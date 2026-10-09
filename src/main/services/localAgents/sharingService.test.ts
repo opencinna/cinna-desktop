@@ -506,6 +506,15 @@ describe('which account a remote belongs to', () => {
     expect(status?.state).toBe('removed')
   }, 30_000)
 
+  it('never says removed from a listing the instance refused (403), which is no answer about the entry', async () => {
+    makeOwnRepo(`${HOST}/git/r7.git`)
+    cinnaFetch.mockRejectedValue(new CinnaApiError('request_failed', 'Cinna API 403', 'Forbidden', 403))
+    await libraryService.refresh(PROFILE)
+    const status = await sharingService.status(USER, agentId, false)
+    expect(status?.remote).toMatchObject({ kind: 'cinna', repoId: 'r7', host: HOST })
+    expect(status?.state).not.toBe('removed')
+  }, 30_000)
+
   it('reads a remote on no known instance as external, and a folder without one as not shared', async () => {
     expect(await sharingService.status(USER, agentId, false)).toBeNull()
     makeOwnRepo('https://github.com/acme/alpha.git')
@@ -565,6 +574,40 @@ describe('share with the team', () => {
       expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r20.git`)
       const state = JSON.parse(readFileSync(join(agentDir, 'app-data', 'desktop.json'), 'utf8'))
       expect(state.shared_remote).toEqual({ kind: 'cinna', repo_id: 'r20', clone_url: `${HOST}/git/r20.git` })
+    } finally {
+      init.mockRestore()
+    }
+  }, 30_000)
+
+  it('does not read a 404 listing as the team version being gone, and keeps the link', async () => {
+    makeOwnRepo(`${HOST}/git/r22.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') return libraryAgent('r23', 'alpha', null)
+      throw new CinnaApiError('request_failed', 'Cinna API 404', 'Not Found', 404)
+    })
+    const result = await sharingService.shareWithTeam(USER, agentId, {})
+    expect(result.refusal).toBe('remote_exists')
+    expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r22.git`)
+    expect(cinnaFetch.mock.calls.some((call) => (call[2] as { method?: string } | undefined)?.method === 'POST')).toBe(false)
+  }, 30_000)
+
+  it('keeps the old link when creating the new library entry fails', async () => {
+    makeOwnRepo(`${HOST}/git/gone.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 500', 'The library is down.', 500)
+      }
+      return { agents: [], mirrors: [] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote')
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, {})
+      expect(result.refusal).toBe('failed')
+      expect(result.detail).toBe('The library is down.')
+      expect(init).not.toHaveBeenCalled()
+      expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/gone.git`)
     } finally {
       init.mockRestore()
     }

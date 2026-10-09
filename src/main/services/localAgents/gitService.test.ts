@@ -80,7 +80,8 @@ const {
   push: pushAgent,
   shareChanges,
   diffForSummary,
-  restoreLocalOnlyFolders
+  restoreLocalOnlyFolders,
+  preflightShare
 } = await import('./gitService')
 
 let sandbox: string
@@ -272,6 +273,13 @@ describe('updateGitRepo', () => {
 // ---------------------------------------------------------------------------
 
 const EXTERNAL = { kind: 'external' } as const
+
+/**
+ * A Cinna team library's auth, against a local bare repository: the header
+ * is scoped to an origin git never reaches here, so it only switches on what
+ * a `cinna` remote gets — the never-travel rules.
+ */
+const CINNA = { kind: 'cinna', origin: 'http://127.0.0.1:9', token: async () => 'tok-unused' } as const
 
 /** A minimal kit agent folder, with things the ignore file must keep out. */
 function kitAgent(dir: string, name: string): void {
@@ -573,14 +581,14 @@ describe('sharing an agent folder', () => {
     mkdirSync(dir, { recursive: true })
     kitAgent(dir, 'Eta')
     credentialsFolder(dir)
-    const result = await initWithRemote(dir, remote, EXTERNAL)
+    const result = await initWithRemote(dir, remote, CINNA)
     expect(result).toEqual({ done: true, refusal: null, detail: null })
     const tree = git(remote, 'ls-tree', '-r', '--name-only', 'main').split('\n')
     expect(tree.some((path) => path.startsWith('credentials/') || path.startsWith('app-data/'))).toBe(false)
     expect(existsSync(join(dir, 'credentials', 'README.md'))).toBe(true)
   }, 60_000)
 
-  it('folds unsent versions that recorded the credentials folder, so the send is accepted', async () => {
+  it('drops the credentials folder from unsent versions that recorded it, so the send is accepted', async () => {
     // A first send refused by the library left a version carrying credentials/.
     const remote = libraryLike(join(box, 'library-retry.git'))
     const dir = join(box, 'workshopF', 'Local', 'zeta')
@@ -593,12 +601,198 @@ describe('sharing an agent folder', () => {
     git(dir, 'commit', '-q', '-m', 'Shared with the team')
     expect(() => git(dir, 'push', '-q', 'origin', 'HEAD:main')).toThrow()
 
-    const result = await shareChanges(dir, '', EXTERNAL)
+    const result = await shareChanges(dir, '', CINNA)
     expect(result).toEqual({ done: true, refusal: null, detail: null })
     const everything = git(remote, 'log', '--format=', '--name-only', 'main')
     expect(everything).not.toContain('credentials/')
     expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('AGENT.md')
+    expect(git(remote, 'log', '--format=%s', 'main')).toContain('Shared with the team')
     expect(readFileSync(join(dir, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
+  }, 60_000)
+
+  /** Every path in every version a bare repository holds. */
+  function allPaths(remote: string): string {
+    return git(remote, 'rev-list', '--objects', '--all')
+  }
+
+  it('keeps a teammate\'s newer version and drops only this folder\'s unsent credentials, when behind', async () => {
+    // The old fold soft-reset onto a team ref this history did not contain and
+    // recorded this folder's tree on top of it, which undid the teammate's
+    // version. Nothing the team has may be rewritten, and the unsent version
+    // goes on top of it.
+    const remote = libraryLike(join(box, 'library-behind.git'))
+    const alice = join(box, 'alice', 'Local', 'iota')
+    mkdirSync(alice, { recursive: true })
+    kitAgent(alice, 'Iota')
+    git(alice, 'init', '-q', '-b', 'main', '.')
+    git(alice, 'add', 'cinna-agent.json', 'AGENT.md')
+    git(alice, 'commit', '-q', '-m', 'first')
+    git(alice, 'push', '-q', remote, 'main')
+    const bob = join(box, 'bob', 'Local', 'iota')
+    mkdirSync(dirname(bob), { recursive: true })
+    git(dirname(bob), 'clone', '-q', remote, 'iota')
+
+    writeFileSync(join(alice, 't'), 'from Alice\n')
+    git(alice, 'add', 't')
+    git(alice, 'commit', '-q', '-m', 'T1')
+    git(alice, 'push', '-q', remote, 'main')
+
+    // Bob knows the team moved (fetched), and records a version carrying the credentials folder.
+    git(bob, 'fetch', '-q')
+    credentialsFolder(bob)
+    writeFileSync(join(bob, 'bob.md'), 'from Bob\n')
+    git(bob, 'add', 'bob.md', 'credentials')
+    git(bob, 'commit', '-q', '-m', 'Bob\'s change')
+
+    expect(await shareChanges(bob, '', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    const tree = git(remote, 'ls-tree', '-r', '--name-only', 'main').split('\n')
+    expect(tree).toContain('t')
+    expect(tree).toContain('bob.md')
+    const subjects = git(remote, 'log', '--format=%s', 'main').trim().split('\n')
+    expect(subjects.indexOf('T1')).toBeGreaterThan(subjects.indexOf('Bob\'s change'))
+    expect(allPaths(remote)).not.toMatch(/ (credentials|app-data)\//)
+    // Bob's own files stay where they were.
+    expect(readFileSync(join(bob, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
+    expect(readFileSync(join(bob, 't'), 'utf8')).toBe('from Alice\n')
+  }, 60_000)
+
+  it('keeps a developer\'s history, each version with its message and author, without the credentials folder', async () => {
+    const remote = libraryLike(join(box, 'library-history.git'))
+    const dir = join(box, 'workshopH', 'Local', 'theta')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Theta')
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md')
+    git(dir, 'commit', '-q', '-m', 'one')
+    credentialsFolder(dir)
+    writeFileSync(join(dir, 'two.md'), '2\n')
+    git(dir, 'add', 'two.md', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'two')
+    writeFileSync(join(dir, 'three.md'), '3\n')
+    git(dir, 'add', 'three.md')
+    git(dir, 'commit', '-q', '-m', 'three')
+    const authored = git(dir, 'log', '--format=%s|%an|%ae|%ad', '--date=raw', 'main').trim().split('\n')
+
+    expect(await initWithRemote(dir, remote, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    const sent = git(remote, 'log', '--format=%s|%an|%ae|%ad', '--date=raw', 'main').trim().split('\n')
+    // The three versions, as they were, plus the one that stopped tracking the folder.
+    expect(sent.slice(-3)).toEqual(authored)
+    expect(sent.length).toBeGreaterThanOrEqual(3)
+    expect(allPaths(remote)).not.toMatch(/ (credentials|app-data)\//)
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('three.md')
+    expect(readFileSync(join(dir, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
+  }, 60_000)
+
+  it('updates a folder whose unsent version untracked the credentials folder without deleting it from disk', async () => {
+    const remote = bare(join(box, 'update-untracked.git'))
+    const alice = join(box, 'alice2', 'Local', 'nu')
+    mkdirSync(alice, { recursive: true })
+    kitAgent(alice, 'Nu')
+    git(alice, 'init', '-q', '-b', 'main', '.')
+    git(alice, 'add', 'cinna-agent.json', 'AGENT.md')
+    git(alice, 'commit', '-q', '-m', 'first')
+    git(alice, 'push', '-q', remote, 'main')
+    const bob = join(box, 'bob2', 'Local', 'nu')
+    mkdirSync(dirname(bob), { recursive: true })
+    git(dirname(bob), 'clone', '-q', remote, 'nu')
+    // An unsent version recorded the credentials folder; recording again for
+    // a Cinna library untracked it (the file stays on disk, excluded).
+    credentialsFolder(bob)
+    git(bob, 'add', 'credentials')
+    git(bob, 'commit', '-q', '-m', 'with credentials')
+    writeFileSync(join(bob, 'bob.md'), 'from Bob\n')
+    expect((await commitAll(bob, 'Bob\'s change', null, undefined, true)).done).toBe(true)
+    expect(git(bob, 'ls-files', 'credentials').trim()).toBe('')
+    // The team moves on.
+    writeFileSync(join(alice, 't'), 'from Alice\n')
+    git(alice, 'add', 't')
+    git(alice, 'commit', '-q', '-m', 'T1')
+    git(alice, 'push', '-q', remote, 'main')
+
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(readFileSync(join(bob, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
+    expect(readFileSync(join(bob, 't'), 'utf8')).toBe('from Alice\n')
+    expect(readFileSync(join(bob, 'bob.md'), 'utf8')).toBe('from Bob\n')
+    expect(git(bob, 'log', '--format=', '--name-only', 'origin/main..HEAD')).not.toContain('credentials/')
+    expect(git(bob, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+  }, 60_000)
+
+  it('shares after a recorded credentials file was edited on disk since', async () => {
+    const remote = libraryLike(join(box, 'library-edited.git'))
+    const dir = join(box, 'workshopEdited', 'Local', 'xi')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Xi')
+    credentialsFolder(dir)
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'remote', 'add', 'origin', remote)
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'with credentials')
+    // Recording for the library stops tracking it; then the user edits the file.
+    writeFileSync(join(dir, 'notes.md'), 'x\n')
+    expect((await commitAll(dir, 'notes', null, undefined, true)).done).toBe(true)
+    writeFileSync(join(dir, 'credentials', 'README.md'), 'My own notes on the keys\n')
+
+    expect(await shareChanges(dir, '', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(allPaths(remote)).not.toMatch(/ (credentials|app-data)\//)
+    expect(readFileSync(join(dir, 'credentials', 'README.md'), 'utf8')).toBe('My own notes on the keys\n')
+  }, 60_000)
+
+  it('refuses on a detached HEAD rather than rewrite, and leaves HEAD as it was', async () => {
+    const remote = libraryLike(join(box, 'library-detached.git'))
+    const dir = join(box, 'workshopI', 'Local', 'kappa')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Kappa')
+    credentialsFolder(dir)
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'remote', 'add', 'origin', remote)
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'with credentials')
+    git(dir, 'rm', '-r', '-q', '--cached', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'untrack them')
+    git(dir, 'checkout', '-q', '--detach')
+    const head = readFileSync(join(dir, '.git', 'HEAD'), 'utf8')
+
+    const result = await shareChanges(dir, '', CINNA)
+    expect(result.refusal).toBe('failed')
+    expect(result.detail).toContain('detached HEAD')
+    expect(readFileSync(join(dir, '.git', 'HEAD'), 'utf8')).toBe(head)
+    expect(() => git(remote, 'rev-parse', '--verify', 'main')).toThrow()
+  }, 60_000)
+
+  it('sends the credentials folder to a remote that is not a Cinna library, as before', async () => {
+    const remote = bare(join(box, 'external-creds.git'))
+    const dir = join(box, 'workshopJ', 'Local', 'lambda')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Lambda')
+    credentialsFolder(dir)
+    expect(await initWithRemote(dir, remote, EXTERNAL)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main').split('\n')).toContain('credentials/README.md')
+    expect(git(dir, 'ls-files', 'credentials/README.md').trim()).toBe('credentials/README.md')
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).not.toContain('/credentials/')
+  }, 60_000)
+
+  it('checks a folder before Share with the team without changing what it tracks', async () => {
+    const dir = join(box, 'workshopK', 'Local', 'mu')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Mu')
+    credentialsFolder(dir)
+    writeFileSync(join(dir, 'credentials', 'credentials.json'), '{"token":"x"}\n')
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'mine')
+    const tracked = git(dir, 'ls-files')
+    const status = git(dir, 'status', '--porcelain', '--untracked-files=no')
+
+    // A Cinna library: what lies under the never-travel folders is left out at
+    // the send, so it is no refusal — and nothing is untracked yet.
+    expect(await preflightShare(dir, undefined, true)).toBeNull()
+    expect(git(dir, 'ls-files')).toBe(tracked)
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=no')).toBe(status)
+    // Any other target still refuses the tracked secret.
+    expect((await preflightShare(dir, undefined, false))?.refusal).toBe('secrets_tracked')
+    // And a secret outside those folders is refused for a Cinna library too.
+    git(dir, 'add', '-f', '.env')
+    expect((await preflightShare(dir, undefined, true))?.refusal).toBe('secrets_tracked')
   }, 60_000)
 
   it('gives a fetched agent the template\'s credentials and app-data folders, locally', () => {

@@ -285,7 +285,8 @@ async function statusOf(agentId: string, shared: SharedAgent, fetch: boolean): P
   }
   const listing = listingFor(shared.remote.host)
   const entry = listing?.agents.find((agent) => agent.repoId === shared.remote.repoId) ?? null
-  const removed = shared.remote.kind === 'cinna' && listing !== null && entry === null
+  // A 404/403 listing stands in as empty and says nothing about this entry.
+  const removed = shared.remote.kind === 'cinna' && listing !== null && listing.available && entry === null
   const counts = await gitService.readShareStatus(
     shared.dir,
     auth,
@@ -464,7 +465,8 @@ async function removedFromLibrary(
   } catch {
     return false
   }
-  return listing !== null && !listing.agents.some((agent) => agent.repoId === remote.repoId)
+  // A 404/403 listing stands in as empty; it is no answer about this entry.
+  return listing !== null && listing.available && !listing.agents.some((agent) => agent.repoId === remote.repoId)
 }
 
 /**
@@ -477,7 +479,9 @@ async function createAndSend(
   kit: NonNullable<ReturnType<typeof locateKit>>,
   profile: string,
   host: string,
-  input: { slug: string; name: string; description: string }
+  input: { slug: string; name: string; description: string },
+  /** The folder's old `origin` is a team version the library no longer lists: dropped once the new entry exists. */
+  replaceOrigin: boolean
 ): Promise<AgentShareResult> {
   let entry: LibraryEntry | null
   try {
@@ -499,6 +503,13 @@ async function createAndSend(
   if (gitOrigin === null) return refused('failed', UNSAFE_ADDRESS)
   // Until the first send lands, a retry may finish this entry — and only this one.
   libraryTrust.setPending(host, input.slug, entry.repoId)
+  if (replaceOrigin) {
+    // Only now that the new entry exists: a refused or failed create leaves
+    // the folder linked to its old team version, as it was. The history here
+    // stays; only the link to the deleted entry goes.
+    if (!(await gitService.removeOrigin(kit.dir))) return refused('failed', 'The old team link could not be removed.')
+    writeLocalLink(kit.dir, null)
+  }
 
   const auth: RemoteAuth = { kind: 'cinna', origin: gitOrigin, token: () => getCinnaAccessToken(profile) }
   const action = await gitService.initWithRemote(kit.dir, entry.cloneUrl, auth, {
@@ -600,7 +611,7 @@ export const sharingService = {
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
     let action: ShareActionResult
     try {
-      action = await gitService.pullRebaseClean(shared.dir, auth, commitIdentity(shared.remote))
+      action = await gitService.pullRebaseClean(shared.dir, auth, commitIdentity(shared.remote), shared.root.path)
     } finally {
       lock.release()
     }
@@ -741,18 +752,16 @@ export const sharingService = {
     const lock = lockOrRefuse(agentId)
     if (!lock) return refused('turn_in_progress')
     try {
-      if (existing.ownRepo && existing.originUrl !== null) {
-        // Its team version is gone from the library: start over. The history
-        // here stays; only the link to the deleted entry goes, and the first
-        // send folds whatever it would refuse.
-        if (!(await gitService.removeOrigin(kit.dir))) return refused('failed', 'The old team link could not be removed.')
-        writeLocalLink(kit.dir, null)
-      }
       // Refused before the library entry exists, so a folder that cannot be
-      // sent does not leave an empty entry behind on the server.
-      const preflight = await gitService.preflightShare(kit.dir, kit.root.path)
+      // sent does not leave an empty entry behind on the server. Read-only:
+      // the target is a Cinna library, so tracked files under the folders
+      // that never travel are not a refusal — the send leaves them out.
+      const preflight = await gitService.preflightShare(kit.dir, kit.root.path, true)
       if (preflight) return result(preflight, null)
-      return await createAndSend(userId, agentId, kit, profile, host, { slug, name, description })
+      // A folder whose team version is gone from the library starts over; its
+      // old link is dropped only once the new entry exists.
+      const replaceOrigin = existing.ownRepo && existing.originUrl !== null
+      return await createAndSend(userId, agentId, kit, profile, host, { slug, name, description }, replaceOrigin)
     } finally {
       lock.release()
     }

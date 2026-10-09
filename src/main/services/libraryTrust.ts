@@ -26,7 +26,6 @@
  */
 
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { createLogger } from '../logger/logger'
@@ -43,20 +42,31 @@ interface TrustFile {
 let state: TrustFile | null = null
 let pathOverride: string | null = null
 
-function filePath(): string {
+/**
+ * Where the trust file lives, or null when this host has no `userData` — then
+ * the list is kept in memory for this run only. Never a shared fallback such
+ * as the temp directory: any local user could write a trust list there and
+ * point a profile's token at their own origin.
+ */
+function filePath(): string | null {
   if (pathOverride) return pathOverride
   try {
     return join(runtimeHost.getPath('userData'), 'team-library-trust.json')
   } catch {
-    return join(tmpdir(), 'cinna-desktop-team-library-trust.json')
+    return null
   }
 }
 
 function load(): TrustFile {
   if (state) return state
   const empty: TrustFile = { gitOrigins: {}, pending: {} }
+  const path = filePath()
+  if (path === null) {
+    state = empty
+    return state
+  }
   try {
-    const parsed = JSON.parse(readFileSync(filePath(), 'utf8')) as Partial<TrustFile>
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<TrustFile>
     state = {
       gitOrigins: parsed.gitOrigins && typeof parsed.gitOrigins === 'object' ? parsed.gitOrigins : {},
       pending: parsed.pending && typeof parsed.pending === 'object' ? parsed.pending : {}
@@ -69,6 +79,7 @@ function load(): TrustFile {
 
 function save(): void {
   const path = filePath()
+  if (path === null) return
   try {
     mkdirSync(dirname(path), { recursive: true })
     const temp = `${path}.${process.pid}.${Date.now()}.tmp`

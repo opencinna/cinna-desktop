@@ -50,6 +50,12 @@ export interface CachedListing {
   host: string
   agents: LibraryEntry[]
   fetchedAt: Date
+  /**
+   * False when the instance answered 404 or 403 and the listing stands in as
+   * empty: it says nothing about which entries exist, so no caller may read
+   * an entry's absence from it as "removed from the library".
+   */
+  available: boolean
 }
 
 /** `LibraryAgent` as core sends it (README §4.2), loosely: every field is checked. */
@@ -181,6 +187,7 @@ export const libraryService = {
     const host = hostOf(userId)
     if (host === null) return null
     let agents: LibraryEntry[] = []
+    let available = true
     try {
       const body = await cinnaFetch<{ agents?: unknown }>(userId, '/api/v1/library')
       const rows = Array.isArray(body?.agents) ? (body.agents as RawLibraryAgent[]) : []
@@ -191,6 +198,7 @@ export const libraryService = {
     } catch (err) {
       const status = err instanceof CinnaApiError ? err.status : undefined
       if (status === 404 || status === 403) {
+        available = false
         if (!missingRoutesLogged.has(host)) {
           missingRoutesLogged.add(host)
           logger.info('team library not available on this instance; treating it as empty', { status })
@@ -201,7 +209,7 @@ export const libraryService = {
     }
     // This instance, answering this profile's session, says where its git is.
     for (const agent of agents) libraryTrust.learn(host, agent.cloneUrl)
-    const listing: CachedListing = { host, agents, fetchedAt: new Date() }
+    const listing: CachedListing = { host, agents, fetchedAt: new Date(), available }
     const before = signature(cache.get(userId))
     cache.set(userId, listing)
     if (signature(listing) !== before) publishEvent(SHARING_CHANGED_CHANNEL)

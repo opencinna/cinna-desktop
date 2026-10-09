@@ -1008,16 +1008,21 @@ async function commitFlags(
  * not cover secrets — a developer's own repository — still keeps
  * `credentials/.env` and `app-data/` out, and one that already tracks a secret
  * is refused `secrets_tracked` before anything is recorded.
+ *
+ * `neverTravel` is for a Cinna team library: the folders that never travel
+ * are also excluded, and anything already tracked under them is untracked
+ * (left on disk) — the one place that happens.
  */
 export async function commitAll(
   dir: string,
   message: string,
   identity?: CommitIdentity | null,
-  workshopRoot?: string
+  workshopRoot?: string,
+  neverTravel = false
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
-  const guarded = await guardSecrets(gitPath, dir, workshopRoot)
+  const guarded = await guardSecrets(gitPath, dir, workshopRoot, neverTravel, true)
   if (guarded) return guarded
   const add = await run(gitPath, dir, ['add', '-A', '--', '.'], LOCAL_TIMEOUT_MS)
   if (!add.ok) return refuse('failed', scrubCredentials(lastLine(add.stderr)).slice(0, MAX_DETAIL_CHARS))
@@ -1054,7 +1059,8 @@ export async function commitAll(
 export async function pullRebaseClean(
   dir: string,
   auth: RemoteAuth | null,
-  identity?: CommitIdentity | null
+  identity?: CommitIdentity | null,
+  workshopRoot?: string
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
@@ -1093,6 +1099,13 @@ export async function pullRebaseClean(
     }
     return done()
   }
+  if (isCinna(auth)) {
+    // Before the rebase: replaying a version that untracked a never-travel
+    // file deletes that file from the working tree; the rewritten version no
+    // longer touches it.
+    const rewritten = await rewriteUnsent(gitPath, dir, neverTravelPaths(workshopRoot))
+    if (rewritten) return rewritten
+  }
   const rebase = await run(
     gitPath,
     dir,
@@ -1117,7 +1130,8 @@ export async function pullRebaseClean(
 export async function push(
   dir: string,
   auth: RemoteAuth | null,
-  identity?: CommitIdentity | null
+  identity?: CommitIdentity | null,
+  workshopRoot?: string
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
@@ -1126,8 +1140,14 @@ export async function push(
   if (attempt.ok) return done()
   let verdict = classifyPush(attempt.stderr)
   if (verdict === 'non_ff') {
-    const pulled = await pullRebaseClean(dir, auth, identity)
+    const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
     if (pulled.refusal !== null) return pulled
+    if (isCinna(auth)) {
+      // The rebased versions came from ones already cleared; this is a no-op
+      // unless something under the never-travel folders slipped back in.
+      const rewritten = await rewriteUnsent(gitPath, dir, neverTravelPaths(workshopRoot))
+      if (rewritten) return rewritten
+    }
     attempt = await runNet(gitPath, dir, args, auth)
     if (attempt.ok) return done()
     verdict = classifyPush(attempt.stderr)
@@ -1155,7 +1175,7 @@ export async function shareChanges(
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
-  const committed = await commitAll(dir, message, identity, workshopRoot)
+  const committed = await commitAll(dir, message, identity, workshopRoot, isCinna(auth))
   if (committed.refusal !== null && committed.refusal !== 'nothing_to_share') return committed
   const ref = await teamRef(gitPath, dir)
   const head = await headOf(gitPath, dir)
@@ -1165,9 +1185,11 @@ export async function shareChanges(
       ? count((await run(gitPath, dir, ['rev-list', '--count', 'HEAD'], LOCAL_TIMEOUT_MS)).stdout)
       : count((await run(gitPath, dir, ['rev-list', '--count', `${ref}..HEAD`], LOCAL_TIMEOUT_MS)).stdout)
   if (ahead === 0) return refuse('nothing_to_share')
-  const folded = await foldUnsentIfCarrying(gitPath, dir, message, identity, workshopRoot)
-  if (folded) return folded
-  return push(dir, auth, identity)
+  if (isCinna(auth)) {
+    const cleared = await dropNeverTravelsFromUnsent(gitPath, dir, auth, identity, workshopRoot)
+    if (cleared) return cleared
+  }
+  return push(dir, auth, identity, workshopRoot)
 }
 
 /** What would be shared, as text for the AI summary: the diff from the team version and the new files' names. */
@@ -1267,6 +1289,11 @@ function travelsNot(rel: string, never: string[]): boolean {
   return never.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix))
 }
 
+/** A Cinna team library — the only kind of remote the never-travel rules apply to. */
+function isCinna(auth: RemoteAuth | null | undefined): boolean {
+  return auth?.kind === 'cinna'
+}
+
 /**
  * Stop recording anything under a never-travelling folder. The files stay on
  * disk; only the index forgets them, and the exclude block keeps them out of
@@ -1282,49 +1309,182 @@ async function untrackNeverTravels(gitPath: string, dir: string, never: string[]
   return out.ok
 }
 
+const failedWith = (out: RunResult): ShareActionResult =>
+  refuse('failed', scrubCredentials(lastLine(out.stderr)).slice(0, MAX_DETAIL_CHARS) || null)
+
 /**
- * Before a send: the team library checks **every** new version, not only the
- * latest, so a never-travelling file recorded in any version not yet sent
- * would refuse the whole send even after it was removed. When one is, the
- * unsent versions are folded into one, on top of the team's version (or as
- * the first version, before anything was sent), from the index as it is now —
- * which {@link untrackNeverTravels} has already cleared. Only history nobody
- * else has is rewritten; the working tree is untouched.
+ * Before a send to a Cinna team library, which checks **every** new version,
+ * not only the latest: a never-travelling file recorded in any version not yet
+ * sent would refuse the whole send even after it was untracked.
+ *
+ * Fetches first, so "not yet sent" is measured against the team's version as
+ * it is now; then drops those paths from the unsent versions
+ * ({@link rewriteUnsent}); then, when the team has moved on, rebases them
+ * onto it ({@link pullRebaseClean}, whose `dirty` and `diverged_conflict`
+ * are the answer when it cannot). The rewrite comes **before** the rebase:
+ * replaying a version that untracked a file deletes that file from the
+ * working tree, and the rewritten one no longer untracks anything.
  */
-async function foldUnsentIfCarrying(
+async function dropNeverTravelsFromUnsent(
   gitPath: string,
   dir: string,
-  message: string,
+  auth: RemoteAuth | null,
   identity: CommitIdentity | null | undefined,
   workshopRoot: string | undefined
 ): Promise<ShareActionResult | null> {
-  const never = neverTravelPaths(workshopRoot)
+  const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+  if (!fetched.ok) {
+    logger.warn('share fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
+    return refuse('fetch_failed')
+  }
+  const rewritten = await rewriteUnsent(gitPath, dir, neverTravelPaths(workshopRoot))
+  if (rewritten) return rewritten
   const ref = await teamRef(gitPath, dir)
-  const range = ref === null ? ['HEAD'] : [`${ref}..HEAD`]
-  const touched = await run(gitPath, dir, ['log', '--format=', '--name-only', '--no-renames', ...range], LOCAL_TIMEOUT_MS)
-  if (!touched.ok) return null
-  const carries = touched.stdout.split('\n').some((rel) => rel.trim() !== '' && travelsNot(rel.trim(), never))
-  if (!carries) return null
-  const subjects = (
-    await run(gitPath, dir, ['log', '--format=%s', '--reverse', ...range], LOCAL_TIMEOUT_MS)
-  ).stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-  const text = message.trim() || subjects.join('; ') || 'Shared with the team'
-  const reset =
-    ref === null
-      ? await run(gitPath, dir, ['update-ref', '-d', 'HEAD'], LOCAL_TIMEOUT_MS)
-      : await run(gitPath, dir, ['reset', '--soft', ref], LOCAL_TIMEOUT_MS)
-  if (!reset.ok) return refuse('failed', scrubCredentials(lastLine(reset.stderr)).slice(0, MAX_DETAIL_CHARS))
-  const commit = await run(
+  if (ref === null || (await headOf(gitPath, dir)) === null) return null
+  const contained = await run(gitPath, dir, ['merge-base', '--is-ancestor', ref, 'HEAD'], LOCAL_TIMEOUT_MS)
+  if (contained.ok) return null
+  const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
+  return pulled.refusal !== null ? pulled : null
+}
+
+/**
+ * Drop the never-travelling paths from every version the team does not have
+ * — `<team ref>..HEAD`, or all of HEAD's history when there is no team ref
+ * (nothing was ever accepted). Each version keeps its message, author,
+ * committer and dates, and its place: a developer's history survives, only
+ * those paths vanish from it. Nothing reachable from the team ref is ever
+ * rewritten. The trees are built in a temporary index; the working tree and
+ * the real index are untouched, and the branch moves by compare-and-swap.
+ * Null when done or when there was nothing to drop.
+ */
+async function rewriteUnsent(gitPath: string, dir: string, never: string[]): Promise<ShareActionResult | null> {
+  const oldTip = await headOf(gitPath, dir)
+  if (oldTip === null) return null
+  const ref = await teamRef(gitPath, dir)
+  const range = ref === null ? [oldTip] : [oldTip, '--not', ref]
+  const roots = never.map((path) => path.slice(0, -1))
+  const touching = await run(
     gitPath,
     dir,
-    [...(await commitFlags(gitPath, dir, identity)), 'commit', '--quiet', '--allow-empty', '-m', text],
+    ['rev-list', '--full-history', ...range, '--', ...roots],
     LOCAL_TIMEOUT_MS
   )
-  if (!commit.ok) return refuse('failed', scrubCredentials(lastLine(commit.stderr)).slice(0, MAX_DETAIL_CHARS))
-  logger.info('folded unsent versions that carried never-travelling files', { versions: subjects.length })
+  if (!touching.ok) return failedWith(touching)
+  if (touching.stdout.trim() === '') return null
+
+  const branch = await run(gitPath, dir, ['symbolic-ref', '-q', 'HEAD'], LOCAL_TIMEOUT_MS)
+  const branchRef = branch.ok ? branch.stdout.trim() : ''
+  if (branchRef === '') {
+    return refuse(
+      'failed',
+      'This folder is not on a branch (detached HEAD). Switch to its branch and share again; the credentials and app-data folders have to be left out of versions not yet sent.'
+    )
+  }
+
+  const listed = await run(
+    gitPath,
+    dir,
+    ['rev-list', '--reverse', '--topo-order', '--parents', ...range],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!listed.ok) return failedWith(listed)
+
+  const gitDirOut = await run(gitPath, dir, ['rev-parse', '--absolute-git-dir'], LOCAL_TIMEOUT_MS)
+  if (!gitDirOut.ok || gitDirOut.stdout.trim() === '') return failedWith(gitDirOut)
+  const scratch = join(gitDirOut.stdout.trim(), `cinna-rewrite-${randomBytes(4).toString('hex')}`)
+  const indexFile = `${scratch}.index`
+  const messageFile = `${scratch}.msg`
+  const mapped = new Map<string, string>()
+  let newTip = oldTip
+  try {
+    for (const line of lines(listed.stdout)) {
+      const [commit, ...parents] = line.trim().split(/\s+/)
+      const index = { GIT_INDEX_FILE: indexFile }
+      const read = await run(gitPath, dir, ['read-tree', commit], LOCAL_TIMEOUT_MS, index)
+      if (!read.ok) return failedWith(read)
+      // `-f`: `rm --cached` still compares the scratch index against the real
+      // HEAD and working tree, and refuses a path whose file was edited since
+      // that version recorded it ("staged content different from both") —
+      // which would block every share for good. This index is ours to throw away.
+      const removed = await run(
+        gitPath,
+        dir,
+        ['rm', '-r', '--cached', '-f', '--quiet', '--ignore-unmatch', '--', ...roots],
+        LOCAL_TIMEOUT_MS,
+        index
+      )
+      if (!removed.ok) return failedWith(removed)
+      const written = await run(gitPath, dir, ['write-tree'], LOCAL_TIMEOUT_MS, index)
+      if (!written.ok) return failedWith(written)
+      const tree = written.stdout.trim()
+
+      const meta = await run(
+        gitPath,
+        dir,
+        // A user's `log.showSignature` would print the signature check ahead of
+        // the formatted line and shift every field.
+        ['-c', 'log.showSignature=false', 'log', '-1', '--date=raw', '--format=%T%x1f%an%x1f%ae%x1f%ad%x1f%cn%x1f%ce%x1f%cd', commit],
+        LOCAL_TIMEOUT_MS
+      )
+      if (!meta.ok) return failedWith(meta)
+      const [oldTree, an, ae, ad, cn, ce, cd] = meta.stdout.trim().split('\x1f')
+      const newParents = parents.map((parent) => mapped.get(parent) ?? parent)
+      if (tree === oldTree && newParents.every((parent, i) => parent === parents[i])) {
+        // Nothing to drop here and nothing below it changed: the version stays as it is.
+        mapped.set(commit, commit)
+        newTip = commit
+        continue
+      }
+
+      // The message from the raw object rather than `%B`. Read as UTF-8, so a
+      // message in another `encoding` is not carried byte for byte (known limit).
+      const raw = await run(gitPath, dir, ['cat-file', 'commit', commit], LOCAL_TIMEOUT_MS)
+      if (!raw.ok) return failedWith(raw)
+      const split = raw.stdout.indexOf('\n\n')
+      writeFileSync(messageFile, split < 0 ? '' : raw.stdout.slice(split + 2))
+      const made = await run(
+        gitPath,
+        dir,
+        [
+          '-c',
+          'commit.gpgsign=false',
+          'commit-tree',
+          tree,
+          ...newParents.flatMap((parent) => ['-p', parent]),
+          '-F',
+          messageFile
+        ],
+        LOCAL_TIMEOUT_MS,
+        {
+          GIT_AUTHOR_NAME: an ?? '',
+          GIT_AUTHOR_EMAIL: ae ?? '',
+          GIT_AUTHOR_DATE: ad ?? '',
+          GIT_COMMITTER_NAME: cn ?? '',
+          GIT_COMMITTER_EMAIL: ce ?? '',
+          GIT_COMMITTER_DATE: cd ?? ''
+        }
+      )
+      const sha = made.stdout.trim()
+      if (!made.ok || sha === '') return failedWith(made)
+      mapped.set(commit, sha)
+      newTip = sha
+    }
+  } catch (err) {
+    return refuse('failed', String(err).slice(0, MAX_DETAIL_CHARS))
+  } finally {
+    rmSync(indexFile, { force: true })
+    rmSync(messageFile, { force: true })
+  }
+
+  if (newTip === oldTip) return null
+  const moved = await run(
+    gitPath,
+    dir,
+    ['update-ref', '-m', 'cinna: leave the never-travel folders out of unsent versions', branchRef, newTip, oldTip],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!moved.ok) return failedWith(moved)
+  logger.info('dropped never-travelling files from unsent versions', { versions: mapped.size })
   return null
 }
 
@@ -1385,9 +1545,16 @@ function kitAgentIgnoreRules(workshopRoot: string | undefined): string[] {
  * changed. False when it could not be made sure of — a caller about to record
  * must not go on.
  */
-async function ensureAgentExcludes(gitPath: string, dir: string, workshopRoot: string | undefined): Promise<boolean> {
+async function ensureAgentExcludes(
+  gitPath: string,
+  dir: string,
+  workshopRoot: string | undefined,
+  neverTravel: boolean
+): Promise<boolean> {
   try {
-    const never = neverTravelPaths(workshopRoot).map((path) => `/${path}`)
+    // The never-travel folders only for a Cinna team library; any other
+    // remote gets the kit's ordinary rules alone.
+    const never = neverTravel ? neverTravelPaths(workshopRoot).map((path) => `/${path}`) : []
     const block = [EXCLUDE_BEGIN, ...kitAgentIgnoreRules(workshopRoot), ...never, EXCLUDE_END].join('\n')
     const at = await run(
       gitPath,
@@ -1447,12 +1614,21 @@ async function trackedSecrets(
  * folder that would be refused does not leave an entry behind with nothing
  * sent to it. Only a folder that is already its own repository can track a
  * secret; any other is cleared here and guarded again when it is recorded.
+ *
+ * **Read-only** apart from the exclude block: nothing is untracked and the
+ * index is not touched. With `neverTravel` (a Cinna library) a tracked secret
+ * under the folders that never travel is not a refusal — the record step
+ * untracks it and the send leaves it out of every version.
  */
-export async function preflightShare(dir: string, workshopRoot?: string): Promise<ShareActionResult | null> {
+export async function preflightShare(
+  dir: string,
+  workshopRoot?: string,
+  neverTravel = false
+): Promise<ShareActionResult | null> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
   if (!(await isOwnRepo(gitPath, dir))) return null
-  return guardSecrets(gitPath, dir, workshopRoot)
+  return guardSecrets(gitPath, dir, workshopRoot, neverTravel, false)
 }
 
 /**
@@ -1466,16 +1642,22 @@ export async function preflightShare(dir: string, workshopRoot?: string): Promis
 async function guardSecrets(
   gitPath: string,
   dir: string,
-  workshopRoot: string | undefined
+  workshopRoot: string | undefined,
+  neverTravel: boolean,
+  untrack: boolean
 ): Promise<ShareActionResult | null> {
-  if (!(await ensureAgentExcludes(gitPath, dir, workshopRoot))) {
+  if (!(await ensureAgentExcludes(gitPath, dir, workshopRoot, neverTravel))) {
     return refuse('failed', 'The ignore rules could not be written.')
   }
-  if (!(await untrackNeverTravels(gitPath, dir, neverTravelPaths(workshopRoot)))) {
+  const never = neverTravel ? neverTravelPaths(workshopRoot) : []
+  if (neverTravel && untrack && !(await untrackNeverTravels(gitPath, dir, never))) {
     return refuse('failed', 'The credentials and app-data folders could not be left out.')
   }
-  const secrets = await trackedSecrets(gitPath, dir, workshopRoot)
-  if (typeof secrets === 'string') return refuse('failed', secrets)
+  const found = await trackedSecrets(gitPath, dir, workshopRoot)
+  if (typeof found === 'string') return refuse('failed', found)
+  // Under a never-travel folder a tracked secret is untracked at record time
+  // and dropped from unsent versions before the send: not a refusal.
+  const secrets = found.filter((rel) => !travelsNot(rel, never))
   if (secrets.length === 0) return null
   logger.warn('refusing to record a folder that tracks secret files', { count: secrets.length })
   return refuse('secrets_tracked', secrets.slice(0, 3).join(', '))
@@ -1526,16 +1708,20 @@ export async function initWithRemote(
   } catch (err) {
     return refuse('failed', `The ignore file could not be written: ${String(err)}`.slice(0, MAX_DETAIL_CHARS))
   }
-  // Before `origin` is added, so a folder refused here is not left looking shared.
-  const guarded = await guardSecrets(gitPath, dir, options.workshopRoot)
+  // Before `origin` is added, so a folder refused here is not left looking
+  // shared. A check only: untracking is `commitAll`'s.
+  const neverTravel = isCinna(auth)
+  const guarded = await guardSecrets(gitPath, dir, options.workshopRoot, neverTravel, false)
   if (guarded) return guarded
   const remote = await run(gitPath, dir, ['remote', 'add', 'origin', url], LOCAL_TIMEOUT_MS)
   if (!remote.ok) return refuse('failed', scrubCredentials(lastLine(remote.stderr)).slice(0, MAX_DETAIL_CHARS))
-  const committed = await commitAll(dir, 'Shared with the team', options.identity, options.workshopRoot)
+  const committed = await commitAll(dir, 'Shared with the team', options.identity, options.workshopRoot, neverTravel)
   if (committed.refusal !== null && committed.refusal !== 'nothing_to_share') return committed
-  const folded = await foldUnsentIfCarrying(gitPath, dir, '', options.identity, options.workshopRoot)
-  if (folded) return folded
-  return push(dir, auth, options.identity)
+  if (neverTravel) {
+    const cleared = await dropNeverTravelsFromUnsent(gitPath, dir, auth, options.identity, options.workshopRoot)
+    if (cleared) return cleared
+  }
+  return push(dir, auth, options.identity, options.workshopRoot)
 }
 
 /**
@@ -1585,7 +1771,7 @@ export async function clone(
   }
   // The team's `.gitignore` is whatever someone pushed; the kit's rules hold
   // here regardless, from before the folder is ever visible.
-  if (!(await ensureAgentExcludes(gitPath, staging, workshopRoot))) {
+  if (!(await ensureAgentExcludes(gitPath, staging, workshopRoot, isCinna(auth)))) {
     cleanup()
     return refuse('failed', 'The ignore rules could not be written.')
   }
