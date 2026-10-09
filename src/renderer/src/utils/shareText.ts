@@ -169,7 +169,6 @@ export const SHARE_UI_TEXT = {
   peopleLabel: 'People',
   peopleSearchLabel: 'Find a person',
   peopleSearchPlaceholder: 'Name or email',
-  peopleSearchHint: 'Type at least two letters of a name or email.',
   peopleSearching: 'Searching…',
   peopleNoneFound: 'No one found.',
   peopleSearchFailed: 'People couldn’t be searched.',

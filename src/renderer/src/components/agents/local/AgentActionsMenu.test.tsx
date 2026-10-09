@@ -230,28 +230,43 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       openMenu()
       fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam }))
       await act(async () => {})
-      const results = (): HTMLElement => document.querySelector('[data-people-results]') as HTMLElement
+      const results = (): HTMLElement | null => document.querySelector('[data-people-results]')
       const search = screen.getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' })
-      expect(results().textContent).toBe(SHARE_UI_TEXT.peopleSearchHint)
-      // One letter asks nothing.
+      // Nothing typed: no dropdown at all.
+      expect(results()).toBeNull()
+      // One letter asks nothing and opens nothing.
       fireEvent.change(search, { target: { value: 'b' } })
       await act(async () => { vi.advanceTimersByTime(400) })
       expect(searchPeople).not.toHaveBeenCalled()
-      // Typing settles, then the server is asked once — and the results live
-      // in the same fixed-height area the hint did.
+      expect(results()).toBeNull()
+      // Typing settles, then the server is asked once; the answers float over
+      // the dialog rather than pushing it down.
       fireEvent.change(search, { target: { value: 'bo' } })
       fireEvent.change(search, { target: { value: 'bob' } })
       await act(async () => { vi.advanceTimersByTime(400) })
       expect(searchPeople).toHaveBeenCalledTimes(1)
       expect(searchPeople).toHaveBeenCalledWith('bob')
-      expect(results().className).toContain('h-[7.5rem]')
+      expect(results()!.className).toContain('absolute')
       fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
-      // Picked people leave the answers and join the list, as "Can use".
-      expect(screen.queryByRole('option', { name: 'Bob <bob@x.test>' })).toBeNull()
+      // A pick closes the dropdown, empties the field for the next person, and
+      // joins the list as "Can use".
+      expect(results()).toBeNull()
+      expect((search as HTMLInputElement).value).toBe('')
       const access = screen.getByLabelText(SHARE_UI_TEXT.accessFor('Bob <bob@x.test>')) as HTMLSelectElement
       expect(access.value).toBe('read')
       fireEvent.change(access, { target: { value: 'write' } })
-      fireEvent.click(screen.getByRole('option', { name: 'Cy <cy@x.test>' }))
+      // Bob is on the list, so a new search leaves him out.
+      fireEvent.change(search, { target: { value: 'cy' } })
+      await act(async () => { vi.advanceTimersByTime(400) })
+      expect(screen.queryByRole('option', { name: 'Bob <bob@x.test>' })).toBeNull()
+      // Arrow keys and Enter pick too, and Escape closes the list, not the dialog.
+      fireEvent.keyDown(search, { key: 'Escape' })
+      expect(results()).toBeNull()
+      expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })).toBeTruthy()
+      fireEvent.change(search, { target: { value: 'c' } })
+      fireEvent.change(search, { target: { value: 'cy' } })
+      await act(async () => { vi.advanceTimersByTime(400) })
+      fireEvent.keyDown(search, { key: 'Enter' })
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removePerson('Cy <cy@x.test>') }))
 
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))

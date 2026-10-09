@@ -35,7 +35,7 @@ const CANCEL =
 // Without a width, so a field can set its own: `w-full` beside a second
 // width class wins or loses on stylesheet order, not on the class string.
 const FIELD_BASE =
-  'rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5 text-xs text-[var(--color-text)] ' +
+  'rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-xs text-[var(--color-text)] ' +
   'placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-60'
 const FIELD = `w-full ${FIELD_BASE}`
 
@@ -308,80 +308,139 @@ function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>): string
 }
 
 /**
- * A search field over the server's people and the answers under it.
+ * A search field over the server's people, with its answers in a dropdown.
  *
- * **The answers live in a fixed-height area**, scrolled inside itself: a hint,
- * "Searching…", "No one found" or the list all take the same space, so
- * nothing below the field moves while the user types (ux_rules rule 1).
+ * **The dropdown floats over what is below it**, so opening, narrowing and
+ * closing it while the user types moves nothing in the dialog (ux_rules rule
+ * 1). It opens once two letters are typed and closes on a pick, on Escape
+ * (which then does not close the dialog) and when focus leaves the field.
+ * Arrow keys move through the answers and Enter picks the highlighted one.
+ *
+ * `keepPick` leaves the picked person's name in the field, for a dialog that
+ * adds one person; otherwise the field empties for the next one. Editing the
+ * field after a pick calls `onEdit`, so the dialog can drop that pick.
  */
 function PeopleSearch({
   disabled,
   exclude,
-  selectedId,
+  keepPick = false,
   onPick,
+  onEdit,
   inputRef
 }: {
   disabled?: boolean
   /** People already on the list, left out of the answers. */
   exclude: ReadonlySet<string>
-  /** The person picked, marked in the list. */
-  selectedId?: string | null
+  keepPick?: boolean
   onPick: (person: PersonSearchResult) => void
+  onEdit?: () => void
   inputRef?: React.RefObject<HTMLInputElement | null>
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const search = usePeopleSearch(query)
+  // A pick puts its name in the field; that name is not a new search.
+  const [picked, setPicked] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const search = usePeopleSearch(picked ? '' : query)
   const results = 'results' in search ? search.results.filter((person) => !exclude.has(person.userId)) : []
   let message: string | null = null
-  if (search.kind === 'idle') message = SHARE_UI_TEXT.peopleSearchHint
-  else if (search.kind === 'failed')
+  if (search.kind === 'failed')
     message = search.why ? SHARE_UI_TEXT.peopleSearchFailedBecause(search.why) : SHARE_UI_TEXT.peopleSearchFailed
   else if (results.length === 0) message = search.kind === 'searching' ? SHARE_UI_TEXT.peopleSearching : SHARE_UI_TEXT.peopleNoneFound
+  const shown = open && !picked && search.kind !== 'idle'
+  const highlighted = Math.min(active, Math.max(results.length - 1, 0))
+
+  const pick = (person: PersonSearchResult): void => {
+    onPick(person)
+    setOpen(false)
+    setActive(0)
+    if (keepPick) {
+      setQuery(personLabel(person))
+      setPicked(true)
+    } else {
+      setQuery('')
+    }
+  }
+
   return (
-    <div className="space-y-1">
-      <label className="block space-y-1">
-        <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleSearchLabel}</span>
+    <label className="block space-y-1">
+      <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleSearchLabel}</span>
+      <div className="relative">
         <input
           ref={inputRef}
           type="search"
+          role="combobox"
+          aria-expanded={shown}
+          aria-controls="share-people-results"
+          aria-autocomplete="list"
           value={query}
           disabled={disabled}
           placeholder={SHARE_UI_TEXT.peopleSearchPlaceholder}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            if (picked) onEdit?.()
+            setPicked(false)
+            setQuery(event.target.value)
+            setActive(0)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
           onKeyDown={(event) => {
-            // Enter picks nothing by surprise and submits nothing either.
-            if (event.key === 'Enter') event.preventDefault()
+            if (event.key === 'Escape' && shown) {
+              // Closes the list, not the dialog.
+              event.preventDefault()
+              event.stopPropagation()
+              event.nativeEvent.stopImmediatePropagation()
+              setOpen(false)
+            } else if (event.key === 'ArrowDown' && results.length > 0) {
+              event.preventDefault()
+              setOpen(true)
+              setActive((i) => Math.min(i + 1, results.length - 1))
+            } else if (event.key === 'ArrowUp' && results.length > 0) {
+              event.preventDefault()
+              setActive((i) => Math.max(i - 1, 0))
+            } else if (event.key === 'Enter') {
+              // Never submits the dialog; picks only what is highlighted.
+              event.preventDefault()
+              if (shown && results[highlighted]) pick(results[highlighted])
+            }
           }}
           className={FIELD}
         />
-      </label>
-      <div
-        role="listbox"
-        aria-label={SHARE_UI_TEXT.peopleSearchLabel}
-        data-people-results
-        className="h-[7.5rem] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]"
-      >
-        {message !== null ? (
-          <p className="px-2.5 py-2 text-[11px] text-[var(--color-text-muted)]">{message}</p>
-        ) : (
-          results.map((person) => (
-            <button
-              key={person.userId}
-              type="button"
-              role="option"
-              aria-selected={selectedId === person.userId}
-              disabled={disabled}
-              onClick={() => onPick(person)}
-              className={`block w-full truncate px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-bg-hover)] ${
-                selectedId === person.userId ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]'
-              }`}
-            >
-              {personLabel(person)}
-            </button>
-          ))
+        {shown && (
+          <div
+            id="share-people-results"
+            role="listbox"
+            aria-label={SHARE_UI_TEXT.peopleSearchLabel}
+            data-people-results
+            // Before the input's blur, so a click on an answer lands.
+            onMouseDown={(event) => event.preventDefault()}
+            className="absolute inset-x-0 top-full z-10 mt-1 max-h-[7.5rem] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] py-0.5 shadow-lg"
+          >
+            {message !== null ? (
+              <p className="px-2.5 py-1.5 text-[11px] text-[var(--color-text-muted)]">{message}</p>
+            ) : (
+              results.map((person, index) => (
+                <button
+                  key={person.userId}
+                  type="button"
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={index === highlighted}
+                  onClick={() => pick(person)}
+                  onMouseEnter={() => setActive(index)}
+                  className={`block w-full truncate px-2.5 py-1.5 text-left text-xs text-[var(--color-text)] ${
+                    index === highlighted ? 'bg-[var(--color-bg-hover)]' : ''
+                  }`}
+                >
+                  {personLabel(person)}
+                </button>
+              ))
+            )}
+          </div>
         )}
       </div>
-    </div>
+    </label>
   )
 }
 
@@ -541,9 +600,9 @@ export function ShareWithTeamDialog({
 
 /**
  * Share with a person (Sharing tab → People): find someone, choose what they
- * may do — "Can use" unless changed — and Add. The chosen person sits in a
- * one-line slot that is there before anyone is picked, so picking moves
- * nothing. A refusal from the server stays here and closes nothing.
+ * may do — "Can use" unless changed — and Add. The picked person stays in the
+ * search field, beside what they may do; editing the field drops the pick. A
+ * refusal from the server stays here and closes nothing.
  */
 export function ShareWithPersonDialog({
   exclude,
@@ -564,20 +623,17 @@ export function ShareWithPersonDialog({
   const [access, setAccess] = useState<LibraryAccess>('read')
   return (
     <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef}>
-      <PeopleSearch
-        disabled={pending}
-        exclude={exclude}
-        selectedId={person?.userId ?? null}
-        onPick={setPerson}
-        inputRef={searchRef}
-      />
-      <div className="flex items-center gap-2">
-        <span
-          data-chosen-person
-          className={`min-w-0 flex-1 truncate text-xs ${person ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
-        >
-          {person ? personLabel(person) : null}
-        </span>
+      <div className="flex items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <PeopleSearch
+            disabled={pending}
+            exclude={exclude}
+            keepPick
+            onPick={setPerson}
+            onEdit={() => setPerson(null)}
+            inputRef={searchRef}
+          />
+        </div>
         <AccessSelect value={access} label={SHARE_UI_TEXT.accessLabel} disabled={pending} onChange={setAccess} />
       </div>
       <ErrorLine error={error} />
