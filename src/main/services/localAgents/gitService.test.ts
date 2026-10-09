@@ -79,7 +79,8 @@ const {
   pullRebaseClean,
   push: pushAgent,
   shareChanges,
-  diffForSummary
+  diffForSummary,
+  restoreLocalOnlyFolders
 } = await import('./gitService')
 
 let sandbox: string
@@ -534,6 +535,81 @@ describe('sharing an agent folder', () => {
     expect(result.refusal).toBe('push_rejected')
     expect(result.detail).toContain('This agent may not contain a credentials file.')
   }, 60_000)
+
+  /**
+   * A remote that refuses what cinna-core's push policy refuses: any **new**
+   * blob, in any version of the send, under `credentials/` or `app-data/`.
+   */
+  function libraryLike(path: string): string {
+    const remote = bare(path)
+    const hook = join(remote, 'hooks', 'pre-receive')
+    writeFileSync(
+      hook,
+      [
+        '#!/bin/sh',
+        'while read old new ref; do',
+        '  if git rev-list --objects "$new" --not --all | grep -E " (credentials|app-data)/" >/dev/null; then',
+        '    echo "This change includes the agent\'s credentials folder, which never leaves your computer." >&2',
+        '    exit 1',
+        '  fi',
+        'done',
+        ''
+      ].join('\n')
+    )
+    chmodSync(hook, 0o755)
+    return remote
+  }
+
+  /** The template's credentials folder, as a scaffolded agent has it. */
+  function credentialsFolder(dir: string): void {
+    mkdirSync(join(dir, 'credentials'), { recursive: true })
+    writeFileSync(join(dir, 'credentials', 'README.md'), 'Put your keys in .env\n')
+    writeFileSync(join(dir, 'credentials', '.env.example'), 'API_KEY=\n')
+  }
+
+  it('never sends the credentials or app-data folders, not even the template\'s README', async () => {
+    const remote = libraryLike(join(box, 'library-first.git'))
+    const dir = join(box, 'workshopG', 'Local', 'eta')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Eta')
+    credentialsFolder(dir)
+    const result = await initWithRemote(dir, remote, EXTERNAL)
+    expect(result).toEqual({ done: true, refusal: null, detail: null })
+    const tree = git(remote, 'ls-tree', '-r', '--name-only', 'main').split('\n')
+    expect(tree.some((path) => path.startsWith('credentials/') || path.startsWith('app-data/'))).toBe(false)
+    expect(existsSync(join(dir, 'credentials', 'README.md'))).toBe(true)
+  }, 60_000)
+
+  it('folds unsent versions that recorded the credentials folder, so the send is accepted', async () => {
+    // A first send refused by the library left a version carrying credentials/.
+    const remote = libraryLike(join(box, 'library-retry.git'))
+    const dir = join(box, 'workshopF', 'Local', 'zeta')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'Zeta')
+    credentialsFolder(dir)
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'remote', 'add', 'origin', remote)
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md', 'credentials')
+    git(dir, 'commit', '-q', '-m', 'Shared with the team')
+    expect(() => git(dir, 'push', '-q', 'origin', 'HEAD:main')).toThrow()
+
+    const result = await shareChanges(dir, '', EXTERNAL)
+    expect(result).toEqual({ done: true, refusal: null, detail: null })
+    const everything = git(remote, 'log', '--format=', '--name-only', 'main')
+    expect(everything).not.toContain('credentials/')
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('AGENT.md')
+    expect(readFileSync(join(dir, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
+  }, 60_000)
+
+  it('gives a fetched agent the template\'s credentials and app-data folders, locally', () => {
+    const dir = join(box, 'fetched')
+    mkdirSync(dir, { recursive: true })
+    restoreLocalOnlyFolders(dir)
+    expect(existsSync(join(dir, 'credentials', 'README.md'))).toBe(true)
+    expect(existsSync(join(dir, 'credentials', '.gitignore'))).toBe(true)
+    expect(existsSync(join(dir, 'app-data', 'cache', '.gitignore'))).toBe(true)
+    expect(existsSync(join(dir, 'app-data', 'cache', 'gitignore'))).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------

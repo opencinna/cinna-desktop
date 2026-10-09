@@ -43,6 +43,7 @@ import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
   appendFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -63,7 +64,7 @@ import type {
 } from '../../../shared/agentGit'
 import type { AgentShareState, ShareRefusal } from '../../../shared/agentSharing'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
-import { getLayoutView, getTemplateRoot } from '../../kit/contractStore'
+import { getLayout, getLayoutView, getTemplateRoot } from '../../kit/contractStore'
 import { isSecretFile } from '../../kit/validator'
 import { getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
@@ -1164,6 +1165,8 @@ export async function shareChanges(
       ? count((await run(gitPath, dir, ['rev-list', '--count', 'HEAD'], LOCAL_TIMEOUT_MS)).stdout)
       : count((await run(gitPath, dir, ['rev-list', '--count', `${ref}..HEAD`], LOCAL_TIMEOUT_MS)).stdout)
   if (ahead === 0) return refuse('nothing_to_share')
+  const folded = await foldUnsentIfCarrying(gitPath, dir, message, identity, workshopRoot)
+  if (folded) return folded
   return push(dir, auth, identity)
 }
 
@@ -1235,6 +1238,122 @@ export async function excludeFromEnclosingRepo(dir: string): Promise<void> {
   }
 }
 
+/**
+ * What cinna-core's push policy enforces today for contract 1.8.0, used only
+ * while the bundled kit predates `shared_remote.never_travels`. Remove once
+ * `make kit-sync` brings 1.8.0 in: then the contract is the only source.
+ */
+const NEVER_TRAVELS_FALLBACK = ['credentials/', 'app-data/']
+
+/**
+ * Agent-relative folders (each ending `/`) that never go to a shared remote:
+ * the agent's credentials and its per-machine runtime data, **whole** — the
+ * team library's server refuses a version carrying any file under them,
+ * including the kit template's own `credentials/README.md`.
+ */
+export function neverTravelPaths(workshopRoot?: string): string[] {
+  let paths: string[] | undefined
+  try {
+    paths = getLayout(workshopRoot).never_travels
+  } catch {
+    paths = undefined
+  }
+  const list = paths && paths.length > 0 ? paths : NEVER_TRAVELS_FALLBACK
+  return list.map((path) => (path.endsWith('/') ? path : `${path}/`))
+}
+
+function travelsNot(rel: string, never: string[]): boolean {
+  return never.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix))
+}
+
+/**
+ * Stop recording anything under a never-travelling folder. The files stay on
+ * disk; only the index forgets them, and the exclude block keeps them out of
+ * every later `add -A`.
+ */
+async function untrackNeverTravels(gitPath: string, dir: string, never: string[]): Promise<boolean> {
+  const out = await run(
+    gitPath,
+    dir,
+    ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...never.map((path) => path.slice(0, -1))],
+    LOCAL_TIMEOUT_MS
+  )
+  return out.ok
+}
+
+/**
+ * Before a send: the team library checks **every** new version, not only the
+ * latest, so a never-travelling file recorded in any version not yet sent
+ * would refuse the whole send even after it was removed. When one is, the
+ * unsent versions are folded into one, on top of the team's version (or as
+ * the first version, before anything was sent), from the index as it is now —
+ * which {@link untrackNeverTravels} has already cleared. Only history nobody
+ * else has is rewritten; the working tree is untouched.
+ */
+async function foldUnsentIfCarrying(
+  gitPath: string,
+  dir: string,
+  message: string,
+  identity: CommitIdentity | null | undefined,
+  workshopRoot: string | undefined
+): Promise<ShareActionResult | null> {
+  const never = neverTravelPaths(workshopRoot)
+  const ref = await teamRef(gitPath, dir)
+  const range = ref === null ? ['HEAD'] : [`${ref}..HEAD`]
+  const touched = await run(gitPath, dir, ['log', '--format=', '--name-only', '--no-renames', ...range], LOCAL_TIMEOUT_MS)
+  if (!touched.ok) return null
+  const carries = touched.stdout.split('\n').some((rel) => rel.trim() !== '' && travelsNot(rel.trim(), never))
+  if (!carries) return null
+  const subjects = (
+    await run(gitPath, dir, ['log', '--format=%s', '--reverse', ...range], LOCAL_TIMEOUT_MS)
+  ).stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  const text = message.trim() || subjects.join('; ') || 'Shared with the team'
+  const reset =
+    ref === null
+      ? await run(gitPath, dir, ['update-ref', '-d', 'HEAD'], LOCAL_TIMEOUT_MS)
+      : await run(gitPath, dir, ['reset', '--soft', ref], LOCAL_TIMEOUT_MS)
+  if (!reset.ok) return refuse('failed', scrubCredentials(lastLine(reset.stderr)).slice(0, MAX_DETAIL_CHARS))
+  const commit = await run(
+    gitPath,
+    dir,
+    [...(await commitFlags(gitPath, dir, identity)), 'commit', '--quiet', '--allow-empty', '-m', text],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!commit.ok) return refuse('failed', scrubCredentials(lastLine(commit.stderr)).slice(0, MAX_DETAIL_CHARS))
+  logger.info('folded unsent versions that carried never-travelling files', { versions: subjects.length })
+  return null
+}
+
+/**
+ * Give a folder that came from a team version the never-travelling folders
+ * the kit's agent template has — `credentials/` with its README and
+ * `.env.example`, `app-data/` with its subfolders — since the team version
+ * never carries them. Only what is missing; dotless template ignore files get
+ * their dot back, as the scaffold does.
+ */
+export function restoreLocalOnlyFolders(dir: string, workshopRoot?: string): void {
+  const templateRoot = getTemplateRoot('agent', workshopRoot)
+  const never = neverTravelPaths(workshopRoot)
+  for (const path of never) {
+    const source = join(templateRoot, ...path.slice(0, -1).split('/'))
+    if (!existsSync(source)) continue
+    cpSync(source, join(dir, ...path.slice(0, -1).split('/')), {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    })
+  }
+  for (const [from, to] of getLayoutView(workshopRoot).scaffoldIgnoreFiles('agent')) {
+    if (!travelsNot(from, never)) continue
+    const dotless = join(dir, ...from.split('/'))
+    const dotted = join(dir, ...to.split('/'))
+    if (existsSync(dotless) && !existsSync(dotted)) renameSync(dotless, dotted)
+  }
+}
+
 /** The first and last line of the block {@link ensureAgentExcludes} keeps in `.git/info/exclude`. */
 const EXCLUDE_BEGIN = '# >>> Cinna Desktop: the agent kit\'s ignore rules (managed; edits here are replaced)'
 const EXCLUDE_END = '# <<< Cinna Desktop'
@@ -1267,7 +1386,8 @@ function kitAgentIgnoreRules(workshopRoot: string | undefined): string[] {
  */
 async function ensureAgentExcludes(gitPath: string, dir: string, workshopRoot: string | undefined): Promise<boolean> {
   try {
-    const block = [EXCLUDE_BEGIN, ...kitAgentIgnoreRules(workshopRoot), EXCLUDE_END].join('\n')
+    const never = neverTravelPaths(workshopRoot).map((path) => `/${path}`)
+    const block = [EXCLUDE_BEGIN, ...kitAgentIgnoreRules(workshopRoot), ...never, EXCLUDE_END].join('\n')
     const at = await run(
       gitPath,
       dir,
@@ -1350,6 +1470,9 @@ async function guardSecrets(
   if (!(await ensureAgentExcludes(gitPath, dir, workshopRoot))) {
     return refuse('failed', 'The ignore rules could not be written.')
   }
+  if (!(await untrackNeverTravels(gitPath, dir, neverTravelPaths(workshopRoot)))) {
+    return refuse('failed', 'The credentials and app-data folders could not be left out.')
+  }
   const secrets = await trackedSecrets(gitPath, dir, workshopRoot)
   if (typeof secrets === 'string') return refuse('failed', secrets)
   if (secrets.length === 0) return null
@@ -1409,6 +1532,8 @@ export async function initWithRemote(
   if (!remote.ok) return refuse('failed', scrubCredentials(lastLine(remote.stderr)).slice(0, MAX_DETAIL_CHARS))
   const committed = await commitAll(dir, 'Shared with the team', options.identity, options.workshopRoot)
   if (committed.refusal !== null && committed.refusal !== 'nothing_to_share') return committed
+  const folded = await foldUnsentIfCarrying(gitPath, dir, '', options.identity, options.workshopRoot)
+  if (folded) return folded
   return push(dir, auth, options.identity)
 }
 
@@ -1517,6 +1642,8 @@ export async function isBehindLibrary(dir: string, libraryHeadSha: string): Prom
 
 export const gitService = {
   preflightShare,
+  neverTravelPaths,
+  restoreLocalOnlyFolders,
   readGitStatus,
   readGitDetail,
   updateGitRepo,

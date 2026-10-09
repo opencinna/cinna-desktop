@@ -12,6 +12,7 @@ Behaviour and rules are in [Team Sharing](team_sharing.md); this is where they l
 
 ### Main process
 
+- **Never-travelling folders** (in `gitService.ts`) — `neverTravelPaths()` (the layout's `never_travels`, parsed by `parseLayout` from `shared_remote.never_travels.paths`; `NEVER_TRAVELS_FALLBACK` until kit-sync brings 1.8.0), added to the exclude block; `untrackNeverTravels()` inside `guardSecrets`; `foldUnsentIfCarrying()` before the push in `shareChanges` and `initWithRemote` (`reset --soft <team ref>`, or `update-ref -d HEAD` before a first send, then one version); `restoreLocalOnlyFolders()` after Get
 - `src/main/services/libraryTrust.ts` — the main-only trust file: git origins per instance, pending library entries, `acceptableGitOrigin()`
 - `src/main/services/libraryService.ts` — the per-profile listing cache, `toLibraryEntry()` (snake_case row → `LibraryEntry`, rows lacking `repo_id`, `clone_url` or `slug` dropped), the five-minute poll, `hostOf()`, `knownHosts()`
 - `src/main/services/localAgents/sharingService.ts` — the verbs and statuses; `parseRemote()`, `commitIdentity()`, `teamChanges()`

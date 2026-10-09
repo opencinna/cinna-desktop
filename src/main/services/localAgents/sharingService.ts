@@ -786,6 +786,11 @@ export const sharingService = {
     const cloned = await gitService.clone(entry.cloneUrl, target, auth, root.path)
     if (!cloned.done) return result(cloned, null)
     await recordServer(target, host)
+    try {
+      gitService.restoreLocalOnlyFolders(target, root.path)
+    } catch (err) {
+      logger.warn('could not give a fetched agent its local credentials folder', { error: String(err) })
+    }
 
     let manifestId: string | undefined
     try {

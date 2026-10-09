@@ -74,6 +74,13 @@ export interface KitLayout {
   /** `secret_files.rules` — the authority for what holds a credential value. */
   secret_files: SecretFileRule[]
   local_command_runner: { description?: string; rules: LayoutCommandRule[] }
+  /**
+   * `shared_remote.never_travels.paths` (contract 1.8.0+): agent-relative
+   * folders, each ending in `/`, that never go to a shared remote — the team
+   * library's server refuses any version carrying them. Absent from an older
+   * contract; see `neverTravelPaths` in `gitService.ts` for the fallback.
+   */
+  never_travels?: string[]
 }
 
 /** Conditions `localizeCommand` can evaluate without touching the filesystem. */
@@ -222,7 +229,9 @@ export function parseLayout(raw: unknown): KitLayout {
   const prompts = asRecord(agent.prompt_files)
   const runner = asRecord(doc.local_command_runner)
 
+  const neverTravels = asRecord(asRecord(doc.shared_remote).never_travels)
   return {
+    never_travels: Array.isArray(neverTravels.paths) ? asStringArray(neverTravels.paths) : undefined,
     contract_version: typeof doc.contract_version === 'string' ? doc.contract_version : undefined,
     workshop: {
       kit_dir:

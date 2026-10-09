@@ -118,6 +118,14 @@ Sharing for the first time also writes the kit's agent ignore files the folder l
 
 The AI share summary is held to the same line. Its text is built from the folder's differences with every tracked secret file left out, because the summary goes to whatever backend AI Functions resolves to — and the dialog drafts it *before* Share has had the chance to refuse the folder.
 
+### The credentials and app-data folders never travel, whole
+
+The contract's `shared_remote.never_travels` (1.8.0; until the bundled kit is synced to it, the same `credentials/` and `app-data/` the server enforces) names folders that never go to a shared remote **in full** — not just their secret files: the template's own `credentials/README.md` and `.env.example` included. The team library's server refuses any send carrying a file under them, in **any** new version, not only the latest.
+
+- They are in the exclude block as `/credentials/` and `/app-data/`, and anything already recorded under them is dropped from what is recorded before every recording. The files stay on disk
+- Before a send, when a version not yet sent recorded one of them — a first send the server refused, a developer's own history — the unsent versions are **folded into one** on top of the team's version (or as the first version), from what is recorded now. Only history nobody else has is rewritten; the working tree is untouched
+- **Get** gives the fetched agent the template's `credentials/` and `app-data/` folders locally, only what is missing, since the team's version never has them
+
 ### Who a version is from
 
 A repository or global git config that names someone keeps it — a developer's versions stay theirs. Otherwise the active Cinna profile's name and email; a profile without an email gets a no-reply address on the server's own host, built from the profile's local id; anything else an anonymous `.invalid` address. **Never this machine's login or host name**, which git would otherwise fill in and every teammate would then receive. Signing is switched off for versions the app records: a global `commit.gpgsign` would wait on a pinentry the app has no terminal for.
