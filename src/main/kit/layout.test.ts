@@ -143,3 +143,16 @@ describe('secret_files', () => {
     expect(createLayoutView(parseLayout(null)).isSecretFile('.env.local')).toBe(true)
   })
 })
+
+describe('shared_remote.never_travels', () => {
+  it('is read from the bundled contract', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const raw = JSON.parse(readFileSync(join(process.cwd(), 'resources', 'cinna-agent-kit', 'layout.json'), 'utf8'))
+    expect(parseLayout(raw).never_travels).toEqual(['credentials/', 'app-data/'])
+  })
+
+  it('is absent from a contract that predates it', () => {
+    expect(parseLayout({ workshop: {}, agent: {} }).never_travels).toBeUndefined()
+  })
+})

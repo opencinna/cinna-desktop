@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `1396076c8de5a8c7` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
+Kit version `760232d7ff193d95` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
 
 ## Documents
 

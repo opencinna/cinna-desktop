@@ -1,6 +1,6 @@
 {
-  "kit_version": "1396076c8de5a8c7",
-  "contract_version": "1.7.0",
+  "kit_version": "760232d7ff193d95",
+  "contract_version": "1.8.0",
   "platform_url": "https://opencinna.io",
   "kit_base_url": "https://opencinna.io/api/agent-start",
   "start_url": "https://opencinna.io/agent-start",
@@ -15,6 +15,7 @@
   "index": "README.md",
   "manifest_schema": "schema/cinna-agent.schema.json",
   "publications_schema": "schema/publications.schema.json",
+  "marketplace_schema": "schema/cinna-marketplace.schema.json",
   "protocols": {
     "tasks": "protocols/tasks.schema.json"
   },
