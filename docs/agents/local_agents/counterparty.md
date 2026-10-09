@@ -12,7 +12,7 @@ Nothing here builds a new way to run a folder agent — [the runner](agent_turn.
 - **Counterparty exclusion** (removed) — The named predicate that kept folder agents out of the two pickers while no local runner existed. Deliberately never expressed by clearing `enabled`, which is why lifting it was a deletion rather than a migration of anyone's saved state.
 - **Synthesized metadata** — The `agents.remote_metadata` blob a folder row now carries, built from that folder's `cinna-agent.json` at scan time. Same column as a remote agent's backend-supplied metadata, entirely different provenance.
 - **Folder job dependency** — The portable descriptor a job carries for an attached folder agent, keyed on the agent's **manifest id**. Alone among the descriptors that resolve against *this machine's* own resources, it creates nothing when it cannot be resolved.
-- **Workshop** — An agents root: the registered directory a folder agent lives under. "The workshop is not on this device" is the thing a folder dependency can fail on. There is **no in-app repair**: no page produces a directory, and the app deliberately does not tell the user to copy one here — see [Local Agents Are Not Synced](local_only.md).
+- **Workshop** — An agents root: the registered directory a folder agent lives under. "The workshop is not on this device" is the thing a folder dependency can fail on. There is **no in-app repair** for it — no page produces a directory, and the app deliberately does not tell the user to copy one here — **except** when the agent is in the Team library, where the dependency's row offers **Get *X* from the team library**; see [Local Agents Are Not Synced](local_only.md#shared-agents-the-one-designed-correspondence).
 
 ## User Stories / Flows
 
@@ -39,7 +39,7 @@ All four read one field. Before it was filled, all four were silently inert for 
 
 1. The user attaches a folder agent to a job on the machine that holds the workshop. The job runs normally.
 2. The job's dependency manifest records a descriptor naming the agent's **manifest id** — the `id` inside `cinna-agent.json`. The manifest is rebuilt on every agent/MCP/mode change whether or not sync is on, so this happens for a purely local user too.
-3. Where the folder is **not** found — another machine, or this one after the directory was moved or deleted — **nothing is created**. The job's detail view lists the dependency as **unavailable**, with no "Set up" button, and a red **Incomplete setup** panel says the job cannot run here. The Run button is disabled and the sidebar's run-now button is not rendered.
+3. Where the folder is **not** found — another machine, or this one after the directory was moved or deleted — **nothing is created**. The job's detail view lists the dependency as **unavailable**, with no "Set up" button, and a red **Incomplete setup** panel says the job cannot run here. The Run button is disabled and the sidebar's run-now button is not rendered. The one exception is a [shared agent](team_sharing.md): when the Team library lists an agent with the dependency's manifest id and this machine has none, the row offers **Get *X* from the team library**, and the job unblocks once it lands.
 4. Attempting the run anyway is **refused in main**: `executeLocal` recomputes the condition from the manifest and throws, naming the missing agents. See "The run is now blocked" below.
 5. The descriptor also resolves wherever the key happens to match — the same machine after a re-auth or reinstall (the case it is for), or a peer that happens to hold a folder with the same manifest id (**a mechanism, not a supported workflow**). Do not document the second as a way to use the product.
 
@@ -173,7 +173,8 @@ Running a job whose agent is not here
 
 ## Integration Points
 
-- [Local Agents Are Not Synced](local_only.md) — **the governing product position**: a job bound to a folder agent is local-only, the descriptor exists to make that visible and blocking, and peer resolution is a mechanism rather than a workflow. Read it before writing any sentence about this dependency crossing machines.
+- [Local Agents Are Not Synced](local_only.md) — **the governing product position**: a job bound to a folder agent is local-only, the descriptor exists to make that visible and blocking, and peer resolution is a mechanism rather than a workflow — with one designed exception, an agent in the Team library. Read it before writing any sentence about this dependency crossing machines.
+- [Team Sharing](team_sharing.md) — shared agents, and the Get the blocked-job row offers for one
 - [The Agent Turn Runner](agent_turn.md) — what actually answers once a folder agent is picked. This slice adds no dispatch of its own; jobs inherit the resolver by not dispatching at all.
 - [Agents Home, Scanner & Folder Index](folder_index.md) — where the synthesized metadata is computed and which writers carry it, and the `enabled` rule that made the exclusion removable in one line.
 - [Agents Tab & Agent Page](agents_tab.md) — the page whose chat controls were disabled for the same reason, and the "Stamp identity" action whose job repair is described above.

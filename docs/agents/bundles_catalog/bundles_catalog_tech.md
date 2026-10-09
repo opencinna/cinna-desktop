@@ -131,7 +131,7 @@ The header action has three states: **Install** button (uninstalled), an amber *
 
 **`CatalogSetupHost`** — returns `null` unless `pendingSetup.profileId` equals the current profile id. The entry is hidden, not cleared, under another profile, so it reappears on switching back. `onClose` clears it; `onReady` clears it and runs `useRefreshCatalogState()`.
 
-**`CatalogBrowserModal`** (props: `onClose`, `installingBundleId`, `installError`, `onInstall`, `onOpen`) — portalled, `role="dialog"` `aria-label="Agent catalog"`, fixed `h-[36rem]`. Escape and a `mousedown` outside close it. Reads `useCatalog()`, `useAgents()` (to map `userInstallId` → local agent id for **Open**), `useRefreshCatalogState()` and `useCinnaReauth()`.
+**`CatalogBrowserModal`** (props: `onClose`, `installingBundleId`, `installError`, `onInstall`, `onOpen`, `library?`) — portalled, `role="dialog"` `aria-label="Agent catalog"`, fixed `h-[36rem]`. Escape and a `mousedown` outside close it. Reads `useCatalog()`, `useAgents()` (to map `userInstallId` → local agent id for **Open**), `useRefreshCatalogState()` and `useCinnaReauth()`.
 - The header's refresh is icon-only beside the close button — `RefreshCw`, `title` and `aria-label` "Refresh catalog", spinning and disabled while `catalog.isFetching` — styled like the agent status overlay's refresh, so the dialog's title row holds a title and two icons rather than a text button competing with the title
 - The grid stays mounted under the detail, `invisible` + `inert` + `aria-hidden`, so its scroll position survives; focus returns to the search field when the detail closes. A `selectedId` whose bundle disappears on refresh falls back to the grid
 - Filtering (`matches`) is case-insensitive over `displayName`, `description`, `publisherName`, `publisherHandle`, `bundleId`
@@ -139,6 +139,7 @@ The header action has three states: **Install** button (uninstalled), an amber *
 - `EntryAction`: uninstalled → **Install** (disabled while any install runs, titled "Another agent is installing" on the others; "Installing…" spinner on its own); installed → **Installed** pill plus **Open** when a synced agent exists. The detail passes `useSettleGuard(selectedId)`; each click checks `isUnsettledClick`
 - The detail renders `CatalogCardCredentials` with `enabled={!selected.isInstalled}` and `compact`
 - `LocalAgentsList` runs the install and passes the state in, so closing the dialog mid-install loses nothing
+- **Second source: the Team library.** An optional `library: TeamLibraryActions` prop and `useTeamLibrary({ refresh: true })` add a `role="tablist"` switch (**Cinna bundles** / **Team library**) above the content — rendered only when the prop is passed **and** the listing is non-null, so a non-Cinna profile sees the dialog unchanged. The dialog's height is fixed, so switching moves nothing; the header refresh acts on whichever source is shown. The library source is `TeamLibraryPanel`; its Get and Update are owned by `LocalAgentsList` like the install. See [Team Sharing — Technical Details](../local_agents/team_sharing_tech.md)
 
 ### `CatalogCardCredentials`
 Takes an optional `compact` prop (default `false`) that drops its body text from `text-[12px]` to `text-[11px]` for the Agent catalog dialog's detail; the inner `AICredentialsSection` and `AIPublisherRow` receive it as `text`.

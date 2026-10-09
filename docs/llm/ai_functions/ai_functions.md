@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Run a short text transformation for titles and agent drafts with one output string, no chat history and no tools. Its billing/runtime choice is independent of the chat mode and of the agent being drafted.
+Run a short text transformation for titles, agent drafts and share summaries with one output string, no chat history and no tools. Its billing/runtime choice is independent of the chat mode and of the agent being drafted.
 
 ## Core Concepts
 
@@ -24,6 +24,7 @@ Run a short text transformation for titles and agent drafts with one output stri
 - The runtime session is canceled/unbound after one reply. ACP has no session/delete; discarding the address is the non-reuse boundary. A late session/new after cancellation is canceled before any prompt.
 - Claude/OpenCode enforce their synthetic no-native-tools policy. Codex uses the [verified restricted profile](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy), available only for the pinned CLI version on POSIX with a bundled model; unsupported configurations refuse. Selecting an AI Functions credential remains an independent alternative.
 - OpenCode utility processes are keyed by the exact function system prompt as well as profile/runtime/credential/model. Repeated matching functions reuse that process with fresh sessions. A warm synthetic chat has a fixed title-only companion mode; only the shared title prompt may reuse it. Claude keeps function instructions in its per-session system prompt. Codex uses a stable process cwd and patched per-session developer instructions, so a compatible warm chat process can answer a fresh utility session without inheriting the chat prompt. Each utility has its own session cwd, no MCP descriptors and no saved transcript; instruction files are not used as an additional Codex prompt channel.
+- **Share summary** (`label: 'share-summary'`, `SHARE_SUMMARY_SYSTEM_PROMPT`) pre-fills the **What changed** field of a shared agent's Share changes dialog. Its input is the agent's own differences from the team's version and the names of new files, capped at 16 000 characters; its output is capped at 600 and stripped of surrounding quotes. It may start a cold runtime, like drafting. The prompt keeps it out of version-control words (branch, commit, push, …, diff), because the note is read by teammates who are not developers. Any failure is an empty field, never an error: the user writes the note themselves. The differences are file contents of the agent's folder, so whatever backend AI Functions resolves to reads them: ignored files never appear, and tracked files that can hold a secret are left out of the text explicitly, because the summary is drafted before Share could refuse such a folder ([Team Sharing](../../agents/local_agents/team_sharing.md)).
 - Background title generation does not create a process merely to title a chat. Drafting and chat execution may deliberately use different backends. A chat whose root runs on Codex gets no AI Function title at all — Codex names it ([Auto titles](../../chat/auto_titles/auto_titles.md#codex-chats-are-named-by-codex)).
 - **On a Codex runtime, a utility session's input also goes to a second model.** Codex asks `gpt-5.6-luna` for a thread title once per session, carrying the first user message verbatim — for an AI Function that is the function's whole input (for a title, the chat's first message). The request is Codex's own, on the user's Codex login, and cannot be disabled ([The Codex Engine](../../agents/local_agents/codex_engine.md)).
 - Errors use `AiFunctionError`: llm_failed or empty_output. There is no "no backend" error: the Default runtime is always the answer, and its own readiness failures surface as `llm_failed`. Secret values stay in main and never appear in the settings status.
@@ -37,6 +38,7 @@ Title/draft caller → resolveBackend → runSingleShot → one provider SDK req
 - [Settings](../../ui/settings/settings.md) — independent credential/model selectors.
 - [Runtime orchestration](../../chat/orchestrated_agents/orchestrated_agents.md) — pooled processes and synthetic policy.
 - [Auto titles](../../chat/auto_titles/auto_titles.md) — warm-only background behavior.
+- [Team Sharing](../../agents/local_agents/team_sharing.md) — the share summary caller (`sharingService.draftMessage`).
 - [LLM adapters](../adapters/adapters.md) — one-shot provider implementation and model discovery.
 
 ## Technical Reference

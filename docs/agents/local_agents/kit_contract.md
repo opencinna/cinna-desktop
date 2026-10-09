@@ -146,7 +146,7 @@ Anything that can hold a credential **value** is excluded from what travels and 
 
 **`layout.json`'s `secret_files` is the authority** for the dotenv half. It is a rule rather than a glob list because a glob list cannot say "any `.env.<suffix>` except `.example`": enumerating suffixes leaks the first one nobody thought of. `cloud_import_excludes` still carries `**/.env`, `**/.env.local` and `**/*.env` as a belt-and-braces subset for hosts that do not read `secret_files` yet. A rule clause this build cannot evaluate fails toward *secret* — an unknown `match` clause counts as a hit, an unknown `unless` clause as a miss — and a layout with no usable rules falls back to the built-in dotenv rule.
 
-Enforced at four independent layers, so no single mistake leaks:
+Enforced at independent layers, so no single mistake leaks:
 
 | Layer | File | What it stops |
 |-------|------|---------------|
@@ -154,6 +154,7 @@ Enforced at four independent layers, so no single mistake leaks:
 | Agent ignore template | `resources/cinna-agent-kit/templates/agent/gitignore` | The file being committed from an agent folder |
 | Workshop ignore template | `resources/cinna-agent-kit/templates/root/gitignore` | The same, from the workshop root |
 | Validator secret check | `isSecretFile()` in `src/main/kit/validator.ts`, with `isIgnoredPath()` deciding whether a rule already covers it | The user shipping or committing one unknowingly |
+| Team-sharing guard | The agent template's rules forced into a shared agent's `.git/info/exclude` as a managed block, and a `secrets_tracked` refusal when `isSecretFile()` or `desktop_owned` matches a file already tracked — see [Team Sharing](team_sharing.md#a-file-that-can-hold-a-secret-is-never-sent) | The file being sent to the team, whatever `.gitignore` the folder carries |
 
 **The export applies the rule to the files it hashes, not only to the files it copies.** A secret left out of the upload but counted in the content hash would make the hash move for a change that can never be published, which reads as "unpublished changes" for ever.
 

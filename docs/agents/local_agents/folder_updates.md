@@ -40,6 +40,8 @@ The shape this was built for is a team repository of agents — cloned once and 
 
 No merge, no rebase, no stash, no `--force`, no commit, no push. `merge --ff-only` is the only update, and by construction it either applies cleanly or changes nothing.
 
+**This rule is about registered roots.** A single `Local/<slug>/` agent that is its own repository with an `origin` — a [shared agent](team_sharing.md) — does record and send versions, and its Update may rebase this machine's unsent versions onto the team's. The part of the rule that survives there is the part that matters: nothing ever resolves a collision. A rebase that does not apply cleanly is aborted and the user is offered two buttons, never a merge. Nothing here changed for a root: a root that is a repository still gets only the fast-forward below.
+
 That is not caution for its own sake. A desktop that resolves a conflict on the user's behalf has to decide which of two people's work survives, in a repository it knows nothing about, with the answer landing in files an agent will then be run from. **Refusing legibly is the feature**: every state this cannot handle is reported as a reason the user can act on.
 
 | Code | Means |
@@ -136,7 +138,7 @@ Settings → Agents → RootRepositoryDialog (opened from a folder row)
 
 ### Files
 
-- `src/main/services/localAgents/gitService.ts` — `readGitStatus()`, `updateGitRepo()`, `looksLikeGitRepo()` (the synchronous first-paint probe, `GIT_ANCESTOR_DEPTH` 8), and the private `run()` that shapes every invocation
+- `src/main/services/localAgents/gitService.ts` — `readGitStatus()`, `updateGitRepo()`, `looksLikeGitRepo()` (the synchronous first-paint probe, `GIT_ANCESTOR_DEPTH` 8), and the private `run()` that shapes every invocation. The second half of the file is the share verbs of [Team Sharing](team_sharing_tech.md), which write; nothing in this half calls them
 - `src/main/services/localAgents/agentsHomeService.ts` — calls `looksLikeGitRepo` when building each `AgentRootDto`
 - `src/shared/agentGit.ts` — `GitCommit`, `GitRefusal`, `GitStatus`, `GitUpdateResult`. Shared because the preload bridge and the settings panel both name them and neither may import from `src/main`
 - `src/main/ipc/local_agent.ipc.ts` — the two channels
@@ -164,3 +166,4 @@ Settings → Agents → RootRepositoryDialog (opened from a folder row)
 - [Agents Tab & Agent Page](agents_tab.md) — the Settings → Agents section the panel lives in
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — where `git` is found and what environment the child gets
 - [The Local Engine](engine.md) — an update that changes the agents calls `applyConfigChange`, the same way create and delete do
+- [Team Sharing](team_sharing.md) — the per-agent counterpart: one shared `Local/<slug>/` folder that does record and send, under the same never-resolve rule

@@ -25,7 +25,8 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 - **Bare agent page** — The same chat/settings shell for an adopted folder (one holding `AGENT.md`, `AGENTS.md` or `CLAUDE.md`), with six Settings tabs (no **Commands** or **Schedules**; **Interface** stays). Overview contains the locally stored **Name**, the folder's read-only `Readme` when present, and **Instructions**; Addons is the same tab a kit agent has. Runtime choices are stored in Cinna rather than in the folder
 - **Prompt card** — One prompt document on Overview — a kit agent's Workflow, Entrypoint and Refiner prompts, a bare agent's Instructions — rendered as markdown, clipped to ten lines, and edited in place
 - **Addons** — What the agent runs with beyond its folder: today, MCP connectors attached to it and offered to every one of its sessions. See [Agent Addons](addons.md)
-- **⋯ menu** — What a user does to an agent *occasionally*: Rescan folder, Reveal folder, Open terminal here, Stamp identity (legacy folders only), and **Delete agent…** — **Remove agent…** for a bare agent — which always confirms
+- **⋯ menu** — What a user does to an agent *occasionally*: Rescan folder, Reveal folder, Open terminal here, Stamp identity (legacy folders only), **Share with the team…** (a kit agent not yet shared, on a Cinna account with a Team library), and **Delete agent…** — **Remove agent…** for a bare agent, **Remove from this computer…** for a [shared](team_sharing.md) one — which always confirms
+- **Share line** — A [shared agent](team_sharing.md)'s one-line state with the team under the page header ("Up to date with the team", "N changes you haven't shared", …) with **Update** and **Share changes…** beside it. Absent for every other agent
 - **Default tool** — The `cli-assistant` or `editor` the Open-in button launches in one click, remembered in the `localAgentsDefaultTool` setting and rewritten by the last pick. Owned by [Open in… (Local Agent Tools)](open_in_tools.md); this page and the New-agent flow are its two writers
 - **File editor** — One in-place editor over one file. A pure state machine in `src/renderer/src/utils/localAgents.ts` plus a thin React shell in `src/renderer/src/hooks/useLocalAgents.ts`
 - **Stamp** — `{mtimeMs, size, hash}` for an editable file, round-tripped through a save so a write over a file that changed underneath is refused. Defined in `src/shared/localAgents.ts`
@@ -42,7 +43,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 1. Click **Agents** in the sidebar tab strip. Switching to the tab clears the selection and shows its empty pane; it does not choose an arbitrary agent
 2. Groups appear in this order: default local folders (**Local**), enabled agents from the active Cinna server (its host name), other registered folder roots in registration order, **A2A agents**, **ACP agents**, **Managed**. Existing ordering within each group is retained
-3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions and credential sublines are absent; runtime and readiness belong on the page
+3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions and credential sublines are absent; runtime and readiness belong on the page. The one addition is a [shared agent](team_sharing.md)'s small people glyph after the name, with a dot inside it when there is something to share or to update; its space exists only on shared rows and the dot sits inside it, so a state change never moves the name
 4. **Settings → Features → Interface → Show sections in Agents sidebar** defaults on. Turning it off removes headings, section spacing and empty-group placeholders without changing row order or profile membership. With sections enabled, the default root is labelled **Local**; a lone present non-default root retains the existing rule that omits its heading. See [Features Settings](../../ui/settings/settings.md)
 5. Clicking a row explicitly enters chat mode with that agent selected. **Settings** opens the runtime controls and detail tabs; **Start chat** returns to that page's composer. Neither mode switch creates a chat or sends a message. The composer stays mounted while hidden; choosing a different agent remounts it. Draft text and pending selections are also stored by profile and agent surface, so navigating away and returning restores them after remount, independently of the dashboard draft. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft)
 6. The trailing chat shortcut instead opens the main new-chat screen, selects the agent, focuses its composer and moves the sidebar to **Chats**. It stops propagation, so it does not also navigate to the agent page. Folder shortcuts exclude `invalid` folders; external shortcuts require `enabled`. A successful send from the page's embedded composer moves to the resulting conversation and the Chats sidebar
@@ -103,6 +104,17 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 2. The dialog offers two options as radios: **Remove from the list only** (the default, selected) and **Remove and move the folder to the Trash**. The recoverable one is first, because this is the user's own folder — very often a repository they share with other people — so deleting it is the deliberate second choice ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5)
 3. The confirm button's label follows the choice: **Remove** or **Move to Trash**
 4. A kit agent is offered no such choice, and main refuses `trashFolder: false` for one: its row is a derived index over its folder, so the next scan would put it straight back
+
+### Removing a shared agent
+
+1. For a [shared agent](team_sharing.md) the menu item, the dialog's title and its button all read **Remove from this computer** — the folder is this machine's copy of the team's version, and that is all that goes
+2. The dialog says the folder goes to the Trash, the team's version stays in the Team library untouched, and the agent can be Got again any time
+3. While this machine has changes the team does not have, main refuses (`unshared_changes`) and names up to three of the files: trashing the folder would lose them. The check reads the folder without reaching the network, so a removal never waits on, or fails with, the team's server
+
+### A shared agent's page
+
+1. The share line sits under the header from the first frame — whether the agent is shared is read from the list the sidebar already holds, so the line never appears under content that was already there
+2. **Update**, **Share changes…**, the conflict choice and the kept copy's note are described in [Team Sharing](team_sharing.md)
 
 ### Editing a prompt in place
 
@@ -487,6 +499,7 @@ Settings ── Agents ──► LocalAgentsSettingsSection (roots, readiness, t
 - [Bare Agents & External Roots](bare_agents.md) — the Add-a-folder half of the + dialog, and every difference on the page of an agent adopted that way
 - [Bundles Catalog](../bundles_catalog/bundles_catalog.md) — the catalog, quick install and setup dialog behind **Install from catalog**; the install store is shared with its [inline install](../bundles_catalog/inline_install.md) in the chat picker
 - [Agents Folder Updates](folder_updates.md) — the update line under a settings root that is a git working tree
+- [Team Sharing](team_sharing.md) — the sidebar glyph, the share line, **Share with the team…** and **Remove from this computer…** on a shared agent
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest schema and validator behind every card, and the templates the scaffold and the draft's "untouched?" check read
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the Open-in split button on the agent page, the default tool it writes, and the Developer Tools section in Settings
 - [Agent Addons](addons.md) — the Addons tab: MCP connectors attached to the agent, its count badge, and how they reach every session of the agent

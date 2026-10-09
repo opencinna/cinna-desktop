@@ -4,19 +4,21 @@
 
 One place to state a product position that four other documents were quietly contradicting, so it does not have to be re-derived — or re-lost — in each of them. **A folder agent lives on one machine. A job bound to one is a local-only job.** The `source: 'folder'` job-dependency descriptor exists so that fact is *visible and blocking* on any other machine, not so the job runs there.
 
+**One deliberate exception: a [shared agent](team_sharing.md).** A `Local/<slug>/` agent put in the account's Team library has a definition that exists on other machines — not because sync carries it, but because each machine fetched it from the library. That is the one case where the app now offers a repair on another machine, and it is described under [Shared agents](#shared-agents-the-one-designed-correspondence) below. Every other folder agent is exactly as this document describes.
+
 This doc is a position, not a feature. It has no `_tech` sibling because it has no implementation of its own — the mechanisms it governs are documented in [Folder Agents as Counterparties](counterparty.md), [Jobs](../../jobs/jobs/jobs.md) and [Native Client Data Sync](../../sync/data_sync/data_sync.md), which all link here rather than restating it.
 
 ## The position
 
-- **A folder agent is a directory on disk, and the desktop's own sync never carries it.** `syncEngine` moves notes and jobs; there is no collection for agent folders, no device-to-device transfer of one, and no "copy this agent to my other machine" flow. (Publishing an agent *to a cinna-server instance* is a different question with its own contract, agreed with the cinna-core team out of band — and it is not a path between two of the user's machines.)
+- **A folder agent is a directory on disk, and the desktop's own sync never carries it.** `syncEngine` moves notes and jobs; there is no collection for agent folders, no device-to-device transfer of one, and no "copy this agent to my other machine" flow. (Publishing an agent *to a cinna-server instance* is a different question with its own contract, agreed with the cinna-core team out of band. The Team library is the one route from there back to a machine: a **shared** agent is fetched with **Get**, on any machine signed in to that account — a deliberate act per machine, not sync.)
 - **A job that depends on one is therefore local-only.** It runs on the machine that holds the folder. On any other machine it is **blocked**, by design, and the app says so.
-- **The one legitimate re-resolve is the same machine.** After a re-auth, a profile switch, a reinstall, or a sign-out and back in, a job on *that same machine* re-attaches to *that same folder* if the folder is still where it was. This is the case the manifest id is actually for.
+- **The one legitimate re-resolve is the same machine.** After a re-auth, a profile switch, a reinstall, or a sign-out and back in, a job on *that same machine* re-attaches to *that same folder* if the folder is still where it was. This is the case the manifest id is actually for. (A shared agent adds a second: a machine that fetched it from the Team library — see below.)
 - **Resolving on a *peer* is a mechanism, not a supported workflow.** Two machines that happen to hold folders with the same `cinna-agent.json` `id` will both resolve the descriptor, because the id is the key and the key matches. That is a property of the lookup, not a promise. It is undesigned, untested across a real device pair, and must not be documented as a way to use the product.
-- **The undesigned part is *matching*, not syncing.** The open question is not "how do we ship the folder" — it is what it should *mean* for a local agent on machine A to correspond to one on machine B. Same manifest id? Same path? Same content? Until that has an answer, no surface may imply the correspondence exists.
+- **The undesigned part is *matching*, not syncing.** The open question is not "how do we ship the folder" — it is what it should *mean* for a local agent on machine A to correspond to one on machine B. Same manifest id? Same path? Same content? Until that has an answer, no surface may imply the correspondence exists — **except for a shared agent**, where the answer was designed: the Team library's repository is the agent, and the manifest id it carries is how a job finds it.
 
 ## What the app says, and what it deliberately does not
 
-The blocked-job panel (`src/renderer/src/components/jobs/JobDetail.tsx`) states the condition and stops:
+The blocked-job panel (`src/renderer/src/components/jobs/JobDetail.tsx`) states the condition and, for any agent that is not in the Team library, stops:
 
 > This job needs an agent that isn't available on this device, so it can't run here.
 
@@ -27,6 +29,16 @@ It gives **no repair instruction**, and this is load-bearing:
 - A hedge does not rescue it. "It *may* run on a device where that agent is set up" is still a claim about a device that need not exist; softening a sentence that is false for a whole class of users leaves it false and makes it harder to notice.
 
 The refusal itself lives in main (`src/main/services/jobService.ts` `executeLocal`) and its message names the missing agents. Same discipline: it stops at what is true.
+
+## Shared agents: the one designed correspondence
+
+A [shared agent](team_sharing.md) is a `Local/<slug>/` folder that is its own git repository whose `origin` is a Team library repository (or the user's own remote). For one of those the question above *has* an answer, so the position bends for them, and only them:
+
+- **Its definition exists on other machines, by way of the library.** Every machine that has it fetched it from there with **Get**; the folders correspond because they are clones of one repository, not because their manifest ids happen to match. Per-machine state — credentials, `app-data/`, grants — is still never carried: a clone does not bring it, and the user sets it up on each machine
+- **The blocked-job row offers a repair, and only this one.** When an `unavailable` folder dependency's manifest id matches an agent the Team library lists, and this machine has no copy, the row offers **Get *X* from the team library**. After the Get the descriptor resolves against the new folder and the job unblocks. The panel's own sentence is unchanged; the offer sits on the dependency's row, and appears only when the app can actually do it
+- **Nothing else changes.** A folder agent that is not in the library — including one the library does not list *yet* — still gets the panel that stops at what is true. The descriptor still keys on the manifest id; a peer holding a non-shared folder with the same id still resolves it as a mechanism, not a workflow. A positional `legacy:` id is never matched against the library: it names a directory on another machine, not an agent
+
+The exception is narrow by design. The two sentences the panel refuses to say are refused for shared agents too: it never tells the user to copy a folder, and it never names a device where the job would run.
 
 **So the docs and the UI now have to agree.** A doc sentence that promises what this panel refuses to promise is a defect in the doc, not a gap in the panel.
 
@@ -54,8 +66,10 @@ The repair in each case was to the **framing, not the facts**: the descriptor st
 - [Jobs](../../jobs/jobs/jobs.md) — the Run button, the sidebar marker, and the blocked-job panel
 - [Native Client Data Sync](../../sync/data_sync/data_sync.md) — the portable-dependency manifest this is the exception inside
 - [Agents Home, Scanner & Folder Index](folder_index.md) — what a folder agent *is*, and why it cannot be a row without a directory
+- [Team Sharing](team_sharing.md) — the shared agents this position makes an exception for, and the **Get** the blocked-job row offers
 
 ## Not verified
 
 - **This position has never been exercised across a real device pair.** No folder-agent job has crossed two real machines. Every claim about peer behaviour is inference from `resolveFolderAgent` plus unit tests against in-memory SQLite (`src/main/sync/resolveFolderAgent.test.ts`).
+- **The Get from a blocked job has never run against a real Cinna server**: the library API does not exist in cinna-core yet, so on every real account the library is empty and the offer never appears. Its matching is covered by `TeamLibraryGet.test.tsx` against a mocked library.
 - **The same-machine re-resolve is likewise reasoned, not observed.** No reinstall-and-reattach has been run in a real app. Checked at `12686f0` on 4 Sep 2026 by reading `resolveFolderAgent` and `agentIdentityKey`; the claim is that the manifest id is stable across those events, which is a property of the file on disk, not of anything the app persists.
