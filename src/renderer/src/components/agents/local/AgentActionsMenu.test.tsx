@@ -2,6 +2,12 @@ import { act, render, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import type {
+  AgentShareResult,
+  AgentShareStatus,
+  LibraryListingDto
+} from '../../../../../shared/agentSharing'
+import { SHARE_REFUSAL_TEXT, SHARE_UI_TEXT } from '../../../utils/shareText'
 
 /**
  * Delete is the one destructive action on the agent page. Three things are
@@ -33,6 +39,29 @@ vi.mock('../../../hooks/useLocalTools', () => ({
   useOpenIn: () => ({ mutate: vi.fn() })
 }))
 
+/**
+ * Sharing state, per test: `listed` is the agent's entry in the statuses list
+ * (null = known not shared), `library` the Team library (null = not a Cinna
+ * profile's), `isCinna` the active profile's type.
+ */
+let listed: AgentShareStatus | null = null
+let library: LibraryListingDto | null = null
+let isCinna = true
+const shareWithTeam = vi.fn()
+let shareWithTeamOptions: { onResult?: (result: AgentShareResult) => void } | undefined
+vi.mock('../../../hooks/useSharing', () => ({
+  useListedShareStatus: () => listed,
+  useTeamLibrary: () => ({ data: library }),
+  useShareWithTeam: (options?: { onResult?: (result: AgentShareResult) => void }) => {
+    shareWithTeamOptions = options
+    return { mutate: shareWithTeam, isPending: false }
+  }
+}))
+vi.mock('../../../stores/auth.store', () => ({
+  useAuthStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ currentUser: { type: isCinna ? 'cinna_user' : 'local_user' } })
+}))
+
 const { AgentActionsMenu } = await import('./AgentActionsMenu')
 
 function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
@@ -42,6 +71,7 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
     path: '/tmp/agents/alpha',
     rootId: 'root-1',
     identity: 'manifest',
+    kind: 'kit',
     stamps: { 'cinna-agent.json': { mtimeMs: 1, size: 1, hash: 'h' } },
     ...overrides
   } as LocalAgentDto
@@ -61,6 +91,115 @@ afterEach(() => {
   vi.clearAllMocks()
   removePending = false
   hookOptions = undefined
+  listed = null
+  library = null
+  isCinna = true
+  shareWithTeamOptions = undefined
+  delete (window as unknown as { api?: unknown }).api
+})
+
+function sharedStatus(): AgentShareStatus {
+  return {
+    agentId: 'folder:alpha',
+    remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'write' },
+    state: 'up_to_date',
+    headSha: 'a',
+    remoteHeadSha: 'a',
+    ahead: 0,
+    behind: 0,
+    changedFiles: 0,
+    unshared: false,
+    fetched: false,
+    refusal: null
+  }
+}
+
+const LIBRARY: LibraryListingDto = { host: 'https://core.test', agents: [], fetchedAt: '2026-10-09T00:00:00Z' }
+
+/**
+ * A shared agent's folder is a copy of the team's version: removing it trashes
+ * this machine's copy only, and every name the dialog has says so — the menu
+ * item, the heading, the button and the accessible name (ux_rules rule 10).
+ */
+describe('AgentActionsMenu — removing a shared agent', () => {
+  it('names itself "Remove from this computer" everywhere, and trashes the folder', () => {
+    listed = sharedStatus()
+    openMenu()
+    expect(screen.queryByRole('menuitem', { name: /delete agent/i })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.removeFromComputerMenu }))
+    const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeFromComputer })
+    expect(dialog.textContent).toContain('Trash')
+    expect(dialog.textContent).toContain('Team library')
+    expect(screen.queryByRole('dialog', { name: /delete agent/i })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removeFromComputer }))
+    expect(remove).toHaveBeenCalledWith({ agentId: 'folder:alpha', trashFolder: true }, expect.anything())
+  })
+
+  it('shows main’s refusal naming what is unshared, and stays open', () => {
+    listed = { ...sharedStatus(), state: 'unshared', unshared: true, changedFiles: 3 }
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.removeFromComputerMenu }))
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removeFromComputer }))
+    // Main's sentence, as `localAgentService` writes it: the count, the first
+    // files, and what to do.
+    const refusal = Object.assign(
+      new Error(
+        "3 changes on this agent haven't been shared with the team yet (prompts/WORKFLOW.md, README.md, and 1 more). Share them first, or keep the folder."
+      ),
+      { code: 'unshared_changes' }
+    )
+    act(() => lastDeleteOptions().onError(refusal))
+    expect(screen.getByRole('alert').textContent).toBe(refusal.message)
+    expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeFromComputer })).toBeTruthy()
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.removeFromComputer })).toBeTruthy()
+  })
+})
+
+describe('AgentActionsMenu — Share with the team', () => {
+  it('is offered for a kit agent that is not shared, on a Cinna profile with a Team library', () => {
+    library = LIBRARY
+    openMenu()
+    expect(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam })).toBeTruthy()
+  })
+
+  it.each([
+    ['already shared', () => { library = LIBRARY; listed = sharedStatus() }, agent()],
+    ['no Team library', () => { library = null }, agent()],
+    ['not a Cinna profile', () => { library = LIBRARY; isCinna = false }, agent()],
+    ['a bare agent', () => { library = LIBRARY }, agent({ kind: 'bare' })],
+    ['statuses not loaded', () => { library = LIBRARY; listed = undefined as unknown as null }, agent()]
+  ])('is not offered when %s', (_label, arrange, a) => {
+    arrange()
+    openMenu(a)
+    expect(screen.queryByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam })).toBeNull()
+  })
+
+  it('pre-fills the draft, shares it, keeps a refusal in the dialog and closes on success', async () => {
+    library = LIBRARY
+    const draft = vi.fn().mockResolvedValue({ success: true, value: { name: 'Alpha', description: 'Watches.' } })
+    ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft } }
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam }))
+    const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })
+    await act(async () => {})
+    expect((screen.getByLabelText(SHARE_UI_TEXT.nameLabel) as HTMLInputElement).value).toBe('Alpha')
+
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
+    expect(shareWithTeam).toHaveBeenCalledWith(
+      { agentId: 'folder:alpha', input: { name: 'Alpha', description: 'Watches.' } },
+      expect.anything()
+    )
+    act(() =>
+      shareWithTeamOptions?.onResult?.({ done: false, refusal: 'no_access', detail: null, status: null, agentId: null })
+    )
+    expect(dialog.textContent).toContain(SHARE_REFUSAL_TEXT.no_access)
+
+    act(() =>
+      shareWithTeamOptions?.onResult?.({ done: true, refusal: null, detail: null, status: null, agentId: null })
+    )
+    expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })).toBeNull()
+  })
 })
 
 describe('AgentActionsMenu — delete', () => {

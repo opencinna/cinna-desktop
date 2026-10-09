@@ -30,6 +30,7 @@ import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
 import { AgentAddonsTab, useAddonsBadge } from './AgentAddonsTab'
 import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
+import { AgentShareLine } from './sharing/AgentShareLine'
 
 export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface'
 
@@ -293,6 +294,13 @@ export function LocalAgentPage(): React.JSX.Element {
             <AgentActionsMenu agent={agent} onError={reportError} />
           </div>
         </header>
+        {/*
+          A shared agent's state with the team, and its Update / Share changes.
+          Present from the first frame for a shared agent and absent for any
+          other — decided from the statuses list the sidebar already holds —
+          so nothing below it moves when the agent's own status lands.
+        */}
+        <AgentShareLine key={agent.id} agentId={agent.id} onNote={reportNote} />
         {/*
           Always rendered, exactly one line: a refusal appearing here must not
           push the panel below it down, and the macOS automation message wraps

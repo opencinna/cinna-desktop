@@ -11,30 +11,48 @@ import { AnswerDeliveryError } from '../../utils/answerError'
 import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
 import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
 import { DispatchGateCard, DispatchPausedCard } from './InboxDispatchCards'
+import { TeamChangedCard } from './InboxTeamChangedCard'
 import { ASK_NO_LONGER_WAITING } from '../../../../shared/inbox'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
-import type { InboxAnswerCode, InboxEntry, TaskDispatchInboxItem } from '../../../../shared/inbox'
+import type {
+  InboxAnswerCode,
+  InboxEntry,
+  TaskDispatchInboxItem,
+  TeamChangedInboxItem
+} from '../../../../shared/inbox'
 
 /**
- * One row of the list: an ask, or one of the task dispatcher's cards (an
- * approval of outside content, a paused queue). Both kinds share the order,
- * the retention and the count.
+ * One row of the list: an ask, one of the task dispatcher's cards (an
+ * approval of outside content, a paused queue), or a shared agent the team
+ * changed. All kinds share the order and the retention.
  */
 type InboxRowItem =
-  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem }
+  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined; team?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem; team?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; team: TeamChangedInboxItem }
 
 function dispatchKey(item: TaskDispatchInboxItem): string {
   return item.kind === 'dispatch_gate' ? `gate:${item.gateId}` : `paused:${item.agentId}:${item.pausedAt.getTime()}`
 }
 
-function rowsOf(entries: readonly InboxEntry[], dispatch: readonly TaskDispatchInboxItem[]): InboxRowItem[] {
+function rowsOf(
+  entries: readonly InboxEntry[],
+  dispatch: readonly TaskDispatchInboxItem[],
+  team: readonly TeamChangedInboxItem[] = []
+): InboxRowItem[] {
   return [
     ...entries.map((ask): InboxRowItem => ({ key: ask.requestId, at: ask.createdAt, ask })),
     ...dispatch.map((item): InboxRowItem => ({
       key: dispatchKey(item),
       at: item.kind === 'dispatch_gate' ? item.createdAt : item.pausedAt,
       dispatch: item
+    })),
+    // One card per agent and team version: a newer change is a new card, so a
+    // retained "Updated." card never stands in for the next one.
+    ...team.map((item): InboxRowItem => ({
+      key: `team:${item.agentId}:${item.changedAt?.getTime() ?? item.repoId}`,
+      at: item.changedAt ?? new Date(0),
+      team: item
     }))
   ]
 }
@@ -128,7 +146,9 @@ export function InboxView(): React.JSX.Element {
   const entries = useMemo(() => {
     const byId = new Map<string, InboxRowItem>()
     for (const row of retained) byId.set(row.key, row)
-    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [])) byId.set(row.key, row)
+    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [], data?.teamChanges ?? [])) {
+      byId.set(row.key, row)
+    }
     const known = new Set(order.current)
     const fresh = [...byId.values()]
       .filter((row) => !known.has(row.key))
@@ -246,6 +266,8 @@ export function InboxView(): React.JSX.Element {
                   now={now}
                   onActed={() => retain(row)}
                 />
+              ) : row.team ? (
+                <TeamChangedCard key={row.key} item={row.team} now={now} onActed={() => retain(row)} />
               ) : row.dispatch.kind === 'dispatch_gate' ? (
                 <DispatchGateCard
                   key={row.key}

@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CatalogEntryDto } from '../../../../shared/catalog'
+import type { LibraryAgentDto, LibraryListingDto } from '../../../../shared/agentSharing'
+import type { TeamLibraryActions } from './TeamLibraryPanel'
 
 /**
  * The Agent Catalog dialog: a grid of every published bundle, a detail view
@@ -32,6 +34,7 @@ window.api = {} as never
 const { CatalogBrowserModal } = await import('./CatalogBrowserModal')
 const { useAuthStore } = await import('../../stores/auth.store')
 const { SETTLE_MS } = await import('../../hooks/useSettleGuard')
+const { SHARE_UI_TEXT } = await import('../../utils/shareText')
 
 function entry(overrides: Partial<CatalogEntryDto>): CatalogEntryDto {
   return {
@@ -82,6 +85,7 @@ const HELPDESK = entry({
 })
 
 let catalogList: ReturnType<typeof vi.fn>
+let libraryList: ReturnType<typeof vi.fn>
 const onClose = vi.fn()
 const onInstall = vi.fn()
 const onOpen = vi.fn()
@@ -99,8 +103,11 @@ beforeEach(() => {
     } as never
   })
   catalogList = vi.fn().mockResolvedValue({ success: true, value: [INVOICES, RATES, HELPDESK] })
+  libraryList = vi.fn().mockResolvedValue({ success: true, value: null })
   window.api = {
     catalog: { list: catalogList },
+    // No Team library unless a test gives the profile one.
+    sharing: { library: libraryList },
     agents: {
       list: vi.fn().mockResolvedValue([
         { id: 'remote:helpdesk', name: 'Helpdesk', source: 'remote', remoteTargetId: 'install-1' }
@@ -316,5 +323,116 @@ describe('CatalogBrowserModal', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
     fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Agent catalog' }))
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+})
+
+
+function libraryAgent(overrides: Partial<LibraryAgentDto>): LibraryAgentDto {
+  return {
+    repoId: 'r',
+    slug: 'agent',
+    name: 'Agent',
+    description: '',
+    cloneUrl: 'https://core.test/git/r.git',
+    headSha: 'a',
+    updatedAt: '2026-10-01T00:00:00Z',
+    access: 'read',
+    maintainers: [],
+    engine: null,
+    manifestId: null,
+    localAgentId: null,
+    updateAvailable: false,
+    ...overrides
+  }
+}
+
+const PAYROLL = libraryAgent({
+  repoId: 'r-payroll',
+  name: 'Payroll Checker',
+  description: 'Checks the payroll export.',
+  maintainers: [{ userId: 'u1', displayName: 'Dana Ruiz' }],
+  engine: 'claude'
+})
+const EXPENSES = libraryAgent({ repoId: 'r-exp', name: 'Expenses', localAgentId: 'folder:exp' })
+const LEDGER = libraryAgent({ repoId: 'r-ledger', name: 'Ledger', localAgentId: 'folder:ledger', updateAvailable: true })
+
+function listing(agents: LibraryAgentDto[]): LibraryListingDto {
+  return { host: 'https://core.test', agents, fetchedAt: '2026-10-09T00:00:00Z' }
+}
+
+function actions(overrides: Partial<TeamLibraryActions> = {}): TeamLibraryActions {
+  return {
+    gettingRepoId: null,
+    updatingAgentId: null,
+    error: null,
+    onGet: vi.fn(),
+    onUpdate: vi.fn(),
+    onOpenLocal: vi.fn(),
+    ...overrides
+  }
+}
+
+/**
+ * The Team library is a second source of the same dialog, offered only when
+ * the profile has one. Get, Update and Open act on the tile they sit in; the
+ * dialog owns none of them.
+ */
+describe('CatalogBrowserModal — Team library', () => {
+  async function openLibrary(agents: LibraryAgentDto[], library = actions()): Promise<TeamLibraryActions> {
+    libraryList.mockResolvedValue({ success: true, value: listing(agents) })
+    mount({ library })
+    fireEvent.click(await screen.findByRole('tab', { name: SHARE_UI_TEXT.librarySource }))
+    return library
+  }
+
+  it('is not offered without a Team library', async () => {
+    mount({ library: actions() })
+    await waitFor(() => expect(libraryList).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
+    expect(screen.queryByRole('tab', { name: SHARE_UI_TEXT.librarySource })).toBeNull()
+  })
+
+  it('asks main for a fresh listing when the dialog opens', async () => {
+    await openLibrary([PAYROLL])
+    expect(libraryList).toHaveBeenCalledWith(true)
+  })
+
+  it('shows each agent with its maintainers and engine, and Get / Installed / Update available', async () => {
+    const library = await openLibrary([PAYROLL, EXPENSES, LEDGER])
+    const payroll = tile('Payroll Checker')
+    expect(payroll.textContent).toContain(SHARE_UI_TEXT.maintainedBy('Dana Ruiz'))
+    expect(payroll.textContent).toContain('claude')
+    fireEvent.click(within(payroll).getByRole('button', { name: SHARE_UI_TEXT.get }))
+    expect(library.onGet).toHaveBeenCalledWith('r-payroll')
+
+    const expenses = tile('Expenses')
+    expect(expenses.textContent).toContain(SHARE_UI_TEXT.installed)
+    expect(within(expenses).queryByRole('button', { name: SHARE_UI_TEXT.get })).toBeNull()
+    fireEvent.click(within(expenses).getByRole('button', { name: SHARE_UI_TEXT.open }))
+    expect(library.onOpenLocal).toHaveBeenCalledWith('folder:exp')
+
+    fireEvent.click(within(tile('Ledger')).getByRole('button', { name: SHARE_UI_TEXT.updateAvailable }))
+    expect(library.onUpdate).toHaveBeenCalledWith(LEDGER)
+  })
+
+  it('shows Getting… in the tile being got, and its refusal only there', async () => {
+    await openLibrary(
+      [PAYROLL, libraryAgent({ repoId: 'r-other', name: 'Other' })],
+      actions({ gettingRepoId: 'r-payroll', error: { repoId: 'r-other', message: 'Open Alpha instead.' } })
+    )
+    expect(within(tile('Payroll Checker')).getByRole('button', { name: SHARE_UI_TEXT.getting })).toBeTruthy()
+    expect(within(tile('Other')).getByRole('alert').textContent).toBe('Open Alpha instead.')
+    expect(within(tile('Payroll Checker')).queryByRole('alert')).toBeNull()
+  })
+
+  it('says so when nothing has been shared yet', async () => {
+    await openLibrary([])
+    expect(screen.getByText(SHARE_UI_TEXT.libraryEmpty)).toBeTruthy()
+  })
+
+  it('opens a detail with the description', async () => {
+    await openLibrary([PAYROLL])
+    fireEvent.click(within(tile('Payroll Checker')).getByRole('button', { name: 'Payroll Checker' }))
+    expect(screen.getByText('Checks the payroll export.', { selector: 'p' })).toBeTruthy()
   })
 })

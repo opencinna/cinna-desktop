@@ -26,6 +26,7 @@ import { useConnectIntent } from './hooks/useConnectIntent'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
+import { useSharingWatch } from './hooks/useSharing'
 import { useEngineWatch } from './hooks/useEngine'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
@@ -123,6 +124,9 @@ function Shell(): React.JSX.Element {
   // once, means an assistant's change to a folder refreshes the Agents tab and
   // the open agent page wherever the user happens to be.
   useLocalAgentWatch()
+  // A shared agent's state and the Team library move on main's schedule (a
+  // teammate shares, a fetch lands); one subscription refreshes every surface.
+  useSharingWatch()
   // The engine's slow transitions — a first-use download, a crash between two
   // turns — happen while nobody is watching a particular screen, so the
   // subscription is here rather than in the card that renders the state.

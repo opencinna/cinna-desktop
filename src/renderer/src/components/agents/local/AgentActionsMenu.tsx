@@ -7,7 +7,8 @@ import {
   MoreHorizontal,
   RefreshCw,
   TerminalSquare,
-  Trash2
+  Trash2,
+  Users
 } from 'lucide-react'
 import { usePopover } from '../../ui/usePopover'
 import { useUIStore } from '../../../stores/ui.store'
@@ -21,11 +22,21 @@ import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import { isBlockedWriteError, type LocalAgentDto } from '../../../../../shared/localAgents'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { MENU_ITEM, MENU_SURFACE } from './OpenInMenu'
+import { useListedShareStatus, useShareWithTeam, useTeamLibrary } from '../../../hooks/useSharing'
+import { useAuthStore } from '../../../stores/auth.store'
+import { SHARE_UI_TEXT, shareRefusalSentence } from '../../../utils/shareText'
+import { ShareWithTeamDialog } from './sharing/ShareDialogs'
 
 interface DeleteAgentDialogProps {
   agent: LocalAgentDto
   /** The mutation, owned by the menu — see {@link AgentActionsMenu}. */
   remove: ReturnType<typeof useDeleteLocalAgent>
+  /**
+   * The agent has a team version. Removing it trashes this machine's folder
+   * only, so the dialog says "Remove from this computer" in every place it
+   * names itself, and main refuses while changes are unshared — naming them.
+   */
+  shared: boolean
   onCancel: () => void
 }
 
@@ -47,14 +58,21 @@ interface DeleteAgentDialogProps {
  * only leave the user looking at a page whose folder is being trashed with no
  * sign that it is.
  */
-function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps): React.JSX.Element {
+function DeleteAgentDialog({ agent, remove, shared, onCancel }: DeleteAgentDialogProps): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   // Only a bare agent has a choice to make. A kit agent's row is a derived
   // index over its folder, so "remove from the list" would be undone by the
   // very next scan; there the folder *is* the removal, and main refuses the
   // other value rather than pretending it means something.
-  const [trashFolder, setTrashFolder] = useState(agent.kind !== 'bare')
+  // A shared folder is a copy of the team's version, so trashing it is the
+  // whole of "remove from this computer"; there is nothing to keep it listed for.
+  const [trashFolder, setTrashFolder] = useState(shared || agent.kind !== 'bare')
+  const title = shared
+    ? SHARE_UI_TEXT.removeFromComputer
+    : agent.kind === 'bare'
+      ? 'Remove agent'
+      : 'Delete agent'
   const pendingRef = useRef(remove.isPending)
   pendingRef.current = remove.isPending
 
@@ -102,14 +120,18 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
         // "Delete agent" over a dialog whose heading, menu item and primary
         // button all said Remove — and announced the more alarming of the two
         // words for the branch whose default deletes nothing (ux_rules rule 8).
-        aria-label={agent.kind === 'bare' ? 'Remove agent' : 'Delete agent'}
+        aria-label={title}
         className="app-popover-surface w-96 space-y-4 rounded-lg border border-[var(--color-border)] p-5 shadow-xl"
       >
         <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-danger)]">
           <AlertTriangle size={16} />
-          {agent.kind === 'bare' ? 'Remove agent' : 'Delete agent'}
+          {title}
         </div>
-        {agent.kind === 'bare' ? (
+        {shared ? (
+          <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+            {SHARE_UI_TEXT.removeFromComputerBody(agent.name)}
+          </p>
+        ) : agent.kind === 'bare' ? (
           <>
             {/*
               The copy owns the half that cannot be undone. Removing the agent
@@ -201,9 +223,15 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
             onClick={confirm}
             disabled={remove.isPending}
             // A fixed width, so the shorter "Deleting…" does not pull Cancel sideways.
-            className="min-w-[7.5rem] rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+            className="min-w-[7.5rem] whitespace-nowrap rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
           >
-            {remove.isPending ? 'Removing…' : trashFolder ? 'Move to Trash' : 'Remove'}
+            {remove.isPending
+              ? 'Removing…'
+              : shared
+                ? SHARE_UI_TEXT.removeFromComputer
+                : trashFolder
+                  ? 'Move to Trash'
+                  : 'Remove'}
           </button>
         </div>
       </div>
@@ -243,6 +271,30 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
   const stamp = useStampAgentIdentity()
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const [confirming, setConfirming] = useState(false)
+  const listed = useListedShareStatus(agent.id)
+  // Only a kit folder can have a team version (main's rule: directly under a
+  // workshop root's `Local/`); said here too, so a bare agent never takes the
+  // shared branches below.
+  const isKit = agent.kind === 'kit'
+  const shared = listed != null && isKit
+  const isCinna = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  const library = useTeamLibrary()
+  // Offered only where it can work: a kit folder known not to be shared, on a
+  // Cinna profile whose Team library answered. Main refuses anything else
+  // (a folder outside `Local/`, one with a team version already), and the
+  // dialog shows why.
+  const canShareWithTeam =
+    isKit && listed === null && isCinna && library.data != null
+  const [sharingWithTeam, setSharingWithTeam] = useState(false)
+  const [shareTeamError, setShareTeamError] = useState<string | null>(null)
+  // Owned here, not in the dialog, for the same reason as the delete: the
+  // close on success is a hook-level callback that survives the dialog.
+  const shareWithTeam = useShareWithTeam({
+    onResult: (result) => {
+      if (result.done) setSharingWithTeam(false)
+      else setShareTeamError(shareRefusalSentence(result.refusal ?? 'failed', result.detail))
+    }
+  })
   const remove = useDeleteLocalAgent({
     onSuccess: () => {
       // The row is gone; a page still asking for it would only get
@@ -361,6 +413,22 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
                 {stamp.isPending ? 'Stamping…' : 'Stamp identity'}
               </button>
             )}
+            {canShareWithTeam && (
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM}
+                onClick={() =>
+                  run(() => {
+                    setShareTeamError(null)
+                    setSharingWithTeam(true)
+                  })
+                }
+              >
+                <Users size={12} />
+                {SHARE_UI_TEXT.shareWithTeam}
+              </button>
+            )}
             <div className="my-1 border-t border-[var(--color-border)]" />
             <button
               type="button"
@@ -369,13 +437,37 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
               onClick={() => run(() => setConfirming(true))}
             >
               <Trash2 size={12} />
-              {agent.kind === 'bare' ? 'Remove agent…' : 'Delete agent…'}
+              {shared
+                ? SHARE_UI_TEXT.removeFromComputerMenu
+                : agent.kind === 'bare'
+                  ? 'Remove agent…'
+                  : 'Delete agent…'}
             </button>
           </div>,
           document.body
         )}
       {confirming && (
-        <DeleteAgentDialog agent={agent} remove={remove} onCancel={() => setConfirming(false)} />
+        <DeleteAgentDialog
+          agent={agent}
+          remove={remove}
+          shared={shared}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+      {sharingWithTeam && (
+        <ShareWithTeamDialog
+          agentId={agent.id}
+          pending={shareWithTeam.isPending}
+          error={shareTeamError}
+          onShare={(input) => {
+            setShareTeamError(null)
+            shareWithTeam.mutate(
+              { agentId: agent.id, input },
+              { onError: (err) => setShareTeamError(unwrapIpcError(err)) }
+            )
+          }}
+          onCancel={() => setSharingWithTeam(false)}
+        />
       )}
     </div>
   )

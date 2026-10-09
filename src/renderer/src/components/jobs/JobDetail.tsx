@@ -41,6 +41,7 @@ import { canScheduleJob } from '../../../../shared/localJobSchedules'
 import { JobSchedules, useJobScheduleCount } from './JobSchedules'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
+import { TeamLibraryGet } from './TeamLibraryGet'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { documentMarkdownComponents } from '../../utils/markdownComponents'
 
@@ -738,6 +739,11 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
                   Set up
                   <ArrowRight size={10} />
                 </button>
+              )}
+              {/* A folder agent this machine lacks, which the Team library has:
+                  the one unavailable dependency the app *can* fetch. */}
+              {d.state === 'unavailable' && d.manifestId && (
+                <TeamLibraryGet jobId={jobId} manifestId={d.manifestId} />
               )}
             </div>
           )

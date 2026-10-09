@@ -9,6 +9,9 @@ import { isUnsettledClick, useSettleGuard } from '../../hooks/useSettleGuard'
 import type { CatalogInstallError } from '../../hooks/useCatalogInstall'
 import type { CatalogEntryDto } from '../../../../shared/catalog'
 import { CatalogCardCredentials } from '../settings/CatalogCardCredentials'
+import { useTeamLibrary } from '../../hooks/useSharing'
+import { SHARE_UI_TEXT } from '../../utils/shareText'
+import { TeamLibraryPanel, type TeamLibraryActions } from './TeamLibraryPanel'
 
 interface CatalogBrowserModalProps {
   onClose: () => void
@@ -18,7 +21,15 @@ interface CatalogBrowserModalProps {
   onInstall: (bundleId: string) => void
   /** Open the local agent an installed bundle became. */
   onOpen: (agentId: string) => void
+  /**
+   * Get and Update for the Team library source, run by the parent. Without
+   * it, or while the active profile has no Team library, the dialog is the
+   * bundles grid alone.
+   */
+  library?: TeamLibraryActions
 }
+
+type CatalogSource = 'bundles' | 'library'
 
 const PRIMARY =
   'inline-flex min-w-[5.5rem] items-center justify-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium ' +
@@ -72,9 +83,15 @@ export function CatalogBrowserModal({
   installingBundleId,
   installError,
   onInstall,
-  onOpen
+  onOpen,
+  library
 }: CatalogBrowserModalProps): React.JSX.Element {
   const catalog = useCatalog()
+  // Opening the dialog is when the user wants the Team library as it is now.
+  const teamLibrary = useTeamLibrary({ refresh: true })
+  const hasLibrary = library !== undefined && teamLibrary.data != null
+  const [sourcePick, setSource] = useState<CatalogSource>('bundles')
+  const source: CatalogSource = hasLibrary ? sourcePick : 'bundles'
   const { data: agents } = useAgents()
   const refresh = useRefreshCatalogState()
   const cinnaReauth = useCinnaReauth()
@@ -201,13 +218,16 @@ export function CatalogBrowserModal({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={refresh}
-              disabled={catalog.isFetching}
+              onClick={source === 'library' ? () => void teamLibrary.refetch() : refresh}
+              disabled={source === 'library' ? teamLibrary.isFetching : catalog.isFetching}
               className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               title="Refresh catalog"
               aria-label="Refresh catalog"
             >
-              <RefreshCw size={12} className={catalog.isFetching ? 'animate-spin' : ''} />
+              <RefreshCw
+                size={12}
+                className={(source === 'library' ? teamLibrary.isFetching : catalog.isFetching) ? 'animate-spin' : ''}
+              />
             </button>
             <button
               type="button"
@@ -221,9 +241,48 @@ export function CatalogBrowserModal({
           </div>
         </div>
 
-        {/* The grid stays mounted (and keeps its scroll position) under a
+        {/* Two sources, one dialog. The switch exists only while the profile
+            has a Team library, so a profile without one sees the dialog as it
+            always was; it sits above both sources at a fixed height, and the
+            dialog's own height is fixed, so switching moves nothing. */}
+        {hasLibrary && (
+          <div role="tablist" aria-label="Catalog source" className="mx-5 mb-3 flex gap-1 rounded-md bg-[var(--color-bg)] p-0.5">
+            {(
+              [
+                ['bundles', SHARE_UI_TEXT.bundlesSource],
+                ['library', SHARE_UI_TEXT.librarySource]
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={source === id}
+                onClick={() => setSource(id)}
+                className={`flex-1 rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  source === id
+                    ? 'bg-[var(--color-bg-secondary)] text-[var(--color-text)] shadow-sm'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {source === 'library' && library ? (
+          <TeamLibraryPanel
+            listing={teamLibrary.data}
+            isLoading={teamLibrary.isLoading}
+            isError={teamLibrary.isError}
+            isFetching={teamLibrary.isFetching}
+            onRetry={() => void teamLibrary.refetch()}
+            actions={library}
+          />
+        ) : (
+        /* The grid stays mounted (and keeps its scroll position) under a
             detail, which is a layer over it; hidden from pointer and screen
-            reader while it is covered. */}
+            reader while it is covered. */
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             aria-hidden={selected ? true : undefined}
@@ -350,6 +409,7 @@ export function CatalogBrowserModal({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>,
     document.body

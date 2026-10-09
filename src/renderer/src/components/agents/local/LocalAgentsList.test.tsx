@@ -3,6 +3,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRootDto, LocalAgentDto } from '../../../../../shared/localAgents'
+import type { AgentShareStatus } from '../../../../../shared/agentSharing'
 
 /**
  * The sidebar row's chat action. It is the jobs row's run-now button with a
@@ -85,6 +86,12 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useRaiseAgentsHomeQuestion: () => undefined
 }))
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
+let shareStatuses: AgentShareStatus[] = []
+vi.mock('../../../hooks/useSharing', () => ({
+  useShareStatuses: () => ({ data: shareStatuses }),
+  useGetFromLibrary: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useUpdateShared: () => ({ mutate: vi.fn(), isPending: false, variables: undefined })
+}))
 let newAgentProps: { onCatalog?: () => void } | null = null
 vi.mock('./NewLocalAgentModal', () => ({
   NewLocalAgentModal: (props: { onCatalog?: () => void }) => {
@@ -109,6 +116,7 @@ vi.mock('../CatalogBrowserModal', () => ({
 const { useAuthStore } = await import('../../../stores/auth.store')
 const { useCatalogInstallStore } = await import('../../../stores/catalogInstall.store')
 const { LocalAgentsList } = await import('./LocalAgentsList')
+const { SHARE_UI_TEXT } = await import('../../../utils/shareText')
 
 function renderList(): ReturnType<typeof render> {
   const client = new QueryClient()
@@ -338,5 +346,65 @@ describe('LocalAgentsList — Install from catalog', () => {
     expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:other')
     expect(setActiveView).toHaveBeenCalledWith('external-agent')
     expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+  })
+})
+
+
+/**
+ * A shared row carries a small glyph, and a dot inside it when there is
+ * something to share or to update. The glyph's space exists only on shared
+ * rows and the dot lives inside it, so a state change moves nothing; it sits
+ * beside the row's button, so the row is still named by the agent alone.
+ */
+describe('LocalAgentsList — shared rows', () => {
+  const BETA = { ...AGENT, id: 'folder:beta', name: 'Beta' } as LocalAgentDto
+  function share(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
+    return {
+      agentId: 'folder:alpha',
+      remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'write' },
+      state: 'up_to_date',
+      headSha: 'a',
+      remoteHeadSha: 'a',
+      ahead: 0,
+      behind: 0,
+      changedFiles: 0,
+      unshared: false,
+      fetched: false,
+      refusal: null,
+      ...overrides
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    AGENTS = [AGENT, BETA]
+    externalAgents = []
+    showAgentSidebarSections = true
+    useAuthStore.setState({ currentUser: null })
+    shareStatuses = []
+  })
+
+  it('marks only the shared row, and keeps it named by the agent alone', () => {
+    shareStatuses = [share()]
+    renderList()
+    const glyphs = screen.getAllByRole('img', { name: /^Shared with the team/ })
+    expect(glyphs).toHaveLength(1)
+    expect(glyphs[0].getAttribute('aria-label')).toBe(SHARE_UI_TEXT.sharedGlyph)
+    expect(document.querySelector('[data-shared-dot]')).toBeNull()
+    const row = screen.getByRole('button', { name: 'Alpha' })
+    expect(row.contains(glyphs[0])).toBe(false)
+    expect(row.parentElement?.contains(glyphs[0])).toBe(true)
+  })
+
+  it.each<[string, Partial<AgentShareStatus>, boolean]>([
+    ['unshared changes', { state: 'unshared', unshared: true, changedFiles: 1 }, true],
+    ['the team moved', { state: 'behind', behind: -1 }, true],
+    ['up to date', {}, false],
+    ['no longer shared', { state: 'removed', behind: -1 }, false]
+  ])('a dot inside the glyph for %s: %s', (_label, overrides, dot) => {
+    shareStatuses = [share(overrides)]
+    renderList()
+    const glyph = screen.getByRole('img', { name: /^Shared with the team/ })
+    expect(glyph.querySelector('[data-shared-dot]') !== null).toBe(dot)
   })
 })

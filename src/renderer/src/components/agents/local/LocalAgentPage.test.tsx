@@ -80,6 +80,7 @@ vi.mock('./ReadinessStrip', () => ({
 }))
 vi.mock('./OpenInMenu', () => ({ OpenInMenu: marker('open-in') }))
 vi.mock('./AgentActionsMenu', () => ({ AgentActionsMenu: marker('actions') }))
+vi.mock('./sharing/AgentShareLine', () => ({ AgentShareLine: marker('share-line') }))
 vi.mock('./ManifestCards', () => ({
   DescriptionCard: marker('description-card'),
   ExamplePromptsCard: marker('prompts-card')

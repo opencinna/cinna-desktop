@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Plus } from 'lucide-react'
+import { MessageSquare, Plus, Users } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
@@ -22,6 +22,12 @@ import { useAuthStore } from '../../../stores/auth.store'
 import { CatalogBrowserModal } from '../CatalogBrowserModal'
 import { useCatalogInstall } from '../../../hooks/useCatalogInstall'
 import { landCatalogInstall } from '../../../stores/catalogInstall.store'
+import { useGetFromLibrary, useShareStatuses, useUpdateShared } from '../../../hooks/useSharing'
+import { useOpenAgentPage } from '../../../hooks/useOpenAgentPage'
+import type { AgentShareResult, AgentShareStatus } from '../../../../../shared/agentSharing'
+import { SHARE_UI_TEXT, shareRefusalSentence } from '../../../utils/shareText'
+import { unwrapIpcError } from '../../../utils/ipcError'
+import type { TeamLibraryActions } from '../TeamLibraryPanel'
 
 function AgentChatShortcut({ agentId, name, available = true }: {
   agentId: string
@@ -54,7 +60,44 @@ function AgentChatShortcut({ agentId, name, available = true }: {
   )
 }
 
-function AgentRow({ agent, color }: { agent: LocalAgentDto; color: string | null }): React.JSX.Element {
+/**
+ * A shared row's glyph, with a dot when there is something to share or to
+ * update. Its space exists only on shared rows, and the dot sits inside it,
+ * so a state change never moves the name or the trailing slot.
+ */
+function SharedGlyph({ status }: { status: AgentShareStatus }): React.JSX.Element {
+  const attention =
+    status.state !== 'removed' &&
+    status.state !== 'other_account' &&
+    (status.unshared || status.behind !== 0)
+  const label = attention
+    ? `${SHARE_UI_TEXT.sharedGlyph} — ${SHARE_UI_TEXT.unsharedDot.toLowerCase()}`
+    : SHARE_UI_TEXT.sharedGlyph
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      data-shared-glyph
+      className="relative ml-1 mt-2 inline-flex h-3 w-3 shrink-0 items-center justify-center text-[var(--color-text-muted)]"
+    >
+      <Users size={10} aria-hidden="true" />
+      {attention && (
+        <span
+          data-shared-dot
+          className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]"
+        />
+      )}
+    </span>
+  )
+}
+
+function AgentRow({ agent, color, share }: {
+  agent: LocalAgentDto
+  color: string | null
+  /** The agent's team status when it is shared; undefined for any other row. */
+  share?: AgentShareStatus
+}): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
   const activeView = useUIStore((s) => s.activeView)
@@ -101,6 +144,9 @@ function AgentRow({ agent, color }: { agent: LocalAgentDto; color: string | null
         <AgentTypeIcon agent={{ source: 'folder' }} color={color} className="mt-0.5" />
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
       </button>
+      {/* Beside the row's button, not inside it, so the row is still named by
+          the agent's name alone (the locator every spec uses). */}
+      {share && <SharedGlyph status={share} />}
       {/*
         A trailing 16x16 slot the row always has, so the name truncates at the
         same point whether or not the chat button is in it: nothing shifts under
@@ -195,8 +241,70 @@ export function LocalAgentsList(): React.JSX.Element {
   const closeCatalog = (): void => {
     setCatalogOpen(false)
     clearCatalogError()
+    setLibraryError(null)
+  }
+  /**
+   * The Team library's Get and Update, owned here rather than by the dialog,
+   * with hook-level callbacks: closing the dialog mid-Get loses nothing, and
+   * the landing on the agent page — a store write — happens either way.
+   * A refusal belongs to the tile it came from.
+   */
+  const openAgentPage = useOpenAgentPage()
+  const [libraryError, setLibraryError] = useState<TeamLibraryActions['error']>(null)
+  const refusalText = (result: AgentShareResult): string =>
+    shareRefusalSentence(result.refusal ?? 'failed', result.detail)
+  const getFromLibrary = useGetFromLibrary({
+    onResult: (result, repoId) => {
+      if (result.done && result.agentId) {
+        setCatalogOpen(false)
+        openAgentPage({ id: result.agentId })
+      } else if (!result.done) {
+        setLibraryError({ repoId, message: refusalText(result) })
+      }
+    }
+  })
+  const [updatingRepoId, setUpdatingRepoId] = useState<string | null>(null)
+  const updateShared = useUpdateShared({
+    onResult: (result, agentId) => {
+      // Combining needs the agent page's two-button choice, which the page
+      // offers from its status line; take the user there.
+      if (result.refusal === 'diverged_conflict') {
+        setCatalogOpen(false)
+        openAgentPage({ id: agentId })
+      } else if (!result.done && updatingRepoId) {
+        setLibraryError({ repoId: updatingRepoId, message: refusalText(result) })
+      }
+    }
+  })
+  const libraryActions: TeamLibraryActions = {
+    gettingRepoId: getFromLibrary.isPending ? (getFromLibrary.variables ?? null) : null,
+    updatingAgentId: updateShared.isPending ? (updateShared.variables ?? null) : null,
+    error: libraryError,
+    onGet: (repoId) => {
+      setLibraryError(null)
+      getFromLibrary.mutate(repoId, {
+        onError: (err) => setLibraryError({ repoId, message: unwrapIpcError(err) })
+      })
+    },
+    onUpdate: (agent) => {
+      if (!agent.localAgentId) return
+      setLibraryError(null)
+      setUpdatingRepoId(agent.repoId)
+      updateShared.mutate(agent.localAgentId, {
+        onError: (err) => setLibraryError({ repoId: agent.repoId, message: unwrapIpcError(err) })
+      })
+    },
+    onOpenLocal: (agentId) => {
+      closeCatalog()
+      openAgentPage({ id: agentId })
+    }
   }
   const { data: agentData } = useAgents()
+  const { data: shareStatuses } = useShareStatuses()
+  const shareByAgent = useMemo(
+    () => new Map((shareStatuses ?? []).map((status) => [status.agentId, status])),
+    [shareStatuses]
+  )
   const allAgents = agentData?.filter((agent) => !agent.conductor && (agent.source !== 'remote' || agent.enabled !== false))
   const remoteAgents = profile?.type === 'cinna_user' ? (allAgents ?? []).filter((agent) => agent.source === 'remote') : []
   const a2aAgents = (allAgents ?? []).filter((agent) => agent.source === 'local' && agent.protocol === 'a2a')
@@ -235,6 +343,7 @@ export function LocalAgentsList(): React.JSX.Element {
                         key={agent.id}
                         agent={agent}
                         color={colorOf(agent.id)}
+                        share={shareByAgent.get(agent.id)}
                       />
                     ))}
                   </div>
@@ -334,6 +443,7 @@ export function LocalAgentsList(): React.JSX.Element {
             closeCatalog()
             openExternalAgent(agentId)
           }}
+          library={libraryActions}
         />
       )}
       {addingA2A && <A2AAgentForm key={profileId} onClose={() => setAddingA2A(false)} />}
