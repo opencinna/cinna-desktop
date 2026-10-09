@@ -127,6 +127,8 @@ function typeCounts(events: RunEvent[]): Record<string, number> {
 export function createLiveRunHub(maxBytes = 8 * 1024 * 1024, maxEvents = 5_000) {
   const runs = new Map<string, LiveRecord>()
   const watchers = new Map<string, Set<Sink>>()
+  /** The key each watch currently sits under; `moveChat` changes it. */
+  const homes = new Map<Sink, string>()
   const keyOf = (userId: string, chatId: string): string => JSON.stringify([userId, chatId])
   const snapshot = (run?: LiveRecord): RunWatchMessage => ({
     type: 'snapshot', runId: run?.id ?? null, sequence: run?.sequence ?? 0,
@@ -136,7 +138,10 @@ export function createLiveRunHub(maxBytes = 8 * 1024 * 1024, maxEvents = 5_000) 
   })
   const send = (key: string, sink: Sink, message: RunWatchMessage): void => {
     try { sink(message) } catch {
-      watchers.get(key)?.delete(sink)
+      const listeners = watchers.get(key)
+      listeners?.delete(sink)
+      if (listeners && !listeners.size) watchers.delete(key)
+      homes.delete(sink)
       try { sink({ type: 'watch_error', runId: message.runId ?? '', sequence: message.sequence, agentId: message.agentId }) } catch { /* Port already closed. */ }
     }
   }
@@ -186,14 +191,45 @@ export function createLiveRunHub(maxBytes = 8 * 1024 * 1024, maxEvents = 5_000) 
   }
   return {
     watch(userId: string, chatId: string, sink: Sink): () => void {
+      // One wrapper per watch, so the same sink watched twice stays two
+      // entries, and `moveChat` can carry this one to another key.
+      const entry: Sink = (message) => sink(message)
       const key = keyOf(userId, chatId)
       let listeners = watchers.get(key)
       if (!listeners) { listeners = new Set(); watchers.set(key, listeners) }
-      listeners.add(sink)
-      send(key, sink, snapshot(runs.get(key)))
+      listeners.add(entry)
+      homes.set(entry, key)
+      send(key, entry, snapshot(runs.get(key)))
       return () => {
-        listeners.delete(sink)
-        if (!listeners.size) watchers.delete(key)
+        const home = homes.get(entry)
+        homes.delete(entry)
+        if (home === undefined) return
+        const current = watchers.get(home)
+        current?.delete(entry)
+        if (current && !current.size) watchers.delete(home)
+      }
+    },
+    /**
+     * A chat that changed owner (a new chat settled into the shared profile)
+     * keeps the views already watching it: they were keyed under the old owner
+     * and would otherwise never see a run that begins under the new one. Only
+     * an empty chat changes owner, so there is no run to carry, and the
+     * watchers' idle snapshot still holds; a run already under the new key is
+     * sent to them as a fresh snapshot.
+     */
+    moveChat(fromUserId: string, toUserId: string, chatId: string): void {
+      const from = keyOf(fromUserId, chatId)
+      const to = keyOf(toUserId, chatId)
+      const moving = watchers.get(from)
+      if (from === to || !moving) return
+      watchers.delete(from)
+      let target = watchers.get(to)
+      if (!target) { target = new Set(); watchers.set(to, target) }
+      const run = runs.get(to)
+      for (const entry of moving) {
+        target.add(entry)
+        homes.set(entry, to)
+        if (run) send(to, entry, snapshot(run))
       }
     },
     begin(userId: string, chatId: string, id: string, baseline: string[]) {

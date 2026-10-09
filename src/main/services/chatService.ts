@@ -20,6 +20,7 @@ import { createLogger } from '../logger/logger'
 import { taskRunnersByChat } from './taskRunnerState'
 import { activeChatRunId as activeRunId, chatHardDeleted } from './chatRemoval'
 import { sessionActivityHub } from './sessionActivityHub'
+import { liveRunHub } from './liveRunHub'
 import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { conductorSessionRepo } from '../db/conductorSessions'
@@ -136,6 +137,9 @@ function settleNewChatOwner(profileUserId: string, chat: ChatRow, next: Pick<Cha
   const conductors = agentRepo.list(chat.userId)
     .filter((agent) => agent.driverConfig?.conductorChatId === chat.id).map((agent) => agent.id)
   if (!chatRepo.reassignOwner(chat.id, chat.userId, owner, conductors)) throw new ChatError('not_found', 'Chat not found')
+  // The view that created the chat is usually watching it already, keyed
+  // under the old owner; its first run begins under the new one.
+  liveRunHub.moveChat(chat.userId, owner, chat.id)
   logger.info('new chat owner settled', { chatId: chat.id, shared: owner === DEFAULT_USER_ID })
   return { ...chat, userId: owner }
 }

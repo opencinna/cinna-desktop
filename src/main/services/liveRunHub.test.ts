@@ -63,6 +63,52 @@ describe('live run hub', () => {
     expect(other).toHaveLength(2)
     expect(other.every((m) => m.type === 'snapshot' && !m.active)).toBe(true)
   })
+  it('carries a chat’s watchers to its new owner, and their unwatch follows them', () => {
+    // Mutation: make `moveChat` a no-op → the view keyed under the old owner never sees the run.
+    const hub = createLiveRunHub()
+    const moved: RunWatchMessage[] = []
+    const stayed: RunWatchMessage[] = []
+    const detach = hub.watch('profile', 'c', (m) => moved.push(m))
+    hub.watch('profile', 'other', (m) => stayed.push(m))
+    hub.moveChat('profile', '__default__', 'c')
+    const run = hub.begin('__default__', 'c', 'r', [])
+    run.push(delta('hi'))
+    expect(moved.map((m) => m.type)).toEqual(['snapshot', 'snapshot', 'event'])
+    expect(moved[1]).toMatchObject({ type: 'snapshot', active: true, runId: 'r' })
+    expect(stayed).toHaveLength(1)
+    // Mutation: unwatch from the key the watch started under → it keeps receiving.
+    detach()
+    run.push(delta(' there'))
+    run.close()
+    expect(moved).toHaveLength(3)
+    // Nothing is left under the old owner: a run there reaches no one.
+    hub.begin('profile', 'c', 'stale', []).push(delta('x'))
+    expect(moved).toHaveLength(3)
+  })
+  it('sends a moved watcher the run already live under the new owner', () => {
+    const hub = createLiveRunHub()
+    const run = hub.begin('__default__', 'c', 'r', ['m1'])
+    run.push(delta('Hel'))
+    const messages: RunWatchMessage[] = []
+    hub.watch('profile', 'c', (m) => messages.push(m))
+    hub.moveChat('profile', '__default__', 'c')
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({ type: 'snapshot', active: true, runId: 'r', baselineMessageIds: ['m1'], events: [delta('Hel')] })
+    run.push(delta('lo'))
+    expect(messages[2]).toMatchObject({ type: 'event', event: delta('lo') })
+  })
+  it('drops a moved watcher that fails under its new owner, and its later unwatch is harmless', () => {
+    const hub = createLiveRunHub()
+    let calls = 0
+    const detach = hub.watch('profile', 'c', () => { if (++calls > 1) throw new Error('closed view') })
+    hub.moveChat('profile', '__default__', 'c')
+    const run = hub.begin('__default__', 'c', 'r', [])
+    run.push(delta('a'))
+    expect(calls).toBe(3) // idle snapshot, the failed active one, its watch_error
+    detach()
+    run.push(delta('b'))
+    expect(calls).toBe(3)
+  })
   it('bounds nested payload bytes and falls back for new watchers without disrupting existing ones', () => {
     const hub = createLiveRunHub(200)
     const messages: RunWatchMessage[] = []

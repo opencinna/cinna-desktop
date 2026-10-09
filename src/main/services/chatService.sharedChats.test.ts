@@ -164,6 +164,24 @@ describe('the owner of a new chat, decided at its first binding', () => {
     expect(chatService.list(PROFILE).map((chat) => chat.id).sort()).toEqual([folder, handAdded, remote, developing].sort())
   })
 
+  it('keeps the view already watching a new chat when the chat moves to the computer', async () => {
+    // The new-chat screen selects the chat on create, so its live watch is
+    // keyed under the profile before binding moves the chat; the first run
+    // begins under the new owner. Mutation: drop the `moveChat` call → the
+    // view gets only its idle snapshot and never sees the turn.
+    const { liveRunHub } = await import('./liveRunHub')
+    const chat = chatService.create(PROFILE).id
+    const seen: string[] = []
+    const detach = liveRunHub.watch(PROFILE, chat, (message) => seen.push(message.type))
+    chatService.update(PROFILE, chat, { agentId: 'folder:local', router: 'direct' })
+    expect(ownerOf(chat)).toBe(DEFAULT)
+    const run = liveRunHub.begin(DEFAULT, chat, 'run-1', [])
+    run.push({ type: 'request-id', requestId: 'req' })
+    run.close()
+    detach()
+    expect(seen).toEqual(['snapshot', 'snapshot', 'event', 'closed'])
+  })
+
   it('keeps a human-routed chat with any account agent attached in the profile', () => {
     const mixed = chatService.create(PROFILE).id
     chatService.addOnDemandAgent(PROFILE, mixed, 'folder:local')
