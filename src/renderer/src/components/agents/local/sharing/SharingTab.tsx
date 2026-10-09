@@ -271,7 +271,16 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
     }
   })
   const editable = people.data?.visible === true
+  // The whole list: every change is saved on it, your own grant included.
   const list = editable ? people.data!.people : []
+  const selfId = people.data?.selfUserId ?? null
+  const isSelf = (person: LibraryPerson): boolean =>
+    selfId !== null && person.principal.kind === 'user' && person.principal.userId === selfId
+  // Your own access is never edited here. As a maintainer you are already
+  // named under Maintainers above, so your row is left out; otherwise it is
+  // shown, read-only.
+  const selfIsMaintainer = selfId !== null && (entry?.maintainers ?? []).some((m) => m.userId === selfId)
+  const rows = list.filter((person) => !(isSelf(person) && selfIsMaintainer))
 
   const save = (next: LibraryGrantInput[], fromDialog = false): void => {
     fromDialogRef.current = fromDialog
@@ -318,10 +327,13 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
               </p>
             </SettingsRow>
           ) : editable ? (
-            list.map((person) => {
+            rows.length === 0 ? (
+              <SettingsRow>
+                <SettingsHint>{SHARE_UI_TEXT.peopleNoOneElse}</SettingsHint>
+              </SettingsRow>
+            ) : rows.map((person) => {
               const key = principalKey(person.principal)
-              const self =
-                person.principal.kind === 'user' && person.principal.userId === people.data?.selfUserId
+              const self = isSelf(person)
               const name = self ? SHARE_UI_TEXT.you : personName(person, entry)
               const confirming = confirmingKey === key
               return (
@@ -346,6 +358,13 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
                         {set.isPending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
                         {SHARE_UI_TEXT.removePersonAction}
                       </button>
+                    </>
+                  ) : self ? (
+                    <>
+                      {/* Your own access is not yours to change. The slot after
+                          it keeps the column aligned with the rows that remove. */}
+                      <SettingsBadge>{SHARE_ACCESS_TEXT[person.access]}</SettingsBadge>
+                      <span className="w-[28px] shrink-0" aria-hidden="true" />
                     </>
                   ) : (
                     <>
@@ -372,24 +391,18 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
                           </option>
                         ))}
                       </select>
-                      {/* Your own row has no remove: taking yourself off is not
-                          a click away. The slot keeps the column aligned. */}
-                      {self ? (
-                        <span className="w-[28px] shrink-0" aria-hidden="true" />
-                      ) : (
-                        <SettingsIconButton
-                          title={SHARE_UI_TEXT.removePerson(name)}
-                          aria-label={SHARE_UI_TEXT.removePerson(name)}
-                          danger
-                          disabled={set.isPending}
-                          onClick={() => {
-                            setError(null)
-                            setConfirmingKey(key)
-                          }}
-                        >
-                          <Trash2 size={13} aria-hidden="true" />
-                        </SettingsIconButton>
-                      )}
+                      <SettingsIconButton
+                        title={SHARE_UI_TEXT.removePerson(name)}
+                        aria-label={SHARE_UI_TEXT.removePerson(name)}
+                        danger
+                        disabled={set.isPending}
+                        onClick={() => {
+                          setError(null)
+                          setConfirmingKey(key)
+                        }}
+                      >
+                        <Trash2 size={13} aria-hidden="true" />
+                      </SettingsIconButton>
                     </>
                   )}
                 </SettingsRow>

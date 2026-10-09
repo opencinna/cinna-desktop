@@ -166,13 +166,36 @@ describe('SharingTab — where it is shared', () => {
 })
 
 describe('SharingTab — people', () => {
-  it('marks your own row "You", with no remove', async () => {
+  it('leaves out your own row when you are already named a maintainer above', async () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
-    expect(within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeTruthy()
+    expect(people.textContent).not.toContain(SHARE_UI_TEXT.you)
+    expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
+    expect(within(people).getAllByRole('combobox')).toHaveLength(1)
+  })
+
+  it('says no one else has access when you are the only one', async () => {
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [PEOPLE.people[0]] }))
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.peopleNoOneElse))
+  })
+
+  it('shows your own access read-only when you are not a maintainer: no select, no remove', async () => {
+    sharing.people.mockResolvedValue(
+      ok({
+        visible: true,
+        people: [PEOPLE.people[0], { principal: { kind: 'user', userId: 'u2' }, access: 'write', displayName: 'Bob' }],
+        selfUserId: 'u2'
+      })
+    )
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.you))
+    expect(people.textContent).toContain(SHARE_ACCESS_TEXT.write)
+    expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
     expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.you) })).toBeNull()
-    expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.everyone) })).toBeTruthy()
   })
 
   it('gives the access select a fixed width, never the whole row the name needs', async () => {
@@ -188,6 +211,8 @@ describe('SharingTab — people', () => {
   it('builds each change on the list the server answered, and holds the controls while one is saving', async () => {
     let answer: (value: unknown) => void = () => {}
     sharing.setPeople.mockReturnValueOnce(new Promise((r) => { answer = r }))
+    const bob = { principal: { kind: 'user' as const, userId: 'u2' }, access: 'read' as const, displayName: 'Bob' }
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, bob] }))
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
@@ -200,17 +225,19 @@ describe('SharingTab — people', () => {
     sharing.people.mockReturnValue(new Promise(() => {}))
     const answered = {
       visible: true,
-      people: [PEOPLE.people[0], { ...PEOPLE.people[1], access: 'write' }],
+      people: [PEOPLE.people[0], { ...PEOPLE.people[1], access: 'write' }, bob],
       selfUserId: 'u1'
     }
     await act(async () => answer(ok({ ...done(), people: answered })))
     await waitFor(() => expect(everyone().disabled).toBe(false))
     expect(everyone().value).toBe('write')
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you)), { target: { value: 'write' } })
+    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')), { target: { value: 'write' } })
     await waitFor(() => expect(sharing.setPeople).toHaveBeenCalledTimes(2))
+    // Your own grant, hidden from the list, is still saved with it, unchanged.
     expect(sharing.setPeople).toHaveBeenLastCalledWith(AGENT.id, [
-      { principal: { kind: 'user', userId: 'u1' }, access: 'write' },
-      { principal: { kind: 'everyone' }, access: 'write' }
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'everyone' }, access: 'write' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'write' }
     ])
   })
 
@@ -236,7 +263,7 @@ describe('SharingTab — people', () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you)), { target: { value: 'read' } })
+    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.everyone)), { target: { value: 'write' } })
     await waitFor(() =>
       expect(within(people).getByRole('alert').textContent).toBe('An agent needs at least one maintainer.')
     )

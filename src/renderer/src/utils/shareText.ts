@@ -176,6 +176,7 @@ export const SHARE_UI_TEXT = {
   removePersonConfirm: (name: string) => `Remove ${name}’s access?`,
   removePersonAction: 'Remove',
   peopleOnlyMe: 'Only you, for now.',
+  peopleNoOneElse: 'No one else has access yet.',
   accessLabel: 'Access',
   addPerson: 'Add',
   removePerson: (name: string) => `Remove ${name}`,
