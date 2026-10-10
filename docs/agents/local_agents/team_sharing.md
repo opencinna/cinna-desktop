@@ -55,6 +55,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 2. Edits here that are not shared yet are in the way: Update refuses and says to share them first. Share changes brings the team's version in as part of sending
 3. When the team changed this agent too and the two do not combine, the Inbox card and the catalog tile take the user to the agent page, where the choice lives
 4. An Update that brought changes attaches matching credentials like a Get, and opens **Finish setting up *Name*** only if a required slot is now missing that was not missing before the Update (below)
+5. After a **Get**, an **Update** or **Use the team's version**, the catalog skills the agent pins are fetched in the background — the agent's access is what allows the download. A skill that cannot be fetched shows on the agent's Skills section; the verb itself never fails because of it ([Agent Skills](skills.md))
 
 ### Finishing setup
 

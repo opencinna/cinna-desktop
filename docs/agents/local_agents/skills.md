@@ -1,89 +1,187 @@
-# Agent Skills (A Kit Agent's Own Skills)
+# Agent Skills (A Kit Agent's Own and Catalog Skills)
 
 ## Purpose
 
-A kit agent can carry skills of its own: folders under `skills/` in the agent folder, each with a `SKILL.md`. The desktop reads and checks them, lists them in a **Skills** section on the agent page's **Addons** tab, and hands every deliverable one to whichever engine the agent runs on, by that engine's own mechanism. Without this, an author's skills sat in the folder and no session ever saw them. The same section lists the skills the agent pins from the platform's catalog (`catalog_skills[]` in its manifest), which are shown and checked but not yet delivered to any engine.
+A kit agent has skills from two places: folders under `skills/` in the agent folder, each with a `SKILL.md`, and skills from the platform's catalog that its manifest pins in `catalog_skills[]`. The desktop reads and checks both, lists them in a **Skills** section on the agent page's **Addons** tab, downloads each pinned catalog revision once into a shared read-only cache, and hands every deliverable skill to whichever engine the agent runs on, by that engine's own mechanism. Without this, an author's skills sat in the folder and no session ever saw them, and a pinned catalog skill was a row with nothing behind it. From the same section an own skill can be shared to the catalog, and a catalog skill updated or removed; adding one starts in the catalog dialog.
 
 ## Core Concepts
 
-- **Authored skill** — a folder `skills/<name>/` directly inside a kit agent's folder, holding a `SKILL.md` whose frontmatter names the skill and says what it is for. The only source of skills an engine gets today
-- **Catalog skill (pin)** — an entry of the manifest's `catalog_skills[]` (contract 1.10.0): a skill from the platform's catalog, referenced by `package_id`, `package_uuid`, `name`, `revision_number`, an optional `version` label and `archive_sha256`. Its files never live under `skills/`; a host is meant to download the pinned revision and check it against the hash. The desktop downloads nothing yet, so a pin is a row and nothing more. Both sources share one row shape, told apart by `source` (`authored` / `catalog`)
-- **Skill rules** — the checks a skill must pass. They are cinna-core's (`skill_manifest.py`), ported line for line: the codes, the sentences, the limits and the restricted frontmatter reader are core's. **Core is the source of truth**: a rule changes there first and is ported here after, and nothing is checked here that core would not say about the same folder
+- **Authored skill** — a folder `skills/<name>/` directly inside a kit agent's folder, holding a `SKILL.md` whose frontmatter names the skill and says what it is for. Marked **Authored** on its row
+- **Catalog skill (pin)** — an entry of the manifest's `catalog_skills[]` (contract 1.10.0): a skill from the platform's catalog, referenced by `package_id`, `package_uuid`, `name`, `revision_number`, an optional `version` label and `archive_sha256`. Marked **From the catalog**. Its files never live under `skills/`: the contract forbids copying them there. Both sources share one row shape, told apart by `source` (`authored` / `catalog`)
+- **Catalog skill cache** — `<userData>/catalog-skills/<instance>/<package_uuid>/<revision>/<name>/`: one unpacked copy per pinned revision, shared by every agent that pins it, read-only on disk, keyed per Cinna server (`<instance>`). A revision is either there whole, with a marker naming the package, revision and archive digest, or not there at all
+- **Skill rules** — the checks a skill must pass. They are cinna-core's (`skill_manifest.py`), ported line for line: the codes, the sentences, the limits and the restricted frontmatter reader are core's. **Core is the source of truth**: a rule changes there first and is ported here after, and nothing is checked here that core would not say about the same folder. A cached catalog skill is checked by the same rules as an own one
 - **Issue** — one finding on a skill, with core's code and sentence. An **error** keeps the skill from every engine; a **warning** is worth knowing and changes nothing
-- **Deliverable** — a skill with no error. Only deliverable skills reach an engine, in any form
-- **Skills plugin** — a desktop-owned local Claude plugin per kit agent, under `<userData>/cinna-plugins/agents/<key>/`, whose `skills/` holds one symlink per deliverable skill pointing at the agent's real `skills/<name>/`. Claude loads it as a plugin; OpenCode is pointed at its `skills/` folder (the **links folder**)
+- **Deliverable** — a skill with no error. Only deliverable skills reach an engine, in any form. A catalog skill is deliverable only once its revision is cached and passes the rules
+- **Skills plugin** — a desktop-owned local Claude plugin per kit agent, under `<userData>/cinna-plugins/agents/<key>/`, whose `skills/` holds one symlink per deliverable skill: to the agent's real `skills/<name>/` for an own skill, to the cached folder for a catalog one. Claude loads it as a plugin; OpenCode is pointed at its `skills/` folder (the **links folder**)
+- **Changeable agent** — one whose pins this person may change: any folder that is not a Cinna team agent, or a team agent where the catalog listing gives them `edit` or `maintain`. A team agent they may only **use** (or whose access the listing does not say) is not: its skills arrive with the team's next version
+- **Skill credential slot** — a credential a deliverable skill's `SKILL.md` declares under `credentials:`, named by its **slot**, which is a Service URI. Filled only by an attachment of that type whose Service URI is exactly the slot ([Service Credentials](../service_credentials/README.md#skill-credential-slots))
+- **Shared skill** — an own skill shared to the active account's catalog, recorded in the agent's `publications.json` → `skills[]`. Its row shows the version it was shared as and a **Shared** badge
 
 ## User Stories / Flows
 
 ### Seeing an agent's skills
 
 1. Agent page → **Settings** → **Addons**. Below **MCP Connectors**, a kit agent has a **Skills** section; a bare agent has none, because it made no promise about a `skills/` folder
-2. Each skill is a card in the connector card's shell: a name, an **Authored** badge, a status glyph and a reveal button on the title line, then the description clamped to two lines, a **Needs** line naming the credential slots its `SKILL.md` declares (two shown, the rest folded into `+N`), and the issues, each only when there are any
+2. Each skill is a card in the connector card's shell: a name, a source badge, a status glyph and the row's actions on the title line, then the description clamped to two lines, a **Needs** line naming the credential slots its `SKILL.md` declares (two shown, the rest folded into `+N`), and the issues, each only when there are any
 3. The glyph is the shared status glyph: the first error's sentence when there is one, else the warnings, else "Every engine of this agent gets this skill"
-4. The reveal button opens the skill's `SKILL.md` in the file manager, or the skill's folder when it has no `SKILL.md`. A failed reveal is shown inside that skill's card, never as a page-level error
-5. A pinned catalog skill is the same card with **From the catalog** instead of **Authored** (its title names the `package_id`), the pinned version muted beside the name — or `Revision <n>` when the pin states no version — and no reveal button, because none of its files are in the folder. Every such card carries the warning "Not on this computer yet.", and an error when its name clashes (below). The section's (?) says the pin lives in `cinna-agent.json` and that no session gets a catalog skill yet
-6. With a `skills/` folder but no skill in it and no pin, the section says "No skills yet."
-7. The **Addons** tab's badge counts skills beside connectors. When any connector is not connected or any skill has an issue (warning included) other than "Not on this computer yet.", the badge shows how many need attention, warning-toned, titled "*k* of *n* skills need attention" (or connectors, or addons when both kinds are present); otherwise the neutral total, titled with what it is made of. A catalog row's "Not on this computer yet." warning is left out of that count: every pin carries it until catalog skills can be downloaded, and the user cannot act on it
-8. Adding, removing or editing a skill refreshes the tab without a manual rescan, on every platform
+4. An own skill has a reveal button, which opens its `SKILL.md` in the file manager, or its folder when it has no `SKILL.md`. A failed reveal is shown inside that skill's card, never as a page-level error
+5. A catalog skill is named by its title in the catalog listing (the folder name stays in the tooltip, and is what every engine calls it), with its pinned **Version N (label)** muted beside it and **From the catalog**, titled with the `package_id`. It has no reveal: none of its files are in the agent's folder. Its description and **Needs** line come from the cached `SKILL.md` once the revision is on this computer, and are absent until then
+6. A catalog row that is not on this computer says so: "Not on this computer yet." when nothing has tried, or the last download's own sentence when one failed. The latter is remembered only until the app restarts
+7. With a `skills/` folder but no skill in it and no pin, the section says "No skills yet."
+8. The **Addons** tab's badge counts skills beside connectors. When any connector is not connected or any skill has an issue other than "Not on this computer yet.", the badge shows how many need attention, warning-toned, titled "*k* of *n* skills need attention" (or connectors, or addons when both kinds are present); otherwise the neutral total. "Not on this computer yet." is left out because it is transient and its **Try again** sits on the row; a failed download is counted
+9. Adding, removing or editing an own skill refreshes the tab without a manual rescan, on every platform; a catalog verb or a finished download rescans too
+
+### Adding a skill from the catalog
+
+1. The **Catalog** dialog's skill tiles and details carry **Add to agent…**, a menu of this computer's kit agents ([Bundles Catalog](../bundles_catalog/bundles_catalog.md#browsing-the-catalog)). An agent that already pins the package reads **Added**, one shared with the user to use only reads **Can use only**, and while sharing status is still being read each reads **Checking access…**; those rows are disabled
+2. A pick reads **Adding…** on its row. Main pins the package's **latest** version: it downloads and checks the revision first, then writes the pin to `cinna-agent.json`. The menu closes on success; a refusal stays under that agent's row in main's sentence
+3. The tile then says **In N agents**. The new row in the agent's Skills section is already on this computer, so — unless the cached copy breaks a skill rule — the agent's next session has it
+4. In the background main reports the install to core (with the agent's manifest id) and fills the skill's credential slots where exactly one of the account's credentials fits
+
+### Updating, re-fetching and removing a catalog skill
+
+1. **Update** (an arrow icon, titled "Update *title* to Version N (label)") appears when the catalog listing has a newer revision than the pin and the agent is changeable. It downloads the latest revision, then moves the pin to it, keeping the pin's name and any keys it does not know. The same update is offered in the Inbox as **Update available for *skill* in *agent*** ([The Inbox](../../jobs/tasks/inbox.md))
+2. **Try again** (a circular arrow, "Download *title* again") appears whenever the pinned revision is not on this computer. It fetches every missing pin of the agent; the row shows its own failure, if any
+3. **Remove** (trash) opens a confirm inside the card: "Remove *title* from this agent? It stays in the catalog; you can add it again. *title* stops being available to this agent in new chats." On a shared agent the person may change, it adds "Share changes to pass this on to the team." **Remove skill** drops the pin and reports the removal to core; the cached revision stays for other agents
+4. On an agent shared with the user to use only, Update and Remove are not shown; Try again is. While the agent's sharing status is still being read, Update and Remove are hidden too
+5. A verb in flight spins its icon and disables the other rows' actions; a refusal is the card's last line, and is not repeated when it is the very sentence the row's issue already says
+
+### A team agent's pinned skills
+
+1. After a team-library **Get**, an **Update** that brought changes, or **Use the team's version**, main fetches every pinned revision the agent lacks, in the background. The verb never waits for it and never fails because of it
+2. A revision that cannot be fetched is an issue on its row — a teammate whose copy is behind gets "This version is not available to you. If the agent is shared, update it to the team's latest version first." — never a failed Get or Update
+3. Then the skill credential slots are filled where exactly one credential fits, as after Add to agent
+
+### Sharing an own skill
+
+1. An own skill that is deliverable, on an agent this person may change, with a Cinna account active, has **Share** on its row (a share icon, "Share *name*…"). Once shared, it reads "Share a new version of *name*…", offered only while the catalog listing gives the person `edit` or `maintain` on that package
+2. **Share *name*** opens on everything at once, words filled in when the catalog's preview answers: the **Version** it will become, its **Catalog id**, **What people need** for each declared credential slot (**Each person connects their own**, or one of the sharer's own credentials offered for everyone), an optional **Note**, and on a first share **Who can use it**: **Everyone on this server can use it** and named people at Can use / Can edit / Maintainer
+3. On a later version each slot starts at what the last version provided, and a line says when that could not be carried over. Someone who did not first share the skill is offered no credential of theirs, because core refuses one. Access stays as it was: "People who can use it keep access."
+4. **Share** packs and uploads the folder. Before any byte is sent it refuses links, anything that is not a file or folder, files that look like secrets, more than 16 MB and more than 2000 files and folders, each with a sentence that says nothing was sent
+5. On success the dialog closes; the catalog's version label is written into the skill's `SKILL.md` (that one line) and the share is recorded in `publications.json`. The row then shows **Version N** and **Shared**. In a team agent both are ordinary file changes to share with the team
+6. A refusal stays in the dialog, under the fields
 
 ### A session using a skill
 
-1. The agent's session starts. On Claude and OpenCode the engine already lists the agent's skills by name; the assembled prompt says only that its own skills are available through the skill tool. On Codex the prompt lists each skill with its description and the path of its `SKILL.md`, and tells the agent to read it before using the skill
+1. The agent's session starts. On Claude and OpenCode the engine already lists the agent's skills by name; the assembled prompt says only that its own skills — and, when it pins any that are cached, the catalog skills it pins — are available through the skill tool. On Codex the prompt lists each skill with its description and the path of its `SKILL.md` (agent-relative for an own skill, absolute in the cache for a catalog one), and tells the agent to read it before using the skill
 2. The agent opens a skill when the task matches its description. On OpenCode this does not stop the turn for a click; on Claude it follows the session's ordinary approvals
+3. A skill script that needs a credential does `from core.cinna_api import credentials` and `credentials.require_slot("<service uri>")`, exactly as in a cloud agent. The desktop puts that module first on the engine's `PYTHONPATH` for a kit agent, and for its kit commands and scheduled runs. A slot nothing fills fails at call time with a sentence naming the slot
 
 ## Business Rules
 
-- **Kit agents only.** Only a kit agent's record carries skills; on a bare agent the field is absent, and every surface (the tab, the badge, the engine config, the Claude plugin) asks whether the field is there rather than what kind of agent it is. A bare folder that runs natively on Claude loads whatever skills its own settings name, which is the engine's doing, not this feature's ([Bare Agents](bare_agents.md))
+### Which skills exist and which are delivered
+
+- **Kit agents only.** Only a kit agent's record carries skills; on a bare agent the field is absent, and every surface (the tab, the badge, the engine config, the Claude plugin, the skill runtime) asks whether the field is there rather than what kind of agent it is. A bare folder that runs natively on Claude loads whatever skills its own settings name, which is the engine's doing, not this feature's ([Bare Agents](bare_agents.md))
 - **Only the agent's own sessions get its skills.** A chat conductor, an AI function, a synthetic chat runtime and Cinna's build session each run as an isolated folder too, and each is given no skills plugin
-- **A skill is deliverable only when its frontmatter `name` equals its folder name and it has a description.** Claude names a plugin skill by its **folder** and OpenCode by its frontmatter **name**, so only a skill whose two agree is the same skill on both engines. A skill without a description gives the model nothing to decide when to open it. Both are core errors too (`name_mismatch`, `missing_description`); here they also decide what the engines can be handed
+- **A skill is deliverable only when its frontmatter `name` equals its folder name and it has a description.** Claude names a plugin skill by its **folder** and OpenCode by its frontmatter **name**, so only a skill whose two agree is the same skill on both engines. A skill without a description gives the model nothing to decide when to open it. Both are core errors too (`name_mismatch`, `missing_description`); here they also decide what the engines can be handed. For a catalog skill the folder name is the pin's `name`
 - **The other errors are core's, verbatim**: not a directory (including a **symlinked** skill folder, which is refused), no `SKILL.md`, unreadable (not UTF-8; a leading byte-order mark is tolerated), no valid frontmatter, no name, an invalid name (lowercase words joined by single hyphens, at most 64 characters), a name reserved by a platform command, a description over 1024 characters, an invalid `credentials:` block (the sentence names the first problem), and over budget
-- **`cinna-tasks` is reserved.** An authored skill by that name is an error ("reserved by a platform skill") and is never linked, so it can never shadow the platform's [`cinna-tasks`](../../jobs/tasks/task_protocol.md) skill on any engine
-- **Warnings never withhold a skill.** `secrets` — files in the skill that look like they hold a credential (`.env` and its variants except examples, `credentials.json`, SSH private keys, `.pem` / `.p12` / `.pfx` / `.key`), each named on the card — and `oversized`, a `SKILL.md` body above 64 KB
-- **The budget is per agent, in name order**: at most 50 deliverable skills and 16 MB of skill files. Past either cap a skill that would have been delivered gets the `budget` error instead; a skill already in error costs nothing
-- **What `skills/` holds besides skills is skipped silently**: plain files and dot-folders at its root are not skills (the kit ships `skills/README.md` as scaffolding). No `skills/`, or a `skills/` that is a file, is an agent with no skills
-- **Skills do not decide readiness.** A broken skill is a row with its issue; the agent still runs, without that skill. The folder validator reports the same problems `kit.py validate` does — every skill error, the budget, a malformed pin, a pin clash — as **errors** in the agent's findings, because the platform leaves such a skill out and refuses to publish it; but the scanner ignores those findings when it decides whether the agent is `invalid`. An error there removes the whole agent from the engine, and one broken skill is no reason to stop an agent that runs fine without it ([Agents Home, Scanner & Folder Index](folder_index.md#readiness-in-the-order-the-user-cares-about))
-- **The validator, the Addons tab and the engines use one scanner.** The findings come from the same code that builds the tab's rows and the engines' lists, so the three cannot disagree about which skills are broken. Two validator findings have no row issue: a `version` the platform would not keep as written (not one line of text, or over 64 characters) is a warning, as in `kit.py`; and the row's `secrets` and `shadowed` warnings are not findings, because `kit.py` does not report them (credential-looking files are the validator's secret check anyway)
+- **`cinna-tasks` is reserved.** An own skill or a pin by that name is an error and is never linked, so it can never shadow the platform's [`cinna-tasks`](../../jobs/tasks/task_protocol.md) skill on any engine
+- **Warnings never withhold a skill.** `secrets` — files in the skill that look like they hold a credential (`.env` and its variants except examples, `credentials.json`, SSH private keys, `.pem` / `.p12` / `.pfx` / `.key`), each named on the card — and `oversized`, a `SKILL.md` body above 64 KB. (Sharing refuses a skill with `secrets`; delivery does not.)
+- **The budget is per agent, in name order**: at most 50 deliverable own skills and 16 MB of skill files. Past either cap a skill that would have been delivered gets the `budget` error instead; a skill already in error costs nothing. Catalog skills are not counted against it
+- **What `skills/` holds besides skills is skipped silently**: plain files and dot-folders at its root are not skills (the kit ships `skills/README.md` as scaffolding). No `skills/`, or a `skills/` that is a file, is an agent with no own skills
+- **Skills do not decide readiness.** A broken skill is a row with its issue; the agent still runs, without that skill. The folder validator reports the same problems `kit.py validate` does — every skill error, the budget, a malformed pin, a pin clash — as **errors** in the agent's findings, because the platform leaves such a skill out and refuses to publish it; but the scanner ignores those findings when it decides whether the agent is `invalid`. An error there removes the whole agent from the engine, and one broken skill is no reason to stop an agent that runs fine without it ([Agents Home, Scanner & Folder Index](folder_index.md#readiness-in-the-order-the-user-cares-about)). A missing download is not a validator finding at all
+- **The validator, the Addons tab and the engines use one scanner.** The findings, the tab's rows and the engines' lists come from the same code, so the three cannot disagree about which skills are broken. Two validator findings have no row issue: a `version` the platform would not keep as written (not one line of text, or over 64 characters) is a warning, as in `kit.py`; and the row's `secrets` and `shadowed` warnings are not findings, because `kit.py` does not report them
+
+### Pins
+
 - **A pin is checked field by field, as `kit.py` checks it.** `package_id` the catalog's id shape, `name` a skill name of at most 64 characters, `package_uuid` a UUID (compared canonically, so the same package pinned twice in two spellings is still a duplicate), `revision_number` a whole number of 1 or more, `version` absent, null or text of at most 64 characters, `archive_sha256` 64 lowercase hex characters. Each malformed field is its own error. A `package_id` that reads as a different skill name than the pin's `name` is only a warning: the `name` is what counts
-- **A pin's name must be free.** It may not be a folder under `skills/` (broken ones included — "Remove the pin or rename the folder"; a catalog skill never lives under `skills/`), a skill the platform provides (`cinna-tasks`), or another pin's name. Each is an error on the pin's row and in the findings. Where an own skill and a pin share a name, both rows are listed, the own skill first
-- **A pin is never delivered.** Nothing downloads a catalog skill, so every catalog row is not deliverable, and the plugin, the OpenCode config and the prompt read `skills/` only. A pin is not copied into `skills/` either: the contract forbids it
-- **Declared credentials are shown, not checked.** The **Needs** line is neutral on purpose: a ✓ followed by code is how a credential row says *connected*, and nothing here checks or provides the slots. Providing them is not built
+- **A pin's name must be free.** It may not be a folder under `skills/` (broken ones included — "Remove the pin or rename the folder"), a skill the platform provides (`cinna-tasks`), or another pin's name. Each is an error on the pin's row and in the findings, and a clashing pin is never delivered or downloaded, cached or not. Where an own skill and a pin share a name, both rows are listed, the own skill first. Add and Update refuse a name that would clash, decided again on a fresh read after the download
+- **One pin per package.** Adding a package the agent already pins is refused ("This agent already has this skill.")
+- **Add always pins the latest version** the catalog listing names. A package with no version, or one missing from the listing even after one refresh, is "not in the catalog any more"
+- **Pins change only on a changeable agent (U9).** Add, Update and Remove refuse a team agent the person may only use ("Its skills change when the team shares a new version") and one whose access the listing does not say, rather than guess. Main decides from the folder's git `origin`, matched to the listing by repository id, with the `shared_remote` link as a second key; when git cannot answer, the link alone decides. Any other git remote is the developer's own business. The surfaces make a cheaper call and the verbs decide again: a row's `updatable` and `shareable` come from the `shared_remote` link and the cached listing alone, and the row's Update / Remove icons and the catalog menu's **Can use only** from the agent's sharing status (a Cinna team agent without `edit` or `maintain`, unknown access included). The failure this prevents: a local pin change in an agent they may only use would be a change they can never share, silently diverging from the team
+- **Downloading needs only the agent (U7).** Anyone who may use an agent may fetch what its pins name, so Try again and the background fetch after a sharing verb have no changeability check
+- **A pin change goes through the manifest guard.** The manifest is re-read and written only if it did not change underneath; one that changed while the skill was downloading answers "cinna-agent.json changed while the skill was downloading. Try again." and nothing is written. The rest of the manifest, unknown keys included, survives
+- **Update keeps the pin's name.** The name is what the engines call the skill; the package's latest `package_id`, revision, version label and digest replace the old ones, and an old version label never survives into the new pin
+
+### Downloads and the cache
+
+- **Two digests, both checked, before anything is written.** The downloaded bytes must equal the server's `X-Content-SHA256` header (a missing header is a mismatch) **and** the pin's `archive_sha256`. Either mismatch is "The download did not match the published skill, so nothing was kept."
+- **A safe reader, no tar tool.** The archive is unpacked by the desktop's own reader: regular files and folders only (any link, device or other type refuses the whole archive), no absolute path, no `..`, no backslash or NUL, no path twice (case-insensitively, as macOS sees them), every entry under exactly one root — core's `skills/<name>/`, or `<name>/` — named like the pin, a `SKILL.md` at its top, at most 10,000 entries, 16 MB downloaded and 64 MB unpacked, so a small download cannot expand into a disk-filling bomb
+- **Complete or absent.** A revision is unpacked into a staging folder beside its place, marked, and renamed in in one step; a folder without a marker matching the pin (uuid, name, revision, digest) is not a cached skill. A revision another install landed first stands
+- **Read-only.** Files 0444 (0555 when the archive marked them executable), folders 0555, so an engine or an assistant reading a skill cannot edit the copy every other agent uses
+- **Never through a link.** The cache refuses a linked instance, package or revision folder both on read and on write, so a link planted in the cache cannot make it read, or write, somewhere else
+- **Per server, found on any.** A download lands under the active profile's server; a lookup prefers that server's folder and then tries the others, because a pin names a package and a digest, not a server, and an agent folder is not tied to one profile. Only a marker whose digest equals the pin's counts
+- **One download per pin at a time**, keyed by server, package, revision and digest, so two pins of one revision with different digests are two checks and one never answers for the other
+- **A failure is a row issue, not a thrown error.** The sentence says what to do where there is something: sign in again, update the team agent first, or simply that it could not be downloaded. Failures are kept in memory per pin and forgotten at restart; the row then reads "Not on this computer yet." again
+- **Nothing fetches on its own.** Add, Update, Try again and the three sharing verbs fetch; opening the page or starting a session does not. A pin that arrives any other way (a hand edit, a `git pull` outside the app) stays "Not on this computer yet." until Try again
+- **Local installs are reported, best effort.** After Add, Update and each fetch, main tells core that this device holds the revision in the agent with that manifest id (`host_manifest_id`); after Remove, that it no longer does. Never awaited, never failing the verb, and skipped for a manifest without an `id`
+
+### Delivery
+
 - **Each engine gets the skills by its own mechanism:**
   - **Claude** — the agent's skills plugin, passed beside the `cinna-tasks` plugin in the same session options, on the isolated branch only (a native folder loads its own skills from its settings). A plugin passed that way is not a user or project setting, so the isolated branch's `settingSources: []` does not hide it. Claude offers each skill as `<plugin>:<folder>`, the plugin named after the agent's slug when that is a clean kebab name, else `agent-skills`
-  - **OpenCode** — the links folder is added to `skills.paths` after the bundle's own `skills/`, each deliverable skill is allowed by name in `permission.skill` beside `cinna-tasks`, and reads under the links folder are allowed in `external_directory`, because OpenCode reports a linked skill's location there, outside the project. Without the allows, every opening would stop the turn for a click under the agent's ask-by-default profile ([Permissions](permissions.md))
-  - **Codex** — no skill loader, so the prompt lists each skill and the path of its `SKILL.md`. The path is inside the agent folder
+  - **OpenCode** — the links folder is added to `skills.paths` after the bundle's own `skills/`, each deliverable skill is allowed by name in `permission.skill` beside `cinna-tasks`, and reads under the links folder are allowed in `external_directory`, because OpenCode reports a linked skill's location there, outside the project. When the agent links a catalog skill, reads under the catalog-skill cache are allowed too, but the cache is never a skills path: OpenCode checks the literal path a tool names, and a model quoting the real cache path would otherwise stop the turn for a click. Without the allows, every opening would stop the turn under the agent's ask-by-default profile ([Permissions](permissions.md))
+  - **Codex** — no skill loader, so the prompt lists each skill and the path of its `SKILL.md`: inside the agent folder for an own skill, the absolute cache path for a catalog one
 - **OpenCode is never pointed at the agent's real `skills/`.** It registers every `SKILL.md` under a path by its frontmatter name and a later path wins, so it would register broken and reserved skills too, and an authored `cinna-tasks` there replaced the platform's skill. The links folder holds only deliverable skills, which is why the same folder serves both engines
-- **Links, not copies.** An edit to a `SKILL.md` reaches the engine through the link with nothing rebuilt, and the links folder is rebuilt only when the *set* of deliverable skills, or the plugin's name, changes. On OpenCode the set is part of the generated config, so adding or removing a skill replaces the warm process and an unchanged set never does
+- **Links, not copies.** An edit to an own `SKILL.md` reaches the engine through the link with nothing rebuilt, and the links folder is rebuilt only when the *set* of deliverable skills, a link's target (a re-pinned revision), or the plugin's name changes. On OpenCode the set is part of the generated config, so adding or removing a skill replaces the warm process and an unchanged set never does
 - **The prompt never promises what the engine was not given.** "Available through the skill tool" is said only when the links folder was written; when it could not be, the prompt falls back to the Codex-style listing with paths, which is true on every engine. The `cinna-tasks` stub has no such fallback, which is the gap [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md) names
 - **A failure to deliver skills never fails a turn.** A plugin that cannot be written is a session without the agent's skills, logged
-- **What is not built**: downloading or delivering a catalog skill (pins are listed and checked only), adding or changing a pin from the app, publishing a skill (the validator checks a `publications.json` → `skills[]` record another tool wrote, nothing more), and providing a skill's declared credentials
+
+### Credentials a skill declares
+
+- **Shown on the row, judged in the scan, never blocking.** The scanner judges each declared slot against the agent's attachments — filled only by a ready attachment of the slot's type whose Service URI is exactly the slot, no name fallback — and records it on the row's credential (`filled`). The Skills row's **Needs** line still draws every slot neutrally: a ✓ followed by code is how a credential row says *connected*. Where the gaps are shown is **Finish setting up**'s **Skills** group ([Service Credentials](../service_credentials/README.md#skill-credential-slots)). A missing slot never changes readiness and never opens that dialog by itself, as in core: the script fails at call time instead
+- **Only deliverable skills' slots count.** A skill no engine is given needs no credential
+- **The skill runtime is a copy.** The `core.cinna_api` shim ships inside the app and is copied once to `<userData>/skill-runtime/<content hash>/`, rebuilt only when the shipped tree changes; that copy goes first on `PYTHONPATH`. Python writes `__pycache__` beside a module it imports, and the shipped folder sits inside the signed app bundle, which must never change. An agent's own `PYTHONPATH` entries are kept after it, so a `core` package of its own is shadowed by the shim. A copy that cannot be made is logged and the engine runs without it rather than with the bundle on its path
+
+### Sharing
+
+- **Share is offered, not enforced, by changeability.** The row offers it only on a deliverable own skill, with a Cinna account active, on an agent this person may change (a share writes `SKILL.md` and `publications.json`, which they could not send back in a team agent they may only use), and for a later version only with `edit` or `maintain` on the package. The publish verb itself re-checks the account, the skill and the folder, but not the agent's changeability
+- **The archive is deterministic.** One top-level `<name>/`, members in byte order, mtime 0, owner 0, modes collapsed to 0755 / 0644, gzip mtime 0 — the same folder packs to the same bytes on any computer. Junk folders core drops (`.git`, `.venv`, `node_modules`, `__pycache__`, tool caches) and `.pyc` / `.pyo` are left out
+- **A first share chooses who can use it; a later one never touches access.** **Everyone** is sent as public visibility, and people at Can use are then not sent (everyone can already use it; the dialog strikes them through in place and says so); named people alone make it visible to those users. A later version carries the recorded package and no visibility or grants
+- **A skill shared before is found again.** A first share that core answers with "package exists" (the person's own package of that name, shared from another folder or with a lost record) is retried once into that package as its next version, without visibility or grants, because core would apply them to the existing package and could narrow a public one
+- **Credentials provided for everyone are kept only when named.** Core keeps only the slots a publish names, so the dialog preselects each slot the latest version had provided and says when one could not be carried over; an unnamed slot becomes each person's own
+- **Afterwards, two file writes.** The returned version label replaces the `version:` line of `SKILL.md` and nothing else, and `publications.json` → `skills[]` gets the entry for this server and name (replaced in place, unknown keys kept; the file created with `publications: []` when absent). If either cannot be written, the share still happened, and a later share finds the package itself
+
+### What is not built
+
+- **Cache cleanup.** A revision no agent pins any more stays in the cache; Remove never deletes it
+- **Detaching on Remove.** Removing a catalog skill leaves the credentials attached for its slots, including ones attached without asking: nothing records why an attachment was made
+- **A readiness entry for skill slots.** The readiness strip opens Finish setting up only when the agent's own slots are missing; an agent whose only gap is a skill slot shows nothing there, and its Skills group is seen only when the dialog is opened for another reason
+- **A filled/unfilled mark on the Skills row** (above), and any fetch of missing pins when the page opens or a session starts
+- **Pinning a specific older version** or choosing a version on Add; **deleting a shared skill** from the catalog or changing its access after the first share
 
 ## Architecture Overview
 
 ```
-<agent>/skills/<name>/SKILL.md
-     │  scanAgentSkills (core's rules) ─┐
-cinna-agent.json catalog_skills[] ──┴ agentSkillRows ── scannerService → LocalAgentDto.skills
-     │      (pins: rows only, never delivered)               └─ Addons tab: Skills section, badge
-     │  validateAgentFolder: skills.* / manifest.catalog_skills* findings (not counted for readiness)
-     ▼  deliverable only
-ensureKitAgentSkillsPlugin ──► <userData>/cinna-plugins/agents/<key>/
-                                  .claude-plugin/plugin.json
-                                  skills/<name> → symlink to <agent>/skills/<name>
+<agent>/skills/<name>/SKILL.md ─┐ scanAgentSkills (core's rules)
+cinna-agent.json catalog_skills[] ─┴ agentSkillRows(+ catalogSkillCache.resolve) ── judgeSkillRows (slots)
+     │                                     └─ scannerService → LocalAgentDto.skills
+     │                                          └─ localAgentService: + latestRevision/updatable/title, + shared/shareable
+     │                                               └─ Addons tab: Skills section, badge; Inbox: Update available
+     ▼  deliverable only (own + cached catalog)
+ensureKitAgentSkillsPlugin ──► <userData>/cinna-plugins/agents/<key>/skills/<name> → own folder | cache folder
      ├─ Claude:   session options plugins: [cinna-tasks, agent skills plugin]   (isolated branch)
-     ├─ OpenCode: skills.paths: [bundle skills/, links folder] + permission.skill allow per name
-     └─ prompt:   "## Your skills" — skill-tool line (Claude, OpenCode) or listing with paths (Codex, or plugin not written)
+     ├─ OpenCode: skills.paths: [bundle skills/, links folder] + skill allows + cache read allow
+     └─ prompt:   "## Your skills" — skill-tool line, or listing with paths (Codex, or plugin not written)
+
+Catalog dialog Add to agent… / row Update · Try again · Remove / Inbox Update / sharing verbs
+  → catalog-skills:* IPC → catalogSkillService
+      → GET /api/v1/skills/packages/{uuid}/revisions/{n}/download → two digests → safe reader
+      → <userData>/catalog-skills/<instance>/<uuid>/<n>/<name>/  → pin written through the manifest guard
+      → background: local-installs report; autoAttachSkills (provision-local, exactly-one attach)
+
+Row Share → ShareSkillDialog → skill-publish:preview / :publish → skillPublishService
+  → preflight → deterministic tar.gz → POST /api/v1/skills/packages/publish
+  → SKILL.md version line + publications.json skills[]
+
+Engine / kit command / scheduled run of a kit agent
+  → PYTHONPATH = <userData>/skill-runtime/<hash>/ (core.cinna_api) : CINNA_CREDENTIALS_PATH
 ```
 
 ## Integration Points
 
 - [Agent Addons](addons.md): the tab that hosts the Skills section and the badge that counts skills beside connectors
+- [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the Catalog dialog's **Add to agent…** menu and **In N agents** on a skill
+- [Service Credentials](../service_credentials/README.md#skill-credential-slots): skill credential slots, attaching without asking after `provision-local`, Finish setting up's Skills group and the `core.cinna_api` shim
+- [The Inbox](../../jobs/tasks/inbox.md): **Update available for *skill* in *agent***
+- [Team Sharing](team_sharing.md): Get, Update and Use the team's version fetch the pins in the background; the link and the listing's access decide whether an agent is changeable
 - [The Local Engine & Prompt Assembly](engine.md): the generated OpenCode config and the "Your skills" prompt section
 - [The Claude Engine](claude_engine.md): the isolated branch and the desktop-owned plugins it loads
 - [The Codex Engine](codex_engine.md): no skill loader, so a listing with paths
-- [Local Agent Permissions](permissions.md): the per-skill `skill` allow and the links-folder read allow
-- [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md): the platform's `cinna-tasks` skill, which an authored skill may not shadow and whose plugin the agent's loads beside
+- [Local Agent Permissions](permissions.md): the per-skill `skill` allow and the links-folder and cache read allows
+- [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md): the platform's `cinna-tasks` skill, which no skill may shadow and whose plugin the agent's loads beside
 - [Agents Home, Scanner & Folder Index](folder_index.md): the scanner that reads `skills/` and the watcher that refreshes on its changes, and the readiness ladder skill findings are kept out of
-- [Kit Contract](kit_contract.md): contract 1.10.0's `catalog_skills[]` and `publications.json` → `skills[]`, and the validator that ports `kit.py`'s skill checks
+- [Kit Contract](kit_contract.md#catalog-skills-and-published-skills-1100): contract 1.10.0's `catalog_skills[]` and `publications.json` → `skills[]`, which the desktop now writes
 - [Claude Code Interface Contract](contracts/claude_interface.md): `claude.session.options-plugins-agent-skills`, the expectation that a second plugin of symlinked skills loads under `settingSources: []`
 
 Sub-doc: [Technical Details](skills_tech.md)
