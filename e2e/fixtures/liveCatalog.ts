@@ -650,3 +650,88 @@ export async function skillSlotDetails(
     typeMismatch: slot.typeMismatch?.name ?? null
   }))
 }
+
+/** A `section` of the page whose `h2` is `title` (a SettingsSection). */
+export function titledSection(app: PersonApp, title: string) {
+  return app.page.locator('section').filter({ has: app.page.getByRole('heading', { level: 2, name: title, exact: true }) })
+}
+
+/** The footer's user menu → Settings, unless Settings is already open (the item toggles). */
+export async function openSettings(app: PersonApp): Promise<void> {
+  const page = app.page
+  if (await page.getByRole('button', { name: 'MCP Providers', exact: true }).isVisible()) return
+  const user = await page.evaluate(() => window.api.auth.getCurrent())
+  await page.getByTitle(user?.cinnaFullName ?? user?.displayName ?? 'User', { exact: true }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'MCP Providers', exact: true })).toBeVisible()
+}
+
+/** Settings → Profile → Catalog; answers its one section, `Agents and skills`. */
+export async function openSettingsCatalog(app: PersonApp) {
+  await openSettings(app)
+  await app.page.getByRole('button', { name: 'Catalog', exact: true }).click()
+  await expect(app.page.getByRole('heading', { level: 1 })).toHaveText('Catalog')
+  return titledSection(app, 'Agents and skills')
+}
+
+/** Agent page → Settings → Sharing. */
+export async function openSharingTab(app: PersonApp, name: string): Promise<void> {
+  await openAgent(app, name)
+  await app.page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await app.page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: 'Sharing', exact: true }).click()
+  await expect(titledSection(app, 'Where it’s shared')).toBeVisible()
+}
+
+/**
+ * `name` is not among `app`'s catalog agents: after a fresh listing, the
+ * dialog's Agents search ends in its empty line, not in a tile. Closes the catalog again.
+ */
+export async function expectAgentNotListed(app: PersonApp, name: string): Promise<void> {
+  const listed = await app.page.evaluate(() => window.api.sharing.library(true))
+  expect(listed.success).toBe(true)
+  const catalog = await openCatalog(app, 'Agents')
+  await catalog.getByRole('textbox', { name: 'Search the catalog' }).fill(name)
+  await expect(
+    catalog.getByText('Nothing matches your search.', { exact: true }).or(catalog.getByText('No agents are in the catalog for you yet.', { exact: true }))
+  ).toBeVisible()
+  await expect(catalog.getByRole('group', { name, exact: true })).toHaveCount(0)
+  await app.page.keyboard.press('Escape')
+  await expect(catalog).toHaveCount(0)
+}
+
+/** The display names of every item main's cached catalog listing holds for the active profile; null for a profile that is not a Cinna one. */
+export async function catalogNames(app: PersonApp, refresh = true): Promise<string[] | null> {
+  const listed = await app.page.evaluate((r) => window.api.catalog.items(r), refresh)
+  if (!listed.success) throw new Error(listed.message)
+  return listed.value === null ? null : listed.value.items.map((item) => item.display_name ?? item.name).sort()
+}
+
+/**
+ * A second profile in `app` named by `person`'s email, holding `person`'s
+ * desktop tokens — two Cinna accounts on one computer. Not activated.
+ */
+export async function addCinnaProfile(app: PersonApp, person: SharingPerson): Promise<void> {
+  const registered = await app.page.evaluate(
+    (p) => window.api.auth.register({ accountType: 'local', username: p.email, displayName: p.name }),
+    person
+  )
+  if (!registered.success) throw new Error(`could not add ${person.email}'s profile`)
+  await app.writeTokens(person)
+}
+
+/** The footer's user menu → the Profiles row named `name`; waits until main has switched. */
+export async function switchProfile(app: PersonApp, name: string, username: string): Promise<void> {
+  const page = app.page
+  const user = await page.evaluate(() => window.api.auth.getCurrent())
+  await page.getByTitle(user?.cinnaFullName ?? user?.displayName ?? 'User', { exact: true }).click()
+  await page.getByRole('button').filter({ hasText: name }).first().click()
+  await expect.poll(async () => (await page.evaluate(() => window.api.auth.getCurrent()))?.username).toBe(username)
+}
+
+/** Out of Settings through its sidebar's Back, when Settings is open. */
+export async function closeSettings(app: PersonApp): Promise<void> {
+  const page = app.page
+  if (!(await page.getByRole('button', { name: 'MCP Providers', exact: true }).isVisible())) return
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'MCP Providers', exact: true })).toHaveCount(0)
+}

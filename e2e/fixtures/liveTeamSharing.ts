@@ -190,14 +190,18 @@ export class PersonApp {
     await shell.waitFor()
   }
 
-  /** Seal a fresh desktop pair into this person's profile row with the app's own safeStorage. */
-  async writeTokens(): Promise<void> {
-    const tokens = await mintDesktopTokens(this.fixture, this.person)
+  /**
+   * Seal a fresh desktop pair into a profile row with the app's own
+   * safeStorage: this person's own, or — `person` — another profile in this
+   * app named by that person's email (a second Cinna account on one computer).
+   */
+  async writeTokens(person: SharingPerson = this.person): Promise<void> {
+    const tokens = await mintDesktopTokens(this.fixture, person)
     const userId = await this.page.evaluate(async (email) => {
       const users = await window.api.auth.listUsers()
       return users.find((u) => u.username === email)?.id ?? null
-    }, this.person.email)
-    if (!userId) throw new Error(`${this.label} has no profile to write tokens into`)
+    }, person.email)
+    if (!userId) throw new Error(`${this.label} has no profile for ${person.email} to write tokens into`)
     await this.electronApp.evaluate(
       ({ app, safeStorage }, input) => {
         if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
@@ -222,7 +226,7 @@ export class PersonApp {
           db.close()
         }
       },
-      { ...tokens, userId, server: this.fixture.server, name: this.person.name, userData: this.sandbox.userData }
+      { ...tokens, userId, server: this.fixture.server, name: person.name, userData: this.sandbox.userData }
     )
   }
 
