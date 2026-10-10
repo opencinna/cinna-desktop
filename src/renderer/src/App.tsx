@@ -28,6 +28,7 @@ import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useSharingWatch } from './hooks/useSharing'
 import { useCatalogItemsWatch } from './hooks/useCatalog'
+import { useSkillCredentialsWatch } from './hooks/useServiceCredentials'
 import { useEngineWatch } from './hooks/useEngine'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
@@ -131,6 +132,8 @@ function Shell(): React.JSX.Element {
   // Catalog items that are not team sharing's (a cloud install, a skill's
   // version) move on the same schedule, under a lighter event.
   useCatalogItemsWatch()
+  // Skill slots main fills in the background after a catalog skill is added or updated.
+  useSkillCredentialsWatch()
   // The engine's slow transitions — a first-use download, a crash between two
   // turns — happen while nobody is watching a particular screen, so the
   // subscription is here rather than in the card that renders the state.

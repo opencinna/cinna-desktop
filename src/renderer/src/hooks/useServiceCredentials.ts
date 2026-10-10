@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
+import { useFinishSetupStore } from '../stores/finishSetup.store'
 import type { ServiceCredentialResult } from '../../../shared/serviceCredentials'
 export function credentialResult<T>(result: ServiceCredentialResult<T>): T {
   if (!result.ok) throw new Error(result.message)
@@ -12,6 +13,16 @@ function useCredentialsChanged() {
   useEffect(() => window.api.serviceCredentials.onChanged(() => {
     void queryClient.invalidateQueries({ queryKey: ['service-credentials'] })
   }), [queryClient])
+}
+/**
+ * Remember the skill slots main filled without asking in the background (after Add to agent or
+ * Update of a catalog skill), so Finish setup says "Connected automatically" however long
+ * `provision-local` took. Mount once, for the app's lifetime.
+ */
+export function useSkillCredentialsWatch(): void {
+  useEffect(() => window.api.serviceCredentials.onChanged((payload) => {
+    if (payload.autoAttached) useFinishSetupStore.getState().remember(payload.autoAttached.agentId, payload.autoAttached.items)
+  }), [])
 }
 export function useServiceCredentials() {
   const userId = useAuthStore(s => s.currentUser?.id)

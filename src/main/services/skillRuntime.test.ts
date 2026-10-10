@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-vi.mock('../host/runtimeHost', () => ({ runtimeHost: { isPackaged: false, resourcesPath: '/packaged', getAppPath: () => '/repo' } }))
-import { engineCredentialEnv, skillRuntimeDir, withSkillRuntime } from './skillRuntime'
+const host = vi.hoisted(() => ({ isPackaged: false, resourcesPath: '/packaged', appPath: '/repo', userData: '' }))
+vi.mock('../host/runtimeHost', () => ({ runtimeHost: {
+  get isPackaged() { return host.isPackaged }, get resourcesPath() { return host.resourcesPath },
+  getAppPath: () => host.appPath, getPath: () => host.userData
+} }))
+import { engineCredentialEnv, ensureSkillRuntime, skillRuntimeCopiesDir, skillRuntimeSourceDir, withSkillRuntime } from './skillRuntime'
 
 const repoRoot = process.cwd()
 const SHIM = join(repoRoot, 'resources', 'skill-runtime')
@@ -26,7 +30,7 @@ describe('the engine env of a folder agent', () => {
   })
 
   it('reads the runtime from the repo in development', () => {
-    expect(skillRuntimeDir()).toBe(join('/repo', 'resources', 'skill-runtime'))
+    expect(skillRuntimeSourceDir()).toBe(join('/repo', 'resources', 'skill-runtime'))
     expect(withSkillRuntime({}, '/x')).toEqual({ PYTHONPATH: '/x' })
   })
 
@@ -34,6 +38,59 @@ describe('the engine env of a folder agent', () => {
     const yml = readFileSync(join(repoRoot, 'electron-builder.yml'), 'utf8')
     expect(yml).toContain("  - '!resources/skill-runtime/**'")
     expect(yml).toMatch(/- from: resources\/skill-runtime\n\s+to: skill-runtime\n\s+filter:\n\s+- '\*\*\/\*'\n\s+- '!\*\*\/__pycache__\/\*\*'/)
+  })
+})
+
+describe('the copy of the skill runtime under userData', () => {
+  function sandbox() {
+    const base = mkdtempSync(join(tmpdir(), 'cinna-skill-runtime-copy-'))
+    const source = join(base, 'Resources', 'skill-runtime')
+    mkdirSync(join(source, 'core', 'cinna_api', '__pycache__'), { recursive: true })
+    writeFileSync(join(source, 'core', '__init__.py'), '')
+    writeFileSync(join(source, 'core', 'cinna_api', '__init__.py'), 'VERSION = 1\n')
+    writeFileSync(join(source, 'core', 'cinna_api', '__pycache__', 'x.pyc'), 'bytecode')
+    Object.assign(host, { isPackaged: true, resourcesPath: join(base, 'Resources'), userData: join(base, 'userData') })
+    return { base, source, done: () => { Object.assign(host, { isPackaged: false, resourcesPath: '/packaged', userData: '' }); rmSync(base, { recursive: true, force: true }) } }
+  }
+
+  it('puts the userData copy on PYTHONPATH, never the shipped folder inside the app bundle', () => {
+    const { source, done } = sandbox()
+    try {
+      const path = engineCredentialEnv({}, { skillRuntime: true }).PYTHONPATH
+      expect(path.startsWith(join(host.userData, 'skill-runtime') + '/')).toBe(true)
+      expect(path.startsWith(source)).toBe(false)
+      expect(readFileSync(join(path, 'core', 'cinna_api', '__init__.py'), 'utf8')).toBe('VERSION = 1\n')
+      // Bytecode the shipped tree may carry is not copied.
+      expect(existsSync(join(path, 'core', 'cinna_api', '__pycache__'))).toBe(false)
+    } finally { done() }
+  })
+
+  it('copies once, and rebuilds only when the shipped tree changes, removing the old copy', () => {
+    const { source, done } = sandbox()
+    try {
+      const first = ensureSkillRuntime()!
+      expect(first).toBe(join(skillRuntimeCopiesDir(), first.split('/').pop()!))
+      // Python's bytecode beside the copy survives another turn: nothing is copied again.
+      mkdirSync(join(first, 'core', '__pycache__'))
+      writeFileSync(join(first, 'core', '__pycache__', 'written-by-python.pyc'), '')
+      expect(ensureSkillRuntime()).toBe(first)
+      expect(existsSync(join(first, 'core', '__pycache__', 'written-by-python.pyc'))).toBe(true)
+
+      writeFileSync(join(source, 'core', 'cinna_api', '__init__.py'), 'VERSION = 2\n')
+      const second = ensureSkillRuntime()!
+      expect(second).not.toBe(first)
+      expect(readFileSync(join(second, 'core', 'cinna_api', '__init__.py'), 'utf8')).toBe('VERSION = 2\n')
+      expect(readdirSync(skillRuntimeCopiesDir())).toEqual([second.split('/').pop()])
+    } finally { done() }
+  })
+
+  it('gives no PYTHONPATH entry when the copy cannot be made', () => {
+    const { source, done } = sandbox()
+    try {
+      rmSync(source, { recursive: true, force: true })
+      expect(ensureSkillRuntime()).toBeNull()
+      expect(engineCredentialEnv({ PATH: '/bin' }, { skillRuntime: true })).toEqual({ PATH: '/bin' })
+    } finally { done() }
   })
 })
 

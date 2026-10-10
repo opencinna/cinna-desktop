@@ -49,6 +49,7 @@ import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
+import { engineCredentialEnv } from '../skillRuntime'
 import { turnLock } from './turnLock'
 import type { RunAgentTurnResult, TurnRun } from '../a2aStreamingService'
 import type { AgentCapabilities } from '../../../shared/agentDrivers'
@@ -56,7 +57,13 @@ import type { MessagePart } from '../../../shared/messageParts'
 import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 
 const logger = createLogger('local-agent-command')
-let prepareCredentials: (agentId: string) => Promise<{ path?: string }> = async () => ({})
+/**
+ * Credential delivery for a command's agent (`serviceCredentialService.prepare`, installed by the
+ * hub core): the credentials file and, for a kit agent (`skillRuntime`), the skill runtime on
+ * `PYTHONPATH` — the same env its engine gets, so a kit command or scheduled run that calls a
+ * skill script finds `core.cinna_api`.
+ */
+let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean }> = async () => ({})
 export function installCommandCredentialPreparation(prepare: typeof prepareCredentials): void { prepareCredentials = prepare }
 
 /**
@@ -244,9 +251,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     onStart?.()
     const env = shellEnvForChild(await getShellEnv())
     const prepared = await prepareCredentials(agentId)
-    delete env.CINNA_CREDENTIALS_PATH
-    if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
-    const outcome = await execute(localCommand, agentDir, env, signal, timeoutMs)
+    const outcome = await execute(localCommand, agentDir, engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true }), signal, timeoutMs)
     const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
     outcome.stdoutIsExactOk = !outcome.stdoutTruncated && outcome.stdout.trim() === 'OK'
     outcome.output = redactCredentialText(outcome.output)

@@ -3,7 +3,7 @@ vi.mock('../../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +29,7 @@ vi.mock('electron', () => ({
     isPackaged: false,
     getAppPath: () => repoRoot,
     getVersion: () => '0.0.0-test',
+    getPath: () => join(workshop, 'userData'),
     on: () => undefined
   }
 }))
@@ -424,6 +425,22 @@ it('injects the credential path under the command lock and redacts script output
     expect(result.ok).toBe(true)
     expect(result.output).toBe('***REDACTED***')
   } finally { installCommandCredentialPreparation(async () => ({})); clearCredentialRedaction() }
+})
+
+it('puts the skill runtime copy on PYTHONPATH for a kit agent’s command, and nothing for a bare folder', async () => {
+  const { installCommandCredentialPreparation } = await import('./commandService')
+  writeCatalog('commands:\n  - name: path\n    description: Print the Python path\n    command: printf %s "$PYTHONPATH"\n')
+  try {
+    installCommandCredentialPreparation(async () => ({ skillRuntime: true }))
+    const kit = await commandService.run(USER, AGENT_ID, 'path')
+    expect(kit.ok).toBe(true)
+    const first = kit.output.split(':')[0]
+    expect(first.startsWith(join(workshop, 'userData', 'skill-runtime') + '/')).toBe(true)
+    expect(existsSync(join(first, 'core', 'cinna_api', 'credentials.py'))).toBe(true)
+    installCommandCredentialPreparation(async () => ({ skillRuntime: false }))
+    const bare = await commandService.run(USER, AGENT_ID, 'path')
+    expect(bare.output).not.toContain('skill-runtime')
+  } finally { installCommandCredentialPreparation(async () => ({})) }
 })
 
 describe('scheduled command execution', () => {

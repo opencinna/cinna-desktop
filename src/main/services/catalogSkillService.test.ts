@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
+import { SERVICE_CREDENTIALS_CHANGED } from '../../shared/serviceCredentials'
 
 /**
  * Catalog skills in local agents: add, update, remove and fetch-what-is-pinned,
@@ -152,11 +153,17 @@ describe('Add to agent', () => {
     listing.value = { items: [skillItem(3, archive)], agents: [] }
     serve({ 3: archive })
 
-    autoAttachSkills.mockResolvedValueOnce([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    // The skill's slots get their credentials once it is pinned (U11), in the background: the verb
+    // answers before provision-local does, and what was attached is pushed to the renderer.
+    let attach!: (items: unknown[]) => void
+    autoAttachSkills.mockImplementationOnce(() => new Promise((resolve) => { attach = resolve }))
     const outcome = await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)
-    // The skill's slots get their credentials once it is pinned (U11), and the outcome says which.
-    expect(outcome).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 3, autoAttached: [{ slot: 'erp-api', credentialName: 'ERP', skill: true }] })
-    expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID)
+    expect(outcome).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
+    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID))
+    expect(publishEvent).not.toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED, expect.anything(), 'all')
+    attach([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    await vi.waitFor(() => expect(publishEvent).toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED,
+      { autoAttached: { agentId: AGENT_ID, items: [{ slot: 'erp-api', credentialName: 'ERP', skill: true }] } }, 'all'))
     expect(cinnaFetchBytes.mock.calls[0].slice(0, 2)).toEqual([PROFILE, `/api/v1/skills/packages/${UUID}/revisions/3/download`])
 
     expect(manifest().catalog_skills).toEqual([
@@ -338,8 +345,10 @@ describe('Update and Remove', () => {
     listing.value = { items: [skillItem(2, v2)], agents: [] }
     serve({ 2: v2 })
     autoAttachSkills.mockClear()
-    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2, autoAttached: [] })
-    expect(autoAttachSkills).toHaveBeenCalledTimes(1)
+    autoAttachSkills.mockImplementationOnce(() => new Promise(() => {}))
+    // Answers without waiting for the slots to be filled (provision-local may take its timeout).
+    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(1))
     expect(manifest().catalog_skills).toEqual([{ ...pinOf(2, v2) }])
     await vi.waitFor(() => expect(posts()).toHaveLength(1))
     expect((posts()[0][2] as { body: unknown }).body).toEqual({

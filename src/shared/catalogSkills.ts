@@ -11,8 +11,6 @@
  * {@link CatalogSkillEnsureInput}.
  */
 
-import type { AutoAttachedCredential } from './serviceCredentials'
-
 /** Pin the latest revision of a catalog skill package into a kit agent. */
 export interface CatalogSkillAddInput {
   agentId: string
@@ -66,6 +64,11 @@ export type CatalogSkillRefusal =
   | 'write_failed'
   | 'reauth_required'
 
+/**
+ * What Add, Update and Remove answer. After Add and Update main fills the skill slots in the
+ * background without holding the verb up; what it attached arrives on `SERVICE_CREDENTIALS_CHANGED`
+ * (`ServiceCredentialsChangedPayload.autoAttached`).
+ */
 export type CatalogSkillOutcome =
   | {
       ok: true
@@ -73,11 +76,6 @@ export type CatalogSkillOutcome =
       name: string
       /** The revision now pinned; for a remove, the one that was. */
       revisionNumber: number
-      /**
-       * Add and Update: the skill slots main filled without asking (`skill: true` entries,
-       * `slot` the Service URI). Absent for a remove and when nothing changed.
-       */
-      autoAttached?: AutoAttachedCredential[]
     }
   | { ok: false; code: CatalogSkillRefusal; message: string }
 

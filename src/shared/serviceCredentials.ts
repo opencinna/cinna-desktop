@@ -134,4 +134,15 @@ export interface CredentialSetupDto {
  * `skill: true` for a skill slot, whose `slot` is a Service URI and may equal an agent slot's name.
  */
 export interface AutoAttachedCredential { slot: string; credentialName: string; skill?: true }
+/**
+ * `SERVICE_CREDENTIALS_CHANGED`'s payload. A credential change carries the current profile's sync
+ * state; `autoAttached` is set when main filled an agent's skill slots without asking in the background
+ * (after Add to agent or Update of a catalog skill, or a sharing verb's pinned-skill fetch), for
+ * Finish setup's "Connected automatically".
+ */
+export interface ServiceCredentialsChangedPayload {
+  lastSync?: number | null
+  error?: string | null
+  autoAttached?: { agentId: string; items: AutoAttachedCredential[] }
+}
 export type ServiceCredentialResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }

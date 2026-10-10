@@ -56,7 +56,7 @@ import {
 import { LOCAL_AGENT_CHANGED_CHANNEL, type LocalAgentDto } from '../../shared/localAgents'
 import type { CatalogSkillPin, CinnaAgentManifest } from '../../shared/kit/manifest'
 import type { CatalogItem } from '../../shared/catalogItems'
-import type { AutoAttachedCredential } from '../../shared/serviceCredentials'
+import { SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type ServiceCredentialsChangedPayload } from '../../shared/serviceCredentials'
 import type {
   CatalogSkillEnsureFailure,
   CatalogSkillEnsureResult,
@@ -369,12 +369,20 @@ function account(): { profile: string; host: string } | Refused {
 /**
  * Fill the agent's skill slots exactly one cloud credential fits (U11: `provision-local`, then a
  * strict `(type, service_uri = slot)` match). Loaded on use, like the drivers do, so this module
- * does not pull the credential service in. Never fails the verb it follows.
+ * does not pull the credential service in. Never fails the verb it follows, and never holds it up:
+ * the verbs start it without waiting (`provision-local` may take its full timeout per revision).
+ * What it attached reaches the renderer on `SERVICE_CREDENTIALS_CHANGED` as `autoAttached`, so
+ * Finish setup can say "Connected automatically".
  */
 async function skillCredentials(agentId: string): Promise<AutoAttachedCredential[]> {
   try {
     const { serviceCredentialService } = await import('./serviceCredentials/service')
-    return await serviceCredentialService.autoAttachSkills(agentId)
+    const items = await serviceCredentialService.autoAttachSkills(agentId)
+    if (items.length) {
+      const payload: ServiceCredentialsChangedPayload = { autoAttached: { agentId, items } }
+      publishEvent(SERVICE_CREDENTIALS_CHANGED, payload, 'all')
+    }
+    return items
   } catch (err) {
     logger.warn('skill credentials could not be attached', { agentId, error: err instanceof Error ? err.message : String(err) })
     return []
@@ -430,8 +438,8 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, pin, written.manifestId)
       logger.info('catalog skill added', { agentId, name: pin.name, revision: pin.revision_number })
-      const autoAttached = await skillCredentials(agentId)
-      return { ok: true as const, name: pin.name, revisionNumber: pin.revision_number, autoAttached }
+      void skillCredentials(agentId)
+      return { ok: true as const, name: pin.name, revisionNumber: pin.revision_number }
     })
   },
 
@@ -479,8 +487,8 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, latest, written.manifestId)
       logger.info('catalog skill updated', { agentId, name, revision: latest.revision_number })
-      const autoAttached = await skillCredentials(agentId)
-      return { ok: true as const, name, revisionNumber: latest.revision_number, autoAttached }
+      void skillCredentials(agentId)
+      return { ok: true as const, name, revisionNumber: latest.revision_number }
     })
   },
 

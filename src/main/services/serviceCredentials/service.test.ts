@@ -1087,6 +1087,14 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
     expect(service.setupState(a.id).skillSlots.map(s => [s.slot, s.state, s.provision])).toEqual([['mail-in', 'missing', 'not_allowed_locally'], ['erp-api', 'connected', null]])
   })
 
+  it('attaches one record to a Service URI two skills declare with different types', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('erp-sync', [{ slot: 'erp-api', type: 'odoo' }])])
+    world.metadata = [rec('erp-token', 'ERP token', 'erp-api'), rec('erp-odoo', 'ERP odoo', 'erp-api', { type: 'odoo' })]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP token', skill: true }])
+    expect(group(a, 'account-b')).toEqual(['erp-token'])
+  })
+
   it('lists deliverable skills only, one entry per slot and type, and never decides setupNeeded', async () => {
     const a = skillAgent([
       skill('a', [{ slot: 'erp-api' }, { slot: 'erp-api', type: 'odoo' }]), skill('b', [{ slot: 'erp-api' }]),

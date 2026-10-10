@@ -1,4 +1,4 @@
-import type { AutoAttachedCredential, CredentialSetupDto, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { AutoAttachedCredential, CredentialSetupDto, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -412,8 +412,9 @@ const api = {
     setupState: (id: string): Promise<ServiceCredentialResult<CredentialSetupDto>> => ipcRenderer.invoke('service-credentials:setup-state', id),
     /** Fill the agent's skill slots exactly one record fits, after `provision-local` (Finish setup opening). Answers what it attached. */
     setupSkills: (id: string): Promise<ServiceCredentialResult<AutoAttachedCredential[]>> => ipcRenderer.invoke('service-credentials:setup-skills', id),
-    onChanged: (cb: () => void): (() => void) => {
-      const listener = (): void => cb()
+    /** `payload.autoAttached` names skill slots main filled without asking, in the background. */
+    onChanged: (cb: (payload: ServiceCredentialsChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload?: ServiceCredentialsChangedPayload): void => cb(payload ?? {})
       ipcRenderer.on('service-credentials:changed', listener)
       return () => { ipcRenderer.removeListener('service-credentials:changed', listener) }
     }

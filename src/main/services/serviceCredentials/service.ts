@@ -588,12 +588,14 @@ async function writeAttachments(id: string, group: string, refsOf: (before: { re
  * Append `added` to the account's group without waiting for a running turn: a turn (shared hold)
  * refuses at once, while an exclusive holder — another short write (a credential regeneration, a
  * sharing verb) — is retried for a few seconds, never queued. `keep` filters the additions once more
- * under the lock, on the fresh state; the answer is what was appended.
+ * under the lock, on the fresh state and given what this write appends before it; the answer is what
+ * was appended.
  */
-async function appendWithoutWaiting(id: string, account: Account, added: string[], keep: (ref: string) => boolean = () => true): Promise<string[]> {
+async function appendWithoutWaiting(id: string, account: Account, added: string[], keep: (ref: string, appendedSoFar: readonly string[]) => boolean = () => true): Promise<string[]> {
   let appended: string[] = []
   const append = (before: { ref: string }[]) => {
-    appended = added.filter(ref => !before.some(v => v.ref === ref) && keep(ref))
+    appended = []
+    for (const ref of added) if (!before.some(v => v.ref === ref) && keep(ref, appended)) appended.push(ref)
     return [...before.map(v => v.ref), ...appended]
   }
   for (let attempt = 0; ; attempt++) {
@@ -793,8 +795,12 @@ export const serviceCredentialService = {
         if (pick?.cloudId) picks.set(pick.cloudId, { slot, credentialName: pick.name })
       }
       if (!picks.size) return []
-      // Decided once more under the lock: a slot the user filled in between keeps their choice.
-      const appended = await appendWithoutWaiting(id, account, [...picks.keys()], ref => !slotClaimed(picks.get(ref)!.slot, attachedMetadata(a)))
+      // Decided once more under the lock: a slot the user filled in between keeps their choice, and a
+      // Service URI two skills declare with different types gets one record, not one per type.
+      const appended = await appendWithoutWaiting(id, account, [...picks.keys()], (ref, soFar) => {
+        const slot = picks.get(ref)!.slot
+        return !slotClaimed(slot, attachedMetadata(a)) && !soFar.some(other => picks.get(other)!.slot.slot === slot.slot)
+      })
       if (!appended.length) return []
       logger.info('Attached matching credentials for skill slots', { agentId: id, count: appended.length })
       return appended.map(ref => ({ slot: picks.get(ref)!.slot.slot, credentialName: picks.get(ref)!.credentialName, skill: true as const }))
