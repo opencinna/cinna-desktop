@@ -1,0 +1,422 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
+
+/**
+ * Catalog skills in local agents: add, update, remove and fetch-what-is-pinned,
+ * over a real agent folder, a real manifest and a real cache, with only the
+ * network, the agent index, the git origin and the listing faked. What is
+ * proved is what the service decides — U9's read-only rule, clashes, the two
+ * digest checks, the pin it writes and the local-install reports — and that a
+ * failure writes nothing.
+ */
+
+const PROFILE = 'profile-cinna'
+const HOST = 'https://cinna.test'
+const USER = '__default__'
+const AGENT_ID = 'folder:11111111-2222-4333-8444-555566667777'
+const MANIFEST_ID = '11111111-2222-4333-8444-555566667777'
+const UUID = '0b6f3c1e-1111-4222-8333-444455556666'
+
+const host = vi.hoisted(() => ({ userData: '' }))
+const cinnaFetch = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>())
+const cinnaFetchBytes = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>())
+const publishEvent = vi.hoisted(() => vi.fn())
+const located = vi.hoisted(() => ({ dir: '', kind: 'managed' as string, missing: false }))
+const remote = vi.hoisted(() => ({ ownRepo: false, originUrl: null as string | null }))
+const listing = vi.hoisted(() => ({ value: null as null | { items: unknown[]; agents: unknown[] } }))
+const refresh = vi.hoisted(() => vi.fn(async () => listing.value))
+
+vi.mock('../host/runtimeHost', () => ({ runtimeHost: { getPath: () => host.userData } }))
+vi.mock('../logger/logger', () => ({
+  createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
+}))
+vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => PROFILE, getSettingsScopeUserId: () => USER }))
+vi.mock('../host/events', () => ({ publishEvent }))
+vi.mock('./cinna-http', () => ({ cinnaFetch, cinnaFetchBytes }))
+vi.mock('./libraryService', () => ({
+  catalogItemPath: (uuid: string) => `/api/v1/catalog/items/${encodeURIComponent(uuid)}`,
+  libraryService: {
+    hostOf: (profile: string) => (profile === PROFILE ? HOST : null),
+    cached: () => listing.value,
+    refresh
+  }
+}))
+vi.mock('./localAgents/localAgentService', async () => {
+  const { LocalAgentError } = await import('../errors')
+  return {
+    localAgentService: {
+      // A bare folder's DTO carries no `skills`.
+      get: () => {
+        if (located.missing) throw new LocalAgentError('not_found', 'gone')
+        return { rootId: 'root-1', path: located.dir, ...(located.kind === 'external' ? {} : { skills: [] }) }
+      }
+    }
+  }
+})
+vi.mock('./localAgents/scannerService', () => ({ scannerService: { markAllRootsDirty: () => {} } }))
+vi.mock('./localAgents/gitService', () => ({
+  gitService: { readShareRemote: async () => ({ ...remote, cinnaServer: null, refusal: null }) }
+}))
+
+const { catalogSkillService } = await import('./catalogSkillService')
+const { catalogSkillCache, removeTree } = await import('./catalogSkillCache')
+const { catalogLocalInstalls } = await import('./catalogLocalInstalls')
+const { withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
+const { agentSkillRows, deliverableSkills } = await import('../kit/skills')
+const { CinnaApiError } = await import('../errors')
+
+let root: string
+let agentDir: string
+
+/** A skill package as the listing sends it, latest revision `revision` with `archive`'s digest. */
+function skillItem(revision: number, archive: Buffer, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: 'skill',
+    runs_on: null,
+    uuid: UUID,
+    id: 'test.cinna.skill.erp-lookup',
+    name: 'erp-lookup',
+    display_name: 'ERP lookup',
+    access: 'use',
+    latest: { revision_number: revision, version: `${revision}.0`, published_at: '', published_by: null, release_notes: null },
+    skill: { frontmatter: {}, archive_sha256: sha256Of(archive), size_bytes: archive.length },
+    ...over
+  }
+}
+
+/** The server: `archives[n]` for revision n, with a correct digest header unless told otherwise. */
+function serve(archives: Record<number, Buffer>, header: (bytes: Buffer) => string = sha256Of): void {
+  cinnaFetchBytes.mockImplementation(async (...args: unknown[]) => {
+    const path = args[1] as string
+    const match = path.match(/\/revisions\/(\d+)\/download$/)
+    const bytes = match ? archives[Number(match[1])] : undefined
+    if (!bytes) throw new CinnaApiError('request_failed', 'Cinna API 404: Not Found', 'Not Found', 404)
+    return { ok: true, bytes, headers: new Headers({ 'X-Content-SHA256': header(bytes) }) }
+  })
+}
+
+function writeManifest(extra: Record<string, unknown> = {}): void {
+  writeFileSync(
+    join(agentDir, 'cinna-agent.json'),
+    `${JSON.stringify({ id: MANIFEST_ID, slug: 'invoices', name: 'Invoices', ...extra }, null, 2)}\n`
+  )
+}
+
+const manifest = (): Record<string, unknown> => JSON.parse(readFileSync(join(agentDir, 'cinna-agent.json'), 'utf8'))
+const cacheRoot = (): string => join(host.userData, 'catalog-skills')
+const revisionDir = (revision: number): string => join(cacheRoot(), 'https-cinna.test', UUID, String(revision))
+const posts = (): unknown[][] => cinnaFetch.mock.calls.filter((call) => (call[2] as { method?: string })?.method === 'POST')
+const deletes = (): unknown[][] => cinnaFetch.mock.calls.filter((call) => (call[2] as { method?: string })?.method === 'DELETE')
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'cinna-catalog-skills-'))
+  host.userData = join(root, 'userData')
+  agentDir = join(root, 'Local', 'invoices')
+  mkdirSync(agentDir, { recursive: true })
+  writeManifest()
+  located.dir = agentDir
+  located.kind = 'managed'
+  located.missing = false
+  remote.ownRepo = false
+  remote.originUrl = null
+  listing.value = { items: [], agents: [] }
+  cinnaFetch.mockReset()
+  cinnaFetch.mockResolvedValue({})
+  cinnaFetchBytes.mockReset()
+  refresh.mockClear()
+  publishEvent.mockClear()
+  catalogSkillCache._reset()
+  catalogSkillService._reset()
+  catalogLocalInstalls._reset(join(root, 'catalog-device.json'))
+})
+
+afterEach(() => {
+  removeTree(root)
+})
+
+describe('Add to agent', () => {
+  it('downloads, checks both digests, caches read-only, writes the pin through the manifest guard and reports the install', async () => {
+    const archive = skillTgz('erp-lookup', 'Look things up in the ERP.')
+    listing.value = { items: [skillItem(3, archive)], agents: [] }
+    serve({ 3: archive })
+
+    const outcome = await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)
+    expect(outcome).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
+    expect(cinnaFetchBytes.mock.calls[0].slice(0, 2)).toEqual([PROFILE, `/api/v1/skills/packages/${UUID}/revisions/3/download`])
+
+    expect(manifest().catalog_skills).toEqual([
+      {
+        package_id: 'test.cinna.skill.erp-lookup',
+        package_uuid: UUID,
+        name: 'erp-lookup',
+        revision_number: 3,
+        version: '3.0',
+        archive_sha256: sha256Of(archive)
+      }
+    ])
+    // Unknown keys of the manifest survive, and it is still the 2-space JSON every writer keeps.
+    expect(manifest().slug).toBe('invoices')
+
+    const skillDir = join(revisionDir(3), 'erp-lookup')
+    expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toContain('name: erp-lookup')
+    expect(statSync(join(skillDir, 'SKILL.md')).mode & 0o777).toBe(0o444)
+    expect(statSync(join(skillDir, 'scripts', 'run.sh')).mode & 0o777).toBe(0o555)
+
+    // Delivered: the agent's skills now include it, from the cache.
+    const delivered = deliverableSkills(agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve))
+    expect(delivered.map((skill) => [skill.name, skill.source, skill.path])).toEqual([
+      ['erp-lookup', 'catalog', join(skillDir, 'SKILL.md')]
+    ])
+    expect(publishEvent).toHaveBeenCalledWith('local-agent:changed', { rootId: 'root-1', agentId: AGENT_ID, reason: 'rescan' })
+
+    await vi.waitFor(() => expect(posts()).toHaveLength(1))
+    expect(posts()[0].slice(0, 3)).toEqual([
+      PROFILE,
+      `/api/v1/catalog/items/${UUID}/local-installs`,
+      {
+        method: 'POST',
+        body: { device_id: catalogLocalInstalls.deviceId(), revision_number: 3, host_manifest_id: MANIFEST_ID }
+      }
+    ])
+  })
+
+  it('writes nothing when the bytes do not match the server’s digest or the pin’s', async () => {
+    const archive = skillTgz('erp-lookup')
+    const before = readFileSync(join(agentDir, 'cinna-agent.json'), 'utf8')
+
+    // The header lies.
+    listing.value = { items: [skillItem(3, archive)], agents: [] }
+    serve({ 3: archive }, () => 'f'.repeat(64))
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'hash_mismatch' })
+
+    // The header and the bytes agree, but not with what the catalog published.
+    listing.value = { items: [skillItem(3, archive, { skill: { archive_sha256: 'e'.repeat(64) } })], agents: [] }
+    serve({ 3: archive })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'hash_mismatch' })
+
+    expect(readFileSync(join(agentDir, 'cinna-agent.json'), 'utf8')).toBe(before)
+    expect(existsSync(join(cacheRoot(), 'https-cinna.test', UUID)) ? readdirSync(join(cacheRoot(), 'https-cinna.test', UUID)) : []).toEqual([])
+    expect(posts()).toEqual([])
+    // The failure is the row's issue until a download succeeds.
+    expect(catalogSkillCache.resolve({ packageUuid: UUID, revisionNumber: 3, name: 'erp-lookup', archiveSha256: 'e'.repeat(64) })).toMatchObject({
+      state: 'failed'
+    })
+  })
+
+  it('refuses a shared agent this person may only use (U9), before any download', async () => {
+    const archive = skillTgz('erp-lookup')
+    remote.ownRepo = true
+    remote.originUrl = `${HOST}/git/r1.git`
+    listing.value = {
+      items: [skillItem(3, archive)],
+      agents: [{ repoId: 'r1', bundleId: 'test.cinna.r1', cloneUrl: `${HOST}/git/r1.git`, access: 'use' }]
+    }
+    serve({ 3: archive })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'read_only' })
+    expect(cinnaFetchBytes).not.toHaveBeenCalled()
+
+    // With edit it may; with no word from the listing it may not.
+    ;(listing.value.agents[0] as { access: string }).access = 'edit'
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: true })
+    listing.value.agents = []
+    expect(await catalogSkillService.remove(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'access_unknown' })
+  })
+
+  it('refuses a name the agent already has: its own skill, the platform’s, or a pin of the package', async () => {
+    const archive = skillTgz('erp-lookup')
+    listing.value = { items: [skillItem(3, archive)], agents: [] }
+    serve({ 3: archive })
+    mkdirSync(join(agentDir, 'skills', 'erp-lookup'), { recursive: true })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'clash' })
+    rmSync(join(agentDir, 'skills'), { recursive: true })
+
+    const tasks = skillTgz('cinna-tasks')
+    listing.value = { items: [skillItem(1, tasks, { name: 'cinna-tasks' })], agents: [] }
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'clash' })
+
+    listing.value = { items: [skillItem(3, archive)], agents: [] }
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: true })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'already_added' })
+    expect(cinnaFetchBytes).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers the other refusals as data', async () => {
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'not_in_catalog' })
+    expect(refresh).toHaveBeenCalled()
+    located.kind = 'external'
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'not_kit_agent' })
+    located.missing = true
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'not_found' })
+    located.missing = false
+    located.kind = 'managed'
+    listing.value = { items: [skillItem(3, skillTgz('erp-lookup'))], agents: [] }
+    cinnaFetchBytes.mockRejectedValue(new CinnaApiError('reauth_required', 'Cinna 401', '401', 401))
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'reauth_required' })
+    cinnaFetchBytes.mockResolvedValue({ ok: false, reason: 'too_large' })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'too_large' })
+    expect(manifest().catalog_skills).toBeUndefined()
+  })
+
+  it('refuses an archive that breaks the unpacking rules, whatever its digest', async () => {
+    const wrongFolder = skillTgz('something-else')
+    listing.value = { items: [skillItem(3, wrongFolder)], agents: [] }
+    serve({ 3: wrongFolder })
+    expect(await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).toMatchObject({ ok: false, code: 'invalid_archive' })
+    expect(existsSync(revisionDir(3))).toBe(false)
+  })
+})
+
+describe('Update and Remove', () => {
+  const pinOf = (revision: number, archive: Buffer): Record<string, unknown> => ({
+    package_id: 'test.cinna.skill.erp-lookup',
+    package_uuid: UUID,
+    name: 'erp-lookup',
+    revision_number: revision,
+    version: `${revision}.0`,
+    archive_sha256: sha256Of(archive),
+    note: 'kept'
+  })
+
+  it('moves the pin to the latest version, keeping the pin’s other keys, and reports the new revision', async () => {
+    const v1 = skillTgz('erp-lookup', 'First.')
+    const v2 = skillTgz('erp-lookup', 'Second.')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    listing.value = { items: [skillItem(2, v2)], agents: [] }
+    serve({ 2: v2 })
+    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    expect(manifest().catalog_skills).toEqual([{ ...pinOf(2, v2) }])
+    await vi.waitFor(() => expect(posts()).toHaveLength(1))
+    expect((posts()[0][2] as { body: unknown }).body).toEqual({
+      device_id: catalogLocalInstalls.deviceId(),
+      revision_number: 2,
+      host_manifest_id: MANIFEST_ID
+    })
+    // Already at the latest: nothing to do, nothing fetched again.
+    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    expect(cinnaFetchBytes).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the pin and tells core this agent no longer holds it', async () => {
+    const v1 = skillTgz('erp-lookup')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    expect(await catalogSkillService.remove(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 1 })
+    expect(manifest().catalog_skills).toEqual([])
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1))
+    expect(deletes()[0].slice(0, 2)).toEqual([
+      PROFILE,
+      `/api/v1/catalog/items/${UUID}/local-installs/${catalogLocalInstalls.deviceId()}?host_manifest_id=${MANIFEST_ID}`
+    ])
+    expect(await catalogSkillService.remove(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'not_found' })
+  })
+
+  it('refuses both on a shared agent this person may only use', async () => {
+    writeManifest({ catalog_skills: [pinOf(1, skillTgz('erp-lookup'))] })
+    remote.ownRepo = true
+    remote.originUrl = `${HOST}/git/r1.git`
+    listing.value = {
+      items: [skillItem(2, skillTgz('erp-lookup', 'Second.'))],
+      agents: [{ repoId: 'r1', bundleId: 'b', cloneUrl: `${HOST}/git/r1.git`, access: 'use' }]
+    }
+    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'read_only' })
+    expect(await catalogSkillService.remove(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'read_only' })
+    expect((manifest().catalog_skills as unknown[]).length).toBe(1)
+  })
+})
+
+describe('fetching what an agent pins (U7)', () => {
+  it('fetches every missing revision, records a refusal on the row, and never throws', async () => {
+    const good = skillTgz('erp-lookup')
+    const other = skillTgz('csv-export')
+    const otherUuid = '9a9a9a9a-1111-4222-8333-444455556666'
+    writeManifest({
+      catalog_skills: [
+        { package_id: 'p.skill.erp-lookup', package_uuid: UUID, name: 'erp-lookup', revision_number: 2, archive_sha256: sha256Of(good) },
+        { package_id: 'p.skill.csv-export', package_uuid: otherUuid, name: 'csv-export', revision_number: 5, archive_sha256: sha256Of(other) }
+      ]
+    })
+    // The teammate is behind: core answers 404 for csv-export.
+    serve({ 2: good })
+
+    const result = await catalogSkillService.ensurePinned(USER, AGENT_ID)
+    expect(result).toMatchObject({ ok: true, fetched: ['erp-lookup'], failed: [{ name: 'csv-export', code: 'download_failed' }] })
+    const rows = agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve)
+    expect(rows.map((row) => [row.name, row.deliverable, row.issues.map((issue) => issue.code)])).toEqual([
+      ['csv-export', false, ['download_failed']],
+      ['erp-lookup', true, []]
+    ])
+    expect(rows[0].issues[0].message).toMatch(/update it to the team’s latest version/)
+    await vi.waitFor(() => expect(posts()).toHaveLength(1))
+
+    // Already here: nothing is fetched again.
+    cinnaFetchBytes.mockClear()
+    expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: true, fetched: [] })
+    expect(cinnaFetchBytes.mock.calls.map((call) => call[1])).toEqual([`/api/v1/skills/packages/${otherUuid}/revisions/5/download`])
+
+    located.missing = true
+    expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: false, code: 'not_found' })
+  })
+})
+
+describe('the cache', () => {
+  const ref = (archive: Buffer) => ({ packageUuid: UUID, revisionNumber: 4, name: 'erp-lookup', archiveSha256: sha256Of(archive) })
+
+  it('holds a revision complete or not at all: a failed install leaves neither the revision nor its staging', async () => {
+    const { readSkillArchive } = await import('../kit/skillArchive')
+    const archive = skillTgz('erp-lookup')
+    const parsed = readSkillArchive(archive, 'erp-lookup')
+    // A file and a folder at one path: the disk refuses half-way through.
+    const broken = { dirs: ['x'], files: [...parsed.files, { path: 'x', data: Buffer.from('no'), executable: false }] }
+    expect(() => catalogSkillCache.install('https-cinna.test', ref(archive), broken)).toThrow()
+    expect(readdirSync(join(cacheRoot(), 'https-cinna.test', UUID))).toEqual([])
+    expect(catalogSkillCache.resolve(ref(archive))).toEqual({ state: 'missing' })
+
+    const dir = catalogSkillCache.install('https-cinna.test', ref(archive), parsed)
+    expect(readdirSync(join(cacheRoot(), 'https-cinna.test', UUID))).toEqual(['4'])
+    expect(catalogSkillCache.resolve(ref(archive))).toEqual({ state: 'ready', dir })
+  })
+
+  it('does not count a revision folder whose marker names another digest, and replaces it on install', () => {
+    const archive = skillTgz('erp-lookup')
+    mkdirSync(join(revisionDir(4), 'erp-lookup'), { recursive: true })
+    writeFileSync(join(revisionDir(4), '.cinna-catalog-skill.json'), JSON.stringify({ ...ref(archive), archive_sha256: 'c'.repeat(64) }))
+    expect(catalogSkillCache.resolve(ref(archive))).toEqual({ state: 'missing' })
+  })
+
+  it('keys an instance by its origin as one safe folder name', () => {
+    expect(catalogSkillCache.instanceKey('https://Cinna.Example.com:8443/')).toBe('https-cinna.example.com-8443')
+    expect(catalogSkillCache.instanceKey('http://localhost:8000')).toBe('http-localhost-8000')
+    expect(catalogSkillCache.revisionDir('x', { ...ref(skillTgz('a')), packageUuid: '../../etc' })).toBeNull()
+  })
+})
+
+describe('the update signal (U9)', () => {
+  const agentWith = (revision: number) => ({
+    path: agentDir,
+    skills: [{ name: 'erp-lookup', source: 'catalog', packageUuid: UUID, revisionNumber: revision }]
+  })
+
+  it('offers an update when the listing is past the pin and the agent may be changed', () => {
+    listing.value = { items: [skillItem(3, skillTgz('erp-lookup'))], agents: [] }
+    const out = withCatalogSkillUpdates(agentWith(1) as never)
+    expect(out.skills?.[0]).toMatchObject({ latestRevision: 3, updatable: true })
+    expect(withCatalogSkillUpdates(agentWith(3) as never).skills?.[0]).toMatchObject({ latestRevision: 3, updatable: false })
+  })
+
+  it('never offers one in a shared agent this person may only use', () => {
+    mkdirSync(join(agentDir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(agentDir, 'app-data', 'desktop.json'),
+      JSON.stringify({ shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` } })
+    )
+    listing.value = {
+      items: [skillItem(3, skillTgz('erp-lookup'))],
+      agents: [{ repoId: 'r1', bundleId: 'b', cloneUrl: `${HOST}/git/r1.git`, access: 'use' }]
+    }
+    expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ latestRevision: 3, updatable: false })
+    ;(listing.value.agents[0] as { access: string }).access = 'maintain'
+    expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ updatable: true })
+  })
+})

@@ -394,4 +394,54 @@ describe('catalog skill rows', () => {
     expect(deliverableSkills(rows).map((row) => row.name)).toEqual(['alpha', 'zeta'])
     expect(scanAgentSkills(agent).map((row) => row.source)).toEqual(['authored', 'authored'])
   })
+
+  describe('with the cache as resolver', () => {
+    /** A cached copy of a skill, outside the agent folder. */
+    function cached(name: string, text: string): string {
+      const dir = join(agent, '..', `${agent.split('/').pop()}-cache`, name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), text)
+      return dir
+    }
+    afterEach(() => rmSync(join(agent, '..', `${agent.split('/').pop()}-cache`), { recursive: true, force: true }))
+
+    it('delivers a cached revision that passes the per-skill checks, with its own description, slots and absolute path', () => {
+      const dir = cached('csv-export', md('name: csv-export\ndescription: Export CSV.\ncredentials:\n  - slot: erp-api\n    type: api_token'))
+      const seen: unknown[] = []
+      const rows = catalogSkillRows({ catalog_skills: [PIN] }, new Set(), (ref) => {
+        seen.push(ref)
+        return { state: 'ready', dir }
+      })
+      expect(seen).toEqual([{ packageUuid: PIN.package_uuid, revisionNumber: 4, name: 'csv-export', archiveSha256: PIN.archive_sha256 }])
+      expect(rows[0]).toMatchObject({
+        source: 'catalog',
+        deliverable: true,
+        description: 'Export CSV.',
+        version: '2.0.0',
+        path: join(dir, 'SKILL.md'),
+        issues: [],
+        credentials: [{ slot: 'erp-api', type: 'api_token', description: null }]
+      })
+    })
+
+    it('keeps a cached copy that breaks the rules, or whose name clashes, from every engine', () => {
+      const wrong = cached('csv-export', md('name: other-name\ndescription: x'))
+      expect(catalogSkillRows({ catalog_skills: [PIN] }, new Set(), () => ({ state: 'ready', dir: wrong }))[0]).toMatchObject({
+        deliverable: false,
+        issues: [{ code: 'name_mismatch', severity: 'error' }]
+      })
+      const good = cached('csv-export', md('name: csv-export\ndescription: x'))
+      const clash = catalogSkillRows({ catalog_skills: [PIN] }, new Set(['csv-export']), () => ({ state: 'ready', dir: good }))[0]
+      expect(clash.deliverable).toBe(false)
+      expect(clash.issues.map((issue) => issue.code)).toEqual(['name_clash'])
+    })
+
+    it('says why the last download failed, and stays undelivered while missing', () => {
+      const failed = catalogSkillRows({ catalog_skills: [PIN] }, new Set(), () => ({ state: 'failed', message: 'Not yours yet.' }))[0]
+      expect(failed).toMatchObject({ deliverable: false, path: '', issues: [{ code: 'download_failed', message: 'Not yours yet.', severity: 'warning' }] })
+      const missing = catalogSkillRows({ catalog_skills: [PIN] }, new Set(), () => ({ state: 'missing' }))[0]
+      expect(missing.issues.map((issue) => issue.code)).toEqual(['not_downloaded'])
+      expect(deliverableSkills(agentSkillRows(agent, { catalog_skills: [PIN] }, () => { throw new Error('boom') }))).toEqual([])
+    })
+  })
 })

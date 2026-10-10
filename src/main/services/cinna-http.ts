@@ -187,3 +187,74 @@ export async function cinnaFetch<T>(
     throw new CinnaApiError('invalid_response', msg)
   }
 }
+
+/** {@link cinnaFetchBytes}' answer: the body and its headers, or a body over the cap. */
+export type CinnaBytesResult =
+  | { ok: true; bytes: Buffer; headers: Headers }
+  | { ok: false; reason: 'too_large' }
+
+/**
+ * A binary GET under the profile's own API — a catalog skill archive — with
+ * the same auth and error mapping as {@link cinnaFetch}, and a cap: a body
+ * declared or found to be over `maxBytes` is never read whole, and answers
+ * `too_large`. Only a path under the profile's server is accepted, never an
+ * absolute URL, so the token goes nowhere else.
+ */
+export async function cinnaFetchBytes(
+  userId: string,
+  path: string,
+  opts: { maxBytes: number; signal?: AbortSignal }
+): Promise<CinnaBytesResult> {
+  if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is fetched.')
+  opts.signal?.throwIfAborted()
+  const baseUrl = resolveBaseUrl(userId)
+  const generation = cinnaSessionGeneration(userId)
+  const authHeader = await resolveAuthHeader(userId)
+  opts.signal?.throwIfAborted()
+  if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) throw new CinnaSessionChanged()
+  const url = `${baseUrl}${path}`
+  const started = Date.now()
+  let response: Response
+  try {
+    response = await runtimeHost.http.fetch(url, {
+      method: 'GET',
+      headers: { Authorization: authHeader, Accept: 'application/gzip, application/octet-stream' },
+      cache: 'no-store',
+      ...(opts.signal ? { signal: opts.signal } : {})
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error('network error', { userId, url, method: 'GET', error: msg, durationMs: Date.now() - started })
+    throw new CinnaApiError('request_failed', msg)
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    logger.warn('request failed', { userId, url, method: 'GET', status: response.status, durationMs: Date.now() - started })
+    if (response.status === 401 || response.status === 403) {
+      throw new CinnaApiError('reauth_required', `Cinna ${response.status}`, String(response.status), response.status)
+    }
+    const detail = extractErrorDetail(text) || response.statusText
+    throw new CinnaApiError('request_failed', `Cinna API ${response.status}: ${detail}`, detail, response.status)
+  }
+  const declared = Number(response.headers.get('content-length') ?? '')
+  if (Number.isFinite(declared) && declared > opts.maxBytes) {
+    await response.body?.cancel().catch(() => undefined)
+    return { ok: false, reason: 'too_large' }
+  }
+  const chunks: Buffer[] = []
+  let total = 0
+  if (response.body) {
+    const reader = response.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > opts.maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        return { ok: false, reason: 'too_large' }
+      }
+      chunks.push(Buffer.from(value))
+    }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks), headers: response.headers }
+}

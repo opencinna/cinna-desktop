@@ -13,6 +13,17 @@ import {
 } from './promptAssembly'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
 
+/** Where the catalog skill cache says a pinned revision is; `missing` unless a test puts one there. */
+const catalogCache = vi.hoisted(() => ({ ready: new Map<string, string>() }))
+vi.mock('../catalogSkillCache', () => ({
+  catalogSkillCache: {
+    resolve: (ref: { packageUuid: string; revisionNumber: number | null }) => {
+      const dir = catalogCache.ready.get(`${ref.packageUuid}/${ref.revisionNumber}`)
+      return dir ? { state: 'ready', dir } : { state: 'missing' }
+    }
+  }
+}))
+
 const skill = vi.hoisted(() => ({ available: true }))
 vi.mock('../tasksSkillService', () => ({
   tasksSkillDeliveryFor: (engine: string) => !skill.available
@@ -784,6 +795,48 @@ describe('the agent’s own skills', () => {
         'Your own skills, from `skills/` in this folder, are available through the skill tool by name. Open one when the task matches its description.'
       ].join('\n'))
     }
+  })
+
+  describe('with a pinned catalog skill', () => {
+    const UUID = '0b6f3c1e-1111-4222-8333-444455556666'
+    const pin = {
+      package_id: 'test.cinna.skill.erp-lookup',
+      package_uuid: UUID,
+      name: 'erp-lookup',
+      revision_number: 2,
+      archive_sha256: 'a'.repeat(64)
+    }
+    let cacheDir: string
+    beforeEach(() => {
+      cacheDir = mkdtempSync(join(tmpdir(), 'cinna-prompt-cache-'))
+      mkdirSync(join(cacheDir, 'erp-lookup'))
+      writeFileSync(join(cacheDir, 'erp-lookup', 'SKILL.md'), '---\nname: erp-lookup\ndescription: Look things up in the ERP.\n---\n')
+    })
+    afterEach(() => {
+      catalogCache.ready.clear()
+      rmSync(cacheDir, { recursive: true, force: true })
+    })
+
+    it('lists a cached one for Codex by the absolute path of its SKILL.md, and says where it comes from', () => {
+      catalogCache.ready.set(`${UUID}/2`, join(cacheDir, 'erp-lookup'))
+      const prompt = assembleAgentPrompt(dir, manifest({ catalog_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext('codex') })
+      expect(section(prompt)).toBe([
+        '## Your skills',
+        '',
+        'Your own skills, from `skills/` in this folder, and the catalog skills this agent pins. When a task matches one, read its `SKILL.md` before using the skill.',
+        '',
+        `- \`erp-lookup\` — Look things up in the ERP. — \`${join(cacheDir, 'erp-lookup', 'SKILL.md')}\``,
+        '- `pdf-tools` — Fill and merge PDFs. — `skills/pdf-tools/SKILL.md`'
+      ].join('\n'))
+      const claude = section(assembleAgentPrompt(dir, manifest({ catalog_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext('claude') }))
+      expect(claude).toContain('and the catalog skills this agent pins are available through the skill tool')
+    })
+
+    it('leaves out a pin that is not on this computer', () => {
+      const prompt = assembleAgentPrompt(dir, manifest({ catalog_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext('codex') })
+      expect(prompt).not.toContain('erp-lookup')
+      expect(section(prompt)).toContain('Your own skills, from `skills/` in this folder. When a task')
+    })
   })
 
   it('has no section when no skill is deliverable', () => {

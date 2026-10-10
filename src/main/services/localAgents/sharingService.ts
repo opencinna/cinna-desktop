@@ -45,6 +45,7 @@ import {
   type LibraryEntry
 } from '../libraryService'
 import { catalogLocalInstalls } from '../catalogLocalInstalls'
+import { catalogSkillService } from '../catalogSkillService'
 import { createLogger } from '../../logger/logger'
 import { AGENTS_SUBDIR, folderAgentId } from '../../../shared/localAgents'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
@@ -996,6 +997,8 @@ export const sharingService = {
       const setup = await credentialSetup(userId, agentId, missingBefore)
       const status = await statusOf(agentId, shared, false)
       reportInstall(shared, status.headSha)
+      // The team's version may pin catalog skills this computer does not have yet.
+      catalogSkillService.ensurePinnedInBackground(userId, agentId)
       return { ...result(action, status), ...setup }
     }
     return result(action, await statusOf(agentId, shared, false))
@@ -1101,6 +1104,7 @@ export const sharingService = {
     const setup = await credentialSetup(userId, agentId, missingBefore)
     const status = await statusOf(agentId, shared, false)
     reportInstall(shared, status.headSha)
+    catalogSkillService.ensurePinnedInBackground(userId, agentId)
     return {
       ...result({ done: true, refusal: null, detail: missedDetail(missed) }, status, folderAgentId(copyId)),
       ...setup
@@ -1447,6 +1451,8 @@ export const sharingService = {
     const setup = await credentialSetup(userId, agentId)
     const status = await sharingService.status(userId, agentId, false).catch(() => null)
     void catalogLocalInstalls.reportInstalled(profile, entry, status?.headSha ?? null)
+    // Every catalog skill the agent pins, fetched in the background (U7); a refusal is an issue on its row, never a failed Get.
+    catalogSkillService.ensurePinnedInBackground(userId, agentId)
     return { ...result({ done: true, refusal: null }, status, agentId), ...setup }
   },
 

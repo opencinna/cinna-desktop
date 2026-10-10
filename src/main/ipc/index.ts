@@ -34,6 +34,7 @@ import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
 import { registerSharingHandlers } from './sharing.ipc'
+import { registerCatalogSkillHandlers } from './catalogSkills.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -72,6 +73,8 @@ export function registerAllIpcHandlers(): void {
   registerLocalAgentHandlers()
   // Team sharing of folder agents: Get, Update, Share changes, the team library.
   registerSharingHandlers()
+  // Catalog skills pinned in folder agents: add, update, remove, fetch.
+  registerCatalogSkillHandlers()
   registerServiceCredentialHandlers()
   registerAgentFileHandlers()
   registerHtmlPreviewHandlers()

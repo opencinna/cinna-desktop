@@ -2,7 +2,9 @@
  * Telling cinna-core which team agents this computer holds (catalog U10):
  * after Get, Update and Use the team's version, `POST
  * /catalog/items/{uuid}/local-installs {device_id, revision_number}`; after
- * Remove from this computer, `DELETE …/local-installs/{device_id}`.
+ * Remove from this computer, `DELETE …/local-installs/{device_id}`. A catalog
+ * skill pinned in a local agent is reported the same way with that agent's
+ * manifest id as `host_manifest_id` (`catalogSkillService`).
  *
  * Core uses the rows for install counts, the "N people use this" guard on
  * delete and "who is behind" for maintainers. **Best effort, always**: a
@@ -147,6 +149,38 @@ export const catalogLocalInstalls = {
       // A 204 has no JSON body: the removal happened.
       if (err instanceof CinnaApiError && err.code === 'invalid_response') return
       logger.warn('local removal could not be reported', { uuid: entry.uuid, error: describe(err) })
+    }
+  },
+
+  /**
+   * Report that this computer holds a catalog skill's revision in the local
+   * agent whose manifest id is `hostManifestId` (core requires it for a
+   * skill). Repeat calls move the revision. Never throws.
+   */
+  async reportSkillInstalled(profile: string, packageUuid: string, revisionNumber: number, hostManifestId: string): Promise<void> {
+    try {
+      await cinnaFetch(profile, `${catalogItemPath(packageUuid)}/local-installs`, {
+        method: 'POST',
+        body: { device_id: catalogLocalInstalls.deviceId(), revision_number: revisionNumber, host_manifest_id: hostManifestId }
+      })
+    } catch (err) {
+      logger.warn('skill local install could not be reported', { uuid: packageUuid, error: describe(err) })
+    }
+  },
+
+  /** Report that the local agent `hostManifestId` no longer pins the skill. Never throws. */
+  async reportSkillRemoved(profile: string, packageUuid: string, hostManifestId: string): Promise<void> {
+    try {
+      const device = encodeURIComponent(catalogLocalInstalls.deviceId())
+      await cinnaFetch(
+        profile,
+        `${catalogItemPath(packageUuid)}/local-installs/${device}?host_manifest_id=${encodeURIComponent(hostManifestId)}`,
+        { method: 'DELETE' }
+      )
+    } catch (err) {
+      // A 204 has no JSON body: the removal happened.
+      if (err instanceof CinnaApiError && err.code === 'invalid_response') return
+      logger.warn('skill local removal could not be reported', { uuid: packageUuid, error: describe(err) })
     }
   },
 

@@ -394,7 +394,11 @@ export interface LocalAgentSkill {
   /** Frontmatter `version`, when it states one; a `catalog` row's pinned `version` label. */
   version: string | null
   source: LocalAgentSkillSource
-  /** Agent-relative POSIX path of its `SKILL.md`; `''` for a `catalog` row, which has no file here. */
+  /**
+   * Agent-relative POSIX path of its `SKILL.md`. For a `catalog` row, the
+   * absolute path of the cached copy's `SKILL.md` once its revision is on
+   * this computer, else `''`.
+   */
   path: string
   /** No error: every engine gets it. */
   deliverable: boolean
@@ -407,6 +411,18 @@ export interface LocalAgentSkill {
   packageUuid?: string
   /** `catalog` rows only: the pinned `revision_number`; null when the pin's is not a whole number of 1 or more. */
   revisionNumber?: number | null
+  /**
+   * `catalog` rows only: the package's latest revision in the active
+   * profile's cached catalog listing; null when the listing does not have it.
+   * Read at list time, not from the folder.
+   */
+  latestRevision?: number | null
+  /**
+   * `catalog` rows only: {@link latestRevision} is past the pinned one **and**
+   * this person may change the agent — not a shared agent they may only use
+   * (catalog U9), whose skills move with the team's next version.
+   */
+  updatable?: boolean
 }
 
 /**

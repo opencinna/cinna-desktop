@@ -3,7 +3,10 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { LocalAgentSkill } from '../../shared/localAgents'
-import { scanAgentSkills } from '../kit/skills'
+import { catalogSkillRefOf, scanAgentSkills } from '../kit/skills'
+import { readSkillArchive } from '../kit/skillArchive'
+import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
+import { catalogSkillCache, removeTree } from './catalogSkillCache'
 
 const host = vi.hoisted(() => ({ userData: '' }))
 vi.mock('../host/runtimeHost', () => ({
@@ -184,5 +187,56 @@ describe('ensureKitAgentSkillsPlugin, the one builder both engines use', () => {
   it('is null when nothing in skills/ is deliverable', () => {
     rmSync(join(agentDir, 'skills'), { recursive: true, force: true })
     expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })).toBeNull()
+  })
+})
+
+describe('pinned catalog skills', () => {
+  const UUID = '0b6f3c1e-1111-4222-8333-444455556666'
+  const pin = (revision: number, archive: Buffer, name = 'erp-lookup') => ({
+    package_id: `test.cinna.skill.${name}`,
+    package_uuid: UUID,
+    name,
+    revision_number: revision,
+    archive_sha256: sha256Of(archive)
+  })
+
+  beforeEach(() => {
+    catalogSkillCache._reset(join(root, 'userData', 'catalog-skills'))
+  })
+  afterEach(() => {
+    removeTree(join(root, 'userData', 'catalog-skills'))
+    catalogSkillCache._reset()
+  })
+
+  it('links a cached revision to its read-only folder in the shared cache, beside the agent’s own', () => {
+    const archive = skillTgz('erp-lookup')
+    const pinned = pin(2, archive)
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ slug: 'invoice-reader', catalog_skills: [pinned] }))
+    // Not on this computer yet: the agent's own skills only.
+    expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.skills).toEqual(['broken', 'ledger', 'pdf-tools'])
+
+    const cached = catalogSkillCache.install(
+      'https-cinna.test',
+      { ...catalogSkillRefOf(pinned), packageId: pinned.package_id },
+      readSkillArchive(archive, 'erp-lookup')
+    )
+    const built = ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })!
+    expect(built.skills).toEqual(['broken', 'erp-lookup', 'ledger', 'pdf-tools'])
+    expect(readlinkSync(join(built.dir, 'skills', 'erp-lookup'))).toBe(cached)
+    expect(readlinkSync(join(built.dir, 'skills', 'ledger'))).toBe(join(agentDir, 'skills', 'ledger'))
+    expect(readFileSync(join(built.dir, 'skills', 'erp-lookup', 'SKILL.md'), 'utf8')).toContain('name: erp-lookup')
+  })
+
+  it('never links a pin whose name is one of the agent’s own skills, or whose digest is not the cached one', () => {
+    const archive = skillTgz('ledger')
+    const clashing = pin(1, archive, 'ledger')
+    catalogSkillCache.install('https-cinna.test', catalogSkillRefOf(clashing), readSkillArchive(archive, 'ledger'))
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ catalog_skills: [clashing] }))
+    const built = ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })!
+    expect(readlinkSync(join(built.dir, 'skills', 'ledger'))).toBe(join(agentDir, 'skills', 'ledger'))
+
+    rmSync(join(agentDir, 'skills', 'ledger'), { recursive: true, force: true })
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ catalog_skills: [{ ...clashing, archive_sha256: 'b'.repeat(64) }] }))
+    expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.skills).toEqual(['broken', 'pdf-tools'])
   })
 })

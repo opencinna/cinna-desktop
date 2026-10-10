@@ -30,6 +30,7 @@ import type { LayoutView } from '../../kit/layout'
 import { manifestPath, readStamp, readWithStamp } from '../../kit/manifestIo'
 import { parseFrontmatter } from '../../kit/miniYaml'
 import { agentSkillRows } from '../../kit/skills'
+import { catalogSkillCache } from '../catalogSkillCache'
 import {
   isSkillFinding,
   readCommandCatalog,
@@ -662,7 +663,7 @@ export const scannerService = {
       commands: catalog.commands,
       // Listed whatever the readiness: a broken skill is a row with its issue,
       // and skills do not decide whether the agent runs.
-      skills: agentSkillRows(agentDir, manifest),
+      skills: agentSkillRows(agentDir, manifest, catalogSkillCache.resolve),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),

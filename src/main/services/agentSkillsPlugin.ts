@@ -8,6 +8,9 @@
  * `skills/<name>` inside the plugin is a link to the agent's real
  * `skills/<name>/`, so an edit to a `SKILL.md` reaches the next turn with no
  * rebuild, and the plugin is rebuilt only when the *set* of skills changes.
+ * A pinned catalog skill whose revision is cached is linked the same way, to
+ * its read-only folder in the shared cache (`catalogSkillCache.ts`), so a
+ * re-pin to another revision is a changed link and a rebuild.
  *
  * What was proven on Claude Code 2.1.276 / adapter 0.76.0, and why the shape
  * is what it is:
@@ -33,14 +36,16 @@
 
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { swapInto } from '../kit/treeSwap'
 import { manifestPath, parseManifest } from '../kit/manifestIo'
-import { deliverableSkills, scanAgentSkills, SKILL_NAME_RE, SKILLS_DIR, MAX_NAME_LENGTH } from '../kit/skills'
+import { agentSkillRows, deliverableSkills, SKILL_NAME_RE, SKILLS_DIR, MAX_NAME_LENGTH } from '../kit/skills'
 import { createLogger } from '../logger/logger'
 import type { LocalAgentSkill } from '../../shared/localAgents'
+import type { CinnaAgentManifest } from '../../shared/kit/manifest'
 import { TASKS_SKILL_NAME } from './tasksSkillService'
+import { catalogSkillCache } from './catalogSkillCache'
 
 const logger = createLogger('agent-skills-plugin')
 
@@ -141,14 +146,31 @@ function sweepLeftovers(target: string): void {
  * {@link ensureKitAgentSkillsPlugin} shares, so two callers never flap the
  * plugin's name.
  */
-function manifestSlug(agentDir: string): string {
+function readKitManifest(agentDir: string): { slug: string; manifest: CinnaAgentManifest | null } {
   try {
     const manifest = parseManifest(readFileSync(manifestPath(agentDir), 'utf8'))
-    if (typeof manifest.slug === 'string') return manifest.slug
+    return { slug: typeof manifest.slug === 'string' ? manifest.slug : basename(agentDir), manifest }
   } catch {
-    /* the folder name, as the scanner does */
+    // The folder name, as the scanner does; no manifest, no catalog pins.
+    return { slug: basename(agentDir), manifest: null }
   }
-  return basename(agentDir)
+}
+
+/**
+ * Every skill a kit agent's engine is given, fresh from disk: its own
+ * deliverable `skills/<name>/` and each pinned catalog skill whose revision is
+ * in the cache and passes the same checks (`kit/skills.ts` `catalogSkillRows`).
+ * A name is never on both: a pin that clashes with an own skill is an error.
+ */
+export function kitAgentDeliverableSkills(agentDir: string, manifest: unknown): LocalAgentSkill[] {
+  return deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve))
+}
+
+/** Where a deliverable skill's folder is: the agent's own, or the catalog cache's. */
+function skillFolder(agentDir: string, skill: LocalAgentSkill): string {
+  return skill.source === 'catalog' && isAbsolute(skill.path)
+    ? dirname(skill.path)
+    : join(agentDir, SKILLS_DIR, skill.name)
 }
 
 export interface KitAgentSkillsPlugin {
@@ -167,9 +189,10 @@ export interface KitAgentSkillsPlugin {
  * written. The caller decides that the agent is a kit agent.
  */
 export function ensureKitAgentSkillsPlugin(agent: { id: string; path: string }): KitAgentSkillsPlugin | null {
-  const skills = deliverableSkills(scanAgentSkills(agent.path))
+  const { slug, manifest } = readKitManifest(agent.path)
+  const skills = kitAgentDeliverableSkills(agent.path, manifest)
   if (skills.length === 0) return null
-  const dir = ensureAgentSkillsPlugin({ agentId: agent.id, slug: manifestSlug(agent.path), agentDir: agent.path, skills })
+  const dir = ensureAgentSkillsPlugin({ agentId: agent.id, slug, agentDir: agent.path, skills })
   return dir ? { dir, skills: skills.map((skill) => skill.name) } : null
 }
 
@@ -185,7 +208,7 @@ export function ensureAgentSkillsPlugin(input: AgentSkillsPluginInput): string |
   sweepLeftovers(target)
   const wanted: PluginState = {
     name: agentSkillsPluginName(input.slug),
-    links: Object.fromEntries(skills.map((skill) => [skill.name, join(input.agentDir, SKILLS_DIR, skill.name)]))
+    links: Object.fromEntries(skills.map((skill) => [skill.name, skillFolder(input.agentDir, skill)]))
   }
   try {
     if (existsSync(target) && sameState(readState(target), wanted) && linksPresent(target, wanted)) return target
@@ -197,7 +220,7 @@ export function ensureAgentSkillsPlugin(input: AgentSkillsPluginInput): string |
       join(staging, '.claude-plugin', 'plugin.json'),
       `${JSON.stringify({
         name: wanted.name,
-        description: 'Skills from this agent’s own skills/ folder. Provided by Cinna Desktop.',
+        description: 'This agent’s skills: its own skills/ folder and the catalog skills it pins. Provided by Cinna Desktop.',
         version: '1'
       }, null, 2)}\n`
     )

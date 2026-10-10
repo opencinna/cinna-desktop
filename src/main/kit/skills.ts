@@ -673,6 +673,7 @@ export function catalogPinClashes(
 /** Sentences for a catalog row's own issues. */
 export const CATALOG_ISSUE_MESSAGES: Readonly<Record<string, string>> = {
   not_downloaded: 'Not on this computer yet.',
+  download_failed: 'It could not be downloaded.',
   duplicate_pin: 'Another catalog skill of this agent has the same name.',
   name_clash: 'This agent’s own skills/ folder has a skill of the same name. Remove the pin or rename the folder.',
   reserved_name: 'This name is reserved by a platform skill.'
@@ -688,16 +689,57 @@ function catalogIssue(code: string, severity: 'error' | 'warning'): LocalAgentSk
   return { code, message: CATALOG_ISSUE_MESSAGES[code], severity }
 }
 
+/** What a pin names, for the cache: the package, the revision, the folder name and the archive digest. */
+export interface CatalogSkillRef {
+  packageUuid: string
+  revisionNumber: number | null
+  name: string
+  archiveSha256: string
+}
+
+/**
+ * Where a pinned revision stands on this computer: unpacked (`dir` is the
+ * skill folder), its last download failed (`message`, a plain sentence), or
+ * not here.
+ */
+export type CatalogSkillCacheState =
+  | { state: 'ready'; dir: string }
+  | { state: 'failed'; message: string }
+  | { state: 'missing' }
+
+/** Answers {@link CatalogSkillCacheState} for a pin; `catalogSkillCache.resolve` provides it. */
+export type CatalogSkillResolver = (ref: CatalogSkillRef) => CatalogSkillCacheState
+
+/** A pin as a {@link CatalogSkillRef}. */
+export function catalogSkillRefOf(pin: Record<string, unknown>): CatalogSkillRef {
+  const revision = pin.revision_number
+  return {
+    packageUuid: typeof pin.package_uuid === 'string' ? pin.package_uuid : '',
+    revisionNumber: typeof revision === 'number' && Number.isInteger(revision) && revision >= 1 ? revision : null,
+    name: typeof pin.name === 'string' ? pin.name : '',
+    archiveSha256: typeof pin.archive_sha256 === 'string' ? pin.archive_sha256 : ''
+  }
+}
+
 /**
  * The manifest's `catalog_skills[]` pins as skill rows (`source: 'catalog'`).
  *
- * Nothing downloads a catalog skill yet, so every row is **not deliverable**
- * and carries the `not_downloaded` warning; no engine, plugin or prompt is ever
- * given one — they read {@link scanAgentSkills}, which lists `skills/` only. A
- * pin whose name collides is an error on its row as well. Pins that are not
- * objects or have no usable name are not rows: `validateManifest` reports them.
+ * Without a `resolve`, or for a revision it does not have, a row is **not
+ * deliverable** and carries `not_downloaded` — or `download_failed` with the
+ * last attempt's sentence. A pin whose name collides is an error on its row
+ * and is never delivered, downloaded or not. A pin whose revision is cached
+ * is checked by the same per-skill rules as an own skill ({@link parseSkillDir}:
+ * `SKILL.md` names its folder, which is the pin's name, and has a
+ * description); one that passes is **deliverable**, with `path` the absolute
+ * path of the cached `SKILL.md`, the description and credential slots from
+ * that file, and its warnings. Pins that are not objects or have no usable
+ * name are not rows: `validateManifest` reports them.
  */
-export function catalogSkillRows(manifest: unknown, authored: ReadonlySet<string>): LocalAgentSkill[] {
+export function catalogSkillRows(
+  manifest: unknown,
+  authored: ReadonlySet<string>,
+  resolve?: CatalogSkillResolver
+): LocalAgentSkill[] {
   if (manifest === null || typeof manifest !== 'object') return []
   const pins = (manifest as Record<string, unknown>).catalog_skills
   if (!Array.isArray(pins)) return []
@@ -707,23 +749,46 @@ export function catalogSkillRows(manifest: unknown, authored: ReadonlySet<string
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
     const pin = raw as Record<string, unknown>
     if (!isCatalogPinName(pin.name)) return
-    const revision = pin.revision_number
-    rows.push({
+    const ref = catalogSkillRefOf(pin)
+    const clashIssues = (clashes.get(index) ?? []).map((clash) => catalogIssue(CLASH_CODES[clash], 'error'))
+    const pinnedVersion = typeof pin.version === 'string' && pin.version.trim() !== '' ? pin.version.trim() : null
+    const row: LocalAgentSkill = {
       name: pin.name,
       description: '',
-      version: typeof pin.version === 'string' && pin.version.trim() !== '' ? pin.version.trim() : null,
+      version: pinnedVersion,
       source: 'catalog',
       path: '',
       deliverable: false,
-      issues: [
-        ...(clashes.get(index) ?? []).map((clash) => catalogIssue(CLASH_CODES[clash], 'error')),
-        catalogIssue('not_downloaded', 'warning')
-      ],
+      issues: [...clashIssues, catalogIssue('not_downloaded', 'warning')],
       credentials: [],
       packageId: typeof pin.package_id === 'string' ? pin.package_id : '',
-      packageUuid: typeof pin.package_uuid === 'string' ? pin.package_uuid : '',
-      revisionNumber: typeof revision === 'number' && Number.isInteger(revision) && revision >= 1 ? revision : null
-    })
+      packageUuid: ref.packageUuid,
+      revisionNumber: ref.revisionNumber
+    }
+    let state: CatalogSkillCacheState = { state: 'missing' }
+    if (resolve) {
+      try {
+        state = resolve(ref)
+      } catch {
+        state = { state: 'missing' }
+      }
+    }
+    if (state.state === 'failed') {
+      row.issues = [
+        ...clashIssues,
+        { code: 'download_failed', message: state.message || CATALOG_ISSUE_MESSAGES.download_failed, severity: 'warning' }
+      ]
+    } else if (state.state === 'ready') {
+      const cached = parseSkillDir(state.dir, pin.name).skill
+      row.path = join(state.dir, SKILL_FILE)
+      row.description = cached.description
+      row.version = pinnedVersion ?? cached.version
+      row.credentials = cached.credentials
+      // The cached copy's own problems, in core's words; a clash comes first.
+      row.issues = [...clashIssues, ...cached.issues]
+      row.deliverable = clashIssues.length === 0 && cached.deliverable
+    }
+    rows.push(row)
   })
   return rows
 }
@@ -731,11 +796,16 @@ export function catalogSkillRows(manifest: unknown, authored: ReadonlySet<string
 /**
  * Every skill row of a kit agent, name-sorted: its own (`skills/`) and its
  * pinned catalog skills, an own skill first where a name is on both. What the
- * Addons tab lists; engines read {@link scanAgentSkills} instead.
+ * Addons tab lists, and — through {@link deliverableSkills}, with the catalog
+ * cache as `resolve` — what every engine is given.
  */
-export function agentSkillRows(agentDir: string, manifest: unknown): LocalAgentSkill[] {
+export function agentSkillRows(
+  agentDir: string,
+  manifest: unknown,
+  resolve?: CatalogSkillResolver
+): LocalAgentSkill[] {
   const authored = scanAgentSkills(agentDir)
-  const rows = [...authored, ...catalogSkillRows(manifest, new Set(authored.map((skill) => skill.name)))]
+  const rows = [...authored, ...catalogSkillRows(manifest, new Set(authored.map((skill) => skill.name)), resolve)]
   // Stable: an own skill keeps its place before a pin of the same name.
   return rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }

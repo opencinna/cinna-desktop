@@ -197,6 +197,7 @@ import type {
   SyncEvent,
   JobDependencyStatus
 } from '../shared/sync'
+import type { CatalogSkillEnsureResult, CatalogSkillOutcome } from '../shared/catalogSkills'
 
 export type { MessageAttachment }
 
@@ -1972,6 +1973,23 @@ const api = {
       ipcRenderer.on(LOCAL_AGENT_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(LOCAL_AGENT_CHANGED_CHANNEL, listener)
     }
+  },
+
+  /**
+   * Catalog skills pinned in a kit agent's `catalog_skills[]`: add the latest
+   * version of a skill package, move a pin to the latest version, drop one,
+   * and fetch every pinned revision this computer lacks. Every answer is data,
+   * refusals included. See `src/shared/catalogSkills.ts`.
+   */
+  catalogSkills: {
+    add: (agentId: string, packageUuid: string): Promise<CatalogSkillOutcome> =>
+      ipcRenderer.invoke('catalog-skills:add', { agentId, packageUuid }),
+    update: (agentId: string, name: string): Promise<CatalogSkillOutcome> =>
+      ipcRenderer.invoke('catalog-skills:update', { agentId, name }),
+    remove: (agentId: string, name: string): Promise<CatalogSkillOutcome> =>
+      ipcRenderer.invoke('catalog-skills:remove', { agentId, name }),
+    ensure: (agentId: string): Promise<CatalogSkillEnsureResult> =>
+      ipcRenderer.invoke('catalog-skills:ensure', { agentId })
   },
 
   /**

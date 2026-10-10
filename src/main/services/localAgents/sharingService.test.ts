@@ -117,6 +117,7 @@ const { desktopStateService } = await import('./desktopStateService')
 const { gitService } = await import('./gitService')
 const { libraryTrust, acceptableGitOrigin } = await import('../libraryTrust')
 const { catalogLocalInstalls } = await import('../catalogLocalInstalls')
+const { catalogSkillService } = await import('../catalogSkillService')
 const { CinnaApiError } = await import('../../errors')
 const { folderAgentId } = await import('../../../shared/localAgents')
 const { CinnaReauthRequired } = await import('../../auth/cinna-oauth')
@@ -1671,6 +1672,38 @@ describe('local installs reported to the catalog', () => {
       expect(cinnaFetch.mock.calls.some((call) => call[1] === '/api/v1/catalog/items/item-r1')).toBe(false)
     } finally {
       pull.mockRestore()
+    }
+  }, 30_000)
+
+  it('fetches the pinned catalog skills in the background after Get and after Update, and not after a refused Update', async () => {
+    const ensure = vi.spyOn(catalogSkillService, 'ensurePinned').mockResolvedValue({ ok: true, fetched: [], failed: [] })
+    const clone = cloneWithOneVersion()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === '/api/v1/catalog/items') return { data: [libraryAgent('r6', 'delta', null)] }
+      return {}
+    })
+    try {
+      const got = await sharingService.get(USER, 'r6')
+      expect(got.done).toBe(true)
+      expect(ensure).toHaveBeenCalledWith(USER, got.agentId)
+    } finally {
+      clone.restore()
+    }
+
+    ensure.mockClear()
+    makeOwnRepo(`${HOST}/git/r1.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    listed(libraryAgent('r1', 'alpha', null))
+    const pull = vi.spyOn(gitService, 'pullRebaseClean').mockResolvedValue({ done: false, refusal: 'dirty', detail: null })
+    try {
+      expect((await sharingService.update(USER, agentId)).done).toBe(false)
+      expect(ensure).not.toHaveBeenCalled()
+      pull.mockResolvedValue({ done: true, refusal: null, detail: null })
+      expect((await sharingService.update(USER, agentId)).done).toBe(true)
+      expect(ensure).toHaveBeenCalledWith(USER, agentId)
+    } finally {
+      pull.mockRestore()
+      ensure.mockRestore()
     }
   }, 30_000)
 
