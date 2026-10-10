@@ -1,4 +1,4 @@
-import { readPublications } from './publications'
+import { PUBLICATIONS_FILE, readPublications } from './publications'
 import { isCoordinatorHandover } from '../../shared/kit/handovers'
 /**
  * A TypeScript port of `kit.py validate`: is this folder a coherent, cloud-ready
@@ -50,11 +50,21 @@ import {
 import { checkContractCompatibility, compareVersionStrings } from '../../shared/kit/contractVersion'
 import { isWorkComplexity } from '../../shared/modelFamilies'
 import { isAgentEngine } from '../../shared/engine'
+import { isSkillFinding } from '../../shared/kit/findings'
 import { KitError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { matchesPattern, type LayoutView } from './layout'
 import { parseFrontmatter, parseWithIssues, type MiniYamlValue } from './miniYaml'
 import { readWithStamp } from './manifestIo'
+import {
+  MAX_VERSION_LENGTH as SKILL_MAX_VERSION_LENGTH,
+  SKILL_FILE,
+  SKILL_NAME_RE,
+  catalogPinClashes,
+  catalogSkillName,
+  isCatalogPinName,
+  scanAgentSkillDetails
+} from './skills'
 
 const logger = createLogger('kit-validator')
 
@@ -592,6 +602,43 @@ function checkHandovers(report: Report, manifest: CinnaAgentManifest, agentDir?:
   })
 }
 
+/**
+ * `publications.json` → `skills[]` (contract 1.10.0): one entry per skill of
+ * this agent published to a catalog — `kit.py`'s `_validate_skill_publications`,
+ * at the same severity as `publications[]`. Only the sibling file carries it.
+ */
+function checkSkillPublications(report: Report, entries: unknown, source: string): void {
+  if (entries === undefined || entries === null) return
+  if (!Array.isArray(entries)) {
+    report.error('publications.skills.type', '`skills` must be an array.', source)
+    return
+  }
+  entries.forEach((raw: unknown, index) => {
+    const label = `skills[${index}]`
+    if (!isRecord(raw)) {
+      report.error('publications.skills.item', `\`${label}\` must be an object.`, source)
+      return
+    }
+    for (const key of ['platform_url', 'name', 'package_id', 'package_uuid', 'content_hash'] as const) {
+      const value = raw[key]
+      if (typeof value !== 'string' || value.trim() === '') {
+        report.error('publications.skills.required', `\`${label}.${key}\` is required.`, source)
+      }
+    }
+    const name = raw.name
+    if (typeof name === 'string' && name.trim() !== '' && !SKILL_NAME_RE.test(name)) {
+      report.error('publications.skills.name', `\`${label}.name\` must be a skill folder name under skills/.`, source)
+    }
+    if (!isRevisionNumber(raw.revision_number)) {
+      report.error(
+        'publications.skills.revision_number',
+        `\`${label}.revision_number\` must be a whole number of 1 or more.`,
+        source
+      )
+    }
+  })
+}
+
 function checkPublications(report: Report, manifest: CinnaAgentManifest, agentDir?: string): void {
   if (manifest.cloud !== undefined) {
     report.info(
@@ -600,9 +647,17 @@ function checkPublications(report: Report, manifest: CinnaAgentManifest, agentDi
       MANIFEST_FILE
     )
   }
-  const { source, value: publications, invalidJson } = readPublications(agentDir, manifest)
+  const { source, value: publications, skills, invalidJson } = readPublications(agentDir, manifest)
   if (invalidJson) { report.error('publications.invalid_json', 'The publication ledger is not readable JSON.', source); return }
-  if (publications === undefined) return
+  checkSkillPublications(report, skills, source)
+  if (publications === undefined) {
+    // `kit.py`: a file with no `publications` says nothing rather than something
+    // wrong — likelier since 1.10.0, when a file may record only `skills[]`.
+    if (source === PUBLICATIONS_FILE) {
+      report.warn('publications.missing', `${PUBLICATIONS_FILE}: no \`publications\` array — nothing is recorded.`, source)
+    }
+    return
+  }
   if (!Array.isArray(publications)) {
     report.error('manifest.publications.type', '`publications` must be an array.', source)
     return
@@ -631,6 +686,122 @@ function checkPublications(report: Report, manifest: CinnaAgentManifest, agentDi
           source
         )
       }
+    }
+  })
+}
+
+/** `catalog_skills[].package_id`: the shape the platform accepts (schema pattern). */
+const CATALOG_PACKAGE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.-]{1,253}$/
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/
+
+/**
+ * Python's `str(uuid.UUID(value))`: `urn:` / `uuid:` and surrounding braces
+ * dropped, hyphens anywhere ignored, 32 hex digits, canonical lower case. Null
+ * where Python raises. (Python's `int()` also tolerates `_` and surrounding
+ * whitespace inside; nobody writes those, and they are refused here.)
+ */
+function canonicalUuid(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const hex = value.replaceAll('urn:', '').replaceAll('uuid:', '').replace(/^[{}]+|[{}]+$/g, '').replaceAll('-', '')
+  if (!/^[0-9a-fA-F]{32}$/.test(hex)) return null
+  const lower = hex.toLowerCase()
+  return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`
+}
+
+/** A JSON whole number of 1 or more. (`1.0` reads as `1` here; Python's JSON keeps it a float.) */
+function isRevisionNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1
+}
+
+/**
+ * `catalog_skills[]` (contract 1.10.0) — `kit.py`'s `_validate_catalog_skills`,
+ * field by field. Every malformed field is an error of its own, coded under
+ * the field so the conformance set's paths match; a pin whose `package_id`
+ * reads as another skill's name is only a warning, because the pin's `name` is
+ * what counts. Clashes with `skills/` and platform skills need the folder and
+ * are {@link checkSkills}' job.
+ */
+function checkCatalogSkills(report: Report, manifest: CinnaAgentManifest): void {
+  const pins = manifest.catalog_skills
+  if (pins === undefined || pins === null) return
+  if (!Array.isArray(pins)) {
+    report.error('manifest.catalog_skills.type', '`catalog_skills` must be an array.', MANIFEST_FILE)
+    return
+  }
+  const seenUuids = new Set<string>()
+  const seenNames = new Set<string>()
+  pins.forEach((raw: unknown, index) => {
+    const label = `catalog_skills[${index}]`
+    if (!isRecord(raw)) {
+      report.error('manifest.catalog_skills.item', `\`${label}\` must be an object.`, MANIFEST_FILE)
+      return
+    }
+    const packageId = raw.package_id
+    if (typeof packageId !== 'string' || !CATALOG_PACKAGE_ID_PATTERN.test(packageId)) {
+      report.error(
+        'manifest.catalog_skills.package_id',
+        `\`${label}.package_id\` must be the catalog's package id, e.g. io.example.team.skill.pdf-report.`,
+        MANIFEST_FILE
+      )
+    }
+    const name = raw.name
+    if (!isCatalogPinName(name)) {
+      report.error(
+        'manifest.catalog_skills.name',
+        `\`${label}.name\` must be the skill's name: lowercase words joined by single hyphens, at most 64 characters.`,
+        MANIFEST_FILE
+      )
+    } else {
+      if (seenNames.has(name)) {
+        report.error(
+          'manifest.catalog_skills.name.duplicate',
+          `\`${label}.name\` pins a second skill named \`${name}\`; an agent holds one skill per name.`,
+          MANIFEST_FILE
+        )
+      }
+      seenNames.add(name)
+      const derived = catalogSkillName(packageId)
+      if (derived !== null && derived !== name) {
+        report.warn(
+          'manifest.catalog_skills.package_id.name_differs',
+          `\`${label}.package_id\` reads as the skill \`${derived}\`, but the pin is named \`${name}\`. The name is what counts; check the pin.`,
+          MANIFEST_FILE
+        )
+      }
+    }
+    const uuid = canonicalUuid(raw.package_uuid)
+    if (uuid === null) {
+      report.error('manifest.catalog_skills.package_uuid', `\`${label}.package_uuid\` must be a UUID.`, MANIFEST_FILE)
+    } else if (seenUuids.has(uuid)) {
+      report.error(
+        'manifest.catalog_skills.package_uuid.duplicate',
+        `\`${label}.package_uuid\` pins the same catalog skill twice.`,
+        MANIFEST_FILE
+      )
+    } else {
+      seenUuids.add(uuid)
+    }
+    if (!isRevisionNumber(raw.revision_number)) {
+      report.error(
+        'manifest.catalog_skills.revision_number',
+        `\`${label}.revision_number\` must be a whole number of 1 or more.`,
+        MANIFEST_FILE
+      )
+    }
+    const version = raw.version
+    if (version !== undefined && version !== null && (typeof version !== 'string' || [...version].length > SKILL_MAX_VERSION_LENGTH)) {
+      report.error(
+        'manifest.catalog_skills.version',
+        `\`${label}.version\` must be a string of at most ${SKILL_MAX_VERSION_LENGTH} characters, or null.`,
+        MANIFEST_FILE
+      )
+    }
+    if (typeof raw.archive_sha256 !== 'string' || !SHA256_HEX_PATTERN.test(raw.archive_sha256)) {
+      report.error(
+        'manifest.catalog_skills.archive_sha256',
+        `\`${label}.archive_sha256\` must be 64 lowercase hex characters.`,
+        MANIFEST_FILE
+      )
     }
   })
 }
@@ -703,6 +874,7 @@ export function validateManifest(
   checkCredentials(report, doc)
   checkSchedules(report, doc)
   checkHandovers(report, doc, options.agentDir)
+  checkCatalogSkills(report, doc)
   checkPublications(report, doc, options.agentDir)
 
   return report.toReport()
@@ -1171,6 +1343,64 @@ function checkFiles(
   }
 }
 
+export { isSkillFinding }
+
+/**
+ * `skills/<name>/SKILL.md` by the platform's rules, then the budget, then the
+ * catalog pins against authored and platform skills — `kit.py`'s
+ * `_validate_skills`, read from the same scan the Addons tab and the engines
+ * use ({@link scanAgentSkillDetails}) so the three cannot disagree. A skill's
+ * error is an error under `skills.<core issue code>`; the body over 64 KB and
+ * a `version` the platform would not keep are warnings. The scanner's
+ * `secrets` and `shadowed` warnings are the Addons tab's: `kit.py` does not
+ * report them (credential-looking files are {@link checkSecrets}' anyway).
+ */
+function checkSkills(report: Report, agentDir: string, manifest: CinnaAgentManifest): void {
+  const entries = scanAgentSkillDetails(agentDir)
+  for (const { skill, versionProblem } of entries) {
+    const folder = `skills/${skill.name}`
+    for (const issue of skill.issues) {
+      if (issue.code === 'not_a_directory') {
+        report.error('skills.not_a_directory', `${folder}: only folders directly under skills/ are read as skills.`, folder)
+      } else if (issue.code === 'budget') {
+        report.error(
+          'skills.budget',
+          `${folder}: excluded — the agent is over its skill budget (50 skills, 16 MB across skills/).`,
+          folder
+        )
+      } else if (issue.code === 'oversized') {
+        report.warn(
+          'skills.oversized',
+          `${skill.path}: the body is larger than 64 KB — move long material into references/.`,
+          skill.path
+        )
+      } else if (issue.severity === 'error') {
+        report.error(`skills.${issue.code}`, `${folder}/${SKILL_FILE}: ${issue.message}`, `${folder}/${SKILL_FILE}`)
+      }
+    }
+    if (versionProblem !== null) report.warn('skills.version', `${skill.path}: ${versionProblem}`, skill.path)
+  }
+
+  const authored = new Set(entries.map((entry) => entry.skill.name))
+  for (const [index, clashes] of catalogPinClashes(manifest.catalog_skills, authored)) {
+    const name = (manifest.catalog_skills as Record<string, unknown>[])[index].name as string
+    // `duplicate` is checkCatalogSkills' finding; the folder adds the other two.
+    if (clashes.includes('authored')) {
+      report.error(
+        'manifest.catalog_skills.name.authored_clash',
+        `\`catalog_skills[${index}]\` is the catalog skill \`${name}\`, and skills/${name}/ is a skill of the same name written here. Remove the pin or rename the folder — a catalog skill never lives under skills/.`,
+        MANIFEST_FILE
+      )
+    } else if (clashes.includes('platform')) {
+      report.error(
+        'manifest.catalog_skills.name.platform_clash',
+        `\`catalog_skills[${index}]\` is named \`${name}\`, which is a skill the platform provides.`,
+        MANIFEST_FILE
+      )
+    }
+  }
+}
+
 function merge(into: Report, from: ValidationReport): void {
   into.errors.push(...from.errors)
   into.warnings.push(...from.warnings)
@@ -1210,6 +1440,7 @@ export function validateAgentFolder(
 
     merge(report, validateManifest(manifest, { ...options, folderName, agentDir }))
     checkFiles(report, agentDir, manifest, options)
+    checkSkills(report, agentDir, manifest)
   } catch (err) {
     // A validator that throws takes the scanner with it. Report and move on.
     logger.error('validation failed unexpectedly', { agentDir, error: err })

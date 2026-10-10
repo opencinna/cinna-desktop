@@ -29,9 +29,18 @@ export function useAddonsBadge(
   const skills = agentSkills ?? []
   return {
     count: attached.length + skills.length,
-    problems: attached.filter((p) => mcpProblem(p) !== null).length + skills.filter((s) => s.issues.length > 0).length,
+    problems: attached.filter((p) => mcpProblem(p) !== null).length + skills.filter(needsAttention).length,
     skills: skills.length
   }
+}
+
+/**
+ * Whether a skill counts toward the tab's attention badge: any issue except
+ * `not_downloaded`, which every catalog pin carries until downloads exist and
+ * which the user cannot act on.
+ */
+function needsAttention(skill: LocalAgentSkill): boolean {
+  return skill.issues.some((issue) => issue.code !== 'not_downloaded')
 }
 
 /** A skill's state as the shared status glyph draws it: the first error, else the warnings, else fine. */
@@ -51,6 +60,12 @@ const MAX_SLOT_CHIPS = 2
  * declares and the issues — each only when there are any — and last a reveal
  * that failed. Drawn in the connector card's shell (ux_rules rule 13).
  *
+ * A catalog skill (a `catalog_skills[]` pin) is the same row: "From the
+ * catalog" instead of "Authored", its pinned version — or revision, when the
+ * pin states no version — muted beside the name, and no reveal, since none of
+ * its files are in the folder. The title line keeps the button's height either
+ * way, so a list mixing the two does not step.
+ *
  * The slots sit on their own neutral "Needs" line, never beside the status
  * glyph: a ✓ followed by code is how a credential row says *connected*, and
  * nothing here checks the slots.
@@ -64,6 +79,14 @@ function SkillRow({
   revealError: string | null
   onReveal: () => void
 }): React.JSX.Element {
+  const catalog = skill.source === 'catalog'
+  const pinned = !catalog
+    ? null
+    : skill.version
+      ? `Version ${skill.version}`
+      : skill.revisionNumber
+        ? `Revision ${skill.revisionNumber}`
+        : null
   const hasFile = !skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
   const shown = skill.credentials.slice(0, MAX_SLOT_CHIPS)
   const hidden = skill.credentials.length - shown.length
@@ -72,20 +95,33 @@ function SkillRow({
     .join('\n')
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div className="flex min-h-12 items-center gap-2 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Sparkles size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />
           <span title={skill.name} className="min-w-0 shrink truncate text-[14px] font-medium">{skill.name}</span>
-          <SettingsBadge title="Written in this agent’s own skills/ folder">Authored</SettingsBadge>
+          {pinned && (
+            <span title={pinned} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
+              {pinned}
+            </span>
+          )}
+          {catalog ? (
+            <SettingsBadge title={skill.packageId ? `Pinned from the catalog as ${skill.packageId}` : 'Pinned from the catalog'}>
+              From the catalog
+            </SettingsBadge>
+          ) : (
+            <SettingsBadge title="Written in this agent’s own skills/ folder">Authored</SettingsBadge>
+          )}
           <CredentialStatusGlyph health={skillHealth(skill)} />
         </div>
-        <SettingsIconButton
-          onClick={onReveal}
-          title={hasFile ? `Reveal ${skill.path}` : `Reveal skills/${skill.name}`}
-          aria-label={hasFile ? `Reveal SKILL.md of ${skill.name}` : `Reveal the ${skill.name} folder`}
-        >
-          <FileText size={14} />
-        </SettingsIconButton>
+        {!catalog && (
+          <SettingsIconButton
+            onClick={onReveal}
+            title={hasFile ? `Reveal ${skill.path}` : `Reveal skills/${skill.name}`}
+            aria-label={hasFile ? `Reveal SKILL.md of ${skill.name}` : `Reveal the ${skill.name} folder`}
+          >
+            <FileText size={14} />
+          </SettingsIconButton>
+        )}
       </div>
       {skill.description && (
         // Padding on the wrapper: a clamped box clips at its padding edge, so
@@ -213,6 +249,7 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
               <p>A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for.</p>
               <p className="mt-2">Every session of this agent can use the skills listed here as working. Claude and OpenCode load them as skills; Codex is told where each one’s SKILL.md is.</p>
               <p className="mt-2">A skill with an error is left out of every session until its SKILL.md is fixed.</p>
+              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna cannot fetch catalog skills yet, so no session gets one.</p>
             </SettingsInfoTip>
           }
         >
@@ -220,8 +257,9 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
             <p className="text-[var(--color-text-muted)]">No skills yet.</p>
           ) : (
             <ul className="space-y-2">
-              {agent.skills.map((skill) => (
-                <li key={skill.name}>
+              {agent.skills.map((skill, index) => (
+                // An own skill and a pin may share a name (an error the row shows), and so may two pins.
+                <li key={`${skill.source}:${skill.name}:${index}`}>
                   <SkillRow
                     skill={skill}
                     revealError={revealError?.skill === skill.name ? revealError.message : null}

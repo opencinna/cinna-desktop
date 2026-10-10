@@ -125,6 +125,24 @@ export interface AgentPublication {
   [key: string]: unknown
 }
 
+/**
+ * One `catalog_skills[]` pin (contract 1.10.0): a skill from the platform's
+ * catalog, referenced by package and revision. Its files never live under
+ * `skills/`; a host downloads the pinned revision and checks it against
+ * `archive_sha256`. `name` is the skill's name and must not be a folder under
+ * `skills/`, a platform skill, or another pin's name.
+ */
+export interface CatalogSkillPin {
+  package_id: string
+  package_uuid: string
+  name: string
+  revision_number: number
+  /** The pinned revision's version label, for display only. */
+  version?: string | null
+  archive_sha256: string
+  [key: string]: unknown
+}
+
 /** DEPRECATED predecessor of `publications[]`, still parsed. */
 export interface AgentCloudStamp {
   platform_url?: string | null
@@ -157,6 +175,8 @@ export interface CinnaAgentManifest {
   schedules?: AgentSchedule[]
   handovers?: AgentHandover[]
   features?: AgentFeatures
+  /** Pinned catalog skills (1.10.0). Preserve on every rewrite; never copy one into `skills/`. */
+  catalog_skills?: CatalogSkillPin[]
   /** Legacy embedded history; new publishers write the sibling publications.json ledger. */
   publications?: AgentPublication[]
   cloud?: AgentCloudStamp

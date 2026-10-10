@@ -166,6 +166,30 @@ describe('the Skills section', () => {
     expect(within(items[1]).getByText('scripts/.env').tagName).toBe('CODE')
   })
 
+  it('draws a pinned catalog skill in the same row, from the catalog, with its version or revision and no reveal', async () => {
+    const pin = (name: string, extra: Partial<LocalAgentSkill>): LocalAgentSkill => skill(name, {
+      description: '', source: 'catalog', path: '', deliverable: false,
+      issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }],
+      packageId: `io.example.skill.${name}`, packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110', revisionNumber: 3, ...extra
+    })
+    renderTab({ skills: [pin('csv-export', { version: '1.2.0' }), pin('pdf-report', {}), skill('pdf-tools')] })
+    await screen.findByText('No connectors attached.')
+    const section = screen.getByRole('heading', { name: 'Skills' }).closest('section')!
+    const items = [...section.querySelector('ul')!.children] as HTMLElement[]
+    expect(items.map((item) => (item.firstElementChild as HTMLElement).className)).toEqual(
+      items.map(() => expect.stringContaining('bg-[var(--color-bg-secondary)]'))
+    )
+    expect(within(items[0]).getByText('From the catalog')).toBeTruthy()
+    expect(within(items[0]).queryByText('Authored')).toBeNull()
+    expect(within(items[0]).getByText('Version 1.2.0')).toBeTruthy()
+    expect(within(items[1]).getByText('Revision 3')).toBeTruthy()
+    expect(within(items[0]).getByRole('img', { name: 'Not on this computer yet.' })).toBeTruthy()
+    expect(within(items[0]).queryByRole('button')).toBeNull()
+    expect(within(items[2]).getByText('Authored')).toBeTruthy()
+    expect(within(items[2]).queryByText(/^(Version|Revision) /)).toBeNull()
+    expect(within(items[2]).getByRole('button', { name: 'Reveal SKILL.md of pdf-tools' })).toBeTruthy()
+  })
+
   it('reveals a skill’s SKILL.md from its row', async () => {
     renderTab({ skills: SKILLS })
     fireEvent.click(await screen.findByRole('button', { name: 'Reveal SKILL.md of pdf-tools' }))
@@ -193,6 +217,23 @@ describe('the Skills section', () => {
     render(createElement(QueryClientProvider, { client }, createElement(Probe)))
     // One connector in error (gh) plus two skills with issues, of four addons.
     await waitFor(() => expect(badge).toEqual({ count: 4, problems: 3, skills: 3 }))
+  })
+
+  it('does not count a catalog pin that is only not downloaded yet as needing attention', async () => {
+    attached = []
+    const pin = skill('csv-export', {
+      description: '', source: 'catalog', path: '', deliverable: false,
+      issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }],
+      packageId: 'io.example.skill.csv-export', packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110', revisionNumber: 3
+    })
+    let badge: ReturnType<typeof useAddonsBadge> | null = null
+    function Probe(): null {
+      badge = useAddonsBadge('folder:a', [pin])
+      return null
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(createElement(QueryClientProvider, { client }, createElement(Probe)))
+    await waitFor(() => expect(badge).toEqual({ count: 1, problems: 0, skills: 1 }))
   })
 
   it('puts declared slots on their own neutral Needs line, two chips then +N, never on the title line', async () => {

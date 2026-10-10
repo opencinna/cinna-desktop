@@ -781,3 +781,114 @@ it('validates the sibling publication ledger rather than obsolete embedded histo
   writeFileSync(join(agentDir, 'publications.json'), '{broken')
   expectError(validateAgentFolder(agentDir, OPTIONS), 'publications.invalid_json')
 })
+
+describe('skills (contract 1.10.0, kit.py validate parity)', () => {
+  const PIN = {
+    package_id: 'io.example.team.skill.pdf-report',
+    package_uuid: '0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34',
+    name: 'pdf-report',
+    revision_number: 1,
+    archive_sha256: 'c'.repeat(64)
+  }
+
+  function skill(name: string, text: string): void {
+    mkdirSync(join(agentDir, 'skills', name), { recursive: true })
+    writeFileSync(join(agentDir, 'skills', name, 'SKILL.md'), text)
+  }
+
+  it('reports a broken SKILL.md as an error under the platform’s issue code, and a valid one not at all', () => {
+    skill('pdf-tools', '---\nname: pdf-tools\ndescription: Fill PDFs.\n---\n')
+    skill('broken', '---\nname: other\ndescription: x\n---\n')
+    skill('no-description', '---\nname: no-description\n---\n')
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors.map((f) => [f.code, f.path])).toEqual([
+      ['skills.name_mismatch', 'skills/broken/SKILL.md'],
+      ['skills.missing_description', 'skills/no-description/SKILL.md']
+    ])
+    expect(report.errors[0].message).toBe('skills/broken/SKILL.md: The name in SKILL.md does not match the folder name.')
+  })
+
+  it('warns about a version the platform would not keep and a body over 64 KB, without an error', () => {
+    skill('listy', '---\nname: listy\ndescription: x\nversion: [1, 2]\n---\n')
+    skill('long-version', `---\nname: long-version\ndescription: x\nversion: ${'v'.repeat(65)}\n---\n`)
+    skill('numbered', '---\nname: numbered\ndescription: x\nversion: 2\n---\n')
+    skill('big', `---\nname: big\ndescription: x\n---\n${'a'.repeat(64 * 1024 + 1)}`)
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(report.warnings.filter((f) => f.code.startsWith('skills.')).map((f) => [f.code, f.path])).toEqual([
+      ['skills.oversized', 'skills/big/SKILL.md'],
+      ['skills.version', 'skills/listy/SKILL.md'],
+      ['skills.version', 'skills/long-version/SKILL.md']
+    ])
+  })
+
+  it('reports a skill past the 50-skill budget as an error, in name order', () => {
+    for (let index = 0; index < 51; index++) {
+      const name = `s${String(index).padStart(2, '0')}`
+      skill(name, `---\nname: ${name}\ndescription: x\n---\n`)
+    }
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors.map((f) => [f.code, f.path])).toEqual([['skills.budget', 'skills/s50']])
+  })
+
+  it('reports a pin named like a skill of this folder, or like a platform skill, as an error', () => {
+    skill('pdf-report', '---\nname: pdf-report\ndescription: Reports.\n---\n')
+    patchManifest(agentDir, (m) => {
+      m.catalog_skills = [
+        PIN,
+        { ...PIN, package_id: 'io.example.skill.cinna-tasks', package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110', name: 'cinna-tasks' }
+      ]
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors).sort()).toEqual([
+      'manifest.catalog_skills.name.authored_clash',
+      'manifest.catalog_skills.name.platform_clash'
+    ])
+  })
+
+  it('reports a second pin of the same name or the same package', () => {
+    const report = validateManifest(
+      { ...readManifest(agentDir), catalog_skills: [PIN, { ...PIN, package_uuid: PIN.package_uuid.toUpperCase() }, { ...PIN, package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110' }] },
+      OPTIONS
+    )
+    expect(codes(report.errors).sort()).toEqual([
+      'manifest.catalog_skills.name.duplicate',
+      'manifest.catalog_skills.name.duplicate',
+      'manifest.catalog_skills.package_uuid.duplicate'
+    ])
+  })
+
+  it('reads a package_uuid the way Python’s uuid.UUID does', () => {
+    const check = (uuid: unknown): string[] =>
+      codes(validateManifest({ ...readManifest(agentDir), catalog_skills: [{ ...PIN, package_uuid: uuid }] }, OPTIONS).errors)
+    expect(check('{0B5C1F8E6A434D7E9A512F0C7D1E9B34}')).toEqual([])
+    expect(check('urn:uuid:0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34')).toEqual([])
+    expect(check('0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b3')).toEqual(['manifest.catalog_skills.package_uuid'])
+    expect(check(42)).toEqual(['manifest.catalog_skills.package_uuid'])
+  })
+
+  it('checks publications.json → skills[] like publications[]', () => {
+    writeFileSync(join(agentDir, 'publications.json'), JSON.stringify({
+      publications: [],
+      skills: [
+        { platform_url: 'https://fixture.test', name: 'pdf-report', package_id: 'p', package_uuid: 'u', revision_number: 2, content_hash: 'h' },
+        { platform_url: 'https://fixture.test', name: 'Bad_Name', package_id: '', package_uuid: 'u', revision_number: 0, content_hash: 'h' },
+        'nope'
+      ]
+    }))
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors.map((f) => [f.code, f.message])).toEqual([
+      ['publications.skills.required', '`skills[1].package_id` is required.'],
+      ['publications.skills.name', '`skills[1].name` must be a skill folder name under skills/.'],
+      ['publications.skills.revision_number', '`skills[1].revision_number` must be a whole number of 1 or more.'],
+      ['publications.skills.item', '`skills[2]` must be an object.']
+    ])
+  })
+
+  it('warns, never errs, about a publications.json that records only skills', () => {
+    writeFileSync(join(agentDir, 'publications.json'), JSON.stringify({ skills: [] }))
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings)).toContain('publications.missing')
+  })
+})

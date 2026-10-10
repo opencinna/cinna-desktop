@@ -1,5 +1,6 @@
 import { AlertTriangle, Info } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { isSkillFinding } from '../../../../../shared/kit/findings'
 
 type Severity = 'ok' | 'warning' | 'error' | 'info'
 
@@ -96,9 +97,11 @@ export function ReadinessStrip({
   // `invalid` with "`id` is required." as its reason — which the legacy banner
   // below already says, with the button that fixes it. Two banners about one
   // missing field is one too many; the readiness line is kept only when
-  // something *else* is wrong with the folder.
+  // something *else* is wrong with the folder. Skill findings are not
+  // something else: they never make the folder invalid.
   const onlyIdMissing =
-    showLegacy && agent.validation.errors.every((finding) => finding.code.startsWith('manifest.id.'))
+    showLegacy &&
+    agent.validation.errors.every((finding) => finding.code.startsWith('manifest.id.') || isSkillFinding(finding))
   const showReadiness = agent.readiness !== 'ok' && !onlyIdMissing
 
   if (!showReadiness && !showLegacy && !drafting && !draftNote) return null

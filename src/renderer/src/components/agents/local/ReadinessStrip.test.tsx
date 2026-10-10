@@ -69,6 +69,29 @@ describe('ReadinessStrip', () => {
     expect(screen.getByRole('button', { name: /1 finding/ })).toBeTruthy()
   })
 
+  it('shows one banner for a legacy folder whose other errors are only about skills', () => {
+    render(
+      createElement(ReadinessStrip, {
+        agent: agent({
+          identity: 'legacy',
+          readiness: 'invalid',
+          readinessReason: '`id` is required.',
+          validation: {
+            errors: [
+              { code: 'manifest.id.missing', message: '`id` is required.', path: null },
+              { code: 'skills.missing_skill_md', message: 'This folder has no SKILL.md.', path: 'skills/foo' }
+            ],
+            warnings: [],
+            infos: []
+          } as unknown as LocalAgentDto['validation']
+        }),
+        onShowDetails: () => undefined
+      })
+    )
+    expect(screen.getByText(/legacy folder/i)).toBeTruthy()
+    expect(screen.queryByText('`id` is required.')).toBeNull()
+  })
+
   it('keeps the readiness line for a legacy folder with a second problem', () => {
     render(
       createElement(ReadinessStrip, {

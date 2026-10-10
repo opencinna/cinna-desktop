@@ -54,7 +54,7 @@ None. Whether an agent is shared comes from each folder's `origin` and from `lib
 
 - `<userData>/team-library-trust.json` (`libraryTrust`): `{gitOrigins: {<instance origin>: [<git origin>…]}, pending: {<instance origin>: {<slug>: <repo id>}}}`. The instance's own origin is never written to it. It is written atomically (temp file, fsync, rename). A failed write is logged, and the list still holds in memory for that run. A host with no `userData` keeps it **in memory only**, never in a shared fallback such as the temp directory, where any local user could plant a trust list
 - `cinna.server` in each shared folder's `.git/config`: the instance's API origin, written after Get and after Share with the team once `.git` exists
-- `shared_remote` in each shared folder's `app-data/desktop.json`: `{kind, repo_id, clone_url}`, written and cleared by `writeLocalLink` and never read for a decision
+- `shared_remote` in each shared folder's `app-data/desktop.json`: `{kind, repo_id, clone_url}`, written and cleared by `writeLocalLink` and never read for a decision. Contract 1.10.0 adds `bundle_id`, the catalog id of the shared agent: the desktop writes none, and `coerceSharedRemote` keeps one another host wrote when any other field of the file is patched. `writeLocalLink` replaces the whole link, so Get, Share with the team and the clears drop it
 
 ## IPC Channels
 

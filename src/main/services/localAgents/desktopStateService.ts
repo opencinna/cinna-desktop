@@ -45,6 +45,11 @@ export interface DesktopSharedRemote {
   kind: 'cinna' | 'external'
   repo_id: string | null
   clone_url: string
+  /**
+   * The catalog id of the shared agent (contract 1.10.0). The desktop writes
+   * none yet; one another host wrote is kept through every rewrite of the file.
+   */
+  bundle_id?: string | null
 }
 
 export interface DesktopState {
@@ -269,7 +274,13 @@ function coerceSharedRemote(raw: unknown): DesktopSharedRemote | null {
   if (!isRecord(raw)) return null
   const cloneUrl = asString(raw.clone_url)
   if (!cloneUrl || (raw.kind !== 'cinna' && raw.kind !== 'external')) return null
-  return { kind: raw.kind, repo_id: asString(raw.repo_id), clone_url: cloneUrl }
+  const bundleId = asString(raw.bundle_id)
+  return {
+    kind: raw.kind,
+    repo_id: asString(raw.repo_id),
+    clone_url: cloneUrl,
+    ...(bundleId ? { bundle_id: bundleId } : {})
+  }
 }
 
 /**

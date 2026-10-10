@@ -202,7 +202,7 @@ So the three shapes that do this are detected, not guessed at:
 
 ### Validation severity
 
-- **error** — the folder is broken or would import wrong: a missing required field, a prompt file that is not there, an exposed secret, an unresolvable `/run:`, an unreadable command. The agent is not run
+- **error** — the folder is broken or would import wrong: a missing required field, a prompt file that is not there, an exposed secret, an unresolvable `/run:`, an unreadable command. The agent is not run — **except for skill findings** (below), which are errors that do not stop it
 - **warning** — it runs, but is stale or not cloud-ready: no example prompts, an uncatalogued script, a command with no Makefile target, an unrecognised credential `type` (the platform's list grows independently, so an unknown one is reported, never rejected), a legacy manifest, a `.env.<suffix>` no ignore rule covers
 - **info** — worth knowing: the folder predates the active contract, or still carries the deprecated `cloud` stamp
 
@@ -212,9 +212,21 @@ The validator **never throws**. Its callers are a scanner and a page, and neithe
 
 The two grades are not interchangeable, and an `error` is not a stronger message — it is a decision about whether the agent exists. The scanner turns any error into readiness `invalid`, and an `invalid` folder is dropped from the engine config entirely, so an error is "this folder does not run".
 
+**Skill findings are the one carve-out.** A broken `skills/<name>/SKILL.md`, a skill over the agent's budget, a malformed `catalog_skills[]` pin and a pin whose name clashes are errors, exactly as `kit.py validate` grades them — the platform leaves such a skill out and refuses to publish it, and the contract asks hosts for validator parity. But they do not make the agent `invalid`: a broken skill is already withheld from every engine, and the agent runs without it. Grading them as ordinary errors would take a working agent off the engine because one of its skills has a typo. The scanner tells them apart by code (`skills.*`, `manifest.catalog_skills*`); see [Agent Skills](skills.md).
+
 That is why everything a **newer minor** of the contract might add is reported as a warning. The `runtime.complexity` and `runtime.engine` cases are the worked examples: a value outside the three tiers the contract defines, a manifest carrying `model` *and* `complexity` at once, an `engine` this build has never heard of, and `engine: "claude"` or `engine: "codex"` sitting beside a `credential`. Erroring on any of them would brick a folder written by a future 1.x tool, which is precisely what "minor bumps are additive and safe to ignore" promises against and what the compatibility gate — same major, run as-is — says will not happen. Each has defined behaviour instead of a refusal: an unrecognised tier reads as no tier, an unrecognised engine **runs on OpenCode** — the contract makes `runtime.engine` a preference, and a named engine the host cannot run falls back to OpenCode rather than to the machine default (see [runtime precedence](engine.md#the-machine-default-is-selected-once-and-explicit-agents-keep-their-choice)) — where a model and a tier are both present the **model wins**, and where an engine that uses no credential names one the **credential is ignored**.
 
 Writing is the other half, and it is strict: this desktop refuses to write any of those shapes. Tolerating what another tool wrote and being careless about what we write are different jobs, and a tool that emitted a manifest its own validator then flagged would be teaching the user to ignore its own findings.
+
+### Catalog skills and published skills (1.10.0)
+
+Contract 1.10.0 adds two records, and the desktop **reads and checks both, and writes neither**.
+
+- **`catalog_skills[]` in `cinna-agent.json`** pins skills from the platform's catalog by reference (`package_id`, `package_uuid`, `name`, `revision_number`, optional `version`, `archive_sha256`). A catalog skill's files never live under `skills/`. The validator checks each pin field by field and for clashes with `skills/`, platform skills and other pins, as `kit.py` does; the Addons tab lists each pin as a skill marked **From the catalog** and "Not on this computer yet." Nothing downloads, verifies or delivers a pinned skill, and the app offers no way to add or change a pin.
+- **`publications.json` → `skills[]`**, beside `publications[]`, records each of the agent's skills published to a catalog (`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`, `content_hash`). Its entries are checked at the same severity as `publications[]`. Because such a file may record only skills, **a `publications.json` without a `publications` array is a warning** ("nothing is recorded"), not an error; it once read as a malformed ledger and stopped the agent
+- **Both must survive a rewrite**, which the contract asks of every host. The desktop rewrites `cinna-agent.json` from the whole parsed object, so a key it does not model is kept, and never writes `publications.json`
+
+`layout.json` → `shared_remote.local_state.fields` gains `bundle_id`, the catalog id of a shared agent, kept per machine in `app-data/desktop.json`. The desktop writes none; one another host wrote is kept when the desktop rewrites the file's other fields, but replacing the link itself (Get, Share with the team, Remove sharing) writes it without one ([Team Sharing](team_sharing_tech.md)).
 
 ### Scaffold ignore files
 

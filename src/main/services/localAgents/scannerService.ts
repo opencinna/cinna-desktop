@@ -29,9 +29,9 @@ import { getLayoutView, resolveContract } from '../../kit/contractStore'
 import type { LayoutView } from '../../kit/layout'
 import { manifestPath, readStamp, readWithStamp } from '../../kit/manifestIo'
 import { parseFrontmatter } from '../../kit/miniYaml'
-import { scanAgentSkills } from '../../kit/skills'
+import { agentSkillRows } from '../../kit/skills'
 import {
-  isValid,
+  isSkillFinding,
   readCommandCatalog,
   validateAgentFolder,
   type Finding,
@@ -345,8 +345,11 @@ function readiness(
   if (contractStatus.status === 'app_too_old') {
     return { readiness: 'contract_too_new', reason: contractStatus.reason }
   }
-  if (!isValid(report)) {
-    return { readiness: 'invalid', reason: report.errors[0]?.message ?? 'This agent does not validate.' }
+  // Skills do not decide readiness: a broken skill or catalog pin is reported
+  // (and left out of every engine), and the agent runs without it.
+  const blocking = report.errors.filter((finding) => !isSkillFinding(finding))
+  if (blocking.length > 0) {
+    return { readiness: 'invalid', reason: blocking[0].message }
   }
   if (unreadableCommands > 0) {
     // Belt and braces: the validator reports `commands.unparseable` as an error,
@@ -659,7 +662,7 @@ export const scannerService = {
       commands: catalog.commands,
       // Listed whatever the readiness: a broken skill is a row with its issue,
       // and skills do not decide whether the agent runs.
-      skills: scanAgentSkills(agentDir),
+      skills: agentSkillRows(agentDir, manifest),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),

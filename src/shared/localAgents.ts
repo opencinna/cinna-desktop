@@ -355,10 +355,12 @@ export interface FileStamp {
 
 /**
  * Where a skill came from. `authored` is a folder the agent's own author wrote
- * under `skills/<name>/`; pinned catalog skills join as `catalog` later, on
- * the same row shape.
+ * under `skills/<name>/`; `catalog` is a pin in the manifest's
+ * `catalog_skills[]` (contract 1.10.0), a platform catalog skill referenced by
+ * package and revision whose files never live in the folder. Nothing downloads
+ * a catalog skill yet, so a `catalog` row is never deliverable.
  */
-export type LocalAgentSkillSource = 'authored'
+export type LocalAgentSkillSource = 'authored' | 'catalog'
 
 /**
  * One condition a skill is flagged with — cinna-core's `skill_manifest.py`
@@ -382,20 +384,29 @@ export interface LocalAgentSkillCredential {
 
 /** One skill of a kit agent, as the Addons tab lists it. */
 export interface LocalAgentSkill {
-  /** The folder name — the name every engine is given the skill under. */
+  /**
+   * The folder name — the name every engine is given the skill under. For a
+   * `catalog` row, the pin's `name`.
+   */
   name: string
   /** Frontmatter `description`; `''` when the skill is broken before it. */
   description: string
-  /** Frontmatter `version`, when it states one. */
+  /** Frontmatter `version`, when it states one; a `catalog` row's pinned `version` label. */
   version: string | null
   source: LocalAgentSkillSource
-  /** Agent-relative POSIX path of its `SKILL.md`. */
+  /** Agent-relative POSIX path of its `SKILL.md`; `''` for a `catalog` row, which has no file here. */
   path: string
   /** No error: every engine gets it. */
   deliverable: boolean
   /** Errors first, then warnings. Empty when the skill is fine. */
   issues: LocalAgentSkillIssue[]
   credentials: LocalAgentSkillCredential[]
+  /** `catalog` rows only: the pin's `package_id` (`''` when the pin has none that is text). */
+  packageId?: string
+  /** `catalog` rows only: the pin's `package_uuid`, as written. */
+  packageUuid?: string
+  /** `catalog` rows only: the pinned `revision_number`; null when the pin's is not a whole number of 1 or more. */
+  revisionNumber?: number | null
 }
 
 /**
@@ -445,7 +456,8 @@ export interface LocalAgentDto {
   /** `docs/CLI_COMMANDS.yaml`, parsed — what the Commands card renders. */
   commands: LocalAgentCommand[]
   /**
-   * A kit agent's skills (`skills/<name>/SKILL.md`), name-sorted, valid or not.
+   * A kit agent's skills (`skills/<name>/SKILL.md`) and its pinned catalog
+   * skills (`catalog_skills[]`), name-sorted, valid or not.
    * **Absent for a bare agent**, which has no `skills/` convention: the field
    * is the capability, so the Addons tab, the badge, the engine config and the
    * Claude plugin ask whether it is there rather than what kind the agent is.

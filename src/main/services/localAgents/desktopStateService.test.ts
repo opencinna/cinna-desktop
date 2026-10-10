@@ -193,6 +193,18 @@ describe('bare agent state', () => {
   })
 })
 
+describe('the contract’s shared_remote link', () => {
+  it('keeps a bundle_id another host wrote through a rewrite of the file (contract 1.10.0)', () => {
+    mkdirSync(join(dir, 'app-data'), { recursive: true })
+    writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({
+      shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: 'https://core.test/git/r1.git', bundle_id: 'b-42' }
+    }))
+    desktopStateService.patch(dir, 'kit', { claudeApproval: 'ask' })
+    const written = JSON.parse(readFileSync(join(dir, 'app-data', 'desktop.json'), 'utf8'))
+    expect(written.shared_remote).toEqual({ kind: 'cinna', repo_id: 'r1', clone_url: 'https://core.test/git/r1.git', bundle_id: 'b-42' })
+  })
+})
+
 describe('who answers a Claude agent’s permission asks', () => {
   it('round-trips the choice, for either kind of folder', () => {
     desktopStateService.patch(dir, 'kit', { claudeApproval: 'ask' })

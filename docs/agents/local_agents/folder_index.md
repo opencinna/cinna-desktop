@@ -136,7 +136,7 @@ What the external branch changes, and why, is [Bare Agents & External Roots](bar
 ### Readiness, in the order the user cares about
 
 1. `contract_too_new` — the folder records a contract major this build cannot operate. Read-only until the app is updated
-2. `invalid` — validation failed, or the manifest could not be read at all. A command entry in `Local/<slug>/docs/CLI_COMMANDS.yaml` that could not be parsed also lands here: a dropped command is silent by construction, and "the list looks fine, it just lost one" is the worst way for that to surface
+2. `invalid` — validation failed, or the manifest could not be read at all. **Skill findings do not count**: a broken `skills/<name>/SKILL.md`, a skill over budget or a bad `catalog_skills[]` pin is an error in the folder's findings, as `kit.py validate` reports it, but the agent stays runnable without that skill, because an `invalid` agent leaves the engine whole and one bad skill is no reason for that ([Agent Skills](skills.md)). A command entry in `Local/<slug>/docs/CLI_COMMANDS.yaml` that could not be parsed also lands here: a dropped command is silent by construction, and "the list looks fine, it just lost one" is the worst way for that to surface
 3. `credentials_needed` — valid, but a required `credentials/.env` variable is missing. A warning, not a refusal: the agent still takes chat turns and tasks, because a half-filled `.env` is normal while an agent is being built ([Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not))
 4. `ok`
 

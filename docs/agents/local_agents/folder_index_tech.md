@@ -154,7 +154,7 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
 - `isAgentFolder(dir)`
 
 ### `src/main/services/localAgents/scannerService.ts`
-- `scanAgentFolder(agentDir, root)` — one folder → `LocalAgentDto`. Never throws
+- `scanAgentFolder(agentDir, root)` — one folder → `LocalAgentDto`. Never throws. Its readiness rung `invalid` is the report's errors **minus** `isSkillFinding` ones (`validator.ts`: codes `skills.*` and `manifest.catalog_skills*`), whose first message becomes the reason; `skills` is `agentSkillRows(agentDir, manifest)`, own skills and catalog pins
 - `listAgentDirs(rootPath)` — `Local/*/`, dot-entries skipped, symlinks `stat`ed. `null` means the root could not be listed
 - `scanRoot(userId, root)` — dispatches to `scanExternalRoot` for an external root, else the full workshop scan and index rebuild. `ScanRootResult` also carries `hiddenCount` and `truncated`, which is what the settings row reads through `cachedScan(rootId, rootPath)` instead of walking again. Returns `{agents, rootMissing, indexed, pruned}`. The row's `description` is `describedAs(dto) || null` (`src/shared/localAgents.ts`) — `null` when the manifest's description is only the name repeated, so the `@` / `[+]` / Jobs pickers, which read the column and never the manifest, do not show the name twice for a name-only agent. `reindexAgent` applies the same
 - `scanRootCached(userId, root)` — what the read paths use

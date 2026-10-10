@@ -273,6 +273,27 @@ export function coerceVersion(raw: FrontmatterValue | undefined): string | null 
   return value.slice(0, MAX_VERSION_LENGTH) || null
 }
 
+/**
+ * `kit.py`'s `skill_version_problem` (contract 1.10.0): why the platform would
+ * not keep a frontmatter `version` as written, or null. Absent is fine and a
+ * number is kept as text; a list, a mapping, a boolean or a value with a line
+ * break or control character is dropped, and one longer than 64 characters is
+ * cut. `kit.py validate` reports it as a warning; {@link coerceVersion} is what
+ * the platform keeps.
+ */
+export function skillVersionProblem(raw: FrontmatterValue | undefined): string | null {
+  if (raw === undefined || raw === null || typeof raw === 'number' || typeof raw === 'bigint') return null
+  // eslint-disable-next-line no-control-regex
+  if (typeof raw !== 'string' || /[\x00-\x1f]/.test(pyStrip(raw))) {
+    return '`version` must be one line of text; this one is ignored and publishing picks the next version itself.'
+  }
+  // Python's `len` counts code points, not UTF-16 units.
+  if ([...pyStrip(raw)].length > MAX_VERSION_LENGTH) {
+    return `\`version\` is longer than ${MAX_VERSION_LENGTH} characters; the platform keeps only the first ${MAX_VERSION_LENGTH}.`
+  }
+  return null
+}
+
 /* ------------------------------------------------- credential declarations */
 
 function bounded(value: string, limit = 64): string {
@@ -394,6 +415,12 @@ function measureTree(root: string): { size: number; secrets: string[] } {
 interface ParsedSkill {
   skill: LocalAgentSkill
   size: number
+  /**
+   * Why `kit.py validate` warns about the frontmatter `version` as written
+   * ({@link skillVersionProblem}), for a skill that parsed; null otherwise.
+   * Not an issue on the row: core's scanner says nothing about it.
+   */
+  versionProblem: string | null
 }
 
 function isDirectory(path: string): boolean {
@@ -439,7 +466,8 @@ export function parseSkillDir(skillDir: string, folderName: string): ParsedSkill
       issues: [issue(code, 'error', message)],
       credentials: []
     },
-    size: 0
+    size: 0,
+    versionProblem: null
   })
 
   if (!isDirectory(skillDir) || isSymlink(skillDir)) return fail('not_a_directory')
@@ -498,7 +526,8 @@ export function parseSkillDir(skillDir: string, folderName: string): ParsedSkill
       issues: warnings,
       credentials
     },
-    size
+    size,
+    versionProblem: skillVersionProblem(frontmatter.version)
   }
 }
 
@@ -539,6 +568,18 @@ export interface ScanSkillsOptions {
  * are skipped silently: the kit ships `skills/README.md` as scaffolding.
  */
 export function scanAgentSkills(agentDir: string, options: ScanSkillsOptions = {}): LocalAgentSkill[] {
+  return scanAgentSkillDetails(agentDir, options).map((entry) => entry.skill)
+}
+
+/**
+ * {@link scanAgentSkills} with what the validator needs beside each row — the
+ * `version` problem `kit.py validate` warns about — so `validateAgentFolder`
+ * reads the same scan rather than a second reading of the same files.
+ */
+export function scanAgentSkillDetails(
+  agentDir: string,
+  options: ScanSkillsOptions = {}
+): { skill: LocalAgentSkill; versionProblem: string | null }[] {
   const root = join(agentDir, SKILLS_DIR)
   if (!isDirectory(root)) return []
   let names: string[]
@@ -553,10 +594,148 @@ export function scanAgentSkills(agentDir: string, options: ScanSkillsOptions = {
     .map((name) => parseSkillDir(join(root, name), name))
   entries.sort((a, b) => (a.skill.name < b.skill.name ? -1 : a.skill.name > b.skill.name ? 1 : 0))
   applyBudget(entries, options.maxSkills ?? DEFAULT_MAX_SKILLS, options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES)
-  return entries.map((entry) => entry.skill)
+  return entries.map(({ skill, versionProblem }) => ({ skill, versionProblem }))
 }
 
 /** The skills an engine is given: the deliverable ones. */
 export function deliverableSkills(skills: readonly LocalAgentSkill[] | undefined): LocalAgentSkill[] {
   return (skills ?? []).filter((skill) => skill.deliverable)
+}
+
+/* ------------------------------------------- catalog skills (contract 1.10) */
+
+/**
+ * The segment a platform-derived catalog package id names the skill after:
+ * `<reversed host>.skill.<name>`, with the publisher's id appended
+ * (`….skill.<name>.<8 hex>`) when the plain id was taken.
+ */
+const CATALOG_PACKAGE_ID_SKILL_SEGMENT = 'skill'
+
+/**
+ * `kit.py`'s `catalog_skill_name`: the skill name a catalog package id seems to
+ * carry — the segment right after the last `skill` segment that is not the id's
+ * last — or null. Advisory only: a pin's `name` is the authority, and this
+ * reading is used to warn when the two disagree.
+ */
+export function catalogSkillName(packageId: unknown): string | null {
+  if (typeof packageId !== 'string') return null
+  const segments = packageId.split('.')
+  for (let position = segments.length - 2; position >= 0; position--) {
+    if (segments[position] === CATALOG_PACKAGE_ID_SKILL_SEGMENT) {
+      const candidate = segments[position + 1]
+      return SKILL_NAME_RE.test(candidate) ? candidate : null
+    }
+  }
+  return null
+}
+
+/** A pin `name` the contract accepts: a skill name, at most 64 characters. */
+export function isCatalogPinName(name: unknown): name is string {
+  return typeof name === 'string' && name.length <= MAX_NAME_LENGTH && SKILL_NAME_RE.test(name)
+}
+
+/**
+ * Why a catalog pin's name collides, as `kit.py validate` reports it:
+ * `authored` — a folder of that name under `skills/`; `platform` — a skill the
+ * platform provides; `duplicate` — an earlier pin of the same name. `kit.py`
+ * reports `authored` and `platform` as one either/or, and `duplicate` beside
+ * them, so a pin can carry two.
+ */
+export type CatalogPinClash = 'authored' | 'platform' | 'duplicate'
+
+/**
+ * Every pin of `catalog_skills[]` (by index) whose name collides, and how. Pins
+ * that are not objects or whose name is not a skill name are left to the
+ * field checks. `authored` is every folder name directly under `skills/`,
+ * broken ones included — what {@link scanAgentSkills} lists.
+ */
+export function catalogPinClashes(
+  catalogSkills: unknown,
+  authored: ReadonlySet<string>
+): Map<number, CatalogPinClash[]> {
+  const clashes = new Map<number, CatalogPinClash[]>()
+  if (!Array.isArray(catalogSkills)) return clashes
+  const seen = new Set<string>()
+  catalogSkills.forEach((pin: unknown, index) => {
+    if (pin === null || typeof pin !== 'object' || Array.isArray(pin)) return
+    const name = (pin as Record<string, unknown>).name
+    if (!isCatalogPinName(name)) return
+    const found: CatalogPinClash[] = []
+    if (seen.has(name)) found.push('duplicate')
+    seen.add(name)
+    if (authored.has(name)) found.push('authored')
+    else if (PLATFORM_SKILL_NAMES.has(name)) found.push('platform')
+    if (found.length > 0) clashes.set(index, found)
+  })
+  return clashes
+}
+
+/** Sentences for a catalog row's own issues. */
+export const CATALOG_ISSUE_MESSAGES: Readonly<Record<string, string>> = {
+  not_downloaded: 'Not on this computer yet.',
+  duplicate_pin: 'Another catalog skill of this agent has the same name.',
+  name_clash: 'This agent’s own skills/ folder has a skill of the same name. Remove the pin or rename the folder.',
+  reserved_name: 'This name is reserved by a platform skill.'
+}
+
+const CLASH_CODES: Readonly<Record<CatalogPinClash, string>> = {
+  duplicate: 'duplicate_pin',
+  authored: 'name_clash',
+  platform: 'reserved_name'
+}
+
+function catalogIssue(code: string, severity: 'error' | 'warning'): LocalAgentSkillIssue {
+  return { code, message: CATALOG_ISSUE_MESSAGES[code], severity }
+}
+
+/**
+ * The manifest's `catalog_skills[]` pins as skill rows (`source: 'catalog'`).
+ *
+ * Nothing downloads a catalog skill yet, so every row is **not deliverable**
+ * and carries the `not_downloaded` warning; no engine, plugin or prompt is ever
+ * given one — they read {@link scanAgentSkills}, which lists `skills/` only. A
+ * pin whose name collides is an error on its row as well. Pins that are not
+ * objects or have no usable name are not rows: `validateManifest` reports them.
+ */
+export function catalogSkillRows(manifest: unknown, authored: ReadonlySet<string>): LocalAgentSkill[] {
+  if (manifest === null || typeof manifest !== 'object') return []
+  const pins = (manifest as Record<string, unknown>).catalog_skills
+  if (!Array.isArray(pins)) return []
+  const clashes = catalogPinClashes(pins, authored)
+  const rows: LocalAgentSkill[] = []
+  pins.forEach((raw: unknown, index) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    const pin = raw as Record<string, unknown>
+    if (!isCatalogPinName(pin.name)) return
+    const revision = pin.revision_number
+    rows.push({
+      name: pin.name,
+      description: '',
+      version: typeof pin.version === 'string' && pin.version.trim() !== '' ? pin.version.trim() : null,
+      source: 'catalog',
+      path: '',
+      deliverable: false,
+      issues: [
+        ...(clashes.get(index) ?? []).map((clash) => catalogIssue(CLASH_CODES[clash], 'error')),
+        catalogIssue('not_downloaded', 'warning')
+      ],
+      credentials: [],
+      packageId: typeof pin.package_id === 'string' ? pin.package_id : '',
+      packageUuid: typeof pin.package_uuid === 'string' ? pin.package_uuid : '',
+      revisionNumber: typeof revision === 'number' && Number.isInteger(revision) && revision >= 1 ? revision : null
+    })
+  })
+  return rows
+}
+
+/**
+ * Every skill row of a kit agent, name-sorted: its own (`skills/`) and its
+ * pinned catalog skills, an own skill first where a name is on both. What the
+ * Addons tab lists; engines read {@link scanAgentSkills} instead.
+ */
+export function agentSkillRows(agentDir: string, manifest: unknown): LocalAgentSkill[] {
+  const authored = scanAgentSkills(agentDir)
+  const rows = [...authored, ...catalogSkillRows(manifest, new Set(authored.map((skill) => skill.name)))]
+  // Stable: an own skill keeps its place before a pin of the same name.
+  return rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }

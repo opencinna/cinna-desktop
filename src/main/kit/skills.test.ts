@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   ISSUE_MESSAGES,
   PLATFORM_SKILL_NAMES,
+  agentSkillRows,
+  catalogSkillName,
+  catalogSkillRows,
   coerceVersion,
+  skillVersionProblem,
   deliverableSkills,
   isSecretFilename,
   parseCredentialDeclarations,
@@ -292,5 +297,101 @@ describe('scanning an agent’s skills', () => {
       ['c-second', false, ['budget']]
     ])
     expect(scanAgentSkills(agent, { maxTotalBytes: 10 }).filter((entry) => entry.deliverable)).toEqual([])
+  })
+})
+
+describe('kit.py parity (contract 1.10.0)', () => {
+  it('reserves exactly the platform skills the bundled kit.json names', () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
+    const kit = JSON.parse(readFileSync(join(repoRoot, 'resources/cinna-agent-kit/kit.json'), 'utf8')) as { platform_skills: Record<string, string> }
+    expect([...PLATFORM_SKILL_NAMES].sort()).toEqual(Object.keys(kit.platform_skills).sort())
+  })
+
+  it('says why a version would not be kept as written, as skill_version_problem does', () => {
+    expect(skillVersionProblem(undefined)).toBeNull()
+    expect(skillVersionProblem(null)).toBeNull()
+    expect(skillVersionProblem(2n)).toBeNull()
+    expect(skillVersionProblem(1.5)).toBeNull()
+    expect(skillVersionProblem('1.2.0')).toBeNull()
+    expect(skillVersionProblem('')).toBeNull()
+    expect(skillVersionProblem(true)).toMatch(/one line of text/)
+    expect(skillVersionProblem(['1'])).toMatch(/one line of text/)
+    expect(skillVersionProblem('1\t2')).toMatch(/one line of text/)
+    expect(skillVersionProblem('v'.repeat(65))).toMatch(/longer than 64/)
+    // Code points, as Python counts: 64 emoji are 128 UTF-16 units and still fine.
+    expect(skillVersionProblem('😀'.repeat(64))).toBeNull()
+  })
+
+  it('reads the skill name a package id carries, as catalog_skill_name does', () => {
+    expect(catalogSkillName('io.example.team.skill.pdf-report')).toBe('pdf-report')
+    expect(catalogSkillName('io.example.team.skill.csv-export.1a2b3c4d')).toBe('csv-export')
+    expect(catalogSkillName('io.skill.example.skill.Bad_Name')).toBeNull()
+    expect(catalogSkillName('io.example.skill')).toBeNull()
+    expect(catalogSkillName('com.example.reports')).toBeNull()
+    expect(catalogSkillName(7)).toBeNull()
+  })
+})
+
+describe('catalog skill rows', () => {
+  const PIN = {
+    package_id: 'io.example.team.skill.csv-export',
+    package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+    name: 'csv-export',
+    revision_number: 4,
+    version: '2.0.0',
+    archive_sha256: 'a'.repeat(64)
+  }
+
+  it('lists each pin as a catalog row that is never deliverable, flagged as not on this computer', () => {
+    expect(catalogSkillRows({ catalog_skills: [PIN] }, new Set())).toEqual([{
+      name: 'csv-export',
+      description: '',
+      version: '2.0.0',
+      source: 'catalog',
+      path: '',
+      deliverable: false,
+      issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }],
+      credentials: [],
+      packageId: 'io.example.team.skill.csv-export',
+      packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+      revisionNumber: 4
+    }])
+  })
+
+  it('puts a name clash on the pin’s own row, and skips pins with no usable name', () => {
+    const rows = catalogSkillRows({
+      catalog_skills: [
+        { ...PIN, name: 'pdf-tools' },
+        { ...PIN, name: 'cinna-tasks' },
+        PIN,
+        PIN,
+        { ...PIN, name: 'Not_A_Name' },
+        'nope'
+      ]
+    }, new Set(['pdf-tools']))
+    expect(rows.map((row) => [row.name, row.issues.map((i) => `${i.severity}:${i.code}`)])).toEqual([
+      ['pdf-tools', ['error:name_clash', 'warning:not_downloaded']],
+      ['cinna-tasks', ['error:reserved_name', 'warning:not_downloaded']],
+      ['csv-export', ['warning:not_downloaded']],
+      ['csv-export', ['error:duplicate_pin', 'warning:not_downloaded']]
+    ])
+    expect(catalogSkillRows({}, new Set())).toEqual([])
+    expect(catalogSkillRows({ catalog_skills: 'nope' }, new Set())).toEqual([])
+    expect(catalogSkillRows({ catalog_skills: [{ ...PIN, version: 7, revision_number: 0 }] }, new Set())[0])
+      .toMatchObject({ version: null, revisionNumber: null })
+  })
+
+  it('merges own and catalog rows by name, and only the own ones are what engines read', () => {
+    skill('zeta', md('name: zeta\ndescription: z'))
+    skill('alpha', md('name: alpha\ndescription: a'))
+    const rows = agentSkillRows(agent, { catalog_skills: [PIN, { ...PIN, name: 'zeta', package_uuid: '0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34' }] })
+    expect(rows.map((row) => [row.name, row.source])).toEqual([
+      ['alpha', 'authored'],
+      ['csv-export', 'catalog'],
+      ['zeta', 'authored'],
+      ['zeta', 'catalog']
+    ])
+    expect(deliverableSkills(rows).map((row) => row.name)).toEqual(['alpha', 'zeta'])
+    expect(scanAgentSkills(agent).map((row) => row.source)).toEqual(['authored', 'authored'])
   })
 })

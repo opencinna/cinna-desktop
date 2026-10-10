@@ -294,6 +294,50 @@ describe('scanning a workshop', () => {
     expect(agent.readiness).toBe('ok')
   })
 
+  it('lists pinned catalog skills as rows no engine gets, and a bad pin leaves readiness alone', () => {
+    const dir = scaffold('alpha', 'Alpha')
+    mkdirSync(join(dir, 'skills', 'pdf-tools'), { recursive: true })
+    writeFileSync(join(dir, 'skills', 'pdf-tools', 'SKILL.md'), '---\nname: pdf-tools\ndescription: Fill PDFs.\n---\n\n# PDF\n')
+    const manifest = readManifest(manifestPath(dir))
+    manifest.catalog_skills = [
+      {
+        package_id: 'io.example.team.skill.csv-export',
+        package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+        name: 'csv-export',
+        revision_number: 3,
+        version: '1.2.0',
+        archive_sha256: 'a'.repeat(64)
+      },
+      // Collides with the folder above, and its sha is malformed: both are errors.
+      {
+        package_id: 'io.example.team.skill.pdf-tools',
+        package_uuid: '0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34',
+        name: 'pdf-tools',
+        revision_number: 1,
+        archive_sha256: 'nope'
+      }
+    ]
+    writeManifest(manifestPath(dir), manifest)
+
+    const [agent] = scannerService.scanRoot(USER, root).agents
+    expect(agent.skills?.map((skill) => [skill.name, skill.source, skill.deliverable, skill.issues.map((i) => i.code)])).toEqual([
+      ['csv-export', 'catalog', false, ['not_downloaded']],
+      ['pdf-tools', 'authored', true, []],
+      ['pdf-tools', 'catalog', false, ['name_clash', 'not_downloaded']]
+    ])
+    expect(agent.skills?.[0]).toMatchObject({
+      packageId: 'io.example.team.skill.csv-export',
+      packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+      revisionNumber: 3,
+      version: '1.2.0',
+      path: ''
+    })
+    expect(agent.validation.errors.map((finding) => finding.code)).toEqual(
+      expect.arrayContaining(['manifest.catalog_skills.archive_sha256', 'manifest.catalog_skills.name.authored_clash'])
+    )
+    expect(agent.readiness).toBe('ok')
+  })
+
   it('follows a manifest edited on disk', () => {
     const dir = scaffold('alpha', 'Alpha')
     scannerService.scanRoot(USER, root)
