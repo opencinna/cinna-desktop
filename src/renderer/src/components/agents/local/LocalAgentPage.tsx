@@ -67,6 +67,23 @@ const TABS: { id: AgentPageTab; label: string }[] = [
 
 
 /**
+ * The Addons badge's tooltip: what the total is made of, or — when the badge
+ * shows the count needing attention — how many of the total that is. Names
+ * connectors or skills when the total is only one kind.
+ */
+function addonsBadgeTitle(count: number, skills: number, problems: number): string {
+  const connectors = count - skills
+  const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`
+  if (problems > 0) {
+    const noun = skills === 0 ? 'connector' : connectors === 0 ? 'skill' : 'addon'
+    return `${problems} of ${plural(count, noun)} need${problems === 1 ? 's' : ''} attention`
+  }
+  return [connectors > 0 ? plural(connectors, 'connector') : null, skills > 0 ? plural(skills, 'skill') : null]
+    .filter(Boolean)
+    .join(', ')
+}
+
+/**
  * A folder agent's page.
  *
  * Above the fold: what the user *does* with an agent — open its folder in
@@ -99,7 +116,7 @@ export function LocalAgentPage(): React.JSX.Element {
   const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
-  const addons = useAddonsBadge(activeLocalAgentId)
+  const addons = useAddonsBadge(activeLocalAgentId, agent?.skills)
   const tasksBadge = useTasksTabBadge(activeLocalAgentId)
   // From the statuses list the sidebar already holds, so whether the Sharing
   // tab and the chat header's badge exist is decided at first paint.
@@ -438,9 +455,11 @@ export function LocalAgentPage(): React.JSX.Element {
                     {grantCount}
                   </span>
                 )}
-                {/* Warning-toned when an attached connector is not connected:
-                    the agent's sessions are running without its tools, and
-                    the Overview no longer says so anywhere. */}
+                {/* Like the Folder tab's: when an attached connector is not
+                    connected — the agent's sessions are running without its
+                    tools, and the Overview no longer says so anywhere — or a
+                    skill has an issue, the count is of those, warning-toned;
+                    otherwise the neutral total. */}
                 {entry.id === 'addons' && addons.count > 0 && (
                   <span
                     className={`ml-1.5 rounded px-1 text-[10px] ${
@@ -448,13 +467,9 @@ export function LocalAgentPage(): React.JSX.Element {
                         ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]'
                         : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]'
                     }`}
-                    title={
-                      addons.problems > 0
-                        ? `${addons.problems} of ${addons.count} connector${addons.count === 1 ? '' : 's'} need${addons.problems === 1 ? 's' : ''} attention`
-                        : `${addons.count} connector${addons.count === 1 ? '' : 's'}`
-                    }
+                    title={addonsBadgeTitle(addons.count, addons.skills ?? 0, addons.problems)}
                   >
-                    {addons.count}
+                    {addons.problems > 0 ? addons.problems : addons.count}
                   </span>
                 )}
                 {/*

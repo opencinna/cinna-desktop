@@ -114,7 +114,7 @@ vi.mock('./ReadOnlyCards', () => ({
 }))
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
 vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
-const addonsBadge = { count: 0, problems: 0 }
+const addonsBadge: { count: number; problems: number; skills?: number } = { count: 0, problems: 0 }
 vi.mock('./AgentAddonsTab', () => ({
   AgentAddonsTab: marker('addons-tab'),
   useAddonsBadge: () => addonsBadge
@@ -357,10 +357,28 @@ describe('LocalAgentPage — layout', () => {
     addonsBadge.problems = 1
     renderPage(agent())
     badge = screen.getByRole('tab', { name: /addons/i }).querySelector('span')!
+    // Like the Folder tab: the warning count is of what needs attention.
+    expect(badge.textContent).toBe('1')
     expect(badge.title).toBe('1 of 2 connectors needs attention')
     expect(badge.className).toContain('--color-warning')
     addonsBadge.count = 0
     addonsBadge.problems = 0
+  })
+
+  it('names connectors and skills apart on the Addons badge', () => {
+    Object.assign(addonsBadge, { count: 3, problems: 0, skills: 2 })
+    const { unmount } = renderPage(agent())
+    let badge = screen.getByRole('tab', { name: /addons/i }).querySelector('span')!
+    expect(badge.textContent).toBe('3')
+    expect(badge.title).toBe('1 connector, 2 skills')
+    unmount()
+
+    Object.assign(addonsBadge, { count: 2, problems: 1, skills: 2 })
+    renderPage(agent())
+    badge = screen.getByRole('tab', { name: /addons/i }).querySelector('span')!
+    expect(badge.textContent).toBe('1')
+    expect(badge.title).toBe('1 of 2 skills needs attention')
+    Object.assign(addonsBadge, { count: 0, problems: 0, skills: undefined })
   })
 
   it('shows the description in the header, and a nudge when it is only the name', () => {

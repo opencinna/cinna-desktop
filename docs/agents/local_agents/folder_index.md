@@ -213,7 +213,7 @@ For a folder agent, `agents.driver` is always `acp` — every local CLI agent ru
 ### Watching a folder
 
 - One debounced watcher per root. Nothing ever watches a **file**: almost every editor writes `file.tmp` and renames it over the target, which replaces the inode and kills a file watcher. Directories survive their contents being replaced
-- Recursive watching is macOS/Windows only; on Linux a per-directory fallback watches `Local/`, each agent folder, and each agent's `docs/` and `credentials/` — re-armed after each root scan so a newly scaffolded folder is covered
+- Recursive watching is macOS/Windows only; on Linux a per-directory fallback watches `Local/`, each agent folder, each agent's `docs/`, `credentials/` and `skills/`, and each `skills/<name>/` (where a `SKILL.md` is edited, one level below anything else watched; see [Agent Skills](skills.md)) — re-armed after each root scan so a newly scaffolded folder is covered
 - A watcher that errors is closed and re-armed **once**, after a delay, so an unmounted volume that returns is picked up while a permanently gone folder stops retrying
 
 Every event is classified into exactly **three** outcomes — `ignore`, `root`, `agent`:

@@ -60,7 +60,14 @@ const state = vi.hoisted(() => ({
   /** What the download-free look finds, and how often it was asked. */
   known: null as null | { path: string; source: string; version: string | null },
   looks: 0,
-  claudeProbeDeps: null as null | { claudePath(): Promise<string | null> }
+  claudeProbeDeps: null as null | { claudePath(): Promise<string | null> },
+  claudeOptions: null as null | {
+    agentSkillsPlugin?(userId: string, agentId: string): string | null
+    systemPrompt(userId: string, agentId: string, mode: string): string
+  },
+  skillsPluginAsked: [] as unknown[],
+  skillsPluginFails: false,
+  promptContexts: [] as { ownSkills?: string }[]
 }))
 
 vi.mock('../../localdev/developmentSessionService', () => {
@@ -118,8 +125,15 @@ vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: (_userId: string, age
 vi.mock('../../db/chats', () => ({ chatRepo: { getOwned: (_userId: string, chatId: string) => ({ id: chatId, deletedAt: null }) } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
 vi.mock('../../auth/cinna-oauth', () => ({ CinnaReauthRequired: class CinnaReauthRequired extends Error {} }))
+vi.mock('../../services/agentSkillsPlugin', () => ({
+  ensureKitAgentSkillsPlugin: (agent: { id: string; path: string }) => {
+    state.skillsPluginAsked.push(agent)
+    return state.skillsPluginFails ? null : { dir: '/userData/cinna-plugins/agents/key', skills: ['pdf-tools'] }
+  }
+}))
 vi.mock('../../services/localAgents/localAgentService', () => ({
   localAgentService: {
+    locate: () => ({ root: { id: 'root-1' }, agentDir: '/agents/a' }),
     get: () => {
       state.gets++
       if (state.getThrows) throw new Error('not_found')
@@ -154,9 +168,12 @@ vi.mock('../../services/localAgents/toolDetectionService', () => ({
   toolDetectionService: { get: vi.fn(), snapshot: () => [] }
 }))
 vi.mock('../../services/localAgents/promptAssembly', () => ({
-  assembleAgentPrompt: () => 'prompt',
+  assembleAgentPrompt: (_dir: string, _manifest: unknown, context: { ownSkills?: string }) => {
+    state.promptContexts.push(context)
+    return 'prompt'
+  },
   assembleBareNativePrompt: () => 'prompt',
-  resolveDesktopPromptContext: () => ({})
+  resolveDesktopPromptContext: (engine?: string) => (engine === 'claude' ? { ownSkills: 'skill' } : {})
 }))
 vi.mock('../../services/providerService', () => ({ providerService: { listMerged: () => [] } }))
 vi.mock('../../services/a2aStreamingService', () => ({
@@ -181,6 +198,7 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
   const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
   const marker = (id: string) => (options?: { configInput?: typeof state.configInput }) => {
     if (id === 'opencode') state.configInput = options?.configInput ?? null
+    if (id === 'claude') state.claudeOptions = options as unknown as typeof state.claudeOptions
     return ({
     id,
     plan: async (context: { folder: { coordinatorHandback?: boolean; path: string; runtimeMode?: unknown } }) => {
@@ -430,6 +448,33 @@ describe('driverFor', () => {
   })
 })
 
+
+describe('a kit agent’s own skills on Claude', () => {
+  it('asks the one shared plugin builder with the same identity OpenCode’s config uses', () => {
+    // Both callers write one folder; a launcher that built it from its own
+    // slug or skill set (it once used the folder basename and a separate scan)
+    // flapped the plugin's name and contents against the OpenCode config.
+    // engineConfigSource.test.ts asserts the same `{ id, path }` on its side.
+    state.liveRows = [folderRow('claude')]
+    state.skillsPluginAsked = []
+    state.skillsPluginFails = false
+    expect(state.claudeOptions?.agentSkillsPlugin?.('user-1', 'folder:aaa')).toBe('/userData/cinna-plugins/agents/key')
+    expect(state.skillsPluginAsked).toEqual([{ id: 'folder:aaa', path: '/agents/a' }])
+  })
+
+  it('points the prompt at each SKILL.md when the plugin could not be written', () => {
+    // Mutation: keep `skill` regardless and the prompt promises a skill tool
+    // entry the session was never given.
+    state.liveRows = [folderRow('claude')]
+    state.promptContexts = []
+    state.skillsPluginFails = false
+    state.claudeOptions?.systemPrompt('user-1', 'folder:aaa', 'isolated')
+    state.skillsPluginFails = true
+    state.claudeOptions?.systemPrompt('user-1', 'folder:aaa', 'isolated')
+    state.skillsPluginFails = false
+    expect(state.promptContexts.map((context) => context.ownSkills)).toEqual(['skill', 'pointer'])
+  })
+})
 
 describe('the login probe’s binary', () => {
   it('is the one the Runtime row found — an exact-version PATH copy included — from one shared look', async () => {

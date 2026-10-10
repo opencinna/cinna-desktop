@@ -387,9 +387,10 @@ The folder already contains everything the agent needs to know; it is just sprea
 2. `Local/<slug>/scripts/README.md`, under "Your scripts"
 3. `Local/<slug>/credentials/README.md`, under "Your credentials", preceded by the never-read-the-secret-files rule
 4. The **list** of `.md` topics under `Local/<slug>/knowledge/`
-5. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none
-6. The desktop context block
-7. The **Cinna tasks** stub: the two rules every folder agent must not miss (report before ending a turn on an assigned task; never wait inside a turn), its own agent id, and one line saying how to open the `cinna-tasks` skill — by name on OpenCode and Claude, by its absolute `SKILL.md` path on Codex. The protocol itself lives in the skill, not here ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)). Bare prompts end with the same section
+5. "Your skills", when the agent has a deliverable skill of its own ([Agent Skills](skills.md)): on Claude and OpenCode, which load the skills themselves, one sentence saying the skill tool has them; on Codex, or when the links folder those two read could not be written, each skill's name, description and `SKILL.md` path
+6. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none
+7. The desktop context block
+8. The **Cinna tasks** stub: the two rules every folder agent must not miss (report before ending a turn on an assigned task; never wait inside a turn), its own agent id, and one line saying how to open the `cinna-tasks` skill — by name on OpenCode and Claude, by its absolute `SKILL.md` path on Codex. The protocol itself lives in the skill, not here ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)). Bare prompts end with the same section
 
 Four rules shape it:
 

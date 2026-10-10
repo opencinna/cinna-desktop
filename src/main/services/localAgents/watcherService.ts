@@ -102,8 +102,15 @@ const IGNORED_SEGMENT = 'app-data'
  *   `credentials_needed` and `ok` — the transition the readiness strip exists
  *   to show. Only key *names* are ever read from it (Invariant 4); the watcher
  *   reacts to the file changing, never to what is in it.
+ * * `skills/` holds the agent's own skills, which the Addons tab lists. A
+ *   skill is a folder, so `skills/` itself sees one appear or go, and each
+ *   `skills/<name>/` is watched too ({@link SKILLS_SUBDIR}) — that is where its
+ *   `SKILL.md` is edited.
  */
-const WATCHED_SUBDIRS = ['docs', 'credentials'] as const
+const WATCHED_SUBDIRS = ['docs', 'credentials', 'skills'] as const
+
+/** The one watched sub-directory whose own sub-directories are watched as well. */
+const SKILLS_SUBDIR = 'skills'
 
 /**
  * The two path segments that make a dot-directory ours. `.cinna/handovers/` is
@@ -576,6 +583,9 @@ function armFallbackWatchers(state: RootWatch): void {
     addWatcher(state, agentDir, false)
     for (const sub of WATCHED_SUBDIRS) {
       addWatcher(state, join(agentDir, sub), false)
+    }
+    for (const skillDir of listAgentDirsSafely(join(agentDir, SKILLS_SUBDIR))) {
+      addWatcher(state, skillDir, false)
     }
   }
 }

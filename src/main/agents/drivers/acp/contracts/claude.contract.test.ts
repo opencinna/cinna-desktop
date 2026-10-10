@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -62,6 +62,11 @@ const SUBAGENT = 'contract-helper-3e9'
 const PLUGIN_SKILL = 'cinna-tasks'
 const PLUGIN_SKILL_QUALIFIED = `${PLUGIN_SKILL}:${PLUGIN_SKILL}`
 const PLUGIN_SKILL_MARKER = 'CONTRACT_PLUGIN_SKILL_4d2'
+/** A kit agent's own skill, as `agentSkillsPlugin` lays it out: a link into the agent folder (the cwd). */
+const AGENT_PLUGIN = 'contract-agent'
+const AGENT_SKILL = 'contract-own-skill'
+const AGENT_SKILL_QUALIFIED = `${AGENT_PLUGIN}:${AGENT_SKILL}`
+const AGENT_SKILL_MARKER = 'CONTRACT_AGENT_SKILL_9b7'
 const POLICY_MARKER = 'CONTRACT_POLICY_PROMPT_e52'
 const FIRST_PROMPT = 'CONTRACT_FIRST_MESSAGE_81b. Answer OK.'
 /** What the `claude_code` preset says and an agent's own prompt must not. */
@@ -108,6 +113,8 @@ const seen = {
   nativeMentionsClaudeMd: false, isolatedMentionsClaudeMd: true,
   /** Whether the plugin's skill reached the model, by its qualified name, per branch. */
   pluginSkill: { isolated: false, native: false },
+  /** Whether the agent's own linked skill reached the isolated session, under `<plugin>:<folder>`. */
+  agentSkillOffered: false,
   bypassInMetaMode: null as unknown,
   policyTurns: [] as ClaudeProviderTurn[],
   policyOptions: null as Json | null,
@@ -172,8 +179,18 @@ async function folderScenario(binary: string, trap: EgressTrap): Promise<void> {
     writeFileSync(join(plugin, 'skills', PLUGIN_SKILL, 'SKILL.md'),
       `---\nname: ${PLUGIN_SKILL}\ndescription: ${PLUGIN_SKILL_MARKER} Work with Cinna tasks.\nversion: "1"\nuser-invocable: false\n---\n\n# Cinna tasks\n`)
     const plugins = [{ type: 'local', path: plugin }]
+    // The agent's own skill lives in the agent folder; the plugin holds only a link to it.
+    const ownSkill = join(scratch.cwd, 'skills', AGENT_SKILL)
+    mkdirSync(ownSkill, { recursive: true })
+    writeFileSync(join(ownSkill, 'SKILL.md'), `---\nname: ${AGENT_SKILL}\ndescription: ${AGENT_SKILL_MARKER} Fill contract forms.\n---\n\n# Own skill\n`)
+    const agentPlugin = join(scratch.home, 'cinna-plugins', 'agents', 'contract')
+    mkdirSync(join(agentPlugin, '.claude-plugin'), { recursive: true })
+    mkdirSync(join(agentPlugin, 'skills'), { recursive: true })
+    writeFileSync(join(agentPlugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: AGENT_PLUGIN, description: 'Contract agent skills.', version: '1' }))
+    symlinkSync(ownSkill, join(agentPlugin, 'skills', AGENT_SKILL), 'dir')
     const isolated = { systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {},
-      agents: { [SUBAGENT]: { description: 'A contract subagent.', prompt: 'Answer OK.' } }, plugins }
+      agents: { [SUBAGENT]: { description: 'A contract subagent.', prompt: 'Answer OK.' } },
+      plugins: [...plugins, { type: 'local', path: agentPlugin }] }
     seen.sessionNew = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: isolated } } }, 60_000)
     seen.wrapperRan = existsSync(marker)
     const sessionId = String(seen.sessionNew.result?.sessionId ?? '')
@@ -200,6 +217,7 @@ async function folderScenario(binary: string, trap: EgressTrap): Promise<void> {
     seen.folderTurns = [...provider.turns]
     seen.isolatedMentionsClaudeMd = conversation(provider.turns).some((turn) => turn.mentions(CLAUDE_MD_MARKER))
     seen.pluginSkill.isolated = pluginSkillOffered(conversation(provider.turns))
+    seen.agentSkillOffered = conversation(provider.turns).some((turn) => turn.mentions(AGENT_SKILL_MARKER) && turn.mentions(AGENT_SKILL_QUALIFIED))
 
     // The native branch, in the same folder: the launcher's other set of options.
     const before = provider.turns.length
@@ -479,6 +497,11 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   it(entry('claude.session.options-plugins'), () => {
     expect(seen.pluginSkill.isolated, 'the plugin skill did not reach an isolated (`settingSources: []`) session').toBe(true)
     expect(seen.pluginSkill.native, 'the plugin skill did not reach a native session').toBe(true)
+  })
+
+  it(entry('claude.session.options-plugins-agent-skills'), () => {
+    expect(seen.pluginSkill.isolated, 'cinna-tasks no longer loads beside a second plugin').toBe(true)
+    expect(seen.agentSkillOffered, `the linked skill was not offered as \`${AGENT_SKILL_QUALIFIED}\` in an isolated session`).toBe(true)
   })
 
   it(entry('claude.session.set-mode'), () => {

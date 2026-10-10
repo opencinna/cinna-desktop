@@ -30,6 +30,9 @@ import {
 } from '../services/localAgents/promptAssembly'
 import { createLogger } from '../logger/logger'
 import { tasksSkillInfo } from '../services/tasksSkillService'
+import { SKILLS_DIR } from '../kit/skills'
+import { ensureKitAgentSkillsPlugin, type KitAgentSkillsPlugin } from '../services/agentSkillsPlugin'
+import { join } from 'node:path'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
 
 const logger = createLogger('engine-config-source')
@@ -244,6 +247,10 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
     // for one agent it was chosen for — and it is chosen by reading the folder,
     // so it is never asked about an agent on another engine. Filtering here
     // would only decide what a question nobody asks gets answered with.
+    // A kit agent's own skills plugin (only a kit DTO carries `skills`), built
+    // before the prompt so the prompt only says "the skill tool has them" when
+    // the links folder exists. Scanned fresh by the builder, as Claude's is.
+    const ownPlugin = agent.skills ? ensureKitAgentSkillsPlugin({ id: agent.id, path: agent.path }) : null
     out.push({
       agentId: agent.id,
       slug: agent.slug,
@@ -256,16 +263,35 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
       prompt:
         agent.kind === 'bare'
           ? assembleBareAgentPrompt(agent.path, agent.name, { ...context, agentId: agent.id })
-          : assembleAgentPrompt(agent.path, agent.manifest, { ...context, agentId: agent.id }),
+          : assembleAgentPrompt(agent.path, agent.manifest, {
+              ...context,
+              agentId: agent.id,
+              ownSkills: ownPlugin ? 'skill' : 'pointer'
+            }),
       providerId: runtime.credentialId ?? '',
       modelId: runtime.modelId ?? '',
       permissions:
         agent.runtime?.permissions && typeof agent.runtime.permissions === 'object'
           ? (agent.runtime.permissions as Record<string, unknown>)
-          : null
+          : null,
+      ...ownSkills(ownPlugin)
     })
   }
   return out
+}
+
+/**
+ * A kit agent's own skills for OpenCode: the `skills/` of its links folder —
+ * the same one Claude loads as a plugin, holding a link per **deliverable**
+ * skill — and the names to allow. Never the real `skills/`: OpenCode follows
+ * the links (probed on 1.18.27) but would also register a broken or reserved
+ * skill from the real folder by its frontmatter name, and an authored
+ * `cinna-tasks` there replaced the platform's. Nothing for a bare agent, for
+ * one with no deliverable skill, or when the links folder could not be written.
+ */
+function ownSkills(plugin: KitAgentSkillsPlugin | null): Pick<EngineAgentInput, 'skillPaths' | 'skills'> {
+  if (!plugin) return {}
+  return { skillPaths: [join(plugin.dir, SKILLS_DIR)], skills: plugin.skills }
 }
 
 /**

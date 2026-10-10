@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
 
 /**
  * The agent's Addons tab over the real attach modal: attached connectors draw
@@ -23,16 +23,17 @@ const upsert = vi.fn(async (data: { name: string }) => {
   providers = [...providers, provider('new', data.name, { status: 'awaiting-auth' })]
   return { id: 'new', success: true }
 })
+const openPath = vi.fn(async (_input: { agentId: string; relPath?: string }) => ({ success: true as const }))
 window.api = {
-  localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider },
+  localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider, openPath },
   mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] }
 } as never
 
-const { AgentAddonsTab } = await import('./AgentAddonsTab')
+const { AgentAddonsTab, useAddonsBadge } = await import('./AgentAddonsTab')
 
-function renderTab() {
+function renderTab(extra: Partial<LocalAgentDto> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const agent = { id: 'folder:a', kind: 'kit' } as unknown as LocalAgentDto
+  const agent = { id: 'folder:a', kind: 'kit', skills: [], ...extra } as unknown as LocalAgentDto
   return render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent })))
 }
 
@@ -123,5 +124,112 @@ describe('AgentAddonsTab', () => {
     await screen.findByText('No connectors attached.')
     expect(detachMcpProvider).toHaveBeenCalledWith('folder:a', 'jira')
     expect(providers.map((p) => p.id)).toContain('jira')
+  })
+})
+
+describe('the Skills section', () => {
+  const skill = (name: string, extra: Partial<LocalAgentSkill> = {}): LocalAgentSkill => ({
+    name, description: `${name} things.`, version: null, source: 'authored', path: `skills/${name}/SKILL.md`,
+    deliverable: true, issues: [], credentials: [], ...extra
+  })
+  const SKILLS: LocalAgentSkill[] = [
+    skill('broken', {
+      description: '', deliverable: false,
+      issues: [{ code: 'name_mismatch', message: 'The name in SKILL.md does not match the folder name.', severity: 'error' }]
+    }),
+    skill('leaky', {
+      issues: [{ code: 'secrets', message: 'This skill holds files that look like credentials.', severity: 'warning', paths: ['scripts/.env'] }]
+    }),
+    skill('pdf-tools', { credentials: [{ slot: 'docs.example.com', type: 'api_token', description: null }] })
+  ]
+
+  it('lists each skill with its source, its state as a glyph naming the sentence, and its slots', async () => {
+    renderTab({ skills: SKILLS })
+    await screen.findByText('No connectors attached.')
+    const section = screen.getByRole('heading', { name: 'Skills' }).closest('section')!
+    const items = [...section.querySelector('ul')!.children] as HTMLElement[]
+    expect(items.map((item) => within(item).getByTitle(/^(broken|leaky|pdf-tools)$/).textContent)).toEqual(['broken', 'leaky', 'pdf-tools'])
+    for (const item of items) expect(within(item).getByText('Authored')).toBeTruthy()
+
+    // Fine: a check, and no issue list.
+    const fine = items[2]
+    expect(within(fine).getByRole('img', { name: 'Every engine of this agent gets this skill' })).toBeTruthy()
+    expect(within(fine).getByText('docs.example.com').tagName).toBe('CODE')
+    // One card shell for the tab: the connector card's.
+    for (const item of items) expect((item.firstElementChild as HTMLElement).className).toContain('bg-[var(--color-bg-secondary)]')
+    expect(within(fine).queryByRole('list')).toBeNull()
+    // Broken: the error is the glyph's name and the row's issue line.
+    expect(within(items[0]).getByRole('img', { name: 'The name in SKILL.md does not match the folder name.' })).toBeTruthy()
+    expect(within(items[0]).getAllByText('The name in SKILL.md does not match the folder name.')).toHaveLength(1)
+    // A warning names the files that tripped it.
+    expect(within(items[1]).getByRole('img', { name: 'This skill holds files that look like credentials.' })).toBeTruthy()
+    expect(within(items[1]).getByText('scripts/.env').tagName).toBe('CODE')
+  })
+
+  it('reveals a skill’s SKILL.md from its row', async () => {
+    renderTab({ skills: SKILLS })
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal SKILL.md of pdf-tools' }))
+    await waitFor(() => expect(openPath).toHaveBeenCalledWith({ agentId: 'folder:a', relPath: 'skills/pdf-tools/SKILL.md' }))
+  })
+
+  it('says there is none plainly — the info tip explains the layout — and has no section for a bare agent', async () => {
+    const view = renderTab()
+    await screen.findByText('No connectors attached.')
+    expect(screen.getByText('No skills yet.')).toBeTruthy()
+    view.unmount()
+    renderTab({ kind: 'bare', skills: undefined })
+    await screen.findByText('No connectors attached.')
+    expect(screen.queryByRole('heading', { name: 'Skills' })).toBeNull()
+  })
+
+  it('counts skills on the tab badge, and a skill with any issue as needing attention', async () => {
+    attached = ['gh']
+    let badge: ReturnType<typeof useAddonsBadge> | null = null
+    function Probe(): null {
+      badge = useAddonsBadge('folder:a', SKILLS)
+      return null
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(createElement(QueryClientProvider, { client }, createElement(Probe)))
+    // One connector in error (gh) plus two skills with issues, of four addons.
+    await waitFor(() => expect(badge).toEqual({ count: 4, problems: 3, skills: 3 }))
+  })
+
+  it('puts declared slots on their own neutral Needs line, two chips then +N, never on the title line', async () => {
+    // A ✓ followed by code reads as a connected credential (rule 13), and a
+    // long slot list squeezed the name (rule 7).
+    const slots = ['a.example', 'b.example', 'c.example', 'd.example', 'e.example', 'f.example']
+    renderTab({
+      skills: [skill('many', { credentials: slots.map((slot) => ({ slot, type: 'api_token', description: null })) })]
+    })
+    const name = await screen.findByTitle('many')
+    const titleLine = name.parentElement!
+    expect(titleLine.querySelector('code')).toBeNull()
+    const line = document.querySelector('[data-skill-slots]') as HTMLElement
+    expect(within(line).getByText('Needs')).toBeTruthy()
+    expect([...line.querySelectorAll('code')].map((code) => code.textContent)).toEqual(['a.example', 'b.example'])
+    expect(within(line).getByText('+4')).toBeTruthy()
+    for (const slot of slots) expect(line.title).toContain(slot)
+    expect(line.className).not.toMatch(/--color-(success|warning|danger)/)
+  })
+
+  it('clamps a long description to two lines with the full text on hover', async () => {
+    const long = 'x'.repeat(600)
+    renderTab({ skills: [skill('wordy', { description: long })] })
+    const text = await screen.findByText(long)
+    expect(text.className).toContain('line-clamp-2')
+    expect(text.title).toBe(long)
+  })
+
+  it('shows a failed reveal inside that skill’s card, last', async () => {
+    // Rule 6: an error by the control that caused it, not at the tab's foot.
+    openPath.mockRejectedValueOnce(new Error('The folder is gone.'))
+    renderTab({ skills: [skill('ledger'), skill('pdf-tools')] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal SKILL.md of pdf-tools' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('The folder is gone.')
+    const card = screen.getByTitle('pdf-tools').closest('li')!.firstElementChild as HTMLElement
+    expect(card.lastElementChild).toBe(alert)
+    expect(screen.getByTitle('ledger').closest('li')!.contains(alert)).toBe(false)
   })
 })

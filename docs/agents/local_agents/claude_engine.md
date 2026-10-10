@@ -210,7 +210,7 @@ The answer is **cached for a short window, not for the app's lifetime**. Whether
 | `strictMcpConfig` / `mcpServers` | `true` / `{}` | not sent — either would take the folder's servers back out |
 | System prompt | the assembled document, **replacing** the `claude_code` preset | the preset, with the desktop's context **appended** |
 | `.claude/agents` | read by the desktop and handed back through `options.agents` | loaded from settings; the shim is not even asked for |
-| `plugins` | the desktop's own `cinna-tasks` plugin | the same plugin, beside the folder's and the user's own |
+| `plugins` | the desktop's own `cinna-tasks` plugin, and a kit agent's own skills plugin | the `cinna-tasks` plugin, beside the folder's and the user's own |
 | Approvals | `session/set_mode` after every `new` and `load` | the same, unchanged |
 
 **The mode is derived once, where the folder view is built, and a launcher never asks what kind of folder it has.** That is not tidiness: Cinna's own local-development build session presents as a bare folder because its synced workspace has no manifest, and a rule written as `kind === 'bare'` would have handed the desktop's own build session whatever `.claude/settings.json` that workspace happened to carry. One field, decided in one place, is what makes the folder whose kind lies harmless.
@@ -233,7 +233,9 @@ If a per-agent opt-out is wanted later — a bare folder the user wants sealed �
 
 **That option is not the whole boundary**, and believing it was would have shipped as a defect. It does not detach the user's own MCP connectors: a probe run with it still had the user's Gmail, Drive and Calendar attached, so a folder agent would have been handed tools reaching the user's mail with no Cinna surface saying so. `strictMcpConfig` with an empty server map is the actual fix and travels with it.
 
-**One plugin does load on this branch: the desktop's own.** The `cinna-tasks` skill, which teaches every folder agent the [Cinna Task Protocol](../../jobs/tasks/task_protocol.md), is copied under `userData` as a local plugin and passed in the session options on both branches. A plugin passed that way is not a user or project setting, so `settingSources: []` does not hide it. That was measured, not assumed ([Claude Engine Contract](claude_contract.md)): the skill is offered as `cinna-tasks:cinna-tasks`. It does not loosen the boundary: the plugin comes from the desktop's own bundle, not from any file in the folder or the user's configuration. When the copy cannot be made, no plugin is passed and the turn runs without it.
+**Desktop-owned plugins do load on this branch.** The `cinna-tasks` skill, which teaches every folder agent the [Cinna Task Protocol](../../jobs/tasks/task_protocol.md), is copied under `userData` as a local plugin and passed in the session options on both branches. A plugin passed that way is not a user or project setting, so `settingSources: []` does not hide it. That was measured, not assumed ([Claude Engine Contract](claude_contract.md)): the skill is offered as `cinna-tasks:cinna-tasks`. It does not loosen the boundary: the plugin comes from the desktop's own bundle, not from any file in the folder or the user's configuration. When the copy cannot be made, no plugin is passed and the turn runs without it.
+
+A kit agent's own skills come in the same way, as a second desktop-owned plugin in the same array: one symlink per deliverable skill in its `skills/` folder, offered as `<plugin>:<folder>` ([Agent Skills](skills.md)). That does not loosen the boundary either: the desktop decides which of the folder's skills pass, and those are files of the agent itself, not of the user's configuration. Nothing else from the folder's or the user's skills loads.
 
 This has a cost worth stating rather than discovering: the user's own skills, `CLAUDE.md`, commands and plugins **do not load**. "Use my whole local setup" and "the desktop decides what this agent is" are in genuine tension, and this resolves it toward the second, because a folder agent's system prompt is assembled from the folder's own files. If a per-agent opt-in is wanted later it is a manifest flag, not a default.
 
@@ -515,7 +517,7 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
    │                                 model (a plan alias), settingSources: [],
    │                                 strictMcpConfig, mcpServers: {},
    │                                 agents (the folder's .claude/agents/*.md),
-   │                                 plugins: [cinna-tasks, desktop-owned] }
+   │                                 plugins: [cinna-tasks, agent skills; desktop-owned] }
    │      native (adopted bare folder) = { systemPrompt: {type:'preset',
    │                                 preset:'claude_code', append: desktop context},
    │                                 model, settingSources:['user','project','local'],

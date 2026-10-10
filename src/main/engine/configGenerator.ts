@@ -387,6 +387,19 @@ export interface EngineAgentInput {
   permissions?: Record<string, unknown> | null
   /** Main-owned synthetic runtimes supply a complete policy, without folder defaults. */
   permissionMode?: 'replace'
+  /**
+   * A kit agent's skills links folder (`agentSkillsPlugin`, one link per
+   * deliverable skill), added to `skills.paths` after the bundled one, and
+   * allowed for reads like it. Never the agent's real `skills/`: OpenCode
+   * registers every SKILL.md under a path by its frontmatter name, and a
+   * later path wins, so an authored `cinna-tasks` would replace the platform's.
+   */
+  skillPaths?: string[]
+  /**
+   * The names of its deliverable skills, each allowed in `permission.skill`
+   * beside `cinna-tasks` so opening one does not stop the turn for a click.
+   */
+  skills?: string[]
 }
 
 export interface EngineConfigInput {
@@ -639,6 +652,10 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
   const prompts = new Map<string, string>()
   const skippedAgents: SkippedAgent[] = []
   const profile = profileWithSkillReads(input.skillPaths ?? [])
+  // The bundled folder first, then each delivered agent's own, deduplicated in
+  // order: the bytes feed `digestEngineConfig`, so a change in the skill set
+  // restarts the warm process and an unchanged one never does.
+  const skillPaths = [...(input.skillPaths ?? [])]
 
   for (const agent of [...input.agents].sort((a, b) => a.agentId.localeCompare(b.agentId))) {
     const providerKey = providerKeys.get(agent.providerId)
@@ -667,8 +684,9 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       prompt: agent.prompt,
       permission: agent.permissionMode === 'replace'
         ? { '*': 'deny', ...agent.permissions }
-        : mergePermissions(agent.permissions, profile)
+        : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], agent.skillPaths ?? []))
     }
+    for (const path of agent.skillPaths ?? []) if (!skillPaths.includes(path)) skillPaths.push(path)
   }
 
   return {
@@ -676,7 +694,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       $schema: 'https://opencode.ai/config.json',
       provider: providers,
       agent: agents,
-      ...(input.skillPaths?.length ? { skills: { paths: [...input.skillPaths] } } : {})
+      ...(skillPaths.length ? { skills: { paths: skillPaths } } : {})
     },
     env,
     providerKeys,
@@ -816,6 +834,30 @@ function mergePermissions(
  * another folder outside the project. A manifest's own `external_directory`
  * still replaces the entry whole, as every override does.
  */
+/**
+ * The profile with the agent's own skills allowed by name, after `cinna-tasks`
+ * — the last matching rule wins, so `'*': 'ask'` stays first and still covers
+ * any skill the agent did not author — and reads under its links folder
+ * allowed the way the bundle's are: OpenCode reports a linked skill's
+ * location under the links folder, outside the project. A manifest's own
+ * `skill` or `external_directory` entry still replaces the whole entry.
+ */
+function profileWithOwnSkills(
+  profile: Record<string, unknown>,
+  skills: readonly string[],
+  skillPaths: readonly string[]
+): Record<string, unknown> {
+  if (skills.length === 0 && skillPaths.length === 0) return profile
+  const base = profile.skill && typeof profile.skill === 'object' ? (profile.skill as Record<string, unknown>) : { '*': 'ask' }
+  const skill: Record<string, unknown> = { ...base }
+  for (const name of skills) skill[name] = 'allow'
+  const current = profile.external_directory
+  const external: Record<string, unknown> =
+    current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : { '*': typeof current === 'string' ? current : 'ask' }
+  for (const path of skillPaths) external[`${path.replaceAll('\\', '/').replace(/\/+$/, '')}/*`] = 'allow'
+  return { ...profile, skill, external_directory: external }
+}
+
 function profileWithSkillReads(skillPaths: readonly string[]): Record<string, unknown> {
   if (skillPaths.length === 0) return CONVERSATION_PERMISSIONS
   const external: Record<string, string> = { '*': 'ask' }

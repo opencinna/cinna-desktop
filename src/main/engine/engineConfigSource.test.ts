@@ -123,8 +123,25 @@ const tasksSkill = vi.hoisted(() => ({ available: false }))
 vi.mock('../services/tasksSkillService', () => ({
   tasksSkillInfo: () => ({ available: tasksSkill.available, dir: '/kit/skills/cinna-tasks', skillFile: '/kit/skills/cinna-tasks/SKILL.md', skillsRoot: '/kit/skills', version: '1' })
 }))
+const linksFolder = vi.hoisted(() => ({
+  fails: false,
+  skills: {} as Record<string, string[]>,
+  asked: [] as unknown[],
+  contexts: [] as { agentId?: string; ownSkills?: string }[]
+}))
+vi.mock('../services/agentSkillsPlugin', () => ({
+  ensureKitAgentSkillsPlugin: (input: { id: string; path: string }) => {
+    linksFolder.asked.push(input)
+    const skills = linksFolder.skills[input.id] ?? []
+    return linksFolder.fails || skills.length === 0 ? null : { dir: `/userData/cinna-plugins/agents/${input.id.slice(7)}`, skills }
+  }
+}))
 vi.mock('../services/localAgents/promptAssembly', () => ({
-  assembleAgentPrompt: (agentDir: string) => `PROMPT FOR ${agentDir}`,
+  assembleAgentPrompt: (agentDir: string, _manifest: unknown, context: { agentId?: string; ownSkills?: string }) => {
+    linksFolder.contexts.push(context)
+    return `PROMPT FOR ${agentDir}`
+  },
+  assembleBareAgentPrompt: (agentDir: string) => `BARE PROMPT FOR ${agentDir}`,
   resolveDesktopPromptContext: () => ({ locale: 'en-GB', timeZone: 'Europe/Berlin' })
 }))
 
@@ -363,6 +380,54 @@ describe('refreshModelCache', () => {
 })
 
 describe('collectEngineAgents', () => {
+  it('hands OpenCode the links folder of a kit agent’s deliverable skills — never its real skills/', () => {
+    // An authored `cinna-tasks` in the real folder replaced the platform skill
+    // on 1.18.27 (a later `skills.paths` entry wins). Mutation: hand OpenCode
+    // `<agent>/skills` again and this fails.
+    linksFolder.fails = false
+    linksFolder.asked = []
+    linksFolder.skills = { 'folder:kit': ['pdf-tools'] }
+    state.agents = [
+      agent({ id: 'folder:kit', kind: 'kit', skills: [] }),
+      agent({ id: 'folder:none', kind: 'kit', skills: [] }),
+      agent({ id: 'folder:bare', kind: 'bare' })
+    ]
+    const [kit, none, bare] = collectEngineAgents('user-1')
+    expect(kit).toMatchObject({ skillPaths: [join('/userData/cinna-plugins/agents/kit', 'skills')], skills: ['pdf-tools'] })
+    expect(JSON.stringify(kit)).not.toContain(join('/agents/invoices', 'skills'))
+    // The one shared builder, asked by identity only — the same input the
+    // Claude launcher gives it (drivers/index.test.ts), so the two never
+    // rebuild the shared folder with a different skill set or name. A bare
+    // agent is never asked.
+    expect(linksFolder.asked).toEqual([
+      { id: 'folder:kit', path: '/agents/invoices' },
+      { id: 'folder:none', path: '/agents/invoices' }
+    ])
+    expect('skillPaths' in none || 'skills' in none).toBe(false)
+    expect('skillPaths' in bare || 'skills' in bare).toBe(false)
+
+    // No links folder, no skills: never a fallback to the real folder.
+    linksFolder.fails = true
+    expect('skillPaths' in collectEngineAgents('user-1')[0]).toBe(false)
+    linksFolder.fails = false
+    linksFolder.skills = {}
+  })
+
+  it('tells the prompt the skill tool has the agent’s skills only when the links folder was written', () => {
+    // Mutation: always pass `skill` and the prompt promises skills OpenCode
+    // was never given.
+    linksFolder.skills = { 'folder:kit': ['pdf-tools'] }
+    state.agents = [agent({ id: 'folder:kit', kind: 'kit', skills: [] })]
+    linksFolder.contexts = []
+    collectEngineAgents('user-1')
+    expect(linksFolder.contexts.at(-1)).toMatchObject({ agentId: 'folder:kit', ownSkills: 'skill' })
+    linksFolder.fails = true
+    collectEngineAgents('user-1')
+    expect(linksFolder.contexts.at(-1)).toMatchObject({ agentId: 'folder:kit', ownSkills: 'pointer' })
+    linksFolder.fails = false
+    linksFolder.skills = {}
+  })
+
   it('carries the assembled prompt, the slug and the resolved runtime', () => {
     state.agents = [agent()]
     const [collected] = collectEngineAgents('user-1')

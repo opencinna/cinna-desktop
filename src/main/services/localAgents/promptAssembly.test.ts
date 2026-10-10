@@ -750,3 +750,54 @@ describe('the agent’s own identifiers and the handover protocol', () => {
     }
   })
 })
+
+describe('the agent’s own skills', () => {
+  beforeEach(() => {
+    write('docs/WORKFLOW_PROMPT.md', '# Invoices\n\nYou check invoices.\n')
+    write('knowledge/rules.md', '# Rules\n')
+    write('skills/README.md', '# Skills\n')
+    write('skills/pdf-tools/SKILL.md', '---\nname: pdf-tools\ndescription: |\n  Fill and\n  merge PDFs.\n---\n\n# PDF\n')
+    write('skills/broken/SKILL.md', '---\nname: other\ndescription: Never offered.\n---\n')
+  })
+
+  const section = (prompt: string): string => prompt.split('\n\n---\n\n').find((part) => part.startsWith('## Your skills')) ?? ''
+
+  it('points Codex at each deliverable SKILL.md, after the knowledge section', () => {
+    const prompt = assembleAgentPrompt(dir, manifest(), { ...CONTEXT, ...resolveDesktopPromptContext('codex') })
+    expect(section(prompt)).toBe([
+      '## Your skills',
+      '',
+      'Your own skills, from `skills/` in this folder. When a task matches one, read its `SKILL.md` before using the skill.',
+      '',
+      '- `pdf-tools` — Fill and merge PDFs. — `skills/pdf-tools/SKILL.md`'
+    ].join('\n'))
+    expect(prompt.indexOf('## Your knowledge')).toBeLessThan(prompt.indexOf('## Your skills'))
+    expect(prompt).not.toContain('broken')
+  })
+
+  it('tells Claude and OpenCode their skill tool has them, without listing them twice', () => {
+    for (const engine of ['claude', 'opencode'] as const) {
+      const text = section(assembleAgentPrompt(dir, manifest(), { ...CONTEXT, ...resolveDesktopPromptContext(engine) }))
+      expect(text, engine).toBe([
+        '## Your skills',
+        '',
+        'Your own skills, from `skills/` in this folder, are available through the skill tool by name. Open one when the task matches its description.'
+      ].join('\n'))
+    }
+  })
+
+  it('has no section when no skill is deliverable', () => {
+    rmSync(join(dir, 'skills', 'pdf-tools'), { recursive: true })
+    for (const engine of ['claude', 'codex', 'opencode'] as const) {
+      expect(assembleAgentPrompt(dir, manifest(), { ...CONTEXT, ...resolveDesktopPromptContext(engine) }), engine).not.toContain('## Your skills')
+    }
+  })
+
+  it('resolves the delivery of the agent’s own skills per engine, and none without an engine', () => {
+    // Mutation: ignore the engine and Codex is told its skill tool has skills it never loaded.
+    expect(resolveDesktopPromptContext('codex').ownSkills).toBe('pointer')
+    expect(resolveDesktopPromptContext('claude').ownSkills).toBe('skill')
+    expect(resolveDesktopPromptContext('opencode').ownSkills).toBe('skill')
+    expect('ownSkills' in resolveDesktopPromptContext()).toBe(false)
+  })
+})

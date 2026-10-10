@@ -354,6 +354,51 @@ export interface FileStamp {
 }
 
 /**
+ * Where a skill came from. `authored` is a folder the agent's own author wrote
+ * under `skills/<name>/`; pinned catalog skills join as `catalog` later, on
+ * the same row shape.
+ */
+export type LocalAgentSkillSource = 'authored'
+
+/**
+ * One condition a skill is flagged with — cinna-core's `skill_manifest.py`
+ * issue vocabulary, codes and sentences verbatim. An `error` keeps the skill
+ * from every engine; a `warning` is worth knowing and changes nothing.
+ */
+export interface LocalAgentSkillIssue {
+  code: string
+  message: string
+  severity: 'error' | 'warning'
+  /** Skill-relative files that tripped it — only `secrets` carries any. */
+  paths?: string[]
+}
+
+/** A credential slot a skill's `SKILL.md` declares under `credentials:`. */
+export interface LocalAgentSkillCredential {
+  slot: string
+  type: string
+  description: string | null
+}
+
+/** One skill of a kit agent, as the Addons tab lists it. */
+export interface LocalAgentSkill {
+  /** The folder name — the name every engine is given the skill under. */
+  name: string
+  /** Frontmatter `description`; `''` when the skill is broken before it. */
+  description: string
+  /** Frontmatter `version`, when it states one. */
+  version: string | null
+  source: LocalAgentSkillSource
+  /** Agent-relative POSIX path of its `SKILL.md`. */
+  path: string
+  /** No error: every engine gets it. */
+  deliverable: boolean
+  /** Errors first, then warnings. Empty when the skill is fine. */
+  issues: LocalAgentSkillIssue[]
+  credentials: LocalAgentSkillCredential[]
+}
+
+/**
  * A folder agent as the renderer sees it. `manifest` is the parsed
  * `cinna-agent.json` verbatim (unknown keys included) so the agent page can
  * render every card without a second call.
@@ -399,6 +444,13 @@ export interface LocalAgentDto {
   credentials: LocalAgentCredentialState[]
   /** `docs/CLI_COMMANDS.yaml`, parsed — what the Commands card renders. */
   commands: LocalAgentCommand[]
+  /**
+   * A kit agent's skills (`skills/<name>/SKILL.md`), name-sorted, valid or not.
+   * **Absent for a bare agent**, which has no `skills/` convention: the field
+   * is the capability, so the Addons tab, the badge, the engine config and the
+   * Claude plugin ask whether it is there rather than what kind the agent is.
+   */
+  skills?: LocalAgentSkill[]
   status: LocalAgentStatusSummary | null
   validation: LocalAgentValidation
   desktop: LocalAgentDesktopSummary

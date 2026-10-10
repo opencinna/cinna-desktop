@@ -125,6 +125,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'no step asserts on the skill list' }
   },
   {
+    id: 'claude.session.options-plugins-agent-skills', area: 'session lifecycle', surface: '_meta key', name: '_meta.claudeCode.options.plugins',
+    expectation: 'A second local plugin in the same `plugins` array, whose `skills/<name>` is a **symlink** to a folder inside the session cwd, loads beside the `cinna-tasks` plugin under `settingSources: []`: its skill is offered to the model as `<plugin>:<folder>`, named by the link’s folder.',
+    owners: [`${LAUNCHERS}#agentSkillsPlugin`, 'src/main/services/agentSkillsPlugin.ts#ensureAgentSkillsPlugin'],
+    feature: 'A kit agent’s own skills (`skills/<name>/SKILL.md`) silently disappear from its sealed Claude session, while its prompt says the skill tool has them.',
+    flow: { steps: ['none'], note: 'no step uses a folder with its own skills' }
+  },
+  {
     id: 'claude.session.set-mode', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_mode',
     expectation: '`default` and `auto` are both accepted modes, and `session/new` reports the session’s `currentModeId`.',
     owners: [`${LAUNCHERS}#modeId`],

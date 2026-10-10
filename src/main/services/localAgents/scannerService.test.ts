@@ -279,6 +279,21 @@ describe('scanning a workshop', () => {
     expect(rows[0].localRootId).toBe(root.id)
   })
 
+  it('lists a kit agent’s own skills, broken ones included, without touching readiness', () => {
+    const dir = scaffold('alpha', 'Alpha')
+    mkdirSync(join(dir, 'skills', 'pdf-tools'), { recursive: true })
+    writeFileSync(join(dir, 'skills', 'pdf-tools', 'SKILL.md'), '---\nname: pdf-tools\ndescription: Fill PDFs.\n---\n\n# PDF\n')
+    mkdirSync(join(dir, 'skills', 'broken'), { recursive: true })
+    writeFileSync(join(dir, 'skills', 'broken', 'SKILL.md'), '---\nname: other\ndescription: x\n---\n')
+
+    const [agent] = scannerService.scanRoot(USER, root).agents
+    expect(agent.skills?.map((skill) => [skill.name, skill.deliverable, skill.issues.map((i) => i.code)])).toEqual([
+      ['broken', false, ['name_mismatch']],
+      ['pdf-tools', true, []]
+    ])
+    expect(agent.readiness).toBe('ok')
+  })
+
   it('follows a manifest edited on disk', () => {
     const dir = scaffold('alpha', 'Alpha')
     scannerService.scanRoot(USER, root)

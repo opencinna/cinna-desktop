@@ -291,6 +291,9 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       // session can reuse the same warm process without its chat instructions.
       const companionIds = deps.companionAgentIds?.(ctx) ?? []
       const built = buildEngineConfig({
+        // The bundled `cinna-tasks` folder; the agent's own `skills/` travels
+        // on its entry (`EngineAgentInput.skillPaths`).
+        ...(input.skillPaths?.length ? { skillPaths: input.skillPaths } : {}),
         providers: input.providers.filter((provider) => provider.id === mine.providerId),
         agents: [mine, ...input.agents.filter((agent) =>
           agent.agentId !== mine.agentId && companionIds.includes(agent.agentId) && agent.providerId === mine.providerId)]
@@ -464,6 +467,16 @@ export interface ClaudeLauncherDeps {
    * (`claude.session.options-plugins` in the contract).
    */
   tasksSkillPlugin?(): string | null
+  /**
+   * The local plugin carrying a **kit** agent's own skills
+   * (`agentSkillsPlugin.ensureAgentSkillsPlugin`), or null when this session
+   * is not a kit agent's or the agent has no deliverable skill. Asked on the
+   * isolated branch only: a native folder loads its own skills from its
+   * settings. The answer for a conductor, an AI function, a synthetic chat or
+   * a build session is null — the dep decides that, since every one of them
+   * is an isolated folder too.
+   */
+  agentSkillsPlugin?(userId: string, agentId: string): string | null
 }
 
 /**
@@ -555,7 +568,13 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // 'initialize'` exists only from SDK 0.3.261, and the adapter runs its
       // own SDK dependency (0.3.257 under adapter 0.76.0), which ignores it.
       const pluginPath = safely(() => deps.tasksSkillPlugin?.() ?? null, null)
-      const plugins = pluginPath ? { plugins: [{ type: 'local' as const, path: pluginPath }] } : {}
+      // The agent's own skills, beside cinna-tasks in the same array (two
+      // local plugins load together, proven on 2.1.276 / adapter 0.76.0).
+      const agentSkillsPath = native ? null : safely(() => deps.agentSkillsPlugin?.(ctx.userId, ctx.agentId) ?? null, null)
+      const pluginPaths = [pluginPath, agentSkillsPath].filter((path): path is string => !!path)
+      const plugins = pluginPaths.length > 0
+        ? { plugins: pluginPaths.map((path) => ({ type: 'local' as const, path })) }
+        : {}
 
       return {
         spec: {
@@ -629,8 +648,8 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     // so a folder without them hands the adapter exactly what it
                     // was handed before this option existed.
                     ...(Object.keys(agents).length > 0 ? { agents } : {}),
-                    // Desktop-owned, so not a "user plugin" the pair above
-                    // shuts out: the one plugin an isolated session loads.
+                    // Desktop-owned, so not "user plugins" the pair above
+                    // shuts out: cinna-tasks and the agent's own skills.
                     ...plugins
                   }
             }

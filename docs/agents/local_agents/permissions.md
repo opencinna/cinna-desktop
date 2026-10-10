@@ -91,6 +91,8 @@ This is a deliberate widening. The profile before it allowed writes only under `
 
 **Two allows reach outside the folder, both for the platform's own skill.** The `cinna-tasks` skill ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)) lives in the app's bundled kit, which OpenCode is pointed at through `skills.paths`. Opening that skill (`skill`, pattern `cinna-tasks`) is allowed while every other skill asks, and `external_directory` allows the bundle's `skills/` folder while everything else outside the agent folder still asks. Without them every turn that used the task tools would stop at least once for a click on text the app itself ships. A manifest that sets its own `external_directory` replaces that entry whole, allow included, as any override does.
 
+**A kit agent's own skills get the same two allows, scoped to them.** Its deliverable skills reach OpenCode through a links folder under `userData` ([Agent Skills](skills.md)), so each one is allowed by name in `skill` after `cinna-tasks`, and reads under that links folder are allowed in `external_directory`. `'*': 'ask'` stays first and the last matching rule wins, so a skill the agent did not author still asks. A manifest's own `skill` entry replaces the whole entry, these allows included.
+
 ### The catch-all has to be written down
 
 `'*': 'ask'` is an explicit entry. OpenCode's own base rule is allow-everything for every permission name — read back off a running engine, not assumed — so a profile that enumerates only the tools it knows about leaves *every other tool* on allow, which is the opposite of what enumerating them was for.

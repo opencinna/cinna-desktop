@@ -29,6 +29,7 @@ import { getLayoutView, resolveContract } from '../../kit/contractStore'
 import type { LayoutView } from '../../kit/layout'
 import { manifestPath, readStamp, readWithStamp } from '../../kit/manifestIo'
 import { parseFrontmatter } from '../../kit/miniYaml'
+import { scanAgentSkills } from '../../kit/skills'
 import {
   isValid,
   readCommandCatalog,
@@ -414,6 +415,7 @@ function unreadableAgent(
     runtime: null,
     credentials: [],
     commands: [],
+    skills: [],
     status: null,
     validation: { errors: [finding], warnings: [], infos: [] },
     desktop: desktopStateService.summarize(desktopStateService.read(agentDir, 'kit')),
@@ -655,6 +657,9 @@ export const scannerService = {
       runtime: manifest.runtime ?? null,
       credentials,
       commands: catalog.commands,
+      // Listed whatever the readiness: a broken skill is a row with its issue,
+      // and skills do not decide whether the agent runs.
+      skills: scanAgentSkills(agentDir),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),
@@ -736,6 +741,8 @@ export const scannerService = {
       runtime: desktop.runtime,
       credentials: [],
       commands: [],
+      // No `skills`: a bare folder made no promise about a `skills/` folder,
+      // and the field's absence is what every surface reads as "no skills here".
       status: null,
       validation,
       desktop: desktopStateService.summarize(desktop),

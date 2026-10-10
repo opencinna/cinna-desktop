@@ -770,3 +770,39 @@ describe('reading the skill’s own files', () => {
     expect(CONVERSATION_PERMISSIONS.external_directory).toBe('ask')
   })
 })
+
+describe('a kit agent’s own skills', () => {
+  const agentOf = (built: ReturnType<typeof buildEngineConfig>) =>
+    Object.values(built.config.agent as Record<string, { permission: Record<string, unknown> }>)[0]
+
+  it('adds the agent’s skills folder after the bundled one, and allows its skills by name', () => {
+    const base = input({ skillPaths: ['/app/kit/skills'] })
+    base.agents[0] = { ...base.agents[0], skillPaths: ['/data/links/skills'], skills: ['pdf-tools', 'ledger'] }
+    const built = buildEngineConfig(base)
+    expect(built.config.skills).toEqual({ paths: ['/app/kit/skills', '/data/links/skills'] })
+    // Order is the mechanism: the wildcard first, so any other skill still asks.
+    expect(Object.entries(agentOf(built).permission.skill as Record<string, string>)).toEqual([
+      ['*', 'ask'], ['cinna-tasks', 'allow'], ['pdf-tools', 'allow'], ['ledger', 'allow']
+    ])
+    // OpenCode reports a linked skill under the links folder, outside the project: its reads are allowed too.
+    expect(agentOf(built).permission.external_directory).toEqual({ '*': 'ask', '/app/kit/skills/*': 'allow', '/data/links/skills/*': 'allow' })
+    // The shared profile is not mutated.
+    expect(Object.keys(CONVERSATION_PERMISSIONS.skill as Record<string, string>)).toEqual(['*', 'cinna-tasks'])
+  })
+
+  it('lists the folder without the bundled one, and never for an agent left out of the config', () => {
+    const own = input()
+    own.agents[0] = { ...own.agents[0], skillPaths: ['/data/links/skills'], skills: ['pdf-tools'] }
+    expect(buildEngineConfig(own).config.skills).toEqual({ paths: ['/data/links/skills'] })
+    expect(agentOf(buildEngineConfig(own)).permission.external_directory).toEqual({ '*': 'ask', '/data/links/skills/*': 'allow' })
+    const skipped = input()
+    skipped.agents[0] = { ...skipped.agents[0], providerId: 'gone', skillPaths: ['/agents/invoices/skills'], skills: ['pdf-tools'] }
+    expect('skills' in buildEngineConfig(skipped).config).toBe(false)
+  })
+
+  it('lets a manifest’s own skill rule replace the entry, as every override does', () => {
+    const base = input()
+    base.agents[0] = { ...base.agents[0], skills: ['pdf-tools'], permissions: { skill: 'deny' } }
+    expect(agentOf(buildEngineConfig(base)).permission.skill).toBe('deny')
+  })
+})

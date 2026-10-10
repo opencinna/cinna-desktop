@@ -2,11 +2,11 @@
 
 ## Purpose
 
-An agent page's **Addons** tab gives a folder agent — kit or bare — MCP connectors of its own. A connector attached there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat.
+An agent page's **Addons** tab gives a folder agent — kit or bare — MCP connectors of its own. A connector attached there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat. A kit agent's tab also lists its own skills, in a **Skills** section documented in [Agent Skills](skills.md); this doc covers the connectors.
 
 ## Core Concepts
 
-- **Addon** — something a folder agent runs *with* beyond its own folder. Today the only kind is an MCP connector. Catalog plugins and skills are expected to join as their own sections on the tab once they exist, and the tab shows no empty sections for them now
+- **Addon** — something a folder agent runs *with* beyond its own instructions. Two kinds today: an MCP connector, attached here, and a kit agent's own skills from its `skills/` folder, listed here ([Agent Skills](skills.md)). Catalog plugins are expected to join as their own section once they exist, and the tab shows no empty section for them now
 - **Attached connector** — a link between one folder agent and one connector from **Settings → MCP**. It is a link only: the connector is the same global record, and toggling, editing or reconnecting it on the Addons tab changes it everywhere. **Detach** removes the link and leaves the connector in place
 - **Unattended connect** — a connect that nobody is watching, started because one of the agent's turns is starting. It never opens a browser
 - **Needs the user** — the state of an OAuth connector whose server wants an interactive authorization. An unattended connect cannot do that, so it stops trying until the connector changes
@@ -24,7 +24,7 @@ An agent page's **Addons** tab gives a folder agent — kit or bare — MCP conn
 
 1. Attached connectors are listed in attach order, each drawn with the **same card as Settings → MCP**. The card offers **Detach** where Settings offers Delete, and the rest of the card behaves the same
 2. A connector that is not connected, is switched off or is waiting for the browser shows a warning glyph beside its name. The glyph's accessible name and tooltip give the reason in one sentence. The same glyph and sentence appear on the Settings card and on the attach dialog's cards
-3. The **Addons** tab carries a count badge. It is muted when every attached connector is fine. It is warning-toned, titled "*k* of *n* connectors need attention", when any is not. The badge is the only place outside the tab that reports a broken addon, because those sessions are running without its tools
+3. The **Addons** tab carries a count badge over everything the tab lists, connectors and skills. It shows the muted total when every attached connector is connected and no skill has an issue. When any is not, it shows how many need attention, warning-toned, titled "*k* of *n* connectors need attention" (skills, or addons, when the total is not only connectors). The badge is the only place outside the tab that reports a broken addon, because those sessions are running without its tools
 4. The section's (?) explains the scope: every session of the agent gets the tools (its own chats, scheduled jobs, task runs, and runs where another agent calls it); Cinna holds the sign-in and the agent's runtime never sees a token; a connector that is not connected when a session starts is left out of that session
 
 ### In a chat
@@ -76,7 +76,8 @@ turn starts ──► conductorBridge.prepare ──► agentMcpService.ensureCo
 ## Integration Points
 
 - [Agents Tab & Agent Page](agents_tab.md): the page that hosts the tab, its badge and the tab order
-- [Bare Agents & External Roots](bare_agents.md): bare agents get the tab too. It is one of the tabs a bare folder can honestly fill, since nothing on it names a folder file
+- [Bare Agents & External Roots](bare_agents.md): bare agents get the tab too. It is one of the tabs a bare folder can honestly fill, since nothing on it names a folder file. The Skills section is left off for them, since it would name `skills/`
+- [Agent Skills](skills.md): the tab's Skills section, a kit agent's own `skills/<name>/SKILL.md`, and how each engine gets them
 - [MCP Connections](../../mcp/connections/connections.md): the connector record, its card, the non-interactive connect, and the delete confirm that names the agents
 - [On-Demand MCP](../../mcp/on_demand/on_demand.md): the chip strip and `[+]` picker, where addons are drawn locked beside the mode's baseline
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md): the Cinna MCP endpoint (conductor bridge) that serves addons, and the nested runs that now get an addons-only endpoint

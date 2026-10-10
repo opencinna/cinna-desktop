@@ -38,6 +38,7 @@ import {
 } from '../../../shared/localAgents'
 import { resolveBareInstructionsFile } from './externalScan'
 import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillService'
+import { deliverableSkills, scanAgentSkills } from '../../kit/skills'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -88,6 +89,14 @@ export interface DesktopPromptContext {
    * delivery line out. Stable per engine and per build, so it may live here.
    */
   tasksSkill?: CinnaTasksSkillDelivery | null
+  /**
+   * How this engine's agent reaches its **own** skills, when the producer
+   * names the engine: `skill` where the engine loads them itself (Claude
+   * through the per-agent plugin, OpenCode through `skills.paths`), `pointer`
+   * where it is pointed at each `SKILL.md` (Codex). Absent reads as `pointer`
+   * — the listing is true on every engine.
+   */
+  ownSkills?: 'skill' | 'pointer'
 }
 
 /** True when `path` is a regular file. */
@@ -185,6 +194,33 @@ export function listKnowledgeTopics(agentDir: string): string[] {
 
   walk(root, 0)
   return out
+}
+
+/**
+ * The agent's own deliverable skills (`skills/<name>/SKILL.md`), or nothing.
+ *
+ * Claude gets them through the per-agent plugin and OpenCode through
+ * `skills.paths`, so their prompt only says the skill tool has them — listing
+ * them again would double what the engine already tells the model. Codex has
+ * no skill loader: it gets the list, each with the file to read first.
+ */
+function skillsSection(agentDir: string, context: DesktopPromptContext): string | null {
+  const skills = deliverableSkills(scanAgentSkills(agentDir))
+  if (skills.length === 0) return null
+  if (context.ownSkills === 'skill') {
+    return [
+      '## Your skills',
+      '',
+      'Your own skills, from `skills/` in this folder, are available through the skill tool by name. Open one when the task matches its description.'
+    ].join('\n')
+  }
+  return [
+    '## Your skills',
+    '',
+    'Your own skills, from `skills/` in this folder. When a task matches one, read its `SKILL.md` before using the skill.',
+    '',
+    ...skills.map((skill) => `- \`${skill.name}\` — ${skill.description.replace(/\s+/g, ' ')} — \`${skill.path}\``)
+  ].join('\n')
 }
 
 /** The handover block, from the manifest's declared sibling delegations. */
@@ -395,6 +431,9 @@ export function assembleAgentPrompt(
       ].join('\n')
     )
   }
+
+  const skills = skillsSection(agentDir, context)
+  if (skills) sections.push(skills)
 
   const handovers = handoverSection(manifest)
   if (handovers) sections.push(handovers)
@@ -712,5 +751,7 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
   } catch {
     /* no skill line rather than no prompt */
   }
-  return { locale, timeZone, ...(engine ? { tasksSkill } : {}) }
+  // Codex has no skill loader; the other two load the agent's skills natively.
+  const ownSkills = engine === 'codex' ? 'pointer' : 'skill'
+  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills } : {}) }
 }

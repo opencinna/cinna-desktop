@@ -147,6 +147,26 @@ describe('the OpenCode launcher', () => {
     expect(provider.env).toEqual([expect.stringMatching(/^CINNA_ENGINE_KEY_/)])
   })
 
+  it('hands OpenCode the bundled cinna-tasks folder and the agent’s own skills, and restarts when the set changes', async () => {
+    // Mutation: drop `skillPaths` from the launcher's `buildEngineConfig` call
+    // and an OpenCode ACP session has no `skills.paths` at all — not even
+    // cinna-tasks.
+    const withSkills = (skills: string[]) => {
+      const input = configInput({ skillPaths: ['/app/kit/skills'] })
+      input.agents[0] = { ...input.agents[0], skillPaths: ['/tmp/agents/pineapple/skills'], skills }
+      return input
+    }
+    const p = plan(await launcher(withSkills(['pdf-tools'])).plan(CTX))
+    const config = JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8'))
+    expect(config.skills).toEqual({ paths: ['/app/kit/skills', '/tmp/agents/pineapple/skills'] })
+    const entry = Object.values(config.agent)[0] as { permission: Record<string, unknown> }
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'pdf-tools': 'allow' })
+
+    // The same set again: the warm process is kept. One more skill: replaced.
+    expect(plan(await launcher(withSkills(['pdf-tools'])).plan(CTX)).spec.key).toBe(p.spec.key)
+    expect(plan(await launcher(withSkills(['pdf-tools', 'ledger'])).plan(CTX)).spec.key).not.toBe(p.spec.key)
+  })
+
   it('never writes a key into the config bytes', async () => {
     const p = plan(await launcher().plan(CTX))
     const bytes = readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8')
@@ -458,6 +478,35 @@ describe('the Claude launcher', () => {
       const broken = { ...deps, tasksSkillPlugin: () => { throw new Error('disk full') } }
       expect('plugins' in claudeOptions(plan(await createClaudeLauncher(broken).plan(ctx)))).toBe(false)
     }
+  })
+
+  it('loads a kit agent’s own skills plugin beside cinna-tasks, on the isolated branch only', async () => {
+    const asked: [string, string][] = []
+    const withBoth = {
+      ...deps,
+      tasksSkillPlugin: () => '/data/cinna-plugins/cinna-tasks',
+      agentSkillsPlugin: (userId: string, agentId: string) => {
+        asked.push([userId, agentId])
+        return '/data/cinna-plugins/agents/0123'
+      }
+    }
+    expect(claudeOptions(plan(await createClaudeLauncher(withBoth).plan(CTX))).plugins).toEqual([
+      { type: 'local', path: '/data/cinna-plugins/cinna-tasks' },
+      { type: 'local', path: '/data/cinna-plugins/agents/0123' }
+    ])
+    expect(asked).toEqual([['user-1', AGENT_ID]])
+    // A native folder loads its own skills from its settings: not even asked.
+    expect(claudeOptions(plan(await createClaudeLauncher(withBoth).plan(BARE_CTX))).plugins).toEqual([
+      { type: 'local', path: '/data/cinna-plugins/cinna-tasks' }
+    ])
+    expect(asked).toHaveLength(1)
+    // Alone, and a dep that fails is a session without the agent's skills, not a refused turn.
+    const alone = { ...deps, agentSkillsPlugin: () => '/data/cinna-plugins/agents/0123' }
+    expect(claudeOptions(plan(await createClaudeLauncher(alone).plan(CTX))).plugins).toEqual([
+      { type: 'local', path: '/data/cinna-plugins/agents/0123' }
+    ])
+    const broken = { ...deps, agentSkillsPlugin: () => { throw new Error('disk full') } }
+    expect('plugins' in claudeOptions(plan(await createClaudeLauncher(broken).plan(CTX)))).toBe(false)
   })
 
   it('offers the folder’s own subagents when it has some', async () => {

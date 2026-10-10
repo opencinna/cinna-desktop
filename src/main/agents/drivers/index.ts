@@ -100,6 +100,7 @@ import { createManagedTurnRecoverer } from './managed/managedTurnRecoverer'
 import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin } from '../../services/tasksSkillService'
+import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
 const logger = createLogger('agent-driver')
@@ -308,9 +309,18 @@ function folderSystemPrompt(
     // returned above. Kept explicit anyway: the failure it would otherwise
     // cause is a folder answering on the kit assembler's "no instructions yet"
     // stub, which reads as a broken agent rather than as a wiring mistake.
-    return agent.kind === 'bare'
-      ? assembleBareAgentPrompt(agent.path, agent.name, context)
-      : assembleAgentPrompt(agent.path, agent.manifest, context)
+    if (agent.kind === 'bare') return assembleBareAgentPrompt(agent.path, agent.name, context)
+    // "The skill tool has them" only when the plugin carrying them was written;
+    // otherwise the prompt points at each `SKILL.md` instead.
+    let ownSkills = context.ownSkills
+    if (ownSkills === 'skill') {
+      try {
+        if (!kitAgentSkillsPlugin(userId, agentId)) ownSkills = 'pointer'
+      } catch {
+        ownSkills = 'pointer'
+      }
+    }
+    return assembleAgentPrompt(agent.path, agent.manifest, { ...context, ownSkills })
   }
 }
 
@@ -571,6 +581,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
     systemPrompt: folderSystemPrompt('claude'),
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
+    agentSkillsPlugin: kitAgentSkillsPlugin,
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.
@@ -610,6 +621,22 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // from its own settings.
     folderAgents: (agentPath) => readFolderAgents(agentPath).agents
   })
+}
+
+/**
+ * A **kit** agent's own skills plugin, or null for everything else that runs
+ * as an isolated folder: a synthetic chat runtime, an AI function, a chat
+ * conductor and a build session each answer null before any folder is read.
+ * A bare folder is never asked: it runs native. The folder is located through
+ * its index row rather than re-validated whole; the plugin itself comes from
+ * `ensureKitAgentSkillsPlugin`, the one builder OpenCode's config uses too.
+ */
+function kitAgentSkillsPlugin(userId: string, agentId: string): string | null {
+  if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return null
+  const row = agentRepo.getOwned(userId, agentId)
+  if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return null
+  const { agentDir } = localAgentService.locate(userId, agentId)
+  return ensureKitAgentSkillsPlugin({ id: agentId, path: agentDir })?.dir ?? null
 }
 
 /**
