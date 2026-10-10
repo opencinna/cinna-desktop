@@ -18,6 +18,7 @@ import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
 import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins } from '../agents/drivers'
 import { localAgentService } from '../services/localAgents/localAgentService'
+import { catalogSkillService } from '../services/catalogSkillService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
 import { handoverScheduler } from '../services/handoverScheduler'
@@ -49,6 +50,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   localAgentService.configure(getSettingsScopeUserId)
   installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
+  // Cached catalog skill revisions no agent pins: once per start, off the boot path but in one
+  // synchronous run before any profile can activate, so no turn or schedule holds a path into it.
+  setImmediate(() => { catalogSkillService.collectGarbage() })
 }
 
 export { runExecutionService } from '../services/runExecutionService'

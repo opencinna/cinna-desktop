@@ -17,7 +17,7 @@ import { serviceCredentialCloud } from './cloud'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates } from './slotMatch'
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -544,12 +544,14 @@ function slotState(slot: LocalAgentCredentialState): CredentialSetupSlot['state'
 /**
  * Replace one group's attachments with `refsOf(current)`, computed under the agent's lock so an
  * append never drops a reference written in between. One state write and one materialization.
- * `queue: false` refuses (`turn_in_progress`) instead of waiting for a running turn.
+ * `queue: false` refuses (`turn_in_progress`) instead of waiting for a running turn. A ref that
+ * survives keeps its entry as it was (its `auto` mark with it); `autoOf` marks a newly added one.
  */
-async function writeAttachments(id: string, group: string, refsOf: (before: { ref: string }[]) => string[], queue = true): Promise<ServiceCredentialAttachmentDto[]> {
+async function writeAttachments(id: string, group: string, refsOf: (before: ServiceCredentialAttachmentRef[]) => string[], queue = true,
+  autoOf: (ref: string) => ServiceCredentialAttachmentRef['auto'] = () => undefined): Promise<ServiceCredentialAttachmentDto[]> {
   const a = agent(id)
   const valid = (refs: unknown): refs is string[] => Array.isArray(refs) && !refs.some(r => typeof r !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(r))
-  const current = (): { ref: string }[] => { const s = state(a); return group === 'local' ? s.local : s.accounts[group] ?? [] }
+  const current = (): ServiceCredentialAttachmentRef[] => { const s = state(a); return group === 'local' ? s.local : s.accounts[group] ?? [] }
   if (typeof group !== 'string' || !valid(refsOf(current()))) throw new Error('Invalid attachment references.')
   const account = group === 'local' ? undefined : accounts.get(group)
   // A signed-out or deleted account's intent can only shrink: removals need no
@@ -573,7 +575,10 @@ async function writeAttachments(id: string, group: string, refsOf: (before: { re
       if (!row) throw new Error('Credential is no longer available.')
       if (!credentialDto(row).localUseAllowed) throw new Error('The owner has not allowed use on this computer.')
     }
-    const next = [...new Set(refs)].map(ref => ({ ref }))
+    const next = [...new Set(refs)].map(ref => {
+      const kept = before.find(v => v.ref === ref), auto = kept ? undefined : autoOf(ref)
+      return kept ?? (auto ? { ref, auto } : { ref })
+    })
     if (group === 'local') s.local = next
     else if (next.length) s.accounts[group] = next
     else delete s.accounts[group]
@@ -585,26 +590,58 @@ async function writeAttachments(id: string, group: string, refsOf: (before: { re
 }
 
 /**
- * Append `added` to the account's group without waiting for a running turn: a turn (shared hold)
- * refuses at once, while an exclusive holder — another short write (a credential regeneration, a
- * sharing verb) — is retried for a few seconds, never queued. `keep` filters the additions once more
- * under the lock, on the fresh state and given what this write appends before it; the answer is what
- * was appended.
+ * One `writeAttachments` without waiting for a running turn: a turn (shared hold) refuses at once,
+ * while an exclusive holder — another short write (a credential regeneration, a sharing verb) — is
+ * retried for a few seconds, never queued.
  */
-async function appendWithoutWaiting(id: string, account: Account, added: string[], keep: (ref: string, appendedSoFar: readonly string[]) => boolean = () => true): Promise<string[]> {
-  let appended: string[] = []
-  const append = (before: { ref: string }[]) => {
-    appended = []
-    for (const ref of added) if (!before.some(v => v.ref === ref) && keep(ref, appended)) appended.push(ref)
-    return [...before.map(v => v.ref), ...appended]
-  }
+async function writeWithoutWaiting(id: string, write: () => Promise<unknown>): Promise<void> {
   for (let attempt = 0; ; attempt++) {
-    try { await writeAttachments(id, account.key, append, false); return appended }
+    try { await write(); return }
     catch (error) {
       if ((error as { code?: string }).code !== 'turn_in_progress' || !turnLock.isExclusivelyLocked(id) || attempt >= AUTO_ATTACH_RETRIES) throw error
       await new Promise(resolve => setTimeout(resolve, AUTO_ATTACH_RETRY_MS))
     }
   }
+}
+/**
+ * Append `added` to the account's group without waiting for a running turn ({@link writeWithoutWaiting}).
+ * `keep` filters the additions once more under the lock, on the fresh state and given what this write
+ * appends before it; `autoOf` marks what it appends. The answer is what was appended.
+ */
+async function appendWithoutWaiting(id: string, account: Account, added: string[], keep: (ref: string, appendedSoFar: readonly string[]) => boolean = () => true,
+  autoOf: (ref: string) => ServiceCredentialAttachmentRef['auto'] = () => undefined): Promise<string[]> {
+  let appended: string[] = []
+  const append = (before: ServiceCredentialAttachmentRef[]) => {
+    appended = []
+    for (const ref of added) if (!before.some(v => v.ref === ref) && keep(ref, appended)) appended.push(ref)
+    return [...before.map(v => v.ref), ...appended]
+  }
+  await writeWithoutWaiting(id, () => writeAttachments(id, account.key, append, false, autoOf))
+  return appended
+}
+/**
+ * The auto-attached entries of `a` (account groups only; only `autoAttachSkills` marks) that nothing
+ * uses any more: no skill on the agent declares their slot, and no agent credential slot is judged by
+ * their record. Null when the agent's skill slots cannot be known: a pinned catalog skill that is not
+ * on this computer declares slots nobody can read, and one of them may be the slot.
+ */
+function unusedAutoEntries(a: LocalAgentDto): Map<string, Set<string>> | null {
+  if ((a.skills ?? []).some(skill => skill.source === 'catalog' && skill.path === '')) return null
+  // Every declared slot, deliverable or not: a skill held back by a clash may still be fixed, and keeping is the safe side.
+  const declared = new Set((a.skills ?? []).flatMap(skill => skill.credentials.map(c => c.slot)))
+  const judged = new Set(a.credentials.flatMap(slot => slot.attachment ? [slot.attachment.credentialId] : []))
+  const resolved = resolve(a)
+  const out = new Map<string, Set<string>>()
+  for (const [group, list] of Object.entries(state(a).accounts)) {
+    for (const entry of list) {
+      if (!entry.auto || declared.has(entry.auto.slot)) continue
+      const row = resolved.find(v => v.group === group && v.ref === entry.ref)?.row
+      if (row && judged.has(row.id)) continue
+      if (!out.has(group)) out.set(group, new Set())
+      out.get(group)!.add(entry.ref)
+    }
+  }
+  return out
 }
 /** Every available attachment as metadata with its state: what the scanner judges slots by. */
 function attachedMetadata(a: Pick<LocalAgentDto, 'path' | 'kind'>): (ServiceCredentialDto & { state: ServiceCredentialAttachmentDto['state'] })[] {
@@ -800,7 +837,7 @@ export const serviceCredentialService = {
       const appended = await appendWithoutWaiting(id, account, [...picks.keys()], (ref, soFar) => {
         const slot = picks.get(ref)!.slot
         return !slotClaimed(slot, attachedMetadata(a)) && !soFar.some(other => picks.get(other)!.slot.slot === slot.slot)
-      })
+      }, ref => ({ slot: picks.get(ref)!.slot.slot }))
       if (!appended.length) return []
       logger.info('Attached matching credentials for skill slots', { agentId: id, count: appended.length })
       return appended.map(ref => ({ slot: picks.get(ref)!.slot.slot, credentialName: picks.get(ref)!.credentialName, skill: true as const }))
@@ -808,6 +845,37 @@ export const serviceCredentialService = {
       if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not attach skill credentials: a turn holds the agent', { agentId: id })
       else logger.warn('Could not attach skill credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
       return []
+    }
+  },
+  /**
+   * After a catalog skill is removed or updated: detach, in every account group, each record
+   * `autoAttachSkills` put there for a skill slot that no skill on the agent declares any more and
+   * that no agent credential slot is judged by. A record attached by hand is never touched. Decided
+   * again under the agent's lock, on the fresh state; never waits for a running turn (one holding the
+   * agent leaves everything attached) and never throws. Answers what was detached.
+   */
+  async detachUnusedAutoAttachments(id: string): Promise<{ group: string; ref: string; slot: string }[]> {
+    const detached: { group: string; ref: string; slot: string }[] = []
+    try {
+      const first = unusedAutoEntries(agent(id))
+      if (!first?.size) return []
+      for (const group of first.keys()) {
+        let dropped: { group: string; ref: string; slot: string }[] = []
+        const shrink = (before: ServiceCredentialAttachmentRef[]): string[] => {
+          // `refsOf` runs once to validate and once under the lock: only the last answer counts.
+          const unused = unusedAutoEntries(agent(id))?.get(group) ?? new Set<string>()
+          dropped = before.flatMap(v => unused.has(v.ref) && v.auto ? [{ group, ref: v.ref, slot: v.auto.slot }] : [])
+          return before.filter(v => !unused.has(v.ref)).map(v => v.ref)
+        }
+        await writeWithoutWaiting(id, () => writeAttachments(id, group, shrink, false))
+        detached.push(...dropped)
+      }
+      if (detached.length) logger.info('Detached credentials no skill slot uses any more', { agentId: id, count: detached.length })
+      return detached
+    } catch (error) {
+      if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not detach unused skill credentials: a turn holds the agent', { agentId: id })
+      else logger.warn('Could not detach unused skill credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
+      return detached
     }
   },
   /**

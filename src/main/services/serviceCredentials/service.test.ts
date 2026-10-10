@@ -25,6 +25,7 @@ vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usable
 vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args), provisionLocal: (...args: unknown[]) => world.provision(...args) } }))
 import { keyApiUrl, serviceCredentialService as service } from './service'
 import { turnLock } from '../localAgents/turnLock'
+import { desktopStateService } from '../localAgents/desktopStateService'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
 import { getLogEntries } from '../../logger/logger'
 const sleep = () => new Promise(resolve => setTimeout(resolve, 30))
@@ -1126,5 +1127,74 @@ try:
 except CredentialMissing as e:
     print(e.reason)`], { env: { ...process.env, CINNA_CREDENTIALS_PATH: p.path! }, encoding: 'utf8' })
     expect(out.trim().split('\n')).toEqual([`Bearer ${world.token}`, 'not_linked'])
+  })
+
+  describe('what auto-attach put there, and detaching it when no skill declares its slot', () => {
+    /** The stored entries of the account's group, as desktop state holds them. */
+    const stored = (a: { path: string }, user: string) => desktopStateService.read(a.path, 'kit').serviceCredentials?.accounts[key(user)] ?? []
+    /** Two auto-attached skill slots (erp-api, crm) and one record attached by hand. */
+    async function attachedAgent(skills: ReturnType<typeof skill>[]) {
+      const a = skillAgent(skills)
+      world.metadata = [rec('erp-1', 'ERP', 'erp-api'), rec('crm-1', 'CRM', 'crm'), rec('notes', 'Notes', 'notes-api')]
+      await login('account-b')
+      expect((await service.autoAttachSkills(a.id)).map(v => v.slot)).toEqual(['erp-api', 'crm'])
+      await service.attach(a.id, key('account-b'), 'notes')
+      return a
+    }
+
+    it('marks what it attached with the slot, keeps the mark through later writes, and reads old state as manual', async () => {
+      const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      expect(stored(a, 'account-b')).toEqual([{ ref: 'erp-1', auto: { slot: 'erp-api' } }, { ref: 'crm-1', auto: { slot: 'crm' } }, { ref: 'notes' }])
+      // A full replacement that keeps a ref keeps its entry; the renderer's DTO is unchanged.
+      await service.setAttachments(a.id, key('account-b'), ['notes', 'erp-1'])
+      expect(stored(a, 'account-b')).toEqual([{ ref: 'notes' }, { ref: 'erp-1', auto: { slot: 'erp-api' } }])
+      expect(service.attachments(a.id)[0]).not.toHaveProperty('auto')
+      // State written before provenance existed: every entry is manual, and stays attached.
+      writeFileSync(join(a.path, 'app-data', 'desktop.json'), JSON.stringify({ serviceCredentials: { local: [], accounts: { [key('account-b')]: [{ ref: 'erp-1' }, { ref: 'notes', auto: 'bogus' }] } } }))
+      expect(stored(a, 'account-b')).toEqual([{ ref: 'erp-1' }, { ref: 'notes' }])
+      a.skills = []
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'notes'])
+    })
+
+    it('detaches only an auto entry whose slot no skill declares any more, never one attached by hand', async () => {
+      const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      a.skills = [skill('crm-sync', [{ slot: 'crm' }])]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([{ group: key('account-b'), ref: 'erp-1', slot: 'erp-api' }])
+      expect(group(a, 'account-b')).toEqual(['crm-1', 'notes'])
+      // Nothing more to do: no write at all.
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+    })
+
+    it('keeps an auto entry another remaining skill still declares', async () => {
+      const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('erp-invoices', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      a.skills = [skill('erp-invoices', [{ slot: 'erp-api' }])]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([{ group: key('account-b'), ref: 'crm-1', slot: 'crm' }])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'notes'])
+    })
+
+    it('keeps an auto entry an agent credential slot is judged by', async () => {
+      const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      const erp = service.attachments(a.id).find(v => v.ref === 'erp-1')!.credential!
+      a.credentials = [{ name: 'ERP', type: 'api_token', serviceUri: 'erp-api', optional: false, satisfied: true, envPrefix: 'ERP', expectedKeys: [], presentKeys: [], attachment: { credentialId: erp.id, state: 'ready' } }]
+      a.skills = []
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([{ group: key('account-b'), ref: 'crm-1', slot: 'crm' }])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'notes'])
+    })
+
+    it('leaves everything attached while a turn holds the agent, or while a pinned skill is not on this computer', async () => {
+      const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      a.skills = [catalog('erp-later', [])]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'crm-1', 'notes'])
+      a.skills = []
+      // A turn holds the agent shared; the detach does not wait for it.
+      const lock = turnLock.acquireShared(a.id, 'turn')
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'crm-1', 'notes'])
+      lock.release(); await sleep()
+      expect((await service.detachUnusedAutoAttachments(a.id)).map(v => v.ref)).toEqual(['erp-1', 'crm-1'])
+      expect(group(a, 'account-b')).toEqual(['notes'])
+    })
   })
 })

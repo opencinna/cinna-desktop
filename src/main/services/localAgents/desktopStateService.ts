@@ -1,4 +1,4 @@
-import type { ServiceCredentialAttachments } from '../../../shared/serviceCredentials'
+import type { ServiceCredentialAttachmentRef, ServiceCredentialAttachments } from '../../../shared/serviceCredentials'
 import { runtimeHost } from '../../host/runtimeHost'
 /**
  * `app-data/desktop.json` — the **one** file in an agent folder Cinna Desktop
@@ -531,8 +531,17 @@ export const desktopStateService = {
 }
 
 function coerceServiceCredentials(raw: unknown): ServiceCredentialAttachments {
-  const refs = (value: unknown): { ref: string }[] => Array.isArray(value)
-    ? [...new Set(value.filter(isRecord).map(v => v.ref).filter((v): v is string => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(v)))].map(ref => ({ ref })) : []
+  // First entry of a ref wins; `auto` survives only as a `{ slot }` with a string slot (old state has none: manual).
+  const refs = (value: unknown): ServiceCredentialAttachmentRef[] => {
+    if (!Array.isArray(value)) return []
+    const out: ServiceCredentialAttachmentRef[] = []
+    for (const v of value.filter(isRecord)) {
+      if (typeof v.ref !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v.ref) || out.some(o => o.ref === v.ref)) continue
+      const slot = isRecord(v.auto) && typeof v.auto.slot === 'string' && v.auto.slot !== '' ? v.auto.slot : null
+      out.push(slot === null ? { ref: v.ref } : { ref: v.ref, auto: { slot } })
+    }
+    return out
+  }
   if (!isRecord(raw)) return { local: [], accounts: {} }
   const accounts: ServiceCredentialAttachments['accounts'] = {}
   if (isRecord(raw.accounts)) for (const [key, value] of Object.entries(raw.accounts)) {

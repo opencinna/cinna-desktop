@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
@@ -32,6 +32,14 @@ const listing = vi.hoisted(() => ({ value: null as null | { items: unknown[]; ag
 const refresh = vi.hoisted(() => vi.fn(async () => listing.value))
 /** The skill slots main fills after Add and Update (U11), faked: what it would have attached. */
 const autoAttachSkills = vi.hoisted(() => vi.fn(async (_agentId: string): Promise<unknown[]> => []))
+/** What main detaches after Remove and Update, faked. */
+const detachUnusedAutoAttachments = vi.hoisted(() => vi.fn(async (_agentId: string): Promise<unknown[]> => []))
+/** The registered roots, the agent index and what a scan of each root finds: what the garbage collection reads. */
+const registry = vi.hoisted(() => ({
+  roots: [] as { id: string; path: string }[],
+  rows: [] as { localPath: string | null }[],
+  scans: {} as Record<string, { path: string; skills?: unknown[] }[]>
+}))
 
 vi.mock('../host/runtimeHost', () => ({ runtimeHost: { getPath: () => host.userData } }))
 vi.mock('../logger/logger', () => ({
@@ -61,8 +69,15 @@ vi.mock('./localAgents/localAgentService', async () => {
     }
   }
 })
-vi.mock('./localAgents/scannerService', () => ({ scannerService: { markAllRootsDirty: () => {} } }))
-vi.mock('./serviceCredentials/service', () => ({ serviceCredentialService: { autoAttachSkills } }))
+vi.mock('./localAgents/scannerService', () => ({
+  scannerService: {
+    markAllRootsDirty: () => {},
+    scanRootCached: (_user: string, scanned: { id: string }) => ({ agents: registry.scans[scanned.id] ?? [] })
+  }
+}))
+vi.mock('./serviceCredentials/service', () => ({ serviceCredentialService: { autoAttachSkills, detachUnusedAutoAttachments } }))
+vi.mock('../db/agents', () => ({ agentRepo: { listFolder: (user: string) => (user === USER ? registry.rows : []) } }))
+vi.mock('../db/agentRoots', () => ({ agentRootRepo: { list: (user: string) => (user === USER ? registry.roots : []) } }))
 vi.mock('./localAgents/gitService', () => ({
   gitService: { readShareRemote: async () => ({ ...remote, refusal: null }) }
 }))
@@ -133,6 +148,9 @@ beforeEach(() => {
   located.other = ''
   libraryTrust._reset(join(root, 'team-library-trust.json'))
   listing.value = { items: [], agents: [] }
+  registry.roots = []
+  registry.rows = []
+  registry.scans = {}
   cinnaFetch.mockReset()
   cinnaFetch.mockResolvedValue({})
   cinnaFetchBytes.mockReset()
@@ -346,9 +364,13 @@ describe('Update and Remove', () => {
     serve({ 2: v2 })
     autoAttachSkills.mockClear()
     autoAttachSkills.mockImplementationOnce(() => new Promise(() => {}))
+    detachUnusedAutoAttachments.mockClear()
     // Answers without waiting for the slots to be filled (provision-local may take its timeout).
     expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
     await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(1))
+    // A later version can drop a provider: what was attached for it is detached first.
+    expect(detachUnusedAutoAttachments).toHaveBeenCalledWith(AGENT_ID)
+    expect(detachUnusedAutoAttachments.mock.invocationCallOrder[0]).toBeLessThan(autoAttachSkills.mock.invocationCallOrder[0])
     expect(manifest().catalog_skills).toEqual([{ ...pinOf(2, v2) }])
     await vi.waitFor(() => expect(posts()).toHaveLength(1))
     expect((posts()[0][2] as { body: unknown }).body).toEqual({
@@ -364,7 +386,16 @@ describe('Update and Remove', () => {
   it('drops the pin and tells core this agent no longer holds it', async () => {
     const v1 = skillTgz('erp-lookup')
     writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    // What auto-attach put there for the skill's slots goes, in the background, once the pin is gone.
+    detachUnusedAutoAttachments.mockClear()
+    let pinsWhenDetached: unknown = null
+    detachUnusedAutoAttachments.mockImplementationOnce(async () => {
+      pinsWhenDetached = manifest().catalog_skills
+      return []
+    })
     expect(await catalogSkillService.remove(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 1 })
+    await vi.waitFor(() => expect(detachUnusedAutoAttachments).toHaveBeenCalledWith(AGENT_ID))
+    expect(pinsWhenDetached).toEqual([])
     expect(manifest().catalog_skills).toEqual([])
     await vi.waitFor(() => expect(deletes()).toHaveLength(1))
     expect(deletes()[0].slice(0, 2)).toEqual([
@@ -551,6 +582,131 @@ describe('the cache', () => {
     expect(catalogSkillCache.instanceKey('https://Cinna.Example.com:8443/')).toBe('https-cinna.example.com-8443')
     expect(catalogSkillCache.instanceKey('http://localhost:8000')).toBe('http-localhost-8000')
     expect(catalogSkillCache.revisionDir('x', { ...ref(skillTgz('a')), packageUuid: '../../etc' })).toBeNull()
+  })
+})
+
+describe('garbage collection of revisions no agent pins', () => {
+  const OTHER = '9a9a9a9a-1111-4222-8333-444455556666'
+  const UNPINNED = '7b7b7b7b-1111-4222-8333-444455556666'
+  const archive = skillTgz('erp-lookup')
+  const at = (...parts: string[]): string => join(cacheRoot(), ...parts)
+  const pin = (uuid: string, revision: number) => ({ package_id: 'p', package_uuid: uuid.toUpperCase(), name: 'erp-lookup', revision_number: revision, archive_sha256: sha256Of(archive) })
+  let workshop: string
+
+  /** A real cached revision: read-only folders, as an install leaves them. */
+  async function cache(instance: string, uuid: string, revision: number): Promise<void> {
+    const { readSkillArchive } = await import('../kit/skillArchive')
+    catalogSkillCache.install(instance, { packageUuid: uuid, revisionNumber: revision, name: 'erp-lookup', archiveSha256: sha256Of(archive) }, readSkillArchive(archive, 'erp-lookup'))
+  }
+  /** A kit agent folder pinning `pins` that the scan finds, indexed unless told otherwise. */
+  function agent(name: string, pins: unknown[], indexed = true): string {
+    const dir = join(workshop, 'agents', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'cinna-agent.json'), JSON.stringify({ id: name, slug: name, catalog_skills: pins }))
+    if (indexed) registry.rows.push({ localPath: dir })
+    ;(registry.scans['root-1'] ??= []).push({ path: dir, skills: [] })
+    return dir
+  }
+
+  beforeEach(() => {
+    workshop = join(root, 'Workshop')
+    registry.roots = [{ id: 'root-1', path: workshop }]
+  })
+
+  it('keeps what any agent pins, on every instance, and removes the rest with the folders left empty', async () => {
+    // Two agents, one indexed and one on disk the index has not seen yet; a malformed pin keeps nothing.
+    agent('invoices', [pin(UUID, 2), { package_uuid: UNPINNED, revision_number: 'one' }])
+    agent('payroll', [pin(OTHER, 5)], false)
+    await cache('https-a.test', UUID, 1)
+    await cache('https-a.test', UUID, 2)
+    await cache('https-a.test', UUID, 3)
+    await cache('https-b.test', UUID, 2)
+    await cache('https-b.test', OTHER, 5)
+    await cache('https-b.test', OTHER, 6)
+    await cache('https-c.test', UNPINNED, 1)
+    // A staging folder of an install still running stays; a stale one goes. A dot-name is left alone.
+    mkdirSync(at('https-a.test', UUID, '3.tmp-fresh'))
+    mkdirSync(at('https-a.test', UUID, '1.old-stale'))
+    const old = new Date(Date.now() - 60 * 60 * 1000)
+    utimesSync(at('https-a.test', UUID, '1.old-stale'), old, old)
+    writeFileSync(at('.DS_Store'), '')
+
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 5 })
+    expect(readdirSync(at('https-a.test', UUID)).sort()).toEqual(['2', '3.tmp-fresh'])
+    expect(readdirSync(at('https-b.test', UUID))).toEqual(['2'])
+    expect(readdirSync(at('https-b.test', OTHER))).toEqual(['5'])
+    // The instance holding only an unpinned revision is gone, parents and all.
+    expect(existsSync(at('https-c.test'))).toBe(false)
+    expect(readdirSync(cacheRoot()).sort()).toEqual(['.DS_Store', 'https-a.test', 'https-b.test'])
+    const kept = { packageUuid: UUID, revisionNumber: 2, name: 'erp-lookup', archiveSha256: sha256Of(archive) }
+    expect(catalogSkillCache.resolve(kept)).toMatchObject({ state: 'ready' })
+  })
+
+  it('reads no agent’s pins when nothing is cached: no cache folder, or only dot-names in it', () => {
+    // An indexed agent no scan reaches: reading the pins would answer not ok.
+    registry.rows.push({ localPath: join(workshop, 'agents', 'unmounted') })
+    expect(existsSync(cacheRoot())).toBe(false)
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 0 })
+    mkdirSync(cacheRoot(), { recursive: true })
+    writeFileSync(at('.DS_Store'), '')
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 0 })
+    // Something cached: now the pins are read, and the unreadable agent stops the clean-up.
+    mkdirSync(at('https-a.test'))
+    expect(catalogSkillService.collectGarbage()).toMatchObject({ ok: false })
+  })
+
+  it('removes nothing when an agent’s pins cannot be read: a manifest unparsable or gone, a drive not mounted', async () => {
+    agent('invoices', [pin(UUID, 2)])
+    const broken = agent('broken', [])
+    await cache('https-a.test', UUID, 1)
+    const before = (): string[] => readdirSync(at('https-a.test', UUID))
+
+    writeFileSync(join(broken, 'cinna-agent.json'), '{ not json')
+    expect(catalogSkillService.collectGarbage()).toMatchObject({ ok: false })
+    expect(before()).toEqual(['1'])
+
+    rmSync(join(broken, 'cinna-agent.json'))
+    expect(catalogSkillService.collectGarbage()).toMatchObject({ ok: false })
+    expect(before()).toEqual(['1'])
+
+    // An indexed agent the scan does not reach: its root is not readable (an unmounted drive).
+    registry.scans['root-1'] = registry.scans['root-1'].filter((scanned) => scanned.path !== broken)
+    expect(catalogSkillService.collectGarbage()).toMatchObject({ ok: false })
+    expect(before()).toEqual(['1'])
+
+    registry.rows = registry.rows.filter((row) => row.localPath !== broken)
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 1 })
+  })
+
+  it('reads no pins from a bare folder, and counts a kit folder the index has not seen yet', async () => {
+    const bare = join(root, 'Elsewhere', 'notes')
+    registry.roots.push({ id: 'root-ext', path: join(root, 'Elsewhere') })
+    registry.rows.push({ localPath: bare })
+    registry.scans['root-ext'] = [{ path: bare }]
+    agent('payroll', [pin(UUID, 2)], false)
+    await cache('https-a.test', UUID, 1)
+    await cache('https-a.test', UUID, 2)
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 1 })
+    expect(readdirSync(at('https-a.test', UUID))).toEqual(['2'])
+  })
+
+  it('removes a link anywhere in the cache as a link, never what it points at', async () => {
+    agent('invoices', [pin(UUID, 2)])
+    await cache('https-a.test', UUID, 2)
+    const elsewhere = join(root, 'elsewhere')
+    mkdirSync(join(elsewhere, UUID, '1'), { recursive: true })
+    writeFileSync(join(elsewhere, UUID, '1', 'keep.txt'), 'mine')
+    // A linked <instance>, a linked <uuid>, and a linked revision folder whose name is even pinned.
+    symlinkSync(elsewhere, at('https-linked.test'), 'dir')
+    symlinkSync(join(elsewhere, UUID), at('https-a.test', OTHER), 'dir')
+    mkdirSync(at('https-b.test', UUID), { recursive: true })
+    symlinkSync(join(elsewhere, UUID, '1'), at('https-b.test', UUID, '2'), 'dir')
+
+    expect(catalogSkillService.collectGarbage()).toEqual({ ok: true, removed: 3 })
+    expect(readFileSync(join(elsewhere, UUID, '1', 'keep.txt'), 'utf8')).toBe('mine')
+    expect(readdirSync(cacheRoot()).sort()).toEqual(['https-a.test'])
+    expect(readdirSync(at('https-a.test'))).toEqual([UUID])
+    expect(readdirSync(at('https-a.test', UUID))).toEqual(['2'])
   })
 })
 

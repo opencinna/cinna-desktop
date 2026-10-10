@@ -28,7 +28,9 @@
  */
 
 import { createHash } from 'node:crypto'
-import { getProfileScopeUserId } from '../auth/scope'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { agentRepo } from '../db/agents'
+import { agentRootRepo } from '../db/agentRoots'
 import { publishEvent } from '../host/events'
 import { CinnaApiError, KitError, LocalAgentError } from '../errors'
 import { CinnaSessionChanged } from '../auth/cinna-session'
@@ -36,7 +38,7 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 import { cinnaFetchBytes } from './cinna-http'
 import { libraryService, type CachedListing } from './libraryService'
-import { cacheRefOf, catalogSkillCache, instanceKey } from './catalogSkillCache'
+import { cacheRefOf, catalogSkillCache, instanceKey, revisionKeyOf } from './catalogSkillCache'
 import { catalogLocalInstalls } from './catalogLocalInstalls'
 import { localAgentService } from './localAgents/localAgentService'
 import { scannerService } from './localAgents/scannerService'
@@ -389,6 +391,50 @@ async function skillCredentials(agentId: string): Promise<AutoAttachedCredential
   }
 }
 
+/**
+ * Detach what auto-attach put on the agent for skill slots nothing declares any more (a removed skill,
+ * or a version that dropped a provider). Loaded on use like {@link skillCredentials}; in the background,
+ * never failing the verb. Runs after `settle`, and the credential service re-reads the agent from its
+ * folder, so it sees the pins as just written.
+ */
+async function detachUnusedCredentials(agentId: string): Promise<void> {
+  try {
+    const { serviceCredentialService } = await import('./serviceCredentials/service')
+    await serviceCredentialService.detachUnusedAutoAttachments(agentId)
+  } catch (err) {
+    logger.warn('unused skill credentials could not be detached', { agentId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * The `uuid/revision` of every pin a registered kit agent holds, or why that cannot be known. Every
+ * root is scanned as the agents list scans it (cached), so a folder on disk the index has not seen yet
+ * counts too; only a kit agent's DTO carries `skills`, and a bare folder pins nothing. An indexed agent
+ * the scan did not reach (its root is not readable: a drive not mounted), or a kit agent whose manifest
+ * cannot be read (gone, unparsable), makes the answer unknown.
+ */
+function pinnedRevisions(): { ok: true; keep: Set<string> } | { ok: false; reason: string } {
+  const userId = getSettingsScopeUserId()
+  const scanned = agentRootRepo.list(userId).flatMap((root) => scannerService.scanRootCached(userId, root).agents)
+  const reached = new Set(scanned.map((agent) => agent.path))
+  if (agentRepo.listFolder(userId).some((row) => row.localPath !== null && !reached.has(row.localPath))) {
+    return { ok: false, reason: 'an agent folder could not be read' }
+  }
+  const keep = new Set<string>()
+  for (const agent of scanned) {
+    if (agent.skills === undefined) continue
+    try {
+      for (const pin of pinsOf(readManifest(manifestPath(agent.path)))) {
+        const key = revisionKeyOf(pin)
+        if (key) keep.add(key)
+      }
+    } catch (err) {
+      return { ok: false, reason: `an agent's manifest could not be read: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+  return { ok: true, keep }
+}
+
 /** Run a verb, turning a lost session into a refusal and logging anything unexpected. */
 async function guarded<T extends { ok: boolean }>(verb: string, run: () => Promise<T | Refused>): Promise<T | Refused> {
   try {
@@ -487,12 +533,17 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, latest, written.manifestId)
       logger.info('catalog skill updated', { agentId, name, revision: latest.revision_number })
-      void skillCredentials(agentId)
+      // A later version can drop a provider: what was attached for it goes, then the new slots fill.
+      void detachUnusedCredentials(agentId).then(() => skillCredentials(agentId))
       return { ok: true as const, name, revisionNumber: latest.revision_number }
     })
   },
 
-  /** Drop the pin `name`. The cached revision stays for other agents (cleaned up later). */
+  /**
+   * Drop the pin `name`, and detach in the background what auto-attach put there for slots no skill
+   * declares any more. The cached revision stays: a running turn may still read it, and the next
+   * app start's {@link collectGarbage} removes it if nothing pins it.
+   */
   async remove(userId: string, agentId: string, name: string): Promise<CatalogSkillOutcome> {
     return guarded('remove', async () => {
       const kit = locateKit(userId, agentId)
@@ -514,6 +565,7 @@ export const catalogSkillService = {
         void catalogLocalInstalls.reportSkillRemoved(profile, pin.package_uuid, written.manifestId)
       }
       logger.info('catalog skill removed', { agentId, name })
+      void detachUnusedCredentials(agentId)
       return { ok: true as const, name, revisionNumber: typeof pin?.revision_number === 'number' ? pin.revision_number : 0 }
     })
   },
@@ -576,6 +628,28 @@ export const catalogSkillService = {
    */
   ensurePinnedInBackground(userId: string, agentId: string): void {
     void catalogSkillService.ensurePinned(userId, agentId).then(() => skillCredentials(agentId)).catch(() => undefined)
+  },
+
+  /**
+   * Remove every cached revision no registered kit agent pins (the profiles share one agents list,
+   * so one keep set covers them all). Skipped, and logged, when any agent's pins cannot be read:
+   * deleting a revision someone still pins is worse than keeping a stale one. Run once per app
+   * start, before any turn can hold a path into the cache; synchronous. **Never throws.**
+   */
+  collectGarbage(): { ok: true; removed: number } | { ok: false; reason: string } {
+    try {
+      // Nothing cached: no reason to read every agent's pins on the way to the window.
+      if (catalogSkillCache.isEmpty()) return { ok: true, removed: 0 }
+      const pinned = pinnedRevisions()
+      if (!pinned.ok) {
+        logger.warn('catalog skill cache not cleaned: some agent pins could not be read', { reason: pinned.reason })
+        return pinned
+      }
+      return { ok: true, ...catalogSkillCache.collectGarbage(pinned.keep) }
+    } catch (err) {
+      logger.warn('catalog skill cache could not be cleaned', { error: err instanceof Error ? err.message : String(err) })
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) }
+    }
   },
 
   /** Tests: forget downloads in flight. */

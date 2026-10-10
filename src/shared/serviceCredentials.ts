@@ -26,9 +26,18 @@ export interface ServiceCredentialInput {
   id?: string; name: string; type: LocalCredentialType; serviceUri?: string; notes?: string
   values?: Record<string, unknown>
 }
+/**
+ * One attached record. `auto` marks one auto-attach put there for a skill slot
+ * (the slot's Service URI), so it can be detached when no skill declares the
+ * slot any more; an entry without it was attached by hand. Main only.
+ */
+export interface ServiceCredentialAttachmentRef {
+  ref: string
+  auto?: { slot: string }
+}
 export interface ServiceCredentialAttachments {
-  local: { ref: string }[]
-  accounts: Record<string, { ref: string }[]>
+  local: ServiceCredentialAttachmentRef[]
+  accounts: Record<string, ServiceCredentialAttachmentRef[]>
 }
 export interface ServiceCredentialAttachmentDto {
   ref: string; origin: 'local' | 'cloud'

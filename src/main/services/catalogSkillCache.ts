@@ -19,8 +19,10 @@
  *   profile — but only a marker whose digest equals the pin's counts.
  *
  * The last failed download of each pin (revision and digest) is kept in memory for the
- * Skills section's issue; a restart forgets it. Garbage collection of
- * revisions no agent pins any more is later work.
+ * Skills section's issue; a restart forgets it. Revisions no agent pins any
+ * more are removed once per app start ({@link catalogSkillCache.collectGarbage},
+ * driven by `catalogSkillService.collectGarbage`), never right after a Remove
+ * or an Update: a running turn may still read the old revision.
  *
  * Core: no Electron. Paths come from `runtimeHost`.
  */
@@ -75,6 +77,20 @@ export function cacheRefOf(ref: CatalogSkillRef): { uuid: string; revision: stri
   if (!UUID_RE.test(uuid) || !SHA256_RE.test(sha) || !isCatalogPinName(ref.name)) return null
   if (!Number.isInteger(ref.revisionNumber) || (ref.revisionNumber as number) < 1) return null
   return { uuid, revision: String(ref.revisionNumber), name: ref.name, sha }
+}
+
+/**
+ * The `uuid/revision` key {@link catalogSkillCache.collectGarbage} keeps a
+ * revision by, from a pin as written, or null when it names no usable one.
+ * Only the package and the revision: a pin with a digest that does not match
+ * still keeps the folder, which the next install moves aside if it must.
+ */
+export function revisionKeyOf(pin: unknown): string | null {
+  if (!pin || typeof pin !== 'object') return null
+  const { package_uuid: rawUuid, revision_number: revision } = pin as Record<string, unknown>
+  const uuid = typeof rawUuid === 'string' ? rawUuid.trim().toLowerCase() : ''
+  if (!UUID_RE.test(uuid) || !Number.isInteger(revision) || (revision as number) < 1) return null
+  return `${uuid}/${revision as number}`
 }
 
 let rootOverride: string | null = null
@@ -195,6 +211,45 @@ export function removeTree(path: string): void {
     if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       logger.warn('could not remove a catalog skill folder', { path, error: String(err) })
     }
+  }
+}
+
+/** Whether a staging folder (`<revision>.tmp-…`, `.old-…`) is old enough to belong to no install still running. */
+function staleStaging(path: string, now: number): boolean {
+  try {
+    return now - lstatSync(path).mtimeMs >= STALE_STAGING_MS
+  } catch {
+    return false
+  }
+}
+
+/** The real folders in `dir` to walk; a link is removed as a link, and `.`-names are left alone. */
+function realChildren(dir: string, onRemoved: () => void): string[] {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.isSymbolicLink()) {
+      removeTree(join(dir, entry.name))
+      onRemoved()
+    } else if (entry.isDirectory()) {
+      out.push(entry.name)
+    }
+  }
+  return out
+}
+
+/** Remove `dir` when nothing is left in it. */
+function removeIfEmpty(dir: string): void {
+  try {
+    if (readdirSync(dir).length === 0) removeTree(dir)
+  } catch {
+    /* gone already, or unreadable: left for the next run */
   }
 }
 
@@ -344,6 +399,70 @@ export const catalogSkillCache = {
   clearFailure(ref: CatalogSkillRef): void {
     const safe = cacheRefOf(ref)
     if (safe) failures.delete(failureKey(safe))
+  },
+
+  /**
+   * Whether there is nothing for {@link collectGarbage} to look at: no cache
+   * folder, or none but `.`-names in it. Lets a start without a cache skip
+   * reading every agent's pins.
+   */
+  isEmpty(): boolean {
+    const root = cacheRoot()
+    if (root === null || !isRealDir(root)) return true
+    try {
+      return readdirSync(root).every((name) => name.startsWith('.'))
+    } catch {
+      return true
+    }
+  },
+
+  /**
+   * Remove every cached revision no agent pins: each
+   * `<instance>/<uuid>/<revision>` whose `uuid/revision` (lowercase) is not in
+   * `keep`, on every instance — a lookup falls back across instances, so a
+   * pin keeps its revision on all of them — then the `<uuid>` and
+   * `<instance>` folders left empty. Never follows a link: one anywhere in the
+   * tree is removed as a link. A staging folder is removed only once it is
+   * stale; `.`-names are left alone. Synchronous, so nothing in this process
+   * can install or read in between. Answers how many entries went.
+   */
+  collectGarbage(keep: ReadonlySet<string>): { removed: number } {
+    const root = cacheRoot()
+    let removed = 0
+    if (root === null || !isRealDir(root)) return { removed }
+    const counted = (): void => {
+      removed++
+    }
+    const now = Date.now()
+    for (const instance of realChildren(root, counted)) {
+      const instanceDir = join(root, instance)
+      for (const uuid of realChildren(instanceDir, counted)) {
+        const uuidDir = join(instanceDir, uuid)
+        let entries: Dirent[]
+        try {
+          entries = readdirSync(uuidDir, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of entries) {
+          if (entry.name.startsWith('.')) continue
+          const path = join(uuidDir, entry.name)
+          if (!entry.isSymbolicLink()) {
+            if (/\.(tmp|old)-/.test(entry.name)) {
+              if (!staleStaging(path, now)) continue
+            } else if (keep.has(`${uuid.toLowerCase()}/${entry.name.toLowerCase()}`)) {
+              continue
+            }
+          }
+          removeTree(path)
+          removed++
+        }
+        removeIfEmpty(uuidDir)
+      }
+      removeIfEmpty(instanceDir)
+    }
+    if (removed > 0) logger.info('unpinned catalog skill revisions removed', { removed })
+    return { removed }
   },
 
   /** Tests: put the cache under `root` (null: back to userData) and forget failures. */

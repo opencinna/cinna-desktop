@@ -41,9 +41,9 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 
 ### Updating, re-fetching and removing a catalog skill
 
-1. **Update** (an arrow icon, titled "Update *title* to Version N (label)") appears when the catalog listing has a newer revision than the pin and the agent is changeable. It downloads the latest revision, then moves the pin to it, keeping the pin's name and any keys it does not know. The same update is offered in the Inbox as **Update available for *skill* in *agent*** ([The Inbox](../../jobs/tasks/inbox.md))
+1. **Update** (an arrow icon, titled "Update *title* to Version N (label)") appears when the catalog listing has a newer revision than the pin and the agent is changeable. It downloads the latest revision, then moves the pin to it, keeping the pin's name and any keys it does not know. In the background, credentials that were attached without asking for a slot the new version no longer declares are detached, then the new version's slots are filled. The same update is offered in the Inbox as **Update available for *skill* in *agent*** ([The Inbox](../../jobs/tasks/inbox.md))
 2. **Try again** (a circular arrow, "Download *title* again") appears whenever the pinned revision is not on this computer. It fetches every missing pin of the agent; the row shows its own failure, if any
-3. **Remove** (trash) opens a confirm inside the card: "Remove *title* from this agent? It stays in the catalog; you can add it again. *title* stops being available to this agent in new chats." On a shared agent the person may change, it adds "Share changes to pass this on to the team." **Remove skill** drops the pin and reports the removal to core; the cached revision stays for other agents
+3. **Remove** (trash) opens a confirm inside the card: "Remove *title* from this agent? It stays in the catalog; you can add it again. *title* stops being available to this agent in new chats." On a shared agent the person may change, it adds "Share changes to pass this on to the team." **Remove skill** drops the pin and reports the removal to core, and in the background detaches what was attached without asking for slots no remaining skill declares ([Service Credentials](../service_credentials/README.md#detaching-what-it-attached)). The cached revision stays: a turn may still be reading it, and the next app start removes it if no agent pins it
 4. On an agent shared with the user to use only, Update and Remove are not shown; Try again is. While the agent's sharing status is still being read, Update and Remove are hidden too
 5. A verb in flight spins its icon and disables the other rows' actions; a refusal is the card's last line, and is not repeated when it is the very sentence the row's issue already says
 
@@ -105,6 +105,8 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 - **One download per pin at a time**, keyed by server, package, revision and digest, so two pins of one revision with different digests are two checks and one never answers for the other
 - **A failure is a row issue, not a thrown error.** The sentence says what to do where there is something: sign in again, update the team agent first, or simply that it could not be downloaded. Failures are kept in memory per pin and forgotten at restart; the row then reads "Not on this computer yet." again
 - **Nothing fetches on its own.** Add, Update, Try again and the three sharing verbs fetch; opening the page or starting a session does not. A pin that arrives any other way (a hand edit, a `git pull` outside the app) stays "Not on this computer yet." until Try again
+- **A revision no agent pins is removed at the next start, never sooner.** Once per app start, before any profile is active and so before any turn or schedule can hold a path into the cache, every cached revision no registered kit agent pins is deleted, on every server's folder (a lookup falls back across them, so a pin keeps its revision on all), with the package and server folders it leaves empty. Remove and Update never delete: a turn running at that moment may still read the old revision. Pins are read from every registered root as the agents list scans it, so a kit folder the index has not seen yet still keeps its pins; a bare folder pins nothing
+- **When in doubt, nothing is removed.** If any agent's pins cannot be read — a manifest gone or unparsable, an indexed agent whose root the scan does not reach (a drive not mounted) — the whole clean-up is skipped and logged: deleting a revision someone still pins is worse than keeping a stale one. A start with nothing cached reads no agent's pins at all. A staging folder is removed only once it is stale (ten minutes), dot-names are left alone, and a link anywhere in the cache is removed as a link, never followed. A pin whose revision was cleaned away — one that arrived while its agent was unreadable, say — reads "Not on this computer yet." and **Try again** fetches it
 - **Local installs are reported, best effort.** After Add, Update and each fetch, main tells core that this device holds the revision in the agent with that manifest id (`host_manifest_id`); after Remove, that it no longer does. Never awaited, never failing the verb, and skipped for a manifest without an `id`
 
 ### Delivery
@@ -136,8 +138,6 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 
 ### What is not built
 
-- **Cache cleanup.** A revision no agent pins any more stays in the cache; Remove never deletes it
-- **Detaching on Remove.** Removing a catalog skill leaves the credentials attached for its slots, including ones attached without asking: nothing records why an attachment was made
 - **A readiness line for skill slots.** An agent whose only gap is a skill slot shows nothing in the readiness strip (above); the way into its Skills group is the row's **Finish setup**
 - **Any fetch of missing pins** when the page opens or a session starts
 - **Pinning a specific older version** or choosing a version on Add; **deleting a shared skill** from the catalog or changing its access after the first share
@@ -160,7 +160,12 @@ Catalog dialog Add to agent… / row Update · Try again · Remove / Inbox Updat
   → catalog-skills:* IPC → catalogSkillService
       → GET /api/v1/skills/packages/{uuid}/revisions/{n}/download → two digests → safe reader
       → <userData>/catalog-skills/<instance>/<uuid>/<n>/<name>/  → pin written through the manifest guard
-      → background: local-installs report; autoAttachSkills (provision-local, exactly-one attach)
+      → background: local-installs report; Remove / Update: detachUnusedAutoAttachments;
+                    Add / Update: autoAttachSkills (provision-local, exactly-one attach)
+
+App start (hub/core.ts, setImmediate) → catalogSkillService.collectGarbage
+  → every registered kit agent's pins (unreadable agent → skip, keep all)
+  → catalogSkillCache.collectGarbage(keep): unpinned <instance>/<uuid>/<n>/ removed
 
 Row Share → ShareSkillDialog → skill-publish:preview / :publish → skillPublishService
   → preflight → deterministic tar.gz → POST /api/v1/skills/packages/publish
