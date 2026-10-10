@@ -6,14 +6,15 @@ import type { LibraryAgentDto } from '../../../../shared/agentSharing'
 import { isUnsettledClick } from '../../hooks/useSettleGuard'
 import { useCatalogItemDetail } from '../../hooks/useCatalog'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { CATALOG_TEXT, catalogDateLabel, catalogVersionLabel, type CatalogItemKind } from '../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, CATALOG_TEXT, catalogDateLabel, catalogVersionLabel, type CatalogItemKind } from '../../utils/catalogItems'
 import { CatalogCardCredentials } from '../settings/CatalogCardCredentials'
 import { CATALOG_KIND_ICON, CatalogKindBadge } from './CatalogKindBadge'
+import { CatalogSkillAddMenu, type CatalogSkillTarget } from './CatalogSkillAddMenu'
 
 /**
  * The tile, the detail and the action of one catalog item, the same for every
  * kind (ux_rules rule 13): only the action differs — Get / Update / Open for
- * an agent of either kind, nothing yet for a skill.
+ * an agent of either kind, Add to agent… for a skill.
  */
 
 export const PRIMARY =
@@ -64,6 +65,8 @@ export interface CatalogEntryView {
   desktop: LibraryAgentDto | null
   /** Skill: the names of this computer's agents that pin it. */
   usedBy: string[]
+  /** Skill: the user's kit agents, each with why it cannot take the skill, for Add to agent…. */
+  skillTargets: CatalogSkillTarget[]
 }
 
 /** The cloud-agent install's own parts of the dialog's props. */
@@ -73,16 +76,20 @@ export interface CloudInstallActions {
   onOpen: (agentId: string) => void
 }
 
-function InstalledPill({ text }: { text: string }): React.JSX.Element {
+/**
+ * The green fact beside an item's action: Installed, or how many agents have
+ * a skill. `yields` lets it truncate (full text in its tooltip) so a narrow
+ * tile gives way on the pill, never on the button beside it.
+ */
+function InstalledPill({ text, yields = false }: { text: string; yields?: boolean }): React.JSX.Element {
   return (
-    <span className="shrink-0 rounded bg-[var(--color-success)]/12 px-1.5 py-px text-[10px] font-medium text-[var(--color-success)]">
+    <span
+      title={yields ? text : undefined}
+      className={`${yields ? 'min-w-0 truncate' : 'shrink-0'} rounded bg-[var(--color-success)]/12 px-1.5 py-px text-[10px] font-medium text-[var(--color-success)]`}
+    >
       {text}
     </span>
   )
-}
-
-function addedToLabel(count: number): string {
-  return count === 1 ? 'Added to 1 agent' : `Added to ${count} agents`
 }
 
 interface ItemActionProps {
@@ -96,11 +103,11 @@ interface ItemActionProps {
 
 /**
  * Whether {@link CatalogItemAction} renders anything for this item: a tile
- * without one has no footer. A skill only when one of the user's agents has
- * it; a desktop agent only with its team entry and the parent's actions.
+ * without one has no footer. A skill always (Add to agent…); a desktop agent
+ * only with its team entry and the parent's actions.
  */
 export function hasCatalogAction(view: CatalogEntryView, desktop: DesktopAgentActions | undefined): boolean {
-  if (view.kind === 'skill') return view.usedBy.length > 0
+  if (view.kind === 'skill') return true
   if (view.kind === 'desktop_agent') return view.desktop !== null && desktop !== undefined
   return true
 }
@@ -111,15 +118,25 @@ export function hasCatalogAction(view: CatalogEntryView, desktop: DesktopAgentAc
  * beside it while its install is behind; *Installed* only in the moment
  * between the install and its sync, when there is nothing to Open yet. A
  * desktop agent: Get, then Open, with Update while the team has moved past
- * this computer's copy. A skill: no action in this step — only whether one of
- * the user's agents already has it.
+ * this computer's copy. A skill: Add to agent…, with how many of the user's
+ * agents already have it beside it.
  */
 export function CatalogItemAction({ view, install, cloudUpdate, desktop, settled }: ItemActionProps): React.JSX.Element | null {
   const guard = (run: () => void) => (event: React.MouseEvent) => {
     if (!isUnsettledClick(settled, event)) run()
   }
   if (view.kind === 'skill') {
-    return view.usedBy.length > 0 ? <InstalledPill text={addedToLabel(view.usedBy.length)} /> : null
+    return (
+      <>
+        {view.usedBy.length > 0 && <InstalledPill text={CATALOG_SKILL_TEXT.inAgents(view.usedBy.length)} yields />}
+        <CatalogSkillAddMenu
+          skillName={view.name}
+          packageUuid={view.item.uuid}
+          targets={view.skillTargets}
+          settled={settled}
+        />
+      </>
+    )
   }
   if (view.kind === 'desktop_agent') {
     const agent = view.desktop

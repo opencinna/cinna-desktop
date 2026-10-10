@@ -1,9 +1,18 @@
 import { useState } from 'react'
-import { FileText, Plus, Sparkles } from 'lucide-react'
+import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
 import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
+import { useListedShareStatus } from '../../../hooks/useSharing'
+import {
+  catalogSkillOutcomeMessage,
+  useEnsureCatalogSkills,
+  useRemoveCatalogSkill,
+  useUpdateCatalogSkill
+} from '../../../hooks/useCatalogSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
+import { CATALOG_SKILL_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
+import { AnimatedCollapse } from '../../ui/AnimatedCollapse'
 import { MCPProviderCard } from '../../settings/MCPProviderCard'
 import { CredentialStatusGlyph } from '../../settings/CredentialRow'
 import type { CredentialHealth } from '../../settings/credentialPresentation'
@@ -36,8 +45,8 @@ export function useAddonsBadge(
 
 /**
  * Whether a skill counts toward the tab's attention badge: any issue except
- * `not_downloaded`, which every catalog pin carries until downloads exist and
- * which the user cannot act on.
+ * `not_downloaded`, which a catalog pin carries only until its revision is
+ * fetched — transient, and its Try again is on the row itself.
  */
 function needsAttention(skill: LocalAgentSkill): boolean {
   return skill.issues.some((issue) => issue.code !== 'not_downloaded')
@@ -49,6 +58,42 @@ function skillHealth(skill: LocalAgentSkill): CredentialHealth {
   if (error) return { tone: 'error', label: error.message }
   if (skill.issues.length > 0) return { tone: 'warning', label: skill.issues.map((issue) => issue.message).join(' ') }
   return { tone: 'ok', label: 'Every engine of this agent gets this skill' }
+}
+
+/** A catalog row's verb in flight. */
+type CatalogVerb = 'update' | 'ensure' | 'remove'
+
+/**
+ * What a catalog row can do, and its state, owned by the tab so a verb in
+ * flight outlives a re-render of the row. Absent on an authored skill.
+ */
+interface CatalogRowActions {
+  /**
+   * Update and Remove are not the user's (catalog U9): the agent is shared
+   * with them to use only, its access is not known, or not read yet.
+   */
+  readOnly: boolean
+  /** The agent is shared and the user may change it: a Remove passes on only once they share changes. */
+  sharedEditable: boolean
+  busy: CatalogVerb | null
+  /** Another row's verb is running. */
+  locked: boolean
+  error: string | null
+  confirming: boolean
+  onUpdate: () => void
+  onEnsure: () => void
+  onAskRemove: () => void
+  onCancelRemove: () => void
+  onRemove: () => void
+}
+
+/** Whether a catalog row's revision is not on this computer, so Try again can fetch it. */
+function notHere(skill: LocalAgentSkill): boolean {
+  return skill.issues.some((issue) => issue.code === 'not_downloaded' || issue.code === 'download_failed')
+}
+
+function BusyIcon({ busy, children }: { busy: boolean; children: React.ReactNode }): React.JSX.Element {
+  return busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <>{children}</>
 }
 
 /** Credential slot chips drawn before the rest fold into `+N`. */
@@ -69,24 +114,38 @@ const MAX_SLOT_CHIPS = 2
  * The slots sit on their own neutral "Needs" line, never beside the status
  * glyph: a ✓ followed by code is how a credential row says *connected*, and
  * nothing here checks the slots.
+ *
+ * A catalog row's actions are icons on the title line (rule 13): Update when
+ * the catalog has a newer version, Try again when the pinned revision is not
+ * on this computer, and Remove, whose confirm opens inside the card. Update
+ * and Remove are not shown on an agent shared with the user to use only. A
+ * verb in flight spins its icon; a refusal is the card's last line (rule 6).
  */
 function SkillRow({
   skill,
   revealError,
-  onReveal
+  onReveal,
+  catalogActions
 }: {
   skill: LocalAgentSkill
   revealError: string | null
   onReveal: () => void
+  catalogActions?: CatalogRowActions
 }): React.JSX.Element {
   const catalog = skill.source === 'catalog'
+  // One name per skill (rule 13): a catalog row goes by its catalog title,
+  // as the catalog and the Inbox show it; the folder name is the code.
+  const title = catalog && skill.title ? skill.title : skill.name
   const pinned = !catalog
     ? null
-    : skill.version
-      ? `Version ${skill.version}`
-      : skill.revisionNumber
-        ? `Revision ${skill.revisionNumber}`
+    : typeof skill.revisionNumber === 'number'
+      ? catalogVersionLabel(skill.revisionNumber, skill.version)
+      : skill.version
+        ? `Version ${skill.version}`
         : null
+  // Try again's failure is often the very sentence the amber issue above says.
+  const actionError =
+    catalogActions?.error && !skill.issues.some((issue) => issue.message === catalogActions.error) ? catalogActions.error : null
   const hasFile = !skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
   const shown = skill.credentials.slice(0, MAX_SLOT_CHIPS)
   const hidden = skill.credentials.length - shown.length
@@ -98,7 +157,12 @@ function SkillRow({
       <div className="flex min-h-12 items-center gap-2 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Sparkles size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />
-          <span title={skill.name} className="min-w-0 shrink truncate text-[14px] font-medium">{skill.name}</span>
+          <span
+            title={title === skill.name ? skill.name : `${title} — ${skill.name}`}
+            className="min-w-0 shrink truncate text-[14px] font-medium"
+          >
+            {title}
+          </span>
           {pinned && (
             <span title={pinned} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
               {pinned}
@@ -121,6 +185,45 @@ function SkillRow({
           >
             <FileText size={14} />
           </SettingsIconButton>
+        )}
+        {catalog && catalogActions && (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {skill.updatable && !catalogActions.readOnly && typeof skill.latestRevision === 'number' && (
+              <SettingsIconButton
+                onClick={catalogActions.onUpdate}
+                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                title={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
+                aria-label={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
+              >
+                <BusyIcon busy={catalogActions.busy === 'update'}>
+                  <ArrowUpCircle size={14} />
+                </BusyIcon>
+              </SettingsIconButton>
+            )}
+            {notHere(skill) && (
+              <SettingsIconButton
+                onClick={catalogActions.onEnsure}
+                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                title={CATALOG_SKILL_TEXT.tryAgain(title)}
+                aria-label={CATALOG_SKILL_TEXT.tryAgain(title)}
+              >
+                <BusyIcon busy={catalogActions.busy === 'ensure'}>
+                  <RotateCw size={14} />
+                </BusyIcon>
+              </SettingsIconButton>
+            )}
+            {!catalogActions.readOnly && (
+              <SettingsIconButton
+                danger
+                onClick={catalogActions.onAskRemove}
+                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                title={CATALOG_SKILL_TEXT.remove(title)}
+                aria-label={CATALOG_SKILL_TEXT.remove(title)}
+              >
+                <Trash2 size={14} />
+              </SettingsIconButton>
+            )}
+          </div>
         )}
       </div>
       {skill.description && (
@@ -167,9 +270,31 @@ function SkillRow({
           ))}
         </ul>
       )}
-      {revealError && (
+      {catalogActions && (
+        <AnimatedCollapse open={catalogActions.confirming}>
+          <div
+            role="group"
+            aria-label={CATALOG_SKILL_TEXT.remove(title)}
+            className="border-t border-[var(--color-border)] px-4 py-3"
+          >
+            <p className="mb-3 text-[13px]">
+              {CATALOG_SKILL_TEXT.removeConfirm(title)}
+              {catalogActions.sharedEditable && ` ${CATALOG_SKILL_TEXT.removeShareHint}`}
+            </p>
+            <div className="flex gap-2">
+              <SettingsButton disabled={catalogActions.busy === 'remove'} onClick={catalogActions.onRemove}>
+                {catalogActions.busy === 'remove' ? CATALOG_SKILL_TEXT.removing : CATALOG_SKILL_TEXT.removeButton}
+              </SettingsButton>
+              <SettingsButton disabled={catalogActions.busy === 'remove'} onClick={catalogActions.onCancelRemove}>
+                {CATALOG_SKILL_TEXT.cancel}
+              </SettingsButton>
+            </div>
+          </div>
+        </AnimatedCollapse>
+      )}
+      {(revealError || actionError) && (
         <p role="alert" className="border-t border-[var(--color-border)] px-4 py-2 text-[13px] text-[var(--color-danger)]">
-          {revealError}
+          {revealError || actionError}
         </p>
       )}
     </div>
@@ -196,6 +321,74 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
   const [error, setError] = useState('')
   // A failed reveal is shown in the card of the skill it was for (rule 6).
   const [revealError, setRevealError] = useState<{ skill: string; message: string } | null>(null)
+  // Catalog rows: owned here, so a verb in flight outlives the row's re-render
+  // when the rescan it causes lands (rule 5).
+  const updateSkill = useUpdateCatalogSkill()
+  const ensureSkills = useEnsureCatalogSkills()
+  const removeSkill = useRemoveCatalogSkill()
+  const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb } | null>(null)
+  const [skillError, setSkillError] = useState<{ name: string; message: string } | null>(null)
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  // As main's `changeableFromLink`: while the share status is not read yet,
+  // and on a Cinna team agent without edit or maintain (or whose access the
+  // listing does not know), Update and Remove are not offered.
+  const shareStatus = useListedShareStatus(agent.id)
+  const readOnly =
+    shareStatus === undefined ||
+    (shareStatus !== null &&
+      shareStatus.remote.kind === 'cinna' &&
+      shareStatus.remote.access !== 'edit' &&
+      shareStatus.remote.access !== 'maintain')
+  const sharedEditable = !readOnly && shareStatus != null
+
+  const runSkillVerb = (
+    name: string,
+    verb: CatalogVerb,
+    run: () => Promise<{ ok: true } | { ok: false; message: string }>,
+    fallback: string
+  ): void => {
+    if (skillBusy) return
+    setSkillError(null)
+    setSkillBusy({ name, verb })
+    run()
+      .then((result) => {
+        if (!result.ok) setSkillError({ name, message: catalogSkillOutcomeMessage(result, fallback) })
+        else if (verb === 'remove') setConfirmingRemove(null)
+      })
+      .catch((err) => setSkillError({ name, message: unwrapIpcError(err, fallback) }))
+      .finally(() => setSkillBusy(null))
+  }
+
+  const catalogActionsFor = (skill: LocalAgentSkill): CatalogRowActions => ({
+    readOnly,
+    sharedEditable,
+    busy: skillBusy?.name === skill.name ? skillBusy.verb : null,
+    locked: skillBusy !== null && skillBusy.name !== skill.name,
+    error: skillError?.name === skill.name ? skillError.message : null,
+    confirming: confirmingRemove === skill.name,
+    onUpdate: () =>
+      runSkillVerb(skill.name, 'update', () => updateSkill.mutateAsync({ agentId: agent.id, name: skill.name }), CATALOG_SKILL_TEXT.updateFailed),
+    onEnsure: () =>
+      runSkillVerb(
+        skill.name,
+        'ensure',
+        async () => {
+          const result = await ensureSkills.mutateAsync({ agentId: agent.id })
+          if (!result.ok) return result
+          // One fetch covers every pin; this row's answer is its own failure, if any.
+          const failed = result.failed.find((failure) => failure.name === skill.name)
+          return failed ? { ok: false as const, message: failed.message } : { ok: true as const }
+        },
+        CATALOG_SKILL_TEXT.tryAgainFailed
+      ),
+    onAskRemove: () => {
+      setSkillError(null)
+      setConfirmingRemove(skill.name)
+    },
+    onCancelRemove: () => setConfirmingRemove(null),
+    onRemove: () =>
+      runSkillVerb(skill.name, 'remove', () => removeSkill.mutateAsync({ agentId: agent.id, name: skill.name }), CATALOG_SKILL_TEXT.removeFailed)
+  })
 
   // In attach order; a link whose connector is gone is never drawn (the
   // delete cascades, and the provider list may simply not have caught up).
@@ -249,7 +442,7 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
               <p>A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for.</p>
               <p className="mt-2">Every session of this agent can use the skills listed here as working. Claude and OpenCode load them as skills; Codex is told where each one’s SKILL.md is.</p>
               <p className="mt-2">A skill with an error is left out of every session until its SKILL.md is fixed.</p>
-              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna cannot fetch catalog skills yet, so no session gets one.</p>
+              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one from the catalog.</p>
             </SettingsInfoTip>
           }
         >
@@ -263,6 +456,7 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
                   <SkillRow
                     skill={skill}
                     revealError={revealError?.skill === skill.name ? revealError.message : null}
+                    catalogActions={skill.source === 'catalog' ? catalogActionsFor(skill) : undefined}
                     onReveal={() => {
                       setRevealError(null)
                       const missing = skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')

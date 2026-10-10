@@ -14,6 +14,7 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { libraryService, type CachedListing } from './libraryService'
 import { desktopStateService } from './localAgents/desktopStateService'
 import type { LocalAgentDto } from '../../shared/localAgents'
+import type { UpdateAvailableInboxItem } from '../../shared/inbox'
 
 /** The active profile's cached listing, or null. Never throws. */
 export function activeListing(profile: string = getProfileScopeUserId()): CachedListing | null {
@@ -55,8 +56,8 @@ export function changeableFromLink(dir: string, listing: CachedListing | null): 
 }
 
 /**
- * `latestRevision` from the active profile's cached listing on every catalog
- * row, and `updatable` when it is past the pin and the person may change the
+ * `latestRevision` (with its `latestVersion` label) and the skill's catalog
+ * `title` from the active profile's cached listing on every catalog row, and `updatable` when it is past the pin and the person may change the
  * agent. An agent without catalog rows comes back as it was. Never throws.
  */
 export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
@@ -65,22 +66,73 @@ export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
   try {
     const listing = activeListing()
     const latest = new Map<string, number>()
+    const latestLabel = new Map<string, string | null>()
+    const titles = new Map<string, string>()
     for (const item of listing?.items ?? []) {
-      const number = item.kind === 'skill' ? item.latest?.revision_number : undefined
-      if (typeof number === 'number') latest.set(item.uuid.toLowerCase(), number)
+      if (item.kind !== 'skill') continue
+      const key = item.uuid.toLowerCase()
+      const number = item.latest?.revision_number
+      if (typeof number === 'number') {
+        latest.set(key, number)
+        latestLabel.set(key, item.latest?.version ?? null)
+      }
+      if (typeof item.display_name === 'string' && item.display_name.trim() !== '') titles.set(key, item.display_name)
     }
     const changeable = changeableFromLink(agent.path, listing)
     return {
       ...agent,
       skills: rows.map((row) => {
         if (row.source !== 'catalog') return row
-        const latestRevision = latest.get((row.packageUuid ?? '').toLowerCase()) ?? null
+        const key = (row.packageUuid ?? '').toLowerCase()
+        const latestRevision = latest.get(key) ?? null
         const updatable =
           changeable && latestRevision !== null && typeof row.revisionNumber === 'number' && latestRevision > row.revisionNumber
-        return { ...row, latestRevision, updatable }
+        return { ...row, title: titles.get(key) ?? null, latestRevision, latestVersion: latestLabel.get(key) ?? null, updatable }
       })
     }
   } catch {
     return agent
+  }
+}
+
+/**
+ * The Inbox's "Update available" items for catalog skills: one per agent and
+ * pin whose row is `updatable` (a newer version in the listing, and an agent
+ * this person may change — {@link withCatalogSkillUpdates} decided both).
+ * Who published that version, and when, comes from the same listing.
+ * `agents` are DTOs as `localAgentService.list` answers them. Never throws.
+ */
+export function catalogSkillUpdateItems(
+  agents: readonly LocalAgentDto[],
+  listing: CachedListing | null = activeListing()
+): UpdateAvailableInboxItem[] {
+  try {
+    const items = new Map((listing?.items ?? []).filter((item) => item.kind === 'skill').map((item) => [item.uuid.toLowerCase(), item]))
+    return agents.flatMap((agent) =>
+      (agent.skills ?? []).flatMap((row): UpdateAvailableInboxItem[] => {
+        if (row.source !== 'catalog' || !row.updatable || typeof row.latestRevision !== 'number') return []
+        const item = items.get((row.packageUuid ?? '').toLowerCase())
+        // The label belongs to the version the number names; a listing that moved on since has none for it.
+        const sameVersion = item?.latest?.revision_number === row.latestRevision
+        const publishedAt = sameVersion && item?.latest?.published_at ? new Date(item.latest.published_at) : null
+        return [
+          {
+            kind: 'update_available',
+            target: 'skill',
+            agentId: agent.id,
+            agentName: agent.name,
+            skillName: row.name,
+            skillTitle: item?.display_name || row.name,
+            pinnedRevision: typeof row.revisionNumber === 'number' ? row.revisionNumber : null,
+            version: row.latestRevision,
+            versionLabel: sameVersion ? (item?.latest?.version ?? null) : null,
+            changedBy: sameVersion ? (item?.latest?.published_by?.display_name ?? null) : null,
+            changedAt: publishedAt && !Number.isNaN(publishedAt.getTime()) ? publishedAt : null
+          }
+        ]
+      })
+    )
+  } catch {
+    return []
   }
 }

@@ -47,10 +47,11 @@ function rowsOf(
       at: item.kind === 'dispatch_gate' ? item.createdAt : item.pausedAt,
       dispatch: item
     })),
-    // One card per agent and version: a newer version is a new card, so a
+    // One card per agent (and skill) and version: a newer version is a new card, so a
     // retained "Updated." card never stands in for the next one.
     ...updates.map((item): InboxRowItem => ({
-      key: `update:${item.agentId}:${item.version ?? item.changedAt?.getTime() ?? ''}`,
+      // A skill's card is one per agent *and* skill.
+      key: `update:${item.agentId}:${item.target === 'skill' ? `skill:${item.skillName}:` : ''}${item.version ?? item.changedAt?.getTime() ?? ''}`,
       at: item.changedAt ?? new Date(0),
       update: item
     }))

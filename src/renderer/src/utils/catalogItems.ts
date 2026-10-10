@@ -86,6 +86,39 @@ export const CATALOG_TEXT = {
   showLess: 'Show less'
 } as const
 
+/** Words of a catalog skill's actions: Add to agent… in the catalog, Update / Try again / Remove on the agent's Skills section. */
+export const CATALOG_SKILL_TEXT = {
+  addToAgent: 'Add to agent…',
+  menuLabel: (skill: string) => `Add ${skill} to an agent`,
+  addTo: (skill: string, agent: string) => `Add ${skill} to ${agent}`,
+  adding: 'Adding…',
+  added: 'Added',
+  canUseOnly: 'Can use only',
+  canUseOnlyTitle: 'Its skills come with the team’s version',
+  checkingAccess: 'Checking access…',
+  /** The catalog tile's pill: how many of this computer's agents have the skill. */
+  inAgents: (count: number) => (count === 1 ? 'In 1 agent' : `In ${count} agents`),
+  noAgents: 'None of your agents can hold catalog skills. Create an agent first.',
+  addFailed: 'The skill could not be added.',
+  updateTo: (skill: string, version: string) => `Update ${skill} to ${version}`,
+  updateFailed: 'The skill could not be updated.',
+  tryAgain: (skill: string) => `Download ${skill} again`,
+  tryAgainFailed: 'The skill could not be downloaded.',
+  remove: (skill: string) => `Remove ${skill} from this agent`,
+  removeConfirm: (skill: string) =>
+    `Remove ${skill} from this agent? It stays in the catalog; you can add it again. ${skill} stops being available to this agent in new chats.`,
+  /** Added to the confirm when the agent is shared and the person may change it. */
+  removeShareHint: 'Share changes to pass this on to the team.',
+  removeButton: 'Remove skill',
+  removing: 'Removing…',
+  removeFailed: 'The skill could not be removed.',
+  cancel: 'Cancel',
+  /** The Inbox card: "Update available for erp-lookup in Invoices". */
+  updateAvailableIn: (skill: string, agent: string) => `Update available for ${skill} in ${agent}`,
+  inAgent: 'in',
+  updatedIn: (skill: string) => `Updated. This agent now has the latest version of ${skill}.`
+} as const
+
 /**
  * `Version N`, with the publisher's own label beside it when the version has
  * one: `Version 3 (1.2.0)`. The number is what every kind has; the label is

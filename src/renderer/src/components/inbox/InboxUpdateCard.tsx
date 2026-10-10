@@ -3,10 +3,11 @@ import { Loader2 } from 'lucide-react'
 import type { UpdateAvailableInboxItem } from '../../../../shared/inbox'
 import { useUpdateShared } from '../../hooks/useSharing'
 import { useApplyBundleUpdate } from '../../hooks/useAgents'
+import { catalogSkillOutcomeMessage, useUpdateCatalogSkill } from '../../hooks/useCatalogSkills'
 import { useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { SHARE_REFUSAL_TEXT, SHARE_UI_TEXT, shareRefusalSentence } from '../../utils/shareText'
-import { CATALOG_TEXT, catalogDateLabel, catalogVersionLabel } from '../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, CATALOG_TEXT, catalogDateLabel, catalogVersionLabel } from '../../utils/catalogItems'
 import { CatalogKindBadge } from '../agents/CatalogKindBadge'
 
 const PRIMARY =
@@ -16,8 +17,10 @@ const PRIMARY =
 /**
  * "Update available for *X*" — one card for every kind of agent with a newer
  * catalog version: a shared desktop agent the team moved past this
- * computer's copy (Update = `sharing:update`), or a cloud agent whose install
- * is behind (Update = apply the latest version to the install). The kind
+ * computer's copy (Update = `sharing:update`), a cloud agent whose install
+ * is behind (Update = apply the latest version to the install), or a catalog
+ * skill one of the user's kit agents pins at an older version — "Update
+ * available for *skill* in *agent*" (Update = `catalog-skills:update`). The kind
  * badge, the version label and the date are the catalog's own; the agent's
  * name opens its page.
  *
@@ -46,8 +49,12 @@ export function UpdateAvailableCard({
     }
   })
   const applyUpdate = useApplyBundleUpdate()
-  const pending = updateShared.isPending || applyUpdate.isPending
-  const subject = SHARE_UI_TEXT.updateAvailableFor(item.agentName)
+  const updateSkill = useUpdateCatalogSkill()
+  const pending = updateShared.isPending || applyUpdate.isPending || updateSkill.isPending
+  const subject =
+    item.target === 'skill'
+      ? CATALOG_SKILL_TEXT.updateAvailableIn(item.skillTitle, item.agentName)
+      : SHARE_UI_TEXT.updateAvailableFor(item.agentName)
   const meta = [
     item.version !== null ? catalogVersionLabel(item.version, item.versionLabel) : null,
     item.changedBy ? CATALOG_TEXT.by(item.changedBy) : null
@@ -63,6 +70,19 @@ export function UpdateAvailableCard({
     onActed(item)
     if (item.target === 'desktop_agent') {
       updateShared.mutate(item.agentId, { onError: (err) => setError(unwrapIpcError(err)) })
+      return
+    }
+    if (item.target === 'skill') {
+      updateSkill.mutate(
+        { agentId: item.agentId, name: item.skillName },
+        {
+          onSuccess: (outcome) => {
+            if (outcome.ok) setSettled(true)
+            else setError(catalogSkillOutcomeMessage(outcome, CATALOG_SKILL_TEXT.updateFailed))
+          },
+          onError: (err) => setError(unwrapIpcError(err, CATALOG_SKILL_TEXT.updateFailed))
+        }
+      )
       return
     }
     applyUpdate.mutate(item.installId, {
@@ -81,6 +101,11 @@ export function UpdateAvailableCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium text-[var(--color-text)]" title={subject}>
             {SHARE_UI_TEXT.updateAvailableLead}{' '}
+            {item.target === 'skill' && (
+              <>
+                <span className="font-medium">{item.skillTitle}</span> {CATALOG_SKILL_TEXT.inAgent}{' '}
+              </>
+            )}
             <button
               type="button"
               onClick={() => openAgentPage({ id: item.agentId })}
@@ -101,7 +126,7 @@ export function UpdateAvailableCard({
       </div>
       {settled ? (
         <p role="status" className="mt-2 text-[11px] text-[var(--color-text-secondary)]">
-          {SHARE_UI_TEXT.updated}
+          {item.target === 'skill' ? CATALOG_SKILL_TEXT.updatedIn(item.skillTitle) : SHARE_UI_TEXT.updated}
         </p>
       ) : (
         <div className="mt-2 flex items-center gap-2">

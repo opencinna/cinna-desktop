@@ -17,11 +17,13 @@ import type { AgentShareResult, SharingOutcome } from '../../../../shared/agentS
 const listMock = vi.fn<() => Promise<InboxSnapshot>>()
 const update = vi.fn<(agentId: string) => Promise<SharingOutcome<AgentShareResult>>>()
 const applyBundleUpdate = vi.fn<(installId: string) => Promise<unknown>>()
+const updateSkill = vi.fn<(agentId: string, name: string) => Promise<unknown>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   inbox: { list: () => listMock(), answer: vi.fn() },
   sharing: { update: (agentId: string) => update(agentId) },
+  catalogSkills: { update: (agentId: string, name: string) => updateSkill(agentId, name) },
   tasks: { list: async () => [] },
   agents: {
     list: async () => [
@@ -38,7 +40,7 @@ const applyBundleUpdate = vi.fn<(installId: string) => Promise<unknown>>()
 const { InboxView } = await import('./InboxView')
 const { useUIStore } = await import('../../stores/ui.store')
 const { SHARE_REFUSAL_TEXT, SHARE_UI_TEXT } = await import('../../utils/shareText')
-const { CATALOG_KIND_TEXT } = await import('../../utils/catalogItems')
+const { CATALOG_KIND_TEXT, CATALOG_SKILL_TEXT } = await import('../../utils/catalogItems')
 
 const DESKTOP: UpdateAvailableInboxItem = {
   kind: 'update_available',
@@ -82,6 +84,7 @@ beforeEach(() => {
   listMock.mockReset().mockResolvedValue({ entries: [], unreadable: [], dispatch: [], updates: [DESKTOP, CLOUD] })
   update.mockReset()
   applyBundleUpdate.mockReset()
+  updateSkill.mockReset()
   useUIStore.setState({ activeView: 'inbox', activeLocalAgentId: null, activeExternalAgentId: null } as never)
 })
 
@@ -186,5 +189,70 @@ describe('Update available — a cloud agent', () => {
       fireEvent.click(within(card('Exchange Rates')).getByRole('button', { name: SHARE_UI_TEXT.update }))
     })
     expect(within(card('Exchange Rates')).getByRole('alert').textContent).toBe(SHARE_REFUSAL_TEXT.reauth_required)
+  })
+})
+
+describe('Update available — a catalog skill in an agent', () => {
+  const SKILL = (skillName: string, skillTitle: string): UpdateAvailableInboxItem => ({
+    kind: 'update_available',
+    target: 'skill',
+    agentId: 'folder:payroll',
+    agentName: 'Payroll Checker',
+    skillName,
+    skillTitle,
+    pinnedRevision: 1,
+    version: 3,
+    versionLabel: '3.0',
+    changedBy: 'Anna Berg',
+    changedAt: new Date('2026-09-13T12:00:00Z')
+  })
+  const skillCard = (title: string): HTMLElement =>
+    screen.getByRole('article', { name: CATALOG_SKILL_TEXT.updateAvailableIn(title, 'Payroll Checker') })
+
+  beforeEach(() => {
+    listMock.mockResolvedValue({
+      entries: [], unreadable: [], dispatch: [],
+      updates: [DESKTOP, SKILL('erp-lookup', 'ERP lookup'), SKILL('csv-export', 'CSV export')]
+    })
+  })
+
+  it('draws one card per agent and skill in the same card, with the Skill badge, and the agent’s name opening it', async () => {
+    render(createElement(InboxView), { wrapper })
+    await screen.findByRole('article', { name: CATALOG_SKILL_TEXT.updateAvailableIn('ERP lookup', 'Payroll Checker') })
+    const erp = skillCard('ERP lookup')
+    expect(skillCard('CSV export')).not.toBe(erp)
+    // The agent card for the same agent is still its own.
+    expect(card('Payroll Checker')).toBeTruthy()
+    expect(within(erp).getByText(CATALOG_KIND_TEXT.skill)).toBeTruthy()
+    expect(within(erp).getByText('Version 3 (3.0) · by Anna Berg')).toBeTruthy()
+    expect(within(erp).getAllByRole('button').map((b) => b.textContent)).toEqual(['Payroll Checker', SHARE_UI_TEXT.update])
+    fireEvent.click(within(erp).getByRole('button', { name: 'Payroll Checker' }))
+    expect(useUIStore.getState().activeLocalAgentId).toBe('folder:payroll')
+  })
+
+  it('updates that pin, and settles in place', async () => {
+    updateSkill.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
+    render(createElement(InboxView), { wrapper })
+    await screen.findByRole('article', { name: CATALOG_SKILL_TEXT.updateAvailableIn('ERP lookup', 'Payroll Checker') })
+    await act(async () => {
+      fireEvent.click(within(skillCard('ERP lookup')).getByRole('button', { name: SHARE_UI_TEXT.update }))
+    })
+    expect(updateSkill).toHaveBeenCalledWith('folder:payroll', 'erp-lookup')
+    expect(update).not.toHaveBeenCalled()
+    expect(within(skillCard('ERP lookup')).getByRole('status').textContent).toBe(CATALOG_SKILL_TEXT.updatedIn('ERP lookup'))
+    expect(within(skillCard('CSV export')).getByRole('button', { name: SHARE_UI_TEXT.update })).toBeTruthy()
+  })
+
+  it('keeps a refusal on the card beside Update, in main’s sentence', async () => {
+    updateSkill.mockResolvedValue({ ok: false, code: 'read_only', message: 'This agent is shared with you to use. Its skills change when the team shares a new version.' })
+    render(createElement(InboxView), { wrapper })
+    await screen.findByRole('article', { name: CATALOG_SKILL_TEXT.updateAvailableIn('ERP lookup', 'Payroll Checker') })
+    await act(async () => {
+      fireEvent.click(within(skillCard('ERP lookup')).getByRole('button', { name: SHARE_UI_TEXT.update }))
+    })
+    expect(within(skillCard('ERP lookup')).getByRole('alert').textContent).toBe(
+      'This agent is shared with you to use. Its skills change when the team shares a new version.'
+    )
+    expect(within(skillCard('ERP lookup')).getByRole('button', { name: SHARE_UI_TEXT.update })).toBeTruthy()
   })
 })

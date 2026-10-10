@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
@@ -24,9 +24,18 @@ const upsert = vi.fn(async (data: { name: string }) => {
   return { id: 'new', success: true }
 })
 const openPath = vi.fn(async (_input: { agentId: string; relPath?: string }) => ({ success: true as const }))
+let shareStatuses: unknown[] = []
+/** Set to a never-settling promise to hold the share statuses in loading. */
+let statusesPending: Promise<never> | null = null
+type Outcome = { ok: true; name: string; revisionNumber: number } | { ok: false; code: string; message: string }
+const updateSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
+const removeSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
+const ensureSkills = vi.fn<(agentId: string) => Promise<unknown>>()
 window.api = {
   localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider, openPath },
-  mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] }
+  mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] },
+  sharing: { statuses: () => statusesPending ?? Promise.resolve({ success: true, value: shareStatuses }) },
+  catalogSkills: { update: updateSkill, remove: removeSkill, ensure: ensureSkills }
 } as never
 
 const { AgentAddonsTab, useAddonsBadge } = await import('./AgentAddonsTab')
@@ -40,6 +49,8 @@ function renderTab(extra: Partial<LocalAgentDto> = {}) {
 beforeEach(() => {
   providers = [provider('jira', 'Atlassian'), provider('gh', 'GitHub', { status: 'error', error: 'HTTP 401' })]
   attached = []
+  shareStatuses = []
+  statusesPending = null
   vi.clearAllMocks()
 })
 
@@ -181,10 +192,15 @@ describe('the Skills section', () => {
     )
     expect(within(items[0]).getByText('From the catalog')).toBeTruthy()
     expect(within(items[0]).queryByText('Authored')).toBeNull()
-    expect(within(items[0]).getByText('Version 1.2.0')).toBeTruthy()
-    expect(within(items[1]).getByText('Revision 3')).toBeTruthy()
+    // Labelled as the catalog and the Inbox label versions (rule 13).
+    expect(within(items[0]).getByText('Version 3 (1.2.0)')).toBeTruthy()
+    expect(within(items[1]).getByText('Version 3')).toBeTruthy()
     expect(within(items[0]).getByRole('img', { name: 'Not on this computer yet.' })).toBeTruthy()
-    expect(within(items[0]).queryByRole('button')).toBeNull()
+    // No reveal: only the catalog row's own actions.
+    await waitFor(() => expect(within(items[0]).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Download csv-export again',
+      'Remove csv-export from this agent'
+    ]))
     expect(within(items[2]).getByText('Authored')).toBeTruthy()
     expect(within(items[2]).queryByText(/^(Version|Revision) /)).toBeNull()
     expect(within(items[2]).getByRole('button', { name: 'Reveal SKILL.md of pdf-tools' })).toBeTruthy()
@@ -272,5 +288,136 @@ describe('the Skills section', () => {
     const card = screen.getByTitle('pdf-tools').closest('li')!.firstElementChild as HTMLElement
     expect(card.lastElementChild).toBe(alert)
     expect(screen.getByTitle('ledger').closest('li')!.contains(alert)).toBe(false)
+  })
+})
+
+describe('the Skills section — a catalog skill’s actions', () => {
+  const pin = (name: string, extra: Partial<LocalAgentSkill> = {}): LocalAgentSkill => ({
+    name, description: '', version: null, source: 'catalog', path: '/cache/x/SKILL.md', deliverable: true, issues: [],
+    credentials: [], packageId: `io.example.skill.${name}`, packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+    revisionNumber: 2, latestRevision: 2, updatable: false, ...extra
+  })
+  const row = (name: string): HTMLElement =>
+    screen.getAllByTitle(name).map((el) => el.closest('li') as HTMLElement).find(Boolean)!
+
+  it('offers Update when the catalog has a newer version, named with that version, and updates in place', async () => {
+    let finish!: (outcome: Outcome) => void
+    updateSkill.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    renderTab({ skills: [pin('erp-lookup', { latestRevision: 4, updatable: true }), pin('csv-export')] })
+    const button = await screen.findByRole('button', { name: 'Update erp-lookup to Version 4' })
+    expect(button.getAttribute('title')).toBe('Update erp-lookup to Version 4')
+    // Current: no Update, no Try again — only Remove.
+    expect(within(row('csv-export')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Remove csv-export from this agent'
+    ])
+    fireEvent.click(button)
+    await waitFor(() => expect(updateSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
+    // Busy inside the row; the other row waits.
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Update erp-lookup to Version 4' }) as HTMLButtonElement).disabled).toBe(true))
+    expect((screen.getByRole('button', { name: 'Remove csv-export from this agent' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => finish({ ok: false, code: 'hash_mismatch', message: 'The download did not match the published skill, so nothing was kept.' }))
+    // The refusal is that row's last line, in main's sentence.
+    const alert = within(row('erp-lookup')).getByRole('alert')
+    expect(alert.textContent).toBe('The download did not match the published skill, so nothing was kept.')
+    expect(row('erp-lookup').firstElementChild!.lastElementChild).toBe(alert)
+    expect(within(row('csv-export')).queryByRole('alert')).toBeNull()
+  })
+
+  it('offers Try again when the pinned version is not here, and shows that row’s own failure', async () => {
+    ensureSkills.mockResolvedValue({
+      ok: true, fetched: [], failed: [{ name: 'erp-lookup', code: 'download_failed', message: 'This version is not available to you.' }]
+    })
+    renderTab({
+      skills: [pin('erp-lookup', { deliverable: false, issues: [{ code: 'download_failed', message: 'It could not be downloaded.', severity: 'warning' }] })]
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Download erp-lookup again' }))
+    await waitFor(() => expect(ensureSkills).toHaveBeenCalledWith('folder:a'))
+    expect((await within(row('erp-lookup')).findByRole('alert')).textContent).toBe('This version is not available to you.')
+  })
+
+  it('removes only after the confirm inside the card, which says what is kept', async () => {
+    let finish!: (outcome: Outcome) => void
+    removeSkill.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    renderTab({ skills: [pin('erp-lookup')] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove erp-lookup from this agent' }))
+    const confirm = screen.getByRole('group', { name: 'Remove erp-lookup from this agent' })
+    expect(row('erp-lookup').contains(confirm)).toBe(true)
+    // The recoverable part first, then the consequence; not shared, so nothing about the team.
+    expect(confirm.querySelector('p')!.textContent).toBe(
+      'Remove erp-lookup from this agent? It stays in the catalog; you can add it again. erp-lookup stops being available to this agent in new chats.'
+    )
+    // Cancel closes it with nothing done.
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(removeSkill).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove erp-lookup from this agent' }))
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Remove skill' }))
+    await waitFor(() => expect(removeSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
+    // Undismissable while it runs.
+    expect((within(confirm).getByRole('button', { name: 'Removing…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(confirm).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => finish({ ok: false, code: 'manifest_modified', message: 'cinna-agent.json changed while the skill was downloading. Try again.' }))
+    // A refusal keeps the confirm open and says why, last in the card.
+    expect(within(confirm).getByRole('button', { name: 'Remove skill' })).toBeTruthy()
+    expect(within(row('erp-lookup')).getByRole('alert').textContent).toBe('cinna-agent.json changed while the skill was downloading. Try again.')
+  })
+
+  it('hides Update and Remove on an agent shared with the user to use only', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    renderTab({
+      skills: [pin('erp-lookup', { latestRevision: 4, updatable: true, issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }] })]
+    })
+    // Fetching what the team's version pins is still theirs (U7).
+    await screen.findByRole('button', { name: 'Download erp-lookup again' })
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove erp-lookup from this agent' })).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Update erp-lookup to Version 4' })).toBeNull()
+  })
+
+  it('names a catalog row by its catalog title, with the folder name in its tooltip, everywhere on the row', async () => {
+    renderTab({ skills: [pin('erp-lookup', { title: 'ERP lookup', latestRevision: 4, latestVersion: '2.0', updatable: true })] })
+    const name = await screen.findByText('ERP lookup')
+    expect(name.getAttribute('title')).toBe('ERP lookup — erp-lookup')
+    expect(await screen.findByRole('button', { name: 'Update ERP lookup to Version 4 (2.0)' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove ERP lookup from this agent' }))
+    expect(screen.getByRole('group', { name: 'Remove ERP lookup from this agent' }).querySelector('p')!.textContent).toContain(
+      'ERP lookup stops being available to this agent in new chats.'
+    )
+  })
+
+  it('on a shared agent the user can edit, the confirm says a Remove reaches the team only once shared', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'edit' } }]
+    renderTab({ skills: [pin('erp-lookup')] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove erp-lookup from this agent' }))
+    expect(screen.getByRole('group', { name: 'Remove erp-lookup from this agent' }).querySelector('p')!.textContent).toMatch(
+      /in new chats\. Share changes to pass this on to the team\.$/
+    )
+  })
+
+  it('offers no Update or Remove while the share status is still loading', async () => {
+    statusesPending = new Promise<never>(() => undefined)
+    renderTab({ skills: [pin('erp-lookup', { latestRevision: 4, updatable: true })] })
+    await screen.findByText('erp-lookup')
+    expect(screen.queryByRole('button', { name: 'Remove erp-lookup from this agent' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update erp-lookup to Version 4' })).toBeNull()
+  })
+
+  it('offers no Update or Remove on a Cinna team agent whose access the listing does not know', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: null } }]
+    renderTab({ skills: [pin('erp-lookup', { latestRevision: 4, updatable: true })] })
+    await screen.findByText('erp-lookup')
+    // Settled, and still not offered.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByRole('button', { name: 'Remove erp-lookup from this agent' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update erp-lookup to Version 4' })).toBeNull()
+  })
+
+  it('Try again whose failure is the sentence already on the row says it once', async () => {
+    const sentence = 'This version is not available to you.'
+    ensureSkills.mockResolvedValue({ ok: true, fetched: [], failed: [{ name: 'erp-lookup', code: 'download_failed', message: sentence }] })
+    renderTab({ skills: [pin('erp-lookup', { deliverable: false, issues: [{ code: 'download_failed', message: sentence, severity: 'warning' }] })] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Download erp-lookup again' }))
+    await waitFor(() => expect(ensureSkills).toHaveBeenCalled())
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Download erp-lookup again' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(within(row('erp-lookup')).queryByRole('alert')).toBeNull()
+    expect(within(row('erp-lookup')).getAllByText(sentence)).toHaveLength(1)
   })
 })

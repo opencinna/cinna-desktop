@@ -18,7 +18,7 @@
  *   archive digest, not a server, and an agent folder is not tied to one
  *   profile — but only a marker whose digest equals the pin's counts.
  *
- * The last failed download of each revision is kept in memory for the
+ * The last failed download of each pin (revision and digest) is kept in memory for the
  * Skills section's issue; a restart forgets it. Garbage collection of
  * revisions no agent pins any more is later work.
  *
@@ -89,8 +89,12 @@ function cacheRoot(): string | null {
   }
 }
 
-function failureKey(uuid: string, revision: string): string {
-  return `${uuid}/${revision}`
+/**
+ * A failure belongs to one pin's check, so the digest is part of the key: a
+ * mismatch on one pin must never mark another pin of the same revision failed.
+ */
+function failureKey(safe: { uuid: string; revision: string; sha: string }): string {
+  return `${safe.uuid}/${safe.revision}/${safe.sha}`
 }
 
 /** The active profile's instance key, or null without a Cinna profile. */
@@ -251,7 +255,7 @@ export const catalogSkillCache = {
       const dir = readyDir(join(root, instance, safe.uuid, safe.revision), safe)
       if (dir) return { state: 'ready', dir }
     }
-    const failure = failures.get(failureKey(safe.uuid, safe.revision))
+    const failure = failures.get(failureKey(safe))
     return failure ? { state: 'failed', message: failure } : { state: 'missing' }
   },
 
@@ -326,7 +330,7 @@ export const catalogSkillCache = {
       removeTree(staging)
       throw err
     }
-    failures.delete(failureKey(safe.uuid, safe.revision))
+    failures.delete(failureKey(safe))
     logger.info('catalog skill cached', { name: safe.name, revision: safe.revision })
     return join(finalDir, safe.name)
   },
@@ -334,12 +338,12 @@ export const catalogSkillCache = {
   /** Remember why the last download of a revision failed, for the Skills section. */
   recordFailure(ref: CatalogSkillRef, message: string): void {
     const safe = cacheRefOf(ref)
-    if (safe) failures.set(failureKey(safe.uuid, safe.revision), message)
+    if (safe) failures.set(failureKey(safe), message)
   },
 
   clearFailure(ref: CatalogSkillRef): void {
     const safe = cacheRefOf(ref)
-    if (safe) failures.delete(failureKey(safe.uuid, safe.revision))
+    if (safe) failures.delete(failureKey(safe))
   },
 
   /** Tests: put the cache under `root` (null: back to userData) and forget failures. */

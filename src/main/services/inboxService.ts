@@ -227,6 +227,28 @@ async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
   }
 }
 
+/**
+ * "Update available" for catalog skills: pins in this machine's kit agents
+ * (settings scope) the active profile's cached listing has a newer version
+ * of, where the person may change the agent. Read from the scanner's cached
+ * folders; imported lazily for the same reason as {@link desktopUpdateItems}.
+ * A failure is an empty list, never a failed Inbox.
+ */
+async function skillUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
+  try {
+    // No skill in the listing, nothing to compare: no import, no scan.
+    if (!libraryService.cached(getProfileScopeUserId())?.items.some((item) => item.kind === 'skill')) return []
+    const [{ localAgentService }, { catalogSkillUpdateItems }] = await Promise.all([
+      import('./localAgents/localAgentService'),
+      import('./catalogSkillUpdates')
+    ])
+    return catalogSkillUpdateItems(localAgentService.list(getSettingsScopeUserId()).agents)
+  } catch (err) {
+    logger.warn('catalog skill update notices could not be read', { error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
 export const inboxService = {
   /**
    * Mirror one run event into the inbox. Called for every event on the send
@@ -567,9 +589,10 @@ export const inboxService = {
       .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
     const dispatchPending = taskDispatchInboxItems(userId)
     const desktopUpdatesPending = desktopUpdateItems()
+    const skillUpdatesPending = skillUpdateItems()
     const remote = await pending
     const dispatch = await dispatchPending
-    const updates = [...(await desktopUpdatesPending), ...cloudUpdateItems()]
+    const updates = [...(await desktopUpdatesPending), ...cloudUpdateItems(), ...(await skillUpdatesPending)]
     return {
       entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
       unreadable: remote.unreadable,

@@ -37,7 +37,7 @@ window.api = {} as never
 const { CatalogBrowserModal, _resetCatalogFilter } = await import('./CatalogBrowserModal')
 const { useAuthStore } = await import('../../stores/auth.store')
 const { SETTLE_MS } = await import('../../hooks/useSettleGuard')
-const { CATALOG_TEXT, CATALOG_KIND_TEXT } = await import('../../utils/catalogItems')
+const { CATALOG_TEXT, CATALOG_KIND_TEXT, CATALOG_SKILL_TEXT } = await import('../../utils/catalogItems')
 
 function item(overrides: Partial<CatalogItem>): CatalogItem {
   return {
@@ -200,11 +200,14 @@ beforeEach(() => {
 })
 
 let client: QueryClient
-function mount(props: Partial<Parameters<typeof CatalogBrowserModal>[0]> = {}): {
+function mount(
+  props: Partial<Parameters<typeof CatalogBrowserModal>[0]> = {},
+  { reuseClient = false }: { reuseClient?: boolean } = {}
+): {
   rerender: (next: Partial<Parameters<typeof CatalogBrowserModal>[0]>) => void
   unmount: () => void
 } {
-  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
+  if (!reuseClient) client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
   const base = {
     onClose,
     onInstall,
@@ -413,13 +416,15 @@ describe('CatalogBrowserModal — the action by kind', () => {
     await waitFor(() => expect(within(tile('Payroll Checker')).getByRole('button', { name: CATALOG_TEXT.getting })).toBeTruthy())
   })
 
-  it('a skill: no action yet, only which of this computer’s agents already has it', async () => {
+  it('a skill: Add to agent…, with which of this computer’s agents already has it', async () => {
     mount()
     await loaded()
     const erp = tile('erp-lookup')
-    // The tile's body is its only button: no Get, and no disabled stand-in for one.
-    expect(within(erp).getAllByRole('button')).toEqual([within(erp).getByRole('button', { name: 'erp-lookup' })])
-    expect(within(erp).getByText('Added to 1 agent')).toBeTruthy()
+    expect(within(erp).getAllByRole('button')).toEqual([
+      within(erp).getByRole('button', { name: 'erp-lookup' }),
+      within(erp).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent })
+    ])
+    expect(within(erp).getByText('In 1 agent')).toBeTruthy()
 
     fireEvent.click(within(erp).getByRole('button', { name: 'erp-lookup' }))
     const used = screen.getByText(CATALOG_TEXT.usedByLabel)
@@ -428,17 +433,222 @@ describe('CatalogBrowserModal — the action by kind', () => {
   })
 })
 
-describe('CatalogBrowserModal — a tile without an action', () => {
-  it('a skill none of the user’s agents has: no footer at all', async () => {
+describe('CatalogBrowserModal — a skill none of the user’s agents has', () => {
+  it('has Add to agent… and no pill', async () => {
     ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({ roots: [], agents: [] })
     mount()
     await loaded()
     const erp = tile('erp-lookup')
-    // The body is the tile's last part: nothing under it.
-    expect(erp.lastElementChild).toBe(within(erp).getByRole('button', { name: 'erp-lookup' }))
-    expect(tile('Invoice Watcher').lastElementChild).not.toBe(
-      within(tile('Invoice Watcher')).getByRole('button', { name: 'Invoice Watcher' })
+    expect(within(erp).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent })).toBeTruthy()
+    expect(within(erp).queryByText(/^In \d/)).toBeNull()
+  })
+})
+
+describe('CatalogBrowserModal — In N agents', () => {
+  it('counts this computer’s kit agents by their own pins, not by an install core still lists', async () => {
+    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roots: [],
+      agents: [
+        // Core still lists Alpha (AAAA-1) as having it, but its pin was removed here.
+        { id: 'folder:aaaa-1', name: 'Alpha', manifestId: 'aaaa-1', kind: 'kit', skills: [] },
+        { id: 'folder:gamma', name: 'Gamma', manifestId: 'gamma', kind: 'kit', skills: [{ name: 'erp-lookup', source: 'catalog', packageUuid: 'u-erp' }] }
+      ]
+    })
+    mount()
+    await loaded()
+    await waitFor(() => expect(within(tile('erp-lookup')).getByText('In 1 agent')).toBeTruthy())
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: 'erp-lookup' }))
+    expect(screen.getByText(CATALOG_TEXT.usedByLabel).nextElementSibling?.textContent).toBe('Gamma')
+  })
+})
+
+describe('CatalogBrowserModal — Add to agent…', () => {
+  const pinned = { name: 'erp-lookup', source: 'catalog', packageUuid: 'U-ERP' }
+  const AGENTS = [
+    { id: 'folder:gamma', name: 'Gamma', manifestId: 'gamma', kind: 'kit', skills: [] },
+    { id: 'folder:aaaa-1', name: 'Alpha', manifestId: 'aaaa-1', kind: 'kit', skills: [pinned] },
+    { id: 'folder:beta', name: 'Beta', manifestId: 'beta', kind: 'kit', skills: [] },
+    // A bare folder cannot hold a pin: not listed at all.
+    { id: 'folder:bare', name: 'Bare', manifestId: '', kind: 'bare' }
+  ]
+  let add: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    add = vi.fn()
+    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({ roots: [], agents: AGENTS })
+    Object.assign(window.api, {
+      catalogSkills: { add },
+      sharing: {
+        library: libraryMock,
+        statuses: vi.fn().mockResolvedValue({ success: true, value: [{ agentId: 'folder:beta', remote: { kind: 'cinna', access: 'use' } }] })
+      }
+    })
+  })
+
+  async function openMenu(): Promise<HTMLElement> {
+    mount()
+    await loaded()
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent }))
+    const menu = screen.getByRole('menu', { name: 'Add erp-lookup to an agent' })
+    // The share statuses land after the agents.
+    await waitFor(() => expect(within(menu).getByText(CATALOG_SKILL_TEXT.canUseOnly)).toBeTruthy())
+    return menu
+  }
+  const item = (menu: HTMLElement, name: string): HTMLButtonElement =>
+    within(menu).getAllByRole('menuitem').find((el) => el.textContent?.startsWith(name)) as HTMLButtonElement
+
+  it('lists the kit agents, each disabled with its reason when it cannot take the skill', async () => {
+    const menu = await openMenu()
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
+      `Alpha${CATALOG_SKILL_TEXT.added}`,
+      `Beta${CATALOG_SKILL_TEXT.canUseOnly}`,
+      'Gamma'
+    ])
+    expect(item(menu, 'Alpha').disabled).toBe(true)
+    expect(item(menu, 'Beta').disabled).toBe(true)
+    expect(item(menu, 'Beta').title).toBe(`Beta: ${CATALOG_SKILL_TEXT.canUseOnlyTitle}`)
+    expect(item(menu, 'Gamma').disabled).toBe(false)
+    fireEvent.click(item(menu, 'Beta'))
+    expect(add).not.toHaveBeenCalled()
+  })
+
+  it('adds to the picked agent with the row busy, closes on success, and the pill counts it', async () => {
+    let finish!: (value: unknown) => void
+    add.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const menu = await openMenu()
+    fireEvent.click(item(menu, 'Gamma'))
+    await waitFor(() => expect(add).toHaveBeenCalledWith('folder:gamma', 'u-erp'))
+    expect(item(menu, 'Gamma').textContent).toBe(`Gamma${CATALOG_SKILL_TEXT.adding}`)
+    expect(item(menu, 'Gamma').getAttribute('aria-busy')).toBe('true')
+    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roots: [],
+      agents: AGENTS.map((agent) => (agent.id === 'folder:gamma' ? { ...agent, skills: [pinned] } : agent))
+    })
+    await act(async () => finish({ ok: true, name: 'erp-lookup', revisionNumber: 1 }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(screen.getByRole('dialog', { name: CATALOG_TEXT.title })).toBeTruthy()
+    await waitFor(() => expect(within(tile('erp-lookup')).getByText('In 2 agents')).toBeTruthy())
+  })
+
+  it('while the share statuses load, every agent waits as Checking access…', async () => {
+    window.api.sharing.statuses = vi.fn(() => new Promise(() => undefined)) as never
+    mount()
+    await loaded()
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent }))
+    const menu = screen.getByRole('menu', { name: 'Add erp-lookup to an agent' })
+    await waitFor(() =>
+      expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
+        `Alpha${CATALOG_SKILL_TEXT.added}`,
+        `Beta${CATALOG_SKILL_TEXT.checkingAccess}`,
+        `Gamma${CATALOG_SKILL_TEXT.checkingAccess}`
+      ])
     )
+    expect(item(menu, 'Gamma').disabled).toBe(true)
+  })
+
+  it('a Cinna team agent whose access the listing does not know is Can use only; edit is not', async () => {
+    window.api.sharing.statuses = vi.fn().mockResolvedValue({
+      success: true,
+      value: [
+        { agentId: 'folder:beta', remote: { kind: 'cinna', access: null } },
+        { agentId: 'folder:gamma', remote: { kind: 'cinna', access: 'edit' } }
+      ]
+    }) as never
+    const menu = await openMenu()
+    expect(item(menu, 'Beta').textContent).toBe(`Beta${CATALOG_SKILL_TEXT.canUseOnly}`)
+    expect(item(menu, 'Gamma').disabled).toBe(false)
+  })
+
+  it('an add outlives the menu: remounted, it still reads Adding…, then shows the refusal', async () => {
+    let finish!: (value: unknown) => void
+    add.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const first = mount()
+    await loaded()
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent }))
+    let menu = screen.getByRole('menu', { name: 'Add erp-lookup to an agent' })
+    await waitFor(() => expect(item(menu, 'Gamma').disabled).toBe(false))
+    fireEvent.click(item(menu, 'Gamma'))
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1))
+    first.unmount()
+
+    mount({}, { reuseClient: true })
+    await loaded()
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent }))
+    menu = screen.getByRole('menu', { name: 'Add erp-lookup to an agent' })
+    await waitFor(() => expect(item(menu, 'Gamma').textContent).toBe(`Gamma${CATALOG_SKILL_TEXT.adding}`))
+    // A second pick of the same agent waits for the first.
+    expect(item(menu, 'Gamma').disabled).toBe(true)
+    fireEvent.click(item(menu, 'Gamma'))
+    expect(add).toHaveBeenCalledTimes(1)
+
+    await act(async () => finish({ ok: false, code: 'clash', message: 'This agent already has a skill with that name.' }))
+    const alert = await within(screen.getByRole('menu')).findByRole('alert')
+    expect(alert.textContent).toBe('This agent already has a skill with that name.')
+    expect(item(screen.getByRole('menu'), 'Gamma').parentElement?.contains(alert)).toBe(true)
+  })
+
+  it('a refusal that lands while the menu is closed reopens it; closing it again drops the refusal', async () => {
+    let finish!: (value: unknown) => void
+    add.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const menu = await openMenu()
+    fireEvent.click(item(menu, 'Gamma'))
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    await act(async () => finish({ ok: false, code: 'write_failed', message: 'Nope.' }))
+    expect((await within(await screen.findByRole('menu')).findByRole('alert')).textContent).toBe('Nope.')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(within(tile('erp-lookup')).getByRole('button', { name: CATALOG_SKILL_TEXT.addToAgent }))
+    expect(within(screen.getByRole('menu')).queryByRole('alert')).toBeNull()
+  })
+
+  const REFUSALS: [string, string][] = [
+    ['no_account', 'Catalog skills need a Cinna account.'],
+    ['not_found', 'That agent or skill is no longer here.'],
+    ['not_kit_agent', 'Only an agent with a cinna-agent.json can hold catalog skills.'],
+    ['not_in_catalog', 'This skill is not in the catalog any more.'],
+    ['read_only', 'This agent is shared with you to use. Its skills change when the team shares a new version.'],
+    ['access_unknown', 'This shared agent is not in your catalog listing, so its skills cannot be changed here.'],
+    ['clash', 'This agent already has a skill with that name.'],
+    ['already_added', 'This agent already has this skill.'],
+    ['download_failed', 'This version is not available to you.'],
+    ['hash_mismatch', 'The download did not match the published skill, so nothing was kept.'],
+    ['invalid_archive', 'The skill’s files could not be unpacked safely.'],
+    ['too_large', 'The skill is larger than 16 MB.'],
+    ['manifest_modified', 'cinna-agent.json changed while the skill was downloading. Try again.'],
+    ['write_failed', 'The skill could not be saved on this computer.'],
+    ['reauth_required', 'Sign in to Cinna again to download this skill.']
+  ]
+
+  it.each(REFUSALS)('a %s refusal stays in the menu under the row, in main’s sentence', async (code, message) => {
+    add.mockResolvedValue({ ok: false, code, message })
+    const menu = await openMenu()
+    fireEvent.click(item(menu, 'Gamma'))
+    const alert = await within(menu).findByRole('alert')
+    expect(alert.textContent).toBe(message)
+    // Under the row it was for; the menu and the dialog stay open.
+    expect(item(menu, 'Gamma').parentElement?.contains(alert)).toBe(true)
+    expect(screen.getByRole('menu')).toBe(menu)
+    expect(item(menu, 'Gamma').disabled).toBe(false)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('a refusal without a sentence still says something', async () => {
+    add.mockResolvedValue({ ok: false, code: 'write_failed', message: '' })
+    const menu = await openMenu()
+    fireEvent.click(item(menu, 'Gamma'))
+    expect((await within(menu).findByRole('alert')).textContent).toBe(CATALOG_SKILL_TEXT.addFailed)
+  })
+
+  it('belongs to the dialog: a press inside does not close it, and Escape closes the menu first', async () => {
+    const menu = await openMenu()
+    fireEvent.mouseDown(item(menu, 'Alpha'))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalled()
   })
 })
 

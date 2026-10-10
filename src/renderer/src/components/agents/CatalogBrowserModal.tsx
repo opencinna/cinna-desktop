@@ -6,7 +6,7 @@ import { useCatalogItems, useRefreshCatalogState } from '../../hooks/useCatalog'
 import { useAgents } from '../../hooks/useAgents'
 import { useLocalAgents } from '../../hooks/useLocalAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
-import { useTeamLibrary } from '../../hooks/useSharing'
+import { useShareStatuses, useTeamLibrary } from '../../hooks/useSharing'
 import { useSettleGuard } from '../../hooks/useSettleGuard'
 import { unwrapIpcError } from '../../utils/ipcError'
 import type { CatalogInstallError } from '../../hooks/useCatalogInstall'
@@ -37,6 +37,7 @@ import {
   type CloudUpdateActions,
   type DesktopAgentActions
 } from './CatalogItemViews'
+import { CATALOG_POPOVER_ATTR, type CatalogSkillTarget } from './CatalogSkillAddMenu'
 
 export type { CloudUpdateActions, DesktopAgentActions } from './CatalogItemViews'
 
@@ -96,6 +97,8 @@ export function CatalogBrowserModal({
   const teamLibrary = useTeamLibrary()
   const { data: agents } = useAgents()
   const { data: localAgents } = useLocalAgents()
+  // Which of this computer's agents are shared with the user to use only (Add to agent…).
+  const { data: shareStatuses } = useShareStatuses()
   const refresh = useRefreshCatalogState()
   const cinnaReauth = useCinnaReauth()
   const cardRef = useRef<HTMLDivElement>(null)
@@ -122,7 +125,10 @@ export function CatalogBrowserModal({
       else onClose()
     }
     const onClick = (e: MouseEvent): void => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
+      const target = e.target as Node
+      // A menu the dialog portaled out (Add to agent…) is still the dialog.
+      if (target instanceof Element && target.closest(`[${CATALOG_POPOVER_ATTR}]`)) return
+      if (cardRef.current && !cardRef.current.contains(target)) onClose()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onClick)
@@ -142,10 +148,54 @@ export function CatalogBrowserModal({
     )
     const agentByInstall = new Map<string, NonNullable<typeof agents>[number]>()
     for (const agent of agents ?? []) if (agent.remoteTargetId) agentByInstall.set(agent.remoteTargetId, agent)
-    const localByManifest = new Map<string, string>()
+    const localByManifest = new Map<string, { id: string; name: string }>()
     for (const agent of localAgents?.agents ?? []) {
-      if (agent.manifestId) localByManifest.set(agent.manifestId.toLowerCase(), agent.name)
+      if (agent.manifestId) localByManifest.set(agent.manifestId.toLowerCase(), { id: agent.id, name: agent.name })
     }
+    // As main's `changeableFromLink`: a Cinna team agent counts only with
+    // edit or maintain; access the listing does not know is not a yes.
+    const readOnly = new Set(
+      (shareStatuses ?? [])
+        .filter((status) => status.remote.kind === 'cinna' && status.remote.access !== 'edit' && status.remote.access !== 'maintain')
+        .map((status) => status.agentId)
+    )
+    // Kit agents only: a bare folder has no cinna-agent.json to pin a skill in,
+    // and its DTO carries no `skills`.
+    const kitAgents = (localAgents?.agents ?? []).filter((agent) => agent.skills !== undefined)
+    const pinsPackage = (agent: (typeof kitAgents)[number], uuid: string): boolean =>
+      (agent.skills ?? []).some(
+        (skill) => skill.source === 'catalog' && (skill.packageUuid ?? '').toLowerCase() === uuid.toLowerCase()
+      )
+    /**
+     * The agents that pin a skill. An agent on this computer counts by its
+     * own pins alone — they move the moment an add or a Remove lands, before
+     * the report reaches core. The server's local installs count only for a
+     * manifest id no agent here has (another device's copy is not listed;
+     * one of ours that core still holds after a Remove is not either).
+     */
+    const usedByOf = (item: CatalogItem): string[] => {
+      const byId = new Map<string, string>()
+      for (const id of skillHostManifestIds(item)) {
+        const agent = localByManifest.get(id)
+        if (agent && !kitAgents.some((kit) => kit.id === agent.id)) byId.set(agent.id, agent.name)
+      }
+      for (const agent of kitAgents) if (pinsPackage(agent, item.uuid)) byId.set(agent.id, agent.name)
+      return [...byId.values()]
+    }
+    const targetsOf = (item: CatalogItem): CatalogSkillTarget[] =>
+      kitAgents
+        .map((agent): CatalogSkillTarget => ({
+          agentId: agent.id,
+          name: agent.name,
+          blocked: pinsPackage(agent, item.uuid)
+            ? 'added'
+            : shareStatuses === undefined
+              ? 'checking'
+              : readOnly.has(agent.id)
+                ? 'read_only'
+                : null
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
     return items.map((item: CatalogItem): CatalogEntryView => {
       const kind = catalogItemKind(item)
       const latest = item.latest
@@ -170,16 +220,11 @@ export function CatalogBrowserModal({
         specs: catalogCredentialSpecs(item),
         cloud,
         desktop: kind === 'desktop_agent' ? (libraryByUuid.get(item.uuid) ?? null) : null,
-        usedBy:
-          kind === 'skill'
-            ? skillHostManifestIds(item).flatMap((id) => {
-                const name = localByManifest.get(id)
-                return name ? [name] : []
-              })
-            : []
+        usedBy: kind === 'skill' ? usedByOf(item) : [],
+        skillTargets: kind === 'skill' ? targetsOf(item) : []
       }
     })
-  }, [catalog.data, teamLibrary.data, agents, localAgents])
+  }, [catalog.data, teamLibrary.data, agents, localAgents, shareStatuses])
 
   const needle = query.trim().toLowerCase()
   const shown = useMemo(

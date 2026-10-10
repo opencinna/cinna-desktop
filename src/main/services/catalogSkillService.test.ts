@@ -66,7 +66,7 @@ vi.mock('./localAgents/gitService', () => ({
 const { catalogSkillService } = await import('./catalogSkillService')
 const { catalogSkillCache, removeTree } = await import('./catalogSkillCache')
 const { catalogLocalInstalls } = await import('./catalogLocalInstalls')
-const { withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
+const { catalogSkillUpdateItems, withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
 const { agentSkillRows, deliverableSkills } = await import('../kit/skills')
 const { CinnaApiError } = await import('../errors')
 const { libraryTrust } = await import('./libraryTrust')
@@ -497,6 +497,23 @@ describe('the cache', () => {
     expect(existsSync(join(elsewhere, 'erp-lookup', 'SKILL.md'))).toBe(true)
   })
 
+  it('remembers a failure for the pin that failed, not for another pin of the same revision', async () => {
+    const good = skillTgz('erp-lookup')
+    // One agent pins revision 2 with a digest the server's bytes do not match.
+    const wrong = { package_id: 'p.skill.erp-lookup', package_uuid: UUID, name: 'erp-lookup', revision_number: 2, archive_sha256: 'e'.repeat(64) }
+    writeManifest({ catalog_skills: [wrong] })
+    serve({ 2: good })
+    const result = await catalogSkillService.ensurePinned(USER, AGENT_ID)
+    expect(result).toMatchObject({ ok: true, failed: [{ name: 'erp-lookup', code: 'hash_mismatch' }] })
+    expect(catalogSkillCache.resolve({ packageUuid: UUID, revisionNumber: 2, name: 'erp-lookup', archiveSha256: 'e'.repeat(64) })).toMatchObject({
+      state: 'failed'
+    })
+    // The same revision pinned with the right digest has not been tried, so it is only missing.
+    expect(catalogSkillCache.resolve({ packageUuid: UUID, revisionNumber: 2, name: 'erp-lookup', archiveSha256: sha256Of(good) })).toEqual({
+      state: 'missing'
+    })
+  })
+
   it('keys an instance by its origin as one safe folder name', () => {
     expect(catalogSkillCache.instanceKey('https://Cinna.Example.com:8443/')).toBe('https-cinna.example.com-8443')
     expect(catalogSkillCache.instanceKey('http://localhost:8000')).toBe('http-localhost-8000')
@@ -517,6 +534,17 @@ describe('the update signal (U9)', () => {
     expect(withCatalogSkillUpdates(agentWith(3) as never).skills?.[0]).toMatchObject({ latestRevision: 3, updatable: false })
   })
 
+  it('names the row by its catalog title and labels the latest version, from the listing', () => {
+    listing.value = { items: [skillItem(3, skillTgz('erp-lookup'))], agents: [] }
+    expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({
+      name: 'erp-lookup',
+      title: 'ERP lookup',
+      latestVersion: '3.0'
+    })
+    listing.value = { items: [], agents: [] }
+    expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ title: null, latestRevision: null, latestVersion: null })
+  })
+
   it('never offers one in a shared agent this person may only use', () => {
     mkdirSync(join(agentDir, 'app-data'), { recursive: true })
     writeFileSync(
@@ -530,5 +558,42 @@ describe('the update signal (U9)', () => {
     expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ latestRevision: 3, updatable: false })
     ;(listing.value.agents[0] as { access: string }).access = 'maintain'
     expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ updatable: true })
+  })
+})
+
+describe('the Inbox items (Update available for a skill)', () => {
+  const agent = (id: string, name: string, rows: Record<string, unknown>[]) => ({ id, name, path: agentDir, skills: rows })
+  const row = (over: Record<string, unknown>) => ({
+    name: 'erp-lookup', source: 'catalog', packageUuid: UUID, revisionNumber: 1, latestRevision: 3, updatable: true, ...over
+  })
+
+  it('lists one item per agent and updatable pin, with the version, who and when from the listing', () => {
+    listing.value = {
+      items: [skillItem(3, skillTgz('erp-lookup'), {
+        latest: { revision_number: 3, version: '3.0', published_at: '2026-09-13T12:00:00Z', published_by: { display_name: 'Anna Berg' }, release_notes: null }
+      })],
+      agents: []
+    }
+    const items = catalogSkillUpdateItems([
+      agent('folder:a', 'Invoices', [row({}), row({ name: 'own', source: 'authored', updatable: undefined })]),
+      agent('folder:b', 'Payroll', [row({ updatable: false })]),
+      agent('folder:c', 'Ledger', [row({ revisionNumber: 2 })])
+    ] as never)
+    expect(items).toEqual([
+      {
+        kind: 'update_available', target: 'skill', agentId: 'folder:a', agentName: 'Invoices', skillName: 'erp-lookup',
+        skillTitle: 'ERP lookup', pinnedRevision: 1, version: 3, versionLabel: '3.0', changedBy: 'Anna Berg',
+        changedAt: new Date('2026-09-13T12:00:00Z')
+      },
+      expect.objectContaining({ agentId: 'folder:c', pinnedRevision: 2, version: 3 })
+    ])
+  })
+
+  it('names no label, publisher or date when the listing no longer describes that version, and none without a skill', () => {
+    listing.value = { items: [], agents: [] }
+    expect(catalogSkillUpdateItems([agent('folder:a', 'Invoices', [row({})])] as never)).toEqual([
+      expect.objectContaining({ skillTitle: 'erp-lookup', version: 3, versionLabel: null, changedBy: null, changedAt: null })
+    ])
+    expect(catalogSkillUpdateItems([{ id: 'folder:bare', name: 'Bare', path: agentDir }] as never)).toEqual([])
   })
 })

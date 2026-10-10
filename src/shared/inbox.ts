@@ -102,16 +102,18 @@ export interface InboxSnapshot {
   /**
    * Agents with a newer version waiting, one card type across kinds: shared
    * desktop agents on this machine the team has moved past (derived on every
-   * read from the cached catalog listing and the folders' own heads), and
-   * cloud agents whose install is behind its catalog item and is not updated
-   * by the server on its own. No table: an Update — or the agent catching up
-   * any other way — clears it. Optional for the same reason as `dispatch`.
+   * read from the cached catalog listing and the folders' own heads), cloud
+   * agents whose install is behind its catalog item and is not updated by the
+   * server on its own, and catalog skills a kit agent pins at an older
+   * version than the listing's, where the person may change that agent. No
+   * table: an Update — or the agent catching up any other way — clears it.
+   * Optional for the same reason as `dispatch`.
    */
   updates?: UpdateAvailableInboxItem[]
 }
 
 /** What the Update on an "Update available" card acts on. */
-export type UpdateAvailableTarget = 'desktop_agent' | 'cloud_agent'
+export type UpdateAvailableTarget = 'desktop_agent' | 'cloud_agent' | 'skill'
 
 interface UpdateAvailableBase {
   kind: 'update_available'
@@ -133,7 +135,9 @@ interface UpdateAvailableBase {
 
 /**
  * "Update available" for one agent, with an Update action — `sharing:update`
- * for a desktop agent, `agent:apply-bundle-update` for a cloud agent.
+ * for a desktop agent, `agent:apply-bundle-update` for a cloud agent,
+ * `catalog-skills:update` for one catalog skill a kit agent pins (one item per
+ * agent and skill).
  */
 export type UpdateAvailableInboxItem =
   | (UpdateAvailableBase & {
@@ -145,6 +149,15 @@ export type UpdateAvailableInboxItem =
       target: 'cloud_agent'
       /** The install on Cinna (the agent row's `remoteTargetId`) the update applies to. */
       installId: string
+    })
+  | (UpdateAvailableBase & {
+      target: 'skill'
+      /** The pin's `name` in the agent's `catalog_skills[]` — what the update names. */
+      skillName: string
+      /** The skill as the catalog names it (`display_name`), else the pin's name. */
+      skillTitle: string
+      /** The pinned revision the agent has now. */
+      pinnedRevision: number | null
     })
 
 /**

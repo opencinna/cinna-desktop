@@ -417,6 +417,15 @@ export interface LocalAgentSkill {
    * Read at list time, not from the folder.
    */
   latestRevision?: number | null
+  /** `catalog` rows only: the publisher's label of {@link latestRevision} (`1.2.0`), null when it has none or the listing lacks it. */
+  latestVersion?: string | null
+  /**
+   * `catalog` rows only: the skill's title in the cached catalog listing
+   * (`display_name`), the name the catalog and the Inbox show it under; null
+   * when the listing does not have it. The folder {@link name} stays what
+   * every engine is given.
+   */
+  title?: string | null
   /**
    * `catalog` rows only: {@link latestRevision} is past the pinned one **and**
    * this person may change the agent — not a shared agent they may only use
