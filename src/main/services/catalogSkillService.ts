@@ -56,6 +56,7 @@ import {
 import { LOCAL_AGENT_CHANGED_CHANNEL, type LocalAgentDto } from '../../shared/localAgents'
 import type { CatalogSkillPin, CinnaAgentManifest } from '../../shared/kit/manifest'
 import type { CatalogItem } from '../../shared/catalogItems'
+import type { AutoAttachedCredential } from '../../shared/serviceCredentials'
 import type {
   CatalogSkillEnsureFailure,
   CatalogSkillEnsureResult,
@@ -365,6 +366,21 @@ function account(): { profile: string; host: string } | Refused {
   return host === null ? refused('no_account') : { profile, host }
 }
 
+/**
+ * Fill the agent's skill slots exactly one cloud credential fits (U11: `provision-local`, then a
+ * strict `(type, service_uri = slot)` match). Loaded on use, like the drivers do, so this module
+ * does not pull the credential service in. Never fails the verb it follows.
+ */
+async function skillCredentials(agentId: string): Promise<AutoAttachedCredential[]> {
+  try {
+    const { serviceCredentialService } = await import('./serviceCredentials/service')
+    return await serviceCredentialService.autoAttachSkills(agentId)
+  } catch (err) {
+    logger.warn('skill credentials could not be attached', { agentId, error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
 /** Run a verb, turning a lost session into a refusal and logging anything unexpected. */
 async function guarded<T extends { ok: boolean }>(verb: string, run: () => Promise<T | Refused>): Promise<T | Refused> {
   try {
@@ -414,7 +430,8 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, pin, written.manifestId)
       logger.info('catalog skill added', { agentId, name: pin.name, revision: pin.revision_number })
-      return { ok: true as const, name: pin.name, revisionNumber: pin.revision_number }
+      const autoAttached = await skillCredentials(agentId)
+      return { ok: true as const, name: pin.name, revisionNumber: pin.revision_number, autoAttached }
     })
   },
 
@@ -462,7 +479,8 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, latest, written.manifestId)
       logger.info('catalog skill updated', { agentId, name, revision: latest.revision_number })
-      return { ok: true as const, name, revisionNumber: latest.revision_number }
+      const autoAttached = await skillCredentials(agentId)
+      return { ok: true as const, name, revisionNumber: latest.revision_number, autoAttached }
     })
   },
 
@@ -543,10 +561,13 @@ export const catalogSkillService = {
 
   /**
    * {@link ensurePinned} for the sharing verbs: in the background, never
-   * awaited and never failing the verb it follows.
+   * awaited and never failing the verb it follows. Then the skill slots of
+   * what is now on this computer get their credentials where one fits
+   * without doubt (U11) — after the fetch, because a catalog skill's slots
+   * are read from its cached SKILL.md.
    */
   ensurePinnedInBackground(userId: string, agentId: string): void {
-    void catalogSkillService.ensurePinned(userId, agentId).catch(() => undefined)
+    void catalogSkillService.ensurePinned(userId, agentId).then(() => skillCredentials(agentId)).catch(() => undefined)
   },
 
   /** Tests: forget downloads in flight. */

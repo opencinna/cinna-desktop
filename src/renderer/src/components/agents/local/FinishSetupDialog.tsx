@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from 'lucide-react'
-import type { CredentialSetupOption, CredentialSetupSlot } from '../../../../../shared/serviceCredentials'
+import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot } from '../../../../../shared/serviceCredentials'
 import { unwrapLocalAgentOutcome } from '../../../../../shared/localAgents'
 import { credentialResult, useCredentialSetup } from '../../../hooks/useServiceCredentials'
 import { LOCAL_AGENTS_KEY, localAgentKey } from '../../../hooks/useLocalAgents'
-import { useFinishSetupStore } from '../../../stores/finishSetup.store'
+import { autoAttachedKey, useFinishSetupStore } from '../../../stores/finishSetup.store'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CredentialRow } from '../../settings/CredentialRow'
 import { credentialHealth, credentialOwnership } from '../../settings/credentialPresentation'
@@ -27,6 +27,12 @@ import { CANCEL, DialogShell, FIELD_BASE, PRIMARY, SECONDARY } from './sharing/S
  * Open credentials/.env instead. Nothing here blocks the agent: Finish later
  * and Done both close, and a missing credential stays the page's warning.
  *
+ * Below them, the slots the agent's skills declare (U11), each "needed by"
+ * its skills: filled only by an attached record of its type whose Service URI
+ * is the slot, so they offer records and no `.env` names. Opening the dialog
+ * asks main to fill them where exactly one record fits (after Core's
+ * `provision-local`); they never decide whether the dialog opens by itself.
+ *
  * The dialog's top is pinned, so a row that changes moves only what is below
  * it; the slot list scrolls inside a dialog no taller than the window, and the
  * footer reserves the line a refusal takes, so neither moves the buttons;
@@ -40,6 +46,31 @@ export function finishSetupStatus(slot: CredentialSetupSlot, autoAttached: reado
   if (slot.state === 'connected') return autoAttached.includes(slot.name) ? 'Connected automatically' : 'Connected'
   if (slot.state === 'env') return 'Set on this computer'
   return slot.optional ? 'Optional' : 'Missing'
+}
+
+/** A skill slot's status: never `.env`, and remembered under `skill:<slot>` when attached without asking. */
+export function skillSlotStatus(slot: CredentialSetupSkillSlot, autoAttached: readonly string[]): FinishSetupStatus {
+  if (slot.state === 'connected') return autoAttached.includes(autoAttachedKey({ slot: slot.slot, skill: true })) ? 'Connected automatically' : 'Connected'
+  return 'Missing'
+}
+
+/** A skill slot drawn by the agent slot's row: records only, no `.env` names. */
+function asSlotRow(slot: CredentialSetupSkillSlot): CredentialSetupSlot {
+  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options }
+}
+
+/** Who needs a skill slot, in one line. */
+function neededBy(slot: CredentialSetupSkillSlot): string {
+  const names = slot.skills.join(', ')
+  return `Needed by ${slot.skills.length === 1 ? 'skill' : 'skills'} ${names} · ${slot.type}`
+}
+
+/** Why nothing is offered for a missing skill slot, in one line. */
+function skillSlotNote(slot: CredentialSetupSkillSlot): string {
+  if (slot.typeMismatch) return `${slot.typeMismatch.name} has this Service URI but is a ${slot.typeMismatch.type} credential, not ${slot.type}.`
+  if (slot.provision === 'not_allowed_locally') return 'The publisher provides it, but not for use on this computer.'
+  if (slot.provision === 'not_shareable') return 'The publisher provides it, but cannot share it with you.'
+  return `Nothing in your account fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
 }
 
 /** The `.env` names a slot shows rows for: none once an attachment satisfies it, or when it declares no `fields`. */
@@ -106,6 +137,31 @@ export function useFinishSetup(agentId: string | null, agentName: string): Finis
   })
   // `useOpenAgentCredentials`'s call, owned here so its result lands in this dialog's footer line.
   const openEnv = useMutation({ mutationFn: (id: string) => window.api.localAgents.openCredentials(id) })
+  /**
+   * Opening the dialog asks main to fill the skill slots one record fits (after `provision-local`).
+   * Owned here, so its answer lands even if the dialog closed meanwhile; once per opening.
+   */
+  const skills = useMutation({
+    mutationFn: async (id: string) => credentialResult(await window.api.serviceCredentials.setupSkills(id)),
+    onSuccess: async (items, id) => {
+      useFinishSetupStore.getState().remember(id, items)
+      if (items.length > 0) await refresh(id)
+    }
+  })
+  const shown = agentId !== null && (openedHere || requested)
+  const askedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!shown) {
+      askedFor.current = null
+      return
+    }
+    if (askedFor.current === agentId) return
+    askedFor.current = agentId
+    // Best effort: nothing to report when it fails; the rows still offer what fits.
+    skills.mutate(agentId, { onError: () => undefined })
+    // `skills.mutate` is stable enough for this; only the opening decides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, agentId])
   const busy = attach.isPending || save.isPending
   const unsaved = Object.values(drafts).some((value) => value !== '')
 
@@ -254,6 +310,7 @@ export function FinishSetupDialog({
   const laterRef = useRef<HTMLButtonElement>(null)
   const setup = useCredentialSetup(agentId)
   const slots = setup.data?.slots ?? []
+  const skillSlots = setup.data?.skillSlots ?? []
   const allKeys = slots.flatMap(keysOf)
   const shownError = error ?? (setup.error ? unwrapIpcError(setup.error) : null)
 
@@ -292,6 +349,32 @@ export function FinishSetupDialog({
             onSave={onSave}
           />
         ))}
+        {skillSlots.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <div className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+              <span className="font-medium text-[var(--color-text)]">Skills</span> find these by Service URI. A missing one does not stop the agent; the skill fails when it needs it.
+            </div>
+            {skillSlots.map((skillSlot) => (
+              <SlotRow
+                key={`${skillSlot.type}:${skillSlot.slot}`}
+                testId={`finish-setup-skill-slot-${skillSlot.slot}`}
+                detail={neededBy(skillSlot)}
+                emptyNote={skillSlotNote(skillSlot)}
+                slot={asSlotRow(skillSlot)}
+                status={skillSlotStatus(skillSlot, autoAttached)}
+                drafts={drafts}
+                onDraft={onDraft}
+                busy={busy}
+                attachingRef={attachingRef}
+                saving={false}
+                onUse={onUse}
+                opening={opening}
+                onOpenEnv={onOpenEnv}
+                onSave={onSave}
+              />
+            ))}
+          </div>
+        )}
       </div>
       {/* Two lines are reserved beside the buttons, so a refusal never grows the dialog or moves them. */}
       <div className="flex h-9 shrink-0 items-center gap-3">
@@ -342,6 +425,9 @@ function KeyName({ name, prefix }: { name: string; prefix: string | null }): Rea
 
 function SlotRow({
   slot,
+  testId,
+  detail,
+  emptyNote,
   status,
   drafts,
   onDraft,
@@ -354,6 +440,12 @@ function SlotRow({
   onSave
 }: {
   slot: CredentialSetupSlot
+  /** Defaults to `finish-setup-slot-<name>`. */
+  testId?: string
+  /** One line under the name (a skill slot's "Needed by …"). */
+  detail?: string
+  /** What a missing slot with nothing to offer says; defaults to the agent slot's sentence. */
+  emptyNote?: string
   status: FinishSetupStatus
   drafts: Record<string, string>
   onDraft: (key: string, value: string) => void
@@ -411,7 +503,7 @@ function SlotRow({
   return (
     <div
       ref={rowRef}
-      data-testid={`finish-setup-slot-${slot.name}`}
+      data-testid={testId ?? `finish-setup-slot-${slot.name}`}
       className="space-y-1.5 rounded-md border border-[var(--color-border)] px-3 py-2"
     >
       <div className="flex h-5 items-center gap-2">
@@ -420,6 +512,11 @@ function SlotRow({
         </span>
         <StatusMark status={status} />
       </div>
+      {detail && (
+        <div className="h-4 truncate text-[11px] leading-4 text-[var(--color-text-muted)]" title={detail}>
+          {detail}
+        </div>
+      )}
 
       {slot.attached && (
         <CredentialRow
@@ -556,8 +653,8 @@ function SlotRow({
       )}
 
       {slot.state === 'missing' && !slot.attached && slot.options.length === 0 && keys.length === 0 && !fieldless && (
-        <div className="h-5 text-[11px] leading-5 text-[var(--color-text-muted)]">
-          Nothing in your account fits it. Attach one on the Credentials tab.
+        <div className="h-5 truncate text-[11px] leading-5 text-[var(--color-text-muted)]" title={emptyNote}>
+          {emptyNote ?? 'Nothing in your account fits it. Attach one on the Credentials tab.'}
         </div>
       )}
     </div>

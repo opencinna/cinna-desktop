@@ -21,6 +21,9 @@ files:
   # Without this it would be packed twice: once here (and unpacked again by
   # asarUnpack) and once as an extra resource.
   - '!resources/cinna-agent-kit/**'
+  # The skill runtime (`core.cinna_api` for skill scripts) ships via
+  # extraResources too: Python reads it from a real directory on PYTHONPATH.
+  - '!resources/skill-runtime/**'
   # The speech helper ships via extraResources too (an executable must sit
   # outside the asar), so it is kept out of the asar and asarUnpack here.
   - '!resources/speech/**'
@@ -70,6 +73,14 @@ extraResources:
   # tree against scripts/kit-sync/kit.lock.json (scripts/packaged-kit.cjs).
   - from: resources/cinna-agent-kit
     to: cinna-agent-kit
+  # `core.cinna_api` for a kit agent's skill scripts, put first on PYTHONPATH
+  # for its engine (src/main/services/skillRuntime.ts, same dev/packaged rule
+  # as the kit). Bytecode a development run left behind is not shipped.
+  - from: resources/skill-runtime
+    to: skill-runtime
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
 # The `cinna://` deep link the server-hosted landing page fires. electron-builder
 # turns this into the macOS bundle's CFBundleURLTypes, the Linux .desktop file's
 # `MimeType=x-scheme-handler/cinna`, and the NSIS registry keys on Windows.

@@ -1,4 +1,4 @@
-import type { CredentialSetupDto, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { AutoAttachedCredential, CredentialSetupDto, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -410,6 +410,8 @@ const api = {
     attach: (id: string, group: string, ref: string): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:attach', id, group, ref),
     /** Each credential slot's state and the active account's records that fit it, for the Finish setup dialog. */
     setupState: (id: string): Promise<ServiceCredentialResult<CredentialSetupDto>> => ipcRenderer.invoke('service-credentials:setup-state', id),
+    /** Fill the agent's skill slots exactly one record fits, after `provision-local` (Finish setup opening). Answers what it attached. */
+    setupSkills: (id: string): Promise<ServiceCredentialResult<AutoAttachedCredential[]>> => ipcRenderer.invoke('service-credentials:setup-skills', id),
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb()
       ipcRenderer.on('service-credentials:changed', listener)

@@ -16,7 +16,8 @@ import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, 
 import { serviceCredentialCloud } from './cloud'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates } from './slotMatch'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -52,6 +53,12 @@ const signedOut = new Set<string>()
 let unlocked: (userId: string) => boolean = () => false
 const logger = createLogger('service-credentials')
 const pendingAgents = new Set<string>()
+/**
+ * What `provision-local` last answered this app session, per account and catalog skill revision
+ * (`<account key>/<package uuid>/<revision>`). Only shown in Finish setup; never decides anything.
+ */
+const provisioned = new Map<string, SkillProvisionSlot[]>()
+const PROVISION_OUTCOMES: readonly SkillProvisionOutcome[] = ['shared', 'already_shared', 'user_provides', 'not_shareable', 'not_allowed_locally']
 const emptyAttachments = (): ServiceCredentialAttachments => ({ local: [], accounts: {} })
 function secure(): void { if (!runtimeHost.keystore.isSecureStorageAvailable()) throw new Error('Secure storage is unavailable. Unlock the system keychain before using credentials.') }
 function encrypt(value: unknown, previous?: Buffer | null): Buffer {
@@ -257,9 +264,13 @@ function chain<T>(path: string, fn: () => Promise<T>): Promise<T> {
   return run
 }
 function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> { return chain(a.path, () => materializeNow(a, refresh)) }
-/** Await the account's sync for at most the turn-start budget; a slow or failed one leaves the cache as it is. */
-async function boundedSync(account: Account): Promise<void> {
-  const running = account.flight?.epoch === account.epoch && account.flight.global === epoch ? account.flight.promise : syncAccount(account)
+/**
+ * Await the account's sync for at most the turn-start budget; a slow or failed one leaves the cache as it is.
+ * `fresh`: the list must be read after this call (Core just shared something), so a sync already in flight
+ * is asked for one more pass rather than joined.
+ */
+async function boundedSync(account: Account, fresh = false): Promise<void> {
+  const running = !fresh && account.flight?.epoch === account.epoch && account.flight.global === epoch ? account.flight.promise : syncAccount(account)
   let timer: ReturnType<typeof setTimeout> | undefined
   try { await Promise.race([running.catch(() => undefined), new Promise<void>(resolve => { timer = setTimeout(resolve, TURN_SYNC_BUDGET) })]) }
   finally { clearTimeout(timer) }
@@ -573,6 +584,69 @@ async function writeAttachments(id: string, group: string, refsOf: (before: { re
   changed(); return serviceCredentialService.attachments(id)
 }
 
+/**
+ * Append `added` to the account's group without waiting for a running turn: a turn (shared hold)
+ * refuses at once, while an exclusive holder — another short write (a credential regeneration, a
+ * sharing verb) — is retried for a few seconds, never queued. `keep` filters the additions once more
+ * under the lock, on the fresh state; the answer is what was appended.
+ */
+async function appendWithoutWaiting(id: string, account: Account, added: string[], keep: (ref: string) => boolean = () => true): Promise<string[]> {
+  let appended: string[] = []
+  const append = (before: { ref: string }[]) => {
+    appended = added.filter(ref => !before.some(v => v.ref === ref) && keep(ref))
+    return [...before.map(v => v.ref), ...appended]
+  }
+  for (let attempt = 0; ; attempt++) {
+    try { await writeAttachments(id, account.key, append, false); return appended }
+    catch (error) {
+      if ((error as { code?: string }).code !== 'turn_in_progress' || !turnLock.isExclusivelyLocked(id) || attempt >= AUTO_ATTACH_RETRIES) throw error
+      await new Promise(resolve => setTimeout(resolve, AUTO_ATTACH_RETRY_MS))
+    }
+  }
+}
+/** Every available attachment as metadata with its state: what the scanner judges slots by. */
+function attachedMetadata(a: Pick<LocalAgentDto, 'path' | 'kind'>): (ServiceCredentialDto & { state: ServiceCredentialAttachmentDto['state'] })[] {
+  return resolve(a).flatMap(v => v.available && v.row ? [{ ...credentialDto(v.row), state: attachmentState(v.row) }] : [])
+}
+function withoutState(record: ServiceCredentialDto & { state: string }): ServiceCredentialDto {
+  const { state: _state, ...dto } = record
+  return dto
+}
+function provisionKey(account: Account, revision: { packageUuid: string; revisionNumber: number }): string {
+  return `${account.key}/${revision.packageUuid.toLowerCase()}/${revision.revisionNumber}`
+}
+/**
+ * `provision-local` for one pinned catalog skill revision: Core shares the publisher's credentials for
+ * a local install with this account (idempotent, no values). Best effort: a failure is logged, and
+ * answered as null.
+ */
+async function provisionRevision(account: Account, revision: { packageUuid: string; revisionNumber: number }): Promise<SkillProvisionSlot[] | null> {
+  try {
+    const answer = await serviceCredentialCloud.provisionLocal(account.userId, revision.packageUuid, revision.revisionNumber, signal(account))
+    if (!Array.isArray(answer?.slots)) throw new Error('Invalid provision response.')
+    const slots: SkillProvisionSlot[] = answer.slots.flatMap(item =>
+      typeof item?.slot === 'string' && typeof item.type === 'string' && PROVISION_OUTCOMES.includes(item.outcome as SkillProvisionOutcome)
+        ? [{ slot: item.slot, type: item.type, providedBy: typeof item.provided_by === 'string' ? item.provided_by : 'user',
+          outcome: item.outcome as SkillProvisionOutcome, credentialId: typeof item.credential_id === 'string' ? item.credential_id : null }]
+        : [])
+    provisioned.set(provisionKey(account, revision), slots)
+    return slots
+  } catch (error) {
+    const failure = error as { status?: number; code?: string }
+    logger.info('Could not provision a catalog skill’s credentials for this computer', { revision: revision.revisionNumber, status: failure.status, code: failure.code })
+    return null
+  }
+}
+/** The last `provision-local` outcome for this slot under the account, from any of its declaring revisions. */
+function provisionOf(account: Account | undefined, slot: SkillSlot): SkillProvisionOutcome | null {
+  if (!account) return null
+  for (const revision of slot.catalog) {
+    const found = provisioned.get(provisionKey(account, revision))?.find(item => item.slot === slot.slot && item.type === slot.type)
+    if (found) return found.outcome
+  }
+  return null
+}
+
 export const serviceCredentialService = {
   metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.available && v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
   /** Local records plus the current profile's cloud cache (the settings pages). */
@@ -665,22 +739,68 @@ export const serviceCredentialService = {
         if (pick?.cloudId) picks.set(pick.cloudId, { slot: slot.name, credentialName: pick.name })
       }
       if (!picks.size) return []
-      const added = [...picks.keys()]
-      const append = (before: { ref: string }[]) => [...before.map(v => v.ref), ...added.filter(ref => !before.some(v => v.ref === ref))]
-      // A turn (shared hold) refuses at once. An exclusive holder is another short write
-      // (a credential regeneration, a sharing verb): retried for a few seconds, never queued.
-      for (let attempt = 0; ; attempt++) {
-        try { await writeAttachments(id, account.key, append, false); break }
-        catch (error) {
-          if ((error as { code?: string }).code !== 'turn_in_progress' || !turnLock.isExclusivelyLocked(id) || attempt >= AUTO_ATTACH_RETRIES) throw error
-          await new Promise(resolve => setTimeout(resolve, AUTO_ATTACH_RETRY_MS))
-        }
-      }
+      await appendWithoutWaiting(id, account, [...picks.keys()])
       logger.info('Attached matching credentials after a team library change', { agentId: id, count: picks.size })
       return [...picks.values()]
     } catch (error) {
       if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not attach matching credentials: a turn holds the agent', { agentId: id })
       else logger.warn('Could not attach matching credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
+      return []
+    }
+  },
+  /**
+   * U11: fill the agent's skill slots without asking where the answer is unambiguous. Called after
+   * Add to agent and Update of a catalog skill, after the sharing verbs have fetched the pinned
+   * skills, and when Finish setup opens.
+   *
+   * 1. Only slots nobody chose for yet: an attachment with the slot's Service URI, of any type or
+   *    state, is the user's choice and is never added to or replaced.
+   * 2. `provision-local` for each pinned catalog revision declaring one of them (best effort), so a
+   *    publisher-provided credential is listed for this account; then a sync of the account.
+   * 3. Attach a cloud record of the active account only when exactly one strictly fits
+   *    `(type, service_uri = slot)` (owned before shared, as `autoMatch`). Appends only.
+   *
+   * Never waits for a running turn and never throws: answers what it attached.
+   */
+  async autoAttachSkills(id: string): Promise<AutoAttachedCredential[]> {
+    try {
+      const account = activeAccount()
+      if (!account) return []
+      const open = (): SkillSlot[] => {
+        const a = agent(id), attached = attachedMetadata(a)
+        return collectSkillSlots(a.skills).filter(slot => !slotClaimed(slot, attached))
+      }
+      const wanted = open()
+      if (!wanted.length) return []
+      const revisions = wanted.flatMap(slot => slot.catalog)
+        .filter((r, i, all) => all.findIndex(o => o.packageUuid === r.packageUuid && o.revisionNumber === r.revisionNumber) === i)
+      let shared = false
+      for (const revision of revisions) {
+        const answer = await provisionRevision(account, revision)
+        if (accounts.get(account.key) !== account) return []
+        if (answer?.some(item => item.outcome === 'shared' || item.outcome === 'already_shared')) shared = true
+      }
+      await boundedSync(account, shared)
+      if (accounts.get(account.key) !== account || activeAccount() !== account) return []
+      // Read again after the awaits: the user may have attached something meanwhile.
+      const slots = open()
+      const a = agent(id)
+      const mine = state(a).accounts[account.key] ?? []
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto)
+      const picks = new Map<string, { slot: SkillSlot; credentialName: string }>()
+      for (const slot of slots) {
+        const pick = autoMatch(skillSlotSpec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
+        if (pick?.cloudId) picks.set(pick.cloudId, { slot, credentialName: pick.name })
+      }
+      if (!picks.size) return []
+      // Decided once more under the lock: a slot the user filled in between keeps their choice.
+      const appended = await appendWithoutWaiting(id, account, [...picks.keys()], ref => !slotClaimed(picks.get(ref)!.slot, attachedMetadata(a)))
+      if (!appended.length) return []
+      logger.info('Attached matching credentials for skill slots', { agentId: id, count: appended.length })
+      return appended.map(ref => ({ slot: picks.get(ref)!.slot.slot, credentialName: picks.get(ref)!.credentialName, skill: true as const }))
+    } catch (error) {
+      if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not attach skill credentials: a turn holds the agent', { agentId: id })
+      else logger.warn('Could not attach skill credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
       return []
     }
   },
@@ -705,9 +825,26 @@ export const serviceCredentialService = {
         options: verdict === 'connected' || !account ? [] : slotCandidates(spec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m }))
       }
     })
-    return { slots, setupNeeded: a.credentials.some(c => !c.satisfied) }
+    const attached = attachedMetadata(a)
+    const skillSlots: CredentialSetupSkillSlot[] = collectSkillSlots(a.skills).map(slot => {
+      const { attachment, filled, typeMismatch } = judgeSkillSlot(slot, attached)
+      return {
+        slot: slot.slot, type: slot.type, skills: slot.skills, description: slot.description,
+        state: filled ? 'connected' : 'missing',
+        attached: attachment ? { credential: withoutState(attachment), state: attachment.state } : null,
+        typeMismatch: typeMismatch ? withoutState(typeMismatch) : null,
+        options: filled || !account ? [] : slotCandidates(skillSlotSpec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m })),
+        provision: provisionOf(account, slot)
+      }
+    })
+    // Skill slots never decide setupNeeded: they warn, as in Core, and never open the dialog.
+    return { slots, skillSlots, setupNeeded: a.credentials.some(c => !c.satisfied) }
   },
-  async prepare(id: string) { return materialize(agent(id), true) },
+  /**
+   * A turn's or command's credentials: the files written (or removed), and whether the folder carries
+   * skills (only a kit agent's DTO has `skills`), whose scripts get the skill runtime on `PYTHONPATH`.
+   */
+  async prepare(id: string) { const a = agent(id); return { ...await materialize(a, true), skillRuntime: a.skills !== undefined } },
   /** Supplies the session unlock state; installed by the activation owner. */
   installUnlockCheck(fn: (userId: string) => boolean): void { unlocked = fn },
   /** Recompute eligible accounts after unlock, lock, logout, deletion or renewal. */
@@ -716,6 +853,7 @@ export const serviceCredentialService = {
   retire(): void {
     lifecycleAbort.abort(); lifecycleAbort = new AbortController(); epoch++
     for (const account of [...accounts.values()]) retireAccount(account)
+    provisioned.clear()
     started = false
   },
   /**

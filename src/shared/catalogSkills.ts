@@ -11,6 +11,8 @@
  * {@link CatalogSkillEnsureInput}.
  */
 
+import type { AutoAttachedCredential } from './serviceCredentials'
+
 /** Pin the latest revision of a catalog skill package into a kit agent. */
 export interface CatalogSkillAddInput {
   agentId: string
@@ -71,6 +73,11 @@ export type CatalogSkillOutcome =
       name: string
       /** The revision now pinned; for a remove, the one that was. */
       revisionNumber: number
+      /**
+       * Add and Update: the skill slots main filled without asking (`skill: true` entries,
+       * `slot` the Service URI). Absent for a remove and when nothing changed.
+       */
+      autoAttached?: AutoAttachedCredential[]
     }
   | { ok: false; code: CatalogSkillRefusal; message: string }
 

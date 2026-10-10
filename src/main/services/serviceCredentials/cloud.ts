@@ -21,7 +21,19 @@ export interface CloudDelivery {
   /** Always null and ignored: an issued Agent API key carries its identity in the key itself. Kept so the response still types. */
   owner_identity: ServiceCredentialEntry | null
 }
+/** Core's answer to `provision-local`, as sent; validated by the caller. */
+export interface CloudSkillProvision {
+  slots: { slot: string; type: string; provided_by: string; outcome: string; credential_id: string | null }[]
+}
 export const serviceCredentialCloud = {
+  /**
+   * Ask Core to share a catalog skill revision's publisher-provided credentials with this account
+   * for a local install (U11, C5). Idempotent, no credential data; a share then appears in `list`.
+   */
+  provisionLocal: (userId: string, packageUuid: string, revisionNumber: number, signal?: AbortSignal) => cinnaFetch<CloudSkillProvision>(userId,
+    `/api/v1/skills/packages/${encodeURIComponent(packageUuid)}/revisions/${revisionNumber}/provision-local`, {
+      method: 'POST', sensitive: true, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
+    }),
   /** `include=agent_api_keys` opts in to issued keys on both calls (without it Core refuses them as unsupported_type); a Core that predates them ignores it. */
   list: (userId: string, signal?: AbortSignal) => cinnaFetch<{ items: CloudCredentialMetadata[] }>(userId, '/api/v1/external/credentials?include=agent_api_keys', { sensitive: true, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) }),
   materialize: (userId: string, ids: string[], signal?: AbortSignal) => cinnaFetch<CloudDelivery>(userId, '/api/v1/external/credentials/materialize?include=agent_api_keys', {

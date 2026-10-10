@@ -380,6 +380,14 @@ export interface LocalAgentSkillCredential {
   slot: string
   type: string
   description: string | null
+  /**
+   * Whether an attached credential of this `type` whose Service URI is exactly `slot` is ready
+   * (strict, as Core's `require_slot`). Set by the scan of a kit agent; absent elsewhere. Never
+   * decides readiness: an unfilled skill slot is a warning.
+   */
+  filled?: boolean
+  /** The strictly matching attachment it was judged by, ready one first; null when none. */
+  attachment?: { credentialId: string; state: string } | null
 }
 
 /** One skill of a kit agent, as the Addons tab lists it. */

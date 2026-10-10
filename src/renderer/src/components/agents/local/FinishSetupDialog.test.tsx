@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode, createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CredentialSetupDto, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
+import type { AutoAttachedCredential, CredentialSetupDto, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
 import { useFinishSetupStore } from '../../../stores/finishSetup.store'
 import { useFinishSetup } from './FinishSetupDialog'
 
@@ -24,6 +24,12 @@ const slot = (over: Partial<CredentialSetupSlot>): CredentialSetupSlot => ({
 let setup: CredentialSetupDto
 const setupState = vi.fn(async () => ({ ok: true, value: setup }))
 const attach = vi.fn(async () => ({ ok: true, value: [] }))
+let skillAttached: AutoAttachedCredential[] = []
+const setupSkills = vi.fn(async () => ({ ok: true, value: skillAttached }))
+const skillSlot = (over: Partial<CredentialSetupSkillSlot>): CredentialSetupSkillSlot => ({
+  slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], description: null, state: 'missing', attached: null,
+  typeMismatch: null, options: [], provision: null, ...over
+})
 const openCredentials = vi.fn(async (): Promise<unknown> => ({ created: false, revealed: false }))
 const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): Promise<unknown> => {
   // Main's answer: the slot now has these names.
@@ -31,7 +37,7 @@ const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): 
   return { ok: true, value: [] }
 })
 window.api = {
-  serviceCredentials: { setupState, attach, onChanged: () => () => {} },
+  serviceCredentials: { setupState, attach, setupSkills, onChanged: () => () => {} },
   localAgents: { setEnvValues, openCredentials }
 } as never
 
@@ -49,10 +55,11 @@ const row = (name: string) => screen.getByTestId(`finish-setup-slot-${name}`)
 const field = (name: string, key: string) => within(row(name)).getByLabelText(key) as HTMLInputElement
 
 beforeEach(() => {
-  setupState.mockClear(); attach.mockClear(); setEnvValues.mockClear(); openCredentials.mockClear()
+  setupState.mockClear(); attach.mockClear(); setEnvValues.mockClear(); openCredentials.mockClear(); setupSkills.mockClear()
+  skillAttached = []
   useFinishSetupStore.setState({ pending: [], autoAttached: {} })
   setup = {
-    setupNeeded: true,
+    setupNeeded: true, skillSlots: [],
     slots: [
       slot({ name: 'acme', state: 'connected', attached: { credential: record({}), state: 'ready' } }),
       slot({ name: 'weather', envPrefix: 'WEATHER_', expectedKeys: ['WEATHER_API_KEY'] })
@@ -107,7 +114,7 @@ describe('Finish setup', () => {
 
   it('says Set on this computer, Optional, Missing with why an attachment stopped counting, and offers records', async () => {
     setup = {
-      setupNeeded: true,
+      setupNeeded: true, skillSlots: [],
       slots: [
         slot({ name: 'env', state: 'env', envPrefix: 'ENV_', expectedKeys: ['ENV_KEY'], presentKeys: ['ENV_KEY'] }),
         slot({ name: 'extra', optional: true }),
@@ -139,7 +146,7 @@ describe('Finish setup', () => {
   })
 
   it('keeps a saved name on screen as Set, keeps focus in the row, and never reshapes it while typing', async () => {
-    setup = { setupNeeded: true, slots: [slot({ name: 'mail', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
+    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'mail', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-mail')
@@ -174,7 +181,7 @@ describe('Finish setup', () => {
   })
 
   it('Replace moves focus to its field, and Cancel puts the saved name back without saving', async () => {
-    setup = { setupNeeded: false, slots: [slot({ name: 'mail', state: 'env', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'], presentKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
+    setup = { setupNeeded: false, skillSlots: [], slots: [slot({ name: 'mail', state: 'env', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'], presentKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-mail')
@@ -202,7 +209,7 @@ describe('Finish setup', () => {
   })
 
   it('offers a slot with no fields its records and Open credentials/.env, never a field', async () => {
-    setup = { setupNeeded: true, slots: [slot({ name: 'vendor', envPrefix: 'VENDOR_', options: [{ group: 'g', ref: 'v1', credential: record({ id: 'v1', cloudId: 'v1', name: 'Vendor key' }) }] })] }
+    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'vendor', envPrefix: 'VENDOR_', options: [{ group: 'g', ref: 'v1', credential: record({ id: 'v1', cloudId: 'v1', name: 'Vendor key' }) }] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-vendor')
@@ -259,12 +266,73 @@ describe('Finish setup', () => {
     expect(setEnvValues).toHaveBeenLastCalledWith(AGENT, { WEATHER_API_KEY: 'k' })
 
     setEnvValues.mockClear()
-    setup = { setupNeeded: true, slots: [slot({ name: 'other', envPrefix: 'OTHER_', expectedKeys: ['OTHER_KEY'] })] }
+    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'other', envPrefix: 'OTHER_', expectedKeys: ['OTHER_KEY'] })] }
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-other')
     fireEvent.change(field('other', 'OTHER_KEY'), { target: { value: 'later' } })
     fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(setEnvValues).not.toHaveBeenCalled()
+  })
+
+  describe('skill slots', () => {
+    const skillRow = (slotName: string) => screen.getByTestId(`finish-setup-skill-slot-${slotName}`)
+
+    it('lists them apart, needed by their skills, with records to use and no .env names', async () => {
+      setup = {
+        ...setup,
+        skillSlots: [
+          skillSlot({
+            slot: 'erp-api', skills: ['erp-orders', 'erp-invoices'],
+            options: [{ group: 'acct', ref: 'erp-1', credential: record({ id: 'erp-1', name: 'ERP key', serviceUri: 'erp-api' }) }]
+          }),
+          skillSlot({ slot: 'crm', type: 'odoo', skills: ['crm-sync'] }),
+          skillSlot({ slot: 'mail', type: 'email_imap', skills: ['inbox'], provision: 'not_allowed_locally' })
+        ]
+      }
+      renderHarness()
+      fireEvent.click(screen.getByText('open'))
+      await screen.findByTestId('finish-setup-skill-slot-erp-api')
+      expect(within(dialog()).getByText('Skills')).toBeTruthy()
+      expect(within(skillRow('erp-api')).getByText('Missing')).toBeTruthy()
+      expect(within(skillRow('erp-api')).getByText('Needed by skills erp-orders, erp-invoices · api_token')).toBeTruthy()
+      expect(within(skillRow('erp-api')).queryByRole('textbox')).toBeNull()
+      expect(skillRow('erp-api').querySelector('input')).toBeNull()
+      expect(within(skillRow('crm')).getByText('Nothing in your account fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
+      expect(within(skillRow('mail')).getByText('The publisher provides it, but not for use on this computer.')).toBeTruthy()
+
+      fireEvent.click(within(skillRow('erp-api')).getByRole('button', { name: 'Use this' }))
+      await waitFor(() => expect(attach).toHaveBeenCalledWith(AGENT, 'acct', 'erp-1'))
+    })
+
+    it('asks main to fill them once per opening, and says Connected automatically only on the skill slot', async () => {
+      // An agent slot named like the skill's Service URI must not read as attached automatically.
+      setup = {
+        ...setup,
+        slots: [slot({ name: 'erp-api', state: 'connected', attached: { credential: record({}), state: 'ready' } })],
+        skillSlots: [skillSlot({ slot: 'erp-api', state: 'connected', attached: { credential: record({ name: 'ERP key' }), state: 'ready' } })]
+      }
+      skillAttached = [{ slot: 'erp-api', credentialName: 'ERP key', skill: true }]
+      renderHarness(true)
+      fireEvent.click(screen.getByText('open'))
+      await waitFor(() => expect(within(skillRow('erp-api')).getByText('Connected automatically')).toBeTruthy())
+      expect(within(row('erp-api')).getByText('Connected')).toBeTruthy()
+      expect(setupSkills).toHaveBeenCalledTimes(1)
+      expect(setupSkills).toHaveBeenCalledWith(AGENT)
+      expect(useFinishSetupStore.getState().autoAttached[AGENT]).toEqual(['skill:erp-api'])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
+      fireEvent.click(screen.getByText('open'))
+      await screen.findByTestId('finish-setup-skill-slot-erp-api')
+      expect(setupSkills).toHaveBeenCalledTimes(2)
+    })
+
+    it('never opens the dialog by itself for a skill slot alone', async () => {
+      setup = { ...setup, setupNeeded: false, slots: [], skillSlots: [skillSlot({})] }
+      renderHarness()
+      act(() => useFinishSetupStore.getState().record(AGENT, { done: true, setupNeeded: false, autoAttached: [{ slot: 'erp-api', credentialName: 'ERP key', skill: true }] }))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(setupSkills).not.toHaveBeenCalled()
+    })
   })
 })

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { ServiceCredentialRow } from '../../db/serviceCredentials'
-const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn() }))
+const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn(), provision: vi.fn() }))
 vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.home, keystore: {
   isEncryptionAvailable: () => true,
   isSecureStorageAvailable: () => world.secure,
@@ -22,7 +22,7 @@ vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCreden
 vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
 vi.mock('../localAgents/scannerService', () => ({ markAllRootsDirty() {} }))
 vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
-vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args) } }))
+vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args), provisionLocal: (...args: unknown[]) => world.provision(...args) } }))
 import { keyApiUrl, serviceCredentialService as service } from './service'
 import { turnLock } from '../localAgents/turnLock'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
@@ -31,6 +31,7 @@ const sleep = () => new Promise(resolve => setTimeout(resolve, 30))
 beforeEach(async () => {
   world.home = mkdtempSync(join(tmpdir(), 'cinna-credentials-')); world.user = '__default__'; world.rows.clear(); world.secure = true; world.agents = []; world.metadata = []; world.byUser = {}; world.identity = false; world.users.clear(); world.unlocked.clear(); world.allowed = true
   world.list.mockImplementation(async (user: string) => ({ items: world.byUser[user] ?? world.metadata }))
+  world.provision.mockReset(); world.provision.mockResolvedValue({ slots: [] })
   world.fetch.mockImplementation(async (user: string, ids: string[]) => ({ items: world.allowed ? ids.map(id => ({ id, revision: 'r1', entry: { id, name: 'Cloud', type: 'api_token', notes: null, service_uri: 'api', is_placeholder: false, credential_data: { http_header_name: 'Authorization', http_header_value: `Bearer ${world.token}` } }, service_account_file: null, ssh_key: null })) : [], refused: world.allowed ? [] : ids.map(id => ({ id, reason: 'no_access' })),
     current_user: world.identity ? { id: 'current_user', name: user, type: 'current_user', notes: null, service_uri: null, is_placeholder: false, credential_data: { email: `${user}@example.test` } } : null, owner_identity: null }))
   service.installUnlockCheck(id => world.unlocked.has(id))
@@ -992,5 +993,130 @@ describe('auto-attach and the Finish setup state', () => {
     await service.setAttachments(a.id, key('account-b'), ['one'])
     await service.attach(a.id, key('account-b'), 'two')
     expect(group(a, 'account-b')).toEqual(['one', 'two'])
+  })
+})
+
+describe('skill slots: auto-attach, provision-local and the Finish setup state', () => {
+  const rec = (id: string, name: string, service_uri: string | null, over: Record<string, unknown> = {}) =>
+    ({ ...metadata(), id, name, service_uri, ...over })
+  type Declared = { slot: string; type?: string }
+  const skill = (name: string, declared: Declared[], over: Record<string, unknown> = {}) => ({
+    name, description: '', version: null, source: 'authored', path: '', deliverable: true, issues: [],
+    credentials: declared.map(d => ({ slot: d.slot, type: d.type ?? 'api_token', description: null })), ...over
+  })
+  const catalog = (name: string, declared: Declared[], packageUuid = 'pkg-uuid', revisionNumber = 3) =>
+    skill(name, declared, { source: 'catalog', packageUuid, revisionNumber, packageId: 'erp' })
+  /** A kit agent with no slots of its own and these skill rows. */
+  function skillAgent(skills: ReturnType<typeof skill>[]) {
+    const a = addAgent('kit') as any
+    a.credentials = []; a.skills = skills
+    return a
+  }
+  const group = (a: { id: string }, user: string) => service.attachments(a.id).filter(v => v.group === key(user)).map(v => v.ref)
+
+  it('attaches the one record whose type and Service URI are the slot, and says it was a skill slot', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('erp-1', 'ERP', 'erp-api'), rec('imap', 'ERP mail', 'erp-api', { type: 'email_imap' }), rec('named', 'erp-api', null)]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    expect(group(a, 'account-b')).toEqual(['erp-1'])
+    const [s] = service.setupState(a.id).skillSlots
+    expect(s).toMatchObject({ slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], state: 'connected', attached: { state: 'ready', credential: { name: 'ERP' } }, options: [] })
+    expect(s.attached!.credential).not.toHaveProperty('state')
+  })
+
+  it('matches strictly: never by name, never another type', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('named', 'erp-api', null), rec('imap', 'ERP mail', 'erp-api', { type: 'email_imap' })]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', options: [] })
+    // Attached by hand, the record of another type does not fill it; it is named as the mismatch.
+    await service.setAttachments(a.id, key('account-b'), ['imap'])
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', attached: null, typeMismatch: { name: 'ERP mail', type: 'email_imap' } })
+  })
+
+  it('attaches only when exactly one record fits, the owned one before shared ones, and offers the rest', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('one', 'ERP one', 'erp-api'), rec('two', 'ERP two', 'erp-api')]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+    expect(service.setupState(a.id).skillSlots[0].options.map(o => o.ref)).toEqual(['one', 'two'])
+    world.metadata.push(rec('mine', 'ERP mine', 'erp-api', { relation: 'owned' })); await service.sync(); await sleep()
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP mine', skill: true }])
+    expect(group(a, 'account-b')).toEqual(['mine'])
+  })
+
+  it('never adds to or replaces what the user attached for the slot', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm', type: 'odoo' }])])
+    world.metadata = [rec('chosen', 'ERP chosen', 'erp-api'), rec('crm-imap', 'CRM mail', 'crm', { type: 'email_imap' })]
+    await login('account-b')
+    await service.setAttachments(a.id, key('account-b'), ['chosen', 'crm-imap'])
+    world.metadata.push(rec('better', 'ERP better', 'erp-api', { relation: 'owned' }), rec('crm-odoo', 'CRM', 'crm', { type: 'odoo' }))
+    await service.sync(); await sleep()
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual(['chosen', 'crm-imap'])
+    expect(world.provision).not.toHaveBeenCalled()
+  })
+
+  it('provisions each pinned catalog revision first, so a publisher-shared credential can be attached', async () => {
+    const a = skillAgent([catalog('erp-orders', [{ slot: 'erp-api' }]), catalog('erp-invoices', [{ slot: 'erp-api' }]), skill('own', [{ slot: 'own-api' }])])
+    world.metadata = []
+    await login('account-b')
+    world.provision.mockImplementation(async () => {
+      world.metadata = [rec('erp-pub', 'ERP (publisher)', 'erp-api')]
+      return { slots: [{ slot: 'erp-api', type: 'api_token', provided_by: 'publisher', outcome: 'shared', credential_id: 'erp-pub' }] }
+    })
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP (publisher)', skill: true }])
+    // One call per revision, never for an own skill.
+    expect(world.provision.mock.calls.map(c => c.slice(0, 3))).toEqual([['account-b', 'pkg-uuid', 3]])
+    expect(group(a, 'account-b')).toEqual(['erp-pub'])
+    expect(service.setupState(a.id).skillSlots.map(s => [s.slot, s.state, s.provision])).toEqual([['erp-api', 'connected', 'shared'], ['own-api', 'missing', null]])
+  })
+
+  it('shows a publisher credential that may not come to this computer, and survives a failed provision', async () => {
+    const a = skillAgent([catalog('mail', [{ slot: 'mail-in', type: 'email_imap' }], 'pkg-mail', 1), catalog('erp', [{ slot: 'erp-api' }], 'pkg-erp', 2)])
+    world.metadata = [rec('erp-1', 'ERP', 'erp-api')]
+    await login('account-b')
+    world.provision.mockImplementation(async (_user: string, uuid: string) => {
+      if (uuid === 'pkg-erp') throw Object.assign(new Error('nope'), { status: 404 })
+      return { slots: [{ slot: 'mail-in', type: 'email_imap', provided_by: 'publisher', outcome: 'not_allowed_locally', credential_id: null }, { slot: 'x', type: 'y', outcome: 'bogus' }] }
+    })
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    expect(service.setupState(a.id).skillSlots.map(s => [s.slot, s.state, s.provision])).toEqual([['mail-in', 'missing', 'not_allowed_locally'], ['erp-api', 'connected', null]])
+  })
+
+  it('lists deliverable skills only, one entry per slot and type, and never decides setupNeeded', async () => {
+    const a = skillAgent([
+      skill('a', [{ slot: 'erp-api' }, { slot: 'erp-api', type: 'odoo' }]), skill('b', [{ slot: 'erp-api' }]),
+      skill('broken', [{ slot: 'hidden' }], { deliverable: false })
+    ])
+    const setup = service.setupState(a.id)
+    expect(setup.skillSlots.map(s => [s.slot, s.type, s.skills])).toEqual([['erp-api', 'api_token', ['a', 'b']], ['erp-api', 'odoo', ['a']]])
+    expect(setup.setupNeeded).toBe(false)
+    // A local profile has no account to attach from or offer.
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(setup.skillSlots[0].options).toEqual([])
+  })
+
+  it('writes what the skill runtime reads: the materialised file answers require_slot for the attached slot', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'api' }])])
+    world.metadata = [metadata()]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'api', credentialName: 'Cloud', skill: true }])
+    const p = await prepare(a.id)
+    expect(p.skillRuntime).toBe(true)
+    // A bare folder carries no skills: its engine gets no skill runtime.
+    expect((await prepare(addAgent('bare').id)).skillRuntime).toBe(false)
+    const shim = join(process.cwd(), 'resources/skill-runtime')
+    const out = execFileSync('python3', ['-I', '-B', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(shim)})
+from core.cinna_api import credentials, CredentialMissing
+print(credentials.require_slot('api')['credential_data']['http_header_value'])
+try:
+    credentials.require_slot('other')
+except CredentialMissing as e:
+    print(e.reason)`], { env: { ...process.env, CINNA_CREDENTIALS_PATH: p.path! }, encoding: 'utf8' })
+    expect(out.trim().split('\n')).toEqual([`Bearer ${world.token}`, 'not_linked'])
   })
 })

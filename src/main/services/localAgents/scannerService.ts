@@ -30,6 +30,7 @@ import type { LayoutView } from '../../kit/layout'
 import { manifestPath, readStamp, readWithStamp } from '../../kit/manifestIo'
 import { parseFrontmatter } from '../../kit/miniYaml'
 import { agentSkillRows } from '../../kit/skills'
+import { judgeSkillRows } from '../serviceCredentials/skillSlots'
 import { catalogSkillCache } from '../catalogSkillCache'
 import {
   isSkillFinding,
@@ -613,7 +614,8 @@ export const scannerService = {
       folderName
     })
     const compatibility = checkContractCompatibility(manifest.contract_version, contract.version)
-    const credentials = credentialStates(manifest, readEnvKeys(agentDir), attachmentMetadata(agentDir))
+    const attached = attachmentMetadata(agentDir)
+    const credentials = credentialStates(manifest, readEnvKeys(agentDir), attached)
     const catalog = commandsFor(agentDir, layout)
     const { readiness: state, reason } = readiness(
       compatibility,
@@ -663,7 +665,9 @@ export const scannerService = {
       commands: catalog.commands,
       // Listed whatever the readiness: a broken skill is a row with its issue,
       // and skills do not decide whether the agent runs.
-      skills: agentSkillRows(agentDir, manifest, catalogSkillCache.resolve),
+      // Each declared credential slot says whether a strictly matching
+      // attachment fills it; a gap is a warning on the row, never readiness.
+      skills: judgeSkillRows(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve), attached),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),

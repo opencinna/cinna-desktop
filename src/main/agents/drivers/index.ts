@@ -101,6 +101,7 @@ import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin } from '../../services/tasksSkillService'
 import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
+import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
 const logger = createLogger('agent-driver')
@@ -713,9 +714,9 @@ export const acpDriver = createAcpDriver({
     if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
     const { serviceCredentialService } = await import('../../services/serviceCredentials/service')
     const prepared = await serviceCredentialService.prepare(agent.id)
-    const env = { ...plan.spec.env }
-    delete env.CINNA_CREDENTIALS_PATH
-    if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
+    // Every engine (Claude, Codex, OpenCode) is launched with this env and passes it to the
+    // shell its tools run in: the credentials path, and for a kit agent the skill runtime.
+    const env = engineCredentialEnv(plan.spec.env, prepared)
     return { ...plan, credentialPrompt: prepared.prompt, spec: { ...plan.spec, env, key: `${plan.spec.key}:credentials:${prepared.generation}` } }
   },
   recordModelCatalog: (userId, launcher, metadata) => {

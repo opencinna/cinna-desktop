@@ -29,6 +29,8 @@ const located = vi.hoisted(() => ({ dir: '', other: '', kind: 'managed' as strin
 const remote = vi.hoisted(() => ({ ownRepo: false, originUrl: null as string | null, cinnaServer: null as string | null }))
 const listing = vi.hoisted(() => ({ value: null as null | { items: unknown[]; agents: unknown[] } }))
 const refresh = vi.hoisted(() => vi.fn(async () => listing.value))
+/** The skill slots main fills after Add and Update (U11), faked: what it would have attached. */
+const autoAttachSkills = vi.hoisted(() => vi.fn(async (_agentId: string): Promise<unknown[]> => []))
 
 vi.mock('../host/runtimeHost', () => ({ runtimeHost: { getPath: () => host.userData } }))
 vi.mock('../logger/logger', () => ({
@@ -59,6 +61,7 @@ vi.mock('./localAgents/localAgentService', async () => {
   }
 })
 vi.mock('./localAgents/scannerService', () => ({ scannerService: { markAllRootsDirty: () => {} } }))
+vi.mock('./serviceCredentials/service', () => ({ serviceCredentialService: { autoAttachSkills } }))
 vi.mock('./localAgents/gitService', () => ({
   gitService: { readShareRemote: async () => ({ ...remote, refusal: null }) }
 }))
@@ -149,8 +152,11 @@ describe('Add to agent', () => {
     listing.value = { items: [skillItem(3, archive)], agents: [] }
     serve({ 3: archive })
 
+    autoAttachSkills.mockResolvedValueOnce([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
     const outcome = await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)
-    expect(outcome).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
+    // The skill's slots get their credentials once it is pinned (U11), and the outcome says which.
+    expect(outcome).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 3, autoAttached: [{ slot: 'erp-api', credentialName: 'ERP', skill: true }] })
+    expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID)
     expect(cinnaFetchBytes.mock.calls[0].slice(0, 2)).toEqual([PROFILE, `/api/v1/skills/packages/${UUID}/revisions/3/download`])
 
     expect(manifest().catalog_skills).toEqual([
@@ -331,7 +337,9 @@ describe('Update and Remove', () => {
     writeManifest({ catalog_skills: [pinOf(1, v1)] })
     listing.value = { items: [skillItem(2, v2)], agents: [] }
     serve({ 2: v2 })
-    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    autoAttachSkills.mockClear()
+    expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2, autoAttached: [] })
+    expect(autoAttachSkills).toHaveBeenCalledTimes(1)
     expect(manifest().catalog_skills).toEqual([{ ...pinOf(2, v2) }])
     await vi.waitFor(() => expect(posts()).toHaveLength(1))
     expect((posts()[0][2] as { body: unknown }).body).toEqual({
@@ -402,6 +410,22 @@ describe('fetching what an agent pins (U7)', () => {
 
     located.missing = true
     expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: false, code: 'not_found' })
+  })
+
+  it('fills the skill slots after the background fetch of a sharing verb, never failing it', async () => {
+    const good = skillTgz('erp-lookup')
+    writeManifest({ catalog_skills: [{ package_id: 'p.skill.erp-lookup', package_uuid: UUID, name: 'erp-lookup', revision_number: 2, archive_sha256: sha256Of(good) }] })
+    serve({ 2: good })
+    autoAttachSkills.mockClear()
+    // Asked only once the revision is cached, so the cached SKILL.md's slots are known.
+    let cachedFirst: string | null = null
+    autoAttachSkills.mockImplementationOnce(async () => {
+      cachedFirst = catalogSkillCache.resolve({ name: 'erp-lookup', packageUuid: UUID, revisionNumber: 2, archiveSha256: sha256Of(good) }).state
+      throw new Error('boom')
+    })
+    catalogSkillService.ensurePinnedInBackground(USER, AGENT_ID)
+    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID))
+    expect(cachedFirst).toBe('ready')
   })
 })
 

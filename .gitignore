@@ -27,5 +27,8 @@ e2e/playwright-report
 # `.claude/settings.local.json`) must not drop a file of it from the repo.
 !/resources/cinna-agent-kit/**
 
+# Bytecode Python writes beside the skill runtime when an agent imports it in development.
+/resources/skill-runtime/**/__pycache__/
+
 # The macOS speech helper, built by scripts/build-speech-helper.sh.
 /resources/speech/

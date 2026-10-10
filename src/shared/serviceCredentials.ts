@@ -89,11 +89,49 @@ export interface CredentialSetupSlot {
   /** The active account's records that fit, best first; empty when connected. */
   options: CredentialSetupOption[]
 }
+/**
+ * Per slot answer of Core's `POST /skills/packages/{uuid}/revisions/{n}/provision-local`.
+ * `shared` / `already_shared`: the publisher's credential is now listed for this account;
+ * `user_provides`: the user brings their own; `not_shareable` / `not_allowed_locally`: the
+ * publisher provides it, but not for this computer.
+ */
+export type SkillProvisionOutcome = 'shared' | 'already_shared' | 'user_provides' | 'not_shareable' | 'not_allowed_locally'
+export interface SkillProvisionSlot { slot: string; type: string; providedBy: string; outcome: SkillProvisionOutcome; credentialId: string | null }
+/**
+ * A credential slot the agent's skills declare (`credentials:` in a deliverable skill's SKILL.md),
+ * one per `(slot, type)`. The slot is the Service URI the skill finds its credential by; only an
+ * attached record of that type with exactly that Service URI fills it (strict, as Core's).
+ * Never blocks the agent: a script fails at call time instead.
+ */
+export interface CredentialSetupSkillSlot {
+  /** The Service URI the skill asks for (`by_slot` / `require_slot`). */
+  slot: string
+  type: string
+  /** The skills that declare it, by name. */
+  skills: string[]
+  /** The first declaring skill's description of it, if any. */
+  description: string | null
+  /** `connected`: a strictly matching attachment is ready. */
+  state: 'connected' | 'missing'
+  /** The strictly matching attachment the slot is judged by, ready when `connected`. */
+  attached: { credential: ServiceCredentialDto; state: ServiceCredentialAttachmentState } | null
+  /** An attached record with this Service URI but another type: the skill's `by_slot` would find it, and it does not fit. */
+  typeMismatch: ServiceCredentialDto | null
+  /** The active account's records that fit strictly, best first; empty when connected. */
+  options: CredentialSetupOption[]
+  /** What the last `provision-local` call this app session answered for this slot, if any. */
+  provision: SkillProvisionOutcome | null
+}
 export interface CredentialSetupDto {
   slots: CredentialSetupSlot[]
+  /** The skills' slots, apart from the agent's own: they never decide `setupNeeded`. */
+  skillSlots: CredentialSetupSkillSlot[]
   /** A required slot is still unsatisfied (the agent reads `credentials_needed`). */
   setupNeeded: boolean
 }
-/** A credential attached without asking after a Get, Update or Use the team's version. */
-export interface AutoAttachedCredential { slot: string; credentialName: string }
+/**
+ * A credential attached without asking after a Get, Update or Use the team's version.
+ * `skill: true` for a skill slot, whose `slot` is a Service URI and may equal an agent slot's name.
+ */
+export interface AutoAttachedCredential { slot: string; credentialName: string; skill?: true }
 export type ServiceCredentialResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }
