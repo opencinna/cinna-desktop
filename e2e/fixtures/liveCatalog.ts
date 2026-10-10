@@ -1,6 +1,9 @@
-import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { repoRoot } from '../playwright.config'
+import type { CinnaApp } from './app'
+import { installFakeAcpEngine, type FakeAcpEngine } from './fakeAcpEngine'
 import {
   expect,
   findAgent,
@@ -57,7 +60,8 @@ export const ERP_SLOT = { name: 'erp', type: 'api_token', service_uri: 'erp-api'
  * credential for slot `erp-api` through `core.cinna_api` — and prints its type
  * and a hash prefix of its header value, never the value.
  */
-const SLOT_CHECK = `import hashlib
+export function slotCheckScript(prefix: string): string {
+  return `import hashlib
 import sys
 
 from core.cinna_api import credentials
@@ -65,11 +69,14 @@ from core.cinna_api import credentials
 cred = credentials.by_slot("erp-api")
 if cred is None:
     # Exit 0: a failed command folds its output behind Details.
-    print("slot-check: erp-api=none")
+    print("${prefix}: erp-api=none")
     sys.exit(0)
 value = (cred.get("credential_data") or {}).get("http_header_value", "")
-print(f"slot-check: erp-api={cred.get('type')} {hashlib.sha256(str(value).encode()).hexdigest()[:12]}")
+print(f"${prefix}: erp-api={cred.get('type')} {hashlib.sha256(str(value).encode()).hexdigest()[:12]}")
 `
+}
+
+const SLOT_CHECK = slotCheckScript('slot-check')
 
 const CLI_COMMANDS = `commands:
   - name: status
@@ -81,8 +88,8 @@ const CLI_COMMANDS = `commands:
 `
 
 /** What `slot-check` prints when the admin's ERP API reached the agent. */
-export function slotCheckLine(fixture: CatalogFixture): string {
-  return `slot-check: erp-api=api_token ${shortHash(`Bearer ${fixture.credentials.erp.secret}`)}`
+export function slotCheckLine(fixture: CatalogFixture, prefix = 'slot-check'): string {
+  return `${prefix}: erp-api=api_token ${shortHash(`Bearer ${fixture.credentials.erp.secret}`)}`
 }
 
 export interface BuiltAgent {
@@ -110,7 +117,13 @@ export function skillName(base: string): string {
 export function writeSkill(
   agentPath: string,
   name: string,
-  input: { description: string; credentials?: { slot: string; type: string; description?: string }[]; body?: string }
+  input: {
+    description: string
+    credentials?: { slot: string; type: string; description?: string }[]
+    body?: string
+    /** Further files of the skill, by path relative to its folder (`scripts/run.py`). */
+    files?: Record<string, string>
+  }
 ): void {
   const lines = ['---', `name: ${name}`, `description: ${input.description}`]
   if (input.credentials?.length) {
@@ -123,6 +136,10 @@ export function writeSkill(
   lines.push('---', '', input.body ?? `Use \`/run:slot-check\` before answering.\n`)
   mkdirSync(join(agentPath, 'skills', name), { recursive: true })
   writeFileSync(join(agentPath, 'skills', name, 'SKILL.md'), lines.join('\n'))
+  for (const [rel, text] of Object.entries(input.files ?? {})) {
+    mkdirSync(dirname(join(agentPath, 'skills', name, rel)), { recursive: true })
+    writeFileSync(join(agentPath, 'skills', name, rel), text)
+  }
 }
 
 /**
@@ -349,4 +366,103 @@ export async function skillDto(app: PersonApp, agentId: string, name: string, so
   const agent = await app.page.evaluate((id) => window.api.localAgents.get(id), agentId)
   if (!agent.ok) throw new Error(agent.message)
   return agent.value.skills?.find((row) => row.name === name && row.source === source)
+}
+
+/** The `catalog_skills[]` pin core's listing item `item` would be added as (its latest version). */
+export function catalogPinOf(item: any): { package_id: string; package_uuid: string; name: string; revision_number: number; version?: string; archive_sha256: string } {
+  return {
+    package_id: item.id,
+    package_uuid: item.uuid,
+    name: item.name,
+    revision_number: item.latest.revision_number,
+    ...(item.latest.version ? { version: item.latest.version } : {}),
+    archive_sha256: String(item.skill.archive_sha256).toLowerCase()
+  }
+}
+
+/** Append `pins` to the agent's `catalog_skills[]` by hand, as a `git pull` or an editor would leave them. */
+export function writeCatalogPins(path: string, pins: ReturnType<typeof catalogPinOf>[]): void {
+  const file = join(path, 'cinna-agent.json')
+  const manifest = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  manifest.catalog_skills = [...((manifest.catalog_skills as unknown[]) ?? []), ...pins]
+  writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n')
+}
+
+/** `<userData>/cinna-plugins/agents/<key>`: the agent's skills plugin; its `skills/` is the links folder. */
+export function skillsPluginDir(app: PersonApp, agentId: string): string {
+  return join(app.sandbox.userData, 'cinna-plugins', 'agents', createHash('sha256').update(agentId).digest('hex').slice(0, 16))
+}
+
+/** The OpenCode config the launcher last wrote for `agentId`, and that agent's entry in it; null before its first turn. */
+export function openCodeConfigOf(app: PersonApp, agentId: string): { config: any; entry: any } | null {
+  const file = join(app.sandbox.userData, 'acp', 'opencode', createHash('sha256').update(agentId).digest('hex').slice(0, 16), 'opencode.json')
+  if (!existsSync(file)) return null
+  const config = JSON.parse(readFileSync(file, 'utf8'))
+  const entry = Object.values(config.agent ?? {}).find((agent: any) => String(agent.prompt ?? '').includes(`\`${agentId}\``))
+  return entry ? { config, entry } : null
+}
+
+/**
+ * Run `app`'s OpenCode agents on the scripted fake ACP agent (`fakeAcpEngine.ts`),
+ * over a keyless Ollama credential at `ollamaHost` as the default chat mode —
+ * the launcher then writes each agent's real `opencode.json`, and no model runs.
+ */
+export async function useFakeOpenCode(app: PersonApp, ollamaHost: string, model: string): Promise<FakeAcpEngine> {
+  const fake = await installFakeAcpEngine(app as unknown as CinnaApp)
+  await app.page.evaluate(
+    async ({ host, model }) => {
+      const { id } = await window.api.providers.upsert({ type: 'ollama', name: 'Ollama', baseUrl: host, enabled: true })
+      await window.api.chatModes.upsert({ name: 'Default', providerId: id, modelId: model, isDefault: true })
+    },
+    { host: ollamaHost, model }
+  )
+  return fake
+}
+
+/**
+ * Run Codex on the scripted app-server (`fakeCodexAppServer.mjs`) through the
+ * explicit Codex path, as `codex-engine.spec.ts` does; it records every request
+ * in `<home>/codex-requests.jsonl`. Takes effect after the next relaunch.
+ */
+export function installFakeCodex(app: PersonApp): string {
+  const bin = join(app.sandbox.home, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const executable = join(bin, 'codex')
+  const source = readFileSync(join(repoRoot, 'src/main/agents/drivers/acp/testSupport/fakeCodexAppServer.mjs'), 'utf8')
+  writeFileSync(executable, `#!${process.execPath}\n${source}`, { mode: 0o755 })
+  const quote = (value: string): string => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+  for (const profile of ['.zprofile', '.zshrc', '.bash_profile', '.profile']) {
+    appendFileSync(join(app.sandbox.home, profile), `\nexport PATH=${quote(bin)}:$PATH\nexport CODEX_HOME=${quote(app.sandbox.home)}\n`)
+  }
+  return executable
+}
+
+/** What the scripted Codex was asked to start, newest last. */
+export function codexThreadStarts(app: PersonApp): any[] {
+  const file = join(app.sandbox.home, 'codex-requests.jsonl')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line))
+    .filter((request) => request.method === 'thread/start' && !request.params?.ephemeral)
+}
+
+/** `text` sent from the composer of the agent's page, which starts a new chat with it. */
+export async function startAgentChat(app: PersonApp, name: string, text: string): Promise<void> {
+  await openAgent(app, name)
+  const input = app.page.getByRole('combobox', { name: 'Type a message...', exact: true })
+  await input.fill(text)
+  await input.press('Enter')
+}
+
+/** The chat whose first user message is `text`, as main stores it; null until it exists. */
+export async function chatStartedWith(app: PersonApp, text: string): Promise<any | null> {
+  return app.page.evaluate(async (first) => {
+    for (const row of await window.api.chat.list()) {
+      const chat = await window.api.chat.get(row.id)
+      if (chat?.messages.find((message) => message.role === 'user')?.content === first) return chat
+    }
+    return null
+  }, text)
 }
