@@ -36,7 +36,7 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 
 ### Cross-repo integration runs
 
-`make e2e-integration` is the only run that installs anything against a running server; the one other spec that reaches a cinna-core is the cloud test in `live-delegation.spec.ts` ([Live specs](#live-specs)), which only creates and deletes tasks there. It exists because one-click onboarding is a contract between three programs — cinna-desktop, cinna-core and cinna-cli — and a suite that fakes two of them proves nothing about the contract itself. `cinna-integration.spec.ts` drives the whole path: a `cinna://connect` link, the real PKCE loopback OAuth flow, the toolchain really downloaded and digest-verified, cinna-cli really installed from PyPI at the version the *server* pinned, and `cinna account setup` really creating an account workspace from a really-minted single-use token.
+`make e2e-integration` is the only run that installs anything against a running server; two other runs reach a cinna-core. One is the cloud test in `live-delegation.spec.ts` ([Live specs](#live-specs)), which only creates and deletes tasks there. The other is the team-sharing specs ([below](#team-sharing-against-a-real-cinna-core)), which create and delete users, credentials and library entries on a local core. `make e2e-integration` exists because one-click onboarding is a contract between three programs — cinna-desktop, cinna-core and cinna-cli — and a suite that fakes two of them proves nothing about the contract itself. `cinna-integration.spec.ts` drives the whole path: a `cinna://connect` link, the real PKCE loopback OAuth flow, the toolchain really downloaded and digest-verified, cinna-cli really installed from PyPI at the version the *server* pinned, and `cinna account setup` really creating an account workspace from a really-minted single-use token.
 
 Configure it in `.env` (see `.env.example`): `CINNA_E2E_SERVER_URL` is the **backend** origin — the one serving `/.well-known/cinna-desktop`, not the SPA dev server — plus `CINNA_E2E_EMAIL` and `CINNA_E2E_PASSWORD` for an account on that instance. Without all three the spec skips.
 
@@ -67,6 +67,30 @@ Five specs run a real model, every one of them on purpose: the fakes prove the p
 - **The model is chosen, not defaulted.** `seedOpenAiDefaultMode` (`e2e/fixtures/live.ts`) adds the OpenAI credential over IPC and makes a default chat mode on the first of `PREFERRED_MODELS` (`gpt-4.1-mini`, `gpt-4o-mini`, `gpt-5-mini`) that the app lists for the key, falling back to the first listed `mini`. A fast model that calls tools dependably is what keeps these runs cheap and their failures meaningful. Each spec logs the model it got.
 - **Assertions are on outcomes, never on prose.** A file on disk, a task's status, a delegation row, an Inbox that stays empty, a core task. Where a spec checks that a requester learnt something, the word exists only in the executor's prompt, so it can have reached the requester only through the return packet.
 - **The cloud test links the profile without a browser.** `linkLiveCinnaProfile` (`e2e/fixtures/liveCinnaLink.ts`) signs in for an owner token and writes it, encrypted with the app's own `safeStorage`, into the sandbox's `users` row; `liveCoreSession()` turns a missing or unreachable core into a skip that names the reason. Every core task the run creates carries a run marker in its title and is deleted afterwards.
+
+### Team sharing against a real cinna-core
+
+Four specs drive [Team Sharing](../../agents/local_agents/team_sharing.md) against a **real local cinna-core**, with one app per core user side by side: A shares, B and C are teammates. They run no model and bill nothing, but they **create and delete real users** on that core. Point them at a disposable development core only, never one anyone works in.
+
+| Spec | What it proves |
+|---|---|
+| `live-team-sharing.spec.ts` | The main path: A shares with B as Can use. Core holds exactly those grants and none of A's secrets, and C can neither see nor clone the entry. B Gets the agent, a shared credential is attached without asking, B types the other into Finish setting up, and the agent's script reads both |
+| `live-team-sharing-credentials.spec.ts` | Credentials on Get, Update and Use the team's version: no option for someone the credential is not shared with, two matching records, revoke, re-share and rotate, an empty `KEY=`, a slot arriving by Update, and a root `.env` refused before anything reaches core |
+| `live-team-sharing-collab.spec.ts` | Update and Share changes both ways, with History, and the one-Update retry. The collision dialog's two buttons, the `dirty` refusal, Can use, a demotion mid-share, and core's refusals of a symlink, an oversized file and an invalid manifest, with the combined send after a fix |
+| `live-team-sharing-lifecycle.spec.ts` | Remove sharing with the delete and a re-share, access removed, Get refused by folder name and by manifest id, the Inbox card, a blocked job fixed by Get, and the `.claude/settings.local.json` migration cases |
+
+What they need, in order:
+
+1. A running local cinna-core, in the checkout at `$CINNA_CORE_PATH` (default `../workflow-runner-core`)
+2. Its state, made by `e2e/fixtures/live-team-sharing.py` inside the backend container. Run this from this repository: `umask 077; (cd "$CINNA_CORE_PATH" && docker compose exec -T backend python - create) < e2e/fixtures/live-team-sharing.py > /tmp/team-sharing.json`. It signs up three people and has the first superuser create two service credentials. The JSON it prints holds bearer tokens, so keep it outside the repository
+3. `npx electron-vite build`, because `make e2e-one` runs against the existing `out/`
+4. One spec at a time: `CINNA_SHARING_LIVE_FIXTURE=/tmp/team-sharing.json make e2e-one SPEC=live-team-sharing-collab`, and the same for `-credentials` and `-lifecycle`. `SPEC` is a substring filter, so `SPEC=live-team-sharing` runs all four. Use `SPEC=live-team-sharing.spec` for the main one alone
+5. Afterwards: `(cd "$CINNA_CORE_PATH" && docker compose exec -T backend python - cleanup) < e2e/fixtures/live-team-sharing.py`, then `rm /tmp/team-sharing.json`. Cleanup finds what any run made by its email prefix (`team-sharing-e2e-`), not by the JSON, so a lost fixture file leaves nothing behind. It removes those people, every library entry they own, and the admin's `Acme API … <tag>` credentials
+
+- **Without `CINNA_SHARING_LIVE_FIXTURE` every test skips**, so `make e2e` and `make e2e-live` pass over them (their names contain `live`, so `make e2e-live` picks them up too).
+- **Each person's desktop tokens are minted per launch**, through core's real PKCE authorize, consent and token exchange, because core's desktop tokens live fifteen minutes and rotate. Only the consent click is done over the API, as in the integration run.
+- **Every test makes its own agent** under a unique name, because library slugs are unique server-wide. A test that revokes, re-shares or rotates a credential puts it back.
+- **On a failure, read `<person>-screen.yaml` and `<person>-screen.png`** in the test's output folder, one per app. `error-context.md` shows only one window. A failed test also keeps each person's sandbox and names it in the report's annotations.
 
 ### Encoding a manual test
 1. One `test()` per `###` item of the manual document, named with the ID (`A1 …`) so the two stay cross-referenced
@@ -147,6 +171,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/live.spec.ts` — `@live`: onboarding through the real API-key screen, a one-turn chat round trip, and D2: a folder agent given a secret word in its prompt documents, attached with `@` inside a model chat, answering through the engine
 - `e2e/specs/folder-tasks.spec.ts` — folder tasks with no model: a bare agent's `.cinna/tasks/*.md` and `_board.yaml` written from outside show up in the list and on the agent's folder board in the file's column order, with the File row, the outside glyph and Blocked by on the task page; an outside rewrite of the status word and title is followed; a Move to and an Edit task title change patch exactly those two lines of the file (compared byte for byte) and clear the glyph; New task for the agent writes a new file and Delete task removes it
 - `e2e/specs/live-tasks.spec.ts`, `e2e/specs/live-delegation.spec.ts`, `e2e/specs/live-autorun.spec.ts`, `e2e/specs/live-folder-tasks.spec.ts` — `@live`: tasks, delegation, auto-run and an agent editing its own task file with real agents on the pinned OpenCode engine; see [Live specs](#live-specs)
+- `e2e/specs/live-team-sharing.spec.ts`, `-credentials`, `-collab`, `-lifecycle` — team sharing against a real local cinna-core, one app per user; see [Team sharing against a real cinna-core](#team-sharing-against-a-real-cinna-core)
 - `e2e/specs/a2a-silent-stop.spec.ts` — a2a silent stop regression.
 - `e2e/specs/chat-session-status.spec.ts` — seven real loopback A2A cases for background spinner/interrupt/delete with the current draft preserved; completed, needs-input and failed unread outcomes through restart and transcript opening; and foreground outcomes remaining read after navigation. Checks computed icon opacity/animation, real cancellation/abort and persisted results. See [Sidebar Session Status](../../chat/session_status/session_status.md).
 - `e2e/specs/chat-row-tooltip.spec.ts` — the sidebar chat row's summary tooltip, seeded over IPC with no model: an agent chat names its agent, `with <other>`, Started and Lasted, 4px right of the row; the pointer crosses onto it and it stays past the closing delay, then goes when the pointer leaves; a mode chat shows exactly one tooltip tagged `chat mode`; an empty chat shows none; a click on a hovered row opens the chat and leaves no tooltip.
@@ -172,6 +197,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/fixtures/seed.ts` — `addAgentRoot`, `createFolderAgent`
 - `e2e/fixtures/live.ts` — `OPENAI_API_KEY`, `LIVE_REQUESTED` (`CINNA_E2E_LIVE=1`), `requireLiveKey()`, `PREFERRED_MODELS` and `seedOpenAiDefaultMode()`
 - `e2e/fixtures/liveCinnaLink.ts` — `linkLiveCinnaProfile()`, `liveCoreSession()` and `coreApi()`: a sandbox profile linked to a real cinna-core without the browser, for the cloud live test
+- `e2e/fixtures/liveTeamSharing.ts` — the `team` fixture (`team.open('a')`: one sandboxed app per person, desktop tokens minted per launch), core's REST and clone helpers, and the UI steps the team-sharing specs share. `e2e/fixtures/live-team-sharing.py` — `create` and `cleanup` of the disposable core state, run inside the backend container
 - `e2e/fixtures/engine-cache.ts`, `e2e/global-setup.ts` — the engine cache and the one-time fill
 - `Makefile` — the user-facing entry points (`make help`)
 - `.claude/agents/e2e-test-writer.md`, `.claude/commands/cinna-desktop.e2e.write.md` — the agent that writes and debugs specs, and the command that launches it

@@ -51,6 +51,48 @@ A producer's owner can issue an **Agent API key** to a person; that person's key
 
 Desktop does not notify the user when a key dies and does not renew or request keys; issuing and revoking stay in Cinna web.
 
+## Finish setup
+
+Credentials never travel with a [shared agent](../local_agents/team_sharing.md): what arrives from the Team library carries its manifest's slots and none of the values or attachments behind them. Finish setup is how such an agent gets its credentials on this computer, first without asking where the answer is unambiguous, then in one dialog for the rest.
+
+### Attaching without asking
+
+After a team-library **Get**, an **Update** that brought changes, or **Use the team's version**, main attaches the active profile's cloud records that fit a still-missing slot beyond doubt:
+
+- **Which records fit** is the scanner's own matching, so nothing is attached that readiness would not then count: same type, local use allowed, not a dead issued key; then the slot's `service_uri` when it declares one, otherwise records named like the slot, then records whose Service URI is the slot's name. Within that, records the user owns come before records shared with them. The first non-empty group is the match, and it is attached only when it holds **exactly one** record. Two owned records for one slot are a choice for the user, never a guess
+- **Only the active profile's account**, only into that account's group, and **only appends**: nothing already attached is removed or reordered, a record already attached is not offered again, and one record is never attached to two slots in one pass
+- **Only when something is missing.** An agent whose slots are all satisfied gets no sync and no write. Otherwise the account is synced first, bounded to five seconds like a turn's sync, so a record created on the server a moment ago can still be found
+- **It never waits behind a turn.** A running turn refuses the write at once and nothing is attached; the dialog then offers the same records. A short exclusive write by something else (a regeneration, a sharing verb) is retried for up to five seconds, never queued
+- **It never fails the verb.** Any error is logged and the verb answers as if nothing matched. A Get that landed is not reported as failed because a credential could not be attached
+
+The verb's result says what was attached (`autoAttached`, slot and record names) and whether the dialog should open (`setupNeeded`): after a Get, when any required slot is still missing; after an Update or Use the team's version, only when a required slot is missing that was not missing before the verb, so **Finish later** is not undone by every Update. When it is set, the agent page opens **Finish setting up *Name*** as soon as it shows that agent, even after a Get whose page was not mounted yet. It stays requested until the dialog is closed, so leaving the page and coming back still shows it.
+
+### The dialog
+
+Opened that way, or from **Finish setup** on the agent page's readiness strip whenever the agent reads `credentials_needed`. One row per slot, each in the scanner's own verdict, so the dialog can never call ready what readiness calls missing:
+
+- **Connected automatically** / **Connected** — a matching attachment is ready; *automatically* when main attached it without asking during this app session
+- **Set on this computer** — no attachment, and `credentials/.env` fills the slot
+- **Missing**, or **Optional** for an optional slot — with the attachment that stopped counting, when there is one, shown so the user sees why
+- Under a slot that is not connected: the active account's records that fit it, best first, each with **Use this**, which appends it to that account's group and waits for a running turn like any attach. Then *or enter it on this computer* and one password field per declared `.env` name, with **Save** for the slot (Enter saves too). A name already set reads **Set** with **Replace**; Replace shows the field again with **Cancel**, which keeps the saved value
+- A slot without `fields` has no names to ask for (the kit reads any `<prefix>…`), so it offers its records and **Open credentials/.env**
+- A slot nothing in the account fits, with no names to fill: *Nothing in your account fits it. Attach one on the Credentials tab.* Local records are attached there, not here
+
+**Finish later** (focused on open) and **Done** close it. Done saves whatever was typed and not yet saved first, and stays open on a refusal. Nothing here blocks the agent: a missing credential stays the page's warning, as before. The dialog is owned by the agent page, so switching between chat and settings neither closes it nor drops a write's result.
+
+The layout is built so nothing moves under the user ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1): the dialog's top is pinned, so a row that grows moves only what is below it; the slot list scrolls inside a dialog no taller than the window; every `.env` name keeps its row whether it is a field or **Set**; the footer reserves two lines for a refusal or a note beside its buttons; **Save** comes and goes with Replace, Cancel and a save, never with typing. **While anything typed is unsaved, the backdrop and Escape close nothing**: a click outside would otherwise throw away a secret the user just pasted, with no way to tell it had.
+
+### Writing `credentials/.env`
+
+Values typed into the dialog go to `credentials/.env` through main, never anywhere else:
+
+- **Only names the manifest declares** (and only plain variable names); a value must be non-empty and one line. Anything else is refused whole
+- **Refused while a turn runs**, with nothing changed and "save again when it finishes", rather than waiting: a write queued behind a long turn would leave the dialog spinning with no end the user can see
+- **Refused when no `.gitignore` rule covers `credentials/.env`**, after installing the contract's own `credentials/.gitignore` where the folder has none. A secrets file the next share could commit is worse than no file
+- **Merged in place.** Every other line and comment stays; a name's first assignment, or its commented seed (`# KEY=`) when nothing assigns it, is replaced where it stands, and any later assignment of it is dropped, because the reader takes the last one. Written `0600` through a temporary file and a rename
+- **Quoted so both readers read it back unchanged.** The kit's reader knows no escapes and python-dotenv, which an agent's own script may use, does, so each value takes the first form both agree on: bare, then `"…"`, then `'…'`. A value that needs quoting and holds a backslash, or both `"` and `'`, falls back to `"…"`, which the kit reader reads exactly and python-dotenv may not. No form stops python-dotenv expanding `${NAME}` unless the script loads with `interpolate=False`
+- The answer is the slots' new states, names only; no value is logged or returned
+
 ## Credential rows
 
 Local settings, remote settings and an agent's attached list render one `CredentialRow`: type icon, name, type badge, status icon, ownership icon (owned, shared by *email*, or stored on this computer), the Service URI as code, then the row's actions. Every element is one line and fixed-size, so a status change does not move its neighbours. The icons carry their sentence as a tooltip and an accessible name. `credentialPresentation.ts` holds what the rows say, as pure functions, so the three lists cannot drift into different words for one state.
@@ -91,7 +133,7 @@ Known sensitive strings of at least eight characters are redacted before transcr
 
 ## Implementation and verification
 
-Hub owns `src/main/services/serviceCredentials/`, the repository/migration, and redaction. IPC and renderer consume metadata-only typed outcomes. `service-credentials:attach-options` (agent ID) returns the picker groups with each item's `attached` flag. `service-credentials:set-attachments` (agent ID, group, refs) replaces one group's list, where group is `'local'` or an account key. `hub/core.ts` installs the session unlock check (`installUnlockCheck`, backed by `userActivation.isUnlocked`); `activation.ts` recomputes the set on unlock changes and reports renewal of any profile through `renewed`; `authService` reports logout (`signOut`), deletion and password changes. `renewed` starts an account's scheduler only when the account already existed: one that just became eligible was started by the recompute, and starting it again synced it twice.
+Hub owns `src/main/services/serviceCredentials/`, the repository/migration, and redaction. IPC and renderer consume metadata-only typed outcomes. `service-credentials:attach-options` (agent ID) returns the picker groups with each item's `attached` flag. `service-credentials:set-attachments` (agent ID, group, refs) replaces one group's list, where group is `'local'` or an account key. `service-credentials:attach` (agent ID, group, ref) appends one record to a group, computed under the agent's lock so it never drops a reference written in between (Finish setup's **Use this**). `service-credentials:setup-state` (agent ID) answers `CredentialSetupDto`: each slot's state, the attachment it was judged by, and the active account's records that fit it. All three writes go through `writeAttachments` in `service.ts`. `autoAttach(agentId)` is called by the sharing verbs, never over IPC; the fit rules are `slotMatch.ts` (`autoMatch`, `slotCandidates`, `isDeadKey`), pure and mirrored from the scanner's `credentialStates`. The `.env` writer is `localAgentService.setEnvValues` over `localAgents/envFile.ts` (`mergeEnv`, `envLine`, `envValueProblem`), reached through `local-agent:set-env-values`. The dialog is `FinishSetupDialog.tsx` (`useFinishSetup`, owned by `LocalAgentPage`); the sharing mutations hand it the verbs' results through `stores/finishSetup.store.ts`, at hook level so the request survives the caller unmounting. `hub/core.ts` installs the session unlock check (`installUnlockCheck`, backed by `userActivation.isUnlocked`); `activation.ts` recomputes the set on unlock changes and reports renewal of any profile through `renewed`; `authService` reports logout (`signOut`), deletion and password changes. `renewed` starts an account's scheduler only when the account already existed: one that just became eligible was started by the recompute, and starting it again synced it twice.
 
 `ServiceCredentialsTab` owns attaching, not `CredentialAttachModal`, so an attach survives the picker closing. Every list write (attach, detach) runs on one promise chain and applies its change to a freshly read copy of that group's list. Without that, a detach made while an attach was in flight would write back a list without the new reference. The follow-on skills feature should call this attachment/materialization service, never implement a second delivery path.
 

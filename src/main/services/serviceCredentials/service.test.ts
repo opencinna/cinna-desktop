@@ -845,3 +845,152 @@ describe('issued Agent API keys', () => {
     })
   })
 })
+
+describe('auto-attach and the Finish setup state', () => {
+  const slot = (name: string, serviceUri: string | null, expectedKeys: string[] = [], presentKeys: string[] = [], optional = false) =>
+    ({ name, type: 'api_token', optional, envPrefix: null, serviceUri, expectedKeys, presentKeys, satisfied: optional || (expectedKeys.length > 0 && presentKeys.length === expectedKeys.length) })
+  const rec = (id: string, name: string, service_uri: string | null, over: Record<string, unknown> = {}) =>
+    ({ ...metadata(), id, name, service_uri, ...over })
+  /** The scanner's judgement, as the real scan computes it: a matching attachment decides, ready preferred. */
+  function kitAgent(slots: ReturnType<typeof slot>[]) {
+    const a = addAgent('kit') as any
+    Object.defineProperty(a, 'credentials', { get: () => slots.map(s => {
+      const attached = service.metadataForPath(a.path).filter(m => m.type === s.type)
+      const matching = s.serviceUri ? attached.filter(m => m.serviceUri === s.serviceUri)
+        : [attached.filter(m => m.name === s.name), attached.filter(m => m.serviceUri === s.name)].find(g => g.length) ?? []
+      const pick = matching.find(m => m.state === 'ready') ?? matching[0]
+      return { ...s, attachment: pick ? { credentialId: pick.id, state: pick.state } : null, satisfied: s.optional || (pick ? pick.state === 'ready' : s.satisfied) }
+    }) })
+    return a
+  }
+  const group = (a: { id: string }, user: string) => service.attachments(a.id).filter(v => v.group === key(user)).map(v => v.ref)
+
+  it('attaches the single matching record of the active account, and reports it', async () => {
+    const a = kitAgent([slot('acme', 'acme-api'), slot('weather', null, ['WEATHER_API_KEY'])])
+    world.metadata = [rec('acme-1', 'Acme API', 'acme-api'), rec('other', 'Acme API (other)', null)]
+    await login('account-b')
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'acme', credentialName: 'Acme API' }])
+    expect(group(a, 'account-b')).toEqual(['acme-1'])
+    const setup = service.setupState(a.id)
+    expect(setup.slots.map(s => [s.name, s.state, s.attached?.credential.name ?? null])).toEqual([['acme', 'connected', 'Acme API'], ['weather', 'missing', null]])
+    expect(setup.slots[0].attached).toMatchObject({ state: 'ready', credential: { relation: 'shared', ownerEmail: 'owner@example.test' } })
+    expect(setup.setupNeeded).toBe(true)
+  })
+
+  it('attaches nothing when no record fits, or two do, and offers both to pick from', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('x', 'Unrelated', 'elsewhere')]
+    await login('account-b')
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+
+    world.metadata = [rec('one', 'Acme one', 'acme-api'), rec('two', 'Acme two', 'acme-api')]
+    await service.sync(); await sleep()
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+    const [s] = service.setupState(a.id).slots
+    expect(s.state).toBe('missing')
+    expect(s.options.map(o => [o.ref, o.group])).toEqual([['one', key('account-b')], ['two', key('account-b')]])
+  })
+
+  it('prefers the owned record and matches name-only slots by name, then service_uri', async () => {
+    const a = kitAgent([slot('acme', 'acme-api'), slot('weather', null), slot('maps', null)])
+    world.metadata = [rec('s1', 'Acme shared', 'acme-api'), rec('s2', 'Acme shared 2', 'acme-api'), rec('o1', 'Acme mine', 'acme-api', { relation: 'owned' }),
+      rec('w-uri', 'Weather by uri', 'weather', { relation: 'owned' }), rec('w-name', 'weather', null), rec('m-uri', 'Maps Inc', 'maps')]
+    await login('account-b')
+    expect(await service.autoAttach(a.id)).toEqual([
+      { slot: 'acme', credentialName: 'Acme mine' }, { slot: 'weather', credentialName: 'weather' }, { slot: 'maps', credentialName: 'Maps Inc' }])
+    expect(group(a, 'account-b')).toEqual(['o1', 'w-name', 'm-uri'])
+  })
+
+  it('skips satisfied slots and records kept off this computer, and never removes an attachment', async () => {
+    const a = kitAgent([slot('acme', 'acme-api', ['ACME_TOKEN'], ['ACME_TOKEN']), slot('weather', 'weather'), slot('maps', 'maps')])
+    world.metadata = [rec('acme-1', 'Acme', 'acme-api'), rec('keep', 'Kept', 'unrelated'), rec('w1', 'Weather', 'weather'), rec('m-off', 'Maps', 'maps', { local_use_allowed: false })]
+    await login('account-b')
+    await service.setAttachments(a.id, key('account-b'), ['keep'])
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'weather', credentialName: 'Weather' }])
+    expect(group(a, 'account-b')).toEqual(['keep', 'w1'])
+    // Now that weather has a ready attachment, a second run adds nothing.
+    world.metadata.push(rec('w2', 'Weather 2', 'weather', { relation: 'owned' })); await service.sync(); await sleep()
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual(['keep', 'w1'])
+    const states = service.setupState(a.id).slots.map(s => [s.name, s.state, s.options.length])
+    expect(states).toEqual([['acme', 'env', 1], ['weather', 'connected', 0], ['maps', 'missing', 0]])
+  })
+
+  it('answers at once, without a sync, when no slot is missing', async () => {
+    // A fieldless slot is filled by any name under its prefix, as the kit reads it.
+    const slots = [slot('acme', 'acme-api', ['ACME_TOKEN'], ['ACME_TOKEN']), slot('vendor', 'vendor', [], ['VENDOR_X'])]
+    const a = kitAgent(slots)
+    world.metadata = [rec('acme-1', 'Acme', 'acme-api'), rec('v1', 'Vendor', 'vendor')]
+    await login('account-b')
+    world.list.mockClear()
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(world.list).not.toHaveBeenCalled()
+    expect(service.setupState(a.id).slots.map(s => s.state)).toEqual(['env', 'env'])
+    // A missing slot does sync first.
+    slots[1] = slot('vendor', 'vendor')
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'vendor', credentialName: 'Vendor' }])
+    expect(world.list).toHaveBeenCalled()
+  })
+
+  it('touches only the active profile account, and does nothing on a local profile', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.byUser = { 'account-a': [rec('a-acme', 'A Acme', 'acme-api')], 'account-b': [] }
+    await login('account-a'); await login('account-b')
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+    world.user = '__default__'; await service.activate('__default__')
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(service.setupState(a.id).slots[0].options).toEqual([])
+  })
+
+  it('shows an attached record that stopped counting as missing, with why, beside the other options', async () => {
+    const a = kitAgent([slot('acme', 'acme-api', ['ACME_TOKEN'], ['ACME_TOKEN'])])
+    world.metadata = [rec('acme-1', 'Acme API', 'acme-api'), rec('acme-2', 'Acme backup', 'acme-api')]
+    await login('account-b')
+    await service.setAttachments(a.id, key('account-b'), ['acme-1'])
+    expect(service.setupState(a.id).slots[0]).toMatchObject({ state: 'connected', options: [] })
+    world.metadata[0].local_use_allowed = false; await service.sync(); await sleep()
+    // `.env` holds the name, but the matching attachment decides, as readiness says.
+    const [s] = service.setupState(a.id).slots
+    expect(s).toMatchObject({ state: 'missing', attached: { state: 'local_use_not_allowed', credential: { name: 'Acme API' } } })
+    expect(s.options.map(o => o.ref)).toEqual(['acme-2'])
+    expect(service.setupState(a.id).setupNeeded).toBe(true)
+  })
+
+  it('never waits for a running turn: attaches nothing, at once, and queues nothing', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('acme-1', 'Acme API', 'acme-api')]
+    await login('account-b'); await sleep()
+    const turn = turnLock.acquireShared(a.id, 'turn')
+    try {
+      const started = Date.now()
+      expect(await service.autoAttach(a.id)).toEqual([])
+      expect(Date.now() - started).toBeLessThan(1000)
+    } finally { turn.release() }
+    await sleep()
+    expect(service.attachments(a.id)).toEqual([])
+    // With the agent free it attaches, even right behind a background regeneration.
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'acme', credentialName: 'Acme API' }])
+  })
+
+  it('swallows a failed attach and answers nothing attached', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    mkdirSync(join(a.path, 'credentials')); writeFileSync(join(a.path, 'credentials/credentials.json'), '[]')
+    execFileSync('git', ['init', '-q', a.path]); execFileSync('git', ['-C', a.path, 'add', 'credentials/credentials.json'])
+    world.metadata = [rec('acme-1', 'Acme API', 'acme-api')]
+    await login('account-b')
+    await expect(service.autoAttach(a.id)).resolves.toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+  })
+
+  it('appends through attach without dropping what is there', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('one', 'Acme one', 'acme-api'), rec('two', 'Acme two', 'acme-api')]
+    await login('account-b')
+    await service.setAttachments(a.id, key('account-b'), ['one'])
+    await service.attach(a.id, key('account-b'), 'two')
+    expect(group(a, 'account-b')).toEqual(['one', 'two'])
+  })
+})

@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { ReadinessStrip } from './ReadinessStrip'
 
@@ -24,6 +24,24 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
 }
 
 describe('ReadinessStrip', () => {
+  it('offers Finish setup while a credential is missing, and only then', () => {
+    const onFinishSetup = vi.fn()
+    const { rerender } = render(
+      createElement(ReadinessStrip, { agent: agent({ readiness: 'credentials_needed' }), onFinishSetup })
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }))
+    expect(onFinishSetup).toHaveBeenCalledTimes(1)
+    rerender(createElement(ReadinessStrip, { agent: agent({ readiness: 'credentials_needed' }) }))
+    expect(screen.queryByRole('button', { name: 'Finish setup' })).toBeNull()
+    rerender(
+      createElement(ReadinessStrip, {
+        agent: agent({ readiness: 'invalid', readinessReason: 'Broken.' }),
+        onFinishSetup
+      })
+    )
+    expect(screen.queryByRole('button', { name: 'Finish setup' })).toBeNull()
+  })
+
   it('renders nothing for a ready folder', () => {
     const { container } = render(createElement(ReadinessStrip, { agent: agent() }))
     expect(container.innerHTML).toBe('')

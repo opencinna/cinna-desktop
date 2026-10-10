@@ -257,13 +257,29 @@ export interface LocalAgentCredentialState {
   name: string
   type: string
   optional: boolean
+  /**
+   * The prefix the kit reads the slot's `.env` names under: its `env_prefix`,
+   * else one derived from its name (`deriveEnvPrefix`). Null when the name
+   * yields none.
+   */
   envPrefix: string | null
-  /** `<env_prefix><FIELD>` names the slot declares. */
+  /** The slot's `service_uri`, when it declares one: what a cloud credential is matched by. */
+  serviceUri?: string | null
+  /** `<envPrefix><FIELD>` names the slot declares; empty when it declares no `fields`. */
   expectedKeys: string[]
-  /** The subset of `expectedKeys` that `credentials/.env` defines. */
+  /**
+   * The names `credentials/.env` sets for the slot: the set subset of
+   * `expectedKeys`, or — for a slot with no `fields` — every set name under
+   * `envPrefix`, any one of which fills it.
+   */
   presentKeys: string[]
   /** Environment fields shadowed by a matching attachment. Names only. */
   overlappingKeys?: string[]
+  /**
+   * The attached service credential this slot is judged by, when one matches
+   * it (a ready one preferred); its readiness decides `satisfied` over `.env`.
+   */
+  attachment?: { credentialId: string; state: string } | null
   satisfied: boolean
 }
 

@@ -140,7 +140,21 @@ What the external branch changes, and why, is [Bare Agents & External Roots](bar
 3. `credentials_needed` — valid, but a required `credentials/.env` variable is missing. A warning, not a refusal: the agent still takes chat turns and tasks, because a half-filled `.env` is normal while an agent is being built ([Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not))
 4. `ok`
 
-Only variable **names** are ever read from `credentials/.env`. No value is read, returned or logged. The desktop writes that file in one place only — the agent page seeds it, with the declared names commented out, when the user clicks through to fill it in ([Agents Tab & Agent Page](agents_tab.md)) — and a seed carries no value either. A slot that declares no keys cannot be checked and counts as satisfied rather than blocking the agent on something unverifiable.
+### A credential slot is filled exactly when the kit's reader would find it
+
+Whether a slot is satisfied follows the kit's `scripts/cinna_credentials.py` step for step, because that script is what the agent's own code calls. A desktop that called a slot set when the script then skipped it would show the agent as ready and let its first run fail on the missing credential.
+
+- **A matching attachment decides.** When a [service credential](../service_credentials/README.md) attached to the agent matches the slot, the slot is satisfied exactly when that attachment is ready, whatever `.env` holds
+- **An empty value is not a value.** `credentials/.env` is read the way the script reads it: each line trimmed, an optional `export ` dropped, the value trimmed and one pair of matching quotes removed, the last assignment of a name winning. `KEY=`, `KEY=""` and `KEY=''` leave the name unset
+- **A slot with no `env_prefix` gets the script's derived one**: the name with every run of non-letters-and-digits turned into `_`, trimmed of `_`, upper-cased, `C_` in front when it does not start with a letter, and `_` appended (`Vendor Portal` → `VENDOR_PORTAL_`)
+- **A slot with `fields` needs every `<prefix><FIELD>`** set
+- **A slot without `fields` needs any one name under its prefix** set, since the script gathers every `<prefix>…` it finds
+- **A slot whose name yields no prefix at all** can be filled only by a ready attachment; with none it is missing (a warning, like any other)
+- An `optional` slot is always satisfied
+
+Each of these changed a verdict the desktop used to give, always in the same direction: a folder that read `ok` because of a slot the script would not fill now reads `credentials_needed`. An empty `KEY=` used to count as set. A slot without `env_prefix` and a slot whose name gave no prefix used to count as satisfied, unchecked. A slot without `fields` used to expect the single name `<prefix>` without its trailing `_`, which the script never reads. Each was a folder shown as ready whose first run then asked for its credential.
+
+Values are read only to tell an empty one from a set one. No value is returned, logged or sent to the renderer: only which names are set, and whether each slot is satisfied. The desktop writes `credentials/.env` in two places: the agent page seeds it when the user clicks through to fill it in ([Agents Tab & Agent Page](agents_tab.md)), with every declared name commented out and so no value; and the **Finish setup** dialog writes the values the user types, for names the manifest declares only ([Service Credentials](../service_credentials/README.md#finish-setup)).
 
 ### An unreadable manifest never changes an agent's identity
 

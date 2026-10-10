@@ -70,6 +70,8 @@ const done = (overrides: Partial<AgentShareResult> = {}): AgentShareResult => ({
   detail: null,
   status: null,
   agentId: AGENT.id,
+  autoAttached: [],
+  setupNeeded: false,
   ...overrides
 })
 

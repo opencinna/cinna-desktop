@@ -74,6 +74,7 @@ import {
   type ShareCounts
 } from './gitService'
 import { localAgentService } from './localAgentService'
+import { serviceCredentialService } from '../serviceCredentials/service'
 import { agentsHomeService } from './agentsHomeService'
 import { turnLock } from './turnLock'
 
@@ -177,7 +178,9 @@ function result(
     refusal: action.refusal,
     detail: action.detail ?? null,
     status,
-    agentId
+    agentId,
+    autoAttached: [],
+    setupNeeded: false
   }
 }
 
@@ -186,8 +189,51 @@ const refused = (refusal: ShareRefusal, detail: string | null = null): AgentShar
   refusal,
   detail,
   status: null,
-  agentId: null
+  agentId: null,
+  autoAttached: [],
+  setupNeeded: false
 })
+
+/**
+ * The required credential slots the agent is missing, by name; null when it
+ * cannot be read. An optional slot always reads as satisfied.
+ */
+function missingSlots(userId: string, agentId: string): Set<string> | null {
+  try {
+    return new Set(
+      localAgentService.get(userId, agentId).credentials.filter((slot) => !slot.satisfied).map((slot) => slot.name)
+    )
+  } catch (err) {
+    logger.warn('could not read credential readiness around a team library action', {
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return null
+  }
+}
+
+/**
+ * After the folder took in the team's files (Get, Update, Use the team's
+ * version): attach the active account's credentials that fit a slot without
+ * doubt, then say whether Finish setup should open. Never fails the action —
+ * `autoAttach` swallows its own errors, and an unreadable agent reads as
+ * nothing needed.
+ *
+ * `before` is what was missing before an Update or Use the team's version:
+ * the dialog opens then only when the team's files **added** a missing slot,
+ * so a user who chose Finish later is not asked again on every Update while
+ * the same slot stays empty — the readiness strip's Finish setup still is.
+ * Without `before` (a Get, or a read that failed), anything missing opens it.
+ */
+async function credentialSetup(
+  userId: string,
+  agentId: string,
+  before: Set<string> | null = null
+): Promise<Pick<AgentShareResult, 'autoAttached' | 'setupNeeded'>> {
+  const autoAttached = await serviceCredentialService.autoAttach(agentId)
+  const after = missingSlots(userId, agentId)
+  const setupNeeded = after !== null && [...after].some((slot) => before === null || !before.has(slot))
+  return { autoAttached, setupNeeded }
+}
 
 /** The kit agent behind an id, or null when it is not one that can be shared (bare, or outside `Local/`). */
 function locateKit(userId: string, agentId: string): KitAgent | null {
@@ -284,12 +330,31 @@ function buildStatus(
   }
 }
 
+/**
+ * Put back the local-only files an interrupted update left backed up under
+ * `.git/`, when nothing else holds the agent's lock — never in the middle of
+ * an action that is using the backup. Never throws.
+ */
+function recoverLocalOnlyFiles(agentId: string, dir: string): void {
+  if (!gitService.hasLeftoverLocalOnlyFiles(dir)) return
+  let lock: { release: () => void } | null = null
+  try {
+    lock = lockOrRefuse(agentId)
+    if (lock) gitService.restoreLeftoverLocalOnlyFiles(dir)
+  } catch (err) {
+    logger.warn('could not check for a local-only backup', { error: String(err) })
+  } finally {
+    lock?.release()
+  }
+}
+
 /** The status of an already-located shared agent. */
 async function statusOf(agentId: string, shared: SharedAgent, fetch: boolean): Promise<AgentShareStatus> {
+  recoverLocalOnlyFiles(agentId, shared.dir)
   const auth = authFor(shared)
   if (auth === 'other_account') {
     // Counts from what is on disk; no listing, no network, no token.
-    const counts = await gitService.readShareStatus(shared.dir, null, false)
+    const counts = await gitService.readShareStatus(shared.dir, null, false, null, shared.remote.kind === 'cinna')
     return buildStatus(agentId, shared, counts, 'other_account', null)
   }
   const listing = listingFor(shared.remote.host)
@@ -421,16 +486,24 @@ function scrubDetail(err: unknown): string {
   return scrubCredentials(err instanceof Error ? err.message : String(err)).slice(0, 300)
 }
 
-/** A free `<slug>-mine`, `<slug>-mine-2`, … beside `dir`. */
+/**
+ * A free `<slug>-mine`, `<slug>-mine-2`, … beside `dir`. The folder name is
+ * the copy's slug too, so it stays within the slug's 63 characters: a long
+ * name is shortened before the suffix rather than the suffix dropped.
+ */
 function freeMineDir(dir: string): string {
   const parent = dirname(dir)
   const slug = basename(dir)
+  const named = (suffix: string): string => join(parent, `${slug.slice(0, SLUG_MAX - suffix.length)}${suffix}`)
   for (let n = 1; n < 1000; n += 1) {
-    const candidate = join(parent, n === 1 ? `${slug}-mine` : `${slug}-mine-${n}`)
+    const candidate = named(n === 1 ? '-mine' : `-mine-${n}`)
     if (!existsSync(candidate)) return candidate
   }
-  return join(parent, `${slug}-mine-${randomUUID().slice(0, 8)}`)
+  return named(`-mine-${randomUUID().slice(0, 8)}`)
 }
+
+/** `SLUG_PATTERN`'s longest slug. */
+const SLUG_MAX = 63
 
 /**
  * The library entry an earlier Share with the team **on this machine**
@@ -666,9 +739,9 @@ async function createAndSend(
         slug: input.slug,
         name: input.name,
         description: input.description,
-        // Sent for a core that takes grants on create. Core today ignores
-        // it and gives every new entry `everyone: read`; the PUT below is
-        // what restricts access until it does.
+        // Core 511ea03a and later apply these on create (the creator as
+        // maintainer plus these people). An older core ignores them and gives
+        // every new entry `everyone: read`; the PUT below restricts it there.
         grants: input.people.map((person) => ({ principal: { user_id: person.userId }, access: person.access }))
       }
     })
@@ -688,12 +761,12 @@ async function createAndSend(
   libraryTrust.setPending(host, input.slug, entry.repoId)
   /*
    * Who may get it is settled before anything is sent: the creator as
-   * maintainer plus the people chosen, and nobody else. Core today gives
-   * every new entry `everyone: read` and ignores `grants` on create, so this
-   * PUT is what restricts access. If it fails, the folder is not sent, but
-   * the entry's name and description stay visible to everyone on the server
-   * until a retry — the entry stays pending, so a retry finishes it and runs
-   * this PUT again.
+   * maintainer plus the people chosen, and nobody else. A current core has
+   * already applied the create's `grants`; an older one gave the entry
+   * `everyone: read`, and this PUT is what restricts it. If it fails, the
+   * folder is not sent; on an older core the entry's name and description
+   * stay visible to everyone until a retry — the entry stays pending, so a
+   * retry finishes it and runs this PUT again.
    */
   if (entry.maintainers.length === 0) {
     return refused('failed', 'The agent wasn’t sent: the team library did not say who maintains it.')
@@ -783,6 +856,8 @@ export const sharingService = {
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    // An interrupted update's backup first: this machine's local-only files.
+    gitService.restoreLeftoverLocalOnlyFiles(shared.dir)
     let action: ShareActionResult
     try {
       action = await gitService.shareChanges(
@@ -810,6 +885,7 @@ export const sharingService = {
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    const missingBefore = missingSlots(userId, agentId)
     let action: ShareActionResult
     try {
       action = await gitService.pullRebaseClean(shared.dir, auth, commitIdentity(shared.remote), shared.root.path)
@@ -819,6 +895,8 @@ export const sharingService = {
     if (action.done) {
       await refreshListing()
       settle(userId, shared.root.id)
+      const setup = await credentialSetup(userId, agentId, missingBefore)
+      return { ...result(action, await statusOf(agentId, shared, false)), ...setup }
     }
     return result(action, await statusOf(agentId, shared, false))
   },
@@ -837,6 +915,10 @@ export const sharingService = {
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    // An interrupted update's backup first: this machine's local-only files.
+    gitService.restoreLeftoverLocalOnlyFiles(shared.dir)
+    // Under the lock, before anything moves: the folder this id names now.
+    const missingBefore = missingSlots(userId, agentId)
     let copyId: string
     let missed: string[] = []
     try {
@@ -864,13 +946,27 @@ export const sharingService = {
         }
         landed = true
         missed = await carryMachineFiles(mineDir, shared.dir)
+        // A never-travelling file the kept folder still tracked (shared before
+        // it joined the list) is not ignored there, so the carry skipped it:
+        // this machine's copy, else the template's. Never throws.
+        // A version an older client or plain git shared may carry one: this
+        // machine's still wins.
+        if (auth.kind === 'cinna') {
+          await gitService.settleLocalOnlyFiles(
+            shared.dir,
+            gitService.keepLocalOnlyFiles(mineDir, shared.root.path),
+            shared.root.path
+          )
+        }
         // The copy's fresh id is written while it still has `origin`, so a
         // failure up to here is undone whole by `putBack`; `origin` goes only
         // once the two folders no longer share an id.
         const path = manifestPath(mineDir)
         copyId = randomUUID()
         const manifest = readManifest(path)
-        writeManifest(path, { ...manifest, id: copyId, name: `${manifest.name} (my copy)` })
+        // `slug` follows the folder: the validator requires the two to match,
+        // and keeping the team's would leave two agents under one slug.
+        writeManifest(path, { ...manifest, id: copyId, slug: basename(mineDir), name: `${manifest.name} (my copy)` })
       } catch (err) {
         /*
          * Something threw between the rename and the copy's new id: a reauth
@@ -902,11 +998,15 @@ export const sharingService = {
     }
     await refreshListing()
     settle(userId, shared.root.id)
-    return result(
-      { done: true, refusal: null, detail: missedDetail(missed) },
-      await statusOf(agentId, shared, false),
-      folderAgentId(copyId)
-    )
+    const setup = await credentialSetup(userId, agentId, missingBefore)
+    return {
+      ...result(
+        { done: true, refusal: null, detail: missedDetail(missed) },
+        await statusOf(agentId, shared, false),
+        folderAgentId(copyId)
+      ),
+      ...setup
+    }
   },
 
   /** Name and description from the manifest, for the Share with the team dialog. */
@@ -1019,7 +1119,7 @@ export const sharingService = {
     // The listing's maintainers and the caller's own access may have moved.
     await refreshListing()
     publishEvent(SHARING_CHANGED_CHANNEL)
-    return { done: true, refusal: null, detail: null, status: null, agentId, people: now }
+    return { ...result({ done: true, refusal: null }, null, agentId), people: now }
   },
 
   /**
@@ -1075,6 +1175,8 @@ export const sharingService = {
     if (!shared) return refused('not_shared')
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    // An interrupted update's backup first: this machine's local-only files.
+    gitService.restoreLeftoverLocalOnlyFiles(shared.dir)
     try {
       if (deleteFromLibrary) {
         const target = await libraryTarget(userId, agentId)
@@ -1100,7 +1202,7 @@ export const sharingService = {
     }
     await refreshListing()
     settle(userId, shared.root.id)
-    return { done: true, refusal: null, detail: null, status: null, agentId }
+    return result({ done: true, refusal: null }, null, agentId)
   },
 
   /**
@@ -1174,6 +1276,9 @@ export const sharingService = {
     await recordServer(target, host)
     try {
       gitService.restoreLocalOnlyFolders(target, root.path)
+      // A team version an older client or plain git shared may carry a
+      // never-travelling file: the template's, never the team's.
+      await gitService.settleLocalOnlyFiles(target, new Map(), root.path)
       writeLocalLink(target, { kind: 'cinna', repo_id: entry.repoId, clone_url: entry.cloneUrl })
     } catch (err) {
       logger.warn('could not give a fetched agent its local credentials folder', { error: String(err) })
@@ -1197,7 +1302,11 @@ export const sharingService = {
     }
     settle(userId, root.id)
     const agentId = folderAgentId(manifestId)
-    return result({ done: true, refusal: null }, await sharingService.status(userId, agentId, false).catch(() => null), agentId)
+    const setup = await credentialSetup(userId, agentId)
+    return {
+      ...result({ done: true, refusal: null }, await sharingService.status(userId, agentId, false).catch(() => null), agentId),
+      ...setup
+    }
   },
 
   /**

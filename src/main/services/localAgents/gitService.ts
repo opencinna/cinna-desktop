@@ -46,12 +46,14 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
-  writeFileSync
+  writeFileSync,
+  type Dirent
 } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import type {
@@ -943,7 +945,8 @@ export async function readShareStatus(
   dir: string,
   auth: RemoteAuth | null,
   fetch: boolean,
-  libraryHeadSha?: string | null
+  libraryHeadSha?: string | null,
+  cinnaRemote = isCinna(auth)
 ): Promise<ShareCounts> {
   const gitPath = await resolveGit()
   if (!gitPath) return { ...NOT_SHARED_COUNTS, refusal: 'git_missing' }
@@ -1014,7 +1017,13 @@ export async function readShareStatus(
     }
   }
 
-  counts.changedPaths = [...(await changedPaths(gitPath, dir, head, ref))]
+  const changed = [...(await changedPaths(gitPath, dir, head, ref))]
+  // A never-travel path is no change for a Cinna team library: the next share
+  // takes it out rather than sending it, and a team version an older client or
+  // plain git recorded may still track one (`.claude/settings.local.json`),
+  // which this machine's own copy then differs from for good.
+  const never = cinnaRemote ? neverTravelPaths() : []
+  counts.changedPaths = changed.filter((path) => !travelsNot(path, never))
   counts.changedFiles = counts.changedPaths.length
   return counts
 }
@@ -1130,6 +1139,86 @@ export async function pullRebaseClean(
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
+  if (!isCinna(auth)) return bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot)
+  // A copy an interrupted earlier update left under `.git/` is this
+  // machine's, and wins over whatever is on disk now.
+  restoreLeftoverLocalOnlyFiles(dir)
+  // A team version recorded before a file joined the never-travel list — or
+  // by an older client or plain git — may track it: the update would replace
+  // this machine's copy with the team's, or delete it. This machine's copy
+  // always wins: kept before (in memory and under `.git/`), put back after
+  // with overwrite, whatever git did. The exclude block first, so the
+  // put-back file is ignored rather than a change to share.
+  if (!(await ensureAgentExcludes(gitPath, dir, workshopRoot, true))) {
+    logger.warn('could not refresh the ignore rules before an update')
+  }
+  const kept = keepLocalOnlyFiles(dir, workshopRoot)
+  saveLocalOnlyBackup(dir, kept)
+  // Tracked here, an edit to one (approving a permission writes the rules)
+  // would refuse the update as `dirty`; HEAD's copy stands in until the
+  // put-back, so only other tracked edits refuse.
+  const tracked = await trackedLocalOnlyFiles(gitPath, dir, workshopRoot)
+  if (tracked.length > 0) {
+    const reset = await run(gitPath, dir, ['checkout', 'HEAD', '--', ...tracked], LOCAL_TIMEOUT_MS)
+    if (!reset.ok) logger.warn('could not set aside the local-only files before an update')
+  }
+  let action: ShareActionResult | null = null
+  try {
+    action = await bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot)
+    return action
+  } finally {
+    const landed = action?.done === true
+    // Landed, a file the team's version carries is never the team's: no kept
+    // copy means the template's. Not landed, one HEAD's copy stood in for
+    // that this machine did not have goes again.
+    const carried = landed ? await trackedLocalOnlyFiles(gitPath, dir, workshopRoot) : []
+    if (!landed) {
+      for (const rel of tracked) {
+        if (kept.has(rel)) continue
+        try {
+          rmSync(join(dir, ...rel.split('/')), { force: true })
+        } catch (err) {
+          logger.warn('could not remove a local-only file set aside for an update', { path: rel, error: String(err) })
+        }
+      }
+    }
+    if (putBackLocalOnlyFiles(dir, kept, workshopRoot, landed, carried)) dropLocalOnlyBackup(dir)
+  }
+}
+
+/** The never-travelling single files HEAD records, agent-relative. Empty without a HEAD. */
+async function trackedLocalOnlyFiles(gitPath: string, dir: string, workshopRoot: string | undefined): Promise<string[]> {
+  const files = neverTravelFiles(workshopRoot)
+  if (files.length === 0 || (await headOf(gitPath, dir)) === null) return []
+  const out = await run(gitPath, dir, ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...files], LOCAL_TIMEOUT_MS)
+  if (!out.ok) return []
+  const listed = new Set(lines(out.stdout))
+  return files.filter((rel) => listed.has(rel))
+}
+
+/**
+ * After a folder became a team version (Get, Use the team's version): its
+ * never-travelling single files are this machine's, never the team's — a
+ * version an older client or plain git shared may carry one, and a teammate
+ * must not widen what runs without asking here. `kept` (this machine's
+ * copies) is written over whatever arrived; a carried file without a kept
+ * copy becomes the kit agent template's (removed when the template has
+ * none); a missing one gets the template's. Never throws.
+ */
+export async function settleLocalOnlyFiles(dir: string, kept: Map<string, Buffer>, workshopRoot?: string): Promise<void> {
+  const gitPath = await resolveGit()
+  const carried = gitPath ? await trackedLocalOnlyFiles(gitPath, dir, workshopRoot) : []
+  putBackLocalOnlyFiles(dir, kept, workshopRoot, true, carried)
+}
+
+/** {@link pullRebaseClean}'s git work. */
+async function bringInTeamChanges(
+  gitPath: string,
+  dir: string,
+  auth: RemoteAuth | null,
+  identity: CommitIdentity | null | undefined,
+  workshopRoot: string | undefined
+): Promise<ShareActionResult> {
   const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
   if (!fetched.ok) {
     logger.warn('share fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
@@ -1225,7 +1314,216 @@ export async function push(
     refusal: verdict.refusal,
     stderr: scrubCredentials(attempt.stderr).slice(0, 400)
   })
+  if (isCinna(auth) && refusedByPolicy(attempt.stderr)) {
+    return sendCombined(gitPath, dir, auth, identity, workshopRoot, verdict)
+  }
   return verdict
+}
+
+/**
+ * The library's push policy saying it cannot check a change at all (core's
+ * `MSG_UNAVAILABLE`) — a server fault, not a verdict on what a version holds.
+ */
+const POLICY_UNAVAILABLE = /can.t check this change right now/i
+
+/**
+ * The server's own refusal of what a version holds — its pre-receive hook
+ * declining the send on content — as opposed to a non-fast-forward, a 403,
+ * the network, a sign-in, any other `[remote rejected]` reason (`failed to
+ * lock` and the like) or the hook saying it cannot check the change now.
+ */
+function refusedByPolicy(stderr: string): boolean {
+  const verdict = classifyPush(stderr)
+  return (
+    verdict !== 'non_ff' &&
+    verdict.refusal === 'push_rejected' &&
+    /\(pre-receive hook declined\)/i.test(stderr) &&
+    !POLICY_UNAVAILABLE.test(stderr)
+  )
+}
+
+/**
+ * After a Cinna team library refused a send for what a version holds: one more
+ * send, with every version the team does not have **combined into one**.
+ *
+ * The library checks every new version, not only the latest, so a version it
+ * refused — a symlink, an oversized file — stays in the unsent history and
+ * refuses every later send even after the file was fixed. The combined
+ * version has HEAD's tree (already cleared of the never-travel paths) on the
+ * team version as its parent, so it is a fast-forward and carries only what
+ * the folder holds now. Its note joins the unsent versions' notes, newest
+ * first, without repeats; the author is the share's.
+ *
+ * Made on a scratch ref and sent from there; the branch moves to it only once
+ * the library accepted it, and only when the branch still points where it
+ * did (compare-and-swap) — the working tree and index already match its tree.
+ * Refused again, history stays exactly as it was and the library's sentence is
+ * the answer. A non-fast-forward gets one update ({@link pullRebaseClean}) and
+ * one more combined send, never a third and never a force.
+ */
+async function sendCombined(
+  gitPath: string,
+  dir: string,
+  auth: RemoteAuth | null,
+  identity: CommitIdentity | null | undefined,
+  workshopRoot: string | undefined,
+  refused: ShareActionResult
+): Promise<ShareActionResult> {
+  const branch = await run(gitPath, dir, ['symbolic-ref', '-q', 'HEAD'], LOCAL_TIMEOUT_MS)
+  const branchRef = branch.ok ? branch.stdout.trim() : ''
+  if (branchRef === '') return refused
+  let updated = false
+  for (let round = 0; round < 2; round++) {
+    const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+    if (!fetched.ok) return refused
+    const ref = await teamRef(gitPath, dir)
+    if (ref !== null) {
+      const contained = await run(gitPath, dir, ['merge-base', '--is-ancestor', ref, 'HEAD'], LOCAL_TIMEOUT_MS)
+      if (!contained.ok) {
+        // HEAD's tree on a team version it does not contain would undo the
+        // teammate's work: bring it in first, once.
+        if (updated) return refuse('push_rejected', 'The team version changed again while sending.')
+        updated = true
+        const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
+        if (pulled.refusal !== null) return pulled
+        const rewritten = await rewriteUnsent(gitPath, dir, neverTravelPaths(workshopRoot))
+        if (rewritten) return rewritten
+        round -= 1
+        continue
+      }
+    }
+    const made = await combineUnsent(gitPath, dir, ref, identity)
+    if (made === null) return refused
+    if (typeof made === 'string') return refuse('failed', made)
+    const { sha, oldTip, scratch } = made
+    try {
+      const sent = await runNet(gitPath, dir, ['push', '--quiet', 'origin', `${scratch}:refs/heads/main`], auth)
+      if (sent.ok) {
+        const moved = await run(
+          gitPath,
+          dir,
+          ['update-ref', '-m', 'cinna: the unsent versions, sent as one', branchRef, sha, oldTip],
+          LOCAL_TIMEOUT_MS
+        )
+        if (!moved.ok) {
+          // Something recorded here meanwhile, outside the app's lock: that
+          // stays, replayed onto the combined version — whose tree is oldTip's,
+          // so only what was recorded since moves.
+          await replayOntoCombined(gitPath, dir, sha, oldTip, identity)
+        } else {
+          await run(gitPath, dir, ['branch', '--quiet', '--set-upstream-to=origin/main'], LOCAL_TIMEOUT_MS)
+          logger.info('sent the unsent versions as one after the library refused them one by one')
+        }
+        return done()
+      }
+      const verdict = classifyPush(sent.stderr)
+      if (verdict === 'non_ff') {
+        if (updated) return refuse('push_rejected', 'The team version changed again while sending.')
+        // The team moved between the fetch and the send: one update, one more try.
+        continue
+      }
+      logger.warn('the combined version was refused too', {
+        refusal: verdict.refusal,
+        stderr: scrubCredentials(sent.stderr).slice(0, 400)
+      })
+      return verdict
+    } finally {
+      await run(gitPath, dir, ['update-ref', '-d', scratch, sha], LOCAL_TIMEOUT_MS)
+    }
+  }
+  return refuse('push_rejected', 'The team version changed again while sending.')
+}
+
+/**
+ * After the library accepted the combined version `sha` but the branch had
+ * moved past `oldTip` meanwhile (a version recorded outside the app's lock):
+ * replay what was recorded since `oldTip` onto `sha`. The combined version's
+ * tree is `oldTip`'s, so the replay applies exactly those versions, and the
+ * folder no longer shows already-sent work as unsent nor collides with it on
+ * the next Update. A branch that no longer descends from `oldTip`, or a
+ * replay that stops, leaves the branch as it was (the replay aborted), logged.
+ */
+async function replayOntoCombined(
+  gitPath: string,
+  dir: string,
+  sha: string,
+  oldTip: string,
+  identity: CommitIdentity | null | undefined
+): Promise<void> {
+  const descends = await run(gitPath, dir, ['merge-base', '--is-ancestor', oldTip, 'HEAD'], LOCAL_TIMEOUT_MS)
+  if (!descends.ok) {
+    logger.warn('the branch moved off the sent versions while the combined one was sent; left as it is')
+    return
+  }
+  const rebase = await run(
+    gitPath,
+    dir,
+    [...(await commitFlags(gitPath, dir, identity)), 'rebase', '--quiet', '--no-autostash', '--onto', sha, oldTip],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!rebase.ok) {
+    await run(gitPath, dir, ['rebase', '--abort'], LOCAL_TIMEOUT_MS)
+    logger.warn('the versions recorded while the combined one was sent did not replay onto it; left as they are', {
+      stderr: scrubCredentials(rebase.stderr).slice(0, 400)
+    })
+    return
+  }
+  await run(gitPath, dir, ['branch', '--quiet', '--set-upstream-to=origin/main'], LOCAL_TIMEOUT_MS)
+  logger.info('sent the unsent versions as one; the versions recorded meanwhile were replayed onto it')
+}
+
+/**
+ * One version with HEAD's tree on `ref` (no parent when there is none), on a
+ * scratch ref under `refs/cinna/`. Null when there is nothing to combine — one
+ * unsent version or none, so a combined send would be the same send. A string
+ * is why it could not be made.
+ */
+async function combineUnsent(
+  gitPath: string,
+  dir: string,
+  ref: string | null,
+  identity: CommitIdentity | null | undefined
+): Promise<{ sha: string; oldTip: string; scratch: string } | string | null> {
+  const oldTip = await headOf(gitPath, dir)
+  if (oldTip === null) return null
+  const range = ref === null ? [oldTip] : [oldTip, '--not', ref]
+  const listed = await run(gitPath, dir, ['rev-list', '--no-merges', ...range], LOCAL_TIMEOUT_MS)
+  if (!listed.ok) return scrubCredentials(lastLine(listed.stderr)).slice(0, MAX_DETAIL_CHARS)
+  const unsent = lines(listed.stdout)
+  if (unsent.length < 2) return null
+  const notes: string[] = []
+  for (const commit of unsent) {
+    const body = await run(gitPath, dir, ['-c', 'log.showSignature=false', 'log', '-1', '--format=%B', commit], LOCAL_TIMEOUT_MS)
+    const note = body.ok ? body.stdout.trim() : ''
+    if (note !== '' && !notes.includes(note)) notes.push(note)
+  }
+  const gitDirOut = await run(gitPath, dir, ['rev-parse', '--absolute-git-dir'], LOCAL_TIMEOUT_MS)
+  if (!gitDirOut.ok || gitDirOut.stdout.trim() === '') return 'The folder\'s history could not be read.'
+  const messageFile = join(gitDirOut.stdout.trim(), `cinna-combine-${randomBytes(4).toString('hex')}.msg`)
+  try {
+    writeFileSync(messageFile, `${notes.join('\n\n')}\n`)
+    const made = await run(
+      gitPath,
+      dir,
+      [
+        ...(await commitFlags(gitPath, dir, identity)),
+        'commit-tree',
+        `${oldTip}^{tree}`,
+        ...(ref === null ? [] : ['-p', ref]),
+        '-F',
+        messageFile
+      ],
+      LOCAL_TIMEOUT_MS
+    )
+    const sha = made.stdout.trim()
+    if (!made.ok || sha === '') return scrubCredentials(lastLine(made.stderr)).slice(0, MAX_DETAIL_CHARS)
+    const scratch = `refs/cinna/combined-${randomBytes(4).toString('hex')}`
+    const pinned = await run(gitPath, dir, ['update-ref', scratch, sha, ''], LOCAL_TIMEOUT_MS)
+    if (!pinned.ok) return scrubCredentials(lastLine(pinned.stderr)).slice(0, MAX_DETAIL_CHARS)
+    return { sha, oldTip, scratch }
+  } finally {
+    rmSync(messageFile, { force: true })
+  }
 }
 
 /**
@@ -1335,10 +1633,22 @@ export async function excludeFromEnclosingRepo(dir: string): Promise<void> {
 const NEVER_TRAVELS_FALLBACK = ['credentials/', 'app-data/']
 
 /**
- * Agent-relative folders (each ending `/`) that never go to a shared remote:
- * the agent's credentials and its per-machine runtime data, **whole** — the
- * team library's server refuses a version carrying any file under them,
- * including the kit template's own `credentials/README.md`.
+ * Single files that never go to a Cinna team library, on top of the kit's
+ * `never_travels` — a **desktop-side extra**, not (yet) in contract 1.8.0's
+ * list, so it is added here whatever the contract says and the server does
+ * not enforce it. `.claude/settings.local.json` holds Claude's permission
+ * allow rules (the kit template ships one): a teammate with edit access must
+ * not be able to widen what runs without asking on everyone's machine.
+ * Without a trailing `/`, which is what marks an entry as a file.
+ */
+const DESKTOP_NEVER_TRAVELS = ['.claude/settings.local.json']
+
+/**
+ * Agent-relative paths that never go to a shared remote. A folder ends in
+ * `/` and goes **whole** — the agent's credentials and its per-machine
+ * runtime data; the team library's server refuses a version carrying any
+ * file under them, including the kit template's own `credentials/README.md`.
+ * A file has no trailing `/` ({@link DESKTOP_NEVER_TRAVELS}).
  */
 export function neverTravelPaths(workshopRoot?: string): string[] {
   let paths: string[] | undefined
@@ -1347,12 +1657,21 @@ export function neverTravelPaths(workshopRoot?: string): string[] {
   } catch {
     paths = undefined
   }
-  const list = paths && paths.length > 0 ? paths : NEVER_TRAVELS_FALLBACK
-  return list.map((path) => (path.endsWith('/') ? path : `${path}/`))
+  const list = (paths && paths.length > 0 ? paths : NEVER_TRAVELS_FALLBACK)
+    .filter((path) => !DESKTOP_NEVER_TRAVELS.includes(path))
+    .map((path) => (path.endsWith('/') ? path : `${path}/`))
+  return [...list, ...DESKTOP_NEVER_TRAVELS]
+}
+
+/** A never-travel entry as a pathspec or file path: a folder without its trailing `/`. */
+function pathOf(entry: string): string {
+  return entry.endsWith('/') ? entry.slice(0, -1) : entry
 }
 
 function travelsNot(rel: string, never: string[]): boolean {
-  return never.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix))
+  return never.some((entry) =>
+    entry.endsWith('/') ? rel === entry.slice(0, -1) || rel.startsWith(entry) : rel === entry
+  )
 }
 
 /** A Cinna team library — the only kind of remote the never-travel rules apply to. */
@@ -1369,7 +1688,7 @@ async function untrackNeverTravels(gitPath: string, dir: string, never: string[]
   const out = await run(
     gitPath,
     dir,
-    ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...never.map((path) => path.slice(0, -1))],
+    ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...never.map(pathOf)],
     LOCAL_TIMEOUT_MS
   )
   return out.ok
@@ -1428,7 +1747,7 @@ async function rewriteUnsent(gitPath: string, dir: string, never: string[]): Pro
   if (oldTip === null) return null
   const ref = await teamRef(gitPath, dir)
   const range = ref === null ? [oldTip] : [oldTip, '--not', ref]
-  const roots = never.map((path) => path.slice(0, -1))
+  const roots = never.map(pathOf)
   const touching = await run(
     gitPath,
     dir,
@@ -1556,18 +1875,20 @@ async function rewriteUnsent(gitPath: string, dir: string, never: string[]): Pro
 
 /**
  * Give a folder that came from a team version the never-travelling folders
- * the kit's agent template has — `credentials/` with its README and
- * `.env.example`, `app-data/` with its subfolders — since the team version
- * never carries them. Only what is missing; dotless template ignore files get
+ * and files the kit's agent template has — `credentials/` with its README and
+ * `.env.example`, `app-data/` with its subfolders, `.claude/settings.local.json`
+ * — since the team version never carries them. Only what is missing; dotless template ignore files get
  * their dot back, as the scaffold does.
  */
 export function restoreLocalOnlyFolders(dir: string, workshopRoot?: string): void {
   const templateRoot = getTemplateRoot('agent', workshopRoot)
   const never = neverTravelPaths(workshopRoot)
-  for (const path of never) {
-    const source = join(templateRoot, ...path.slice(0, -1).split('/'))
+  for (const entry of never) {
+    const source = join(templateRoot, ...pathOf(entry).split('/'))
     if (!existsSync(source)) continue
-    cpSync(source, join(dir, ...path.slice(0, -1).split('/')), {
+    const target = join(dir, ...pathOf(entry).split('/'))
+    mkdirSync(dirname(target), { recursive: true })
+    cpSync(source, target, {
       recursive: true,
       force: false,
       errorOnExist: false
@@ -1578,6 +1899,163 @@ export function restoreLocalOnlyFolders(dir: string, workshopRoot?: string): voi
     const dotless = join(dir, ...from.split('/'))
     const dotted = join(dir, ...to.split('/'))
     if (existsSync(dotless) && !existsSync(dotted)) renameSync(dotless, dotted)
+  }
+}
+
+/** The never-travel entries that are single files, agent-relative. */
+function neverTravelFiles(workshopRoot: string | undefined): string[] {
+  return neverTravelPaths(workshopRoot).filter((entry) => !entry.endsWith('/'))
+}
+
+/**
+ * The never-travelling single files a folder holds now, by path, for
+ * {@link putBackLocalOnlyFiles}. A file that cannot be read is not kept.
+ */
+export function keepLocalOnlyFiles(dir: string, workshopRoot?: string): Map<string, Buffer> {
+  const kept = new Map<string, Buffer>()
+  for (const rel of neverTravelFiles(workshopRoot)) {
+    try {
+      const file = join(dir, ...rel.split('/'))
+      if (existsSync(file)) kept.set(rel, readFileSync(file))
+    } catch (err) {
+      logger.warn('could not keep a local-only file', { path: rel, error: String(err) })
+    }
+  }
+  return kept
+}
+
+/**
+ * Put back each never-travelling single file: **this machine's copy always
+ * wins**. A kept copy is written whatever is there now — a team version an
+ * older client or plain git shared may have replaced it. Without one, a file
+ * in `carried` (the team's version carries it) is replaced — with `template`
+ * — by the kit agent template's, or removed when the template has none; any
+ * other file missing from `dir` gets the template's with `template`, and one
+ * that is there is not touched. Never throws; false when a write failed.
+ */
+export function putBackLocalOnlyFiles(
+  dir: string,
+  kept: Map<string, Buffer>,
+  workshopRoot?: string,
+  template = true,
+  carried: readonly string[] = []
+): boolean {
+  let ok = true
+  for (const rel of neverTravelFiles(workshopRoot)) {
+    try {
+      const file = join(dir, ...rel.split('/'))
+      const copy = kept.get(rel)
+      if (copy !== undefined) {
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, copy)
+        continue
+      }
+      if (!template) continue
+      const theirs = carried.includes(rel)
+      if (!theirs && existsSync(file)) continue
+      const source = join(getTemplateRoot('agent', workshopRoot), ...rel.split('/'))
+      if (!existsSync(source)) {
+        if (theirs) rmSync(file, { force: true })
+        continue
+      }
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, readFileSync(source))
+    } catch (err) {
+      ok = false
+      logger.warn('could not put back a local-only file', { path: rel, error: String(err) })
+    }
+  }
+  return ok
+}
+
+/** Where {@link saveLocalOnlyBackup} keeps the local-only files during an update, under `.git/`. */
+function localOnlyBackupDir(dir: string): string | null {
+  const gitDir = join(dir, '.git')
+  try {
+    return statSync(gitDir).isDirectory() ? join(gitDir, 'cinna-local-only') : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The kept never-travelling files, on disk under `.git/cinna-local-only/`
+ * before a git operation that may replace them, so a crash between the
+ * operation and the put-back loses nothing ({@link restoreLeftoverLocalOnlyFiles}).
+ * Never throws.
+ */
+function saveLocalOnlyBackup(dir: string, kept: Map<string, Buffer>): void {
+  const backup = localOnlyBackupDir(dir)
+  if (backup === null) return
+  try {
+    rmSync(backup, { recursive: true, force: true })
+    for (const [rel, copy] of kept) {
+      const file = join(backup, ...rel.split('/'))
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, copy)
+    }
+  } catch (err) {
+    logger.warn('could not back up the local-only files before an update', { error: String(err) })
+  }
+}
+
+/** Remove the backup once its files are back. Never throws. */
+function dropLocalOnlyBackup(dir: string): void {
+  const backup = localOnlyBackupDir(dir)
+  if (backup === null) return
+  try {
+    rmSync(backup, { recursive: true, force: true })
+  } catch (err) {
+    logger.warn('could not remove the local-only backup', { error: String(err) })
+  }
+}
+
+/** Every file under `root`, relative and `/`-separated. */
+function filesUnder(root: string, prefix = ''): string[] {
+  const out: string[] = []
+  const entries: Dirent[] = readdirSync(join(root, ...prefix.split('/').filter(Boolean)), { withFileTypes: true })
+  for (const entry of entries) {
+    const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+    if (entry.isDirectory()) out.push(...filesUnder(root, rel))
+    else if (entry.isFile()) out.push(rel)
+  }
+  return out
+}
+
+/** Whether an interrupted update left a backup of the local-only files ({@link restoreLeftoverLocalOnlyFiles}). */
+export function hasLeftoverLocalOnlyFiles(dir: string): boolean {
+  const backup = localOnlyBackupDir(dir)
+  return backup !== null && existsSync(backup)
+}
+
+/**
+ * A backup an interrupted update left under `.git/cinna-local-only/` holds
+ * this machine's local-only files as they were before it: written back over
+ * whatever is there now, then removed. Run before any sharing verb or status
+ * read touches the folder, under its lock. Never throws.
+ */
+export function restoreLeftoverLocalOnlyFiles(dir: string): void {
+  const backup = localOnlyBackupDir(dir)
+  if (backup === null || !hasLeftoverLocalOnlyFiles(dir)) return
+  let ok = true
+  try {
+    for (const rel of filesUnder(backup)) {
+      try {
+        const file = join(dir, ...rel.split('/'))
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, readFileSync(join(backup, ...rel.split('/'))))
+      } catch (err) {
+        ok = false
+        logger.warn('could not restore a local-only file from its backup', { path: rel, error: String(err) })
+      }
+    }
+  } catch (err) {
+    ok = false
+    logger.warn('could not read the local-only backup', { error: String(err) })
+  }
+  if (ok) {
+    logger.info('restored the local-only files an interrupted update left backed up')
+    dropLocalOnlyBackup(dir)
   }
 }
 
@@ -1910,6 +2388,11 @@ export const gitService = {
   pullRebaseClean,
   push,
   shareChanges,
+  keepLocalOnlyFiles,
+  putBackLocalOnlyFiles,
+  settleLocalOnlyFiles,
+  restoreLeftoverLocalOnlyFiles,
+  hasLeftoverLocalOnlyFiles,
   diffForSummary,
   initWithRemote,
   clone,

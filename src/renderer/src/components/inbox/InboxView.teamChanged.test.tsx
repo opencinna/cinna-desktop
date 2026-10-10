@@ -41,7 +41,7 @@ const ITEM: TeamChangedInboxItem = {
 }
 
 function result(overrides: Partial<AgentShareResult>): SharingOutcome<AgentShareResult> {
-  return { success: true, value: { done: true, refusal: null, detail: null, status: null, agentId: null, ...overrides } }
+  return { success: true, value: { done: true, refusal: null, detail: null, status: null, agentId: null, autoAttached: [], setupNeeded: false, ...overrides } }
 }
 
 let client: QueryClient

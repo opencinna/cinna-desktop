@@ -24,27 +24,29 @@ import { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } from '../../../../utils/shareText'
  * renders under the field, last in the dialog, moving nothing above it.
  */
 
-const PRIMARY =
+export const PRIMARY =
   'inline-flex min-w-[6rem] items-center justify-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white ' +
   'transition-colors hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50'
-const SECONDARY =
+export const SECONDARY =
   'inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium ' +
   'text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50'
-const CANCEL =
+export const CANCEL =
   'rounded-md px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)] disabled:opacity-50'
 // Without a width, so a field can set its own: `w-full` beside a second
 // width class wins or loses on stylesheet order, not on the class string.
-const FIELD_BASE =
+export const FIELD_BASE =
   'rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-xs text-[var(--color-text)] ' +
   'placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-60'
 const FIELD = `w-full ${FIELD_BASE}`
 
-function DialogShell({
+export function DialogShell({
   title,
   pending,
   onDismiss,
   initialFocusRef,
   danger = false,
+  width = 'w-[28rem]',
+  align = 'center',
   children
 }: {
   title: string
@@ -53,19 +55,30 @@ function DialogShell({
   initialFocusRef: React.RefObject<HTMLElement | null>
   /** A destructive dialog's heading: danger-toned, with the warning glyph. */
   danger?: boolean
+  /** Width class; the sharing dialogs share one. */
+  width?: string
+  /**
+   * `top` pins the dialog's top edge so a row that grows or shrinks moves only
+   * what is below it; `center` (the default) suits a dialog of fixed height.
+   * A `top` dialog is also a flex column no taller than the window below its
+   * offset: give the child that may grow `min-h-0 flex-1 overflow-y-auto` and
+   * it scrolls inside, keeping the heading and the footer on screen.
+   */
+  align?: 'center' | 'top'
   children: ReactNode
 }): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
   useDialogChrome({ modalRef, initialFocusRef, pending, onDismiss })
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25">
+    <div className={`fixed inset-0 z-50 flex justify-center bg-black/25 ${align === 'top' ? 'items-start pt-16' : 'items-center'}`}>
       <div
         ref={modalRef}
         role="dialog"
         aria-modal="true"
         // The accessible name is the visible heading (ux_rules rule 10).
         aria-label={title}
-        className="app-popover-surface w-[28rem] space-y-3 rounded-lg border border-[var(--color-border)] p-5 shadow-xl"
+        // `top`: 4rem above (`pt-16`) and 1rem below fit the window.
+        className={`app-popover-surface ${width} ${align === 'top' ? 'flex max-h-[calc(100vh-5rem)] flex-col' : ''} space-y-3 rounded-lg border border-[var(--color-border)] p-5 shadow-xl`}
       >
         {danger ? (
           <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-danger)]">
@@ -82,7 +95,7 @@ function DialogShell({
   )
 }
 
-function ErrorLine({ error }: { error: string | null }): React.JSX.Element | null {
+export function ErrorLine({ error }: { error: string | null }): React.JSX.Element | null {
   if (!error) return null
   return (
     <p role="alert" className="text-[11px] leading-relaxed text-[var(--color-danger)]">

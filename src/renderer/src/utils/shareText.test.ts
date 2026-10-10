@@ -87,7 +87,7 @@ describe('the sharing vocabulary', () => {
     expect(shareRefusalSentence('exists', 'Payroll')).toContain('Payroll')
     expect(shareRefusalSentence('dirty', 'ignored')).toBe(SHARE_REFUSAL_TEXT.dirty)
     expect(shareRefusalSentence('secrets_tracked', 'credentials/.env')).toBe(
-      'A file that can hold a secret is already in the team’s version (credentials/.env). Ask whoever maintains this agent to remove it before sharing.'
+      'A file that can hold a secret is recorded in this agent’s history (credentials/.env). Ask whoever maintains this agent to remove it before sharing.'
     )
     expect(shareRefusalSentence('secrets_tracked', null)).toBe(SHARE_REFUSAL_TEXT.secrets_tracked)
   })

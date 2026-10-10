@@ -19,6 +19,7 @@ import type {
 } from '../../../shared/agentSharing'
 import { unwrapCatalogOutcome } from '../../../shared/catalog'
 import { useAuthStore } from '../stores/auth.store'
+import { useFinishSetupStore } from '../stores/finishSetup.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { LOCAL_AGENTS_KEY, LOCAL_AGENT_ROOTS_KEY, localAgentKey } from './useLocalAgents'
@@ -90,7 +91,16 @@ const lastExternalFetch = new Map<string, number>()
 /** Test seam: forget the per-agent fetch clock. */
 export function resetSharingFetchClock(): void {
   lastExternalFetch.clear()
+  quietReads.clear()
 }
+
+/**
+ * Agents whose next status read was caused by a folder edit, and so must not
+ * fetch. An edit changes the local side of the counts — what git already has —
+ * and an editor saving every few seconds would otherwise turn the minute-long
+ * fetch clock into a fetch a minute for as long as the user types.
+ */
+const quietReads = new Set<string>()
 
 function useProfileId(): string | null {
   return useAuthStore((s) => s.currentUser?.id ?? null)
@@ -133,7 +143,9 @@ export function useShareStatus(
     queryFn: async () => {
       const id = agentId as string
       const now = Date.now()
+      const quiet = quietReads.delete(id)
       const fetch =
+        !quiet &&
         remoteKind === 'external' &&
         now - (lastExternalFetch.get(id) ?? 0) >= EXTERNAL_FETCH_INTERVAL_MS
       if (fetch) lastExternalFetch.set(id, now)
@@ -205,6 +217,35 @@ export function useSharingWatch(): void {
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
     })
   }, [queryClient])
+  useEffect(() => {
+    return window.api.localAgents.onChanged((payload) => refreshAfterFolderChange(queryClient, payload.agentId))
+  }, [queryClient])
+}
+
+/**
+ * A folder edit moves an agent's local changes, and main publishes
+ * `sharing:changed` only when a sharing action or a library read settles — so
+ * the watcher's push is what tells the badge it now has something to share.
+ *
+ * A named agent re-reads its own status; a root push (`agentId: null`, which
+ * is every edit to a bare agent's `AGENT.md` or `README.md`) re-reads every
+ * open status and the list behind the sidebar. Neither fetches: the read is
+ * marked quiet for exactly the queries that are about to refetch, which are
+ * the active ones `invalidateQueries` refetches by default.
+ *
+ * Lives here rather than in `useLocalAgentWatch` because this module owns the
+ * fetch clock and the profile-keyed status keys, and `useSharing` already
+ * imports `useLocalAgents` — the reverse import would be a cycle.
+ */
+function refreshAfterFolderChange(queryClient: QueryClient, agentId: string | null): void {
+  const isStatus = (key: readonly unknown[]): boolean =>
+    key[0] === 'sharing' && key[1] === 'status' && (agentId === null || key[3] === agentId)
+  for (const query of queryClient.getQueryCache().findAll({ type: 'active', predicate: (q) => isStatus(q.queryKey) })) {
+    const id = query.queryKey[3]
+    if (typeof id === 'string') quietReads.add(id)
+  }
+  void queryClient.invalidateQueries({ predicate: (q) => isStatus(q.queryKey) })
+  if (agentId === null) void queryClient.invalidateQueries({ queryKey: ['sharing', 'statuses'] })
 }
 
 /**
@@ -272,6 +313,7 @@ export function useUpdateShared(options: ShareMutationOptions<string> = {}) {
     onSuccess: (result, agentId) => {
       applyResult(queryClient, agentId, result)
       if (result.done) invalidateRescanned(queryClient, [agentId])
+      useFinishSetupStore.getState().record(agentId, result)
       options.onResult?.(result, agentId)
     }
   })
@@ -286,6 +328,8 @@ export function useUseTeamVersion(options: ShareMutationOptions<string> = {}) {
     onSuccess: (result, agentId) => {
       applyResult(queryClient, agentId, result)
       if (result.done) invalidateRescanned(queryClient, [agentId, result.agentId])
+      // The team's version keeps `agentId`; the kept copy is `result.agentId`.
+      useFinishSetupStore.getState().record(agentId, result)
       options.onResult?.(result, agentId)
     }
   })
@@ -316,6 +360,7 @@ export function useGetFromLibrary(options: ShareMutationOptions<string> = {}) {
       void queryClient.invalidateQueries({ queryKey: SHARING_KEY })
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
       if (result.done) invalidateRescanned(queryClient, [result.agentId])
+      if (result.agentId) useFinishSetupStore.getState().record(result.agentId, result)
       options.onResult?.(result, repoId)
     }
   })

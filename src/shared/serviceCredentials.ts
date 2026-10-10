@@ -60,4 +60,40 @@ export interface ServiceCredentialBundle {
   id: string; revision: string; entry: ServiceCredentialEntry
   service_account_file: Record<string, unknown> | null; ssh_key: null
 }
+/** A credential the Finish setup dialog offers for a slot: a record in the active profile's account. */
+export interface CredentialSetupOption {
+  /** The account key, as `setAttachments` takes it. */
+  group: string
+  /** Core's record id. */
+  ref: string
+  credential: ServiceCredentialDto
+}
+/**
+ * One manifest credential slot, as the Finish setup dialog shows it. Names only, never a value.
+ * `state` restates the scanner's verdict: `connected` and `env` are exactly the satisfied slots
+ * (optional ones aside), so the dialog can never call ready what readiness calls missing.
+ */
+export interface CredentialSetupSlot {
+  name: string
+  type: string
+  optional: boolean
+  envPrefix: string | null
+  /** `connected`: its matching attachment is ready; `env`: no attachment and `.env` fills it (every name, or any name under `envPrefix` for a slot with no `fields`); else `missing`. */
+  state: 'connected' | 'env' | 'missing'
+  /** The attached record the slot is judged by — ready when `connected`, otherwise the reason it does not count. */
+  attached: { credential: ServiceCredentialDto; state: ServiceCredentialAttachmentState } | null
+  /** `<envPrefix><FIELD>` names the slot reads from `credentials/.env`; empty when it declares no `fields`. */
+  expectedKeys: string[]
+  /** As `LocalAgentCredentialState.presentKeys`: for a slot with no `fields`, every set name under `envPrefix`. */
+  presentKeys: string[]
+  /** The active account's records that fit, best first; empty when connected. */
+  options: CredentialSetupOption[]
+}
+export interface CredentialSetupDto {
+  slots: CredentialSetupSlot[]
+  /** A required slot is still unsatisfied (the agent reads `credentials_needed`). */
+  setupNeeded: boolean
+}
+/** A credential attached without asking after a Get, Update or Use the team's version. */
+export interface AutoAttachedCredential { slot: string; credentialName: string }
 export type ServiceCredentialResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }

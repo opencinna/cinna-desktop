@@ -39,7 +39,7 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
 }
 
 function result(overrides: Partial<AgentShareResult> = {}): AgentShareResult {
-  return { done: true, refusal: null, detail: null, status: null, agentId: null, ...overrides }
+  return { done: true, refusal: null, detail: null, status: null, agentId: null, autoAttached: [], setupNeeded: false, ...overrides }
 }
 
 const ok = <T,>(value: T) => ({ success: true as const, value })

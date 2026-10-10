@@ -28,7 +28,8 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 1. On a Cinna account, **Agents → + → Install from catalog** opens the Agent catalog. A source switch above the grid reads **Cinna bundles | Team library**; it exists only while the account has a Team library, so any other account sees the dialog it always had
 2. The Team library lists one tile per shared agent — name, description, maintainers — with **Get**, or, when this machine already has it, **Installed** and **Open**, or **Update available**
 3. **Get** fetches the agent into `Local/<slug>/`, the dialog closes, and the user lands on the new agent's page. A refusal stays on the tile it came from and closes nothing
-4. Opening the dialog re-reads the library, so what the user browses is the team's list as it is now
+4. If the agent needs a credential this computer does not have, the page opens **Finish setting up *Name*** (below)
+5. Opening the dialog re-reads the library, so what the user browses is the team's list as it is now
 
 ### Seeing where an agent stands
 
@@ -36,6 +37,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 2. Beside it sit the buttons that state allows, at the badges' height: **Update** when the team moved and nothing here is in the way of a clean combine, **Share changes…** when there is something of this machine's to send and the account may change the team's version
 3. Clicking the badge opens **Settings → Sharing** and moves focus to that tab. There the same state is the full sentence (**N changes you haven't shared**, **Share changes to combine yours with the team's — you both changed this agent**, …), with the same two buttons beside it
 4. The sidebar row carries nothing. Sharing is a fact about the agent, read on its page, not something to scan a list for
+5. An edit to the agent's folder, by the agent, an editor or the page itself, re-reads the badge at once: **N changes not shared** and **Share changes…** appear without leaving the page. That re-read never reaches the network
 
 ### The Sharing tab
 
@@ -49,13 +51,20 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 1. **Update** — from the share badge, the Sharing tab, the library tile, or the Inbox card — brings the team's changes in, and the agent's page, sidebar and catalog reflect them at once
 2. Edits here that are not shared yet are in the way: Update refuses and says to share them first. Share changes brings the team's version in as part of sending
 3. When the team changed this agent too and the two do not combine, the Inbox card and the library tile take the user to the agent page, where the choice lives
+4. An Update that brought changes attaches matching credentials like a Get, and opens **Finish setting up *Name*** only if a required slot is now missing that was not missing before the Update (below)
+
+### Finishing setup
+
+1. After a **Get**, an **Update** that brought changes, or **Use the team's version**, main attaches the active account's cloud credentials that fit a missing slot beyond doubt — exactly one candidate — without asking
+2. The agent's page then opens **Finish setting up *Name***: each slot's state, the account's credentials that fit it with **Use this**, and fields for the `.env` names it declares. After a **Get** it opens whenever a required slot is still missing. After an **Update** or **Use the team's version** it opens only when a required slot that was not missing before is missing now, so a slot the user already chose to leave for later does not bring it back on every Update. **Finish later** closes it and the agent stays usable, with the page's usual warning
+3. The same dialog opens any time from **Finish setup** on the page's readiness strip, for as long as a credential is missing
 
 ### Sharing changes
 
 1. **Share changes…** opens one field, **What changed**, editable from the first frame with "Writing a summary…" as its placeholder. An AI summary of the changes fills it, unless the user has already typed
 2. **Share** records everything not ignored, and sends it. If a teammate shared first, the app brings their version in and tries once more
 3. If the two sets of changes do not fit together, the share dialog gives way to **The team changed this agent too**: **Use the team's version (keep mine as a copy)** or **Keep working on mine (share later)**. The recoverable one has focus
-4. **Use the team's version** replaces this folder with the team's, keeps the old folder as "*Name* (my copy)", and says so in the page's note — naming any per-machine file (a credential, say) that could not be copied over
+4. **Use the team's version** replaces this folder with the team's, keeps the old folder as "*Name* (my copy)" in `<slug>-mine`, and says so in the page's note — naming any per-machine file (a credential, say) that could not be copied over
 
 ### Sharing an agent with the team for the first time
 
@@ -105,9 +114,11 @@ Three things are written down, and none of them is the answer to "is this shared
 
 ### The library is polled, not pushed
 
-Core has no realtime channel for library changes, so main lists the library when a Cinna profile becomes active (and on wake), every five minutes while it stays active, and on demand: when the catalog opens, and after Update, Share changes, Share with the team and Use the team's version. The renderer is told (`sharing:changed`) only when the set of agents, their heads or the caller's grants moved, not on every poll. The Sharing tab's People and History are re-read on that same signal, and after any action that changed them; they have no poll of their own. Polling stops on profile switch, sign-out, sleep and an expired session; re-activation starts it again.
+Core emits two realtime events for the library, `library.updated` after an accepted send and `library.granted` to people who just gained access, each to the reader's own room. **The desktop does not consume them**: it polls. Main lists the library when a Cinna profile becomes active (and on wake), every five minutes while it stays active, and on demand: when the catalog opens, and after Update, Share changes, Share with the team and Use the team's version. The renderer is told (`sharing:changed`) only when the set of agents, their heads or the caller's grants moved, not on every poll. Reads can overlap (the poll, the catalog opening, an action's own re-read) and answer out of order; an answer older than one already taken is dropped, and its caller gets the newer listing. The Sharing tab's People and History are re-read on that same signal, and after any action that changed them; they have no poll of their own. Polling stops on profile switch, sign-out, sleep and an expired session; re-activation starts it again.
 
 A listing is what lets a shared agent say **The team changed this agent** without a network fetch per folder per screen. For an `external` remote there is no listing, so its page fetches on open — at most once a minute per agent, whatever triggered the read.
+
+Core's listing shows a new head a few seconds after a send lands, not at once. A teammate whose app re-reads the library straight after a send still gets the old head, and its badge still reads **Up to date with the team** until a later read. Nothing on the desktop can shorten that delay. The live specs wait for core's listing to show the sender's head before they check a teammate.
 
 ### An instance without the library routes is an empty library
 
@@ -125,6 +136,11 @@ The badge and the Sharing tab show one state, with this precedence: **other acco
 - **No longer shared** — a real listing for that server loaded and no longer has the repository. A `404`/`403` listing stands in as empty and says nothing about any entry, so it never makes an agent "no longer shared"
 - **N changes you haven't shared** — files that differ from what the team has: recorded-but-unsent versions and working-tree edits measured from the **merge base**, so a file only the team changed is never counted as the user's, plus new files the ignore rules do not exclude. A new file is a change to share; `credentials/.env` is not
 - **The team changed this agent** — when the listing's head is not in this folder's history. Without a fetch the app may know only that the team moved, not by how much; the sentence is the same either way
+
+The badge can take a while to settle, and it is not wrong while it does. Against a real core, two cases have been seen; their cause is not established:
+
+- **After a library refresh, up to about 15 s to read *The team changed this agent*.** This happened when this machine's copy of a tracked local-only file (`.claude/settings.local.json`) was edited, and the badge read **Up to date with the team** until then. In the collaboration spec, once in about fifteen runs, the badge did not change within Playwright's default wait, and that was not reproduced
+- **Right after an Update over a team version that tracks `.claude/settings.local.json`, briefly *1 change not shared*,** before it settles to **Up to date with the team**. The file is never counted as a change to share once the state is re-read (below)
 
 ### The badge is there from the first paint, or not at all
 
@@ -148,12 +164,24 @@ It records with `add -A` (honouring the ignore rules) under the user's note — 
 
 A refusal from the server carries the server's own sentence; a `403` reads as "ask a maintainer for edit access". An account with `read` access is not offered Share changes at all.
 
+### A version the library refused is sent again as one
+
+A Cinna team library checks **every** new version in a send, not only the latest, and refuses one that holds a symbolic link, an oversized file or an invalid manifest. That version stays here as not shared yet, so once the user fixed the file, every later send was refused with the same sentence, for good.
+
+So when a Cinna library refuses a send for what it holds — its push policy declining the content, not a teammate sharing first, a `403`, the network, a sign-in, a server that could not take the lock, or the policy saying it *can't check this change right now* — the app sends once more, automatically, with every version the team does not have **combined into one**. Its content is what the folder holds now, already cleaned of what never travels ([below](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole)), on top of the team's version, so it adds what the team lacks and nothing else. Its note joins the unsent versions' notes, newest first, without repeats; it is from whoever shares, as any version is. With a single unsent version there is nothing to combine, and the refusal stands.
+
+- **History changes only once the library accepted it.** The combined version is built aside; this folder's history moves to it only after the send succeeded, and only if nothing was recorded here meanwhile. The files on disk are not touched: they are already exactly what was sent
+- **A version recorded meanwhile** (outside the app, from a terminal, say) is replayed onto the combined version, so the work just sent is not shown as unshared and the next Update does not collide with it. If that replay stops, it is undone and history stays as it was, logged
+- **Refused again** — the file is still bad — history stays exactly as it was and the answer is the server's sentence, as before
+- **The team moved meanwhile**: one Update, one more combined send, never a third and **never a force**
+- **A send the library accepts is never combined**: each version keeps its note, author and date. Only `external` remotes never combine
+
 ### A file that can hold a secret is never sent
 
 Before anything is recorded, two things are made true:
 
 - **The kit's agent ignore rules are in the folder's own `.git/info/exclude`**, in one marked block, rewritten only when the kit's rules change. What `add -A` records must not depend on a `.gitignore` a teammate (or a developer's own repository) left in the folder. The same block is written into every clone before it becomes visible
-- **No file that can hold a credential is already tracked.** That covers anything the contract's `secret_files` rules call secret, and the desktop-owned `app-data/desktop.json`, which holds a bearer token. For a Cinna team library, a tracked secret under `credentials/` or `app-data/` is not a refusal, because the app takes those folders out itself ([below](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole)). An ignore rule cannot untrack a file, so the folder is refused (`secrets_tracked`) when a secret is tracked anywhere else (a `.env` at the agent's root, say), or anywhere at all for an `external` remote. Nothing is recorded or sent, and up to three of the files are named. The sentence asks whoever maintains the agent to remove them, because a non-developer cannot take a file out of the team's version
+- **No file that can hold a credential is already tracked.** That covers anything the contract's `secret_files` rules call secret, and the desktop-owned `app-data/desktop.json`, which holds a bearer token. For a Cinna team library, a tracked secret under `credentials/` or `app-data/` is not a refusal, because the app takes those folders out itself ([below](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole)). An ignore rule cannot untrack a file, so the folder is refused (`secrets_tracked`) when a secret is tracked anywhere else (a `.env` at the agent's root, say), or anywhere at all for an `external` remote. Nothing is recorded or sent, and up to three of the files are named. The sentence ("…is recorded in this agent's history") asks whoever maintains the agent to remove them, because a non-developer cannot take a recorded file out of the agent's history, and it may already be in the team's version
 
 Sharing for the first time also writes the kit's agent ignore files the folder lacks, so an agent made before it was a repository does not send its secrets with the first share. A folder that is already its own repository is checked for tracked secrets **before** the library entry is created: a refusal after the entry existed would leave an empty agent in the team's library.
 
@@ -168,7 +196,16 @@ The contract's `shared_remote.never_travels` (1.8.0) names folders that never go
 - They are in the exclude block as `/credentials/` and `/app-data/`. Before every recording, anything already recorded under them is dropped from what is recorded, and the files stay on disk. Share with the team's preflight only checks and changes nothing, because a preflight that then refuses must leave the folder as it found it
 - **Before a send, the versions not yet sent are cleaned, not squashed.** A version may have recorded one of these folders: a first send the server refused, say, or a developer's own history. First the app fetches, so "not yet sent" is measured against the team's version as it is now. Every unsent version then has those paths taken out and keeps its note, author, dates and place. Then, if the team has moved on, the cleaned versions are rebased onto it. Clean first and rebase second, because replaying a version that untracked a file would delete that file from disk. Nothing the team already has is rewritten. The working tree and the index are untouched, and the branch moves only if nothing else moved it meanwhile. A folder on a detached HEAD is refused with a sentence saying to switch to its branch. A fetch that fails refuses the send (`fetch_failed`)
 - **Update** cleans the same way before it rebases this machine's unsent versions, for the same reason: otherwise the rebase could delete a credential from disk. A send that is rejected because a teammate shared first is cleaned again after its one Update
-- **Get** gives the fetched agent the template's `credentials/` and `app-data/` folders locally, only what is missing, since the team's version never has them
+- **Get** gives the fetched agent the template's `credentials/` and `app-data/` folders and `.claude/settings.local.json` locally, only what is missing, since the team's version never has them. A `.claude/settings.local.json` the team's version does carry is replaced by the template's (below)
+
+**`.claude/settings.local.json` never travels either.** It holds Claude's permission allow rules, the commands that run without asking, and the kit template ships one. A teammate with edit access could otherwise widen what runs without asking on everyone's machine. It is cleaned exactly like the two folders: in the exclude block, left out of what is recorded and of unsent versions, and a tracked copy is no reason for Share with the team to refuse. The contract's list does not name it yet, so the app adds it itself; the server does not enforce it. A team version recorded by an older client or plain git may still track it, and this machine's copy then differs from it for good; that difference is never counted as a change to share (it would be taken out, not sent), so the badge does not read "1 change not shared" over it. The next share from someone who can edit takes it out of the team version.
+
+**This machine's copy always wins.** An agent shared before this rule, or by an older client or plain git, may have the file in the team's version; arriving, it would replace this machine's rules with a teammate's (possibly wider) ones, or the version that stops tracking it would delete them. So:
+
+- **Update** keeps the file before and writes it back over whatever git left, whether the update landed or was refused. With no copy here, a team version that carries one gets the template's file instead. The copy is also kept under `.git/cinna-local-only/` for the length of the update; one left there by an interrupted update is put back, over what is on disk, before the next sharing action or status read on that agent, then removed
+- A folder that still **tracks** the file (shared before the rule) is not refused as having unshared edits because approving a permission rewrote it: only other tracked edits refuse an Update
+- **Get** replaces a carried file with the template's, never the team's
+- **Use the team's version** gives the team's version this machine's copy from the kept folder, else the template's, over whatever the team's version carried
 
 ### Who a version is from
 
@@ -195,7 +232,7 @@ The library entry is created before the folder is first sent, and its id is reco
 
 Share with the team never gives the agent to everyone by default. With nobody picked, only the sharer can get it. The people chosen are sent with the create, and then the entry's whole list of grants is written: whoever the server names as maintainer (the sharer, on a fresh entry) as **Maintainer**, plus each person chosen. **Nothing is sent before that write succeeds.** If the server names no maintainer, or refuses the write, the folder is not sent and the dialog says why. The entry stays pending, so a retry finishes it and writes the grants again.
 
-**Known gap.** cinna-core today ignores `grants` on create and gives every new entry `everyone: read`. Between the create and the desktop's grants write, every user on the instance is notified of the new entry and can see its name and description. If the write fails, the entry stays visible to everyone until a retry. The agent's contents are not exposed, because nothing has been sent. What leaks in that window is the manifest's description, which the dialog does not show. A core change that applies `grants` on create has been requested; until it lands, the grants write is the only thing that restricts access.
+cinna-core applies `grants` on create: the entry starts readable by the creator, as maintainer, and the people named, and by nobody else; an omitted list means the creator alone. So the entry is never visible to anyone the sharer did not pick, not even between the create and the grants write. The write still runs and still gates the send. Against a current core it writes the list the entry already has. A core older than that change ignores `grants` on create and gives every new entry `everyone: read`, and there the write is the only thing that undoes it: every user on the instance can see the entry's name and description until the write lands, and for as long as it keeps failing; nothing of the agent's contents, since nothing has been sent.
 
 ### People is the server's list, written whole
 
@@ -219,9 +256,13 @@ Remove sharing removes `origin`, clears the `shared_remote` link in `desktop.jso
 
 Get refuses when `Local/<slug>/` exists, or when an agent with the same manifest id is already on this machine — checked against the listing first, then against what actually arrived (the listing's id can be missing or stale), and the clone is removed. It clones into a hidden staging folder and renames it into place, so the scanner and the watcher never see half an agent and a failure leaves nothing. What arrives must have a `cinna-agent.json` at its root.
 
+### Credentials are set up after, never carried
+
+A team version never holds `credentials/` (see [never travel](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole)), so every Get lands an agent without its credentials, and an Update can add a slot nobody here has filled. Rather than leave the user to discover that from a failed run, the three verbs that bring the team's files in end by attaching what fits beyond doubt and asking in **Finish setting up *Name*** when that leaves a required slot missing: any, after a Get; one the verb made missing, after an Update or Use the team's version. Asking again about a slot the user already left for later would make **Finish later** mean nothing; the readiness strip's **Finish setup** is there for it. The rules — what counts as a fit, why it never waits behind a turn, never removes an attachment and never fails the verb — are [Service Credentials' Finish setup](../service_credentials/README.md#finish-setup). Share changes, Share with the team and Remove sharing bring nothing in, and do none of it.
+
 ### Use the team's version keeps everything, and leaves one id per folder
 
-- The old folder is renamed to `<slug>-mine` (or `-mine-2`, …), the team's version is cloned at the original path, and the kept copy gets a **fresh manifest id**, "(my copy)" after its name, and no `origin` — it is nobody's team agent. The original id stays with the team's version, so the chats bound to the agent follow the team
+- The old folder is renamed to `<slug>-mine` (or `-mine-2`, …, a long slug shortened so the name stays within a slug's 63 characters), the team's version is cloned at the original path, and the kept copy gets a **fresh manifest id**, its folder's name as its **slug** (the validator requires the two to match, and two agents never share a slug), "(my copy)" after its name, and no `origin` — it is nobody's team agent. The original id stays with the team's version, so the chats bound to the agent follow the team
 - **Per-machine files are carried over**: everything git ignores in the old folder — `credentials/.env`, `credentials.json`, `app-data/` — which no clone brings. Copied, not moved, so the kept copy still runs; only where the team's version has nothing at that path, so nothing that arrived is overwritten. Rebuildable folders (`.venv`, `node_modules`, `__pycache__`) are not carried. What could not be copied is named in the page's note ("Some of this computer's files didn't come across: …"), because the team's version may not run until the user puts, say, a credential back
 - **Anything that fails part way puts the folder back** as it was before the click — id, `origin` and all. A clone that already landed is first renamed to a hidden dot-folder and only then deleted, so a delete that fails half way (a file held open) never leaves a partial clone carrying the original id at the agent's path. Two folders with one id is the state never allowed: the scanner would refuse one of them, and which one is a coin toss
 - The agent's warm engine process is retired, because its working directory is now the kept copy
@@ -238,7 +279,7 @@ When a `Local/<slug>/` becomes its own repository inside a workshop that is itse
 
 - **No diff view, no merge tool, no restore.** History is a read-only list of versions: no version opens, compares or comes back. A user who wants those has their own tools, and the folder is an ordinary repository they can open with them
 - **No sidebar marker.** A shared agent's row looks like any other; its state is on its page
-- **No realtime.** A teammate's share reaches this machine at the next five-minute poll, or when the catalog opens
+- **No realtime.** Core's `library.updated` and `library.granted` events are not listened to; a teammate's share reaches this machine at the next five-minute poll, or when the catalog opens
 - **No sharing of bare agents** or of agents outside `Local/`: they are not the kit shape the library and Get produce
 - **Root-level updates are unchanged.** A whole agents folder that is a git repository still gets only [Agents Folder Updates](folder_updates.md)' fast-forward
 
@@ -253,6 +294,7 @@ Catalog (Team library) / share badge / Sharing tab / ⋯ menu / Inbox card / blo
           → POST /api/v1/library/agents, then PUT …/agents/<repo_id>/grants (Share with the team)
           → GET / PUT …/grants (People), GET /api/v1/users/search (the people picker)
           → DELETE …/agents/<repo_id> (Remove sharing, when asked)
+          → serviceCredentialService.autoAttach (after Get, Update, Use the team's version)
       → rescan + sharing:changed → renderer invalidates sharing, agents, Inbox
 ```
 
@@ -266,15 +308,39 @@ Catalog (Team library) / share badge / Sharing tab / ⋯ menu / Inbox card / blo
 - [Jobs](../../jobs/jobs/jobs.md) — the blocked-job row's **Get *X* from the team library**
 - [AI Functions](../../llm/ai_functions/ai_functions.md) — the share summary
 - [Kit Contract & Manifest Layer](kit_contract.md) — the agent ignore template, the `secret_files` rules and `shared_remote` (`never_travels`, `local_state`) that sharing enforces
-- [Agents Home, Scanner & Folder Index](folder_index.md) — the rescan every action ends with, and the turn lock the writing verbs take
+- [Agents Home, Scanner & Folder Index](folder_index.md) — the rescan every action ends with, the turn lock the writing verbs take, and the credential readiness Finish setup restates
+- [Service Credentials](../service_credentials/README.md#finish-setup) — the auto-attach and the **Finish setting up *Name*** dialog the receiving verbs end with
 - [Native Client Data Sync](../../sync/data_sync/data_sync.md) — a different thing: profile data, end-to-end encrypted. Team-library agents are not
 - Sub-doc: [Technical Details](team_sharing_tech.md)
 
-## Not verified
+## Verification
 
-- **Only Share with the team has been run against a real Cinna server**, a local cinna-core, and that run predates its grants write: the `PUT …/grants` it now makes before sending has not been seen to succeed against core. Its server half, the git host at `/git/<repo_id>.git` and the library API (`GET /api/v1/library`, `POST /api/v1/library/agents`), was built in parallel against the agreed interface. That run found two failures, both now fixed. The first was the git origin: `clone_url` was on the backend origin and was refused as another server's. The second was the server refusing the template's `credentials/` folder. **Get, Update, Share changes, Use the team's version and the Inbox's *The team changed X* card have not been observed end to end against core.** Their field names and the server's push refusals are still what was agreed, not what was seen
-- Three paths are tested only against fakes: the retry that finishes an entry left empty (it relies on core answering `409` with an empty `head_sha` for the taken name), the restart of an agent whose entry was deleted, and the cleaning of unsent versions before a send or an Update
-- The git verbs are covered by unit tests over real repositories (bare remotes, two clones, the real binary) and a local HTTP server that checks the header scoping and the redirect refusal. The service is tested over real folders with the library and token mocked. No end-to-end spec drives these surfaces yet
-- **People, the people search and Remove sharing's delete from the library have only unit tests** (the service with `cinnaFetch` mocked, the tab and dialogs in component tests). None has been run against a real cinna-core, so the grants body's shape (`principal` as `{user_id}`, `{role}` or `"everyone"`), the search route's `data` rows and the delete's answers are what was agreed, not what was seen. The grants reader accepts a bare array or one under `grants` or `data` for that reason
-- The window in which a new entry is visible to everyone (see [A new agent reaches only the people chosen](#a-new-agent-reaches-only-the-people-chosen-never-everyone)) is core's current behaviour as reported from its side. Nothing in this repository can show it
-- That a `403` from the listing means "this role has no library" rather than "this session is broken" is an assumption about the server's behaviour
+### Observed against a real cinna-core
+
+Four live specs, `e2e/specs/live-team-sharing*.spec.ts` ([how to run them](../../development/e2e/e2e.md#team-sharing-against-a-real-cinna-core)), drive one app per core user side by side: A shares, B and C are teammates. Each app is signed in with desktop tokens minted through core's real OAuth flow, against a local cinna-core at `511ea03a`. All 28 tests passed in two runs. The test agent's `/run:check-creds` prints a hash of each credential value its script reads, so "the agent runs with the right credential" is observed, not inferred. Seen end to end:
+
+- **Share with the team** — the entry's grants are exactly the sharer as maintainer and the people picked, found through core's user search in the dialog. A clone of the entry's full history on core holds nothing under `credentials/` or `app-data/`, no `.env`, no `.claude/settings.local.json` and neither of the sharer's secret values, and every version names the sharer's account. A person who was not picked neither sees the entry in the listing nor can clone it (`403`)
+- **Get** — the agent lands with the sharer's slug, manifest id and tracked files, plus the template's `.claude/settings.local.json`. A credential the server's admin shared with both people is attached without asking (**Connected automatically**). Finish setting up asks for the `.env` key, and the script then reads both values. A teammate the credential is not shared with gets no cloud option and nothing of the sharer's on disk. With two matching records nothing is attached, both are offered, and the one picked is the one the script reads. Get is refused by folder name (from the tile) and by manifest id (over IPC, caught by the listing's id), and `Local/` is left as it was
+- **Update and Share changes, both ways** — each side's note and author show in the other's History, and both folders end on the same version. When a teammate shared first, the share runs one Update and one more send. When both changed the same lines, the collision dialog opens with **Keep working on mine** focused, and that button leaves both changed. **Use the team's version** keeps the old folder as `<slug>-mine`, named "(my copy)", with a fresh id, no `origin`, and ready to run. With edits here and a team that moved, the tile's Update is refused as `dirty`, and Share changes brings the team's version in and sends. An open page shows **1 change not shared** after a file edit with nothing but the folder watcher
+- **Access** — a **Can use** account is offered no Share changes, and core refuses a raw `git push` with its token (`403`). Demoted to Can use while the Share changes dialog is open, the send reads the ask-a-maintainer sentence. Removing a person in People leaves **No one else has access yet.**, and that person's copy reads **No longer shared**
+- **Core's push refusals** — a symlink, an 11 MB file and an invalid manifest each come back as core's own sentence after "Fix what the team library refused, then share again." Core's head does not move and the version stays **Not shared yet**. Once the symlink or the big file is fixed, the next Share changes lands as **one** version carrying both notes, and core's history has no symlink and no blob over 10 MB
+- **Remove sharing with the delete** — the entry is gone from core. A teammate's copy reads **No longer shared**, with its folder and `credentials/.env` still there, and the same folder can be shared again
+- **The Inbox card** updates the agent and says **Updated.** **A blocked job's Get *X* from the team library** unblocks the job, with the same agent id
+- **Credentials over time** — when the admin revokes B's share, the slot reads missing and Finish setup is offered. Re-sharing makes the same attachment ready again, and after a rotation the script reads the new value. An empty `KEY=` in `credentials/.env` leaves the slot missing. A slot a teammate added arrives with Update and reopens Finish setting up. After Finish later, an Update that leaves nothing newly missing does not reopen it. **Use the team's version** keeps this machine's `credentials/.env` and attachment
+- **A secret refused before core** — a folder tracking a `.env` at its root is refused in the Share with the team dialog, and afterwards there is no library entry and no `origin`
+- **`.claude/settings.local.json`** — a plain-git teammate sent a version tracking a `Bash(*)` copy. It never replaced B's on Update, and a later Get got the template's file. B's copy then differs from the team's and still reads **Up to date with the team**, both as Can use and after being promoted to Can edit. B's own edit to a copy the team still tracks survives Update, and A's next in-app share takes the file out of the team version
+
+### Not verified against core
+
+- **The retry that finishes an entry this machine left empty.** It relies on core answering `409`, with an empty `head_sha`, for the taken name. Unit tests only
+- **Share with the team restarting an agent whose entry was deleted** while the folder still has its `origin`. The live re-share comes after Remove sharing, which has already dropped the link, so it takes the ordinary first-share path, not the one that replaces the old origin. Unit tests only
+- **The cleaning of unsent versions** that recorded `credentials/` or `app-data/`, before a send or an Update. Nothing was ever recorded under them in the live runs. In `gitService.test.ts` a pre-receive hook stands in for core's policy
+- **Grants on create.** The live grants are exactly the ones chosen, but the desktop writes them again before it sends, so no run can tell core's create from that write. That core applies `grants` on create was read from core's source (`library_service.py`'s `create_agent`)
+- **The `.git/cinna-local-only/` backup** being put back after an interrupted Update
+- **Use the team's version keeping this machine's `.claude/settings.local.json`.** The live run checks only `.env` and attachments
+- **The AI share summary.** The specs type every note
+- **Most of People.** Only removing a person was seen. Changing access from the select, **Share with a person…** in the Sharing tab, grants to everyone or to a role, and what a non-maintainer sees after a `403` are unit-tested only. The specs demote people through core's API directly
+- **Remove sharing's refused delete** (`403`) and an entry already gone (`404`)
+- **Get's second check**, against what actually arrived, for when the listing's manifest id is missing or stale
+- **External remotes.** No spec uses a GitHub, GitLab or SSH remote
+- That a `404` or `403` from the listing means "no library here" rather than "this session is broken" is still an assumption about the server. No live run has met either answer

@@ -37,10 +37,10 @@ export const SHARE_REFUSAL_TEXT: Record<ShareRefusal, string> = {
   not_in_library: 'Refresh the Team library — this agent is no longer in it.',
   turn_in_progress: 'Wait for the agent to finish its turn, then try again — nothing was changed.',
   unshared_changes: 'Share your changes first — removing this agent would lose them.',
-  // A non-developer cannot take a file out of the team's version; the
-  // maintainer can. `detail` names up to three of the files.
+  // A non-developer cannot take a recorded file out of the agent's history
+  // (it may already be in the team's version); the maintainer can. `detail` names up to three of the files.
   secrets_tracked:
-    'A file that can hold a secret is already in the team’s version. Ask whoever maintains this agent to remove it before sharing.',
+    'A file that can hold a secret is recorded in this agent’s history. Ask whoever maintains this agent to remove it before sharing.',
   failed: 'Try again — that didn’t work.'
 }
 
@@ -54,7 +54,7 @@ export function shareRefusalSentence(refusal: ShareRefusal, detail: string | nul
   const extra = detail?.trim()
   if (!extra) return base
   if (refusal === 'secrets_tracked') {
-    return `A file that can hold a secret is already in the team’s version (${extra}). Ask whoever maintains this agent to remove it before sharing.`
+    return `A file that can hold a secret is recorded in this agent’s history (${extra}). Ask whoever maintains this agent to remove it before sharing.`
   }
   if (refusal === 'exists') return `Open ${extra} instead — this agent is already on this computer.`
   if (refusal === 'push_rejected' || refusal === 'failed') return `${base} ${extra}`

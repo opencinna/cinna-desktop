@@ -302,6 +302,9 @@ export function useLocalAgentWatch(): void {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+      // Finish setup reads `credentials/.env` through its own key; a hand edit
+      // from Open credentials/.env arrives only as this push.
+      void queryClient.invalidateQueries({ queryKey: ['service-credentials', 'setup'] })
       // The prompt documents live in their own cache entries — the DTO carries
       // their stamps but not their text — so a folder edit has to drop those
       // too, or an assistant's rewrite would never appear.

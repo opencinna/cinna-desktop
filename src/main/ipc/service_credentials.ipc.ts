@@ -25,4 +25,6 @@ export function registerServiceCredentialHandlers(): void {
   ipcHandle('service-credentials:attachments', (_, id: string) => outcome(() => service.attachments(id)))
   ipcHandle('service-credentials:attach-options', (_, id: string) => outcome(() => service.attachOptions(id)))
   ipcHandle('service-credentials:set-attachments', (_, id: string, group: string, refs: string[]) => outcome(() => service.setAttachments(id, group, refs)))
+  ipcHandle('service-credentials:attach', (_, id: string, group: string, ref: string) => outcome(() => service.attach(id, group, ref)))
+  ipcHandle('service-credentials:setup-state', (_, id: string) => outcome(() => service.setupState(id)))
 }

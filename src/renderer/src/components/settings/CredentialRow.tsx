@@ -66,7 +66,7 @@ export function ManageCredentialButton({ name, url, onError, disabled }: { name:
  * form). The toggle is a real button for keyboard use; the whole header also
  * takes the click, and `actions` stop their clicks from reaching it.
  */
-export function CredentialRow({ name, type, typeTitle, serviceUri, health, ownership, actions, expandable, children }: {
+export function CredentialRow({ name, type, typeTitle, serviceUri, health, ownership, actions, expandable, compact = false, children }: {
   name: string
   type?: string
   /** Tooltip and accessible name of the type icon, when it says more than the badge. */
@@ -77,19 +77,25 @@ export function CredentialRow({ name, type, typeTitle, serviceUri, health, owner
   actions?: ReactNode
   /** `disabled` locks the toggle while another form holds unsaved input. */
   expandable?: { expanded: boolean; onToggle: () => void; disabled?: boolean }
+  /**
+   * The app-chrome scale, for a row inside a dialog on an agent page (Finish
+   * setup): a `text-xs` name, `text-[11px]` Service URI, tighter padding and
+   * 14px glyphs. Settings rows leave it off.
+   */
+  compact?: boolean
   children?: ReactNode
 }): React.JSX.Element {
   const TypeIcon = type ? credentialTypeIcon(type) : null
   const typeName = type ? credentialTypeName(type) : '', titled = !!typeTitle && typeTitle !== typeName
   const content = <>
     {TypeIcon && (titled
-      ? <Glyph label={typeTitle} className="text-[var(--color-accent)]"><TypeIcon size={16} aria-hidden /></Glyph>
-      : <TypeIcon size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />)}
-    <span title={name} className="min-w-0 shrink truncate text-[14px] font-medium">{name}</span>
+      ? <Glyph label={typeTitle} className="text-[var(--color-accent)]"><TypeIcon size={compact ? 14 : 16} aria-hidden /></Glyph>
+      : <TypeIcon size={compact ? 14 : 16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />)}
+    <span title={name} className={`min-w-0 shrink truncate font-medium ${compact ? 'text-xs' : 'text-[14px]'}`}>{name}</span>
     {type && <SettingsBadge title={titled ? typeTitle : undefined}>{typeName}</SettingsBadge>}
-    <CredentialStatusGlyph health={health} />
-    {ownership && <CredentialOwnershipGlyph ownership={ownership} />}
-    {serviceUri && <code title={`Service URI: ${serviceUri}`} className="min-w-0 shrink-[2] truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">{serviceUri}</code>}
+    <CredentialStatusGlyph health={health} size={compact ? 12 : 14} />
+    {ownership && <CredentialOwnershipGlyph ownership={ownership} size={compact ? 12 : 14} />}
+    {serviceUri && <code title={`Service URI: ${serviceUri}`} className={`min-w-0 shrink-[2] truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[var(--color-text-secondary)] ${compact ? 'text-[11px]' : 'text-[12px]'}`}>{serviceUri}</code>}
   </>
   const actionBox = actions ? <div className="flex shrink-0 items-center gap-1.5" onClick={e => e.stopPropagation()}>{actions}</div> : null
   return <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
@@ -100,7 +106,7 @@ export function CredentialRow({ name, type, typeTitle, serviceUri, health, owner
         {actionBox}
         <ChevronDown size={14} aria-hidden className={`shrink-0 text-[var(--color-text-muted)] transition-transform duration-200 ${expandable.expanded ? 'rotate-180' : ''}`} />
       </div>
-      : <div className="flex items-center gap-2 px-4 py-2.5"><div className="flex min-w-0 flex-1 items-center gap-2">{content}</div>{actionBox}</div>}
+      : <div className={`flex items-center gap-2 ${compact ? 'px-3 py-1.5' : 'px-4 py-2.5'}`}><div className="flex min-w-0 flex-1 items-center gap-2">{content}</div>{actionBox}</div>}
     {children}
   </div>
 }

@@ -82,7 +82,8 @@ const { agentRootRepo } = await import('../../db/agentRoots')
 const { clearContractCache, getLayoutView } = await import('../../kit/contractStore')
 const { manifestPath, readManifest, writeManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
-const { scannerService, installCredentialReadiness } = await import('./scannerService')
+const { scannerService, installCredentialReadiness, readEnvKeys } = await import('./scannerService')
+const { execFileSync } = await import('node:child_process')
 const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 
 const USER = '__default__'
@@ -568,6 +569,32 @@ describe('scanning a workshop', () => {
     expect(agent.credentials[0].presentKeys).toEqual(['ACME_TOKEN'])
     // The value is never read, so it cannot leak into the DTO.
     expect(JSON.stringify(agent)).not.toContain('super-secret')
+  })
+
+  it('does not count an empty .env value as a filled credential', () => {
+    const dir = scaffold('alpha')
+    const manifest = readManifest(manifestPath(dir))
+    manifest.credentials = [
+      { name: 'Acme API', type: 'api_token', env_prefix: 'ACME_', fields: ['token', 'team', 'org', 'zone'] }
+    ]
+    writeManifest(manifestPath(dir), manifest)
+
+    writeFileSync(
+      join(dir, 'credentials/.env'),
+      'ACME_TOKEN=\nACME_TEAM=""\nexport ACME_ORG=\'\'\nACME_ZONE=  \n'
+    )
+    let agent = scannerService.scanRoot(USER, root).agents[0]
+    expect(agent.readiness).toBe('credentials_needed')
+    expect(agent.credentials[0].presentKeys).toEqual([])
+
+    // The last assignment wins, as in the kit's reader: emptied after a value is empty.
+    writeFileSync(
+      join(dir, 'credentials/.env'),
+      'ACME_TOKEN=x\nACME_TOKEN=\nACME_TEAM=" "\nACME_ORG=\'o\'\nACME_ZONE=z # note\n'
+    )
+    agent = scannerService.scanRoot(USER, root).agents[0]
+    expect(agent.credentials[0].presentKeys).toEqual(['ACME_TEAM', 'ACME_ORG', 'ACME_ZONE'])
+    expect(agent.readiness).toBe('credentials_needed')
   })
 
   it('refuses to operate a folder built against a newer contract major', () => {
@@ -1269,6 +1296,79 @@ it('matches attached credentials by service and type without spurious env overla
   expect(slot.satisfied).toBe(false)
   installCredentialReadiness(() => [{ ...attached as object, serviceUri: 'slack-workspace' } as never])
   expect(scannerService.scanRoot(USER, root).agents[0].credentials[0].satisfied).toBe(true)
+})
+
+it('fills a slot that declares no .env names with a ready attachment, and names the one it judged', () => {
+  const dir = scaffold('keyless-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'acme', type: 'api_token', service_uri: 'acme-api' }, { name: 'extra', type: 'api_token', optional: true }]
+  writeManifest(manifestPath(dir), manifest)
+  installCredentialReadiness(() => [])
+  let agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials.map((c) => [c.name, c.satisfied])).toEqual([['acme', false], ['extra', true]])
+  expect(agent.readiness).toBe('credentials_needed')
+  expect(agent.credentials[0]).toMatchObject({ serviceUri: 'acme-api', expectedKeys: [], attachment: null })
+  // With no fields, any set name under the derived prefix (`ACME_`) fills it too.
+  writeFileSync(join(dir, 'credentials/.env'), 'ACME_ANYTHING=v\n')
+  expect(scannerService.scanRoot(USER, root).agents[0].credentials[0]).toMatchObject({ envPrefix: 'ACME_', presentKeys: ['ACME_ANYTHING'], satisfied: true })
+  writeFileSync(join(dir, 'credentials/.env'), '')
+
+  const record = { id: 'row-1', name: 'Acme', type: 'api_token', serviceUri: 'acme-api', state: 'local_use_not_allowed' } as never
+  installCredentialReadiness(() => [record])
+  agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials[0]).toMatchObject({ satisfied: false, attachment: { credentialId: 'row-1', state: 'local_use_not_allowed' } })
+
+  installCredentialReadiness(() => [record, { ...(record as object), id: 'row-2', state: 'ready' } as never])
+  agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials[0]).toMatchObject({ satisfied: true, attachment: { credentialId: 'row-2', state: 'ready' } })
+  expect(agent.readiness).toBe('ok')
+  installCredentialReadiness(() => [])
+})
+
+it('reads a slot with no env_prefix under the prefix the kit derives from its name', () => {
+  const dir = scaffold('derived-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'Vendor Portal', type: 'api_token', fields: ['token'] }]
+  writeManifest(manifestPath(dir), manifest)
+  installCredentialReadiness(() => [])
+  let [slot] = scannerService.scanRoot(USER, root).agents[0].credentials
+  expect(slot).toMatchObject({ envPrefix: 'VENDOR_PORTAL_', expectedKeys: ['VENDOR_PORTAL_TOKEN'], satisfied: false })
+  writeFileSync(join(dir, 'credentials/.env'), 'VENDOR_PORTAL_TOKEN=x\n')
+  ;[slot] = scannerService.scanRoot(USER, root).agents[0].credentials
+  expect(slot).toMatchObject({ presentKeys: ['VENDOR_PORTAL_TOKEN'], satisfied: true })
+  expect(scannerService.scanRoot(USER, root).agents[0].readiness).toBe('ok')
+})
+
+it('fills a slot with a prefix and no fields by any set name under the full prefix, as the kit does', () => {
+  const dir = scaffold('fieldless-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'Weather', type: 'api_token', env_prefix: 'WEATHER_' }]
+  writeManifest(manifestPath(dir), manifest)
+  installCredentialReadiness(() => [])
+  const scan = () => scannerService.scanRoot(USER, root).agents[0].credentials[0]
+  // The prefix without its `_` is not under it, and an empty value counts for nothing.
+  writeFileSync(join(dir, 'credentials/.env'), 'WEATHER=x\nWEATHER_TOKEN=\nWEATHERX_KEY=y\n')
+  expect(scan()).toMatchObject({ expectedKeys: [], presentKeys: [], satisfied: false })
+  writeFileSync(join(dir, 'credentials/.env'), 'WEATHER_TOKEN=\nWEATHER_ZONE=eu\nWEATHER_API_KEY="k"\n')
+  expect(scan()).toMatchObject({ envPrefix: 'WEATHER_', expectedKeys: [], presentKeys: ['WEATHER_API_KEY', 'WEATHER_ZONE'], satisfied: true })
+})
+
+it('counts the .env names the kit reader fills, on a file only Python splits and strips this way', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'env-keys-'))
+  try {
+    mkdirSync(join(dir, 'credentials')); mkdirSync(join(dir, 'scripts'))
+    const text = [
+      '\x1fLEAD=1', 'A=x\x1cB=y', 'C=\x1f\x85', 'D=﻿', '  export   E = "e" ', 'export\tF=f', 'G="" ', '# H=h',
+      'I=\x1e', 'my key = v', 'J=1\rJ=', 'K=　k　'
+    ].join('\n') + '\n'
+    writeFileSync(join(dir, 'credentials/.env'), text, 'utf8')
+    const script = join(repoRoot, 'resources/cinna-agent-kit/templates/agent/scripts/cinna_credentials.py')
+    writeFileSync(join(dir, 'scripts/cinna_credentials.py'), readFileSync(script))
+    const code = `import sys, json; sys.path.insert(0, ${JSON.stringify(join(dir, 'scripts'))})\nfrom cinna_credentials import _parse_env_file, LOCAL_ENV\nsys.stdout.write(json.dumps(sorted(k for k, v in _parse_env_file(LOCAL_ENV).items() if v != '')))`
+    const kit = JSON.parse(execFileSync('python3', ['-I', '-c', code], { encoding: 'utf8' }))
+    expect([...readEnvKeys(dir)].sort()).toEqual(kit)
+    expect(kit).toEqual(['A', 'B', 'D', 'E', 'LEAD', 'export\tF', 'K', 'my key'].sort())
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 it('projects the sibling publication ledger with legacy fallback and no manifest mutation', () => {

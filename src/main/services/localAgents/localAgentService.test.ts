@@ -4,6 +4,7 @@ vi.mock('../../host/runtimeHost', async () => {
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -891,6 +892,17 @@ describe('openCredentials', () => {
     expect(text).toContain('# VENDOR_PORTAL_TOKEN=')
   })
 
+  it('seeds a slot with no fields as a pattern under its prefix, which fills nothing', async () => {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.credentials = [{ name: 'Vendor Portal', type: 'api_key' }]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+    await localAgentService.openCredentials(USER, agentId)
+
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toContain('# VENDOR_PORTAL_<FIELD>=')
+    expect(currentAgent().credentials[0]).toMatchObject({ presentKeys: [], satisfied: false })
+  })
+
   it('leaves the credential unsatisfied — the seed defines no variable', async () => {
     declareCredential()
     await localAgentService.openCredentials(USER, agentId)
@@ -984,6 +996,125 @@ describe('openCredentials', () => {
     expect(readFileSync(join(agentDir, ENV), 'utf8')).toContain(
       '# This agent declares no credentials yet.'
     )
+  })
+})
+
+describe('setEnvValues', () => {
+  const ENV = 'credentials/.env'
+
+  function declare(): void {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.credentials = [
+      { name: 'Weather', type: 'api_token', env_prefix: 'WEATHER_', fields: ['api_key'] },
+      { name: 'Mail', type: 'email_imap', env_prefix: 'MAIL_', fields: ['login', 'password'] }
+    ]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+  }
+
+  it('merges declared values in place, 0600, replacing the commented seed', async () => {
+    declare()
+    writeFileSync(
+      join(agentDir, ENV),
+      '# Credentials\n# WEATHER_API_KEY=\nOTHER=keep # me\nMAIL_LOGIN=old\nMAIL_LOGIN=older\n'
+    )
+    const states = localAgentService.setEnvValues(USER, agentId, {
+      WEATHER_API_KEY: 'w-secret',
+      MAIL_LOGIN: 'me'
+    })
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toBe(
+      '# Credentials\nWEATHER_API_KEY=w-secret\nOTHER=keep # me\nMAIL_LOGIN=me\n'
+    )
+    expect(statSync(join(agentDir, ENV)).mode & 0o777).toBe(0o600)
+    expect(states.find((s) => s.name === 'Weather')?.satisfied).toBe(true)
+    expect(states.find((s) => s.name === 'Mail')?.presentKeys).toEqual(['MAIL_LOGIN'])
+    expect(JSON.stringify(states)).not.toContain('w-secret')
+  })
+
+  it('creates the file when there is none', () => {
+    declare()
+    localAgentService.setEnvValues(USER, agentId, { WEATHER_API_KEY: 'x' })
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toBe('WEATHER_API_KEY=x\n')
+    expect(statSync(join(agentDir, ENV)).mode & 0o777).toBe(0o600)
+  })
+
+  it('refuses names the manifest does not declare, empty and multi-line values, writing nothing', () => {
+    declare()
+    const refuse = (values: unknown, pattern: RegExp): void => {
+      expect(() => localAgentService.setEnvValues(USER, agentId, values)).toThrow(pattern)
+      expect(existsSync(join(agentDir, ENV))).toBe(false)
+    }
+    refuse({ PATH: 'x' }, /not a credential/)
+    refuse({ WEATHER_API_KEY: '' }, /empty/)
+    refuse({ WEATHER_API_KEY: '   ' }, /empty/)
+    refuse({ WEATHER_API_KEY: 'a\nMAIL_LOGIN=b' }, /single line/)
+    refuse({ WEATHER_API_KEY: 'a\u2028b' }, /single line/)
+    refuse({ WEATHER_API_KEY: 'a\0b' }, /single line/)
+    refuse({ WEATHER_API_KEY: 42 }, /empty/)
+    refuse({}, /Nothing/)
+    refuse(['x'], /Nothing/)
+  })
+
+  it('refuses every name for a slot with no fields, even one under its prefix', () => {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.credentials = [{ name: 'Vendor', type: 'api_token', env_prefix: 'VENDOR_' }]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+    for (const key of ['VENDOR_TOKEN', 'VENDOR', 'VENDOR_']) {
+      expect(() => localAgentService.setEnvValues(USER, agentId, { [key]: 'x' })).toThrow(/not a credential/)
+    }
+    expect(existsSync(join(agentDir, ENV))).toBe(false)
+  })
+
+  it('refuses while a turn holds the agent, and changes nothing', () => {
+    declare()
+    writeFileSync(join(agentDir, ENV), '# WEATHER_API_KEY=\n')
+    const handle = turnLock.acquireShared(agentId, 'turn')
+    try {
+      let refusal: unknown
+      try {
+        localAgentService.setEnvValues(USER, agentId, { WEATHER_API_KEY: 'x' })
+      } catch (err) {
+        refusal = err
+      }
+      expect(refusal).toMatchObject({ code: 'turn_in_progress', message: expect.stringMatching(/Nothing was changed/) })
+    } finally {
+      handle.release()
+    }
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toBe('# WEATHER_API_KEY=\n')
+  })
+
+  it('refuses a declared name that is not a plain variable name', () => {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.credentials = [{ name: 'Odd', type: 'api_token', env_prefix: 'ODD-X=1 #', fields: ['key'] }]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+    const declared = currentAgent().credentials[0].expectedKeys[0]
+    expect(declared).toBe('ODD-X=1 #KEY')
+    expect(() => localAgentService.setEnvValues(USER, agentId, { [declared]: 'x' })).toThrow(/not a credential/)
+    expect(existsSync(join(agentDir, ENV))).toBe(false)
+  })
+
+  it('says why a write failed when the system does', () => {
+    declare()
+    mkdirSync(join(agentDir, 'credentials'), { recursive: true })
+    chmodSync(join(agentDir, 'credentials'), 0o500)
+    try {
+      expect(() => localAgentService.setEnvValues(USER, agentId, { WEATHER_API_KEY: 'x' })).toThrow(
+        /you do not have permission to write/
+      )
+    } finally {
+      chmodSync(join(agentDir, 'credentials'), 0o700)
+    }
+  })
+
+  it('refuses when no ignore rule covers .env', () => {
+    declare()
+    writeFileSync(join(agentDir, 'credentials/.gitignore'), '!.env\n')
+    rmSync(join(agentDir, '.gitignore'), { force: true })
+    rmSync(join(workshop, '.gitignore'), { force: true })
+    expect(() => localAgentService.setEnvValues(USER, agentId, { WEATHER_API_KEY: 'x' })).toThrow(/gitignore/i)
+    expect(existsSync(join(agentDir, ENV))).toBe(false)
   })
 })
 

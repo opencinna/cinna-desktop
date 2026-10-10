@@ -33,6 +33,7 @@ import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
 import { AgentShareBadge } from './sharing/AgentShareBadge'
 import { SharingTab } from './sharing/SharingTab'
 import { useShareActions } from './sharing/useShareActions'
+import { useFinishSetup } from './FinishSetupDialog'
 import { useListedShareStatus } from '../../../hooks/useSharing'
 import { SHARE_UI_TEXT } from '../../../utils/shareText'
 
@@ -143,6 +144,11 @@ export function LocalAgentPage(): React.JSX.Element {
     onError: (message) => (shareErrorSink.current ?? reportError)(message),
     onNote: reportNote
   })
+  /**
+   * Finish setup, owned here for the same reason: it opens after a Get lands
+   * on this page, and must survive switching between chat and settings.
+   */
+  const finishSetup = useFinishSetup(activeLocalAgentId, agent?.name ?? '')
   const bindShareErrors = useCallback((sink: ((message: string | null) => void) | null): void => {
     shareErrorSink.current = sink
   }, [])
@@ -374,6 +380,7 @@ export function LocalAgentPage(): React.JSX.Element {
           drafting={drafting}
           draftNote={draftNote}
           onShowDetails={() => { setMode('settings'); setTab('folder') }}
+          onFinishSetup={finishSetup.open}
           onStampIdentity={
             manifestStamp
               ? () =>
@@ -574,6 +581,7 @@ export function LocalAgentPage(): React.JSX.Element {
         </div>
         </>}
         {shareActions.dialogs}
+        {finishSetup.dialog}
       </div>
     </div>
   )

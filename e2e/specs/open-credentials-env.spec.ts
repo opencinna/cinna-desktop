@@ -173,8 +173,8 @@ test('Open credentials/.env seeds the file, falls back to the file manager, and 
       [
         `# Credentials for ${AGENT}.`,
         '#',
-        '# This file stays on this machine. Cinna reads which variable names are set',
-        '# here and never their values.',
+        '# This file stays on this machine. Cinna checks which variables are filled in',
+        '# here; it never shows or sends their values.',
         '#',
         '# Fill a value in and remove the leading "#" from its line.',
         '',

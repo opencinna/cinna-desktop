@@ -80,6 +80,7 @@ import {
   type FileStamp,
   type LocalAgentDocDto,
   type LocalAgentDocKind,
+  type LocalAgentCredentialState,
   type LocalAgentDto,
   type LocalAgentKind,
   type LocalAgentValidation,
@@ -99,6 +100,7 @@ import { agentsHomeService } from './agentsHomeService'
 import { scaffoldService } from './scaffoldService'
 import { ENV_FILE, folderIndexLauncher, scannerService } from './scannerService'
 import { turnLock } from './turnLock'
+import { envValueProblem, mergeEnv } from './envFile'
 import { gitService } from './gitService'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
@@ -296,24 +298,27 @@ function rebuildManifestsForRekeyedAgent(oldAgentId: string, newAgentId: string)
  * The `credentials/.env` a click has to be able to open when the file is not
  * there yet.
  *
- * The declared variable names are written **commented out**. An uncommented
- * `KEY=` is what the scanner counts as defined (`readEnvKeys` matches the name
- * and never the value), so seeding bare assignments would report every
- * credential as satisfied the moment the user opened the file — the opposite of
- * what the readiness strip is for.
+ * The declared variable names are written **commented out**, so the file reads
+ * as a list of what to fill in. (`readEnvKeys` no longer counts an empty `KEY=`
+ * as defined, but a commented seed is also what Finish setup's writer replaces
+ * in place.)
  */
 function credentialsSeed(agent: LocalAgentDto): string {
-  const keys = agent.credentials.flatMap((slot) => slot.expectedKeys)
+  // A slot with no `fields` is read as any `<prefix><FIELD>`, so it gets a pattern, not a name.
+  // `<` keeps the line from ever reading as an assignment, to the kit or to `mergeEnv`; a declared
+  // prefix that is not a plain name (it may hold a newline) gets no line at all.
+  const keys = agent.credentials.flatMap((slot) =>
+    slot.expectedKeys.length > 0 ? slot.expectedKeys : slot.envPrefix && ENV_NAME.test(slot.envPrefix) ? [`${slot.envPrefix}<FIELD>`] : []
+  )
   // The name is manifest text and may legally hold a newline. Left in, a name
-  // ending `\nVENDOR_PORTAL_TOKEN=` would define a variable in this file, and
-  // `readEnvKeys` would report the slot satisfied over an empty value — the
-  // exact failure the commented placeholders below are written to avoid.
+  // ending `\nVENDOR_PORTAL_TOKEN=x` would define a variable in this file, and
+  // `readEnvKeys` would report the slot satisfied over a value nobody chose.
   const name = agent.name.replace(/[\r\n]+/g, ' ')
   const lines = [
     `# Credentials for ${name}.`,
     '#',
-    '# This file stays on this machine. Cinna reads which variable names are set',
-    '# here and never their values.',
+    '# This file stays on this machine. Cinna checks which variables are filled in',
+    '# here; it never shows or sends their values.',
     '#',
     '# Fill a value in and remove the leading "#" from its line.',
     ''
@@ -324,6 +329,58 @@ function credentialsSeed(agent: LocalAgentDto): string {
     for (const key of keys) lines.push(`# ${key}=`)
   }
   return lines.join('\n') + '\n'
+}
+
+/** A `.env` variable name a line may define. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function errnoOf(err: unknown): string {
+  return (err as NodeJS.ErrnoException)?.code ?? 'unknown'
+}
+
+/** Why a write under `credentials/` failed, in words, from the error code alone (never its path). */
+function envWriteFailure(err: unknown, what: string): string {
+  switch (errnoOf(err)) {
+    case 'EACCES':
+    case 'EPERM':
+      return `${what}: you do not have permission to write to the agent's credentials folder.`
+    case 'EROFS':
+      return `${what}: the agent's folder is on a read-only disk.`
+    case 'ENOSPC':
+      return `${what}: the disk is full.`
+    case 'EISDIR':
+      return `${what}: credentials/.env is a folder, not a file.`
+    default:
+      return `${what}.`
+  }
+}
+
+/**
+ * Refuse unless a `.gitignore` rule covers `credentials/.env`, installing the
+ * contract's own `credentials/.gitignore` first where the folder has none. See
+ * {@link seedCredentialsFile} for why a write without the rule is worse than
+ * no write.
+ *
+ * @throws LocalAgentError `write_failed`
+ */
+function ensureEnvIgnored(agentDir: string, rootPath: string, credentialsDir: string): void {
+  if (isIgnoredPath(agentDir, ENV_FILE)) return
+  const ignore = join(credentialsDir, '.gitignore')
+  if (!existsSync(ignore)) {
+    try {
+      copyFileSync(join(getTemplateRoot('agent', rootPath), 'credentials', '.gitignore'), ignore)
+    } catch (err) {
+      logger.warn('could not install the credentials .gitignore', {
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
+  if (!isIgnoredPath(agentDir, ENV_FILE)) {
+    throw new LocalAgentError(
+      'write_failed',
+      'No .gitignore rule covers credentials/.env, so writing it would leave a secrets file committable. Add “.env” to credentials/.gitignore first.'
+    )
+  }
 }
 
 /**
@@ -361,25 +418,7 @@ function seedCredentialsFile(agentDir: string, rootPath: string, agent: LocalAge
     )
   }
   const target = join(resolveWithinRoot(agentDir, dirname(ENV_FILE)), basename(ENV_FILE))
-
-  if (!isIgnoredPath(agentDir, ENV_FILE)) {
-    const ignore = join(dirname(target), '.gitignore')
-    if (!existsSync(ignore)) {
-      try {
-        copyFileSync(join(getTemplateRoot('agent', rootPath), 'credentials', '.gitignore'), ignore)
-      } catch (err) {
-        logger.warn('could not install the credentials .gitignore', {
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
-    if (!isIgnoredPath(agentDir, ENV_FILE)) {
-      throw new LocalAgentError(
-        'write_failed',
-        'No .gitignore rule covers credentials/.env, so creating it would leave a secrets file committable. Add “.env” to credentials/.gitignore first.'
-      )
-    }
-  }
+  ensureEnvIgnored(agentDir, rootPath, dirname(target))
 
   try {
     // `wx` so a file that appeared between the check and the write — the user's
@@ -1151,6 +1190,105 @@ export const localAgentService = {
     }
     logger.info('opened agent credentials', { agentId, created, revealed })
     return { created, revealed }
+  },
+
+  /**
+   * Fill credential values into `credentials/.env` from the Finish setup dialog.
+   *
+   * Only names the manifest's slots declare are accepted; a value must be
+   * non-empty and one line (`envValueProblem`). The file is merged in place —
+   * other lines and comments kept, a `# KEY=` seed replaced where it stands —
+   * and written 0600 through a temp file and a rename. Refused while a turn
+   * runs (nothing is changed), and refused when no ignore rule covers `.env`.
+   *
+   * Values are never logged and never returned: the answer is the slots'
+   * states as the rescan reads them, names only.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`, `turn_in_progress`,
+   *   `invalid_path`, `write_failed`
+   */
+  setEnvValues(userId: string, agentId: string, values: unknown): LocalAgentCredentialState[] {
+    // A bare agent declares no slots, so every name it could be sent is refused below.
+    const agent = this.get(userId, agentId)
+    if (values === null || typeof values !== 'object' || Array.isArray(values)) {
+      throw new LocalAgentError('invalid_input', 'Nothing to save.')
+    }
+    const entries = Object.entries(values as Record<string, unknown>)
+    if (entries.length === 0) throw new LocalAgentError('invalid_input', 'Nothing to save.')
+    const declared = new Set(agent.credentials.flatMap((slot) => slot.expectedKeys))
+    const clean: Record<string, string> = {}
+    for (const [key, value] of entries) {
+      // A declared name is still teammate-authored manifest text: only a plain
+      // variable name may become a line of the file.
+      if (!declared.has(key) || !ENV_NAME.test(key)) {
+        throw new LocalAgentError('invalid_input', `${key.slice(0, 64)} is not a credential this agent declares.`)
+      }
+      const problem = envValueProblem(value)
+      if (problem) throw new LocalAgentError('invalid_input', `${key} ${problem}.`)
+      clean[key] = value as string
+    }
+
+    const { root, agentDir } = this.locate(userId, agentId)
+    let handle: { release: () => void }
+    try {
+      handle = turnLock.acquire(agentId, 'credentials')
+    } catch (err) {
+      if (err instanceof LocalAgentError && err.code === 'turn_in_progress') {
+        throw new LocalAgentError(
+          'turn_in_progress',
+          'This agent is running. Nothing was changed — save again when it finishes.'
+        )
+      }
+      throw err
+    }
+    try {
+      try {
+        mkdirSync(join(agentDir, dirname(ENV_FILE)), { recursive: true })
+      } catch (err) {
+        throw new LocalAgentError('write_failed', envWriteFailure(err, 'The credentials folder could not be created'), errnoOf(err))
+      }
+      const credentialsDir = resolveWithinRoot(agentDir, dirname(ENV_FILE))
+      ensureEnvIgnored(agentDir, root.path, credentialsDir)
+      const target = existsSync(join(agentDir, ENV_FILE))
+        ? resolveWithinRoot(agentDir, ENV_FILE)
+        : join(credentialsDir, basename(ENV_FILE))
+      let current = ''
+      try {
+        current = readFileSync(target, 'utf8')
+      } catch {
+        current = ''
+      }
+      const temp = join(credentialsDir, `.env.${process.pid}.${Date.now()}.tmp`)
+      let fd: number | null = null
+      try {
+        fd = openSync(temp, 'wx', 0o600)
+        writeSync(fd, mergeEnv(current, clean))
+        fsyncSync(fd)
+        closeSync(fd)
+        fd = null
+        renameSync(temp, target)
+      } catch (err) {
+        if (fd !== null) {
+          try {
+            closeSync(fd)
+          } catch {
+            /* the write already failed */
+          }
+        }
+        try {
+          unlinkSync(temp)
+        } catch {
+          /* never created */
+        }
+        throw new LocalAgentError('write_failed', envWriteFailure(err, 'credentials/.env could not be saved'), errnoOf(err))
+      }
+    } finally {
+      handle.release()
+    }
+    scannerService.markRootDirty(root.id)
+    const dto = this.reindexAgent(userId, root, agentDir) ?? scannerService.scanAgentFolder(agentDir, root)
+    logger.info('credential values saved', { agentId, keys: Object.keys(clean) })
+    return dto.credentials
   },
 
   /**

@@ -28,6 +28,7 @@ import type {
   DeleteLocalAgentResult,
   PickAgentFolderResult,
   DraftLocalAgentResult,
+  LocalAgentCredentialState,
   LocalAgentDocDto,
   LocalAgentDto,
   ReadLocalAgentDocInput,
@@ -348,6 +349,19 @@ export function registerLocalAgentHandlers(): void {
     (_event, agentId: string): Promise<OpenLocalAgentCredentialsResult> => {
       userActivation.requireActivated()
       return localAgentService.openCredentials(getSettingsScopeUserId(), agentId)
+    }
+  )
+
+  /**
+   * Fill values into `credentials/.env` from the Finish setup dialog. Only the
+   * names the manifest declares; answers the slots' states, never a value. An
+   * outcome, so `turn_in_progress` / `invalid_input` reach the dialog.
+   */
+  ipcHandle(
+    'local-agent:set-env-values',
+    (_event, agentId: string, values: unknown): LocalAgentOutcome<LocalAgentCredentialState[]> => {
+      userActivation.requireActivated()
+      return withCode(() => localAgentService.setEnvValues(getSettingsScopeUserId(), agentId, values))
     }
   )
 

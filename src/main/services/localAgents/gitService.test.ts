@@ -24,6 +24,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -45,7 +46,10 @@ vi.mock('../../shell/env', () => ({
   getShellEnv: async () => ({
     ...process.env,
     GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_CONFIG_NOSYSTEM: '1'
+    GIT_CONFIG_NOSYSTEM: '1',
+    // Nor the user's global ignore file, which git reads from here even
+    // without a global config (a developer's may ignore .claude/settings.local.json).
+    XDG_CONFIG_HOME: '/nonexistent-cinna-test-xdg'
   }),
   shellEnvForChild: (env: NodeJS.ProcessEnv) =>
     Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === 'string')),
@@ -81,6 +85,11 @@ const {
   shareChanges,
   diffForSummary,
   restoreLocalOnlyFolders,
+  keepLocalOnlyFiles,
+  putBackLocalOnlyFiles,
+  settleLocalOnlyFiles,
+  restoreLeftoverLocalOnlyFiles,
+  hasLeftoverLocalOnlyFiles,
   preflightShare
 } = await import('./gitService')
 
@@ -96,7 +105,8 @@ const ENV = {
   GIT_COMMITTER_NAME: 'Tester',
   GIT_COMMITTER_EMAIL: 'tester@example.test',
   GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null'
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  XDG_CONFIG_HOME: '/nonexistent-cinna-test-xdg'
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -804,6 +814,455 @@ describe('sharing an agent folder', () => {
     expect(existsSync(join(dir, 'app-data', 'cache', '.gitignore'))).toBe(true)
     expect(existsSync(join(dir, 'app-data', 'cache', 'gitignore'))).toBe(false)
   })
+})
+
+// ---------------------------------------------------------------------------
+// A version the library refused, and the files that never travel
+// ---------------------------------------------------------------------------
+
+describe('a version the library refused does not block later shares', () => {
+  let box: string
+
+  beforeAll(() => {
+    box = mkdtempSync(join(tmpdir(), 'cinna-combined-'))
+  })
+
+  afterAll(() => {
+    rmSync(box, { recursive: true, force: true })
+  })
+
+  /**
+   * A remote that refuses what cinna-core's push policy refuses for a symlink:
+   * any **new** version in the send whose tree holds one. Every send it sees
+   * is counted in `received`; `onAccept` runs (outside the hook's git
+   * environment) just before it accepts one.
+   */
+  function symlinkRefusing(path: string, onAccept = ''): { remote: string; received: () => number } {
+    const remote = bare(path)
+    const log = join(remote, 'received.log')
+    const hook = join(remote, 'hooks', 'pre-receive')
+    writeFileSync(
+      hook,
+      [
+        '#!/bin/sh',
+        `echo x >> "${log}"`,
+        'while read old new ref; do',
+        '  for c in $(git rev-list "$new" --not --all); do',
+        '    if git ls-tree -r "$c" | grep "^120000 " >/dev/null; then',
+        '      echo "This agent contains a symbolic link, which the team library does not accept." >&2',
+        '      exit 1',
+        '    fi',
+        '  done',
+        'done',
+        onAccept === '' ? '' : `(unset GIT_DIR GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES; ${onAccept})`,
+        ''
+      ].join('\n')
+    )
+    chmodSync(hook, 0o755)
+    return {
+      remote,
+      received: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0)
+    }
+  }
+
+  /** A kit agent already shared with `remote` as one accepted version. */
+  async function sharedAgent(name: string, remote: string): Promise<string> {
+    const dir = join(box, name, 'Local', name)
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, name)
+    expect(await initWithRemote(dir, remote, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    return dir
+  }
+
+  it('sends the unsent versions as one once the refused file is fixed', async () => {
+    const { remote } = symlinkRefusing(join(box, 'fix.git'))
+    const dir = await sharedAgent('fix', remote)
+    symlinkSync('AGENT.md', join(dir, 'link.md'))
+    const refused = await shareChanges(dir, 'Add a link', CINNA)
+    expect(refused.refusal).toBe('push_rejected')
+    expect(refused.detail).toContain('symbolic link')
+
+    rmSync(join(dir, 'link.md'))
+    writeFileSync(join(dir, 'notes.md'), 'fixed\n')
+    const unsent = git(dir, 'rev-list', 'origin/main..HEAD').trim()
+    expect(await shareChanges(dir, 'Remove the link', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+
+    expect(git(dir, 'rev-parse', 'HEAD').trim()).toBe(git(remote, 'rev-parse', 'main').trim())
+    expect(git(dir, 'rev-list', '--count', 'HEAD').trim()).toBe('2')
+    expect(git(dir, 'log', '-1', '--format=%B').trim()).toBe('Remove the link\n\nAdd a link')
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('notes.md')
+    expect(git(remote, 'rev-list', '--objects', '--all')).not.toContain('link.md')
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+    expect(git(dir, 'for-each-ref', 'refs/cinna/').trim()).toBe('')
+    expect(unsent.split('\n')).toHaveLength(1)
+  }, 60_000)
+
+  it('leaves history exactly as it was when the combined version is refused too', async () => {
+    const { remote, received } = symlinkRefusing(join(box, 'bad.git'))
+    const dir = await sharedAgent('bad', remote)
+    const teamHead = git(remote, 'rev-parse', 'main').trim()
+    symlinkSync('AGENT.md', join(dir, 'link.md'))
+    expect((await commitAll(dir, 'Add a link', null, undefined, true)).done).toBe(true)
+    writeFileSync(join(dir, 'notes.md'), 'still has the link\n')
+    const before = received()
+
+    const result = await shareChanges(dir, 'More notes', CINNA)
+    expect(result.refusal).toBe('push_rejected')
+    expect(result.detail).toContain('symbolic link')
+    // The version-by-version send, then the combined one: two refusals.
+    expect(received() - before).toBe(2)
+    expect(git(dir, 'log', '--format=%s', `${teamHead}..HEAD`).trim().split('\n')).toEqual(['More notes', 'Add a link'])
+    expect(git(remote, 'rev-parse', 'main').trim()).toBe(teamHead)
+    expect(git(dir, 'for-each-ref', 'refs/cinna/').trim()).toBe('')
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+  }, 60_000)
+
+  it('keeps each version of a share the library accepts', async () => {
+    const { remote, received } = symlinkRefusing(join(box, 'normal.git'))
+    const dir = await sharedAgent('normal', remote)
+    writeFileSync(join(dir, 'one.md'), '1\n')
+    expect((await commitAll(dir, 'one', null, undefined, true)).done).toBe(true)
+    writeFileSync(join(dir, 'two.md'), '2\n')
+    const before = received()
+    expect(await shareChanges(dir, 'two', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(received() - before).toBe(1)
+    expect(git(remote, 'log', '--format=%s', '-2', 'main').trim().split('\n')).toEqual(['two', 'one'])
+    expect(git(dir, 'rev-parse', 'HEAD').trim()).toBe(git(remote, 'rev-parse', 'main').trim())
+  }, 60_000)
+
+  it('combines only when the library declined the content, never when it cannot check it now', async () => {
+    const remote = bare(join(box, 'unavailable.git'))
+    const log = join(remote, 'received.log')
+    const sentence = join(box, 'unavailable-sentence')
+    // Refuses every send with the sentence in `sentence`, counting them.
+    const hook = join(remote, 'hooks', 'pre-receive')
+    writeFileSync(
+      hook,
+      ['#!/bin/sh', `echo x >> "${log}"`, `if [ -f "${sentence}" ]; then cat "${sentence}" >&2; exit 1; fi`, ''].join('\n')
+    )
+    chmodSync(hook, 0o755)
+    const received = (): number => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0)
+    const dir = await sharedAgent('unavailable', remote)
+    writeFileSync(join(dir, 'one.md'), '1\n')
+    expect((await commitAll(dir, 'one', null, undefined, true)).done).toBe(true)
+    writeFileSync(join(dir, 'two.md'), '2\n')
+
+    // core's MSG_UNAVAILABLE: a server fault, so no second, combined send.
+    writeFileSync(
+      sentence,
+      "The team library can't check this change right now. Ask your admin to look at the Cinna server.\n"
+    )
+    let before = received()
+    const unavailable = await shareChanges(dir, 'two', CINNA)
+    expect(unavailable.refusal).toBe('push_rejected')
+    expect(unavailable.detail).toContain("can't check this change right now")
+    expect(received() - before).toBe(1)
+    expect(git(dir, 'log', '--format=%s', 'origin/main..HEAD').trim().split('\n')).toEqual(['two', 'one'])
+
+    // A verdict on what a version holds: one combined send follows.
+    writeFileSync(sentence, 'The file big.bin is larger than 10 MB, too big to share with the team.\n')
+    before = received()
+    const content = await pushAgent(dir, CINNA)
+    expect(content.refusal).toBe('push_rejected')
+    expect(received() - before).toBe(2)
+    expect(git(dir, 'for-each-ref', 'refs/cinna/').trim()).toBe('')
+  }, 60_000)
+
+  it('replays a version recorded while the combined one was sent onto it, never dropping it', async () => {
+    const dir = join(box, 'moved', 'Local', 'moved')
+    const armed = join(box, 'moved-armed')
+    // Once armed, the library records a version in the folder as it accepts a send.
+    const { remote } = symlinkRefusing(
+      join(box, 'moved.git'),
+      `if [ -f "${armed}" ]; then git -C "${dir}" -c user.name=Meanwhile -c user.email=m@example.test -c commit.gpgsign=false commit -q --allow-empty -m meanwhile; fi`
+    )
+    expect(await sharedAgent('moved', remote)).toBe(dir)
+    symlinkSync('AGENT.md', join(dir, 'link.md'))
+    expect((await shareChanges(dir, 'Add a link', CINNA)).refusal).toBe('push_rejected')
+    rmSync(join(dir, 'link.md'))
+    writeFileSync(armed, '')
+
+    expect((await shareChanges(dir, 'Remove the link', CINNA)).done).toBe(true)
+    const sent = git(remote, 'rev-parse', 'main').trim()
+    expect(git(remote, 'log', '-1', '--format=%B', 'main').trim()).toBe('Remove the link\n\nAdd a link')
+    // The version recorded meanwhile is still the folder's tip, now on the
+    // combined version the team has: the sent work is not shown as unsent.
+    expect(git(dir, 'log', '-1', '--format=%s').trim()).toBe('meanwhile')
+    expect(git(dir, 'rev-parse', 'HEAD~1').trim()).toBe(sent)
+    expect(git(dir, 'rev-list', '--count', 'origin/main..HEAD').trim()).toBe('1')
+    expect(git(dir, 'for-each-ref', 'refs/cinna/').trim()).toBe('')
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+  }, 60_000)
+})
+
+describe('.claude/settings.local.json never travels to a Cinna library', () => {
+  let box: string
+  const RULES = '{"permissions":{"allow":["Bash(rm:*)"]}}\n'
+
+  beforeAll(() => {
+    box = mkdtempSync(join(tmpdir(), 'cinna-settings-'))
+  })
+
+  afterAll(() => {
+    rmSync(box, { recursive: true, force: true })
+  })
+
+  function settingsFile(dir: string, body = RULES): void {
+    mkdirSync(join(dir, '.claude'), { recursive: true })
+    writeFileSync(join(dir, '.claude', 'settings.local.json'), body)
+  }
+
+  it('is left out of every version sent, recorded ones included, and stays on disk', async () => {
+    const remote = bare(join(box, 'first.git'))
+    const dir = join(box, 'first', 'Local', 'first')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'First')
+    settingsFile(dir)
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'add', 'cinna-agent.json', 'AGENT.md', '.claude')
+    git(dir, 'commit', '-q', '-m', 'mine, with my rules')
+    // Tracked, it is no refusal: it is cleaned like credentials/.
+    expect(await preflightShare(dir, undefined, true)).toBeNull()
+
+    expect(await initWithRemote(dir, remote, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(remote, 'rev-list', '--objects', '--all')).not.toContain('settings.local.json')
+    expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toBe(RULES)
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('/.claude/settings.local.json')
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+  }, 60_000)
+
+  it('still travels to a remote that is not a Cinna library', async () => {
+    const remote = bare(join(box, 'external.git'))
+    const dir = join(box, 'external', 'Local', 'external')
+    mkdirSync(dir, { recursive: true })
+    kitAgent(dir, 'External')
+    settingsFile(dir)
+    expect(await initWithRemote(dir, remote, EXTERNAL)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('.claude/settings.local.json')
+  }, 60_000)
+
+  it('gives a fetched agent the template\'s file, and never replaces one that is there', () => {
+    const dir = join(box, 'fetched')
+    mkdirSync(dir, { recursive: true })
+    restoreLocalOnlyFolders(dir)
+    expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toContain('"allow"')
+    settingsFile(dir)
+    restoreLocalOnlyFolders(dir)
+    expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toBe(RULES)
+  })
+
+  it('puts back the kept copy, else the template\'s', () => {
+    const dir = join(box, 'kept')
+    settingsFile(dir)
+    const kept = keepLocalOnlyFiles(dir)
+    rmSync(join(dir, '.claude'), { recursive: true })
+    putBackLocalOnlyFiles(dir, kept)
+    expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toBe(RULES)
+    rmSync(join(dir, '.claude'), { recursive: true })
+    putBackLocalOnlyFiles(dir, new Map(), undefined, false)
+    expect(existsSync(join(dir, '.claude', 'settings.local.json'))).toBe(false)
+    putBackLocalOnlyFiles(dir, new Map())
+    expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toContain('"allow"')
+  })
+
+  it('keeps a teammate\'s copy when the version that stops tracking it arrives by Update', async () => {
+    // A team version shared before the file joined the never-travel list tracks it.
+    const remote = bare(join(box, 'old-team.git'))
+    const alice = join(box, 'alice', 'Local', 'old')
+    mkdirSync(alice, { recursive: true })
+    kitAgent(alice, 'Old')
+    settingsFile(alice)
+    git(alice, 'init', '-q', '-b', 'main', '.')
+    git(alice, 'remote', 'add', 'origin', remote)
+    git(alice, 'add', '-f', 'cinna-agent.json', 'AGENT.md', '.claude')
+    git(alice, 'commit', '-q', '-m', 'first')
+    git(alice, 'push', '-q', '-u', 'origin', 'main')
+    const bob = join(box, 'bob', 'Local', 'old')
+    mkdirSync(dirname(bob), { recursive: true })
+    git(dirname(bob), 'clone', '-q', remote, 'old')
+    expect(git(bob, 'ls-files', '.claude/settings.local.json').trim()).toBe('.claude/settings.local.json')
+
+    // Alice shares from a desktop that leaves it out: that version stops tracking it.
+    writeFileSync(join(alice, 'notes.md'), 'from Alice\n')
+    expect(await shareChanges(alice, 'notes', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).not.toContain('settings.local.json')
+
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(readFileSync(join(bob, 'notes.md'), 'utf8')).toBe('from Alice\n')
+    expect(readFileSync(join(bob, '.claude', 'settings.local.json'), 'utf8')).toBe(RULES)
+    expect(git(bob, 'ls-files', '.claude/settings.local.json').trim()).toBe('')
+    // Ignored, not a change waiting to be shared.
+    expect(git(bob, 'status', '--porcelain')).toBe('')
+  }, 60_000)
+})
+
+describe('this machine\'s .claude/settings.local.json always wins over a team version', () => {
+  let box: string
+  const MINE = '{"permissions":{"allow":["Bash(ls:*)"]}}\n'
+  const WIDER = '{"permissions":{"allow":["Bash(*)","Write(*)"]}}\n'
+  const SETTINGS = join('.claude', 'settings.local.json')
+
+  beforeAll(() => {
+    box = mkdtempSync(join(tmpdir(), 'cinna-mine-wins-'))
+  })
+
+  afterAll(() => {
+    rmSync(box, { recursive: true, force: true })
+  })
+
+  function settingsFile(dir: string, body: string): void {
+    mkdirSync(join(dir, '.claude'), { recursive: true })
+    writeFileSync(join(dir, SETTINGS), body)
+  }
+
+  /** Alice on plain git (or an older client): her versions track the file. */
+  function plainGitAlice(name: string, remote: string): string {
+    const alice = join(box, `${name}-alice`, 'Local', name)
+    mkdirSync(alice, { recursive: true })
+    kitAgent(alice, name)
+    git(alice, 'init', '-q', '-b', 'main', '.')
+    git(alice, 'remote', 'add', 'origin', remote)
+    git(alice, 'add', '-f', 'cinna-agent.json', 'AGENT.md')
+    git(alice, 'commit', '-q', '-m', 'first')
+    git(alice, 'push', '-q', '-u', 'origin', 'main')
+    return alice
+  }
+
+  function cloneAs(remote: string, name: string, who: string): string {
+    const dir = join(box, `${name}-${who}`, 'Local', name)
+    mkdirSync(dirname(dir), { recursive: true })
+    git(dirname(dir), 'clone', '-q', remote, name)
+    return dir
+  }
+
+  it('keeps this machine\'s rules on Update when a teammate\'s version carries a wider allow-list', async () => {
+    const remote = bare(join(box, 'wider.git'))
+    const alice = plainGitAlice('wider', remote)
+    const bob = cloneAs(remote, 'wider', 'bob')
+    // Bob's copy is ignored here (the exclude block), so git does not see it.
+    settingsFile(bob, MINE)
+    writeFileSync(join(bob, 'notes.md'), 'from Bob\n')
+    expect(await shareChanges(bob, 'notes', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+
+    // Alice's plain git starts tracking her wider rules and sends them.
+    git(alice, 'pull', '-q', '--ff-only')
+    settingsFile(alice, WIDER)
+    git(alice, 'add', '-f', SETTINGS)
+    git(alice, 'commit', '-q', '-m', 'my rules')
+    git(alice, 'push', '-q')
+
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(bob, 'rev-parse', 'HEAD').trim()).toBe(git(remote, 'rev-parse', 'main').trim())
+    expect(readFileSync(join(bob, SETTINGS), 'utf8')).toBe(MINE)
+    expect(existsSync(join(bob, '.git', 'cinna-local-only'))).toBe(false)
+  }, 60_000)
+
+  it('gives a folder without its own rules the template\'s, never the team\'s, on Update and on Get', async () => {
+    const remote = bare(join(box, 'none.git'))
+    const alice = plainGitAlice('none', remote)
+    const bob = cloneAs(remote, 'none', 'bob')
+    settingsFile(alice, WIDER)
+    git(alice, 'add', '-f', SETTINGS)
+    git(alice, 'commit', '-q', '-m', 'my rules')
+    git(alice, 'push', '-q')
+
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    const updated = readFileSync(join(bob, SETTINGS), 'utf8')
+    expect(updated).not.toBe(WIDER)
+    expect(updated).toContain('"allow"')
+
+    const carol = join(box, 'none-carol', 'Local', 'none')
+    expect((await cloneAgent(remote, carol, CINNA)).done).toBe(true)
+    expect(readFileSync(join(carol, SETTINGS), 'utf8')).toBe(WIDER)
+    restoreLocalOnlyFolders(carol)
+    await settleLocalOnlyFiles(carol, new Map())
+    expect(readFileSync(join(carol, SETTINGS), 'utf8')).toBe(updated)
+  }, 60_000)
+
+  it('keeps this machine\'s copy over the team\'s on Use the team\'s version', async () => {
+    const remote = bare(join(box, 'use.git'))
+    const alice = plainGitAlice('use', remote)
+    settingsFile(alice, WIDER)
+    git(alice, 'add', '-f', SETTINGS)
+    git(alice, 'commit', '-q', '-m', 'my rules')
+    git(alice, 'push', '-q')
+    const mine = join(box, 'use-mine')
+    settingsFile(mine, MINE)
+    const team = join(box, 'use-team', 'Local', 'use')
+    expect((await cloneAgent(remote, team, CINNA)).done).toBe(true)
+    await settleLocalOnlyFiles(team, keepLocalOnlyFiles(mine))
+    expect(readFileSync(join(team, SETTINGS), 'utf8')).toBe(MINE)
+  }, 60_000)
+
+  it('updates a folder that still tracks its edited rules, and keeps the edit', async () => {
+    const remote = bare(join(box, 'tracked.git'))
+    const alice = plainGitAlice('tracked', remote)
+    settingsFile(alice, WIDER)
+    git(alice, 'add', '-f', SETTINGS)
+    git(alice, 'commit', '-q', '-m', 'rules, tracked')
+    git(alice, 'push', '-q')
+    const bob = cloneAs(remote, 'tracked', 'bob')
+    expect(git(bob, 'ls-files', SETTINGS).trim()).toBe('.claude/settings.local.json')
+    // Approving a permission rewrites the tracked file.
+    settingsFile(bob, MINE)
+    writeFileSync(join(alice, 'notes.md'), 'from Alice\n')
+    git(alice, 'add', 'notes.md')
+    git(alice, 'commit', '-q', '-m', 'notes')
+    git(alice, 'push', '-q')
+
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(readFileSync(join(bob, 'notes.md'), 'utf8')).toBe('from Alice\n')
+    expect(readFileSync(join(bob, SETTINGS), 'utf8')).toBe(MINE)
+    expect(existsSync(join(bob, '.git', 'cinna-local-only'))).toBe(false)
+    // Still tracked by the team version, so it differs for good: never a change
+    // to share with a Cinna library, which would take it out rather than send it.
+    const counts = await readShareStatus(bob, CINNA, false)
+    expect(counts.changedPaths).toEqual([])
+    expect(shareStateOf(counts)).toBe('up_to_date')
+    expect((await readShareStatus(bob, EXTERNAL, false)).changedPaths).toEqual(['.claude/settings.local.json'])
+  }, 60_000)
+
+  it('still refuses an Update over any other tracked edit, and leaves the rules edit in place', async () => {
+    const remote = bare(join(box, 'dirty.git'))
+    const alice = plainGitAlice('dirty', remote)
+    settingsFile(alice, WIDER)
+    git(alice, 'add', '-f', SETTINGS)
+    git(alice, 'commit', '-q', '-m', 'rules, tracked')
+    git(alice, 'push', '-q')
+    const bob = cloneAs(remote, 'dirty', 'bob')
+    settingsFile(bob, MINE)
+    writeFileSync(join(bob, 'AGENT.md'), 'an edit not shared yet\n')
+    writeFileSync(join(alice, 'notes.md'), 'from Alice\n')
+    git(alice, 'add', 'notes.md')
+    git(alice, 'commit', '-q', '-m', 'notes')
+    git(alice, 'push', '-q')
+
+    expect((await pullRebaseClean(bob, CINNA)).refusal).toBe('dirty')
+    expect(readFileSync(join(bob, SETTINGS), 'utf8')).toBe(MINE)
+    expect(readFileSync(join(bob, 'AGENT.md'), 'utf8')).toBe('an edit not shared yet\n')
+    expect(existsSync(join(bob, '.git', 'cinna-local-only'))).toBe(false)
+  }, 60_000)
+
+  it('puts back a copy an interrupted update left under .git, over what is there, then removes it', async () => {
+    const remote = bare(join(box, 'leftover.git'))
+    plainGitAlice('leftover', remote)
+    const bob = cloneAs(remote, 'leftover', 'bob')
+    settingsFile(bob, WIDER)
+    const backup = join(bob, '.git', 'cinna-local-only')
+    settingsFile(backup, MINE)
+    expect(hasLeftoverLocalOnlyFiles(bob)).toBe(true)
+    restoreLeftoverLocalOnlyFiles(bob)
+    expect(readFileSync(join(bob, SETTINGS), 'utf8')).toBe(MINE)
+    expect(existsSync(backup)).toBe(false)
+    expect(hasLeftoverLocalOnlyFiles(bob)).toBe(false)
+
+    // The next Update restores one first, before it keeps what is on disk.
+    settingsFile(bob, WIDER)
+    settingsFile(backup, MINE)
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: false, refusal: null, detail: null })
+    expect(readFileSync(join(bob, SETTINGS), 'utf8')).toBe(MINE)
+    expect(existsSync(backup)).toBe(false)
+  }, 60_000)
 })
 
 // ---------------------------------------------------------------------------

@@ -107,6 +107,7 @@ const { appSettingsRepo } = await import('../../db/appSettings')
 const { userRepo } = await import('../../db/users')
 const { clearContractCache } = await import('../../kit/contractStore')
 const { manifestPath, readManifest } = await import('../../kit/manifestIo')
+const { validateAgentFolder } = await import('../../kit/validator')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
 const { turnLock } = await import('./turnLock')
@@ -118,6 +119,7 @@ const { libraryTrust, acceptableGitOrigin } = await import('../libraryTrust')
 const { CinnaApiError } = await import('../../errors')
 const { folderAgentId } = await import('../../../shared/localAgents')
 const { CinnaReauthRequired } = await import('../../auth/cinna-oauth')
+const { serviceCredentialService } = await import('../serviceCredentials/service')
 
 const GIT_ENV = {
   ...process.env,
@@ -213,6 +215,95 @@ afterEach(() => {
   rmSync(workshop, { recursive: true, force: true })
 })
 
+describe('credentials after the team\'s files arrive', () => {
+  it('Update that brings changes attaches matching credentials and reports a missing one', async () => {
+    const team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    const mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+    const manifest = JSON.parse(readFileSync(join(mate, 'cinna-agent.json'), 'utf8'))
+    manifest.credentials = [{ name: 'weather', type: 'api_token', env_prefix: 'WEATHER_', fields: ['api_key'] }]
+    writeFileSync(join(mate, 'cinna-agent.json'), JSON.stringify(manifest, null, 2))
+    git(mate, 'commit', '-q', '-am', 'needs weather')
+    git(mate, 'push', '-q')
+
+    const autoAttach = vi.spyOn(serviceCredentialService, 'autoAttach').mockResolvedValue([{ slot: 'acme', credentialName: 'Acme API' }])
+    try {
+      const result = await sharingService.update(USER, agentId)
+      expect(result.done).toBe(true)
+      expect(autoAttach).toHaveBeenCalledWith(agentId)
+      expect(result.autoAttached).toEqual([{ slot: 'acme', credentialName: 'Acme API' }])
+      expect(result.setupNeeded).toBe(true)
+
+      // Nothing new from the team: no credential work, nothing to finish.
+      autoAttach.mockClear()
+      const again = await sharingService.update(USER, agentId)
+      expect(again.done).toBe(false)
+      expect(autoAttach).not.toHaveBeenCalled()
+      expect(again).toMatchObject({ autoAttached: [], setupNeeded: false })
+    } finally {
+      autoAttach.mockRestore()
+    }
+  }, 60_000)
+
+  it('a later Update reopens Finish setup only when a required slot that was filled or absent is now missing', async () => {
+    const team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    const mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+    const teamPushes = (slots: string[], note: string): void => {
+      const manifest = JSON.parse(readFileSync(join(mate, 'cinna-agent.json'), 'utf8'))
+      manifest.credentials = slots.map((name) => ({ name, type: 'api_token', env_prefix: `${name.toUpperCase()}_`, fields: ['api_key'] }))
+      writeFileSync(join(mate, 'cinna-agent.json'), JSON.stringify(manifest, null, 2))
+      writeFileSync(join(mate, 'notes.md'), note)
+      git(mate, 'add', '-A')
+      git(mate, 'commit', '-q', '-m', note)
+      git(mate, 'push', '-q')
+    }
+
+    teamPushes(['weather'], 'one\n')
+    expect((await sharingService.update(USER, agentId)).setupNeeded).toBe(true)
+
+    // The user chose Finish later: the same slot still missing asks nothing.
+    teamPushes(['weather'], 'two\n')
+    const same = await sharingService.update(USER, agentId)
+    expect(same.done).toBe(true)
+    expect(same.setupNeeded).toBe(false)
+
+    // A slot the team just added is missing too: the set grew.
+    teamPushes(['weather', 'maps'], 'three\n')
+    expect((await sharingService.update(USER, agentId)).setupNeeded).toBe(true)
+
+    // Filling one and losing nothing new stays quiet even though one is still missing.
+    writeFileSync(join(agentDir, 'credentials', '.env'), 'MAPS_API_KEY=x\n')
+    teamPushes(['weather', 'maps'], 'four\n')
+    expect((await sharingService.update(USER, agentId)).setupNeeded).toBe(false)
+  }, 60_000)
+
+  it('Update with no signed-in account attaches nothing and still lands', async () => {
+    const team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    const mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+    writeFileSync(join(mate, 'notes.md'), 'From the team.\n')
+    git(mate, 'add', 'notes.md')
+    git(mate, 'commit', '-q', '-m', 'notes')
+    git(mate, 'push', '-q')
+    // No account is active here, so the real service has nothing to attach and says so.
+    const result = await sharingService.update(USER, agentId)
+    expect(result).toMatchObject({ done: true, autoAttached: [], setupNeeded: false })
+  }, 60_000)
+})
+
 describe('use the team version', () => {
   it('puts the team version at the original path and keeps this one as a fresh, unshared copy', async () => {
     const team = join(workshop, '.team.git')
@@ -239,11 +330,17 @@ describe('use the team version', () => {
     mkdirSync(join(agentDir, '.venv', 'bin'), { recursive: true })
     writeFileSync(join(agentDir, '.venv', 'bin', 'python'), '')
 
+    const autoAttach = vi.spyOn(serviceCredentialService, 'autoAttach')
     const update = await sharingService.update(USER, agentId)
     expect(update.refusal).toBe('diverged_conflict')
     expect(update.status?.state).toBe('diverged')
+    expect(autoAttach).not.toHaveBeenCalled()
 
     const result = await sharingService.useTeamVersion(USER, agentId)
+    // The team's version keeps the id; that is the agent whose slots are checked.
+    expect(autoAttach).toHaveBeenCalledWith(agentId)
+    autoAttach.mockRestore()
+    expect(result).toMatchObject({ autoAttached: [], setupNeeded: false })
     expect(result.done).toBe(true)
     expect(result.refusal).toBeNull()
     expect(result.detail).toBeNull()
@@ -268,6 +365,12 @@ describe('use the team version', () => {
     expect(existsSync(join(mine, 'app-data', 'desktop.json'))).toBe(true)
     // The two are told apart by name.
     expect(readManifest(manifestPath(mine)).name).toBe(`${readManifest(manifestPath(agentDir)).name} (my copy)`)
+    // The copy's slug is its folder's name, so it validates — the team's
+    // slug would fail `manifest.slug.folder_mismatch` and put two agents
+    // under one slug.
+    expect(readManifest(manifestPath(mine)).slug).toBe('alpha-mine')
+    const contractVersion = readManifest(manifestPath(mine)).contract_version as string
+    expect(validateAgentFolder(mine, { contractVersion }).errors).toEqual([])
     expect(agentRepo.getOwned(USER, agentId)?.localPath).toBe(agentDir)
     expect(agentRepo.getOwned(USER, result.agentId!)?.localPath).toBe(mine)
     expect(result.status?.state).toBe('up_to_date')
@@ -306,6 +409,48 @@ describe('use the team version', () => {
       handle.release()
     }
     expect(existsSync(join(workshop, 'Local', 'alpha-mine'))).toBe(false)
+  }, 60_000)
+})
+
+describe('use the team version — Finish setup', () => {
+  /** A diverged folder whose shared first version needs `weather`; the team's side ends with `teamSlots`. */
+  async function divergeWith(teamSlots: string[]): Promise<void> {
+    const slot = (name: string) => ({ name, type: 'api_token', env_prefix: `${name.toUpperCase()}_`, fields: ['api_key'] })
+    const team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    const manifest = JSON.parse(readFileSync(join(agentDir, 'cinna-agent.json'), 'utf8'))
+    manifest.credentials = [slot('weather')]
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify(manifest, null, 2))
+    writeFileSync(join(agentDir, 'notes.md'), 'Line one.\n')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    const mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+    const theirs = JSON.parse(readFileSync(join(mate, 'cinna-agent.json'), 'utf8'))
+    theirs.credentials = teamSlots.map(slot)
+    writeFileSync(join(mate, 'cinna-agent.json'), JSON.stringify(theirs, null, 2))
+    writeFileSync(join(mate, 'notes.md'), 'Line one, by the team.\n')
+    git(mate, 'commit', '-q', '-am', 'team edit')
+    git(mate, 'push', '-q')
+    writeFileSync(join(agentDir, 'notes.md'), 'Line one, by me.\n')
+    git(agentDir, 'commit', '-q', '-am', 'my edit')
+    scannerService.markAllRootsDirty()
+    expect((await sharingService.update(USER, agentId)).refusal).toBe('diverged_conflict')
+  }
+
+  it('stays closed when the team’s version is missing only what this folder already was', async () => {
+    await divergeWith(['weather'])
+    const result = await sharingService.useTeamVersion(USER, agentId)
+    expect(result.done).toBe(true)
+    expect(result.setupNeeded).toBe(false)
+  }, 60_000)
+
+  it('opens when the team’s version brings a required slot this folder did not miss', async () => {
+    await divergeWith(['weather', 'maps'])
+    const result = await sharingService.useTeamVersion(USER, agentId)
+    expect(result.done).toBe(true)
+    expect(result.setupNeeded).toBe(true)
   }, 60_000)
 })
 
@@ -553,6 +698,62 @@ describe('which account a remote belongs to', () => {
     expect(await sharingService.teamChanges(USER)).toHaveLength(1)
     expect(spawned.count).toBeGreaterThan(0)
   }, 30_000)
+})
+
+describe('overlapping library refreshes', () => {
+  /** Two listings in flight at once, answered in the order the test says. */
+  function inFlight(): Array<(body: unknown) => void> {
+    const answers: Array<(body: unknown) => void> = []
+    cinnaFetch.mockImplementation(() => new Promise((resolve) => answers.push(resolve)))
+    return answers
+  }
+  const repoIds = (listing: { agents: Array<{ repoId: string }> } | null): string[] =>
+    (listing?.agents ?? []).map((agent) => agent.repoId)
+
+  it('an older answer landing late neither overwrites the newer cache nor publishes again', async () => {
+    const answers = inFlight()
+    const older = libraryService.refresh(PROFILE)
+    // e.g. `library(true)` after another machine shared r2.
+    const newer = libraryService.refresh(PROFILE)
+    answers[1]({ agents: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)], mirrors: [] })
+    expect(repoIds(await newer)).toEqual(['r1', 'r2'])
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+
+    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    // The late caller gets the newer listing: still no older than its own start.
+    expect(repoIds(await older)).toEqual(['r1', 'r2'])
+    expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1', 'r2'])
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refresh that starts after another is never handed the earlier one’s answer', async () => {
+    const answers = inFlight()
+    const older = libraryService.refresh(PROFILE)
+    const newer = libraryService.refresh(PROFILE)
+    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    expect(repoIds(await older)).toEqual(['r1'])
+    answers[1]({ agents: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)], mirrors: [] })
+    expect(repoIds(await newer)).toEqual(['r1', 'r2'])
+    expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1', 'r2'])
+    expect(publishEvent).toHaveBeenCalledTimes(2)
+  })
+
+  it('a later refresh that throws does not make an earlier one’s answer look stale', async () => {
+    cinnaFetch.mockResolvedValueOnce({ agents: [], mirrors: [] })
+    await libraryService.refresh(PROFILE)
+    publishEvent.mockClear()
+    const answers: Array<(body: unknown) => void> = []
+    cinnaFetch.mockImplementationOnce(() => new Promise((resolve) => answers.push(resolve)))
+    cinnaFetch.mockImplementationOnce(async () => {
+      throw new CinnaApiError('request_failed', 'Cinna API 500', 'Server Error', 500)
+    })
+    const older = libraryService.refresh(PROFILE)
+    await expect(libraryService.refresh(PROFILE)).rejects.toThrow()
+    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    expect(repoIds(await older)).toEqual(['r1'])
+    expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1'])
+    expect(publishEvent).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('share with the team', () => {

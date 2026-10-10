@@ -62,6 +62,8 @@ interface ReadinessStripProps {
   stampError?: string | null
   /** Where the full findings live now — the Folder tab. */
   onShowDetails?: () => void
+  /** Open the Finish setup dialog; offered while a credential is missing. */
+  onFinishSetup?: () => void
 }
 
 /**
@@ -82,7 +84,8 @@ export function ReadinessStrip({
   onStampIdentity,
   stamping,
   stampError,
-  onShowDetails
+  onShowDetails,
+  onFinishSetup
 }: ReadinessStripProps): React.JSX.Element | null {
   const { severity, text } = readinessMessage(agent)
   const tone = TONE[severity]
@@ -115,6 +118,16 @@ export function ReadinessStrip({
               className="shrink-0 text-[10px] font-medium text-[var(--color-text)] underline-offset-2 hover:underline"
             >
               {findings} finding{findings === 1 ? '' : 's'}
+            </button>
+          )}
+          {agent.readiness === 'credentials_needed' && onFinishSetup && (
+            <button
+              type="button"
+              onClick={onFinishSetup}
+              className="shrink-0 self-center rounded-md bg-[var(--color-bg-tertiary)] px-2 py-1 text-[10px] font-medium
+                text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+            >
+              Finish setup
             </button>
           )}
         </div>

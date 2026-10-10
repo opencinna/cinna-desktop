@@ -74,6 +74,15 @@ interface RawLibraryAgent {
 }
 
 const cache = new Map<string, CachedListing>()
+/**
+ * Per profile: the number of the last refresh started, and of the one whose
+ * listing the cache holds. Refreshes overlap — the five-minute timer, a
+ * catalog opening, a sharing action's own re-read — and their answers can
+ * land in any order; a later-started one already in the cache means an
+ * earlier one's answer is older than what is there, so it is dropped.
+ */
+const started = new Map<string, number>()
+const applied = new Map<string, number>()
 /** Hosts already logged as having no library routes, so a 404 is said once. */
 const missingRoutesLogged = new Set<string>()
 let timer: ReturnType<typeof setInterval> | null = null
@@ -186,6 +195,8 @@ export const libraryService = {
   async refresh(userId: string): Promise<CachedListing | null> {
     const host = hostOf(userId)
     if (host === null) return null
+    const seq = (started.get(userId) ?? 0) + 1
+    started.set(userId, seq)
     let agents: LibraryEntry[] = []
     let available = true
     try {
@@ -209,7 +220,12 @@ export const libraryService = {
     }
     // This instance, answering this profile's session, says where its git is.
     for (const agent of agents) libraryTrust.learn(host, agent.cloneUrl)
+    // A refresh that started after this one has already answered: the cache
+    // is newer than this listing, and still no older than this call's start.
+    const newer = cache.get(userId)
+    if ((applied.get(userId) ?? 0) > seq && newer && newer.host === host) return newer
     const listing: CachedListing = { host, agents, fetchedAt: new Date(), available }
+    applied.set(userId, seq)
     const before = signature(cache.get(userId))
     cache.set(userId, listing)
     if (signature(listing) !== before) publishEvent(SHARING_CHANGED_CHANNEL)
@@ -258,6 +274,8 @@ export const libraryService = {
   _reset(): void {
     libraryService.stop()
     cache.clear()
+    started.clear()
+    applied.clear()
     missingRoutesLogged.clear()
   }
 }

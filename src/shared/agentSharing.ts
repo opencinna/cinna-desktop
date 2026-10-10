@@ -17,6 +17,8 @@
  * tests never assert on prose.
  */
 
+import type { AutoAttachedCredential } from './serviceCredentials'
+
 /** `cinna`: hosted by the signed-in Cinna instance. `external`: anything else. */
 export type AgentRemoteKind = 'cinna' | 'external'
 
@@ -139,6 +141,18 @@ export interface AgentShareResult {
    * copy kept by Use the team's version.
    */
   agentId: string | null
+  /**
+   * After a Get, an Update that brought changes, or Use the team's version:
+   * the active account's credentials main attached because exactly one fitted
+   * a slot. Empty after anything else.
+   */
+  autoAttached: AutoAttachedCredential[]
+  /**
+   * After those same actions: the page opens Finish setup. After a Get, when
+   * any required credential is missing; after an Update or Use the team's
+   * version, only when one is missing that was not before the action.
+   */
+  setupNeeded: boolean
 }
 
 /** A maintainer, as the library lists them. */

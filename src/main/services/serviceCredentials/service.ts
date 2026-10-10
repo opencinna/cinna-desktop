@@ -15,8 +15,9 @@ import { rememberCredentialSecrets } from '../../security/serviceCredentialRedac
 import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
 import { localBundle, validateLocal } from './transforms'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
-import type { LocalAgentDto } from '../../../shared/localAgents'
+import { autoMatch, isDeadKey, slotCandidates } from './slotMatch'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
 const CHANGED_ERROR = 'The account changed. Start the turn again.'
@@ -81,6 +82,7 @@ const REFUSAL_STATUS: Record<string, string> = { key_revoked: 'revoked_by_issuer
 const KEY_STATUS_WORDS: Record<string, string> = { revoked_by_issuer: 'revoked by issuer', producer_removed: 'producer removed', issuer_removed: 'issuer account removed',
   expired: 'expired', api_disabled: 'API turned off by producer', external_access_paused: 'external access paused' }
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+const AUTO_ATTACH_RETRIES = 25, AUTO_ATTACH_RETRY_MS = 200
 const FAST_POLL = 60_000, SLOW_POLL = 300_000, TURN_SYNC_AGE = 120_000, TURN_SYNC_BUDGET = 5_000
 /** An issued key's list expiry in ms: epoch seconds, or an ISO-8601 string; anything else is no expiry. */
 function expiresAt(value: unknown): number | null {
@@ -95,7 +97,7 @@ function keyUnavailable(m: Pick<ServiceCredentialDto, 'type' | 'keyStatus'>): bo
 /** Unavailable by status, or because Desktop refused its last delivery. */
 function rowKeyUnavailable(row: ServiceCredentialRow): boolean { const m = stored(row); return keyUnavailable(m) || (isKey(m) && !!m.keyBlocked) }
 /** Revoked, removed, expired or unknown: no use attaching it. Paused keys recover by themselves. */
-function keyTerminal(m: ServiceCredentialDto): boolean { return keyUnavailable(m) && !AGENT_API_KEY_PAUSED_STATUSES.includes(m.keyStatus ?? '') }
+function keyTerminal(m: ServiceCredentialDto): boolean { return isDeadKey(m) }
 /** An issued key that is active or paused: one worth polling for and syncing at turn start. */
 function liveKey(row: ServiceCredentialRow): boolean { const m = credentialDto(row); return isKey(m) && !keyTerminal(m) }
 function unavailableReason(status: string | null): string { return status === 'expired' ? 'key_expired' : AGENT_API_KEY_PAUSED_STATUSES.includes(status ?? '') ? 'key_paused' : 'key_revoked' }
@@ -510,6 +512,67 @@ function toAttachmentDto(v: Resolved): ServiceCredentialAttachmentDto {
     serverUrl: account?.serverUrl ?? null, account: account ? { name: account.name, email: account.email } : null }
 }
 
+/** The current profile's account, when it is a signed-in Cinna account: the one the team library belongs to. */
+function activeAccount(): Account | undefined {
+  if (currentUser === LOCAL || currentUser !== getProfileScopeUserId()) return undefined
+  return accountOf(currentUser)
+}
+function spec(slot: LocalAgentCredentialState) { return { name: slot.name, type: slot.type, serviceUri: slot.serviceUri ?? null } }
+/**
+ * `.env` fills the slot as the scanner judges it: every expected name has a value, or, for a slot
+ * that declares no `fields` (no expected names), some name under its prefix does.
+ */
+function envFilled(slot: LocalAgentCredentialState): boolean {
+  return slot.expectedKeys.length > 0 ? slot.presentKeys.length === slot.expectedKeys.length : slot.presentKeys.length > 0
+}
+/** The scanner's verdict on a slot, restated: what Finish setup shows and auto-attach skips. */
+function slotState(slot: LocalAgentCredentialState): CredentialSetupSlot['state'] {
+  if (slot.attachment) return slot.attachment.state === 'ready' ? 'connected' : 'missing'
+  return envFilled(slot) ? 'env' : 'missing'
+}
+/**
+ * Replace one group's attachments with `refsOf(current)`, computed under the agent's lock so an
+ * append never drops a reference written in between. One state write and one materialization.
+ * `queue: false` refuses (`turn_in_progress`) instead of waiting for a running turn.
+ */
+async function writeAttachments(id: string, group: string, refsOf: (before: { ref: string }[]) => string[], queue = true): Promise<ServiceCredentialAttachmentDto[]> {
+  const a = agent(id)
+  const valid = (refs: unknown): refs is string[] => Array.isArray(refs) && !refs.some(r => typeof r !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(r))
+  const current = (): { ref: string }[] => { const s = state(a); return group === 'local' ? s.local : s.accounts[group] ?? [] }
+  if (typeof group !== 'string' || !valid(refsOf(current()))) throw new Error('Invalid attachment references.')
+  const account = group === 'local' ? undefined : accounts.get(group)
+  // A signed-out or deleted account's intent can only shrink: removals need no
+  // rows, tokens or fetch, and a deleted profile's key may never be eligible again.
+  const inert = group !== 'local' && !account
+  if (inert && (!/^[a-f0-9]{16}$/.test(group) || refsOf(current()).some(ref => !(state(a).accounts[group] ?? []).some(v => v.ref === ref)))) throw new Error('Sign in to that account to change its credentials.')
+  const g = guard(account ? [account] : [])
+  const locked = <T,>(fn: () => Promise<T>): Promise<T> =>
+    queue ? turnLock.withQueuedLock(id, 'credentials', new AbortController().signal, fn) : turnLock.withLock(id, 'credentials', fn)
+  await locked(async () => {
+    check(g)
+    const s = state(a), before = group === 'local' ? s.local : s.accounts[group] ?? []
+    const refs = refsOf(before)
+    if (!valid(refs)) throw new Error('Invalid attachment references.')
+    if (refs.length) secure()
+    if (refs.length && a.kind === 'kit') await checkCredentialPaths(a.path)
+    check(g)
+    const available = inert ? [] : account ? repo.list(account.userId).filter(r => r.origin === 'cloud') : repo.list(LOCAL).filter(r => r.origin === 'local')
+    for (const ref of refs.filter(ref => !before.some(v => v.ref === ref))) {
+      const row = available.find(r => (account ? r.cloud_id : r.id) === ref)
+      if (!row) throw new Error('Credential is no longer available.')
+      if (!credentialDto(row).localUseAllowed) throw new Error('The owner has not allowed use on this computer.')
+    }
+    const next = [...new Set(refs)].map(ref => ({ ref }))
+    if (group === 'local') s.local = next
+    else if (next.length) s.accounts[group] = next
+    else delete s.accounts[group]
+    desktopStateService.patch(a.path, a.kind, { serviceCredentials: s })
+    await materialize(a, true)
+  })
+  if (account) updatePolling(account)
+  changed(); return serviceCredentialService.attachments(id)
+}
+
 export const serviceCredentialService = {
   metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.available && v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
   /** Local records plus the current profile's cloud cache (the settings pages). */
@@ -568,35 +631,81 @@ export const serviceCredentialService = {
     ] }
   },
   async setAttachments(id: string, group: string, refs: string[]): Promise<ServiceCredentialAttachmentDto[]> {
-    const a = agent(id)
-    if (typeof group !== 'string' || !Array.isArray(refs) || refs.some(r => typeof r !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(r))) throw new Error('Invalid attachment references.')
-    const account = group === 'local' ? undefined : accounts.get(group)
-    // A signed-out or deleted account's intent can only shrink: removals need no
-    // rows, tokens or fetch, and a deleted profile's key may never be eligible again.
-    const inert = group !== 'local' && !account
-    if (inert && (!/^[a-f0-9]{16}$/.test(group) || refs.some(ref => !(state(a).accounts[group] ?? []).some(v => v.ref === ref)))) throw new Error('Sign in to that account to change its credentials.')
-    const g = guard(account ? [account] : [])
-    await turnLock.withQueuedLock(id, 'credentials', new AbortController().signal, async () => {
-      check(g)
-      if (refs.length) secure()
-      if (refs.length && a.kind === 'kit') await checkCredentialPaths(a.path)
-      check(g)
-      const s = state(a), before = group === 'local' ? s.local : s.accounts[group] ?? []
-      const available = inert ? [] : account ? repo.list(account.userId).filter(r => r.origin === 'cloud') : repo.list(LOCAL).filter(r => r.origin === 'local')
-      for (const ref of refs.filter(ref => !before.some(v => v.ref === ref))) {
-        const row = available.find(r => (account ? r.cloud_id : r.id) === ref)
-        if (!row) throw new Error('Credential is no longer available.')
-        if (!credentialDto(row).localUseAllowed) throw new Error('The owner has not allowed use on this computer.')
+    return writeAttachments(id, group, () => refs)
+  },
+  /** Add one record to an agent's group, keeping what is there (the Finish setup dialog's Use this). */
+  async attach(id: string, group: string, ref: string): Promise<ServiceCredentialAttachmentDto[]> {
+    if (typeof ref !== 'string') throw new Error('Invalid attachment references.')
+    return writeAttachments(id, group, before => [...before.map(v => v.ref), ref])
+  },
+  /**
+   * D1: after a Get, an Update or Use the team's version, attach the active profile's
+   * cloud records that fit a still-unsatisfied slot without doubt (exactly one record
+   * in the winning sub-tier, see `slotMatch`). Only that account's group, only appends,
+   * one write for the agent. Never waits for a running turn: if one holds the agent the
+   * write is refused and nothing is attached, so the verb returns at once and the
+   * Finish setup dialog offers the same records. Answers what it attached; never throws.
+   */
+  async autoAttach(id: string): Promise<AutoAttachedCredential[]> {
+    try {
+      const account = activeAccount()
+      if (!account) return []
+      // Nothing left to fill: answer before the sync, which could only find records for slots that need none.
+      if (!agent(id).credentials.some(slot => slotState(slot) === 'missing')) return []
+      await boundedSync(account)
+      if (accounts.get(account.key) !== account || activeAccount() !== account) return []
+      // A bare agent declares no slots, so the loop below finds nothing to do.
+      const a = agent(id)
+      const picks = new Map<string, { slot: string; credentialName: string }>()
+      const mine = state(a).accounts[account.key] ?? []
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto)
+      for (const slot of a.credentials) {
+        if (slotState(slot) !== 'missing') continue
+        const pick = autoMatch(spec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
+        if (pick?.cloudId) picks.set(pick.cloudId, { slot: slot.name, credentialName: pick.name })
       }
-      const next = [...new Set(refs)].map(ref => ({ ref }))
-      if (group === 'local') s.local = next
-      else if (next.length) s.accounts[group] = next
-      else delete s.accounts[group]
-      desktopStateService.patch(a.path, a.kind, { serviceCredentials: s })
-      await materialize(a, true)
+      if (!picks.size) return []
+      const added = [...picks.keys()]
+      const append = (before: { ref: string }[]) => [...before.map(v => v.ref), ...added.filter(ref => !before.some(v => v.ref === ref))]
+      // A turn (shared hold) refuses at once. An exclusive holder is another short write
+      // (a credential regeneration, a sharing verb): retried for a few seconds, never queued.
+      for (let attempt = 0; ; attempt++) {
+        try { await writeAttachments(id, account.key, append, false); break }
+        catch (error) {
+          if ((error as { code?: string }).code !== 'turn_in_progress' || !turnLock.isExclusivelyLocked(id) || attempt >= AUTO_ATTACH_RETRIES) throw error
+          await new Promise(resolve => setTimeout(resolve, AUTO_ATTACH_RETRY_MS))
+        }
+      }
+      logger.info('Attached matching credentials after a team library change', { agentId: id, count: picks.size })
+      return [...picks.values()]
+    } catch (error) {
+      if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not attach matching credentials: a turn holds the agent', { agentId: id })
+      else logger.warn('Could not attach matching credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
+      return []
+    }
+  },
+  /**
+   * What the Finish setup dialog shows: each slot as the scanner judges it, the attachment
+   * it was judged by, and the active account's records that fit it.
+   */
+  setupState(id: string): CredentialSetupDto {
+    const a = agent(id)
+    const account = activeAccount()
+    const rows = resolve(a).filter(v => v.available && v.row)
+    const mine = account ? state(a).accounts[account.key] ?? [] : []
+    const pool = account ? repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !mine.some(v => v.ref === m.cloudId)) : []
+    const slots: CredentialSetupSlot[] = a.credentials.map(slot => {
+      const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
+      const verdict = slotState(slot)
+      return {
+        name: slot.name, type: slot.type, optional: slot.optional, envPrefix: slot.envPrefix,
+        state: verdict,
+        attached: judged ? { credential: credentialDto(judged.row!), state: attachmentState(judged.row) } : null,
+        expectedKeys: slot.expectedKeys, presentKeys: slot.presentKeys,
+        options: verdict === 'connected' || !account ? [] : slotCandidates(spec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m }))
+      }
     })
-    if (account) updatePolling(account)
-    changed(); return this.attachments(id)
+    return { slots, setupNeeded: a.credentials.some(c => !c.satisfied) }
   },
   async prepare(id: string) { return materialize(agent(id), true) },
   /** Supplies the session unlock state; installed by the activation owner. */

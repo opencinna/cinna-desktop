@@ -1,4 +1,4 @@
-import type { ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { CredentialSetupDto, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -37,6 +37,7 @@ import type {
   LocalAgentOutcome,
   LocalAgentValidation,
   OpenLocalAgentCredentialsResult,
+  LocalAgentCredentialState,
   OpenLocalAgentPathInput,
   ReadLocalAgentDocInput,
   RescanResult,
@@ -401,6 +402,10 @@ const api = {
     attachOptions: (id: string): Promise<ServiceCredentialResult<ServiceCredentialAttachOptions>> => ipcRenderer.invoke('service-credentials:attach-options', id),
     /** `group` is `'local'` or an eligible account key from `attachOptions`. */
     setAttachments: (id: string, group: string, refs: string[]): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:set-attachments', id, group, refs),
+    /** Add one record to the agent's `group`, keeping what is attached there (Finish setup's Use this). */
+    attach: (id: string, group: string, ref: string): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:attach', id, group, ref),
+    /** Each credential slot's state and the active account's records that fit it, for the Finish setup dialog. */
+    setupState: (id: string): Promise<ServiceCredentialResult<CredentialSetupDto>> => ipcRenderer.invoke('service-credentials:setup-state', id),
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb()
       ipcRenderer.on('service-credentials:changed', listener)
@@ -1818,6 +1823,16 @@ const api = {
      */
     openCredentials: (agentId: string): Promise<OpenLocalAgentCredentialsResult> =>
       ipcRenderer.invoke('local-agent:open-credentials', agentId),
+    /**
+     * Write credential values into `credentials/.env` — only the names the
+     * manifest declares. Answers the slots' states (names only, never a
+     * value). An outcome, so `turn_in_progress` survives the crossing.
+     */
+    setEnvValues: (
+      agentId: string,
+      values: Record<string, string>
+    ): Promise<LocalAgentOutcome<LocalAgentCredentialState[]>> =>
+      ipcRenderer.invoke('local-agent:set-env-values', agentId, values),
     /**
      * What this agent may do without asking again — the decisions the user
      * made with *Always allow*, newest first. Each mutation answers with the

@@ -44,7 +44,7 @@ The kit-only members, carried for the workshop copy and never read by the app (e
 
 ### Shared (main + renderer, type-only and pure)
 
-- `src/shared/kit/manifest.ts` — `CinnaAgentManifest` and its member types (`CredentialSlot`, `AgentSchedule`, `AgentHandover`, `AgentPrompts`, `AgentFeatures`, `AgentRuntimeRef`, `AgentPublication`, `AgentCloudStamp`), plus `MANIFEST_TOKENS`, `SLUG_PATTERN`, `ENV_PREFIX_PATTERN`, `RUN_REFERENCE_PATTERN`, `MANIFEST_FILE`, `DESKTOP_STATE_FILE`
+- `src/shared/kit/manifest.ts` — `CinnaAgentManifest` and its member types (`CredentialSlot`, `AgentSchedule`, `AgentHandover`, `AgentPrompts`, `AgentFeatures`, `AgentRuntimeRef`, `AgentPublication`, `AgentCloudStamp`), plus `MANIFEST_TOKENS`, `SLUG_PATTERN`, `ENV_PREFIX_PATTERN`, `deriveEnvPrefix` / `slotEnvPrefix` (the prefix `cinna_credentials.py` reads a slot's `.env` names under: declared, else derived from the name; what the scanner's readiness uses), `RUN_REFERENCE_PATTERN`, `MANIFEST_FILE`, `DESKTOP_STATE_FILE`
 - `src/shared/kit/contractVersion.ts` — `parseSemver()`, `compareSemver()`, `compareVersionStrings()`, `checkContractCompatibility()`, and the `ContractCompatibilityStatus` union
 
 ### Main process

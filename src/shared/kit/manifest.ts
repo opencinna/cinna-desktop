@@ -203,6 +203,28 @@ export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/
 /** `env_prefix` rule from the schema. */
 export const ENV_PREFIX_PATTERN = /^[A-Z][A-Z0-9_]*_$/
 
+/**
+ * The prefix the kit's `scripts/cinna_credentials.py` (`derive_env_prefix`)
+ * gives a slot that declares none: `Vendor Portal` → `VENDOR_PORTAL_`. Runs of
+ * anything but ASCII letters and digits become `_`, the ends are stripped of
+ * `_`, the rest upper-cased, `C_` put in front when it does not start with a
+ * letter, and a `_` appended. Null where the script raises (nothing usable).
+ */
+export function deriveEnvPrefix(name: string): string | null {
+  const cleaned = name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase()
+  if (cleaned === '') return null
+  return `${/^[A-Z]/.test(cleaned) ? '' : 'C_'}${cleaned}_`
+}
+
+/**
+ * The prefix the kit reads a slot's `.env` names under (`_env_prefix`): the
+ * declared `env_prefix` when it is a non-empty string, else the derived one.
+ */
+export function slotEnvPrefix(slot: { name?: unknown; env_prefix?: unknown }): string | null {
+  if (typeof slot.env_prefix === 'string' && slot.env_prefix !== '') return slot.env_prefix
+  return typeof slot.name === 'string' ? deriveEnvPrefix(slot.name) : null
+}
+
 /** `/run:<name>` reference into `docs/CLI_COMMANDS.yaml`. */
 export const RUN_REFERENCE_PATTERN = /^\/run:([A-Za-z0-9][A-Za-z0-9_-]*)$/
 

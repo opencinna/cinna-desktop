@@ -41,6 +41,7 @@ import { createLogger } from '../../logger/logger'
 import { checkContractCompatibility } from '../../../shared/kit/contractVersion'
 import {
   MANIFEST_FILE,
+  slotEnvPrefix,
   type CinnaAgentManifest,
   type CredentialSlot
 } from '../../../shared/kit/manifest'
@@ -71,6 +72,7 @@ import {
   resolveBareInstructionsFile
 } from './externalScan'
 import { isWithin } from './pathRules'
+import { pySplitLines, pyStrip } from './envFile'
 import type { BareInstructionsFile } from '../../../shared/localAgents'
 
 const logger = createLogger('local-agent-scan')
@@ -157,34 +159,64 @@ function toValidation(report: ValidationReport): LocalAgentValidation {
 }
 
 /**
- * The variable **names** defined in `credentials/.env`. Values are never read,
- * never returned and never logged (Invariant 4) — only whether a slot is
- * filled reaches the renderer.
+ * The variable **names** `credentials/.env` defines with a non-empty value.
+ * Values are never returned and never logged (Invariant 4) — only whether a
+ * slot is filled reaches the renderer.
+ *
+ * Emptiness is judged the way the kit's `scripts/cinna_credentials.py` reads
+ * the file: the value trimmed, one pair of matching quotes stripped, and the
+ * last assignment of a name winning. `KEY=`, `KEY=""` and `KEY=''` are absent —
+ * the script skips them, so counting them would call the agent ready and then
+ * fail its first run.
  */
 export function readEnvKeys(agentDir: string): Set<string> {
-  const keys = new Set<string>()
+  const filled = new Map<string, boolean>()
   let text: string
   try {
     text = readFileSync(join(agentDir, ENV_FILE), 'utf8')
   } catch {
-    return keys
+    return new Set()
   }
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)
-    if (match) keys.add(match[1])
+  // `_parse_env_file`, step for step: Python's `splitlines` and `strip`, not JS's.
+  for (const raw of pySplitLines(text)) {
+    let line = pyStrip(raw)
+    if (line === '' || line.startsWith('#') || !line.includes('=')) continue
+    if (line.startsWith('export ')) line = pyStrip(line.slice('export '.length))
+    const at = line.indexOf('=')
+    const key = pyStrip(line.slice(0, at))
+    let value = pyStrip(line.slice(at + 1))
+    if (value.length >= 2 && value[0] === value[value.length - 1] && (value[0] === '"' || value[0] === "'")) {
+      value = value.slice(1, -1)
+    }
+    if (key) filled.set(key, value !== '')
   }
-  return keys
+  return new Set([...filled].filter(([, isFilled]) => isFilled).map(([key]) => key))
 }
 
-/** The `.env` names a slot expects: `<env_prefix><FIELD>`, upper-cased. */
-function expectedKeysFor(slot: CredentialSlot): string[] {
-  const prefix = typeof slot.env_prefix === 'string' ? slot.env_prefix : ''
+/**
+ * The `.env` names a slot expects, `<prefix><FIELD>` upper-cased, under the
+ * prefix the kit reads it by (`slotEnvPrefix`: declared, else derived from the
+ * name). A slot that declares no `fields` expects no particular name: see
+ * `envFilledFor`.
+ */
+function expectedKeysFor(slot: CredentialSlot, prefix: string | null): string[] {
   const fields = Array.isArray(slot.fields)
     ? slot.fields.filter((f): f is string => typeof f === 'string')
     : []
-  if (prefix === '') return []
-  if (fields.length === 0) return [prefix.replace(/_$/, '')]
+  if (prefix === null) return []
   return fields.map((field) => `${prefix}${field.toUpperCase()}`)
+}
+
+/**
+ * The filled `.env` names a slot counts. With `fields`, the expected ones that
+ * are set. Without, every set name under the prefix: the kit's `_local_payload`
+ * gathers each `<prefix><anything>` with a non-empty value and is satisfied by
+ * one of them.
+ */
+function presentKeysFor(prefix: string | null, expectedKeys: string[], envKeys: ReadonlySet<string>, fieldless: boolean): string[] {
+  if (!fieldless) return expectedKeys.filter((key) => envKeys.has(key))
+  if (prefix === null) return []
+  return [...envKeys].filter((key) => key.startsWith(prefix)).sort()
 }
 
 function credentialStates(
@@ -196,9 +228,12 @@ function credentialStates(
   return slots
     .filter((slot): slot is CredentialSlot => slot !== null && typeof slot === 'object')
     .map((slot) => {
-      const expectedKeys = expectedKeysFor(slot)
-      const presentKeys = expectedKeys.filter((key) => envKeys.has(key))
+      const prefix = slotEnvPrefix(slot)
+      const expectedKeys = expectedKeysFor(slot, prefix)
+      const fieldless = expectedKeys.length === 0
+      const presentKeys = presentKeysFor(prefix, expectedKeys, envKeys, fieldless)
       const optional = slot.optional === true
+      // The tiers `serviceCredentials/slotMatch.ts` attaches and offers by; change both together.
       const sameType = attached.filter(c => c.type === slot.type)
       const matching = typeof slot.service_uri === 'string' && slot.service_uri
         ? sameType.filter(c => c.serviceUri === slot.service_uri)
@@ -208,14 +243,18 @@ function credentialStates(
         name: typeof slot.name === 'string' ? slot.name : '(unnamed)',
         type: typeof slot.type === 'string' ? slot.type : 'unknown',
         optional,
-        envPrefix: typeof slot.env_prefix === 'string' ? slot.env_prefix : null,
+        envPrefix: prefix,
+        serviceUri: typeof slot.service_uri === 'string' && slot.service_uri ? slot.service_uri : null,
         expectedKeys,
         presentKeys,
         overlappingKeys: attachment ? presentKeys : [],
-        // A slot that declares no keys cannot be checked; treat it as satisfied
-        // rather than blocking the agent on something we cannot verify.
+        attachment: attachment ? { credentialId: attachment.id, state: attachment.state } : null,
+        // A matching attachment decides; without one, `.env` must hold every
+        // expected name, or — for a slot with no `fields` — any name under its
+        // prefix. A slot whose name yields no prefix can only be filled by an
+        // attachment, so with none it is missing (a warning, not a block).
         satisfied:
-          optional || (attachment ? attachment.state === 'ready' : expectedKeys.length === 0 || presentKeys.length === expectedKeys.length)
+          optional || (attachment ? attachment.state === 'ready' : fieldless ? presentKeys.length > 0 : presentKeys.length === expectedKeys.length)
       }
     })
 }

@@ -34,3 +34,9 @@ export function useCredentialAttachOptions(agentId: string, enabled = true) {
   return useQuery({ queryKey: ['service-credentials', 'attach-options', agentId], enabled,
     queryFn: async () => credentialResult(await window.api.serviceCredentials.attachOptions(agentId)) })
 }
+/** Each credential slot of one agent, its state and what the active account offers for it (Finish setup). */
+export function useCredentialSetup(agentId: string, enabled = true) {
+  useCredentialsChanged()
+  return useQuery({ queryKey: ['service-credentials', 'setup', agentId], enabled,
+    queryFn: async () => credentialResult(await window.api.serviceCredentials.setupState(agentId)) })
+}

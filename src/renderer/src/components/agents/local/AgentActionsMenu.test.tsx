@@ -202,12 +202,12 @@ describe('AgentActionsMenu — Share with the team', () => {
       expect.anything()
     )
     act(() =>
-      shareWithTeamOptions?.onResult?.({ done: false, refusal: 'no_access', detail: null, status: null, agentId: null })
+      shareWithTeamOptions?.onResult?.({ done: false, refusal: 'no_access', detail: null, status: null, agentId: null, autoAttached: [], setupNeeded: false })
     )
     expect(dialog.textContent).toContain(SHARE_REFUSAL_TEXT.no_access)
 
     act(() =>
-      shareWithTeamOptions?.onResult?.({ done: true, refusal: null, detail: null, status: null, agentId: null })
+      shareWithTeamOptions?.onResult?.({ done: true, refusal: null, detail: null, status: null, agentId: null, autoAttached: [], setupNeeded: false })
     )
     expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })).toBeNull()
   })
