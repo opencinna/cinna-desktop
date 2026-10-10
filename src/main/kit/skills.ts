@@ -682,6 +682,7 @@ export function catalogPinClashes(
 export const CATALOG_ISSUE_MESSAGES: Readonly<Record<string, string>> = {
   not_downloaded: 'Not on this computer yet.',
   download_failed: 'It could not be downloaded.',
+  catalog_unavailable: 'This skill is no longer in the catalog for you. The copy on this computer keeps working, but it won’t get updates.',
   duplicate_pin: 'Another catalog skill of this agent has the same name.',
   name_clash: 'This agent’s own skills/ folder has a skill of the same name. Remove the pin or rename the folder.',
   reserved_name: 'This name is reserved by a platform skill.'

@@ -16,7 +16,8 @@
  * * **Who may download (U7).** Anyone who may use an agent may fetch what its
  *   latest version pins; a teammate whose copy is behind gets 404 until they
  *   update. {@link ensurePinned} records that as the row's issue, never as a
- *   failed Get or Update.
+ *   failed Get or Update. On an agent no team tracks, the same 404 means the
+ *   person's own access went, and the row says that instead.
  * * **Local installs (U10)** are reported in the background after each
  *   change and each fetch, as team sharing does; never awaited, never failing.
  *
@@ -109,20 +110,27 @@ interface PinTarget extends CatalogSkillRef {
 
 const inFlight = new Map<string, Promise<{ ok: true } | Refused>>()
 
-/** Why a download failed, as a refusal and the sentence the Skills section shows. */
-function downloadRefusal(err: unknown): Refused {
+/** A 404 for a team-tracked agent (U7): the teammate's copy pins a version the team has moved past. */
+const BEHIND_SENTENCE =
+  'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
+/** A 404 for an agent no team tracks: the publisher withdrew the person's access, or the package is gone. */
+const WITHDRAWN_SENTENCE =
+  'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
+
+/**
+ * Why a download failed, as a refusal and the sentence the Skills section
+ * shows. A 404 reads differently for an agent a team tracks (behind the
+ * team's latest, {@link BEHIND_SENTENCE}) than for one only this person has
+ * ({@link WITHDRAWN_SENTENCE}); `teamTracked` is asked only then.
+ */
+async function downloadRefusal(err: unknown, teamTracked: () => Promise<boolean>): Promise<Refused> {
   if (err instanceof CinnaReauthRequired) return refused('reauth_required')
   if (err instanceof CinnaApiError) {
     if (err.code === 'reauth_required' && err.status === 403) {
       return refused('download_failed', 'The server did not allow this download.')
     }
     if (err.code === 'reauth_required') return refused('reauth_required')
-    if (err.status === 404) {
-      return refused(
-        'download_failed',
-        'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
-      )
-    }
+    if (err.status === 404) return refused('download_failed', (await teamTracked()) ? BEHIND_SENTENCE : WITHDRAWN_SENTENCE)
     if (err.code === 'not_cinna_user' || err.code === 'missing_server_url') return refused('no_account')
     return refused('download_failed', `The skill could not be downloaded: ${err.message}`.slice(0, 300))
   }
@@ -137,7 +145,12 @@ function downloadRefusal(err: unknown): Refused {
  * before they are unpacked; any failure leaves the cache as it was and is
  * remembered for the Skills section. One download per revision at a time.
  */
-function fetchRevision(profile: string, host: string, target: PinTarget): Promise<{ ok: true } | Refused> {
+function fetchRevision(
+  profile: string,
+  host: string,
+  target: PinTarget,
+  teamTracked: () => Promise<boolean>
+): Promise<{ ok: true } | Refused> {
   const instance = instanceKey(host)
   // Nothing reaches the request path that is not a UUID, a revision number and a digest.
   const safe = cacheRefOf(target)
@@ -174,7 +187,7 @@ function fetchRevision(profile: string, host: string, target: PinTarget): Promis
         }
       }
     } catch (err) {
-      outcome = downloadRefusal(err)
+      outcome = await downloadRefusal(err, teamTracked)
     }
     if (outcome.ok) catalogSkillCache.clearFailure(target)
     else catalogSkillCache.recordFailure(target, outcome.message)
@@ -286,6 +299,29 @@ async function changeability(dir: string, listing: CachedListing | null): Promis
   if (linked.linked || repoId !== null) return 'access_unknown'
   // Any other git remote is the developer's own business.
   return 'ok'
+}
+
+/**
+ * Whether a team tracks this agent — it was got from, or shared to, a Cinna
+ * catalog — so its pins are reached through the team's latest version (U7)
+ * rather than the person's own grant. The `shared_remote` link, else a git
+ * `origin` that is a Cinna team agent's. When git cannot answer, yes: the
+ * sentence for a tracked agent is the hedged one.
+ */
+function teamTrackedOf(dir: string): () => Promise<boolean> {
+  let answer: Promise<boolean> | null = null
+  const decide = async (): Promise<boolean> => {
+    if (linkedEntry(dir, null).linked) return true
+    try {
+      const remote = await gitService.readShareRemote(dir)
+      if (remote.refusal === 'git_missing') return true
+      return remote.ownRepo && remote.originUrl !== null && cinnaRepoIdOf(remote.originUrl, remote.cinnaServer) !== null
+    } catch {
+      return true
+    }
+  }
+  // Read once per verb, and only when a download was refused with a 404.
+  return () => (answer ??= decide())
 }
 
 /** The cached listing (refreshed once when it lacks `uuid`) and the skill item, if any. */
@@ -472,7 +508,7 @@ export const catalogSkillService = {
 
       const target = targetOf(pin)
       if (!target) return refused('not_in_catalog')
-      const fetched = await fetchRevision(who.profile, who.host, target)
+      const fetched = await fetchRevision(who.profile, who.host, target, teamTrackedOf(kit.dir))
       if (!fetched.ok) return fetched
       // Decided again on the fresh read: the download took time.
       const written = writePins(kit.dir, (pins) => {
@@ -509,7 +545,7 @@ export const catalogSkillService = {
       // The pin keeps its name: the package's folder name is what the engines call it.
       const target = targetOf({ ...latest, name })
       if (!target) return refused('not_in_catalog')
-      const fetched = await fetchRevision(who.profile, who.host, target)
+      const fetched = await fetchRevision(who.profile, who.host, target, teamTrackedOf(kit.dir))
       if (!fetched.ok) return fetched
       const written = writePins(kit.dir, (pins) => {
         const index = pins.findIndex((pin) => pin?.name === name)
@@ -601,8 +637,9 @@ export const catalogSkillService = {
       const fetched: string[] = []
       const failed: CatalogSkillEnsureFailure[] = []
       const hostManifestId = typeof manifest.id === 'string' && manifest.id !== '' ? manifest.id : null
+      const teamTracked = teamTrackedOf(kit.dir)
       for (const target of wanted) {
-        const outcome = await fetchRevision(who.profile, who.host, target)
+        const outcome = await fetchRevision(who.profile, who.host, target, teamTracked)
         if (outcome.ok) {
           fetched.push(target.name)
           reportInstalled(who.profile, { package_uuid: target.packageUuid, revision_number: target.revisionNumber }, hostManifestId)

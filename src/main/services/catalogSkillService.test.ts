@@ -440,7 +440,10 @@ describe('fetching what an agent pins (U7)', () => {
       ['csv-export', false, ['download_failed']],
       ['erp-lookup', true, []]
     ])
-    expect(rows[0].issues[0].message).toMatch(/update it to the team’s latest version/)
+    // An agent no team tracks: the 404 is the person's own access gone.
+    expect(rows[0].issues[0].message).toBe(
+      'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
+    )
     await vi.waitFor(() => expect(posts()).toHaveLength(1))
 
     // Already here: nothing is fetched again.
@@ -450,6 +453,40 @@ describe('fetching what an agent pins (U7)', () => {
 
     located.missing = true
     expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: false, code: 'not_found' })
+  })
+
+  it('says a team-tracked agent is behind the team’s latest on a 404: a shared_remote link, or a Cinna team origin', async () => {
+    const pin = { package_id: 'p.skill.csv-export', package_uuid: UUID, name: 'csv-export', revision_number: 5, archive_sha256: sha256Of(skillTgz('csv-export')) }
+    writeManifest({ catalog_skills: [pin] })
+    serve({})
+    const message = async (): Promise<string | undefined> => {
+      const result = await catalogSkillService.ensurePinned(USER, AGENT_ID)
+      return result.ok ? result.failed[0]?.message : undefined
+    }
+    const behind = 'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
+    const withdrawn = 'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
+    expect(await message()).toBe(withdrawn)
+
+    // Got from (or shared to) the catalog: the link in desktop.json.
+    mkdirSync(join(agentDir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(agentDir, 'app-data', 'desktop.json'),
+      JSON.stringify({ shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` } })
+    )
+    expect(await message()).toBe(behind)
+    expect(agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve)[0].issues[0].message).toBe(behind)
+
+    // No link, but a git origin that is a Cinna team agent's (cloned by hand).
+    rmSync(join(agentDir, 'app-data'), { recursive: true, force: true })
+    remote.ownRepo = true
+    remote.originUrl = `${HOST}/git/r1.git`
+    remote.cinnaServer = HOST
+    expect(await message()).toBe(behind)
+
+    // Any other git remote is the developer's own: the person's access went.
+    remote.originUrl = 'https://github.com/someone/agent.git'
+    remote.cinnaServer = null
+    expect(await message()).toBe(withdrawn)
   })
 
   it('fills the skill slots after the background fetch of a sharing verb, never failing it', async () => {
@@ -747,6 +784,63 @@ describe('the update signal (U9)', () => {
     expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ latestRevision: 3, updatable: false })
     ;(listing.value.agents[0] as { access: string }).access = 'maintain'
     expect(withCatalogSkillUpdates(agentWith(1) as never).skills?.[0]).toMatchObject({ updatable: true })
+  })
+})
+
+describe('a pin the catalog no longer lists for this person', () => {
+  const unavailable = {
+    code: 'catalog_unavailable',
+    message: 'This skill is no longer in the catalog for you. The copy on this computer keeps working, but it won’t get updates.',
+    severity: 'warning'
+  }
+  const ready = (issues: unknown[] = []) => ({
+    path: agentDir,
+    skills: [
+      { name: 'erp-lookup', source: 'catalog', packageUuid: UUID, revisionNumber: 1, deliverable: true, issues },
+      { name: 'own', source: 'authored', deliverable: true, issues: [] }
+    ]
+  })
+  const loaded = (items: unknown[], available = true) => {
+    listing.value = { items, agents: [], available } as never
+  }
+
+  it('warns on a ready row of an agent no team tracks once a loaded listing lacks the package, and keeps it deliverable', () => {
+    loaded([])
+    const out = withCatalogSkillUpdates(ready() as never)
+    expect(out.skills?.[0]).toMatchObject({ deliverable: true, issues: [unavailable], latestRevision: null })
+    // Never on an own skill.
+    expect(out.skills?.[1]).toMatchObject({ issues: [] })
+    // After the row's own issues (a clash error stays first).
+    const clash = { code: 'name_clash', message: 'x', severity: 'error' }
+    expect(withCatalogSkillUpdates(ready([clash]) as never).skills?.[0].issues).toEqual([clash, unavailable])
+    // Listed again: no warning.
+    loaded([skillItem(1, skillTgz('erp-lookup'))])
+    expect(withCatalogSkillUpdates(ready() as never).skills?.[0].issues).toEqual([])
+  })
+
+  it('says nothing without a listing that loaded: no account or not loaded yet, or an instance without the catalog', () => {
+    listing.value = null
+    expect(withCatalogSkillUpdates(ready() as never).skills?.[0].issues).toEqual([])
+    loaded([], false)
+    expect(withCatalogSkillUpdates(ready() as never).skills?.[0].issues).toEqual([])
+  })
+
+  it('says nothing on a team-tracked agent, whose pins come with the team’s version (U7)', () => {
+    loaded([])
+    mkdirSync(join(agentDir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(agentDir, 'app-data', 'desktop.json'),
+      JSON.stringify({ shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` } })
+    )
+    expect(withCatalogSkillUpdates(ready() as never).skills?.[0].issues).toEqual([])
+  })
+
+  it('leaves a row that is not on this computer in its own state', () => {
+    loaded([])
+    const notHere = { code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }
+    const failed = { code: 'download_failed', message: 'gone', severity: 'warning' }
+    expect(withCatalogSkillUpdates(ready([notHere]) as never).skills?.[0].issues).toEqual([notHere])
+    expect(withCatalogSkillUpdates(ready([failed]) as never).skills?.[0].issues).toEqual([failed])
   })
 })
 

@@ -1,5 +1,8 @@
+import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { repoRoot } from '../playwright.config'
 import type { CinnaApp } from './app'
@@ -465,4 +468,99 @@ export async function chatStartedWith(app: PersonApp, text: string): Promise<any
     }
     return null
   }, text)
+}
+
+/** Share `name`, an own skill of agent `agentId`, over main's publish (the Share dialog's call); answers core's item as the publisher sees it. */
+export async function publishSkill(
+  app: PersonApp,
+  agentId: string,
+  name: string,
+  input: { people?: SharingPerson[]; releaseNotes?: string } = {}
+): Promise<any> {
+  const people = input.people?.map((person) => ({ userId: person.id, access: 'use' as const }))
+  const published = await app.page.evaluate((args) => window.api.skillPublish.publish(args), {
+    agentId,
+    name,
+    releaseNotes: input.releaseNotes ?? 'From the lifecycle spec',
+    ...(people ? { people } : {})
+  })
+  expect(published.ok, JSON.stringify(published)).toBe(true)
+  return skillItem(app.fixtureRef, app.person.token, name)
+}
+
+/** Delete one cached revision (`<instance>/<uuid>/<revision>/`) as a disk clean-up or another machine would leave it; the cache is read-only by design. */
+export function dropCachedRevision(app: PersonApp, packageUuid: string, revision: number, name: string): void {
+  const dir = cachedSkillDir(app, packageUuid, revision, name)
+  if (!dir) throw new Error(`${app.label} has no cached ${name} revision ${revision}`)
+  const revisionDir = dirname(dir)
+  execFileSync('chmod', ['-R', 'u+w', revisionDir])
+  rmSync(revisionDir, { recursive: true, force: true })
+}
+
+/** Core's answer to the bearer of `token` downloading revision `revision` of the skill package (the U7 route). */
+export async function skillDownloadStatus(fixture: TeamFixtureBase, token: string, packageUuid: string, revision: number): Promise<number> {
+  const response = await fetch(`${fixture.server}/api/v1/skills/packages/${packageUuid}/revisions/${revision}/download`, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+  await response.arrayBuffer()
+  return response.status
+}
+
+/**
+ * The agent's credential attachments as Desktop State stores them
+ * (`<agent>/app-data/desktop.json` `serviceCredentials`), one
+ * `<group>:<ref>[ auto:<slot>]` string each, sorted.
+ */
+export function storedAttachments(agentPath: string): string[] {
+  const file = join(agentPath, 'app-data', 'desktop.json')
+  if (!existsSync(file)) return []
+  const state = JSON.parse(readFileSync(file, 'utf8')) as {
+    serviceCredentials?: { local?: { ref: string; auto?: { slot: string } }[]; accounts?: Record<string, { ref: string; auto?: { slot: string } }[]> }
+  }
+  const groups: [string, { ref: string; auto?: { slot: string } }[]][] = [
+    ['local', state.serviceCredentials?.local ?? []],
+    ...Object.entries(state.serviceCredentials?.accounts ?? {}).map(([key, refs]) => ['account', refs] as [string, typeof refs])
+  ]
+  return groups.flatMap(([group, refs]) => refs.map((entry) => `${group}:${entry.ref}${entry.auto ? ` auto:${entry.auto.slot}` : ''}`)).sort()
+}
+
+/** The skill-slot rows of main's setup read: `<slot>:<type>:<state>:<attached record name>`. */
+export async function skillSlotStates(app: PersonApp, agentId: string): Promise<string[] | string> {
+  const setup = await app.page.evaluate((id) => window.api.serviceCredentials.setupState(id), agentId)
+  if (!setup.ok) return setup.message
+  return setup.value.skillSlots.map((slot) => `${slot.slot}:${slot.type}:${slot.state}:${slot.attached?.credential.name ?? ''}`)
+}
+
+/** The Skills row's Remove → the confirm's Remove skill; resolves once the row is gone. */
+export async function removeSkillFromAgent(app: PersonApp, agent: string, skill: string): Promise<void> {
+  await openSkills(app, agent)
+  const row = skillRow(app, skill, 'From the catalog')
+  await row.getByRole('button', { name: `Remove ${skill} from this agent`, exact: true }).click()
+  await row.getByRole('group', { name: `Remove ${skill} from this agent` }).getByRole('button', { name: 'Remove skill', exact: true }).click()
+  await expect(row).toHaveCount(0, { timeout: 60_000 })
+}
+
+/**
+ * Just enough of Ollama on loopback for a keyless credential to list `model`
+ * ({@link useFakeOpenCode}); answers the host and a close.
+ */
+export async function startOllamaStub(model: string): Promise<{ host: string; close: () => Promise<void> }> {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/api/tags') {
+      res.end(JSON.stringify({ models: [{ name: model, model, details: { family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' } }] }))
+      return
+    }
+    if (req.url === '/api/version') {
+      res.end(JSON.stringify({ version: '0.6.2' }))
+      return
+    }
+    res.statusCode = 404
+    res.end('{}')
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    host: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+  }
 }
