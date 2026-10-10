@@ -52,6 +52,10 @@ API = "/api/v1"
 PREFIX = "team-sharing-e2e-"
 CRED_NAME = "Acme API"
 CRED_OTHER = "Acme API (other)"
+# Only credentials this script made: the exact name shape and the notes marker.
+# A looser match once deleted an admin credential no run had made.
+CRED_PATTERN = re.compile(r"^Acme API( \(other\))? [0-9a-f]{8}$")
+CRED_NOTES = "Made by cinna-desktop e2e/fixtures/live-team-sharing.py; cleanup deletes it."
 # The slug of every agent the specs make: "Acme reporter <tag> <4 hex>" (liveTeamSharing.ts agentName).
 AGENT_SLUG = re.compile(r"^acme-reporter-[0-9a-f]{8}-[0-9a-f]{4}(-mine)?$")
 
@@ -95,6 +99,7 @@ def create(client: httpx.Client) -> None:
             "service_uri": "acme-api",
             "allow_sharing": True,
             "allow_local_use": True,
+            "notes": CRED_NOTES,
             "credential_data": {"api_token_type": "bearer", "api_token": secret},
         }
         return ok(client.post(f"{API}/credentials/", headers=bearer(admin), json=body)).json()["id"]
@@ -161,7 +166,7 @@ def cleanup(client: httpx.Client) -> None:
     creds = ok(client.get(f"{API}/credentials/", headers=bearer(admin), params={"limit": 500})).json()
     removed_creds = 0
     for cred in creds.get("data", []):
-        if cred["name"].startswith(CRED_NAME) and len(cred["name"].rsplit(" ", 1)[-1]) == 8:
+        if CRED_PATTERN.match(cred["name"]) and cred.get("notes") == CRED_NOTES:
             r = client.delete(f"{API}/credentials/{cred['id']}", headers=bearer(admin))
             removed_creds += r.status_code < 400
     print(json.dumps({

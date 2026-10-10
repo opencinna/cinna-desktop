@@ -31,11 +31,15 @@ export interface SharingPerson {
   token: string
 }
 
-export interface SharingFixture {
+/** What every two-app live fixture holds: the server, a run tag, the admin and three people. */
+export interface TeamFixtureBase {
   server: string
   tag: string
   admin: { id: string; token: string }
   people: Record<'a' | 'b' | 'c', SharingPerson>
+}
+
+export interface SharingFixture extends TeamFixtureBase {
   credentials: {
     acme: { id: string; name: string; secret: string; shares: Record<'a' | 'b', string> }
     other: { id: string; name: string; secret: string }
@@ -53,7 +57,7 @@ export function sharingFixture(): SharingFixture | null {
 
 /** One authenticated JSON call to core's API. */
 export async function coreCall(
-  fixture: SharingFixture,
+  fixture: TeamFixtureBase,
   token: string,
   path: string,
   init: { method?: string; body?: unknown } = {}
@@ -79,7 +83,7 @@ export async function coreCall(
  * the code and client id in `redirect_to`, which is read instead of followed.
  */
 export async function mintDesktopTokens(
-  fixture: SharingFixture,
+  fixture: TeamFixtureBase,
   person: SharingPerson
 ): Promise<{ clientId: string; accessToken: string; refreshToken: string; expiresIn: number }> {
   const b64 = (bytes: Buffer): string => bytes.toString('base64url')
@@ -134,11 +138,11 @@ export class PersonApp {
     readonly label: PersonLabel,
     readonly person: SharingPerson,
     readonly sandbox: Sandbox,
-    private readonly fixture: SharingFixture
+    private readonly fixture: TeamFixtureBase
   ) {}
 
   /** The fixture this person came from. */
-  get fixtureRef(): SharingFixture {
+  get fixtureRef(): TeamFixtureBase {
     return this.fixture
   }
 
@@ -258,50 +262,67 @@ export class PersonApp {
   }
 }
 
-export interface Team {
-  fixture: SharingFixture
+export interface Team<F extends TeamFixtureBase = SharingFixture> {
+  fixture: F
   /** Launch (once) and return a person's app, set up and signed in. */
   open(label: PersonLabel): Promise<PersonApp>
 }
 
-export const test = base.extend<{ team: Team }>({
-  team: async ({}, use, testInfo) => {
-    const fixture = sharingFixture()
-    test.skip(
-      fixture === null,
-      'Set CINNA_SHARING_LIVE_FIXTURE to the JSON printed by e2e/fixtures/live-team-sharing.py create (a running local cinna-core)'
-    )
-    const apps = new Map<PersonLabel, PersonApp>()
-    const team: Team = {
-      fixture: fixture as SharingFixture,
-      async open(label) {
-        const existing = apps.get(label)
-        if (existing) return existing
-        const app = new PersonApp(label, (fixture as SharingFixture).people[label], makeSandbox(), fixture as SharingFixture)
-        apps.set(label, app)
-        await app.setUp()
-        return app
-      }
-    }
-    await use(team)
-    const failed = testInfo.status !== testInfo.expectedStatus
-    for (const app of apps.values()) {
-      // Each person's screen at the moment of failure: error-context.md shows
-      // only one window, and rarely the one that matters.
-      if (failed) {
-        try {
-          writeFileSync(testInfo.outputPath(`${app.label}-screen.yaml`), await app.page.locator('body').ariaSnapshot())
-          await app.page.screenshot({ path: testInfo.outputPath(`${app.label}-screen.png`) })
-        } catch {
-          // the app may be gone already
+/**
+ * The `team` fixture over the JSON `load` answers: one app per person, each in
+ * its own sandbox, closed after the test (their screens kept on failure).
+ * Every test skips with `skipReason` when `load` answers null.
+ */
+export function makeTeamTest<F extends TeamFixtureBase>(load: () => F | null, skipReason: string) {
+  const extended = base.extend<{ team: Team<F> }>({
+    team: async ({}, use, testInfo) => {
+      const fixture = load()
+      extended.skip(fixture === null, skipReason)
+      const apps = new Map<PersonLabel, PersonApp>()
+      const team: Team<F> = {
+        fixture: fixture as F,
+        async open(label) {
+          const existing = apps.get(label)
+          if (existing) return existing
+          const app = new PersonApp(label, (fixture as F).people[label], makeSandbox(), fixture as F)
+          apps.set(label, app)
+          await app.setUp()
+          return app
         }
       }
-      await app.close().catch(() => {})
-      if (testInfo.status === testInfo.expectedStatus) rmSync(app.sandbox.root, { recursive: true, force: true })
-      else testInfo.annotations.push({ type: `sandbox ${app.label}`, description: app.sandbox.root })
+      await use(team)
+      const failed = testInfo.status !== testInfo.expectedStatus
+      for (const app of apps.values()) {
+        // Each person's screen at the moment of failure: error-context.md shows
+        // only one window, and rarely the one that matters.
+        if (failed) {
+          try {
+            writeFileSync(testInfo.outputPath(`${app.label}-screen.yaml`), await app.page.locator('body').ariaSnapshot())
+            await app.page.screenshot({ path: testInfo.outputPath(`${app.label}-screen.png`) })
+          } catch {
+            // the app may be gone already
+          }
+        }
+        await app.close().catch(() => {})
+        if (testInfo.status === testInfo.expectedStatus) {
+          // The catalog-skill cache under userData is read-only by design.
+          try {
+            execFileSync('chmod', ['-R', 'u+w', app.sandbox.root], { stdio: 'ignore' })
+          } catch {
+            // nothing read-only, or already gone
+          }
+          rmSync(app.sandbox.root, { recursive: true, force: true })
+        } else testInfo.annotations.push({ type: `sandbox ${app.label}`, description: app.sandbox.root })
+      }
     }
-  }
-})
+  })
+  return extended
+}
+
+export const test = makeTeamTest(
+  sharingFixture,
+  'Set CINNA_SHARING_LIVE_FIXTURE to the JSON printed by e2e/fixtures/live-team-sharing.py create (a running local cinna-core)'
+)
 
 export { expect }
 
@@ -313,7 +334,7 @@ export { expect }
  * scan of secret values.
  */
 export function cloneHistory(
-  fixture: SharingFixture,
+  fixture: TeamFixtureBase,
   repoId: string,
   token: string
 ):
@@ -427,7 +448,7 @@ export interface AcmeAgent {
 }
 
 /** A unique agent name per test: core's desktop-agent slugs are unique server-wide. */
-export function agentName(fixture: SharingFixture): string {
+export function agentName(fixture: TeamFixtureBase): string {
   return `Acme reporter ${fixture.tag} ${randomBytes(2).toString('hex')}`
 }
 
@@ -576,21 +597,21 @@ export async function getFromLibrary(app: PersonApp, name: string): Promise<void
  * `access`, `visibility`, `latest`, `install_count`, `my_installs`, and
  * `desktop.{repo_id, clone_url, head_sha, manifest_id, slug}`.
  */
-export async function catalogEntry(fixture: SharingFixture, token: string, slug: string): Promise<any> {
+export async function catalogEntry(fixture: TeamFixtureBase, token: string, slug: string): Promise<any> {
   const listed = await coreCall(fixture, token, '/catalog/items?kind=agent&runs_on=desktop')
   expect(listed.status, JSON.stringify(listed.body)).toBe(200)
   return (listed.body.data as any[]).find((item) => item.desktop?.slug === slug)
 }
 
 /** The catalog entry `slug` as its maintainer A sees it; fails when it is not there. */
-export async function catalogEntryOrFail(fixture: SharingFixture, slug: string): Promise<any> {
+export async function catalogEntryOrFail(fixture: TeamFixtureBase, slug: string): Promise<any> {
   const entry = await catalogEntry(fixture, fixture.people.a.token, slug)
   if (!entry) throw new Error(`core's catalog has no desktop agent ${slug} for A`)
   return entry
 }
 
 /** Every grant on catalog item `uuid`, as `user:<id>:<access>` / `role:<role>:<access>`, sorted. */
-export async function catalogGrants(fixture: SharingFixture, token: string, uuid: string): Promise<string[]> {
+export async function catalogGrants(fixture: TeamFixtureBase, token: string, uuid: string): Promise<string[]> {
   const grants = await coreCall(fixture, token, `/catalog/items/${uuid}/grants`)
   expect(grants.status, JSON.stringify(grants.body)).toBe(200)
   return (grants.body as { principal: { user_id?: string; role?: string }; access: string }[])
@@ -600,7 +621,7 @@ export async function catalogGrants(fixture: SharingFixture, token: string, uuid
 
 /** As maintainer A: set one person's access on the team agent `slug` (core's full-replace `PUT …/grants`). */
 export async function setCatalogAccess(
-  fixture: SharingFixture,
+  fixture: TeamFixtureBase,
   slug: string,
   userId: string,
   access: 'use' | 'edit' | 'maintain'
@@ -619,7 +640,7 @@ export async function setCatalogAccess(
 /** The admin's REST steps between a test's UI steps. */
 export const admin = {
   /** Share credential `credentialId` with `email`; answers the share id. */
-  async share(fixture: SharingFixture, credentialId: string, email: string): Promise<string> {
+  async share(fixture: TeamFixtureBase, credentialId: string, email: string): Promise<string> {
     const shared = await coreCall(fixture, fixture.admin.token, `/credentials/${credentialId}/shares`, {
       method: 'POST',
       body: { shared_with_email: email }
@@ -628,7 +649,7 @@ export const admin = {
     return shared.body.id as string
   },
   /** Revoke every share of `credentialId` with `email`. */
-  async unshare(fixture: SharingFixture, credentialId: string, email: string): Promise<void> {
+  async unshare(fixture: TeamFixtureBase, credentialId: string, email: string): Promise<void> {
     const listed = await coreCall(fixture, fixture.admin.token, `/credentials/${credentialId}/shares`)
     for (const share of (listed.body?.data ?? []) as { id: string; shared_with_email: string }[]) {
       if (share.shared_with_email !== email) continue
@@ -636,12 +657,12 @@ export const admin = {
       expect(removed.status).toBeLessThan(300)
     }
   },
-  async isSharedWith(fixture: SharingFixture, credentialId: string, email: string): Promise<boolean> {
+  async isSharedWith(fixture: TeamFixtureBase, credentialId: string, email: string): Promise<boolean> {
     const listed = await coreCall(fixture, fixture.admin.token, `/credentials/${credentialId}/shares`)
     return ((listed.body?.data ?? []) as { shared_with_email: string }[]).some((s) => s.shared_with_email === email)
   },
   /** Replace the credential's token value. */
-  async rotate(fixture: SharingFixture, credentialId: string, secret: string): Promise<void> {
+  async rotate(fixture: TeamFixtureBase, credentialId: string, secret: string): Promise<void> {
     const put = await coreCall(fixture, fixture.admin.token, `/credentials/${credentialId}`, {
       method: 'PUT',
       body: { credential_data: { api_token_type: 'bearer', api_token: secret } }
