@@ -135,18 +135,15 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
     await expect(people(a).getByText('Everyone on this server', { exact: true })).toHaveCount(0)
   })
 
-  await test.step('A makes it public (People’s own call, with Everyone added); the tab shows Everyone at Can use; core: public', async () => {
-    // The People list can remove Everyone but offers nothing that adds it:
-    // the one way in is the list main saves, here with Everyone appended.
-    const result = await a.page.evaluate(async (id) => {
-      const now = await window.api.sharing.people(id)
-      if (!now.success || !now.value) return 'no people list'
-      const list = now.value.people.map(({ principal, access }) => ({ principal, access }))
-      const saved = await window.api.sharing.setPeople(id, [...list, { principal: { kind: 'everyone' as const }, access: 'use' as const }])
-      return saved.success ? (saved.value.done ? 'done' : `${saved.value.refusal}: ${saved.value.detail}`) : saved.message
-    }, agent.id)
-    expect(result).toBe('done')
-    expect(await visibilityOf(a, agent.slug)).toBe('public')
+  await test.step('A makes it public with People’s Share with everyone; the tab shows Everyone at Can use and drops the button; core: public', async () => {
+    const shareWithEveryone = people(a).getByRole('button', { name: 'Share with everyone', exact: true })
+    await expect(shareWithEveryone).toBeVisible()
+    await shot(a, 'A1-people-share-with-everyone.png')
+    await shareWithEveryone.click()
+    await expect(people(a).getByText('Everyone on this server', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(shareWithEveryone).toHaveCount(0)
+    await expect(people(a).getByRole('alert')).toHaveCount(0)
+    await expect.poll(() => visibilityOf(a, agent.slug)).toBe('public')
     await reopenSharing(a)
     const everyone = people(a).locator('div').filter({ hasText: /^Everyone on this server/ }).last()
     await expect(people(a).getByText('Everyone on this server', { exact: true })).toBeVisible()

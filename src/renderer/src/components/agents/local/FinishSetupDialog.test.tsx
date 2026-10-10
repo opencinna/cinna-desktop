@@ -288,7 +288,7 @@ describe('Finish setup', () => {
           }),
           skillSlot({ slot: 'crm', type: 'odoo', skills: ['crm-sync'] }),
           skillSlot({ slot: 'mail', type: 'email_imap', skills: ['inbox'], provision: 'not_allowed_locally' }),
-          skillSlot({ slot: 'vault', skills: ['vault-read'], notLocal: record({ id: 'v-1', name: 'Vault key', serviceUri: 'vault' }) })
+          skillSlot({ slot: 'vault', skills: ['vault-read'], notLocal: record({ id: 'v-1', name: 'Vault key', serviceUri: 'vault', ownerEmail: 'admin@example.com' }) })
         ]
       }
       renderHarness()
@@ -301,7 +301,7 @@ describe('Finish setup', () => {
       expect(skillRow('erp-api').querySelector('input')).toBeNull()
       expect(within(skillRow('crm')).getByText('Nothing in your account fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
       expect(within(skillRow('mail')).getByText('The publisher provides it, but not for use on this computer.')).toBeTruthy()
-      expect(within(skillRow('vault')).getByText('Vault key is shared with you, but not for use on this computer.')).toBeTruthy()
+      expect(within(skillRow('vault')).getByText('Vault key is shared with you, but not for use on this computer. admin@example.com can turn on Allow local use.')).toBeTruthy()
 
       fireEvent.click(within(skillRow('erp-api')).getByRole('button', { name: 'Use this' }))
       await waitFor(() => expect(attach).toHaveBeenCalledWith(AGENT, 'acct', 'erp-1'))

@@ -903,7 +903,7 @@ export const serviceCredentialService = {
     const skillSlots: CredentialSetupSkillSlot[] = collectSkillSlots(a.skills).map(slot => {
       const { attachment, filled, typeMismatch } = judgeSkillSlot(slot, attached)
       const options = filled || !account ? [] : slotCandidates(skillSlotSpec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m }))
-      const notLocal = filled || options.length > 0 ? null : pool.find(m => m.type === slot.type && m.serviceUri === slot.slot && !m.localUseAllowed) ?? null
+      const notLocal = filled || options.length > 0 ? null : pool.find(m => m.relation !== 'owned' && m.type === slot.type && m.serviceUri === slot.slot && !m.localUseAllowed) ?? null
       return {
         slot: slot.slot, type: slot.type, skills: slot.skills, description: slot.description,
         state: filled ? 'connected' : 'missing',

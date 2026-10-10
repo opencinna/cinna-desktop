@@ -550,10 +550,14 @@ export function ChosenPeopleList({
  * Share with the team: a name, and who may get it.
  *
  * No description: main sends the manifest's. The name is there from the first
- * frame and the draft fills it unless the user has typed. People are picked
- * from a search; each starts as "Can use", and an empty list means only the
- * sharer — never everyone. The chosen list has a fixed height, filled in
- * every state, so a pick moves nothing below it (ux_rules rule 1).
+ * frame and the draft fills it unless the user has typed. "Everyone on this
+ * server can use it" sits above the people picker, as in the skill Share
+ * dialog, unticked by default. People are picked from a search; each starts
+ * as "Can use", and an empty list with Everyone unticked means only the
+ * sharer. Unlike a skill, a named person at Can use is sent beside Everyone
+ * (core keeps an agent's grants under `public`), so removing Everyone later
+ * in People leaves them their access. The chosen list has a fixed height,
+ * filled in every state, so a pick moves nothing below it (ux_rules rule 1).
  */
 export function ShareWithTeamDialog({
   agentId,
@@ -571,6 +575,7 @@ export function ShareWithTeamDialog({
   const nameRef = useRef<HTMLInputElement>(null)
   const [name, setName] = useState('')
   const [people, setPeople] = useState<ChosenPerson[]>([])
+  const [everyone, setEveryone] = useState(false)
   const [loading, setLoading] = useState(true)
   const [draftError, setDraftError] = useState<string | null>(null)
   const touched = useRef(false)
@@ -597,7 +602,7 @@ export function ShareWithTeamDialog({
 
   const submit = (): void => {
     if (pending || name.trim() === '') return
-    onShare({ name: name.trim(), people: people.map(({ userId, access }) => ({ userId, access })) })
+    onShare({ name: name.trim(), people: people.map(({ userId, access }) => ({ userId, access })), everyone })
   }
 
   return (
@@ -624,6 +629,17 @@ export function ShareWithTeamDialog({
           className={FIELD}
         />
       </label>
+      <span className="block text-[11px] font-medium text-[var(--color-text-secondary)]">{SHARE_UI_TEXT.whoCanUse}</span>
+      <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
+        <input
+          type="checkbox"
+          className="accent-[var(--color-accent)]"
+          checked={everyone}
+          disabled={pending}
+          onChange={(event) => setEveryone(event.target.checked)}
+        />
+        {SHARE_UI_TEXT.everyoneCanUse}
+      </label>
       <PeopleSearch
         disabled={pending}
         exclude={new Set(people.map((person) => person.userId))}
@@ -631,7 +647,12 @@ export function ShareWithTeamDialog({
           setPeople((list) => [...list, { userId: person.userId, access: 'use', label: personLabel(person) }])
         }
       />
-      <ChosenPeopleList people={people} disabled={pending} onChange={setPeople} />
+      <ChosenPeopleList
+        people={people}
+        disabled={pending}
+        onChange={setPeople}
+        emptyText={everyone ? SHARE_UI_TEXT.peopleNoOneNamed : undefined}
+      />
       <ErrorLine error={error ?? draftError} />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>

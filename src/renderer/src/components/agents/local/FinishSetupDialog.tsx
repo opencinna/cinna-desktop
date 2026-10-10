@@ -70,7 +70,12 @@ function skillSlotNote(slot: CredentialSetupSkillSlot): string {
   if (slot.typeMismatch) return `${slot.typeMismatch.name} has this Service URI but is a ${slot.typeMismatch.type} credential, not ${slot.type}.`
   if (slot.provision === 'not_allowed_locally') return 'The publisher provides it, but not for use on this computer.'
   if (slot.provision === 'not_shareable') return 'The publisher provides it, but cannot share it with you.'
-  if (slot.notLocal) return `${slot.notLocal.name} is shared with you, but not for use on this computer.`
+  if (slot.notLocal) {
+    const owner = slot.notLocal.ownerEmail
+    return owner
+      ? `${slot.notLocal.name} is shared with you, but not for use on this computer. ${owner} can turn on Allow local use.`
+      : `${slot.notLocal.name} is shared with you, but not for use on this computer.`
+  }
   return `Nothing in your account fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
 }
 

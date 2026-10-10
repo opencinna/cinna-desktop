@@ -137,7 +137,7 @@ export const SKILL_SHARE_TEXT = {
   sharedFactTitle: (packageId: string) => (packageId ? `In the catalog as ${packageId}` : 'In the catalog'),
   title: (skill: string) => `Share ${skill}`,
   titleNewVersion: (skill: string) => `Share a new version of ${skill}`,
-  firstBody: 'Put this skill in the catalog. Only you and the people you choose here can get it.',
+  firstBody: 'Put this skill in the catalog for the people you choose here, or for everyone on this server.',
   laterBody: 'People who can use it keep access.',
   versionLabel: 'Version',
   catalogIdLabel: 'Catalog id',

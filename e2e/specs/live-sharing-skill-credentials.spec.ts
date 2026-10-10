@@ -375,7 +375,9 @@ test('T4.4 / T4.5 slots nothing is attached for: not for this computer, no longe
     await expect(row(local).getByText(NOT_LOCAL, { exact: true })).toBeVisible()
     await expect(row(shareable).getByText(NOT_SHAREABLE, { exact: true })).toBeVisible()
     // B holds the admin's record for this slot, listed without local use; the row names it.
-    await expect(row(adminNoLocal).getByText(`${noLocal!.name} is shared with you, but not for use on this computer.`, { exact: true })).toBeVisible()
+    await expect(row(adminNoLocal).getByText(`${noLocal!.name} is shared with you, but not for use on this computer.`)).toBeVisible()
+    // …and names the owner who can turn on Allow local use (the admin shared it).
+    await expect(row(adminNoLocal).getByText(/ can turn on Allow local use\.$/)).toBeVisible()
     await expect(row(wrongType).getByText(nothingFits(wrongType), { exact: true })).toBeVisible()
     for (const slot of [local, shareable, adminNoLocal, wrongType]) {
       await expect(row(slot).getByText('Missing', { exact: true })).toBeVisible()

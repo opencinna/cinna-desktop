@@ -1,4 +1,4 @@
-import { act, render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
@@ -199,7 +199,7 @@ describe('AgentActionsMenu — Share with the team', () => {
 
     fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
     expect(shareWithTeam).toHaveBeenCalledWith(
-      { agentId: 'folder:alpha', input: { name: 'Alpha', people: [] } },
+      { agentId: 'folder:alpha', input: { name: 'Alpha', people: [], everyone: false } },
       expect.anything()
     )
     act(() =>
@@ -215,6 +215,28 @@ describe('AgentActionsMenu — Share with the team', () => {
 })
 
 describe('AgentActionsMenu — Share with the team’s people', () => {
+  it('offers Everyone on this server above the people picker, unticked, and sends it with the people named', async () => {
+    library = LIBRARY
+    const draft = vi.fn().mockResolvedValue({ success: true, value: { name: 'Alpha', description: '' } })
+    ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft } }
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam }))
+    const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })
+    await act(async () => {})
+    const box = within(dialog).getByRole('checkbox', { name: SHARE_UI_TEXT.everyoneCanUse }) as HTMLInputElement
+    expect(box.checked).toBe(false)
+    // Placed as in the skill Share dialog: before the people search.
+    const search = within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' })
+    expect(box.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(box)
+    expect(dialog.querySelector('[data-chosen-people]')?.textContent).toBe(SHARE_UI_TEXT.peopleNoOneNamed)
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
+    expect(shareWithTeam).toHaveBeenCalledWith(
+      { agentId: 'folder:alpha', input: { name: 'Alpha', people: [], everyone: true } },
+      expect.anything()
+    )
+  })
+
   it('finds people as the user types, without moving the list, and sends each one picked with the access chosen', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
@@ -272,7 +294,7 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
 
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
       expect(shareWithTeam).toHaveBeenCalledWith(
-        { agentId: 'folder:alpha', input: { name: 'Alpha', people: [{ userId: 'u2', access: 'edit' }] } },
+        { agentId: 'folder:alpha', input: { name: 'Alpha', people: [{ userId: 'u2', access: 'edit' }], everyone: false } },
         expect.anything()
       )
     } finally {

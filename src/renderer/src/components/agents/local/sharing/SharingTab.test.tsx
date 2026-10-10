@@ -342,6 +342,82 @@ describe('SharingTab — people', () => {
     expect(within(people).queryByRole('combobox')).toBeNull()
   })
 
+  it('offers Share with everyone while the agent is not public, adds the Everyone row through the same save, and then hides', async () => {
+    let answer: (value: unknown) => void = () => {}
+    sharing.setPeople.mockReturnValueOnce(new Promise((r) => { answer = r }))
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ visibility: 'users' })], fetchedAt: '' }))
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [PEOPLE.people[0], BOB] }))
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain('Bob'))
+    const everyone = (): HTMLButtonElement | null =>
+      within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone }) as HTMLButtonElement | null
+    await waitFor(() => expect(everyone()).not.toBeNull())
+    fireEvent.click(everyone()!)
+    await waitFor(() => expect(sharing.setPeople).toHaveBeenCalledTimes(1))
+    expect(sharing.setPeople).toHaveBeenCalledWith(AGENT.id, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'use' },
+      { principal: { kind: 'everyone' }, access: 'use' }
+    ])
+    // Pending like every other People change: the controls hold, this button says it is busy.
+    await waitFor(() => expect(everyone()!.disabled).toBe(true))
+    expect(everyone()!.getAttribute('aria-busy')).toBe('true')
+    expect((within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson }) as HTMLButtonElement).disabled).toBe(true)
+    sharing.people.mockReturnValue(new Promise(() => {}))
+    await act(async () =>
+      answer(ok({ ...done(), people: { visible: true, people: [PEOPLE.people[0], BOB, PEOPLE.people[1]], selfUserId: 'u1' } }))
+    )
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
+    expect(everyone()).toBeNull()
+    expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })).toBeTruthy()
+  })
+
+  it('keeps Share with everyone after a refusal, with the server’s sentence under the header, above the list', async () => {
+    sharing.setPeople.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: 'Public items are turned off here.' })))
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ visibility: 'users' })], fetchedAt: '' }))
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [PEOPLE.people[0], BOB] }))
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeTruthy())
+    fireEvent.click(within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone }))
+    await waitFor(() => expect(within(people).getByRole('alert').textContent).toBe('Public items are turned off here.'))
+    const alert = within(people).getByRole('alert')
+    const list = people.querySelector('[data-sharing-people]')!
+    expect(alert.parentElement).toBe(list)
+    expect(list.firstElementChild).toBe(alert)
+    const button = within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    expect(button.getAttribute('aria-busy')).not.toBe('true')
+  })
+
+  it('does not offer Share with everyone when the agent is already public, nor to someone who cannot change people', async () => {
+    mount(status())
+    let people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
+    expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })).toBeTruthy()
+    expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeNull()
+    cleanup()
+
+    // Public but unlisted: no Everyone row, yet nothing for the button to add.
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ isListed: false })], fetchedAt: '' }))
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [PEOPLE.people[0], BOB] }))
+    mount(status())
+    people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain('Bob'))
+    // The listing has answered: Where it’s shared says it is not listed.
+    await waitFor(() => expect(document.body.textContent).toContain(SHARE_UI_TEXT.notListed))
+    expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeNull()
+    cleanup()
+
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ visibility: 'users', access: 'use' })], fetchedAt: '' }))
+    sharing.people.mockResolvedValue(ok({ visible: false, people: [], selfUserId: null }))
+    mount(status({ remote: { ...status().remote, access: 'use' } }))
+    people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.peopleOnlyMaintainer))
+    expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeNull()
+  })
+
   it('adds a person picked in Share with a person, as Can use unless changed', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {

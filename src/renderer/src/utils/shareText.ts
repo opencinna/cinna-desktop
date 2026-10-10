@@ -163,7 +163,7 @@ export const SHARE_UI_TEXT = {
   shareWithTeam: 'Share with the team…',
   shareWithTeamTitle: 'Share with the team',
   shareWithTeamBody:
-    'Put this agent in the catalog. Only you and the people you choose here can get it — you can add more people later.',
+    'Put this agent in the catalog for the people you choose here, or for everyone on this server. You can change who has it later.',
   nameLabel: 'Name',
   loadingDraft: 'Loading…',
   peopleLabel: 'People',
@@ -211,6 +211,13 @@ export const SHARE_UI_TEXT = {
   roleMembers: (role: string) => `Everyone with the ${role} role`,
   you: 'You',
   shareWithPerson: 'Share with a person…',
+  /** People, for a maintainer while the agent is not public: adds the Everyone row. */
+  shareWithEveryone: 'Share with everyone',
+  /** Share with the team's checkbox: the same words as the skill Share dialog's. */
+  whoCanUse: 'Who can use it',
+  everyoneCanUse: 'Everyone on this server can use it',
+  /** Share with the team's people list while Everyone is ticked and no one is named. */
+  peopleNoOneNamed: 'No one named — add people who may change it, as Can edit.',
   shareWithPersonTitle: 'Share with a person',
   historySection: 'History',
   historyInfo:

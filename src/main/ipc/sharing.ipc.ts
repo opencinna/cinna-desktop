@@ -108,12 +108,13 @@ export function registerSharingHandlers(): void {
 
   ipcHandle(
     'sharing:share-with-team',
-    (_event, input?: { agentId?: unknown; name?: unknown; people?: unknown }) => {
+    (_event, input?: { agentId?: unknown; name?: unknown; people?: unknown; everyone?: unknown }) => {
       userActivation.requireActivated()
       return outcome('sharing:share-with-team', () =>
         sharingService.shareWithTeam(getSettingsScopeUserId(), str(input?.agentId), {
           name: input?.name,
-          people: input?.people
+          people: input?.people,
+          everyone: input?.everyone
         })
       )
     }

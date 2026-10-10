@@ -277,12 +277,20 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
   /** The row asking "Remove … access?", by principal. */
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   // Which surface the change came from, so its refusal lands beside it: the
-  // dialog for an Add, the list for a select or a remove.
+  // dialog for an Add, the list for a select, a remove or Share with everyone.
   const fromDialogRef = useRef(false)
+  /** Share with everyone is the change in flight: its button carries the spinner. */
+  const [addingEveryone, setAddingEveryone] = useState(false)
+  /** Share with everyone's refusal, shown under the section's header beside its button. */
+  const [everyoneError, setEveryoneError] = useState<string | null>(null)
+  const fromEveryoneRef = useRef(false)
   const set = useSetSharePeople({
     onResult: (result) => {
+      setAddingEveryone(false)
       const message = result.done ? null : libraryRefusalSentence(result, SHARE_UI_TEXT.peopleNoAccess)
-      if (fromDialogRef.current) {
+      if (fromEveryoneRef.current) {
+        setEveryoneError(message)
+      } else if (fromDialogRef.current) {
         if (result.done) setAdding(false)
         else setAddError(message)
       } else {
@@ -302,15 +310,26 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
   // shown, read-only.
   const selfIsMaintainer = selfId !== null && (entry?.maintainers ?? []).some((m) => m.userId === selfId)
   const rows = list.filter((person) => !(isSelf(person) && selfIsMaintainer))
+  // Offered only while it would change something: not public yet, by either
+  // the list (a listed public item) or the catalog entry (an unlisted one).
+  const offerEveryone =
+    editable && entry?.visibility !== 'public' && !list.some((person) => person.principal.kind === 'everyone')
 
-  const save = (next: LibraryGrantInput[], fromDialog = false): void => {
+  const save = (next: LibraryGrantInput[], fromDialog = false, fromEveryone = false): void => {
     fromDialogRef.current = fromDialog
+    fromEveryoneRef.current = fromEveryone
+    setEveryoneError(null)
     if (fromDialog) setAddError(null)
     else setError(null)
     set.mutate(
       { agentId, people: next },
       {
-        onError: (err) => (fromDialog ? setAddError(unwrapIpcError(err)) : setError(unwrapIpcError(err)))
+        onError: (err) => {
+          setAddingEveryone(false)
+          if (fromEveryone) setEveryoneError(unwrapIpcError(err))
+          else if (fromDialog) setAddError(unwrapIpcError(err))
+          else setError(unwrapIpcError(err))
+        }
       }
     )
   }
@@ -323,19 +342,40 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
       info={<SettingsInfoTip label={`About ${SHARE_UI_TEXT.peopleSection}`}>{SHARE_UI_TEXT.peopleInfo}</SettingsInfoTip>}
       action={
         editable ? (
-          <SettingsButton
-            onClick={() => {
-              setAddError(null)
-              setAdding(true)
-            }}
-            disabled={set.isPending}
-          >
-            {SHARE_UI_TEXT.shareWithPerson}
-          </SettingsButton>
+          <div className="flex items-center gap-2">
+            {offerEveryone && (
+              <SettingsButton
+                onClick={() => {
+                  setConfirmingKey(null)
+                  setAddingEveryone(true)
+                  save([...asInput(list), { principal: { kind: 'everyone' }, access: 'use' }], false, true)
+                }}
+                disabled={set.isPending}
+                aria-busy={set.isPending && addingEveryone}
+              >
+                {set.isPending && addingEveryone && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+                {SHARE_UI_TEXT.shareWithEveryone}
+              </SettingsButton>
+            )}
+            <SettingsButton
+              onClick={() => {
+                setAddError(null)
+                setAdding(true)
+              }}
+              disabled={set.isPending}
+            >
+              {SHARE_UI_TEXT.shareWithPerson}
+            </SettingsButton>
+          </div>
         ) : undefined
       }
     >
       <div data-sharing-people>
+        {everyoneError && (
+          <p role="alert" className="mb-3 text-[13px] text-[var(--color-danger)]">
+            {everyoneError}
+          </p>
+        )}
         <SettingsRows>
           {people.isPending ? (
             <SettingsRow>

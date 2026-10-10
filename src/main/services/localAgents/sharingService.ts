@@ -669,6 +669,11 @@ export function visibilityFor(people: LibraryGrantInput[]): CatalogVisibility {
   return people.some((person) => person.principal.kind === 'everyone') ? 'public' : 'users'
 }
 
+/** Everyone's row alone, or nothing: what `visibilityFor` reads for a first share. */
+function everyoneList(everyone: boolean): LibraryGrantInput[] {
+  return everyone ? [{ principal: { kind: 'everyone' }, access: 'use' }] : []
+}
+
 /** The renderer's desired list, checked field by field; null when any row is not a grant. */
 function parseGrantInputs(raw: unknown): LibraryGrantInput[] | null {
   if (!Array.isArray(raw)) return null
@@ -818,7 +823,15 @@ async function createAndSend(
   kit: NonNullable<ReturnType<typeof locateKit>>,
   profile: string,
   host: string,
-  input: { slug: string; name: string; description: string; manifestId: string; people: ShareWithTeamPerson[] },
+  input: {
+    slug: string
+    name: string
+    description: string
+    manifestId: string
+    people: ShareWithTeamPerson[]
+    /** Everyone on the server may use it: `public`, else `users`. */
+    everyone: boolean
+  },
   /** The folder's old `origin` is a team version the library no longer lists: dropped once the new entry exists. */
   replaceOrigin: boolean
 ): Promise<AgentShareResult> {
@@ -834,8 +847,10 @@ async function createAndSend(
         manifest_id: input.manifestId,
         // `users`: a person's `use` grant counts only there. With nobody
         // chosen it reaches the maintainers alone, as `private` would, and a
-        // person added later in People counts at once.
-        visibility: 'users',
+        // person added later in People counts at once. `public` with
+        // Everyone ticked: everyone's `use`, the named people granted as
+        // well, so removing Everyone later in People leaves them theirs.
+        visibility: visibilityFor(everyoneList(input.everyone)),
         // Applied with the create, all or nothing; core adds the creator as maintainer.
         grants: input.people.map((person) => ({ principal: { user_id: person.userId }, access: person.access }))
       }
@@ -871,6 +886,15 @@ async function createAndSend(
     if ('refusal' in grantsWrite) {
       const why = grantsWrite.detail ? ` (${grantsWrite.detail})` : ''
       return refused('failed', `The agent wasn’t sent: who can get it couldn’t be limited yet${why}.`)
+    }
+    // And its visibility, which the earlier attempt may have set the other way.
+    const wanted = visibilityFor(everyoneList(input.everyone))
+    if (entry.visibility !== wanted) {
+      const patch = await libraryWrite(profile, catalogItemPath(entry.uuid), 'PATCH', { visibility: wanted })
+      if ('refusal' in patch) {
+        const why = patch.detail ? ` (${patch.detail})` : ''
+        return refused('failed', `The agent wasn’t sent: who can get it couldn’t be set yet${why}.`)
+      }
     }
   }
   if (replaceOrigin) {
@@ -1127,7 +1151,7 @@ export const sharingService = {
   async shareWithTeam(
     userId: string,
     agentId: string,
-    input: { name?: unknown; people?: unknown }
+    input: { name?: unknown; people?: unknown; everyone?: unknown }
   ): Promise<AgentShareResult> {
     const profile = getProfileScopeUserId()
     const host = libraryService.hostOf(profile)
@@ -1177,7 +1201,7 @@ export const sharingService = {
         kit,
         profile,
         host,
-        { slug, name, description, manifestId, people },
+        { slug, name, description, manifestId, people, everyone: input?.everyone === true },
         replaceOrigin
       )
     } finally {

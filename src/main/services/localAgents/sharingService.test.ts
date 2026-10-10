@@ -1125,6 +1125,57 @@ describe('share with the team — who gets it', () => {
     }
   }, 30_000)
 
+  it('creates it public with Everyone ticked, the named people granted as they are', async () => {
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if (((args[2] as { method?: string } | undefined)?.method ?? 'GET') === 'POST') return fresh
+      return { data: [] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockResolvedValue({ done: true, refusal: null, detail: null })
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, {
+        name: 'Alpha',
+        people: [{ userId: 'bob-2', access: 'use' }],
+        everyone: true
+      })
+      expect(result.done).toBe(true)
+      expect(calls('POST')[0][1]).toMatchObject({
+        visibility: 'public',
+        // Kept beside public: removing Everyone later in People leaves Bob his access.
+        grants: [{ principal: { user_id: 'bob-2' }, access: 'use' }]
+      })
+      expect(calls('PATCH')).toEqual([])
+    } finally {
+      init.mockRestore()
+    }
+  }, 30_000)
+
+  it('sets an adopted entry’s visibility to this attempt’s choice before anything is sent', async () => {
+    const own = libraryAgent('r30', 'alpha', readManifest(manifestPath(agentDir)).id!, {
+      ...NEVER_SHARED,
+      maintainers: [{ user_id: 'me-1', display_name: 'Ann' }]
+    })
+    const order: string[] = []
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
+      order.push(`${method} ${args[1] as string}`)
+      if (method === 'POST') throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
+      if (method === 'PUT' || method === 'PATCH') return {}
+      return { data: [own] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockImplementation(async () => {
+      order.push('send')
+      return { done: true, refusal: null, detail: null }
+    })
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, { name: 'Alpha', people: [], everyone: true })
+      expect(result.done).toBe(true)
+      expect(calls('PATCH')).toEqual([['/api/v1/catalog/items/item-r30', { visibility: 'public' }]])
+      expect(order.indexOf('PATCH /api/v1/catalog/items/item-r30')).toBeLessThan(order.indexOf('send'))
+    } finally {
+      init.mockRestore()
+    }
+  }, 30_000)
+
   it('sends nothing when giving an adopted entry access fails, and leaves it for a retry to finish', async () => {
     const own = libraryAgent('r30', 'alpha', readManifest(manifestPath(agentDir)).id!, {
       ...NEVER_SHARED,

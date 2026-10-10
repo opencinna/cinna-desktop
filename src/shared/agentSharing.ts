@@ -245,11 +245,15 @@ export interface ShareWithTeamPerson {
 /**
  * What the Share with the team dialog sends. The description is not asked
  * for: main sends the manifest's. `people` may be empty — only the sharer
- * (as maintainer) can then get it; never "everyone" by default.
+ * (as maintainer) can then get it; never "everyone" by default. `everyone`
+ * makes the new entry `visibility: 'public'` (everyone's `use`); the people
+ * named are granted as they are either way, so removing Everyone later in
+ * People leaves them their access.
  */
 export interface ShareWithTeamInput {
   name: string
   people: ShareWithTeamPerson[]
+  everyone?: boolean
 }
 
 /**
