@@ -1352,8 +1352,8 @@ export { isSkillFinding }
  * use ({@link scanAgentSkillDetails}) so the three cannot disagree. A skill's
  * error is an error under `skills.<core issue code>`; the body over 64 KB and
  * a `version` the platform would not keep are warnings. The scanner's
- * `secrets` and `shadowed` warnings are the Addons tab's: `kit.py` does not
- * report them (credential-looking files are {@link checkSecrets}' anyway).
+ * `secrets`, `links` and `shadowed` warnings are the Addons tab's: `kit.py`
+ * does not report them (credential-looking files are {@link checkSecrets}' anyway).
  */
 function checkSkills(report: Report, agentDir: string, manifest: CinnaAgentManifest): void {
   const entries = scanAgentSkillDetails(agentDir)

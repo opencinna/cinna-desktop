@@ -261,6 +261,17 @@ describe('scanning an agent’s skills', () => {
     ])
   })
 
+  it('warns, without withholding the skill, about links inside it, which Share refuses', () => {
+    const dir = skill('linky', md('name: linky\ndescription: x'), { 'notes-real.md': 'n', 'docs/a.md': 'a' })
+    symlinkSync(join(dir, 'notes-real.md'), join(dir, 'notes.md'))
+    symlinkSync(join(dir, 'docs'), join(dir, 'more-docs'), 'dir')
+    const entry = only('linky')
+    expect(entry.deliverable).toBe(true)
+    expect(entry.issues).toEqual([
+      { code: 'links', message: ISSUE_MESSAGES.links, severity: 'warning', paths: ['more-docs', 'notes.md'] }
+    ])
+  })
+
   it('matches core’s secret filenames', () => {
     for (const name of ['.env', '.env.local', 'prod.env', 'credentials.json', 'id_ed25519', 'a.key', 'b.p12']) {
       expect(isSecretFilename(name), name).toBe(true)

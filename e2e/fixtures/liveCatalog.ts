@@ -206,13 +206,14 @@ export function skillRow(app: PersonApp, title: string, source: 'Authored' | 'Fr
 
 /**
  * The Skills row's Share button → the Share dialog → (first share) each of
- * `people` at Can use → Share. Waits until the dialog closed.
+ * `people` at Can use, and Everyone on this server when `everyone` → Share.
+ * Waits until the dialog closed.
  */
 export async function shareSkill(
   app: PersonApp,
   agent: string,
   skill: string,
-  input: { people?: SharingPerson[]; note?: string; newVersion?: boolean }
+  input: { people?: SharingPerson[]; note?: string; newVersion?: boolean; everyone?: boolean }
 ): Promise<void> {
   await openSkills(app, agent)
   const verb = input.newVersion ? `Share a new version of ${skill}…` : `Share ${skill}…`
@@ -223,7 +224,8 @@ export async function shareSkill(
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
     await dialog.getByRole('option', { name: `${person.name} <${person.email}>` }).click()
   }
-  if (input.note) await dialog.getByRole('textbox').fill(input.note)
+  if (input.everyone) await dialog.getByRole('checkbox', { name: 'Everyone on this server can use it', exact: true }).check()
+  if (input.note) await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(input.note)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 }
@@ -276,6 +278,51 @@ export function cachedSkillDir(app: PersonApp, packageUuid: string, revision: nu
 }
 
 export { findAgent }
+
+/**
+ * The catalog's Skills searched for `skill`, after a fresh read of the
+ * listing; answers the dialog and the skill's tile (which may be absent).
+ */
+export async function searchSkills(app: PersonApp, skill: string) {
+  const listed = await app.page.evaluate(() => window.api.sharing.library(true))
+  expect(listed.success).toBe(true)
+  const catalog = await openCatalog(app, 'Skills')
+  await catalog.getByRole('textbox', { name: 'Search the catalog' }).fill(skill)
+  return { catalog, tile: catalog.getByRole('group', { name: skill, exact: true }) }
+}
+
+/** `skill` is in `app`'s catalog with Add to agent…; closes the catalog again. */
+export async function expectSkillListed(app: PersonApp, skill: string, publisher: SharingPerson): Promise<void> {
+  const { catalog, tile } = await searchSkills(app, skill)
+  await expect(tile).toContainText('Skill')
+  await expect(tile).toContainText(`by ${publisher.name}`)
+  await expect(tile.getByRole('button', { name: 'Add to agent…' })).toBeEnabled()
+  await app.page.keyboard.press('Escape')
+  await expect(catalog).toHaveCount(0)
+}
+
+/**
+ * `skill` is not in `app`'s catalog: the search over a loaded listing ends
+ * in its empty line, not in a tile. Closes the catalog again.
+ */
+export async function expectSkillNotListed(app: PersonApp, skill: string): Promise<void> {
+  const { catalog, tile } = await searchSkills(app, skill)
+  await expect(
+    catalog.getByText('Nothing matches your search.', { exact: true }).or(catalog.getByText('No skills are in the catalog for you yet.', { exact: true }))
+  ).toBeVisible()
+  await expect(tile).toHaveCount(0)
+  await app.page.keyboard.press('Escape')
+  await expect(catalog).toHaveCount(0)
+}
+
+/** The local installs core lists for the bearer of `token` on skill `name`, as `<host_manifest_id>@<revision>`. */
+export async function skillLocalInstalls(fixture: TeamFixtureBase, token: string, name: string): Promise<string[]> {
+  const item = await skillItem(fixture, token, name)
+  return ((item?.my_installs ?? []) as { where: string; host_manifest_id: string | null; revision_number: number | null }[])
+    .filter((install) => install.where === 'local')
+    .map((install) => `${String(install.host_manifest_id).toLowerCase()}@${install.revision_number}`)
+    .sort()
+}
 
 /** The catalog's Agents → the agent's Get, landing on its page. */
 export async function getAgent(app: PersonApp, name: string): Promise<void> {

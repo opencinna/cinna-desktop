@@ -31,12 +31,15 @@ export interface SharingPerson {
   token: string
 }
 
-/** What every two-app live fixture holds: the server, a run tag, the admin and three people. */
+/**
+ * What every two-app live fixture holds: the server, a run tag, the admin and
+ * three people — four in `live-catalog.py`, whose D is nobody's audience.
+ */
 export interface TeamFixtureBase {
   server: string
   tag: string
   admin: { id: string; token: string }
-  people: Record<'a' | 'b' | 'c', SharingPerson>
+  people: Record<'a' | 'b' | 'c', SharingPerson> & { d?: SharingPerson }
 }
 
 export interface SharingFixture extends TeamFixtureBase {
@@ -47,6 +50,8 @@ export interface SharingFixture extends TeamFixtureBase {
 }
 
 export type PersonLabel = 'a' | 'b' | 'c'
+/** A person of any fixture: `live-catalog.py` also makes D. */
+export type AnyPersonLabel = PersonLabel | 'd'
 
 const fixturePath = (process.env.CINNA_SHARING_LIVE_FIXTURE ?? '').trim()
 
@@ -135,7 +140,7 @@ export class PersonApp {
   rootPath = ''
 
   constructor(
-    readonly label: PersonLabel,
+    readonly label: AnyPersonLabel,
     readonly person: SharingPerson,
     readonly sandbox: Sandbox,
     private readonly fixture: TeamFixtureBase
@@ -265,7 +270,7 @@ export class PersonApp {
 export interface Team<F extends TeamFixtureBase = SharingFixture> {
   fixture: F
   /** Launch (once) and return a person's app, set up and signed in. */
-  open(label: PersonLabel): Promise<PersonApp>
+  open(label: AnyPersonLabel): Promise<PersonApp>
 }
 
 /**
@@ -278,13 +283,15 @@ export function makeTeamTest<F extends TeamFixtureBase>(load: () => F | null, sk
     team: async ({}, use, testInfo) => {
       const fixture = load()
       extended.skip(fixture === null, skipReason)
-      const apps = new Map<PersonLabel, PersonApp>()
+      const apps = new Map<AnyPersonLabel, PersonApp>()
       const team: Team<F> = {
         fixture: fixture as F,
         async open(label) {
           const existing = apps.get(label)
           if (existing) return existing
-          const app = new PersonApp(label, (fixture as F).people[label], makeSandbox(), fixture as F)
+          const person = (fixture as F).people[label]
+          if (!person) throw new Error(`the fixture has no person ${label.toUpperCase()}; re-run its create`)
+          const app = new PersonApp(label, person, makeSandbox(), fixture as F)
           apps.set(label, app)
           await app.setUp()
           return app

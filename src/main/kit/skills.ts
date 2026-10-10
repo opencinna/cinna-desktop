@@ -100,11 +100,13 @@ export const ISSUE_MESSAGES: Readonly<Record<string, string>> = {
   projection_error: 'This skill could not be copied to the engine.',
   oversized: 'The SKILL.md body is larger than 64 KB.',
   shadowed: 'Another installed skill uses this name.',
-  secrets: 'This skill holds files that look like credentials.'
+  secrets: 'This skill holds files that look like credentials.',
+  // Desktop only: core's scanner skips links silently, but Share refuses them.
+  links: 'This skill holds links, which can’t be shared — replace them with the files themselves.'
 }
 
 /** Warning order, most severe first (core's `WARNING_PRECEDENCE`). */
-const WARNING_PRECEDENCE = ['secrets', 'shadowed', 'oversized'] as const
+const WARNING_PRECEDENCE = ['secrets', 'links', 'shadowed', 'oversized'] as const
 
 function issue(code: string, severity: 'error' | 'warning', message?: string, paths?: string[]): LocalAgentSkillIssue {
   return {
@@ -375,13 +377,15 @@ export function isSecretFilename(name: string): boolean {
 }
 
 /**
- * Total bytes and the secret-looking files of a skill tree, in one walk.
- * Symlinks are skipped at both levels and the junk directories never entered,
- * as core's `_walk_files` does; an unreadable directory is skipped silently.
+ * Total bytes, the secret-looking files and the links of a skill tree, in one
+ * walk. Symlinks are skipped at both levels and the junk directories never
+ * entered, as core's `_walk_files` does; an unreadable directory is skipped
+ * silently. The links are collected only to warn: Share refuses them.
  */
-function measureTree(root: string): { size: number; secrets: string[] } {
+function measureTree(root: string): { size: number; secrets: string[]; links: string[] } {
   let size = 0
   const secrets: string[] = []
+  const links: string[] = []
   const walk = (dir: string, rel: string): void => {
     let entries: Dirent[]
     try {
@@ -391,8 +395,11 @@ function measureTree(root: string): { size: number; secrets: string[] } {
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue
       const relative = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) {
+        links.push(relative)
+        continue
+      }
       if (entry.isDirectory()) {
         if (!SKIP_DIR_NAMES.has(entry.name)) walk(join(dir, entry.name), relative)
         continue
@@ -406,7 +413,7 @@ function measureTree(root: string): { size: number; secrets: string[] } {
     }
   }
   walk(root, '')
-  return { size, secrets }
+  return { size, secrets, links }
 }
 
 /* ------------------------------------------------------ parsing / scanning */
@@ -509,9 +516,10 @@ export function parseSkillDir(skillDir: string, folderName: string): ParsedSkill
     return fail('invalid_credentials', `The credentials block in SKILL.md is invalid: ${problem}.`)
   }
 
-  const { size, secrets } = measureTree(skillDir)
+  const { size, secrets, links } = measureTree(skillDir)
   const warnings: LocalAgentSkillIssue[] = []
   if (secrets.length > 0) warnings.push(issue('secrets', 'warning', undefined, secrets))
+  if (links.length > 0) warnings.push(issue('links', 'warning', undefined, links))
   if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) warnings.push(issue('oversized', 'warning'))
   warnings.sort((a, b) => warningRank(a.code) - warningRank(b.code))
 

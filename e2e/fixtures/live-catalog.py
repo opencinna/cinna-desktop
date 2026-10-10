@@ -14,7 +14,8 @@ superuser's password is read from the container's own environment):
 Run the docker commands from cinna-core's checkout ($CINNA_CORE_PATH), with this
 file's path relative to it.
 
-``create`` signs up three people (A, B, C), has the first superuser ("admin")
+``create`` signs up four people (A, B, C, D; D only ever appears as the
+person a skill was not shared with, ``live-sharing-skill-audiences.spec.ts``), has the first superuser ("admin")
 create one ``api_token`` service credential ``ERP API catalog-e2e <tag>`` with
 ``service_uri: erp-api``, Allow local use and sharing on, shared with A and B
 (not C), and prints one JSON document in the shape ``liveTeamSharing.ts``
@@ -79,7 +80,7 @@ def create(client: httpx.Client) -> None:
     tag = uuid.uuid4().hex[:8]
     admin, admin_id = admin_token(client)
     people = {}
-    for label in ("a", "b", "c"):
+    for label in ("a", "b", "c", "d"):
         email = f"{PREFIX}{label}-{tag}@example.com"
         password = uuid.uuid4().hex + "A!9"
         name = f"Cataloger {label.upper()} {tag}"
