@@ -1174,7 +1174,7 @@ export async function pullRebaseClean(
     const carried = landed ? await trackedLocalOnlyFiles(gitPath, dir, workshopRoot) : []
     if (!landed) {
       for (const rel of tracked) {
-        if (kept.has(rel)) continue
+        if (holdsFolded(kept.keys(), rel)) continue
         try {
           rmSync(join(dir, ...rel.split('/')), { force: true })
         } catch (err) {
@@ -1186,14 +1186,25 @@ export async function pullRebaseClean(
   }
 }
 
-/** The never-travelling single files HEAD records, agent-relative. Empty without a HEAD. */
+/**
+ * The never-travelling single files HEAD records, agent-relative and **as
+ * recorded** — in any case, so `.Claude/Settings.local.json` counts. Empty
+ * without a HEAD. The whole tree is listed and matched here: `ls-tree`
+ * refuses the `:(icase)` pathspec magic.
+ */
 async function trackedLocalOnlyFiles(gitPath: string, dir: string, workshopRoot: string | undefined): Promise<string[]> {
   const files = neverTravelFiles(workshopRoot)
   if (files.length === 0 || (await headOf(gitPath, dir)) === null) return []
-  const out = await run(gitPath, dir, ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...files], LOCAL_TIMEOUT_MS)
+  const out = await run(gitPath, dir, ['ls-tree', '-r', '--name-only', '-z', 'HEAD'], LOCAL_TIMEOUT_MS)
   if (!out.ok) return []
-  const listed = new Set(lines(out.stdout))
-  return files.filter((rel) => listed.has(rel))
+  return out.stdout.split('\0').filter((rel) => rel !== '' && travelsNot(rel, files))
+}
+
+/** Whether `paths` holds `rel` in any case. */
+function holdsFolded(paths: Iterable<string>, rel: string): boolean {
+  const folded = foldPath(rel)
+  for (const path of paths) if (foldPath(path) === folded) return true
+  return false
 }
 
 /**
@@ -1625,30 +1636,43 @@ export async function excludeFromEnclosingRepo(dir: string): Promise<void> {
 }
 
 /**
- * Contract 1.8.0's `never_travels`, for a contract that predates it: the
- * layout is read from the workshop's own `.cinna-kit/` when it has one, and a
- * workshop made before 1.8.0 still has an older copy. The server enforces
- * these whatever the folder's contract says.
+ * The contract's `never_travels` before 1.8.0 listed none: the layout is read
+ * from the workshop's own `.cinna-kit/` when it has one, and a workshop made
+ * before 1.8.0 may still have an older copy. The server enforces these
+ * whatever the folder's contract says.
  */
 const NEVER_TRAVELS_FALLBACK = ['credentials/', 'app-data/']
 
 /**
- * Single files that never go to a Cinna team library, on top of the kit's
- * `never_travels` — a **desktop-side extra**, not (yet) in contract 1.8.0's
- * list, so it is added here whatever the contract says and the server does
- * not enforce it. `.claude/settings.local.json` holds Claude's permission
- * allow rules (the kit template ships one): a teammate with edit access must
- * not be able to widen what runs without asking on everyone's machine.
- * Without a trailing `/`, which is what marks an entry as a file.
+ * Single files that never go to a Cinna team library, kept in the list
+ * whatever the contract says. Contract 1.9.0 lists
+ * `.claude/settings.local.json` itself, and the server refuses a version whose
+ * tip still contains it since core d5bb0a16; this covers a workshop whose
+ * `.cinna-kit/` predates 1.9.0, as {@link NEVER_TRAVELS_FALLBACK} covers one
+ * before 1.8.0. The file holds Claude's permission allow rules (the kit
+ * template ships one): a teammate with edit access must not be able to widen
+ * what runs without asking on everyone's machine.
  */
-const DESKTOP_NEVER_TRAVELS = ['.claude/settings.local.json']
+const NEVER_TRAVELS_FILES_FALLBACK = ['.claude/settings.local.json']
+
+/** A `never_travels` entry, agent-root relative, as core's push policy normalizes it. */
+function normalizeNeverTravel(entry: string): string {
+  return entry.trim().replace(/^(\.\/)+/, '').replace(/^\/+/, '')
+}
+
+/** Two never-travel paths or entries compared the way the server does: case-insensitively. */
+function foldPath(path: string): string {
+  return path.toLowerCase()
+}
 
 /**
- * Agent-relative paths that never go to a shared remote. A folder ends in
- * `/` and goes **whole** — the agent's credentials and its per-machine
- * runtime data; the team library's server refuses a version carrying any
- * file under them, including the kit template's own `credentials/README.md`.
- * A file has no trailing `/` ({@link DESKTOP_NEVER_TRAVELS}).
+ * Agent-relative paths that never go to a shared remote, in the contract's
+ * two shapes. An entry ending in `/` is a folder and goes **whole** — the
+ * agent's credentials and its per-machine runtime data; the team library's
+ * server refuses a version carrying any file under them, including the kit
+ * template's own `credentials/README.md`. Any other entry is one file, matched
+ * exactly. Both are compared case-insensitively ({@link travelsNot}): a
+ * case-insensitive disk lands `.Claude/Settings.local.json` on the same file.
  */
 export function neverTravelPaths(workshopRoot?: string): string[] {
   let paths: string[] | undefined
@@ -1657,21 +1681,54 @@ export function neverTravelPaths(workshopRoot?: string): string[] {
   } catch {
     paths = undefined
   }
-  const list = (paths && paths.length > 0 ? paths : NEVER_TRAVELS_FALLBACK)
-    .filter((path) => !DESKTOP_NEVER_TRAVELS.includes(path))
-    .map((path) => (path.endsWith('/') ? path : `${path}/`))
-  return [...list, ...DESKTOP_NEVER_TRAVELS]
+  const list: string[] = []
+  for (const raw of paths && paths.length > 0 ? paths : NEVER_TRAVELS_FALLBACK) {
+    const entry = normalizeNeverTravel(raw)
+    if (entry === '' || entry === '/') continue
+    if (!list.some((known) => foldPath(known) === foldPath(entry))) list.push(entry)
+  }
+  for (const file of NEVER_TRAVELS_FILES_FALLBACK) {
+    if (!list.some((known) => foldPath(known) === foldPath(file))) list.push(file)
+  }
+  return list
 }
 
-/** A never-travel entry as a pathspec or file path: a folder without its trailing `/`. */
+/** A never-travel entry as a file path: a folder without its trailing `/`. */
 function pathOf(entry: string): string {
   return entry.endsWith('/') ? entry.slice(0, -1) : entry
 }
 
+/**
+ * A never-travel entry as a case-insensitive git pathspec. `:(icase)` keeps
+ * pathspec semantics otherwise: a folder covers what is under it, and a file
+ * matches exactly (`.claude/settings.local.json` never takes `….json.bak`).
+ * Accepted by `rm` and the revision walk; `ls-tree` refuses the magic.
+ */
+function icasePathspec(entry: string): string {
+  return `:(icase)${pathOf(entry)}`
+}
+
+/**
+ * A never-travel entry as an anchored ignore rule that matches in any case,
+ * whatever the clone's `core.ignorecase` (false on a Linux clone, where
+ * `.Claude/Settings.local.json` would otherwise be a new file to record).
+ */
+function icaseIgnoreRule(entry: string): string {
+  const glob = Array.from(entry, (ch) => {
+    if ('*?[]\\'.includes(ch)) return `\\${ch}`
+    const lower = ch.toLowerCase()
+    const upper = ch.toUpperCase()
+    return lower === upper ? ch : `[${lower}${upper}]`
+  }).join('')
+  return `/${glob}`
+}
+
 function travelsNot(rel: string, never: string[]): boolean {
-  return never.some((entry) =>
-    entry.endsWith('/') ? rel === entry.slice(0, -1) || rel.startsWith(entry) : rel === entry
-  )
+  const path = foldPath(rel)
+  return never.some((raw) => {
+    const entry = foldPath(raw)
+    return entry.endsWith('/') ? path === entry.slice(0, -1) || path.startsWith(entry) : path === entry
+  })
 }
 
 /** A Cinna team library — the only kind of remote the never-travel rules apply to. */
@@ -1680,15 +1737,15 @@ function isCinna(auth: RemoteAuth | null | undefined): boolean {
 }
 
 /**
- * Stop recording anything under a never-travelling folder. The files stay on
- * disk; only the index forgets them, and the exclude block keeps them out of
- * every later `add -A`.
+ * Stop recording anything under a never-travelling folder, and each
+ * never-travelling file, in any case. The files stay on disk; only the index
+ * forgets them, and the exclude block keeps them out of every later `add -A`.
  */
 async function untrackNeverTravels(gitPath: string, dir: string, never: string[]): Promise<boolean> {
   const out = await run(
     gitPath,
     dir,
-    ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...never.map(pathOf)],
+    ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...never.map(icasePathspec)],
     LOCAL_TIMEOUT_MS
   )
   return out.ok
@@ -1747,7 +1804,7 @@ async function rewriteUnsent(gitPath: string, dir: string, never: string[]): Pro
   if (oldTip === null) return null
   const ref = await teamRef(gitPath, dir)
   const range = ref === null ? [oldTip] : [oldTip, '--not', ref]
-  const roots = never.map(pathOf)
+  const roots = never.map(icasePathspec)
   const touching = await run(
     gitPath,
     dir,
@@ -1951,7 +2008,7 @@ export function putBackLocalOnlyFiles(
         continue
       }
       if (!template) continue
-      const theirs = carried.includes(rel)
+      const theirs = holdsFolded(carried, rel)
       if (!theirs && existsSync(file)) continue
       const source = join(getTemplateRoot('agent', workshopRoot), ...rel.split('/'))
       if (!existsSync(source)) {
@@ -2096,9 +2153,10 @@ async function ensureAgentExcludes(
   neverTravel: boolean
 ): Promise<boolean> {
   try {
-    // The never-travel folders only for a Cinna team library; any other
-    // remote gets the kit's ordinary rules alone.
-    const never = neverTravel ? neverTravelPaths(workshopRoot).map((path) => `/${path}`) : []
+    // The never-travel paths only for a Cinna team library; any other
+    // remote gets the kit's ordinary rules alone. In any case, as the server
+    // matches them.
+    const never = neverTravel ? neverTravelPaths(workshopRoot).map(icaseIgnoreRule) : []
     const block = [EXCLUDE_BEGIN, ...kitAgentIgnoreRules(workshopRoot), ...never, EXCLUDE_END].join('\n')
     const at = await run(
       gitPath,

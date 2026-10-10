@@ -76,9 +76,12 @@ export interface KitLayout {
   local_command_runner: { description?: string; rules: LayoutCommandRule[] }
   /**
    * `shared_remote.never_travels.paths` (contract 1.8.0+): agent-relative
-   * folders, each ending in `/`, that never go to a shared remote — the team
-   * library's server refuses any version carrying them. Absent from an older
-   * contract; see `neverTravelPaths` in `gitService.ts` for the fallback.
+   * paths that never go to a shared remote — the team library's server
+   * refuses any version carrying them. An entry ending in `/` is a folder and
+   * covers everything under it; since 1.9.0 any other entry is one file
+   * (`.claude/settings.local.json`), matched exactly. Both are compared
+   * case-insensitively. Kept as written here; absent from an older contract —
+   * see `neverTravelPaths` in `gitService.ts` for the fallbacks.
    */
   never_travels?: string[]
 }

@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { repoRoot } from '../playwright.config'
@@ -7,6 +7,7 @@ import {
   expect,
   agentName,
   buildAcmeReporter,
+  cloneHistory,
   coreCall,
   findAgent,
   finishWithWeather,
@@ -25,7 +26,8 @@ import {
  * A shared agent's life outside the day-to-day, against the real local
  * cinna-core: sharing removed, access taken away, a Get that would land on
  * an agent already here, the Inbox's "The team changed X", and a blocked job
- * fetching its agent from the Team library. Setup:
+ * fetching its agent from the Team library, and core refusing Claude's
+ * per-machine settings file. Setup:
  * `e2e/fixtures/live-team-sharing.py`.
  */
 
@@ -57,20 +59,36 @@ function section(app: PersonApp, title: string) {
 }
 
 
-/** A commit of `paths` (forced past the ignore rules) sent with a raw `git push`, as plain git would. */
-function rawSend(fixture: SharingFixture, dir: string, paths: string[], note: string): string {
-  const git = (...args: string[]): string =>
+/**
+ * A version made by plain git on top of the folder's HEAD, carrying `files`
+ * at exactly the given paths (casing included), sent with a raw `git push`.
+ * Built in a throwaway index, so the folder's HEAD, index and files are
+ * untouched whether core takes it or not. Returns git's output on a refusal.
+ */
+function rawSend(fixture: SharingFixture, dir: string, files: Record<string, string>, note: string): { sha: string; refused: string | null } {
+  const index = join(dir, '.git', `e2e-raw-index-${process.pid}`)
+  const env = { ...process.env, GIT_INDEX_FILE: index, GIT_TERMINAL_PROMPT: '0' }
+  const git = (args: string[], input?: string): string =>
     execFileSync('git', ['-C', dir, '-c', 'user.name=Plain Git', '-c', 'user.email=plain@example.com', '-c', 'commit.gpgsign=false',
-      '-c', `http.${fixture.server}/.extraheader=Authorization: Bearer ${fixture.people.a.token}`, ...args], { encoding: 'utf8', stdio: 'pipe' })
-  git('add', '-f', ...paths)
-  git('commit', '-q', '-m', note)
-  git('push', '-q', 'origin', 'HEAD:main')
-  return git('rev-parse', 'HEAD').trim()
-}
-
-/** Core's listing takes a new head a few seconds after a push lands. */
-async function waitForTeamHead(fixture: SharingFixture, slug: string, sha: string): Promise<void> {
-  await expect.poll(async () => (await libraryEntry(fixture, fixture.people.a.token, slug))?.head_sha, { timeout: 30_000 }).toBe(sha)
+      '-c', `http.${fixture.server}/.extraheader=Authorization: Bearer ${fixture.people.a.token}`, ...args], { encoding: 'utf8', stdio: 'pipe', env, input })
+  try {
+    git(['read-tree', 'HEAD'])
+    for (const [path, content] of Object.entries(files)) {
+      const blob = git(['hash-object', '-w', '--stdin'], content).trim()
+      git(['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`])
+    }
+    const tree = git(['write-tree']).trim()
+    const sha = git(['commit-tree', tree, '-p', 'HEAD', '-m', note]).trim()
+    try {
+      git(['push', 'origin', `${sha}:refs/heads/main`])
+      return { sha, refused: null }
+    } catch (error) {
+      const err = error as { stderr?: string }
+      return { sha, refused: (err.stderr ?? String(error)).replace(/Bearer \S+/g, 'Bearer ***') }
+    }
+  } finally {
+    rmSync(index, { force: true })
+  }
 }
 
 /** Refresh, open the page, Update from the badge, wait for the folder to be at `sha`. */
@@ -244,10 +262,15 @@ test('a blocked job offers Get X from the team library, and the Get unblocks it'
 
 const SETTINGS = '.claude/settings.local.json'
 const TEMPLATE_SETTINGS = readFileSync(join(repoRoot, 'resources/cinna-agent-kit/templates/agent', SETTINGS), 'utf8')
+const SETTINGS_REFUSED = 'This change includes the agent\'s Claude permission settings (.claude/settings.local.json), which never leave your computer.'
 
-test('a plain-git teammate’s Bash(*) settings.local.json never replaces B’s, and C’s Get gets the template’s', async ({ team }) => {
-  // The migration case: a team version recorded by plain git (or an older
-  // client) that tracks .claude/settings.local.json. A sends it with a raw push.
+// Since core d5bb0a16 (kit contract 1.9.0) the push policy refuses any version
+// whose tip still holds .claude/settings.local.json, in any casing, so a team
+// version that tracks the file can no longer be made against a real core. The
+// migration of an entry shared before d5bb0a16 (B edits a tracked copy, an
+// Update keeps B's, a version that deletes the file is accepted) is covered by
+// the desktop's gitService unit tests instead.
+test('core refuses a plain-git version carrying settings.local.json in any casing; B’s file stays B’s through an Update, and C’s Get gets the template’s', async ({ team }) => {
   test.setTimeout(300_000)
   const { fixture } = team
   const name = agentName(fixture)
@@ -258,34 +281,57 @@ test('a plain-git teammate’s Bash(*) settings.local.json never replaces B’s,
   await getFromLibrary(b, name)
   await finishWithWeather(b, name, `weather-b-${fixture.tag}-secret`)
   const bPath = (await findAgent(b, name)).path
-  const bBefore = readFileSync(join(bPath, SETTINGS), 'utf8')
-  expect(bBefore).toBe(TEMPLATE_SETTINGS)
+  expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(TEMPLATE_SETTINGS)
+  const teamHead = (await libraryEntry(fixture, fixture.people.a.token, built.slug)).head_sha as string
+  const aHead = execFileSync('git', ['-C', built.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  expect(teamHead).toBe(aHead)
 
   const wide = '{ "permissions": { "allow": ["Bash(*)"] } }\n'
-  writeFileSync(join(built.path, SETTINGS), wide)
-  writeFileSync(join(built.path, 'knowledge/acme.md'), '# Acme\n\nSent by plain git.\n')
-  const sent = rawSend(fixture, built.path, [SETTINGS, 'knowledge/acme.md'], 'Plain git: wide permissions')
-  await waitForTeamHead(fixture, built.slug, sent)
+  for (const path of [SETTINGS, '.Claude/Settings.local.json']) {
+    await test.step(`a raw push of ${path} is refused with core’s sentence`, async () => {
+      const sent = rawSend(fixture, built.path, { [path]: wide, 'knowledge/acme.md': '# Acme\n\nSent by plain git.\n' }, 'Plain git: wide permissions')
+      expect(sent.refused, `core accepted ${sent.sha}`).not.toBeNull()
+      expect(sent.refused).toContain(`remote: ${SETTINGS_REFUSED}`)
+    })
+  }
 
-  await test.step('B’s Update brings the change in and keeps B’s file', async () => {
-    await updateFromBadge(b, name, bPath, sent)
-    expect(readFileSync(join(bPath, 'knowledge/acme.md'), 'utf8')).toContain('Sent by plain git.')
-    expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(bBefore)
+  await test.step('the team version is unchanged and its history never held the file', async () => {
+    const entry = await libraryEntry(fixture, fixture.people.a.token, built.slug)
+    expect(entry.head_sha).toBe(teamHead)
+    const history = cloneHistory(fixture, entry.repo_id, fixture.admin.token)
+    if (history.status !== 'ok') throw new Error(`admin clone refused: ${history.output}`)
+    expect(history.paths.filter((p) => p.toLowerCase() === SETTINGS)).toEqual([])
+    expect(history.blobs).not.toContain('Bash(*)')
+    expect(execFileSync('git', ['-C', built.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(aHead)
   })
 
-  await test.step('B (Can use) reads up to date, though git sees the file modified', async () => {
-    // Read "1 change not shared" for a moment right after the Update, then settles.
-    expect(gitStatus(bPath)).toBe('M .claude/settings.local.json')
+  const mine = '{ "permissions": { "allow": ["Bash(echo from-B)"] } }\n'
+  writeFileSync(join(bPath, SETTINGS), mine)
+  writeFileSync(join(built.path, SETTINGS), '{ "permissions": { "allow": ["Bash(echo from-A)"] } }\n')
+  writeFileSync(join(built.path, 'knowledge/acme.md'), '# Acme\n\nA change shared from the app.\n')
+  await shareChanges(a, name, 'A shares a change')
+  const head = execFileSync('git', ['-C', built.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  expect(head).not.toBe(aHead)
+
+  await test.step('B’s in-app Update brings the change in and keeps B’s file', async () => {
+    await updateFromBadge(b, name, bPath, head)
+    expect(readFileSync(join(bPath, 'knowledge/acme.md'), 'utf8')).toContain('A change shared from the app.')
+    expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(mine)
+    expect(gitStatus(bPath)).toBe('clean')
+    expect(execFileSync('git', ['-C', bPath, 'ls-files', SETTINGS], { encoding: 'utf8' }).trim()).toBe('')
+  })
+
+  await test.step('B (Can use) reads up to date', async () => {
     await expect(badge(b, 'Up to date with the team')).toBeVisible({ timeout: 20_000 })
     await expect(b.page.getByRole('button', { name: 'Share changes…', exact: true })).toHaveCount(0)
   })
 
-  await test.step('C’s Get has the template’s file, not A’s', async () => {
+  await test.step('C’s Get has the template’s file, not A’s or B’s', async () => {
     const c = await team.open('c')
     await getFromLibrary(c, name)
     const cPath = (await findAgent(c, name)).path
     expect(readFileSync(join(cPath, SETTINGS), 'utf8')).toBe(TEMPLATE_SETTINGS)
-    expect(readFileSync(join(cPath, 'knowledge/acme.md'), 'utf8')).toContain('Sent by plain git.')
+    expect(readFileSync(join(cPath, 'knowledge/acme.md'), 'utf8')).toContain('A change shared from the app.')
   })
 
   await test.step('B promoted to Can edit: still up to date, nothing of B’s to share', async () => {
@@ -295,35 +341,6 @@ test('a plain-git teammate’s Bash(*) settings.local.json never replaces B’s,
     await openAgent(b, name)
     await expect(badge(b, 'Up to date with the team')).toBeVisible({ timeout: 20_000 })
     await expect(b.page.getByRole('button', { name: 'Share changes…', exact: true })).toHaveCount(0)
-    expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(bBefore)
-  })
-})
-
-test('migration: B edits a settings.local.json the team still tracks; A shares a change; B’s Update keeps B’s file', async ({ team }) => {
-  test.setTimeout(300_000)
-  const { fixture } = team
-  const { a, b, name, aPath, slug } = await shared(team)
-  const bPath = (await findAgent(b, name)).path
-  writeFileSync(join(aPath, SETTINGS), '{ "permissions": { "allow": ["Bash(echo from-A)"] } }\n')
-  const tracked = rawSend(fixture, aPath, [SETTINGS], 'Plain git: tracks the settings file')
-  await waitForTeamHead(fixture, slug, tracked)
-  await updateFromBadge(b, name, bPath, tracked)
-
-  const mine = '{ "permissions": { "allow": ["Bash(echo from-B)"] } }\n'
-  writeFileSync(join(bPath, SETTINGS), mine)
-  writeFileSync(join(aPath, 'knowledge/acme.md'), '# Acme\n\nA change shared from the app.\n')
-  await shareChanges(a, name, 'A shares a change')
-  const head = execFileSync('git', ['-C', aPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-
-  await test.step('1–2: B’s Update succeeds and B’s file is B’s own', async () => {
-    await updateFromBadge(b, name, bPath, head)
-    expect(readFileSync(join(bPath, 'knowledge/acme.md'), 'utf8')).toContain('A change shared from the app.')
     expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(mine)
-  })
-
-  await test.step('3: A’s in-app share dropped the file from the team version, so B reads up to date', async () => {
-    await expect(badge(b, 'Up to date with the team')).toBeVisible()
-    expect(gitStatus(bPath)).toBe('clean')
-    expect(execFileSync('git', ['-C', bPath, 'ls-files', SETTINGS], { encoding: 'utf8' }).trim()).toBe('')
   })
 })

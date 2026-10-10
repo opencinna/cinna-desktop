@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -90,7 +91,8 @@ const {
   settleLocalOnlyFiles,
   restoreLeftoverLocalOnlyFiles,
   hasLeftoverLocalOnlyFiles,
-  preflightShare
+  preflightShare,
+  neverTravelPaths
 } = await import('./gitService')
 
 let sandbox: string
@@ -1027,16 +1029,24 @@ describe('.claude/settings.local.json never travels to a Cinna library', () => {
     expect(await initWithRemote(dir, remote, CINNA)).toEqual({ done: true, refusal: null, detail: null })
     expect(git(remote, 'rev-list', '--objects', '--all')).not.toContain('settings.local.json')
     expect(readFileSync(join(dir, '.claude', 'settings.local.json'), 'utf8')).toBe(RULES)
-    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('/.claude/settings.local.json')
+    // Anchored and in any case, whatever the clone's core.ignorecase.
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain(
+      '/.[cC][lL][aA][uU][dD][eE]/[sS][eE][tT][tT][iI][nN][gG][sS].[lL][oO][cC][aA][lL].[jJ][sS][oO][nN]\n'
+    )
     expect(git(dir, 'status', '--porcelain')).toBe('')
   }, 60_000)
 
-  it('still travels to a remote that is not a Cinna library', async () => {
+  it('still travels to a remote that is not a Cinna library when the folder tracks it', async () => {
+    // The kit's own gitignore leaves it out since contract 1.9.0; tracked
+    // anyway, only a Cinna library takes it out.
     const remote = bare(join(box, 'external.git'))
     const dir = join(box, 'external', 'Local', 'external')
     mkdirSync(dir, { recursive: true })
     kitAgent(dir, 'External')
     settingsFile(dir)
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    git(dir, 'add', '-f', 'cinna-agent.json', 'AGENT.md', '.claude')
+    git(dir, 'commit', '-q', '-m', 'mine, with my rules')
     expect(await initWithRemote(dir, remote, EXTERNAL)).toEqual({ done: true, refusal: null, detail: null })
     expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('.claude/settings.local.json')
   }, 60_000)
@@ -1093,6 +1103,115 @@ describe('.claude/settings.local.json never travels to a Cinna library', () => {
     expect(git(bob, 'ls-files', '.claude/settings.local.json').trim()).toBe('')
     // Ignored, not a change waiting to be shared.
     expect(git(bob, 'status', '--porcelain')).toBe('')
+  }, 60_000)
+})
+
+describe('the never-travel paths in the contract\'s two shapes, in any case', () => {
+  let box: string
+  const RULES = '{"permissions":{"allow":["Bash(rm:*)"]}}\n'
+  const WIDER = '{"permissions":{"allow":["Bash(*)","Write(*)"]}}\n'
+  /** One name for the file in another case; a case-insensitive disk holds only one of the two. */
+  const MIXED = join('.Claude', 'Settings.local.json')
+
+  beforeAll(() => {
+    box = mkdtempSync(join(tmpdir(), 'cinna-icase-'))
+  })
+
+  afterAll(() => {
+    rmSync(box, { recursive: true, force: true })
+  })
+
+  /** A workshop whose `.cinna-kit/` is newer than the bundle and lists `paths`. */
+  function workshopListing(name: string, paths: string[]): string {
+    const root = join(box, name)
+    const kit = join(root, '.cinna-kit')
+    cpSync(join(repoRoot, 'resources', 'cinna-agent-kit'), kit, { recursive: true })
+    writeFileSync(join(kit, 'kit.json'), JSON.stringify({ contract_version: '1.99.0' }, null, 2))
+    writeFileSync(join(kit, 'CONTRACT_VERSION'), '1.99.0\n')
+    const layout = JSON.parse(readFileSync(join(kit, 'layout.json'), 'utf8'))
+    layout.shared_remote.never_travels.paths = paths
+    writeFileSync(join(kit, 'layout.json'), JSON.stringify(layout, null, 2))
+    return root
+  }
+
+  function mixedSettings(dir: string, body: string): void {
+    mkdirSync(join(dir, '.Claude'), { recursive: true })
+    writeFileSync(join(dir, MIXED), body)
+  }
+
+  it('reads an entry without a trailing slash as one file, and keeps the settings file for an older list', () => {
+    const root = workshopListing('shapes', ['credentials/', './notes.md', '/App-Data/'])
+    expect(neverTravelPaths(root)).toEqual(['credentials/', 'notes.md', 'App-Data/', '.claude/settings.local.json'])
+    const listed = workshopListing('listed', ['credentials/', '.Claude/Settings.local.json', 'CREDENTIALS/'])
+    expect(neverTravelPaths(listed)).toEqual(['credentials/', '.Claude/Settings.local.json'])
+    // The bundled contract (1.9.0) lists it itself.
+    expect(neverTravelPaths()).toEqual(['credentials/', 'app-data/', '.claude/settings.local.json'])
+  })
+
+  it('leaves a tracked .Claude/Settings.local.json and Credentials/ out of every version sent, and nothing more', async () => {
+    const remote = bare(join(box, 'mixed.git'))
+    const dir = join(box, 'mixed', 'Local', 'mixed')
+    mkdirSync(join(dir, 'Credentials'), { recursive: true })
+    kitAgent(dir, 'Mixed')
+    mixedSettings(dir, RULES)
+    writeFileSync(join(dir, 'Credentials', 'notes.txt'), 'mine\n')
+    // A file beside it whose name only starts the same travels: files match exactly.
+    writeFileSync(join(dir, '.Claude', 'settings.local.json.bak'), '{}\n')
+    git(dir, 'init', '-q', '-b', 'main', '.')
+    // A Linux clone's default: only the exclude rule's own form ignores another case.
+    git(dir, 'config', 'core.ignorecase', 'false')
+    git(dir, 'add', '-f', 'cinna-agent.json', 'AGENT.md', '.Claude', 'Credentials')
+    git(dir, 'commit', '-q', '-m', 'mine, with my rules in another case')
+    expect(git(dir, 'ls-files', '.Claude').trim().split('\n')).toContain('.Claude/Settings.local.json')
+
+    expect(await initWithRemote(dir, remote, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    const sent = git(remote, 'rev-list', '--objects', '--all').toLowerCase()
+    expect(sent).not.toMatch(/settings\.local\.json(\n|$)/)
+    expect(sent).not.toContain('credentials/')
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main')).toContain('.Claude/settings.local.json.bak')
+    expect(readFileSync(join(dir, MIXED), 'utf8')).toBe(RULES)
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+  }, 60_000)
+
+  it('updates a folder whose team version tracks it in another case, keeps this machine\'s edit, and counts no change', async () => {
+    const remote = bare(join(box, 'team-mixed.git'))
+    const alice = join(box, 'team-mixed-alice', 'Local', 'team')
+    mkdirSync(alice, { recursive: true })
+    kitAgent(alice, 'Team')
+    mixedSettings(alice, WIDER)
+    git(alice, 'init', '-q', '-b', 'main', '.')
+    git(alice, 'remote', 'add', 'origin', remote)
+    git(alice, 'add', '-f', 'cinna-agent.json', 'AGENT.md', MIXED)
+    git(alice, 'commit', '-q', '-m', 'rules, tracked in another case')
+    git(alice, 'push', '-q', '-u', 'origin', 'main')
+    const bob = join(box, 'team-mixed-bob', 'Local', 'team')
+    mkdirSync(dirname(bob), { recursive: true })
+    git(dirname(bob), 'clone', '-q', remote, 'team')
+    // Get without a copy of one's own: the template's, never the team's.
+    const carol = join(box, 'team-mixed-carol', 'Local', 'team')
+    expect((await cloneAgent(remote, carol, CINNA)).done).toBe(true)
+    restoreLocalOnlyFolders(carol)
+    await settleLocalOnlyFiles(carol, new Map())
+    const settled = readFileSync(join(carol, MIXED), 'utf8')
+    expect(settled).not.toBe(WIDER)
+    expect(settled).toContain('"allow"')
+    // Approving a permission rewrites the tracked file.
+    writeFileSync(join(bob, MIXED), RULES)
+    expect((await readShareStatus(bob, CINNA, false)).changedPaths).toEqual([])
+
+    writeFileSync(join(alice, 'notes.md'), 'from Alice\n')
+    git(alice, 'add', 'notes.md')
+    git(alice, 'commit', '-q', '-m', 'notes')
+    git(alice, 'push', '-q')
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(readFileSync(join(bob, 'notes.md'), 'utf8')).toBe('from Alice\n')
+    expect(readFileSync(join(bob, MIXED), 'utf8')).toBe(RULES)
+
+    // Bob's next share removes it from the team's latest version, which is what the server requires.
+    writeFileSync(join(bob, 'more.md'), 'from Bob\n')
+    expect(await shareChanges(bob, 'more', CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    expect(git(remote, 'ls-tree', '-r', '--name-only', 'main').toLowerCase()).not.toContain('settings.local.json')
+    expect(readFileSync(join(bob, MIXED), 'utf8')).toBe(RULES)
   }, 60_000)
 })
 

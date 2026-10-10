@@ -112,10 +112,10 @@ describe('a workshop with its own .cinna-kit/', () => {
   })
 
   it('prefers a newer copy of the same major', () => {
-    installWorkshopContract('1.9.0')
+    installWorkshopContract('1.99.0')
     const contract = resolveContract(workshop)
     expect(contract.source).toBe('workshop')
-    expect(contract.version).toBe('1.9.0')
+    expect(contract.version).toBe('1.99.0')
     expect(contract.root).toBe(join(workshop, '.cinna-kit'))
   })
 
@@ -132,12 +132,12 @@ describe('a workshop with its own .cinna-kit/', () => {
   it('falls back to CONTRACT_VERSION, never to the full kit\'s VERSION', () => {
     // A full kit installed by kit.py: VERSION is the kit content hash, and a
     // kit.json without contract_version leaves CONTRACT_VERSION as the answer.
-    installWorkshopContract('1.9.0')
+    installWorkshopContract('1.99.0')
     writeFileSync(join(workshop, '.cinna-kit/kit.json'), JSON.stringify({ name: 'no version here' }))
     writeFileSync(join(workshop, '.cinna-kit/VERSION'), '2feb753f95761046\n')
     const contract = resolveContract(workshop)
     expect(contract.source).toBe('workshop')
-    expect(contract.version).toBe('1.9.0')
+    expect(contract.version).toBe('1.99.0')
   })
 
   it('ignores a .cinna-kit/ that is not a contract tree', () => {

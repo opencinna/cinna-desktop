@@ -67,7 +67,7 @@ test('A shares an agent with B as Can use; B gets it, finishes setup and runs it
     if (history.status !== 'ok') throw new Error(`admin clone refused: ${history.output}`)
     expect(history.paths.filter((p) => /^(credentials|app-data)\//.test(p) || /(^|\/)\.env(\.|$)/.test(p))).toEqual([])
     expect(history.paths).toEqual(expect.arrayContaining(['cinna-agent.json', 'scripts/check_creds.py', 'skills/acme-report/SKILL.md', 'knowledge/acme.md']))
-    // Claude's per-machine permissions stay on the machine (gitService.ts DESKTOP_NEVER_TRAVELS).
+    // Claude's per-machine permissions stay on the machine (kit layout.json shared_remote.never_travels, contract 1.9.0).
     expect(existsSync(join(agent.path, '.claude/settings.local.json'))).toBe(true)
     expect(history.paths).not.toContain('.claude/settings.local.json')
     expect(history.blobs).not.toContain(weatherA)
