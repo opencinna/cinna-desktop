@@ -432,6 +432,25 @@ export interface LocalAgentSkill {
    * (catalog U9), whose skills move with the team's next version.
    */
   updatable?: boolean
+  /**
+   * `authored` rows only: this skill's `skills[]` entry in the agent's
+   * `publications.json` for the active Cinna account's server — it was shared
+   * to that catalog — or null. Read at list time, not from the folder scan.
+   */
+  shared?: LocalAgentSkillShared | null
+  /**
+   * `authored` rows only: Share (or, once {@link shared}, Share a new version)
+   * is offered — a deliverable skill and an active Cinna account and, for a
+   * shared one, `edit` or `maintain` on its package in the cached listing.
+   */
+  shareable?: boolean
+}
+
+/** Where an authored skill was shared: the package and the version the last share created. */
+export interface LocalAgentSkillShared {
+  packageUuid: string
+  packageId: string
+  revisionNumber: number
 }
 
 /**

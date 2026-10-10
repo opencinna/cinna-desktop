@@ -119,6 +119,43 @@ export const CATALOG_SKILL_TEXT = {
   updatedIn: (skill: string) => `Updated. This agent now has the latest version of ${skill}.`
 } as const
 
+/** Sharing an agent's own skill to the catalog: the Skills row's action and fact, and the Share dialog. */
+export const SKILL_SHARE_TEXT = {
+  share: (skill: string) => `Share ${skill}…`,
+  shareNewVersion: (skill: string) => `Share a new version of ${skill}…`,
+  /** The row's badge once shared, beside its `Version N`. */
+  sharedBadge: 'Shared',
+  sharedFactTitle: (packageId: string) => (packageId ? `In the catalog as ${packageId}` : 'In the catalog'),
+  title: (skill: string) => `Share ${skill}`,
+  titleNewVersion: (skill: string) => `Share a new version of ${skill}`,
+  firstBody: 'Put this skill in the catalog. Only you and the people you choose here can get it.',
+  laterBody: 'People who can use it keep access.',
+  versionLabel: 'Version',
+  catalogIdLabel: 'Catalog id',
+  loading: 'Loading…',
+  needsLabel: 'What people need',
+  needsFor: (slot: string) => `What people need for ${slot}`,
+  eachPersonOwn: 'Each person connects their own',
+  /** Under the slots of a later version whose last version had providers that are not preselected. */
+  providersNotKept: 'Credentials you provided for the last version are not kept unless you pick them again.',
+  /** Under the slots of a later version shared by an editor, when the last version had providers. */
+  publisherProvidersNotKept: 'Credentials the first sharer provided are not kept — each person connects their own.',
+  /** Beside the people list's label while Everyone is ticked and someone is at Can use. */
+  everyoneCoversUse: 'Everyone can use it — Can use is not sent',
+  coveredByEveryone: (person: string) => `${person}: everyone can already use it, so Can use is not sent`,
+  noteLabel: 'Note (optional)',
+  notePlaceholder: 'What this version does or changes',
+  whoCanUse: 'Who can use it',
+  everyone: 'Everyone on this server can use it',
+  /** The people list while Everyone is ticked and no one is named. */
+  noOneNamed: 'No one named — add people who may change it.',
+  shareButton: 'Share',
+  sharing: 'Sharing…',
+  cancel: 'Cancel',
+  previewFailed: 'What this share would be couldn’t be read.',
+  shareFailed: 'The skill couldn’t be shared.'
+} as const
+
 /**
  * `Version N`, with the publisher's own label beside it when the version has
  * one: `Version 3 (1.2.0)`. The number is what every kind has; the label is

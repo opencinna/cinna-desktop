@@ -258,3 +258,72 @@ export async function cinnaFetchBytes(
   }
   return { ok: true, bytes: Buffer.concat(chunks), headers: response.headers }
 }
+
+/** {@link cinnaSend}'s answer: the status and the parsed JSON body (null when there was none). */
+export interface CinnaSendResult {
+  status: number
+  ok: boolean
+  body: unknown
+}
+
+/**
+ * A write under the profile's own API whose refusals the caller reads as
+ * data: any HTTP answer, 4xx included, comes back as `{status, body}` with the
+ * body parsed when it is JSON — core's coded refusals (`{detail: {code,
+ * message, …}}`) are what the caller branches on, and {@link cinnaFetch}
+ * reduces them to a sentence (and a 403 to "re-auth"). Only a 401 throws
+ * `CinnaApiError('reauth_required')`, since that one is the session.
+ *
+ * `body` is JSON (`json`) or raw bytes with their content type (`bytes`), for
+ * a multipart upload. Only a path under the profile's server is accepted,
+ * never an absolute URL, so the token goes nowhere else.
+ *
+ * @throws CinnaApiError `request_failed` when no answer came back, and the
+ *   profile errors of {@link cinnaFetch}.
+ */
+export async function cinnaSend(
+  userId: string,
+  path: string,
+  opts: { method: 'POST' | 'PUT' | 'PATCH'; json?: unknown; bytes?: { data: Uint8Array; contentType: string } }
+): Promise<CinnaSendResult> {
+  if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is used.')
+  const baseUrl = resolveBaseUrl(userId)
+  const generation = cinnaSessionGeneration(userId)
+  const authHeader = await resolveAuthHeader(userId)
+  if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) throw new CinnaSessionChanged()
+  const url = `${baseUrl}${path}`
+  const headers: Record<string, string> = { Authorization: authHeader, Accept: 'application/json' }
+  let body: BodyInit | undefined
+  if (opts.bytes) {
+    headers['Content-Type'] = opts.bytes.contentType
+    body = opts.bytes.data as unknown as BodyInit
+  } else if (opts.json !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(opts.json)
+  }
+  const started = Date.now()
+  let response: Response
+  try {
+    response = await runtimeHost.http.fetch(url, { method: opts.method, headers, body, cache: 'no-store' })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error('network error', { userId, url, method: opts.method, error: msg, durationMs: Date.now() - started })
+    throw new CinnaApiError('request_failed', msg)
+  }
+  const text = await response.text().catch(() => '')
+  if (!response.ok) {
+    logger.warn('request refused', { userId, url, method: opts.method, status: response.status, durationMs: Date.now() - started })
+  }
+  if (response.status === 401) {
+    throw new CinnaApiError('reauth_required', `Cinna ${response.status}`, String(response.status), response.status)
+  }
+  let parsed: unknown = null
+  if (text.trim() !== '') {
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = null
+    }
+  }
+  return { status: response.status, ok: response.ok, body: parsed }
+}

@@ -105,6 +105,7 @@ import { gitService } from './gitService'
 import { getProfileScopeUserId } from '../../auth/scope'
 import { catalogLocalInstalls } from '../catalogLocalInstalls'
 import { withCatalogSkillUpdates } from '../catalogSkillUpdates'
+import { withSkillPublications } from '../skillPublications'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { runtimeService } from './runtimeService'
@@ -661,11 +662,12 @@ export const localAgentService = {
    * The scanner reads files, and `enabled` is not one — it is the user's toggle,
    * held in the index row. Fold it back in so the list shows what the user set.
    * The catalog skills' update signal is not in a file either: it comes from the
-   * cached catalog listing (`withCatalogSkillUpdates`).
+   * cached catalog listing (`withCatalogSkillUpdates`); nor is whether an own
+   * skill was shared to the active account's catalog (`withSkillPublications`).
    */
   overlayEnabled(userId: string, agents: LocalAgentDto[]): LocalAgentDto[] {
     const rows = new Map(agentRepo.listFolder(userId).map((row) => [row.id, row.enabled]))
-    return agents.map((agent) => withCatalogSkillUpdates({ ...agent, enabled: rows.get(agent.id) ?? agent.enabled }))
+    return agents.map((agent) => withSkillPublications(withCatalogSkillUpdates({ ...agent, enabled: rows.get(agent.id) ?? agent.enabled })))
   },
 
   /**

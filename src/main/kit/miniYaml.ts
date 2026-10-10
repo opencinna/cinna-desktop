@@ -27,6 +27,8 @@
  * crash.
  */
 
+import { PY_SPACE_CHAR, pySplitLines, pyStrip } from '../services/localAgents/envFile'
+
 export type MiniYamlValue =
   | string
   | number
@@ -422,4 +424,76 @@ export function formatFrontmatter(
   }
   lines.push('---', '')
   return lines.join('\n') + body
+}
+
+/**
+ * Set one top-level `key: value` line in a `---` frontmatter block, and change
+ * **nothing else**: the BOM, the line endings, the quoting, comments, every
+ * other key and the body survive byte for byte. The one writer for a file the
+ * user owns (a skill's `SKILL.md`), where {@link formatFrontmatter}'s
+ * re-serialisation would rewrite their header.
+ *
+ * A port of cinna-core's `SkillCatalogService._write_version_to_skill_md`, so
+ * the desktop and core write the same bytes for the same publish (and the
+ * folder then hashes as the published snapshot did): an existing top-level
+ * `key:` line is replaced, otherwise the line is inserted after `name:`, or at
+ * the top of the block. Lines are split as Python's `splitlines` does and
+ * joined with the file's own newline (`\r\n` when it has any). The value is
+ * written bare, as core writes it, so it must be one line.
+ *
+ * Returns the new bytes — the same bytes when the line is already there — or
+ * null when the file has no frontmatter block, is not UTF-8, or the value
+ * would break the line.
+ */
+export function setFrontmatterLine(raw: Buffer, key: string, value: string): Buffer | null {
+  if (!SAFE_KEY.test(key) || UNWRITABLE_KEYS.has(key)) {
+    throw new Error(`\`${key}\` is not a frontmatter key this writer can write`)
+  }
+  // Anything `splitlines` breaks at, or a control character, would not stay one line.
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f\x85\u2028\u2029]/.test(value)) return null
+  const hadBom = raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf
+  let text: string
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(raw)
+  } catch {
+    return null
+  }
+  if (!text.startsWith('---')) return null
+  const newline = text.includes('\r\n') ? '\r\n' : '\n'
+  const trailing = text.endsWith('\n') || text.endsWith('\r') ? newline : ''
+  const lines = pySplitLines(text)
+
+  let end: number | null = null
+  for (let index = 1; index < lines.length; index++) {
+    const stripped = pyStrip(lines[index])
+    if (stripped === '---' || stripped === '...') {
+      end = index
+      break
+    }
+  }
+  if (end === null) return null
+
+  const line = `${key}: ${value}`
+  let at: number | null = null
+  let afterName: number | null = null
+  for (let index = 1; index < end; index++) {
+    const candidate = lines[index]
+    // Only top-level keys: an indented one belongs to a mapping the author wrote.
+    if (candidate !== '' && PY_SPACE_CHAR.test(candidate[0])) continue
+    const found = pyStrip(candidate.split(':', 1)[0])
+    if (found === key) {
+      at = index
+      break
+    }
+    if (found === 'name') afterName = index
+  }
+  if (at !== null) {
+    if (lines[at] === line) return raw
+    lines[at] = line
+  } else {
+    lines.splice(afterName !== null ? afterName + 1 : 1, 0, line)
+  }
+  const updated = Buffer.from(lines.join(newline) + trailing, 'utf8')
+  return hadBom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), updated]) : updated
 }

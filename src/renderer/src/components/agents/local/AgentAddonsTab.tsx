@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2 } from 'lucide-react'
 import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
@@ -11,7 +11,10 @@ import {
   useUpdateCatalogSkill
 } from '../../../hooks/useCatalogSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { CATALOG_SKILL_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
+import { usePublishSkill } from '../../../hooks/useSkillPublish'
+import type { SkillPublishInput } from '../../../../../shared/skillPublish'
+import { ShareSkillDialog } from './ShareSkillDialog'
 import { AnimatedCollapse } from '../../ui/AnimatedCollapse'
 import { MCPProviderCard } from '../../settings/MCPProviderCard'
 import { CredentialStatusGlyph } from '../../settings/CredentialRow'
@@ -125,17 +128,24 @@ function SkillRow({
   skill,
   revealError,
   onReveal,
+  onShare,
   catalogActions
 }: {
   skill: LocalAgentSkill
   revealError: string | null
   onReveal: () => void
+  /** Authored rows the person may share (`skill.shareable`): opens the Share dialog. */
+  onShare?: () => void
   catalogActions?: CatalogRowActions
 }): React.JSX.Element {
   const catalog = skill.source === 'catalog'
   // One name per skill (rule 13): a catalog row goes by its catalog title,
   // as the catalog and the Inbox show it; the folder name is the code.
   const title = catalog && skill.title ? skill.title : skill.name
+  // An own skill shared to the active account's catalog shows its version as a
+  // pin does, with a Shared badge (rule 13: a badge, not a dotted sub-line).
+  const sharedVersion = !catalog && skill.shared ? catalogVersionLabel(skill.shared.revisionNumber, null) : null
+  const shareLabel = skill.shared ? SKILL_SHARE_TEXT.shareNewVersion(skill.name) : SKILL_SHARE_TEXT.share(skill.name)
   const pinned = !catalog
     ? null
     : typeof skill.revisionNumber === 'number'
@@ -168,6 +178,14 @@ function SkillRow({
               {pinned}
             </span>
           )}
+          {sharedVersion && (
+            <span title={sharedVersion} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
+              {sharedVersion}
+            </span>
+          )}
+          {sharedVersion && (
+            <SettingsBadge title={SKILL_SHARE_TEXT.sharedFactTitle(skill.shared?.packageId ?? '')}>{SKILL_SHARE_TEXT.sharedBadge}</SettingsBadge>
+          )}
           {catalog ? (
             <SettingsBadge title={skill.packageId ? `Pinned from the catalog as ${skill.packageId}` : 'Pinned from the catalog'}>
               From the catalog
@@ -177,6 +195,11 @@ function SkillRow({
           )}
           <CredentialStatusGlyph health={skillHealth(skill)} />
         </div>
+        {!catalog && skill.shareable && onShare && (
+          <SettingsIconButton onClick={onShare} title={shareLabel} aria-label={shareLabel}>
+            <Share2 size={14} />
+          </SettingsIconButton>
+        )}
         {!catalog && (
           <SettingsIconButton
             onClick={onReveal}
@@ -329,6 +352,23 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
   const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb } | null>(null)
   const [skillError, setSkillError] = useState<{ name: string; message: string } | null>(null)
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  // Share a skill: owned here, so the share outlives its dialog (rule 5); the
+  // dialog closes on success only and shows a refusal itself (rule 6).
+  const publishSkill = usePublishSkill()
+  const [sharingSkill, setSharingSkill] = useState<string | null>(null)
+  const [shareError, setShareError] = useState<string | null>(null)
+  const sharingRow = sharingSkill ? (agent.skills ?? []).find((skill) => skill.source === 'authored' && skill.name === sharingSkill) ?? null : null
+  const shareSkill = (input: SkillPublishInput): void => {
+    if (publishSkill.isPending) return
+    setShareError(null)
+    publishSkill
+      .mutateAsync(input)
+      .then((result) => {
+        if (result.ok) setSharingSkill((current) => (current === input.name ? null : current))
+        else setShareError(result.message || SKILL_SHARE_TEXT.shareFailed)
+      })
+      .catch((err) => setShareError(unwrapIpcError(err, SKILL_SHARE_TEXT.shareFailed)))
+  }
   // As main's `changeableFromLink`: while the share status is not read yet,
   // and on a Cinna team agent without edit or maintain (or whose access the
   // listing does not know), Update and Remove are not offered.
@@ -457,6 +497,14 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
                     skill={skill}
                     revealError={revealError?.skill === skill.name ? revealError.message : null}
                     catalogActions={skill.source === 'catalog' ? catalogActionsFor(skill) : undefined}
+                    onShare={
+                      skill.source === 'authored'
+                        ? () => {
+                            setShareError(null)
+                            setSharingSkill(skill.name)
+                          }
+                        : undefined
+                    }
                     onReveal={() => {
                       setRevealError(null)
                       const missing = skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
@@ -474,6 +522,22 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
       )}
       {(error || idsError) && (
         <p role="alert" className="text-[var(--color-danger)]">{error || unwrapIpcError(idsError)}</p>
+      )}
+      {sharingRow && (
+        <ShareSkillDialog
+          // A new dialog per skill: its preview and choices belong to that skill.
+          key={sharingRow.name}
+          agentId={agent.id}
+          skill={sharingRow}
+          pending={publishSkill.isPending}
+          error={shareError}
+          onShare={shareSkill}
+          onCancel={() => {
+            if (publishSkill.isPending) return
+            setSharingSkill(null)
+            setShareError(null)
+          }}
+        />
       )}
       <McpAttachModal
         open={picking}

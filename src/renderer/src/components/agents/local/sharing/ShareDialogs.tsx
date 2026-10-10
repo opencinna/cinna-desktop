@@ -315,7 +315,7 @@ function usePeopleSearch(query: string): SearchState {
 }
 
 /** `Name <email>`, dropping the email when it would repeat the name (ux_rules rule 13). */
-function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>): string {
+export function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>): string {
   if (!person.email || person.email === person.name) return person.name
   return `${person.name} <${person.email}>`
 }
@@ -333,7 +333,7 @@ function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>): string
  * adds one person; otherwise the field empties for the next one. Editing the
  * field after a pick calls `onEdit`, so the dialog can drop that pick.
  */
-function PeopleSearch({
+export function PeopleSearch({
   disabled,
   exclude,
   keepPick = false,
@@ -458,8 +458,92 @@ function PeopleSearch({
 }
 
 /** A person chosen in Share with the team, with the name to show. */
-interface ChosenPerson extends ShareWithTeamPerson {
+export interface ChosenPerson extends ShareWithTeamPerson {
   label: string
+}
+
+/**
+ * The people a first share gives access to, each with what they may do and a
+ * remove. A fixed height, filled in every state ("Only you, for now." when
+ * empty), so a pick or a removal moves nothing below it (ux_rules rule 1).
+ */
+export function ChosenPeopleList({
+  people,
+  disabled,
+  onChange,
+  emptyText = SHARE_UI_TEXT.peopleOnlyMe,
+  unsent
+}: {
+  people: ChosenPerson[]
+  disabled: boolean
+  onChange: (update: (list: ChosenPerson[]) => ChosenPerson[]) => void
+  emptyText?: string
+  /**
+   * People listed but not sent as they stand (a share to everyone already
+   * covers Can use): `title` is the person's sentence, `note` the one line
+   * beside the list's label. Each such name is struck through in place, so
+   * the list never shows what will not happen and nothing moves (rule 1).
+   */
+  unsent?: { is: (person: ChosenPerson) => boolean; title: (person: ChosenPerson) => string; note: string }
+}): React.JSX.Element {
+  const anyUnsent = unsent !== undefined && people.some((person) => unsent.is(person))
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2 text-[11px]">
+        <span className="shrink-0 text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleLabel}</span>
+        {anyUnsent && (
+          <span data-people-note title={unsent.note} className="min-w-0 truncate text-[var(--color-text-muted)]">
+            {unsent.note}
+          </span>
+        )}
+      </div>
+      <ul
+        aria-label={SHARE_UI_TEXT.peopleLabel}
+        data-chosen-people
+        className="h-[5.5rem] space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
+      >
+        {people.length === 0 ? (
+          <li className="px-1 py-0.5 text-[11px] text-[var(--color-text-muted)]">{emptyText}</li>
+        ) : (
+          people.map((person) => (
+            <li key={person.userId} className="flex items-center gap-2 px-1">
+              {unsent?.is(person) ? (
+                <span
+                  data-unsent
+                  className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-muted)] line-through"
+                  title={unsent.title(person)}
+                >
+                  {person.label}
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text)]" title={person.label}>
+                  {person.label}
+                </span>
+              )}
+              <AccessSelect
+                value={person.access}
+                label={SHARE_UI_TEXT.accessFor(person.label)}
+                disabled={disabled}
+                onChange={(access) =>
+                  onChange((list) => list.map((p) => (p.userId === person.userId ? { ...p, access } : p)))
+                }
+              />
+              <button
+                type="button"
+                aria-label={SHARE_UI_TEXT.removePerson(person.label)}
+                title={SHARE_UI_TEXT.removePerson(person.label)}
+                disabled={disabled}
+                onClick={() => onChange((list) => list.filter((p) => p.userId !== person.userId))}
+                className="shrink-0 rounded p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50"
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+    </div>
+  )
 }
 
 /**
@@ -547,44 +631,7 @@ export function ShareWithTeamDialog({
           setPeople((list) => [...list, { userId: person.userId, access: 'use', label: personLabel(person) }])
         }
       />
-      <div className="space-y-1">
-        <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleLabel}</span>
-        <ul
-          aria-label={SHARE_UI_TEXT.peopleLabel}
-          data-chosen-people
-          className="h-[5.5rem] space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
-        >
-          {people.length === 0 ? (
-            <li className="px-1 py-0.5 text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleOnlyMe}</li>
-          ) : (
-            people.map((person) => (
-              <li key={person.userId} className="flex items-center gap-2 px-1">
-                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text)]" title={person.label}>
-                  {person.label}
-                </span>
-                <AccessSelect
-                  value={person.access}
-                  label={SHARE_UI_TEXT.accessFor(person.label)}
-                  disabled={pending}
-                  onChange={(access) =>
-                    setPeople((list) => list.map((p) => (p.userId === person.userId ? { ...p, access } : p)))
-                  }
-                />
-                <button
-                  type="button"
-                  aria-label={SHARE_UI_TEXT.removePerson(person.label)}
-                  title={SHARE_UI_TEXT.removePerson(person.label)}
-                  disabled={pending}
-                  onClick={() => setPeople((list) => list.filter((p) => p.userId !== person.userId))}
-                  className="shrink-0 rounded p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50"
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
-      </div>
+      <ChosenPeopleList people={people} disabled={pending} onChange={setPeople} />
       <ErrorLine error={error ?? draftError} />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>

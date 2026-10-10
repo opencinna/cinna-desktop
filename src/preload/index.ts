@@ -198,6 +198,7 @@ import type {
   JobDependencyStatus
 } from '../shared/sync'
 import type { CatalogSkillEnsureResult, CatalogSkillOutcome } from '../shared/catalogSkills'
+import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
 
 export type { MessageAttachment }
 
@@ -1990,6 +1991,18 @@ const api = {
       ipcRenderer.invoke('catalog-skills:remove', { agentId, name }),
     ensure: (agentId: string): Promise<CatalogSkillEnsureResult> =>
       ipcRenderer.invoke('catalog-skills:ensure', { agentId })
+  },
+
+  /**
+   * Share a kit agent's own skill (`skills/<name>/`) to the catalog: what it
+   * would become, then the share itself. Every answer is data, refusals
+   * included. See `src/shared/skillPublish.ts`.
+   */
+  skillPublish: {
+    preview: (agentId: string, name: string): Promise<SkillPublishPreviewOutcome> =>
+      ipcRenderer.invoke('skill-publish:preview', { agentId, name }),
+    publish: (input: SkillPublishInput): Promise<SkillPublishOutcome> =>
+      ipcRenderer.invoke('skill-publish:publish', input)
   },
 
   /**
