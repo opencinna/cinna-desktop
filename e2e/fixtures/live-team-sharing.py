@@ -14,7 +14,7 @@ own environment, never from a file and never printed:
 
 Run the docker commands from cinna-core's checkout ($CINNA_CORE_PATH), with this
 file's path relative to it. The specs leave core as they found it apart from
-what cleanup removes: each test's agent is a fresh library entry, and the
+what cleanup removes: each test's agent is a fresh catalog entry, and the
 specs that revoke, re-share or rotate a credential put it back.
 
 ``create`` signs up three people (A, B, C), has the first superuser ("admin")
@@ -27,14 +27,21 @@ the spec mints a fresh pair for every app it launches (``liveTeamSharing.ts``).
 
 ``cleanup`` removes everything any run of this script made, found by the
 ``team-sharing-e2e-`` email prefix rather than by a fixture file, so a lost
-fixture leaves nothing behind: every library entry those people own, the
-admin's ``Acme API … <tag>`` credentials, and the people. It prints counts only.
+fixture leaves nothing behind: every desktop agent in the catalog those people
+publish or maintain (and any left without a publisher whose slug is a test
+agent's, ``acme-reporter-<tag>-…``), with its repository, versions, grants and
+reported local installs; the admin's ``Acme API … <tag>`` credentials; and the
+people. Core keeps a desktop agent when its creator is deleted and refuses to
+delete one while another person reports holding it, so the agents are listed
+first (``scope=all``), the people deleted next (their local installs go with
+them), and the agents deleted last. It prints counts only.
 
 The JSON holds bearer tokens: keep it private (``umask 077``), outside the
 repository, and delete it after the run.
 """
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -45,6 +52,8 @@ API = "/api/v1"
 PREFIX = "team-sharing-e2e-"
 CRED_NAME = "Acme API"
 CRED_OTHER = "Acme API (other)"
+# The slug of every agent the specs make: "Acme reporter <tag> <4 hex>" (liveTeamSharing.ts agentName).
+AGENT_SLUG = re.compile(r"^acme-reporter-[0-9a-f]{8}-[0-9a-f]{4}(-mine)?$")
 
 
 def ok(response: httpx.Response) -> httpx.Response:
@@ -119,25 +128,48 @@ def cleanup(client: httpx.Client) -> None:
         if skip >= page["count"]:
             break
     ids = {u["id"] for u in users}
-    agents = ok(client.get(f"{API}/library/admin/agents", headers=bearer(admin))).json()
+
+    # Desktop agents first, while their publisher and maintainers still name
+    # the people: core detaches the publisher when a user is deleted.
+    listed = ok(client.get(
+        f"{API}/catalog/items",
+        headers=bearer(admin),
+        params={"kind": "agent", "runs_on": "desktop", "scope": "all"},
+    )).json()["data"]
+    doomed = []
+    for item in listed:
+        people = {(item.get("publisher") or {}).get("user_id")} | {m.get("user_id") for m in item.get("maintainers") or []}
+        slug = (item.get("desktop") or {}).get("slug") or ""
+        orphan = item.get("publisher") is None and AGENT_SLUG.match(slug) is not None
+        if people & ids or orphan:
+            doomed.append(item["uuid"])
+
+    removed_users = 0
+    for user in users:
+        r = client.delete(f"{API}/users/{user['id']}", headers=bearer(admin))
+        removed_users += r.status_code < 400
+
     removed_agents = 0
-    for agent in agents:
-        owner = (agent.get("owner") or {}).get("user_id")
-        if owner in ids:
-            r = client.delete(f"{API}/library/agents/{agent['repo_id']}", headers=bearer(admin))
-            removed_agents += r.status_code in (204, 404)
+    refused_agents = 0
+    for item_uuid in doomed:
+        r = client.delete(f"{API}/catalog/items/{item_uuid}", headers=bearer(admin))
+        if r.status_code in (204, 404):
+            removed_agents += 1
+        else:
+            refused_agents += 1
+
     creds = ok(client.get(f"{API}/credentials/", headers=bearer(admin), params={"limit": 500})).json()
     removed_creds = 0
     for cred in creds.get("data", []):
         if cred["name"].startswith(CRED_NAME) and len(cred["name"].rsplit(" ", 1)[-1]) == 8:
             r = client.delete(f"{API}/credentials/{cred['id']}", headers=bearer(admin))
             removed_creds += r.status_code < 400
-    removed_users = 0
-    for user in users:
-        r = client.delete(f"{API}/users/{user['id']}", headers=bearer(admin))
-        removed_users += r.status_code < 400
-    print(json.dumps({"library_agents": removed_agents, "credentials": removed_creds, "users": removed_users}))
-
+    print(json.dumps({
+        "desktop_agents": removed_agents,
+        "desktop_agents_refused": refused_agents,
+        "credentials": removed_creds,
+        "users": removed_users,
+    }))
 
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else ""

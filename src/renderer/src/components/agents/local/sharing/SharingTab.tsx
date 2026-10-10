@@ -130,12 +130,7 @@ function WhereSection({
   }, [bindActionErrors])
   const openExternal = useOpenExternal()
   const warn = shareStatusWarns(status)
-  const when = entry?.updatedAt ? formatDate(entry.updatedAt) : null
-  const lastShared = when
-    ? entry?.pushedBy
-      ? SHARE_UI_TEXT.lastSharedBy(when, entry.pushedBy)
-      : SHARE_UI_TEXT.lastShared(when)
-    : null
+  const latest = entry?.latest ?? null
   const cinna = status.remote.kind === 'cinna'
   const access = entry?.access ?? status.remote.access
 
@@ -179,6 +174,33 @@ function WhereSection({
       value: entry.maintainers.map((m) => m.displayName).join(', ')
     })
   }
+  // The team's latest version, one fact each, never a dotted line under the status.
+  if (latest) {
+    facts.push({ label: SHARE_UI_TEXT.versionLabel, value: String(latest.number) })
+    if (latest.publishedBy) facts.push({ label: SHARE_UI_TEXT.sharedByLabel, value: latest.publishedBy })
+    const when = latest.publishedAt ? formatDate(latest.publishedAt) : null
+    if (when) facts.push({ label: SHARE_UI_TEXT.sharedOnLabel, value: when })
+  }
+  // Said once, only when the catalog narrows who can get it: unlisted, core
+  // counts neither Everyone nor a Can use grant; private, no Can use grant.
+  if (entry && (!entry.isListed || entry.visibility === 'private')) {
+    facts.push({
+      label: SHARE_UI_TEXT.whoCanGetLabel,
+      value: entry.isListed ? SHARE_UI_TEXT.privateItem : SHARE_UI_TEXT.notListed
+    })
+  }
+  // What this machine recorded when it shared or got the agent, else the listing's.
+  const catalogId = cinna ? (status.bundleId ?? entry?.bundleId ?? null) : null
+  if (catalogId) {
+    facts.push({
+      label: SHARE_UI_TEXT.catalogIdLabel,
+      value: (
+        <code className="block truncate text-[12px]" title={catalogId}>
+          {catalogId}
+        </code>
+      )
+    })
+  }
 
   return (
     <SettingsSection
@@ -190,7 +212,6 @@ function WhereSection({
           <SettingsStatusRow
             tone={warn ? 'warning' : status.state === 'up_to_date' ? 'ok' : 'neutral'}
             label={shareStatusSentence(status)}
-            detail={lastShared ? `${SHARE_UI_TEXT.lastSharedLabel} ${lastShared}` : undefined}
             action={
               canUpdate(status) || canShareChanges(status) ? (
                 <div className="flex items-center gap-2">
@@ -366,6 +387,24 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
                       <SettingsBadge>{SHARE_ACCESS_TEXT[person.access]}</SettingsBadge>
                       <span className="w-[28px] shrink-0" aria-hidden="true" />
                     </>
+                  ) : person.principal.kind === 'everyone' ? (
+                    <>
+                      {/* Everyone on the server can only use it: that is what
+                          sharing with everyone means, so there is no choice. */}
+                      <SettingsBadge>{SHARE_ACCESS_TEXT.use}</SettingsBadge>
+                      <SettingsIconButton
+                        title={SHARE_UI_TEXT.removePerson(name)}
+                        aria-label={SHARE_UI_TEXT.removePerson(name)}
+                        danger
+                        disabled={set.isPending}
+                        onClick={() => {
+                          setError(null)
+                          setConfirmingKey(key)
+                        }}
+                      >
+                        <Trash2 size={13} aria-hidden="true" />
+                      </SettingsIconButton>
+                    </>
                   ) : (
                     <>
                       <select
@@ -385,7 +424,7 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
                         }
                         className={`${ACCESS_SELECT} w-36 shrink-0 disabled:opacity-50`}
                       >
-                        {(['read', 'write', 'maintain'] as const).map((access) => (
+                        {(['use', 'edit', 'maintain'] as const).map((access) => (
                           <option key={access} value={access}>
                             {SHARE_ACCESS_TEXT[access]}
                           </option>
@@ -540,6 +579,8 @@ function RemoveSection({
           offerDelete={offerDelete}
           pending={unshare.isPending}
           error={error}
+          // A refusal belongs to the choice it answered: a new choice clears it.
+          onChoiceChange={() => setError(null)}
           onConfirm={(deleteFromLibrary) => {
             setError(null)
             unshare.mutate(

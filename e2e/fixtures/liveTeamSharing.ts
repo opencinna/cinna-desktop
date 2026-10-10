@@ -306,8 +306,9 @@ export const test = base.extend<{ team: Team }>({
 export { expect }
 
 /**
- * Every path ever recorded in a library repository, across all of its history,
- * read from an admin's raw clone (superusers can clone any library repo). Also
+ * Every path ever recorded in a team agent's repository, across all of its
+ * history, read from an admin's raw clone (superusers can clone any desktop
+ * agent's repository). Also
  * returns the concatenated content of every version of every file, for a leak
  * scan of secret values.
  */
@@ -425,7 +426,7 @@ export interface AcmeAgent {
   manifestId: string
 }
 
-/** A unique agent name per test: core's library slugs are unique server-wide. */
+/** A unique agent name per test: core's desktop-agent slugs are unique server-wide. */
 export function agentName(fixture: SharingFixture): string {
   return `Acme reporter ${fixture.tag} ${randomBytes(2).toString('hex')}`
 }
@@ -558,11 +559,51 @@ export async function getFromLibrary(app: PersonApp, name: string): Promise<void
   await expect(app.page.getByRole('heading', { level: 1 })).toHaveText(name)
 }
 
-/** The library entry `slug` as `person` sees it, or undefined. */
-export async function libraryEntry(fixture: SharingFixture, token: string, slug: string): Promise<any> {
-  const listed = await coreCall(fixture, token, '/library')
-  expect(listed.status).toBe(200)
-  return (listed.body.agents as any[]).find((agent) => agent.slug === slug)
+/**
+ * The team agent `slug` as the bearer of `token` sees it in core's catalog
+ * (`GET /catalog/items?kind=agent&runs_on=desktop`), or undefined. Core's own
+ * snake_case `CatalogItem`: `uuid`, `id` (the bundle id), `display_name`,
+ * `access`, `visibility`, `latest`, `install_count`, `my_installs`, and
+ * `desktop.{repo_id, clone_url, head_sha, manifest_id, slug}`.
+ */
+export async function catalogEntry(fixture: SharingFixture, token: string, slug: string): Promise<any> {
+  const listed = await coreCall(fixture, token, '/catalog/items?kind=agent&runs_on=desktop')
+  expect(listed.status, JSON.stringify(listed.body)).toBe(200)
+  return (listed.body.data as any[]).find((item) => item.desktop?.slug === slug)
+}
+
+/** The catalog entry `slug` as its maintainer A sees it; fails when it is not there. */
+export async function catalogEntryOrFail(fixture: SharingFixture, slug: string): Promise<any> {
+  const entry = await catalogEntry(fixture, fixture.people.a.token, slug)
+  if (!entry) throw new Error(`core's catalog has no desktop agent ${slug} for A`)
+  return entry
+}
+
+/** Every grant on catalog item `uuid`, as `user:<id>:<access>` / `role:<role>:<access>`, sorted. */
+export async function catalogGrants(fixture: SharingFixture, token: string, uuid: string): Promise<string[]> {
+  const grants = await coreCall(fixture, token, `/catalog/items/${uuid}/grants`)
+  expect(grants.status, JSON.stringify(grants.body)).toBe(200)
+  return (grants.body as { principal: { user_id?: string; role?: string }; access: string }[])
+    .map((g) => (g.principal.user_id ? `user:${g.principal.user_id}:${g.access}` : `role:${g.principal.role}:${g.access}`))
+    .sort()
+}
+
+/** As maintainer A: set one person's access on the team agent `slug` (core's full-replace `PUT …/grants`). */
+export async function setCatalogAccess(
+  fixture: SharingFixture,
+  slug: string,
+  userId: string,
+  access: 'use' | 'edit' | 'maintain'
+): Promise<void> {
+  const entry = await catalogEntryOrFail(fixture, slug)
+  const grants = await coreCall(fixture, fixture.people.a.token, `/catalog/items/${entry.uuid}/grants`)
+  expect(grants.status, JSON.stringify(grants.body)).toBe(200)
+  const body = (grants.body as { principal: object & { user_id?: string }; access: string }[]).map((g) => ({
+    principal: g.principal,
+    access: g.principal.user_id === userId ? access : g.access
+  }))
+  const put = await coreCall(fixture, fixture.people.a.token, `/catalog/items/${entry.uuid}/grants`, { method: 'PUT', body })
+  expect(put.status, JSON.stringify(put.body)).toBe(200)
 }
 
 /** The admin's REST steps between a test's UI steps. */
@@ -630,11 +671,20 @@ export async function shareChanges(app: PersonApp, name: string, note: string): 
       async () => {
         if (await app.page.getByRole('dialog', { name: 'The team changed this agent too' }).isVisible()) return 'collision'
         const sent = execFileSync('git', ['-C', agent.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-        return (await libraryEntry(app.fixtureRef, app.person.token, agent.slug))?.head_sha === sent ? 'sent' : 'waiting'
+        return (await catalogEntry(app.fixtureRef, app.person.token, agent.slug))?.desktop?.head_sha === sent ? 'sent' : 'waiting'
       },
       { timeout: 30_000 }
     )
     .not.toBe('waiting')
+}
+
+/**
+ * One fact of the Sharing tab's Where it’s shared card (a `dt` label and its
+ * `dd` value: Version, Shared by, Shared on, Catalog id, …), by its label.
+ */
+export function whereFact(app: PersonApp, label: string) {
+  const where = app.page.locator('section').filter({ has: app.page.getByRole('heading', { level: 2, name: 'Where it’s shared', exact: true }) })
+  return where.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd[1]')
 }
 
 /** A slot's state as main's setup read answers it. */

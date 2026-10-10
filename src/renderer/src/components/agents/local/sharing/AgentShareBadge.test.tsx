@@ -24,7 +24,8 @@ const AGENT = 'folder:alpha'
 function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
   return {
     agentId: AGENT,
-    remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'write' },
+    remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'edit' },
+    bundleId: null,
     state: 'up_to_date',
     headSha: 'a',
     remoteHeadSha: 'a',
@@ -212,7 +213,7 @@ describe('AgentShareBadge — which buttons', () => {
     ['unshared', { state: 'unshared', unshared: true, changedFiles: 1 }, [SHARE_UI_TEXT.shareChanges]],
     ['behind with local edits', { state: 'behind', behind: 1, unshared: true, changedFiles: 1 }, [SHARE_UI_TEXT.update, SHARE_UI_TEXT.shareChanges]],
     ['diverged', { state: 'diverged', behind: 1, ahead: 1, unshared: true }, [SHARE_UI_TEXT.shareChanges]],
-    ['read-only access', { state: 'unshared', unshared: true, changedFiles: 1, remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'read' } }, []],
+    ['read-only access', { state: 'unshared', unshared: true, changedFiles: 1, remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'use' } }, []],
     ['external, unknown access', { state: 'unshared', unshared: true, changedFiles: 1, remote: { kind: 'external', url: 'u', repoId: null, host: null, access: null } }, [SHARE_UI_TEXT.shareChanges]],
     ['removed', { state: 'removed', behind: -1, unshared: true }, []],
     ['other account', { state: 'other_account', behind: -1, unshared: true }, []]

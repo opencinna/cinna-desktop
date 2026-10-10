@@ -1338,10 +1338,19 @@ export async function push(
 const POLICY_UNAVAILABLE = /can.t check this change right now/i
 
 /**
+ * The catalog refusing a version whose manifest `id` is not the one it bound
+ * at create (core's `MSG_MANIFEST_ID_CHANGED`). A verdict on the folder's
+ * current identity, which a combined send carries just the same, so it is
+ * answered once and never retried.
+ */
+const IDENTITY_CHANGED = /identity changed; share it as a new agent/i
+
+/**
  * The server's own refusal of what a version holds — its pre-receive hook
  * declining the send on content — as opposed to a non-fast-forward, a 403,
  * the network, a sign-in, any other `[remote rejected]` reason (`failed to
- * lock` and the like) or the hook saying it cannot check the change now.
+ * lock` and the like), the hook saying it cannot check the change now, or
+ * the folder's identity no longer being the one the catalog bound.
  */
 function refusedByPolicy(stderr: string): boolean {
   const verdict = classifyPush(stderr)
@@ -1349,7 +1358,8 @@ function refusedByPolicy(stderr: string): boolean {
     verdict !== 'non_ff' &&
     verdict.refusal === 'push_rejected' &&
     /\(pre-receive hook declined\)/i.test(stderr) &&
-    !POLICY_UNAVAILABLE.test(stderr)
+    !POLICY_UNAVAILABLE.test(stderr) &&
+    !IDENTITY_CHANGED.test(stderr)
   )
 }
 

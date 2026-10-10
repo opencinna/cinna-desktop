@@ -101,7 +101,8 @@ afterEach(() => {
 function sharedStatus(): AgentShareStatus {
   return {
     agentId: 'folder:alpha',
-    remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'write' },
+    remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'edit' },
+    bundleId: null,
     state: 'up_to_date',
     headSha: 'a',
     remoteHeadSha: 'a',
@@ -253,8 +254,8 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       expect(results()).toBeNull()
       expect((search as HTMLInputElement).value).toBe('')
       const access = screen.getByLabelText(SHARE_UI_TEXT.accessFor('Bob <bob@x.test>')) as HTMLSelectElement
-      expect(access.value).toBe('read')
-      fireEvent.change(access, { target: { value: 'write' } })
+      expect(access.value).toBe('use')
+      fireEvent.change(access, { target: { value: 'edit' } })
       // Bob is on the list, so a new search leaves him out.
       fireEvent.change(search, { target: { value: 'cy' } })
       await act(async () => { vi.advanceTimersByTime(400) })
@@ -271,7 +272,7 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
 
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
       expect(shareWithTeam).toHaveBeenCalledWith(
-        { agentId: 'folder:alpha', input: { name: 'Alpha', people: [{ userId: 'u2', access: 'write' }] } },
+        { agentId: 'folder:alpha', input: { name: 'Alpha', people: [{ userId: 'u2', access: 'edit' }] } },
         expect.anything()
       )
     } finally {

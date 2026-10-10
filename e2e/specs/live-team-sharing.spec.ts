@@ -7,12 +7,14 @@ import {
   agentName,
   buildAcmeReporter,
   cloneHistory,
+  catalogEntry,
+  catalogGrants,
   coreCall,
   getFromLibrary,
-  libraryEntry,
   runCommand,
   shareWithTeam,
-  shortHash
+  shortHash,
+  whereFact
 } from '../fixtures/liveTeamSharing'
 
 /**
@@ -47,21 +49,39 @@ test('A shares an agent with B as Can use; B gets it, finishes setup and runs it
   })
 
   let repoId = ''
-  await test.step('A: Share with the team, B as Can use', async () => {
+  let uuid = ''
+  let bundleId = ''
+  await test.step('A: Share with the team, B as Can use; core lists a desktop agent at Version 1 and desktop.json records its catalog id', async () => {
     await shareWithTeam(a, name, [{ person: personB }])
-    const entry = await libraryEntry(fixture, personA.token, agent.slug)
-    expect(entry?.name).toBe(name)
-    repoId = entry.repo_id
+    // Core records the version a moment after the send lands.
+    await expect.poll(async () => (await catalogEntry(fixture, personA.token, agent.slug))?.latest?.revision_number ?? null).toBe(1)
+    const entry = await catalogEntry(fixture, personA.token, agent.slug)
+    expect(entry?.display_name).toBe(name)
+    expect(entry.kind).toBe('agent')
+    expect(entry.runs_on).toBe('desktop')
+    expect(entry.access).toBe('maintain')
+    expect(entry.id).toMatch(/\S/)
+    expect(entry.desktop.manifest_id).toBe(agent.manifestId)
+    expect(entry.latest?.revision_number).toBe(1)
+    expect(entry.latest?.published_by?.user_id).toBe(personA.id)
+    expect(entry.desktop.head_sha).toBe(execFileSync('git', ['-C', agent.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+    repoId = entry.desktop.repo_id
+    uuid = entry.uuid
+    bundleId = entry.id
+    expect(JSON.parse(readFileSync(join(agent.path, 'app-data/desktop.json'), 'utf8')).shared_remote?.bundle_id).toBe(bundleId)
   })
 
-  await test.step('core: exactly A maintains and B reads; history carries no secret and is authored by A', async () => {
-    const grants = await coreCall(fixture, personA.token, `/library/agents/${repoId}/grants`)
-    expect(grants.status).toBe(200)
-    const rows = (Array.isArray(grants.body) ? grants.body : grants.body.grants ?? grants.body.data) as any[]
-    const simplified = rows
-      .map((g) => `${g.principal?.user_id ?? g.user_id ?? JSON.stringify(g.principal)}:${g.access}`)
-      .sort()
-    expect(simplified).toEqual([`${personA.id}:maintain`, `${personB.id}:read`].sort())
+  await test.step('A: the Sharing tab shows Version 1, shared by A, and the catalog id, read-only', async () => {
+    await a.page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await a.page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: 'Sharing', exact: true }).click()
+    await expect(whereFact(a, 'Version')).toHaveText('1')
+    await expect(whereFact(a, 'Shared by')).toHaveText(personA.name)
+    await expect(whereFact(a, 'Catalog id')).toHaveText(bundleId)
+    await expect(a.page.getByRole('textbox', { name: 'Catalog id' })).toHaveCount(0)
+  })
+
+  await test.step('core: exactly A maintains and B uses; history carries no secret and is authored by A', async () => {
+    expect(await catalogGrants(fixture, personA.token, uuid)).toEqual([`user:${personA.id}:maintain`, `user:${personB.id}:use`].sort())
 
     const history = cloneHistory(fixture, repoId, fixture.admin.token)
     if (history.status !== 'ok') throw new Error(`admin clone refused: ${history.output}`)
@@ -76,7 +96,7 @@ test('A shares an agent with B as Can use; B gets it, finishes setup and runs it
   })
 
   await test.step('core: C, not granted, neither lists it nor can clone it', async () => {
-    expect(await libraryEntry(fixture, personC.token, agent.slug)).toBeUndefined()
+    expect(await catalogEntry(fixture, personC.token, agent.slug)).toBeUndefined()
     const clone = cloneHistory(fixture, repoId, personC.token)
     expect(clone.status).toBe('refused')
     if (clone.status === 'refused') expect(clone.output).toContain('403')
@@ -93,6 +113,17 @@ test('A shares an agent with B as Can use; B gets it, finishes setup and runs it
     expect(trackedFiles(got!.path)).not.toContain('.claude/settings.local.json')
     // …and the template's own copy is still there for B's Claude.
     expect(existsSync(join(got!.path, '.claude/settings.local.json'))).toBe(true)
+    expect(JSON.parse(readFileSync(join(got!.path, 'app-data/desktop.json'), 'utf8')).shared_remote?.bundle_id).toBe(bundleId)
+  })
+
+  await test.step('core: B’s Get is reported as B’s local install at Version 1, and A sees one person using it', async () => {
+    await expect
+      .poll(async () => {
+        const mine = ((await catalogEntry(fixture, personB.token, agent.slug))?.my_installs ?? []) as any[]
+        return mine.map((row) => `${row.where}:${row.revision_number}`)
+      })
+      .toEqual(['local:1'])
+    expect((await catalogEntry(fixture, personA.token, agent.slug)).install_count).toBe(1)
   })
 
   const dialog = b.page.getByRole('dialog', { name: `Finish setting up ${name}` })

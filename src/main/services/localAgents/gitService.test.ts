@@ -932,7 +932,7 @@ describe('a version the library refused does not block later shares', () => {
     expect(git(dir, 'rev-parse', 'HEAD').trim()).toBe(git(remote, 'rev-parse', 'main').trim())
   }, 60_000)
 
-  it('combines only when the library declined the content, never when it cannot check it now', async () => {
+  it('combines only when the library declined the content, never when it cannot check it now or the identity changed', async () => {
     const remote = bare(join(box, 'unavailable.git'))
     const log = join(remote, 'received.log')
     const sentence = join(box, 'unavailable-sentence')
@@ -960,6 +960,16 @@ describe('a version the library refused does not block later shares', () => {
     expect(unavailable.detail).toContain("can't check this change right now")
     expect(received() - before).toBe(1)
     expect(git(dir, 'log', '--format=%s', 'origin/main..HEAD').trim().split('\n')).toEqual(['two', 'one'])
+
+    // core's MSG_MANIFEST_ID_CHANGED: the folder's identity, which a combined
+    // send carries too, so it is said once and never retried.
+    writeFileSync(sentence, "This agent's identity changed; share it as a new agent instead.\n")
+    before = received()
+    const identity = await shareChanges(dir, 'three', CINNA)
+    expect(identity.refusal).toBe('push_rejected')
+    expect(identity.detail).toContain("This agent's identity changed; share it as a new agent instead.")
+    expect(received() - before).toBe(1)
+    expect(git(dir, 'for-each-ref', 'refs/cinna/').trim()).toBe('')
 
     // A verdict on what a version holds: one combined send follows.
     writeFileSync(sentence, 'The file big.bin is larger than 10 MB, too big to share with the team.\n')

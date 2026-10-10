@@ -46,8 +46,9 @@ export interface DesktopSharedRemote {
   repo_id: string | null
   clone_url: string
   /**
-   * The catalog id of the shared agent (contract 1.10.0). The desktop writes
-   * none yet; one another host wrote is kept through every rewrite of the file.
+   * The catalog id of the shared agent (contract 1.10.0), written when this
+   * machine shares or gets it; one another host wrote is kept through every
+   * rewrite of the file. Shown in the Sharing tab, never asked for.
    */
   bundle_id?: string | null
 }

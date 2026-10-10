@@ -1,7 +1,6 @@
 /**
  * What this machine has been told by each Cinna instance about where its
- * team-library git lives, and which library entry a Share with the team
- * created but never finished.
+ * team agents' git lives.
  *
  * ## Why a git origin has to be trusted, not just seen
  *
@@ -14,7 +13,7 @@
  * process can rewrite `.git/config`, and a remote URL taken from there would
  * send the profile's token wherever it points. The only source of a git
  * origin other than the instance's own is **that instance's answer over that
- * profile's session** — a library listing or the reply to creating an entry.
+ * profile's session** — a catalog listing or the reply to creating an entry.
  *
  * ## Why a file in main and not the settings store
  *
@@ -35,8 +34,6 @@ const logger = createLogger('library-trust')
 interface TrustFile {
   /** Instance API origin → git origins it has named. */
   gitOrigins: Record<string, string[]>
-  /** Instance API origin → slug → the repo id a Share with the team created and has not finished. */
-  pending: Record<string, Record<string, string>>
 }
 
 let state: TrustFile | null = null
@@ -59,7 +56,7 @@ function filePath(): string | null {
 
 function load(): TrustFile {
   if (state) return state
-  const empty: TrustFile = { gitOrigins: {}, pending: {} }
+  const empty: TrustFile = { gitOrigins: {} }
   const path = filePath()
   if (path === null) {
     state = empty
@@ -67,10 +64,8 @@ function load(): TrustFile {
   }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<TrustFile>
-    state = {
-      gitOrigins: parsed.gitOrigins && typeof parsed.gitOrigins === 'object' ? parsed.gitOrigins : {},
-      pending: parsed.pending && typeof parsed.pending === 'object' ? parsed.pending : {}
-    }
+    // A file an older build wrote may also carry `pending`; it is dropped on the next save.
+    state = { gitOrigins: parsed.gitOrigins && typeof parsed.gitOrigins === 'object' ? parsed.gitOrigins : {} }
   } catch {
     state = empty
   }
@@ -147,24 +142,6 @@ export const libraryTrust = {
     return Object.entries(load().gitOrigins)
       .filter(([, origins]) => origins.includes(gitOrigin))
       .map(([server]) => server)
-  },
-
-  /** Remember the entry a Share with the team just created, until its first send succeeds. */
-  setPending(serverOrigin: string, slug: string, repoId: string): void {
-    const file = load()
-    file.pending[serverOrigin] = { ...(file.pending[serverOrigin] ?? {}), [slug]: repoId }
-    save()
-  },
-
-  pending(serverOrigin: string, slug: string): string | null {
-    return load().pending[serverOrigin]?.[slug] ?? null
-  },
-
-  clearPending(serverOrigin: string, slug: string): void {
-    const file = load()
-    if (!file.pending[serverOrigin]?.[slug]) return
-    delete file.pending[serverOrigin][slug]
-    save()
   },
 
   /** Tests: start empty, optionally at a given file. */

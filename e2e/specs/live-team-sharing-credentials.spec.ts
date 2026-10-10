@@ -11,7 +11,7 @@ import {
   finishDialog,
   finishWithWeather,
   getFromLibrary,
-  libraryEntry,
+  catalogEntry,
   openAgent,
   refreshLibrary,
   runCommand,
@@ -259,7 +259,7 @@ test('a tracked .env at the agent root refuses Share with the team before anythi
     'A file that can hold a secret is recorded in this agent’s history (.env). Ask whoever maintains this agent to remove it before sharing.'
   )
   await expect(dialog).toBeVisible()
-  expect(await libraryEntry(fixture, fixture.people.a.token, agent.slug)).toBeUndefined()
+  expect(await catalogEntry(fixture, fixture.people.a.token, agent.slug)).toBeUndefined()
   expect(execFileSync('git', ['-C', agent.path, 'remote'], { encoding: 'utf8' }).trim()).toBe('')
 })
 

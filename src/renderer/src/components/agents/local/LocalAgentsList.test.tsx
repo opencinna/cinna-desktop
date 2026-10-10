@@ -361,7 +361,8 @@ describe('LocalAgentsList — shared rows', () => {
     useAuthStore.setState({ currentUser: null })
     shareStatuses = [{
       agentId: 'folder:alpha',
-      remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'write' },
+      remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'edit' },
+      bundleId: null,
       state: 'unshared',
       headSha: 'a',
       remoteHeadSha: 'a',

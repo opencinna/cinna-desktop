@@ -116,8 +116,8 @@ export function shareStatusWarns(status: AgentShareStatus): boolean {
 
 /** A library grant, as the People list and the pickers name it. */
 export const SHARE_ACCESS_TEXT: Record<LibraryAccess, string> = {
-  read: 'Can use',
-  write: 'Can edit',
+  use: 'Can use',
+  edit: 'Can edit',
   maintain: 'Maintainer'
 }
 
@@ -192,9 +192,14 @@ export const SHARE_UI_TEXT = {
   libraryFolderLabel: 'Folder name',
   yourAccessLabel: 'Your access',
   maintainersLabel: 'Maintainers',
-  lastSharedLabel: 'Last shared',
-  lastShared: (when: string) => when,
-  lastSharedBy: (when: string, who: string) => `${when} by ${who}`,
+  catalogIdLabel: 'Catalog id',
+  versionLabel: 'Version',
+  sharedByLabel: 'Shared by',
+  sharedOnLabel: 'Shared on',
+  /** Only when the catalog's own rules narrow who can get it (unlisted, or private). */
+  whoCanGetLabel: 'Who can get it',
+  notListed: 'Only people who can edit it — it isn’t listed in the catalog',
+  privateItem: 'Only people who can edit it — it’s private in the catalog',
   peopleSection: 'People',
   peopleInfo:
     'Only the people listed here can get this agent from the Team library. A maintainer can change who has access and what they may do.',
@@ -223,6 +228,7 @@ export const SHARE_UI_TEXT = {
   removeSharingBody: (name: string) =>
     `Stop sharing ${name} with the team? Its folder, files and history stay on this computer, and it becomes an ordinary agent you can share again later. Teammates keep their own copies.`,
   alsoDeleteFromLibrary: 'Also delete it from the team library — teammates can no longer get it',
+  removeSharingOnlyHint: 'Untick the box above to remove sharing from this computer only.',
   deleteNoAccess: 'Only a maintainer can delete it from the team library.',
   noLongerSharedNote: (name: string) => `${name} is no longer shared with the team.`,
   removeFromComputer: 'Remove from this computer',

@@ -18,12 +18,17 @@
  */
 
 import type { AutoAttachedCredential } from './serviceCredentials'
+import type { CatalogAccessLevel, CatalogVisibility } from './catalogItems'
 
 /** `cinna`: hosted by the signed-in Cinna instance. `external`: anything else. */
 export type AgentRemoteKind = 'cinna' | 'external'
 
-/** A caller's grant on a team-library agent. */
-export type LibraryAccess = 'read' | 'write' | 'maintain'
+/**
+ * A caller's access to a team agent — core's catalog levels: `use` (get it),
+ * `edit` (share changes to it), `maintain` (who has access, delete). The UI
+ * says Can use / Can edit / Maintainer.
+ */
+export type LibraryAccess = CatalogAccessLevel
 
 /** Where a shared agent's team version lives. Derived from `origin`, never stored. */
 export interface AgentRemote {
@@ -100,6 +105,12 @@ export type AgentShareState =
 export interface AgentShareStatus {
   agentId: string
   remote: AgentRemote
+  /**
+   * The catalog id (`bundle_id`) this machine recorded in the agent's
+   * `app-data/desktop.json` when it shared or got it; null when none was.
+   * Shown, never asked.
+   */
+  bundleId: string | null
   state: AgentShareState
   /** Full local `HEAD`, or null in a folder with nothing recorded yet. */
   headSha: string | null
@@ -161,22 +172,44 @@ export interface LibraryMaintainer {
   displayName: string
 }
 
+/** A team agent's newest version, as the catalog numbers it. */
+export interface LibraryVersionDto {
+  /** "Version N". */
+  number: number
+  /** ISO 8601. */
+  publishedAt: string
+  /** Who shared it, when the catalog says. */
+  publishedBy: string | null
+  /** The notes the changes were shared with since the version before. */
+  releaseNotes: string | null
+}
+
 /** One agent in the team library, as the catalog shows it. */
 export interface LibraryAgentDto {
+  /** The catalog item's uuid. */
+  uuid: string
+  /** The catalog id (`bundle_id`). */
+  bundleId: string
   repoId: string
   slug: string
   name: string
   description: string
   cloneUrl: string
+  /** '' before the first share. */
   headSha: string
-  updatedAt: string
   access: LibraryAccess
+  visibility: CatalogVisibility
+  /**
+   * Whether the catalog lists it. Unlisted, only people who can edit or
+   * maintain it can get it: core counts neither `public` nor a `use` grant.
+   */
+  isListed: boolean
   maintainers: LibraryMaintainer[]
-  /** The manifest's `runtime.engine`, when the manifest has one. */
+  /** The engine the catalog names for it, when it does. */
   engine: string | null
   manifestId: string | null
-  /** Who sent the latest version, when the listing says. */
-  pushedBy: string | null
+  /** Null until the first share: only people who can edit see such an entry. */
+  latest: LibraryVersionDto | null
   /**
    * This machine's copy: the local agent whose `origin` is this repository, or
    * whose manifest id matches it. Null when there is none.
@@ -217,7 +250,12 @@ export interface ShareWithTeamInput {
   people: ShareWithTeamPerson[]
 }
 
-/** Who a library grant is for: one account, everyone with a role, or everyone on the instance. */
+/**
+ * Who a library grant is for: one account, or everyone with a role. `everyone`
+ * — everyone on the instance — is not a grant on core: it is the item's
+ * `visibility: 'public'`. Main reads and writes it as that, so the People list
+ * keeps one shape.
+ */
 export type LibraryPrincipal =
   | { kind: 'user'; userId: string }
   | { kind: 'role'; role: string }

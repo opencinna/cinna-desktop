@@ -1,23 +1,24 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import {
   test,
   expect,
   agentName,
   buildAcmeReporter,
   cloneHistory,
-  coreCall,
   findAgent,
   finishDialog,
   finishWithWeather,
   getFromLibrary,
-  libraryEntry,
+  catalogEntryOrFail,
   openAgent,
   refreshLibrary,
+  setCatalogAccess,
   shareChanges,
   shareWithTeam,
+  whereFact,
   type PersonApp,
   type SharingFixture,
   type SharingPerson,
@@ -27,8 +28,8 @@ import {
 /**
  * Two people changing one shared agent, against the real local cinna-core:
  * Update and Share changes in both directions, a teammate who shared first, a
- * collision and its two answers, edit access taken away mid-way, and what the
- * team library's push policy refuses. B can edit, C can only use.
+ * collision and its two answers, edit access taken away mid-way, and what
+ * core's push policy refuses. B can edit, C can only use.
  * Setup: `e2e/fixtures/live-team-sharing.py`.
  */
 
@@ -122,14 +123,20 @@ test('a change shared by either side comes in with Update, with its note and aut
   test.setTimeout(300_000)
   const { fixture } = team
   const { people } = fixture
-  const { a, b, name, aPath, bPath } = await sharedWithEditor(team)
+  const { a, b, name, aPath, bPath, slug } = await sharedWithEditor(team)
 
   await test.step('A shares; B updates', async () => {
     edit(aPath, ACME_MD, '# Acme\n\nAnvils are heavy.\n')
     await shareChanges(a, name, 'A: anvils are heavy')
     await updateFromBadge(b, name)
     expect(readFileSync(join(bPath, ACME_MD), 'utf8')).toBe('# Acme\n\nAnvils are heavy.\n')
+    const entry = await catalogEntryOrFail(fixture, slug)
+    expect(entry.latest?.revision_number).toBe(2)
+    expect(entry.latest?.release_notes).toContain('A: anvils are heavy')
+    expect(entry.desktop.head_sha).toBe(head(aPath))
     await openSharingTab(b, name)
+    await expect(whereFact(b, 'Version')).toHaveText('2')
+    await expect(whereFact(b, 'Shared by')).toHaveText(people.a.name)
     const history = section(b, 'History')
     await expect(history.getByText('A: anvils are heavy', { exact: true }).locator('..')).toContainText(`${people.a.name} · `)
     await expect(history.getByText('Not shared yet', { exact: true })).toHaveCount(0)
@@ -142,7 +149,10 @@ test('a change shared by either side comes in with Update, with its note and aut
     await expect(section(b, 'History').getByText('Not shared yet', { exact: true })).toHaveCount(0)
     await updateFromBadge(a, name)
     expect(readFileSync(join(aPath, SKILL_MD), 'utf8')).toContain('Always mention anvils.')
+    expect((await catalogEntryOrFail(fixture, slug)).latest?.published_by?.user_id).toBe(people.b.id)
     await openSharingTab(a, name)
+    await expect(whereFact(a, 'Version')).toHaveText('3')
+    await expect(whereFact(a, 'Shared by')).toHaveText(people.b.name)
     const history = section(a, 'History')
     await expect(history.getByText('B: mention anvils', { exact: true }).locator('..')).toContainText(`${people.b.name} · `)
     expect(head(aPath)).toBe(head(bPath))
@@ -160,7 +170,7 @@ test('a teammate shared first: Share changes brings their version in, sends once
   await updateFromBadge(a, name)
   expect(readFileSync(join(aPath, SKILL_MD), 'utf8')).toContain('B second.')
   expect(head(aPath)).toBe(head(bPath))
-  expect((await libraryEntry(team.fixture, team.fixture.people.a.token, slug)).head_sha).toBe(head(aPath))
+  expect((await catalogEntryOrFail(team.fixture, slug)).desktop.head_sha).toBe(head(aPath))
 })
 
 test('the same lines on both: Keep working on mine leaves both changed; Use the team’s version keeps mine as a copy', async ({ team }) => {
@@ -261,15 +271,7 @@ test('edit access taken away mid-way: the send asks for a maintainer', async ({ 
   const dialog = b.page.getByRole('dialog', { name: 'Share changes' })
   await dialog.getByRole('textbox').fill('B, about to be demoted')
 
-  const entry = await libraryEntry(fixture, fixture.people.a.token, slug)
-  const grants = await coreCall(fixture, fixture.people.a.token, `/library/agents/${entry.repo_id}/grants`)
-  const rows = (Array.isArray(grants.body) ? grants.body : grants.body.grants ?? grants.body.data) as any[]
-  const demoted = rows.map((g) => (g.principal?.user_id ?? g.user_id) === fixture.people.b.id ? { ...g, access: 'read' } : g)
-  const put = await coreCall(fixture, fixture.people.a.token, `/library/agents/${entry.repo_id}/grants`, {
-    method: 'PUT',
-    body: Array.isArray(grants.body) ? demoted : { grants: demoted }
-  })
-  expect(put.status, JSON.stringify(put.body)).toBe(200)
+  await setCatalogAccess(fixture, slug, fixture.people.b.id, 'use')
 
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog.getByRole('alert')).toHaveText(
@@ -298,14 +300,26 @@ for (const refusal of [
       writeFileSync(join(path, 'cinna-agent.json'), JSON.stringify(manifest, null, 2) + '\n')
     },
     sentence: "This agent's cinna-agent.json isn't valid (schedules: 'every morning' is not of type 'array'), so it can't be shared."
+  },
+  {
+    title: 'a changed manifest id',
+    make: (path: string) => {
+      const manifest = JSON.parse(readFileSync(join(path, 'cinna-agent.json'), 'utf8'))
+      manifest.id = randomUUID()
+      writeFileSync(join(path, 'cinna-agent.json'), JSON.stringify(manifest, null, 2) + '\n')
+    },
+    sentence: "This agent's identity changed; share it as a new agent instead.",
+    relaunch: true
   }
 ]) {
   test(`core refuses ${refusal.title}: the dialog shows core's sentence and the version stays Not shared yet`, async ({ team }) => {
     test.setTimeout(300_000)
     const { fixture } = team
     const { a, name, aPath, slug } = await sharedWithEditor(team)
-    const before = (await libraryEntry(fixture, fixture.people.a.token, slug)).head_sha
+    const before = (await catalogEntryOrFail(fixture, slug)).desktop.head_sha
     refusal.make(aPath)
+    // A new manifest id is a new agent to the app: like a seeded one, it needs a relaunch.
+    if (refusal.relaunch) await a.relaunch()
     await openAgent(a, name)
     await a.page.getByRole('group', { name: 'Runtime summary' }).getByRole('button', { name: 'Share changes…', exact: true }).click()
     const dialog = a.page.getByRole('dialog', { name: 'Share changes' })
@@ -313,7 +327,7 @@ for (const refusal of [
     await dialog.getByRole('button', { name: 'Share', exact: true }).click()
     await expect(dialog.getByRole('alert')).toHaveText(`Fix what the team library refused, then share again. ${refusal.sentence}`, { timeout: 60_000 })
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    expect((await libraryEntry(fixture, fixture.people.a.token, slug)).head_sha).toBe(before)
+    expect((await catalogEntryOrFail(fixture, slug)).desktop.head_sha).toBe(before)
     await openSharingTab(a, name)
     const history = section(a, 'History')
     await expect(history.getByText(`Adds ${refusal.title}`, { exact: true })).toBeVisible()
@@ -342,7 +356,7 @@ for (const fixable of [
     test.setTimeout(300_000)
     const { fixture } = team
     const { a, name, aPath, slug } = await sharedWithEditor(team)
-    const repoId = (await libraryEntry(fixture, fixture.people.a.token, slug)).repo_id as string
+    const repoId = (await catalogEntryOrFail(fixture, slug)).desktop.repo_id as string
     const clone = () => {
       const history = cloneHistory(fixture, repoId, fixture.admin.token)
       if (history.status !== 'ok') throw new Error(`admin clone refused: ${history.output}`)

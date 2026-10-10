@@ -23,7 +23,8 @@ import {
 
 const STATUS: AgentShareStatus = {
   agentId: 'folder:a',
-  remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'write' },
+  remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'edit' },
+  bundleId: null,
   state: 'unshared',
   headSha: 'a',
   remoteHeadSha: 'b',

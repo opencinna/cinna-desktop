@@ -30,6 +30,7 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
   return {
     agentId: AGENT.id,
     remote: { kind: 'cinna', url: 'https://core.test/git/r1.git', repoId: 'r1', host: 'https://core.test', access: 'maintain' },
+    bundleId: null,
     state: 'up_to_date',
     headSha: 'a',
     remoteHeadSha: 'a',
@@ -45,18 +46,21 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
 
 function entry(overrides: Partial<LibraryAgentDto> = {}): LibraryAgentDto {
   return {
+    uuid: 'item-1',
+    bundleId: 'test.core.alpha1234',
     repoId: 'r1',
     slug: 'alpha',
     name: 'Alpha in the library',
     description: '',
     cloneUrl: 'https://core.test/git/r1.git',
     headSha: 'a',
-    updatedAt: '2026-10-09T10:00:00Z',
     access: 'maintain',
+    visibility: 'public',
+    isListed: true,
     maintainers: [{ userId: 'u1', displayName: 'Ann' }],
     engine: null,
     manifestId: null,
-    pushedBy: 'Bob',
+    latest: { number: 3, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' },
     localAgentId: AGENT.id,
     updateAvailable: false,
     ...overrides
@@ -80,10 +84,11 @@ const PEOPLE: AgentPeopleDto = {
   visible: true,
   people: [
     { principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' },
-    { principal: { kind: 'everyone' }, access: 'read', displayName: '' }
+    { principal: { kind: 'everyone' }, access: 'use', displayName: '' }
   ],
   selfUserId: 'u1'
 }
+const BOB = { principal: { kind: 'user' as const, userId: 'u2' }, access: 'use' as const, displayName: 'Bob' }
 const HISTORY: AgentVersionDto[] = [
   { note: 'Tightened the prompt', author: 'Ann', date: '2026-10-09T11:00:00Z', unsent: true },
   { note: 'First version', author: 'Bob', date: '2026-10-08T09:00:00Z', unsent: false }
@@ -137,6 +142,12 @@ function mount(listed: AgentShareStatus): { onNote: ReturnType<typeof vi.fn> } {
 const section = (name: string): HTMLElement =>
   screen.getByRole('heading', { name }).closest('section') as HTMLElement
 
+/** The value beside a label in Where it's shared, or null when there is no such fact. */
+const fact = (where: HTMLElement, label: string): string | null => {
+  const term = Array.from(where.querySelectorAll('dt')).find((dt) => dt.textContent === label)
+  return term ? (term.nextElementSibling?.textContent ?? '') : null
+}
+
 describe('SharingTab — where it is shared', () => {
   it('reads the library again on open and shows that entry’s facts', async () => {
     mount(status())
@@ -146,7 +157,51 @@ describe('SharingTab — where it is shared', () => {
     expect(where.textContent).toContain('core.test')
     expect(where.textContent).toContain(SHARE_ACCESS_TEXT.maintain)
     expect(where.textContent).toContain('Ann')
-    expect(where.textContent).toContain('by Bob')
+    // The latest version as facts of their own, not a dotted line under the status.
+    expect(fact(where, SHARE_UI_TEXT.versionLabel)).toBe('3')
+    expect(fact(where, SHARE_UI_TEXT.sharedByLabel)).toBe('Bob')
+    expect(fact(where, SHARE_UI_TEXT.sharedOnLabel)).toContain('2026')
+    expect(where.querySelector('[data-sharing-status]')?.textContent).not.toContain('Bob')
+    expect(where.querySelector('[data-sharing-status]')?.textContent).not.toContain('3')
+    // No catalog id recorded in the folder: the listing's, as the same read-only fact.
+    expect(where.textContent).toContain(SHARE_UI_TEXT.catalogIdLabel)
+    expect(within(where).getByText('test.core.alpha1234').tagName).toBe('CODE')
+  })
+
+  it('shows the catalog id this computer recorded for the agent, read-only', async () => {
+    mount(status({ bundleId: 'test.core.recorded1' }))
+    const where = section(SHARE_UI_TEXT.whereShared)
+    await waitFor(() => expect(where.textContent).toContain('Alpha in the library'))
+    const id = within(where).getByText('test.core.recorded1')
+    expect(id.tagName).toBe('CODE')
+    // A long id truncates in its column, the whole of it on hover.
+    expect(id.className.split(/\s+/)).toContain('truncate')
+    expect(id.getAttribute('title')).toBe('test.core.recorded1')
+    expect(where.textContent).not.toContain('test.core.alpha1234')
+    expect(within(where).queryByRole('textbox')).toBeNull()
+  })
+
+  it('says nothing about a version before the first share', async () => {
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ latest: null })], fetchedAt: '' }))
+    mount(status())
+    const where = section(SHARE_UI_TEXT.whereShared)
+    await waitFor(() => expect(where.textContent).toContain('Alpha in the library'))
+    expect(fact(where, SHARE_UI_TEXT.versionLabel)).toBeNull()
+    expect(fact(where, SHARE_UI_TEXT.sharedByLabel)).toBeNull()
+  })
+
+  it.each<[string, Partial<LibraryAgentDto>, string | null]>([
+    ['listed and shared with people', { visibility: 'users' }, null],
+    ['listed and public', { visibility: 'public' }, null],
+    ['not listed', { isListed: false }, SHARE_UI_TEXT.notListed],
+    ['private', { visibility: 'private' }, SHARE_UI_TEXT.privateItem],
+    ['private and not listed', { visibility: 'private', isListed: false }, SHARE_UI_TEXT.notListed]
+  ])('says who can get it only when the catalog narrows it: %s', async (_label, overrides, expected) => {
+    sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry(overrides)], fetchedAt: '' }))
+    mount(status())
+    const where = section(SHARE_UI_TEXT.whereShared)
+    await waitFor(() => expect(where.textContent).toContain('Alpha in the library'))
+    expect(fact(where, SHARE_UI_TEXT.whoCanGetLabel)).toBe(expected)
   })
 
   it('names an external team version as the user’s own server, with no library facts', async () => {
@@ -174,7 +229,9 @@ describe('SharingTab — people', () => {
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
     expect(people.textContent).not.toContain(SHARE_UI_TEXT.you)
     expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
-    expect(within(people).getAllByRole('combobox')).toHaveLength(1)
+    // Everyone on the server can only use it: a fixed badge, not a choice.
+    expect(within(people).queryAllByRole('combobox')).toHaveLength(0)
+    expect(people.textContent).toContain(SHARE_ACCESS_TEXT.use)
   })
 
   it('says no one else has access when you are the only one', async () => {
@@ -188,23 +245,25 @@ describe('SharingTab — people', () => {
     sharing.people.mockResolvedValue(
       ok({
         visible: true,
-        people: [PEOPLE.people[0], { principal: { kind: 'user', userId: 'u2' }, access: 'write', displayName: 'Bob' }],
+        people: [PEOPLE.people[0], { principal: { kind: 'user', userId: 'u2' }, access: 'edit', displayName: 'Bob' }],
         selfUserId: 'u2'
       })
     )
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.you))
-    expect(people.textContent).toContain(SHARE_ACCESS_TEXT.write)
+    expect(people.textContent).toContain(SHARE_ACCESS_TEXT.edit)
     expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
     expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.you) })).toBeNull()
   })
 
   it('gives the access select a fixed width, never the whole row the name needs', async () => {
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, BOB] }))
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
-    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
+    await waitFor(() => expect(people.textContent).toContain('Bob'))
     // `w-full` beside `w-36` wins on stylesheet order and leaves the name no width.
+    expect(within(people).getAllByRole('combobox')).toHaveLength(1)
     for (const select of within(people).getAllByRole('combobox')) {
       expect(select.className.split(/\s+/)).not.toContain('w-full')
     }
@@ -213,33 +272,34 @@ describe('SharingTab — people', () => {
   it('builds each change on the list the server answered, and holds the controls while one is saving', async () => {
     let answer: (value: unknown) => void = () => {}
     sharing.setPeople.mockReturnValueOnce(new Promise((r) => { answer = r }))
-    const bob = { principal: { kind: 'user' as const, userId: 'u2' }, access: 'read' as const, displayName: 'Bob' }
-    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, bob] }))
+    const carol = { principal: { kind: 'user' as const, userId: 'u3' }, access: 'use' as const, displayName: 'Carol' }
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, BOB, carol] }))
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
-    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
-    const everyone = (): HTMLSelectElement =>
-      within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.everyone)) as HTMLSelectElement
-    fireEvent.change(everyone(), { target: { value: 'write' } })
-    await waitFor(() => expect(everyone().disabled).toBe(true))
+    await waitFor(() => expect(people.textContent).toContain('Bob'))
+    const bob = (): HTMLSelectElement =>
+      within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')) as HTMLSelectElement
+    fireEvent.change(bob(), { target: { value: 'edit' } })
+    await waitFor(() => expect(bob().disabled).toBe(true))
     // The refetch after the change has not answered yet: the list on screen
     // and the next edit come from the PUT's own answer.
     sharing.people.mockReturnValue(new Promise(() => {}))
     const answered = {
       visible: true,
-      people: [PEOPLE.people[0], { ...PEOPLE.people[1], access: 'write' }, bob],
+      people: [PEOPLE.people[0], PEOPLE.people[1], { ...BOB, access: 'edit' }, carol],
       selfUserId: 'u1'
     }
     await act(async () => answer(ok({ ...done(), people: answered })))
-    await waitFor(() => expect(everyone().disabled).toBe(false))
-    expect(everyone().value).toBe('write')
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')), { target: { value: 'write' } })
+    await waitFor(() => expect(bob().disabled).toBe(false))
+    expect(bob().value).toBe('edit')
+    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Carol')), { target: { value: 'edit' } })
     await waitFor(() => expect(sharing.setPeople).toHaveBeenCalledTimes(2))
     // Your own grant, hidden from the list, is still saved with it, unchanged.
     expect(sharing.setPeople).toHaveBeenLastCalledWith(AGENT.id, [
       { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
-      { principal: { kind: 'everyone' }, access: 'write' },
-      { principal: { kind: 'user', userId: 'u2' }, access: 'write' }
+      { principal: { kind: 'everyone' }, access: 'use' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'edit' },
+      { principal: { kind: 'user', userId: 'u3' }, access: 'edit' }
     ])
   })
 
@@ -262,10 +322,11 @@ describe('SharingTab — people', () => {
 
   it('shows the server’s refusal under the list, closing nothing', async () => {
     sharing.setPeople.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: 'An agent needs at least one maintainer.' })))
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, BOB] }))
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
-    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.everyone)), { target: { value: 'write' } })
+    await waitFor(() => expect(people.textContent).toContain('Bob'))
+    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')), { target: { value: 'edit' } })
     await waitFor(() =>
       expect(within(people).getByRole('alert').textContent).toBe('An agent needs at least one maintainer.')
     )
@@ -273,7 +334,7 @@ describe('SharingTab — people', () => {
 
   it('shows only the maintainers to someone who may not see the list, with no way to change it', async () => {
     sharing.people.mockResolvedValue(ok({ visible: false, people: [], selfUserId: null }))
-    mount(status({ remote: { ...status().remote, access: 'read' } }))
+    mount(status({ remote: { ...status().remote, access: 'use' } }))
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.peopleOnlyMaintainer))
     await waitFor(() => expect(people.textContent).toContain('Ann'))
@@ -297,7 +358,7 @@ describe('SharingTab — people', () => {
       expect(within(dialog).queryByRole('listbox')).toBeNull()
       const field = within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' }) as HTMLInputElement
       expect(field.value).toBe('Bob <bob@x.test>')
-      expect((within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel) as HTMLSelectElement).value).toBe('read')
+      expect((within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel) as HTMLSelectElement).value).toBe('use')
       expect(within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel).className.split(/\s+/)).not.toContain('w-full')
       // Editing the field drops the pick until someone is picked again.
       fireEvent.change(field, { target: { value: 'Bob' } })
@@ -309,8 +370,8 @@ describe('SharingTab — people', () => {
       })
       expect(sharing.setPeople).toHaveBeenCalledWith(AGENT.id, [
         { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
-        { principal: { kind: 'everyone' }, access: 'read' },
-        { principal: { kind: 'user', userId: 'u2' }, access: 'read' }
+        { principal: { kind: 'everyone' }, access: 'use' },
+        { principal: { kind: 'user', userId: 'u2' }, access: 'use' }
       ])
       await waitFor(() => expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })).toBeNull())
     } finally {
@@ -367,8 +428,32 @@ describe('SharingTab — remove sharing', () => {
     expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeSharingTitle })).toBeTruthy()
   })
 
+  it('clears a refused delete when the choice changes, and says unticking still removes sharing here', async () => {
+    const refusal = '2 people use this. It can be removed once nobody does.'
+    sharing.unshare.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: refusal })))
+    mount(status())
+    await waitFor(() => expect(section(SHARE_UI_TEXT.whereShared).textContent).toContain('Alpha in the library'))
+    const dialog = open()
+    expect(dialog.textContent).not.toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
+    const box = within(dialog).getByRole('checkbox')
+    fireEvent.click(box)
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
+    })
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toBe(refusal))
+    expect(dialog.textContent).toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
+    fireEvent.click(box)
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(dialog.textContent).not.toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
+    sharing.unshare.mockResolvedValue(ok(done()))
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
+    })
+    expect(sharing.unshare).toHaveBeenLastCalledWith(AGENT.id, false)
+  })
+
   it.each<[string, Partial<AgentShareStatus>, Partial<LibraryAgentDto> | null]>([
-    ['someone who may only edit', {}, { access: 'write' }],
+    ['someone who may only edit', {}, { access: 'edit' }],
     ['an agent no longer shared', { state: 'removed' }, null],
     ['an agent shared on another account', { state: 'other_account' }, {}]
   ])('disconnects locally only for %s', async (_label, overrides, listing) => {

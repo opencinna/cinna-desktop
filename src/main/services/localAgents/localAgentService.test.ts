@@ -74,6 +74,7 @@ const { scannerService } = await import('./scannerService')
 const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 const { localAgentService } = await import('./localAgentService')
 const { turnLock } = await import('./turnLock')
+const { catalogLocalInstalls } = await import('../catalogLocalInstalls')
 const { isBlockedWriteError, isStaleWriteError } = await import('../../../shared/localAgents')
 const { jobsRepo, jobAgentRepo } = await import('../../db/jobs')
 const { agentSessionRepo } = await import('../../db/agents')
@@ -754,11 +755,34 @@ describe('delete', () => {
       )
     }, 30_000)
 
-    it('removes a shared agent that is up to date with the team', async () => {
+    it('removes a shared agent that is up to date with the team, and tells the catalog in the background', async () => {
       share()
-      const result = await localAgentService.delete(USER, { agentId, trashFolder: true })
-      expect(result).toEqual({ agentId, trashed: true })
-      expect(trash).toHaveBeenCalledWith(agentDir)
+      const report = vi.spyOn(catalogLocalInstalls, 'reportRemovedByOrigin').mockResolvedValue()
+      try {
+        const result = await localAgentService.delete(USER, { agentId, trashFolder: true })
+        expect(result).toEqual({ agentId, trashed: true })
+        expect(trash).toHaveBeenCalledWith(agentDir)
+        expect(report).toHaveBeenCalledTimes(1)
+        expect(report.mock.calls[0][1]).toBe(join(workshop, '.team.git'))
+      } finally {
+        report.mockRestore()
+      }
+    }, 30_000)
+
+    it('tells the catalog nothing when the removal is refused, or the agent was never shared', async () => {
+      const report = vi.spyOn(catalogLocalInstalls, 'reportRemovedByOrigin').mockResolvedValue()
+      try {
+        share()
+        writeFileSync(join(agentDir, 'notes.md'), 'not sent yet\n')
+        await expect(localAgentService.delete(USER, { agentId, trashFolder: true })).rejects.toMatchObject({
+          code: 'unshared_changes'
+        })
+        rmSync(join(agentDir, '.git'), { recursive: true, force: true })
+        await localAgentService.delete(USER, { agentId, trashFolder: true })
+        expect(report).not.toHaveBeenCalled()
+      } finally {
+        report.mockRestore()
+      }
     }, 30_000)
   })
 })

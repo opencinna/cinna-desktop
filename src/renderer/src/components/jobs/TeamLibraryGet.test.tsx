@@ -17,18 +17,21 @@ const { SHARE_REFUSAL_TEXT, SHARE_UI_TEXT } = await import('../../utils/shareTex
 
 function libraryAgent(overrides: Partial<LibraryAgentDto> = {}): LibraryAgentDto {
   return {
+    uuid: 'item-1',
+    bundleId: 'test.core.item1',
     repoId: 'r-payroll',
     slug: 'payroll',
     name: 'Payroll Checker',
     description: '',
     cloneUrl: 'https://core.test/git/r-payroll.git',
     headSha: 'a',
-    updatedAt: '2026-10-01T00:00:00Z',
-    access: 'read',
+    access: 'use',
+    visibility: 'users',
+    isListed: true,
     maintainers: [],
     engine: null,
     manifestId: 'm-1',
-    pushedBy: null,
+    latest: { number: 1, publishedAt: '2026-10-01T00:00:00Z', publishedBy: null, releaseNotes: null },
     localAgentId: null,
     updateAvailable: false,
     ...overrides

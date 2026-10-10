@@ -23,6 +23,7 @@ function status(agentId: string, overrides: Partial<AgentShareStatus> = {}): Age
   return {
     agentId,
     remote: { kind: 'external', url: 'git@x:y.git', repoId: null, host: null, access: null },
+    bundleId: null,
     state: 'up_to_date',
     headSha: 'a',
     remoteHeadSha: 'a',

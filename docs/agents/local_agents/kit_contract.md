@@ -226,7 +226,7 @@ Contract 1.10.0 adds two records, and the desktop **reads and checks both, and w
 - **`publications.json` → `skills[]`**, beside `publications[]`, records each of the agent's skills published to a catalog (`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`, `content_hash`). Its entries are checked at the same severity as `publications[]`. Because such a file may record only skills, **a `publications.json` without a `publications` array is a warning** ("nothing is recorded"), not an error; it once read as a malformed ledger and stopped the agent
 - **Both must survive a rewrite**, which the contract asks of every host. The desktop rewrites `cinna-agent.json` from the whole parsed object, so a key it does not model is kept, and never writes `publications.json`
 
-`layout.json` → `shared_remote.local_state.fields` gains `bundle_id`, the catalog id of a shared agent, kept per machine in `app-data/desktop.json`. The desktop writes none; one another host wrote is kept when the desktop rewrites the file's other fields, but replacing the link itself (Get, Share with the team, Remove sharing) writes it without one ([Team Sharing](team_sharing_tech.md)).
+`layout.json` → `shared_remote.local_state.fields` gains `bundle_id`, the catalog id of a shared agent, kept per machine in `app-data/desktop.json`. The desktop writes the catalog's own id when it gets or shares the agent, and shows it read-only in the Sharing tab; one another host wrote is kept when the desktop rewrites the file's other fields, while replacing the link itself writes the entry's id (Get, Share with the team) or clears the whole link (Remove sharing) ([Team Sharing](team_sharing_tech.md)).
 
 ### Scaffold ignore files
 

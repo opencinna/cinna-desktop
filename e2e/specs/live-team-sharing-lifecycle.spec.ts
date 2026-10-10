@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { repoRoot } from '../playwright.config'
@@ -8,13 +8,14 @@ import {
   agentName,
   buildAcmeReporter,
   cloneHistory,
-  coreCall,
   findAgent,
   finishWithWeather,
   getFromLibrary,
-  libraryEntry,
+  catalogEntry,
+  catalogEntryOrFail,
   openAgent,
   refreshLibrary,
+  setCatalogAccess,
   shareChanges,
   shareWithTeam,
   type PersonApp,
@@ -102,47 +103,67 @@ async function updateFromBadge(app: PersonApp, name: string, path: string, sha: 
   await expect.poll(() => execFileSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), { timeout: 60_000 }).toBe(sha)
 }
 
-/** Replace one person's grant on the library entry `slug`, as its maintainer A. */
-async function setAccess(fixture: SharingFixture, slug: string, userId: string, access: 'read' | 'write'): Promise<void> {
-  const entry = await libraryEntry(fixture, fixture.people.a.token, slug)
-  const grants = await coreCall(fixture, fixture.people.a.token, `/library/agents/${entry.repo_id}/grants`)
-  const rows = (Array.isArray(grants.body) ? grants.body : grants.body.grants ?? grants.body.data) as any[]
-  const changed = rows.map((g) => ((g.principal?.user_id ?? g.user_id) === userId ? { ...g, access } : g))
-  const put = await coreCall(fixture, fixture.people.a.token, `/library/agents/${entry.repo_id}/grants`, {
-    method: 'PUT',
-    body: Array.isArray(grants.body) ? changed : { grants: changed }
-  })
-  expect(put.status, JSON.stringify(put.body)).toBe(200)
-}
-
 function gitStatus(path: string): string {
   return execFileSync('git', ['-C', path, 'status', '--short'], { encoding: 'utf8' }).trim() || 'clean'
 }
 
-test('A removes sharing and deletes it from the library: B reads No longer shared and keeps the folder; A shares it again', async ({ team }) => {
+test('A’s Remove sharing with delete is refused while B holds it; after B removes it from this computer, the delete goes through and A shares it again', async ({ team }) => {
   test.setTimeout(300_000)
   const { fixture } = team
   const { a, b, name, slug } = await shared(team)
-  const bPath = (await findAgent(b, name)).path
+  const first = await catalogEntryOrFail(fixture, slug)
+  // B's Get is reported to core in the background.
+  await expect.poll(async () => (await catalogEntryOrFail(fixture, slug)).install_count).toBe(1)
 
-  await openSharingTab(a, name)
-  await section(a, 'Remove sharing').getByRole('button', { name: 'Remove sharing…', exact: true }).click()
-  const dialog = a.page.getByRole('dialog', { name: 'Remove sharing' })
-  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
-  await dialog.getByRole('checkbox', { name: 'Also delete it from the team library — teammates can no longer get it' }).check()
-  await dialog.getByRole('button', { name: 'Remove sharing', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 60_000 })
-  await expect(a.page.getByText(`${name} is no longer shared with the team.`, { exact: true })).toBeVisible()
-  expect(await libraryEntry(fixture, fixture.people.a.token, slug)).toBeUndefined()
+  const removeSharing = async (): Promise<ReturnType<PersonApp['page']['getByRole']>> => {
+    await openSharingTab(a, name)
+    await section(a, 'Remove sharing').getByRole('button', { name: 'Remove sharing…', exact: true }).click()
+    const dialog = a.page.getByRole('dialog', { name: 'Remove sharing' })
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+    await dialog.getByRole('checkbox', { name: 'Also delete it from the team library — teammates can no longer get it' }).check()
+    await dialog.getByRole('button', { name: 'Remove sharing', exact: true }).click()
+    return dialog
+  }
 
-  await refreshLibrary(b)
-  await openAgent(b, name)
-  await expect(badge(b, 'No longer shared')).toBeVisible()
-  expect(existsSync(join(bPath, 'cinna-agent.json'))).toBe(true)
-  expect(existsSync(join(bPath, 'credentials/.env'))).toBe(true)
+  await test.step('refused with core’s sentence while B holds it; nothing changes', async () => {
+    const dialog = await removeSharing()
+    await expect(dialog.getByRole('alert')).toHaveText('1 person uses this. It can be removed once nobody does.', { timeout: 60_000 })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    expect((await catalogEntry(fixture, fixture.people.b.token, slug))?.uuid).toBe(first.uuid)
+    await expect(section(a, 'Where it’s shared').getByText('Up to date with the team', { exact: true })).toBeVisible()
+  })
 
-  await shareWithTeam(a, name, [{ person: fixture.people.b }])
-  expect((await libraryEntry(fixture, fixture.people.b.token, slug))?.name).toBe(name)
+  await test.step('B removes it from this computer: core drops B’s local install', async () => {
+    await openAgent(b, name)
+    await b.page.getByRole('button', { name: 'More actions' }).click()
+    await b.page.getByRole('menu', { name: 'Agent actions' }).getByRole('menuitem', { name: 'Remove from this computer…' }).click()
+    const dialog = b.page.getByRole('dialog', { name: 'Remove from this computer' })
+    await dialog.getByRole('button', { name: 'Remove from this computer', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+    await expect
+      .poll(async () => ((await catalogEntry(fixture, fixture.people.b.token, slug))?.my_installs ?? []).length)
+      .toBe(0)
+    expect((await catalogEntryOrFail(fixture, slug)).install_count).toBe(0)
+  })
+
+  await test.step('A’s delete now goes through', async () => {
+    const dialog = await removeSharing()
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+    await expect(a.page.getByText(`${name} is no longer shared with the team.`, { exact: true })).toBeVisible()
+    expect(await catalogEntry(fixture, fixture.people.a.token, slug)).toBeUndefined()
+  })
+
+  await test.step('A shares it again: a new catalog entry at Version 1 that B can get', async () => {
+    await shareWithTeam(a, name, [{ person: fixture.people.b }])
+    // B sees it once core has recorded its first version.
+    await expect.poll(async () => (await catalogEntry(fixture, fixture.people.b.token, slug))?.latest?.revision_number ?? null).toBe(1)
+    const again = await catalogEntry(fixture, fixture.people.b.token, slug)
+    expect(again?.display_name).toBe(name)
+    expect(again.uuid).not.toBe(first.uuid)
+    expect(again.latest?.revision_number).toBe(1)
+  })
 })
 
 test('A takes B’s access away: B’s copy reads No longer shared', async ({ team }) => {
@@ -155,7 +176,7 @@ test('A takes B’s access away: B’s copy reads No longer shared', async ({ te
   await expect(people.getByText(`Remove ${fixture.people.b.name}’s access?`, { exact: true })).toBeVisible()
   await people.getByRole('button', { name: 'Remove', exact: true }).click()
   await expect(people.getByText('No one else has access yet.', { exact: true })).toBeVisible({ timeout: 30_000 })
-  expect(await libraryEntry(fixture, fixture.people.b.token, slug)).toBeUndefined()
+  expect(await catalogEntry(fixture, fixture.people.b.token, slug)).toBeUndefined()
 
   await refreshLibrary(b)
   await openAgent(b, name)
@@ -282,7 +303,7 @@ test('core refuses a plain-git version carrying settings.local.json in any casin
   await finishWithWeather(b, name, `weather-b-${fixture.tag}-secret`)
   const bPath = (await findAgent(b, name)).path
   expect(readFileSync(join(bPath, SETTINGS), 'utf8')).toBe(TEMPLATE_SETTINGS)
-  const teamHead = (await libraryEntry(fixture, fixture.people.a.token, built.slug)).head_sha as string
+  const teamHead = (await catalogEntryOrFail(fixture, built.slug)).desktop.head_sha as string
   const aHead = execFileSync('git', ['-C', built.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   expect(teamHead).toBe(aHead)
 
@@ -296,9 +317,9 @@ test('core refuses a plain-git version carrying settings.local.json in any casin
   }
 
   await test.step('the team version is unchanged and its history never held the file', async () => {
-    const entry = await libraryEntry(fixture, fixture.people.a.token, built.slug)
-    expect(entry.head_sha).toBe(teamHead)
-    const history = cloneHistory(fixture, entry.repo_id, fixture.admin.token)
+    const entry = await catalogEntryOrFail(fixture, built.slug)
+    expect(entry.desktop.head_sha).toBe(teamHead)
+    const history = cloneHistory(fixture, entry.desktop.repo_id, fixture.admin.token)
     if (history.status !== 'ok') throw new Error(`admin clone refused: ${history.output}`)
     expect(history.paths.filter((p) => p.toLowerCase() === SETTINGS)).toEqual([])
     expect(history.blobs).not.toContain('Bash(*)')
@@ -335,7 +356,7 @@ test('core refuses a plain-git version carrying settings.local.json in any casin
   })
 
   await test.step('B promoted to Can edit: still up to date, nothing of B’s to share', async () => {
-    await setAccess(fixture, built.slug, fixture.people.b.id, 'write')
+    await setCatalogAccess(fixture, built.slug, fixture.people.b.id, 'edit')
     await b.relaunch()
     await refreshLibrary(b)
     await openAgent(b, name)

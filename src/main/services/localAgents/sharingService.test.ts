@@ -111,11 +111,12 @@ const { validateAgentFolder } = await import('../../kit/validator')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
 const { turnLock } = await import('./turnLock')
-const { libraryService } = await import('../libraryService')
+const { libraryService, toLibraryEntry } = await import('../libraryService')
 const { sharingService, commitIdentity, parseRemote, fromCoreGrants, toCoreGrants } = await import('./sharingService')
 const { desktopStateService } = await import('./desktopStateService')
 const { gitService } = await import('./gitService')
 const { libraryTrust, acceptableGitOrigin } = await import('../libraryTrust')
+const { catalogLocalInstalls } = await import('../catalogLocalInstalls')
 const { CinnaApiError } = await import('../../errors')
 const { folderAgentId } = await import('../../../shared/localAgents')
 const { CinnaReauthRequired } = await import('../../auth/cinna-oauth')
@@ -138,26 +139,71 @@ let agentDir: string
 let agentId: string
 let rootId = ""
 
-/** A library listing as core sends it. */
+/** The catalog listing as core sends it (`GET /api/v1/catalog/items`). */
 function listed(...agents: Array<Record<string, unknown>>): void {
-  cinnaFetch.mockResolvedValue({ agents, mirrors: [] })
+  cinnaFetch.mockResolvedValue({ data: agents, count: agents.length })
 }
 
-function libraryAgent(repoId: string, slug: string, manifestId: string | null): Record<string, unknown> {
+interface ItemOverrides {
+  cloneUrl?: string
+  headSha?: string | null
+  access?: string
+  visibility?: string
+  isListed?: boolean
+  maintainers?: Array<{ user_id: string; display_name: string }>
+  latest?: Record<string, unknown> | null
+}
+
+/** A desktop agent as a `CatalogItem`, item uuid `item-<repoId>`, catalog id `test.cinna.<repoId>`. */
+function libraryAgent(
+  repoId: string,
+  slug: string,
+  manifestId: string | null,
+  over: ItemOverrides = {}
+): Record<string, unknown> {
   return {
-    repo_id: repoId,
-    slug,
+    kind: 'agent',
+    runs_on: 'desktop',
+    uuid: `item-${repoId}`,
+    id: `test.cinna.${repoId}`,
     name: slug,
+    display_name: slug,
     description: `${slug} agent`,
-    clone_url: `${HOST}/git/${repoId}.git`,
-    default_branch: 'main',
-    head_sha: 'a'.repeat(40),
-    updated_at: '2026-10-09T10:00:00Z',
-    access: 'write',
-    maintainers: [{ user_id: 'u1', display_name: 'Ann' }],
-    manifest: manifestId ? { id: manifestId, name: slug, runtime: { engine: 'claude' } } : {}
+    publisher: { user_id: 'u1', display_name: 'Ann' },
+    maintainers: over.maintainers ?? [{ user_id: 'u1', display_name: 'Ann' }],
+    access: over.access ?? 'edit',
+    visibility: over.visibility ?? 'users',
+    is_listed: over.isListed ?? true,
+    latest:
+      'latest' in over
+        ? over.latest
+        : {
+            revision_number: 4,
+            version: null,
+            published_at: '2026-10-09T10:00:00Z',
+            published_by: { user_id: 'u2', display_name: 'Bob' },
+            release_notes: 'Tightened the prompt'
+          },
+    install_count: 0,
+    my_installs: [],
+    required_credential_specs: [],
+    skills: [],
+    desktop: {
+      repo_id: repoId,
+      clone_url: over.cloneUrl ?? `${HOST}/git/${repoId}.git`,
+      default_branch: 'main',
+      head_sha: 'headSha' in over ? over.headSha : 'a'.repeat(40),
+      manifest_id: manifestId,
+      slug,
+      engine: 'claude',
+      contract_version: '1.10.0'
+    },
+    skill: null
   }
 }
+
+/** A catalog entry created and never shared to: what only an editor or maintainer sees. */
+const NEVER_SHARED: ItemOverrides = { headSha: null, latest: null, access: 'maintain' }
 
 /** Make the agent its own repository with `origin` = `url`, one version recorded. */
 function makeOwnRepo(url: string): void {
@@ -176,6 +222,7 @@ beforeEach(async () => {
   cinnaFetch.mockReset()
   getCinnaAccessToken.mockClear()
   libraryTrust._reset(join(mkdtempSync(join(tmpdir(), 'cinna-trust-')), 'trust.json'))
+  catalogLocalInstalls._reset(join(mkdtempSync(join(tmpdir(), 'cinna-device-')), 'catalog-device.json'))
   publishEvent.mockClear()
   manifestWrite.fail = false
   workshop = mkdtempSync(join(tmpdir(), 'cinna-sharing-'))
@@ -515,6 +562,42 @@ describe('share changes', () => {
   }, 60_000)
 })
 
+describe('share changes — local install', () => {
+  it('reports the version it just sent as this computer’s install', async () => {
+    makeOwnRepo(`${HOST}/git/r1.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === '/api/v1/catalog/items') return { data: [libraryAgent('r1', 'alpha', null, { headSha: head })] }
+      return {}
+    })
+    const send = vi.spyOn(gitService, 'shareChanges').mockResolvedValue({ done: true, refusal: null, detail: null })
+    try {
+      expect((await sharingService.shareChanges(USER, agentId, 'notes')).done).toBe(true)
+      await vi.waitFor(() => expect(calls('POST')).toEqual([[
+        '/api/v1/catalog/items/item-r1/local-installs',
+        { device_id: catalogLocalInstalls.deviceId(), revision_number: 4 }
+      ]]))
+    } finally {
+      send.mockRestore()
+    }
+  }, 30_000)
+
+  it('reports nothing when nothing was sent', async () => {
+    makeOwnRepo(`${HOST}/git/r1.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    listed(libraryAgent('r1', 'alpha', null))
+    const send = vi.spyOn(gitService, 'shareChanges').mockResolvedValue({ done: false, refusal: 'nothing_to_share', detail: null })
+    try {
+      expect((await sharingService.shareChanges(USER, agentId, 'notes')).done).toBe(false)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls('POST')).toEqual([])
+    } finally {
+      send.mockRestore()
+    }
+  }, 30_000)
+})
+
 describe('commit identity', () => {
   it('is the Cinna profile\'s name and email, else a no-reply address, never the machine\'s user', () => {
     expect(commitIdentity({ kind: 'cinna', host: HOST })).toEqual({ name: 'Ann', email: 'ann@example.test' })
@@ -551,13 +634,46 @@ describe('get', () => {
     expect(getCinnaAccessToken).not.toHaveBeenCalled()
   }, 30_000)
 
+  it('refuses a manifest id that is already here in another case, before any network', async () => {
+    const manifestId = readManifest(manifestPath(agentDir)).id!
+    listed(libraryAgent('r2', 'beta', manifestId.toUpperCase()))
+    const result = await sharingService.get(USER, 'r2')
+    expect(result).toMatchObject({ refusal: 'exists', detail: 'Alpha' })
+    expect(getCinnaAccessToken).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('removes a fetched folder whose manifest id is one already here in another case', async () => {
+    const manifestId = readManifest(manifestPath(agentDir)).id!
+    listed(libraryAgent('r7', 'beta', null))
+    const clone = vi.spyOn(gitService, 'clone').mockImplementation(async (_url, target) => {
+      mkdirSync(target, { recursive: true })
+      git(target, 'init', '-q', '-b', 'main', '.')
+      writeFileSync(join(target, 'cinna-agent.json'), JSON.stringify({ id: manifestId.toUpperCase(), name: 'Beta' }))
+      return { done: true, refusal: null, detail: null }
+    })
+    try {
+      const result = await sharingService.get(USER, 'r7')
+      expect(result).toMatchObject({ refusal: 'exists', detail: 'Alpha' })
+      expect(existsSync(join(workshop, 'Local', 'beta'))).toBe(false)
+    } finally {
+      clone.mockRestore()
+    }
+  }, 30_000)
+
+  it('matches this machine’s copy in the library by manifest id in any case', async () => {
+    const manifestId = readManifest(manifestPath(agentDir)).id!
+    listed(libraryAgent('r8', 'beta', manifestId.toUpperCase()))
+    const listing = await sharingService.library(USER, true)
+    expect(listing?.agents.find((agent) => agent.repoId === 'r8')?.localAgentId).toBe(agentId)
+  }, 30_000)
+
   it('answers not_in_library for a repository the library no longer lists', async () => {
     listed(libraryAgent('r1', 'gamma', null))
     expect((await sharingService.get(USER, 'gone')).refusal).toBe('not_in_library')
   }, 30_000)
 
   it('refuses a listing whose address is not a web one, so the token never goes there', async () => {
-    listed({ ...libraryAgent('r5', 'delta', null), clone_url: 'file:///tmp/r5.git' })
+    listed(libraryAgent('r5', 'delta', null, { cloneUrl: 'file:///tmp/r5.git' }))
     const result = await sharingService.get(USER, 'r5')
     expect(result.refusal).toBe('failed')
     expect(getCinnaAccessToken).not.toHaveBeenCalled()
@@ -566,7 +682,7 @@ describe('get', () => {
   it('clones from the git origin the instance names, scoping the token to it, and records the instance', async () => {
     // cinna-core builds clone_url from its backend address; the profile signed
     // in through the web app's origin. Both are the same instance.
-    listed({ ...libraryAgent('r6', 'delta', null), clone_url: `${GIT_HOST}/git/r6.git` })
+    listed(libraryAgent('r6', 'delta', null, { cloneUrl: `${GIT_HOST}/git/r6.git` }))
     const clone = vi.spyOn(gitService, 'clone').mockImplementation(async (_url, target) => {
       mkdirSync(target, { recursive: true })
       git(target, 'init', '-q', '-b', 'main', '.')
@@ -619,7 +735,7 @@ describe('an instance whose git is on another origin', () => {
   it('is learned from the instance\'s own listing for a folder that recorded nothing', async () => {
     makeOwnRepo(`${GIT_HOST}/git/r8.git`)
     expect((await sharingService.status(USER, agentId, false))?.remote.kind).toBe('external')
-    listed({ ...libraryAgent('r8', 'alpha', null), clone_url: `${GIT_HOST}/git/r8.git` })
+    listed(libraryAgent('r8', 'alpha', null, { cloneUrl: `${GIT_HOST}/git/r8.git` }))
     await sharingService.library(USER, true)
     expect((await sharingService.status(USER, agentId, false))?.remote).toMatchObject({ kind: 'cinna', host: HOST })
   }, 30_000)
@@ -671,7 +787,7 @@ describe('which account a remote belongs to', () => {
 
   it('lists a team change in the Inbox when the listing is past this folder', async () => {
     makeOwnRepo(`${HOST}/git/r1.git`)
-    listed({ ...libraryAgent('r1', 'alpha', null), pushed_by: { display_name: 'Bob' } })
+    listed(libraryAgent('r1', 'alpha', null))
     await libraryService.refresh(PROFILE)
     expect(await sharingService.teamChanges(USER)).toEqual([
       expect.objectContaining({ kind: 'team_changed', agentId, agentName: 'Alpha', repoId: 'r1', changedBy: 'Bob' })
@@ -681,7 +797,7 @@ describe('which account a remote belongs to', () => {
 
   it('answers a repeat Inbox read without running git while nothing changed, and reads again when the folder moves', async () => {
     makeOwnRepo(`${HOST}/git/r1.git`)
-    listed({ ...libraryAgent('r1', 'alpha', null), pushed_by: { display_name: 'Bob' } })
+    listed(libraryAgent('r1', 'alpha', null))
     await libraryService.refresh(PROFILE)
     const first = await sharingService.teamChanges(USER)
     expect(first).toHaveLength(1)
@@ -715,11 +831,11 @@ describe('overlapping library refreshes', () => {
     const older = libraryService.refresh(PROFILE)
     // e.g. `library(true)` after another machine shared r2.
     const newer = libraryService.refresh(PROFILE)
-    answers[1]({ agents: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)], mirrors: [] })
+    answers[1]({ data: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)] })
     expect(repoIds(await newer)).toEqual(['r1', 'r2'])
     expect(publishEvent).toHaveBeenCalledTimes(1)
 
-    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    answers[0]({ data: [libraryAgent('r1', 'alpha', null)] })
     // The late caller gets the newer listing: still no older than its own start.
     expect(repoIds(await older)).toEqual(['r1', 'r2'])
     expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1', 'r2'])
@@ -730,16 +846,16 @@ describe('overlapping library refreshes', () => {
     const answers = inFlight()
     const older = libraryService.refresh(PROFILE)
     const newer = libraryService.refresh(PROFILE)
-    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    answers[0]({ data: [libraryAgent('r1', 'alpha', null)] })
     expect(repoIds(await older)).toEqual(['r1'])
-    answers[1]({ agents: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)], mirrors: [] })
+    answers[1]({ data: [libraryAgent('r1', 'alpha', null), libraryAgent('r2', 'beta', null)] })
     expect(repoIds(await newer)).toEqual(['r1', 'r2'])
     expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1', 'r2'])
     expect(publishEvent).toHaveBeenCalledTimes(2)
   })
 
   it('a later refresh that throws does not make an earlier one’s answer look stale', async () => {
-    cinnaFetch.mockResolvedValueOnce({ agents: [], mirrors: [] })
+    cinnaFetch.mockResolvedValueOnce({ data: [] })
     await libraryService.refresh(PROFILE)
     publishEvent.mockClear()
     const answers: Array<(body: unknown) => void> = []
@@ -749,7 +865,7 @@ describe('overlapping library refreshes', () => {
     })
     const older = libraryService.refresh(PROFILE)
     await expect(libraryService.refresh(PROFILE)).rejects.toThrow()
-    answers[0]({ agents: [libraryAgent('r1', 'alpha', null)], mirrors: [] })
+    answers[0]({ data: [libraryAgent('r1', 'alpha', null)] })
     expect(repoIds(await older)).toEqual(['r1'])
     expect(repoIds(libraryService.cached(PROFILE))).toEqual(['r1'])
     expect(publishEvent).toHaveBeenCalledTimes(1)
@@ -757,13 +873,16 @@ describe('overlapping library refreshes', () => {
 })
 
 describe('share with the team', () => {
-  it('starts over on a folder whose team version the library no longer has, and links the new one', async () => {
+  const myManifestId = (): string => readManifest(manifestPath(agentDir)).id!
+  const isPost = (args: unknown[]): boolean => (args[2] as { method?: string } | undefined)?.method === 'POST'
+
+  it('starts over on a folder whose team version the library no longer has, and links the new one with its catalog id', async () => {
     makeOwnRepo(`${HOST}/git/gone.git`)
     git(agentDir, 'config', 'cinna.server', HOST)
-    const fresh = { ...libraryAgent('r20', 'alpha', null), head_sha: null, access: 'maintain' }
+    const fresh = libraryAgent('r20', 'alpha', null, NEVER_SHARED)
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') return fresh
-      return { agents: [], mirrors: [] }
+      if (isPost(args)) return fresh
+      return { data: [] }
     })
     const init = vi.spyOn(gitService, 'initWithRemote').mockImplementation(async (dir, url) => {
       git(dir, 'remote', 'add', 'origin', url)
@@ -775,7 +894,14 @@ describe('share with the team', () => {
       expect(init).toHaveBeenCalledTimes(1)
       expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r20.git`)
       const state = JSON.parse(readFileSync(join(agentDir, 'app-data', 'desktop.json'), 'utf8'))
-      expect(state.shared_remote).toEqual({ kind: 'cinna', repo_id: 'r20', clone_url: `${HOST}/git/r20.git` })
+      expect(state.shared_remote).toEqual({
+        kind: 'cinna',
+        repo_id: 'r20',
+        clone_url: `${HOST}/git/r20.git`,
+        bundle_id: 'test.cinna.r20'
+      })
+      // The status carries what was recorded, for the Sharing tab.
+      expect(result.status?.bundleId).toBe('test.cinna.r20')
     } finally {
       init.mockRestore()
     }
@@ -785,29 +911,27 @@ describe('share with the team', () => {
     makeOwnRepo(`${HOST}/git/r22.git`)
     git(agentDir, 'config', 'cinna.server', HOST)
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') return libraryAgent('r23', 'alpha', null)
+      if (isPost(args)) return libraryAgent('r23', 'alpha', null)
       throw new CinnaApiError('request_failed', 'Cinna API 404', 'Not Found', 404)
     })
     const result = await sharingService.shareWithTeam(USER, agentId, {})
     expect(result.refusal).toBe('remote_exists')
     expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r22.git`)
-    expect(cinnaFetch.mock.calls.some((call) => (call[2] as { method?: string } | undefined)?.method === 'POST')).toBe(false)
+    expect(cinnaFetch.mock.calls.some((call) => isPost(call))).toBe(false)
   }, 30_000)
 
-  it('keeps the old link when creating the new library entry fails', async () => {
+  it('keeps the old link when creating the new catalog entry fails', async () => {
     makeOwnRepo(`${HOST}/git/gone.git`)
     git(agentDir, 'config', 'cinna.server', HOST)
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
-        throw new CinnaApiError('request_failed', 'Cinna API 500', 'The library is down.', 500)
-      }
-      return { agents: [], mirrors: [] }
+      if (isPost(args)) throw new CinnaApiError('request_failed', 'Cinna API 500', 'The catalog is down.', 500)
+      return { data: [] }
     })
     const init = vi.spyOn(gitService, 'initWithRemote')
     try {
       const result = await sharingService.shareWithTeam(USER, agentId, {})
       expect(result.refusal).toBe('failed')
-      expect(result.detail).toBe('The library is down.')
+      expect(result.detail).toBe('The catalog is down.')
       expect(init).not.toHaveBeenCalled()
       expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/gone.git`)
     } finally {
@@ -822,52 +946,98 @@ describe('share with the team', () => {
     expect(result.refusal).toBe('remote_exists')
     expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r21.git`)
   }, 30_000)
-  it('finishes an entry an earlier attempt created and never sent to, instead of failing on the name', async () => {
-    const empty = { ...libraryAgent('r10', 'alpha', null), clone_url: `${GIT_HOST}/git/r10.git`, head_sha: null, access: 'maintain' }
-    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
-        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
-      }
-      return { agents: [empty], mirrors: [] }
+
+  it('finishes this folder’s own entry an earlier attempt created and never sent to, giving access first', async () => {
+    const empty = libraryAgent('r10', 'alpha', myManifestId(), {
+      ...NEVER_SHARED,
+      cloneUrl: `${GIT_HOST}/git/r10.git`,
+      maintainers: [{ user_id: 'me-1', display_name: 'Ann' }]
     })
-    const init = vi.spyOn(gitService, 'initWithRemote').mockResolvedValue({ done: true, refusal: null, detail: null })
-    // The earlier attempt on this machine recorded the entry it created.
-    libraryTrust.setPending(HOST, 'alpha', 'r10')
+    const order: string[] = []
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
+      order.push(`${method} ${args[1] as string}`)
+      if (method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
+      }
+      if (method === 'PUT') return []
+      return { data: [empty] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockImplementation(async () => {
+      order.push('send')
+      return { done: true, refusal: null, detail: null }
+    })
     try {
-      const result = await sharingService.shareWithTeam(USER, agentId, {})
+      const result = await sharingService.shareWithTeam(USER, agentId, { name: 'Alpha', people: [{ userId: 'bob-2', access: 'use' }] })
       expect(result.done).toBe(true)
       expect(init.mock.calls[0][1]).toBe(`${GIT_HOST}/git/r10.git`)
       expect(init.mock.calls[0][2]).toMatchObject({ kind: 'cinna', origin: GIT_HOST })
-      expect(libraryTrust.pending(HOST, 'alpha')).toBeNull()
+      // This attempt's people replace whatever the earlier one chose, before anything is sent.
+      expect(calls('PUT')).toEqual([[
+        '/api/v1/catalog/items/item-r10/grants',
+        [{ principal: { user_id: 'me-1' }, access: 'maintain' }, { principal: { user_id: 'bob-2' }, access: 'use' }]
+      ]])
+      expect(order.indexOf('PUT /api/v1/catalog/items/item-r10/grants')).toBeLessThan(order.indexOf('send'))
     } finally {
       init.mockRestore()
     }
   }, 30_000)
 
-  it('does not take over an empty entry under the same name that this machine did not create', async () => {
-    const empty = { ...libraryAgent('r12', 'alpha', null), head_sha: null, access: 'maintain' }
-    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
-        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
-      }
-      return { agents: [empty], mirrors: [] }
+  it('finishes this folder’s own entry when core stored its manifest id in another case', async () => {
+    // Core lowercases the id; the validator accepts an uppercase UUID in the folder.
+    const empty = libraryAgent('r12', 'alpha', myManifestId().toUpperCase(), {
+      ...NEVER_SHARED,
+      cloneUrl: `${GIT_HOST}/git/r12.git`,
+      maintainers: [{ user_id: 'me-1', display_name: 'Ann' }]
     })
-    const result = await sharingService.shareWithTeam(USER, agentId, {})
-    expect(result.refusal).toBe('failed')
-    expect(existsSync(join(agentDir, '.git'))).toBe(false)
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
+      if (method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
+      }
+      if (method === 'PUT') return []
+      return { data: [empty] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockResolvedValue({ done: true, refusal: null, detail: null })
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, { name: 'Alpha', people: [] })
+      expect(result.done).toBe(true)
+      expect(init.mock.calls[0][1]).toBe(`${GIT_HOST}/git/r12.git`)
+    } finally {
+      init.mockRestore()
+    }
   }, 30_000)
 
-  it('keeps refusing a taken name that already has content', async () => {
-    const taken = { ...libraryAgent('r11', 'alpha', null), access: 'maintain' }
+  it('does not take over an empty entry under the same name that is not this folder’s', async () => {
+    const empty = libraryAgent('r12', 'alpha', 'someone-elses-manifest', NEVER_SHARED)
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
-        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
+      if (isPost(args)) {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
       }
-      return { agents: [taken], mirrors: [] }
+      return { data: [empty] }
+    })
+    const result = await sharingService.shareWithTeam(USER, agentId, {})
+    expect(result).toMatchObject({ refusal: 'failed', detail: 'An agent called alpha is already in the catalog.' })
+    expect(existsSync(join(agentDir, '.git'))).toBe(false)
+    expect(calls('PUT')).toEqual([])
+  }, 30_000)
+
+  it('keeps refusing this folder’s entry once it has a version, with core’s own sentence', async () => {
+    const taken = libraryAgent('r11', 'alpha', myManifestId(), { access: 'maintain' })
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if (isPost(args)) {
+        throw new CinnaApiError(
+          'request_failed',
+          'Cinna API 409',
+          'This agent is already in the catalog. Share changes to it instead.',
+          409
+        )
+      }
+      return { data: [taken] }
     })
     const result = await sharingService.shareWithTeam(USER, agentId, {})
     expect(result.refusal).toBe('failed')
-    expect(result.detail).toBe('An agent called alpha is already in the team library.')
+    expect(result.detail).toBe('This agent is already in the catalog. Share changes to it instead.')
     expect(existsSync(join(agentDir, '.git'))).toBe(false)
   }, 30_000)
 
@@ -911,16 +1081,15 @@ function calls(method: string): Array<[string, unknown]> {
 }
 
 describe('share with the team — who gets it', () => {
-  const fresh = { ...libraryAgent('r30', 'alpha', null), head_sha: null, access: 'maintain', maintainers: [{ user_id: 'me-1', display_name: 'Ann' }] }
+  const fresh = libraryAgent('r30', 'alpha', null, { ...NEVER_SHARED, maintainers: [{ user_id: 'me-1', display_name: 'Ann' }] })
 
-  it('creates with the chosen people, gives them access before anything is sent, and sends the manifest description', async () => {
+  it('creates the catalog entry with the manifest id and the chosen people, before anything is sent', async () => {
     const order: string[] = []
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
       const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
       order.push(`${method} ${args[1] as string}`)
       if (method === 'POST') return fresh
-      if (method === 'PUT') return null
-      return { agents: [], mirrors: [] }
+      return { data: [] }
     })
     const init = vi.spyOn(gitService, 'initWithRemote').mockImplementation(async () => {
       order.push('send')
@@ -930,59 +1099,62 @@ describe('share with the team — who gets it', () => {
       const result = await sharingService.shareWithTeam(USER, agentId, {
         name: 'Alpha',
         description: 'ignored',
-        people: [{ userId: 'bob-2', access: 'write' }, { userId: 'me-1', access: 'read' }, { userId: '', access: 'read' }]
+        people: [{ userId: 'bob-2', access: 'edit' }, { userId: 'me-1', access: 'use' }, { userId: '', access: 'use' }]
       } as never)
       expect(result.done).toBe(true)
-      const [[, created]] = calls('POST')
+      const [[path, created]] = calls('POST')
+      expect(path).toBe('/api/v1/catalog/desktop-agents')
       expect(created).toEqual({
         slug: 'alpha',
-        name: 'Alpha',
+        display_name: 'Alpha',
         description: 'Watches the alpha feed.',
+        manifest_id: readManifest(manifestPath(agentDir)).id,
+        // A person's `use` counts only under `users`; never everyone by default.
+        visibility: 'users',
         grants: [
-          { principal: { user_id: 'bob-2' }, access: 'write' },
-          { principal: { user_id: 'me-1' }, access: 'read' }
+          { principal: { user_id: 'bob-2' }, access: 'edit' },
+          { principal: { user_id: 'me-1' }, access: 'use' }
         ]
       })
-      const [[path, grants]] = calls('PUT')
-      expect(path).toBe('/api/v1/library/agents/r30/grants')
-      // The creator stays maintainer; nobody else, and never everyone.
-      expect(grants).toEqual([
-        { principal: { user_id: 'me-1' }, access: 'maintain' },
-        { principal: { user_id: 'bob-2' }, access: 'write' }
-      ])
-      expect(order.indexOf('PUT /api/v1/library/agents/r30/grants')).toBeLessThan(order.indexOf('send'))
+      // The create carried the people: no separate write of who has access.
+      expect(calls('PUT')).toEqual([])
+      expect(order.indexOf('POST /api/v1/catalog/desktop-agents')).toBeLessThan(order.indexOf('send'))
     } finally {
       init.mockRestore()
     }
   }, 30_000)
 
-  it('sends nothing when giving access fails, and leaves the entry for a retry to finish', async () => {
+  it('sends nothing when giving an adopted entry access fails, and leaves it for a retry to finish', async () => {
+    const own = libraryAgent('r30', 'alpha', readManifest(manifestPath(agentDir)).id!, {
+      ...NEVER_SHARED,
+      maintainers: [{ user_id: 'me-1', display_name: 'Ann' }]
+    })
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
       const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
-      if (method === 'POST') return fresh
-      if (method === 'PUT') throw new CinnaApiError('request_failed', 'Cinna API 422', 'Unknown user bob-2.', 422)
-      return { agents: [], mirrors: [] }
+      if (method === 'POST') throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
+      if (method === 'PUT') throw new CinnaApiError('request_failed', 'Cinna API 422', 'That person is not an active user', 422)
+      return { data: [own] }
     })
     const init = vi.spyOn(gitService, 'initWithRemote')
     try {
-      const result = await sharingService.shareWithTeam(USER, agentId, { name: 'Alpha', people: [{ userId: 'bob-2', access: 'read' }] })
+      const result = await sharingService.shareWithTeam(USER, agentId, { name: 'Alpha', people: [{ userId: 'bob-2', access: 'use' }] })
       expect(result.done).toBe(false)
       expect(result.refusal).toBe('failed')
       expect(result.detail).toContain('wasn’t sent')
-      expect(result.detail).toContain('Unknown user bob-2.')
+      expect(result.detail).toContain('That person is not an active user')
       expect(init).not.toHaveBeenCalled()
       expect(existsSync(join(agentDir, '.git'))).toBe(false)
-      expect(libraryTrust.pending(HOST, 'alpha')).toBe('r30')
     } finally {
       init.mockRestore()
     }
   }, 30_000)
 
-  it('refuses before sending when the server does not say who maintains the new entry', async () => {
+  it('refuses before sending when the catalog does not say who maintains an adopted entry', async () => {
+    const own = libraryAgent('r30', 'alpha', readManifest(manifestPath(agentDir)).id!, { ...NEVER_SHARED, maintainers: [] })
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
       const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
-      if (method === 'POST') return { ...fresh, maintainers: [] }
-      return { agents: [], mirrors: [] }
+      if (method === 'POST') throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the catalog.', 409)
+      return { data: [own] }
     })
     const init = vi.spyOn(gitService, 'initWithRemote')
     try {
@@ -999,41 +1171,81 @@ describe('share with the team — who gets it', () => {
 describe('people', () => {
   it('maps core’s grants to the People list and back, both ways', () => {
     const fromCore = fromCoreGrants([
-      { principal: { user_id: 'u1', display_name: 'Ann' }, access: 'maintain' },
-      { principal: { role: 'admin' }, access: 'write', display_name: 'Admins' },
-      { principal: 'everyone', access: 'read' },
-      { principal: { nonsense: true }, access: 'read' }
+      { principal: { user_id: 'u1' }, access: 'maintain', display_name: 'Ann' },
+      { principal: { role: 'admin' }, access: 'edit', display_name: 'Admins' },
+      { principal: { nonsense: true }, access: 'use' }
     ])
     expect(fromCore).toEqual([
       { principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' },
-      { principal: { kind: 'role', role: 'admin' }, access: 'write', displayName: 'Admins' },
-      { principal: { kind: 'everyone' }, access: 'read', displayName: '' }
+      { principal: { kind: 'role', role: 'admin' }, access: 'edit', displayName: 'Admins' }
     ])
-    expect(fromCoreGrants({ grants: [{ principal: { user_id: 'u2' }, access: 'write', full_name: 'Bob' }] })).toEqual([
-      { principal: { kind: 'user', userId: 'u2' }, access: 'write', displayName: 'Bob' }
+    expect(fromCoreGrants({ grants: [{ principal: { user_id: 'u2' }, access: 'edit', full_name: 'Bob' }] })).toEqual([
+      { principal: { kind: 'user', userId: 'u2' }, access: 'edit', displayName: 'Bob' }
     ])
-    expect(toCoreGrants(fromCore)).toEqual([
+    // Everyone is the item's visibility on core, never a grant.
+    expect(
+      toCoreGrants([...fromCore, { principal: { kind: 'everyone' }, access: 'use', displayName: '' }])
+    ).toEqual([
       { principal: { user_id: 'u1' }, access: 'maintain' },
-      { principal: { role: 'admin' }, access: 'write' },
-      { principal: 'everyone', access: 'read' }
+      { principal: { role: 'admin' }, access: 'edit' }
     ])
   })
 
-  async function sharedOnHost(): Promise<void> {
+  /** Shared on HOST as `r1`, listed as item `item-r1` at `visibility`, with `grants` as core's answer to GET/PUT. */
+  async function sharedOnHost(visibility = 'users', grants: unknown[] = [], isListed = true): Promise<void> {
     makeOwnRepo(`${HOST}/git/r1.git`)
     git(agentDir, 'config', 'cinna.server', HOST)
+    const item = { ...libraryAgent('r1', 'alpha', null, { access: 'maintain', visibility, isListed }) }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string
+      const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
+      if (path === '/api/v1/catalog/items' && method === 'GET') return { data: [item] }
+      if (path.endsWith('/grants')) return grants
+      if (method === 'PATCH') {
+        item.visibility = ((args[2] as { body: { visibility: string } }).body).visibility
+        return item
+      }
+      throw new Error(`unexpected ${method} ${path}`)
+    })
+    await libraryService.refresh(PROFILE)
+    cinnaFetch.mockClear()
   }
 
-  it('reads who has access, and says "not visible" on a 403 instead of asking to sign in again', async () => {
-    await sharedOnHost()
-    cinnaFetch.mockResolvedValueOnce([{ principal: { user_id: 'u1', display_name: 'Ann' }, access: 'maintain' }])
+  const ANN = { principal: { user_id: 'u1' }, access: 'maintain', display_name: 'Ann' }
+
+  it('reads who has access from the catalog item, Everyone when it is public', async () => {
+    await sharedOnHost('public', [ANN])
     // The caller (the stored token's subject) is marked, since it is listed.
     expect(await sharingService.people(USER, agentId)).toEqual({
       visible: true,
-      people: [{ principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' }],
+      people: [
+        { principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' },
+        { principal: { kind: 'everyone' }, access: 'use', displayName: '' }
+      ],
       selfUserId: 'u1'
     })
-    expect(cinnaFetch.mock.calls[0][1]).toBe('/api/v1/library/agents/r1/grants')
+    expect(cinnaFetch.mock.calls.map((call) => call[1])).toEqual(['/api/v1/catalog/items/item-r1/grants'])
+  }, 30_000)
+
+  it('shows no Everyone for a public item the catalog does not list: it reaches no one', async () => {
+    await sharedOnHost('public', [ANN], false)
+    const people = await sharingService.people(USER, agentId)
+    expect(people?.people.map((p) => p.principal.kind)).toEqual(['user'])
+  }, 30_000)
+
+  it('leaves an unlisted public item public when a list without Everyone is saved', async () => {
+    await sharedOnHost('public', [ANN], false)
+    const saved = await sharingService.setPeople(USER, agentId, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'edit' }
+    ])
+    expect(saved.done).toBe(true)
+    expect(calls('PUT')).toHaveLength(1)
+    expect(calls('PATCH')).toEqual([])
+  }, 30_000)
+
+  it('says "not visible" on a 403 instead of asking to sign in again', async () => {
+    await sharedOnHost('users', [ANN])
     cinnaFetch.mockRejectedValueOnce(new CinnaApiError('reauth_required', 'Cinna 403', '403', 403))
     expect(await sharingService.people(USER, agentId)).toEqual({ visible: false, people: [], selfUserId: null })
   }, 30_000)
@@ -1044,44 +1256,87 @@ describe('people', () => {
     expect(cinnaFetch).not.toHaveBeenCalled()
   }, 30_000)
 
-  it('puts the whole list, mapped to core’s principals, and returns the server’s refusal sentence', async () => {
-    await sharedOnHost()
-    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'PUT') {
-        return [
-          { principal: { user_id: 'u1', display_name: 'Ann' }, access: 'maintain' },
-          { principal: 'everyone', access: 'read' }
-        ]
-      }
-      return { agents: [], mirrors: [] }
-    })
-    const people = [
+  it('adding Everyone puts the grants, then makes the agent public — in that order', async () => {
+    await sharedOnHost('users', [ANN])
+    const saved = await sharingService.setPeople(USER, agentId, [
       { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
-      { principal: { kind: 'everyone' }, access: 'read' }
-    ]
-    const saved = await sharingService.setPeople(USER, agentId, people)
+      { principal: { kind: 'everyone' }, access: 'use' }
+    ])
     expect(saved.done).toBe(true)
-    // The list as the server answered it, names included, for the renderer's cache.
+    const writes = cinnaFetch.mock.calls
+      .filter((call) => (call[2] as { method?: string } | undefined)?.method)
+      .map((call) => [(call[2] as { method: string }).method, call[1], (call[2] as { body?: unknown }).body])
+    expect(writes).toEqual([
+      ['PUT', '/api/v1/catalog/items/item-r1/grants', [{ principal: { user_id: 'u1' }, access: 'maintain' }]],
+      ['PATCH', '/api/v1/catalog/items/item-r1', { visibility: 'public' }]
+    ])
+    // The list as the server answered it, names included, Everyone back in.
     expect(saved.people).toEqual({
       visible: true,
       people: [
         { principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' },
-        { principal: { kind: 'everyone' }, access: 'read', displayName: '' }
+        { principal: { kind: 'everyone' }, access: 'use', displayName: '' }
       ],
       selfUserId: 'u1'
     })
-    expect(calls('PUT')).toEqual([[
-      '/api/v1/library/agents/r1/grants',
-      [{ principal: { user_id: 'u1' }, access: 'maintain' }, { principal: 'everyone', access: 'read' }]
-    ]])
     expect(publishEvent).toHaveBeenCalledWith('sharing:changed')
+  }, 30_000)
 
-    cinnaFetch.mockRejectedValueOnce(
-      new CinnaApiError('request_failed', 'Cinna API 409', 'An agent needs at least one maintainer.', 409)
-    )
-    const refused = await sharingService.setPeople(USER, agentId, [{ principal: { kind: 'everyone' }, access: 'read' }])
-    expect(refused).toMatchObject({ done: false, refusal: 'failed', detail: 'An agent needs at least one maintainer.' })
-    expect((await sharingService.setPeople(USER, agentId, [{ principal: { kind: 'user' }, access: 'read' }])).done).toBe(false)
+  it('removing Everyone narrows the agent to the people named, after their grants are in', async () => {
+    await sharedOnHost('public', [ANN, { principal: { user_id: 'u2' }, access: 'use', display_name: 'Bob' }])
+    const saved = await sharingService.setPeople(USER, agentId, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'use' }
+    ])
+    expect(saved.done).toBe(true)
+    expect(calls('PUT').map(([path]) => path)).toEqual(['/api/v1/catalog/items/item-r1/grants'])
+    expect(calls('PATCH')).toEqual([['/api/v1/catalog/items/item-r1', { visibility: 'users' }]])
+    const order = cinnaFetch.mock.calls.map((call) => (call[2] as { method?: string } | undefined)?.method ?? 'GET')
+    expect(order.indexOf('PUT')).toBeLessThan(order.indexOf('PATCH'))
+    expect(saved.people?.people.some((p) => p.principal.kind === 'everyone')).toBe(false)
+  }, 30_000)
+
+  it('changes no visibility when Everyone stayed as it was', async () => {
+    await sharedOnHost('users', [ANN])
+    const saved = await sharingService.setPeople(USER, agentId, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'edit' }
+    ])
+    expect(saved.done).toBe(true)
+    expect(calls('PUT')).toHaveLength(1)
+    expect(calls('PATCH')).toEqual([])
+  }, 30_000)
+
+  it('returns the server’s refusal sentence, and changes no visibility after refused grants', async () => {
+    await sharedOnHost('users', [ANN])
+    const base = cinnaFetch.getMockImplementation()!
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'PUT') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An item needs at least one maintainer.', 409)
+      }
+      return base(...args)
+    })
+    const refused = await sharingService.setPeople(USER, agentId, [{ principal: { kind: 'everyone' }, access: 'use' }])
+    expect(refused).toMatchObject({ done: false, refusal: 'failed', detail: 'An item needs at least one maintainer.' })
+    expect(calls('PATCH')).toEqual([])
+    expect((await sharingService.setPeople(USER, agentId, [{ principal: { kind: 'user' }, access: 'use' }])).done).toBe(false)
+  }, 30_000)
+
+  it('says why when the visibility is refused after the grants went in, with the list as it now stands', async () => {
+    await sharedOnHost('users', [ANN])
+    const base = cinnaFetch.getMockImplementation()!
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'PATCH') {
+        throw new CinnaApiError('request_failed', 'Cinna API 422', 'Public sharing is turned off here.', 422)
+      }
+      return base(...args)
+    })
+    const saved = await sharingService.setPeople(USER, agentId, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'everyone' }, access: 'use' }
+    ])
+    expect(saved).toMatchObject({ done: false, refusal: 'failed', detail: 'Public sharing is turned off here.' })
+    expect(saved.people?.people.map((p) => p.principal.kind)).toEqual(['user'])
   }, 30_000)
 
   it('finds people by name or email, from two characters', async () => {
@@ -1101,9 +1356,9 @@ describe('remove sharing', () => {
     makeOwnRepo(`${HOST}/git/r1.git`)
     git(agentDir, 'config', 'cinna.server', HOST)
     desktopStateService.patch(agentDir, 'kit', {
-      shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` }
+      shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git`, bundle_id: 'test.cinna.r1' }
     })
-    listed({ ...libraryAgent('r1', 'alpha', null), access: 'maintain' })
+    listed(libraryAgent('r1', 'alpha', null, { access: 'maintain' }))
     await libraryService.refresh(PROFILE)
   }
   const sharedRemote = (): unknown =>
@@ -1117,7 +1372,8 @@ describe('remove sharing', () => {
     listed()
     const result = await sharingService.unshare(USER, agentId, false)
     expect(result.done).toBe(true)
-    expect(calls('DELETE')).toEqual([])
+    // The catalog entry stays; only this computer's install row goes (see below).
+    expect(calls('DELETE').filter(([path]) => !path.includes('/local-installs/'))).toEqual([])
     expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
     expect(() => git(agentDir, 'config', '--get', 'cinna.server')).toThrow()
     expect(sharedRemote()).toBeNull()
@@ -1127,39 +1383,83 @@ describe('remove sharing', () => {
     expect(publishEvent).toHaveBeenCalledWith('sharing:changed')
   }, 30_000)
 
-  it('deletes the library entry first when asked, then disconnects', async () => {
+  it('tells the catalog this computer no longer holds an entry that stays, so it never blocks a delete', async () => {
     await sharedOnHost()
-    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
-      if ((args[2] as { method?: string } | undefined)?.method === 'DELETE') return null
-      return { agents: [], mirrors: [] }
-    })
-    const result = await sharingService.unshare(USER, agentId, true)
-    expect(result.done).toBe(true)
-    expect(calls('DELETE').map(([path]) => path)).toEqual(['/api/v1/library/agents/r1'])
-    expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
+    cinnaFetch.mockClear()
+    listed(libraryAgent('r1', 'alpha', null, { access: 'maintain' }))
+    expect((await sharingService.unshare(USER, agentId, false)).done).toBe(true)
+    await vi.waitFor(() =>
+      expect(calls('DELETE')).toEqual([
+        [`/api/v1/catalog/items/item-r1/local-installs/${catalogLocalInstalls.deviceId()}`, undefined]
+      ])
+    )
   }, 30_000)
 
-  it('changes nothing here when the server refuses the delete, and says why', async () => {
+  it('still removes sharing when that report fails', async () => {
     await sharedOnHost()
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {
       if ((args[2] as { method?: string } | undefined)?.method === 'DELETE') {
-        throw new CinnaApiError('request_failed', 'Cinna API 409', 'Another person has this agent in their workspace.', 409)
+        throw new CinnaApiError('request_failed', 'Cinna API 500', 'Server Error', 500)
       }
-      return { agents: [], mirrors: [] }
+      return { data: [] }
+    })
+    expect((await sharingService.unshare(USER, agentId, false)).done).toBe(true)
+    expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
+  }, 30_000)
+
+  it('deletes the catalog entry first when asked, then disconnects', async () => {
+    await sharedOnHost()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'DELETE') return null
+      return { data: [libraryAgent('r1', 'alpha', null, { access: 'maintain' })] }
     })
     const result = await sharingService.unshare(USER, agentId, true)
-    expect(result).toMatchObject({ done: false, refusal: 'failed', detail: 'Another person has this agent in their workspace.' })
+    expect(result.done).toBe(true)
+    expect(calls('DELETE').map(([path]) => path)).toEqual(['/api/v1/catalog/items/item-r1'])
+    expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
+  }, 30_000)
+
+  it('changes nothing here when the server refuses the delete because people use it, and says so', async () => {
+    await sharedOnHost()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'DELETE') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', '1 person uses this. It can be removed once nobody does.', 409)
+      }
+      return { data: [libraryAgent('r1', 'alpha', null, { access: 'maintain' })] }
+    })
+    const result = await sharingService.unshare(USER, agentId, true)
+    expect(result).toMatchObject({
+      done: false,
+      refusal: 'failed',
+      detail: '1 person uses this. It can be removed once nobody does.'
+    })
+    // Nothing changed here, so no install row is reported gone either.
+    expect(calls('DELETE').map(([path]) => path)).toEqual(['/api/v1/catalog/items/item-r1'])
     expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r1.git`)
     expect(git(agentDir, 'config', '--get', 'cinna.server').trim()).toBe(HOST)
-    expect(sharedRemote()).toEqual({ kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` })
+    expect(sharedRemote()).toEqual({
+      kind: 'cinna',
+      repo_id: 'r1',
+      clone_url: `${HOST}/git/r1.git`,
+      bundle_id: 'test.cinna.r1'
+    })
+  }, 30_000)
+
+  it('counts an entry the catalog no longer lists as already deleted, and disconnects', async () => {
+    await sharedOnHost()
+    listed()
+    const result = await sharingService.unshare(USER, agentId, true)
+    expect(result.done).toBe(true)
+    expect(calls('DELETE')).toEqual([])
+    expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
   }, 30_000)
 
   it('disconnects an agent shared on another account, locally only', async () => {
     makeOwnRepo(`${OTHER_HOST}/git/r9.git`)
-    cinnaFetch.mockResolvedValue({ agents: [], mirrors: [] })
+    cinnaFetch.mockResolvedValue({ data: [] })
     expect((await sharingService.unshare(USER, agentId, false)).done).toBe(true)
     // Only the active account's own listing is read again afterwards.
-    expect(cinnaFetch.mock.calls.map((call) => call[1])).toEqual(['/api/v1/library'])
+    expect(cinnaFetch.mock.calls.map((call) => call[1])).toEqual(['/api/v1/catalog/items'])
     expect(() => git(agentDir, 'config', '--get', 'remote.origin.url')).toThrow()
   }, 30_000)
 
@@ -1214,5 +1514,177 @@ describe('the library poll', () => {
     await libraryService.refreshQuietly(PROFILE)
     expect(publishEvent).toHaveBeenCalledWith('sharing:changed')
     expect((await sharingService.status(USER, agentId, false))?.state).toBe('removed')
+  }, 30_000)
+})
+
+describe('the catalog listing', () => {
+  it('keeps every item it lists, and reads team agents only from the desktop agents among them', async () => {
+    const cloud = { ...libraryAgent('c1', 'cloudy', null), runs_on: 'cloud', desktop: null }
+    const skill = { ...libraryAgent('s1', 'a-skill', null), kind: 'skill', runs_on: null, desktop: null }
+    const noRepo = libraryAgent('', 'broken', null)
+    cinnaFetch.mockResolvedValue({ data: [libraryAgent('r1', 'alpha', 'm-1'), cloud, skill, noRepo, 'junk', { kind: 'agent' }], count: 6 })
+    const listing = await libraryService.refresh(PROFILE)
+    expect(cinnaFetch.mock.calls[0][1]).toBe('/api/v1/catalog/items')
+    // Raw items for the one-catalog dialog: every well-formed row, every kind.
+    expect(listing?.items.map((item) => item.uuid)).toEqual(['item-r1', 'item-c1', 'item-s1', 'item-'])
+    // Team agents: desktop agents carrying what a Get needs.
+    expect(listing?.agents.map((agent) => agent.repoId)).toEqual(['r1'])
+    expect(listing?.available).toBe(true)
+  })
+
+  it('maps a desktop agent’s catalog facts', () => {
+    expect(
+      toLibraryEntry(libraryAgent('r1', 'alpha', 'm-1', { access: 'maintain', visibility: 'public', cloneUrl: `${GIT_HOST}/git/r1.git` }))
+    ).toEqual({
+      uuid: 'item-r1',
+      bundleId: 'test.cinna.r1',
+      repoId: 'r1',
+      slug: 'alpha',
+      name: 'alpha',
+      description: 'alpha agent',
+      cloneUrl: `${GIT_HOST}/git/r1.git`,
+      headSha: 'a'.repeat(40),
+      access: 'maintain',
+      visibility: 'public',
+      isListed: true,
+      maintainers: [{ userId: 'u1', displayName: 'Ann' }],
+      engine: 'claude',
+      manifestId: 'm-1',
+      latest: { number: 4, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' }
+    })
+    // Delisted is carried; a row without the flag reads as listed.
+    expect(toLibraryEntry(libraryAgent('r5', 'eps', null, { isListed: false }))).toMatchObject({ isListed: false })
+    const { is_listed: _dropped, ...unflagged } = libraryAgent('r6', 'zeta', null)
+    expect(toLibraryEntry(unflagged)).toMatchObject({ isListed: true })
+    // Never shared: no head, no version.
+    expect(toLibraryEntry(libraryAgent('r2', 'beta', null, NEVER_SHARED))).toMatchObject({ headSha: '', latest: null, access: 'maintain' })
+    // Rows a Get could not use are dropped.
+    expect(toLibraryEntry(libraryAgent('r3', 'gamma', null, { cloneUrl: '' }))).toBeNull()
+    expect(toLibraryEntry({ ...libraryAgent('r4', 'delta', null), runs_on: 'cloud' })).toBeNull()
+  })
+
+  it('treats a 403 listing as unavailable and empty, never as a dead session', async () => {
+    cinnaFetch.mockRejectedValue(new CinnaApiError('reauth_required', 'Cinna 403', '403', 403))
+    const listing = await libraryService.refresh(PROFILE)
+    expect(listing).toMatchObject({ items: [], agents: [], available: false })
+  })
+})
+
+describe('local installs reported to the catalog', () => {
+  const posts = (): Array<[string, unknown]> => calls('POST').filter(([path]) => path.endsWith('/local-installs'))
+  /** Let fire-and-forget reports run. */
+  const settleReports = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
+
+  /** A clone stand-in: a folder with one recorded version. Answers its head. */
+  function cloneWithOneVersion(): { head: () => string; restore: () => void } {
+    let head = ''
+    const clone = vi.spyOn(gitService, 'clone').mockImplementation(async (url, target) => {
+      mkdirSync(target, { recursive: true })
+      git(target, 'init', '-q', '-b', 'main', '.')
+      git(target, 'remote', 'add', 'origin', url)
+      writeFileSync(join(target, 'cinna-agent.json'), JSON.stringify({ id: 'delta-id', name: 'Delta' }))
+      git(target, 'add', '-A')
+      git(target, 'commit', '-q', '-m', 'first')
+      head = git(target, 'rev-parse', 'HEAD').trim()
+      return { done: true, refusal: null, detail: null }
+    })
+    return { head: () => head, restore: () => clone.mockRestore() }
+  }
+
+  it('after Get, reports the version that arrived — looked up by its commit — and records the catalog id', async () => {
+    const clone = cloneWithOneVersion()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string
+      if (path === '/api/v1/catalog/items') return { data: [libraryAgent('r6', 'delta', null)] }
+      if (path === '/api/v1/catalog/items/item-r6') {
+        return { revisions: [{ revision_number: 5, git_commit_sha: 'b'.repeat(40) }, { revision_number: 2, git_commit_sha: clone.head() }] }
+      }
+      return {}
+    })
+    try {
+      const result = await sharingService.get(USER, 'r6')
+      expect(result.done).toBe(true)
+      await vi.waitFor(() => expect(posts()).toHaveLength(1))
+      expect(posts()[0]).toEqual([
+        '/api/v1/catalog/items/item-r6/local-installs',
+        { device_id: catalogLocalInstalls.deviceId(), revision_number: 2 }
+      ])
+      const state = JSON.parse(readFileSync(join(workshop, 'Local', 'delta', 'app-data', 'desktop.json'), 'utf8'))
+      expect(state.shared_remote).toMatchObject({ repo_id: 'r6', bundle_id: 'test.cinna.r6' })
+    } finally {
+      clone.restore()
+    }
+  }, 30_000)
+
+  it('reports nothing when the folder is at no version the catalog knows', async () => {
+    const clone = cloneWithOneVersion()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string
+      if (path === '/api/v1/catalog/items') return { data: [libraryAgent('r6', 'delta', null)] }
+      if (path === '/api/v1/catalog/items/item-r6') return { revisions: [{ revision_number: 5, git_commit_sha: 'b'.repeat(40) }] }
+      return {}
+    })
+    try {
+      expect((await sharingService.get(USER, 'r6')).done).toBe(true)
+      await vi.waitFor(() => expect(cinnaFetch.mock.calls.some((call) => call[1] === '/api/v1/catalog/items/item-r6')).toBe(true))
+      await settleReports()
+      expect(posts()).toEqual([])
+    } finally {
+      clone.restore()
+    }
+  }, 30_000)
+
+  it('never fails the verb when the report fails', async () => {
+    const clone = cloneWithOneVersion()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string
+      if (path === '/api/v1/catalog/items') return { data: [libraryAgent('r6', 'delta', null)] }
+      throw new CinnaApiError('request_failed', 'Cinna API 500', 'Server Error', 500)
+    })
+    try {
+      const result = await sharingService.get(USER, 'r6')
+      expect(result).toMatchObject({ done: true, refusal: null })
+      await settleReports()
+      expect(posts()).toEqual([])
+    } finally {
+      clone.restore()
+    }
+  }, 30_000)
+
+  it('after Update, reports the latest version when the folder is at the team’s head', async () => {
+    makeOwnRepo(`${HOST}/git/r1.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === '/api/v1/catalog/items') return { data: [libraryAgent('r1', 'alpha', null, { headSha: head })] }
+      return {}
+    })
+    const pull = vi.spyOn(gitService, 'pullRebaseClean').mockResolvedValue({ done: true, refusal: null, detail: null })
+    try {
+      expect((await sharingService.update(USER, agentId)).done).toBe(true)
+      await vi.waitFor(() => expect(posts()).toHaveLength(1))
+      expect(posts()[0]).toEqual([
+        '/api/v1/catalog/items/item-r1/local-installs',
+        { device_id: catalogLocalInstalls.deviceId(), revision_number: 4 }
+      ])
+      // The latest version said it: no lookup of the versions.
+      expect(cinnaFetch.mock.calls.some((call) => call[1] === '/api/v1/catalog/items/item-r1')).toBe(false)
+    } finally {
+      pull.mockRestore()
+    }
+  }, 30_000)
+
+  it('does not report an Update that brought nothing in', async () => {
+    makeOwnRepo(`${HOST}/git/r1.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    listed(libraryAgent('r1', 'alpha', null))
+    const pull = vi.spyOn(gitService, 'pullRebaseClean').mockResolvedValue({ done: false, refusal: 'dirty', detail: null })
+    try {
+      expect((await sharingService.update(USER, agentId)).done).toBe(false)
+      await settleReports()
+      expect(posts()).toEqual([])
+    } finally {
+      pull.mockRestore()
+    }
   }, 30_000)
 })

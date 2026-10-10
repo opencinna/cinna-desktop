@@ -20,7 +20,7 @@ export function canUpdate(status: AgentShareStatus): boolean {
 export function canShareChanges(status: AgentShareStatus): boolean {
   if (status.state === 'removed' || status.state === 'other_account') return false
   if (!status.unshared && status.state !== 'diverged') return false
-  return status.remote.kind === 'external' || status.remote.access !== 'read'
+  return status.remote.kind === 'external' || status.remote.access !== 'use'
 }
 
 export interface ShareActions {

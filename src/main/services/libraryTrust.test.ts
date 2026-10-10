@@ -1,7 +1,6 @@
 /**
  * The team-library trust list: which git origins an instance has named, the
- * http rules a token is held to, the pending-entry bookkeeping, and where the
- * list is kept — a file under `userData`, or memory only when there is none.
+ * http rules a token is held to, and where the list is kept — a file under `userData`, or memory only when there is none.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -98,29 +97,12 @@ describe('acceptableGitOrigin', () => {
   })
 })
 
-describe('pending entries', () => {
-  it('sets, reads and clears per instance and slug', () => {
-    expect(libraryTrust.pending(SERVER, 'alpha')).toBeNull()
-    libraryTrust.setPending(SERVER, 'alpha', 'r1')
-    libraryTrust.setPending(SERVER, 'beta', 'r2')
-    expect(libraryTrust.pending(SERVER, 'alpha')).toBe('r1')
-    expect(libraryTrust.pending('https://other.test', 'alpha')).toBeNull()
-    libraryTrust.clearPending(SERVER, 'alpha')
-    expect(libraryTrust.pending(SERVER, 'alpha')).toBeNull()
-    expect(libraryTrust.pending(SERVER, 'beta')).toBe('r2')
-    // Clearing what is not there is a no-op.
-    libraryTrust.clearPending(SERVER, 'gamma')
-  })
-})
-
 describe('persistence', () => {
   it('survives a restart through the file', () => {
     const file = join(dir, 'trust.json')
     libraryTrust.learn(SERVER, `${GIT}/git/r1.git`)
-    libraryTrust.setPending(SERVER, 'alpha', 'r1')
     libraryTrust._reset(file)
     expect(libraryTrust.trusts(SERVER, GIT)).toBe(true)
-    expect(libraryTrust.pending(SERVER, 'alpha')).toBe('r1')
   })
 
   it('starts empty from a file that is not JSON', () => {
@@ -143,10 +125,7 @@ describe('persistence', () => {
     fsCalls.names = []
     expect(libraryTrust.trusts(SERVER, GIT)).toBe(false)
     libraryTrust.learn(SERVER, `${GIT}/git/r1.git`)
-    libraryTrust.setPending(SERVER, 'alpha', 'r1')
     expect(libraryTrust.trusts(SERVER, GIT)).toBe(true)
-    expect(libraryTrust.pending(SERVER, 'alpha')).toBe('r1')
-    libraryTrust.clearPending(SERVER, 'alpha')
     expect(fsCalls.names).toEqual([])
   })
 })

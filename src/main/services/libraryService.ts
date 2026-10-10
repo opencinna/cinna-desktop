@@ -1,18 +1,24 @@
 /**
- * The active Cinna profile's team library, as last listed.
+ * The active Cinna profile's catalog, as last listed, and the team library —
+ * the desktop agents in it — derived from that one listing.
  *
- * Core has no realtime channel for library changes, so this polls: once when
- * a Cinna profile becomes active, every five minutes while it stays active,
- * and whenever a caller asks for a refresh (the catalog's Team library, and
- * every sharing action that moved a repository). The listing is the one
- * place `head_sha` per repository comes from, which is what lets a shared
- * agent say "The team changed this agent" without a fetch per folder.
+ * `GET /api/v1/catalog/items` answers every kind the caller may list (cloud
+ * agents, desktop agents, skills). It is fetched once and kept whole
+ * ({@link CachedListing.items}) for the one-catalog dialog; team sharing reads
+ * the desktop agents out of it ({@link CachedListing.agents}).
+ *
+ * Core's events do not reach the desktop yet, so this polls: once when a
+ * Cinna profile becomes active, every five minutes while it stays active, and
+ * whenever a caller asks for a refresh (the catalog's Team library, and every
+ * sharing action that moved an agent). The listing is the one place
+ * `head_sha` per desktop agent comes from, which is what lets a shared agent
+ * say "The team changed this agent" without a fetch per folder.
  *
  * Nothing here is persisted: a restart lists again.
  *
- * `sharing:changed` is published when the set of repositories, their heads or
- * the caller's grants moved — not on every poll — so the renderer refetches
- * only when there is something new to show.
+ * `sharing:changed` is published when the set of desktop agents, their heads,
+ * versions, visibility, listing or the caller's access moved — not on every poll — so
+ * the renderer refetches only when there is something new to show.
  */
 import { publishEvent } from '../host/events'
 import { userRepo } from '../db/users'
@@ -22,32 +28,55 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { libraryTrust } from './libraryTrust'
 import { createLogger } from '../logger/logger'
 import { SHARING_CHANGED_CHANNEL } from '../../shared/agentSharing'
-import type { LibraryAccess, LibraryMaintainer } from '../../shared/agentSharing'
+import type { LibraryAccess, LibraryMaintainer, LibraryVersionDto } from '../../shared/agentSharing'
+import type { CatalogItem, CatalogVisibility } from '../../shared/catalogItems'
 
 const logger = createLogger('team-library')
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
 
-/** One library agent as main keeps it: the listing's facts, nothing about this machine. */
+/** The listing, under the profile's API. */
+export const CATALOG_ITEMS_PATH = '/api/v1/catalog/items'
+
+/** One catalog item's path, under the profile's API. */
+export function catalogItemPath(uuid: string): string {
+  return `${CATALOG_ITEMS_PATH}/${encodeURIComponent(uuid)}`
+}
+
+/** One team agent (a desktop agent in the catalog) as main keeps it: the listing's facts, nothing about this machine. */
 export interface LibraryEntry {
+  /** The catalog item's uuid — what every catalog route takes. */
+  uuid: string
+  /** The catalog id (`bundle_id`). */
+  bundleId: string
   repoId: string
   slug: string
   name: string
   description: string
   cloneUrl: string
+  /** '' before the first share. */
   headSha: string
-  updatedAt: string
   access: LibraryAccess
+  visibility: CatalogVisibility
+  /**
+   * Whether the catalog lists it. Core counts `public` (everyone's `use`) and
+   * a `use` grant only while it is listed; `edit` and `maintain` grants count
+   * either way.
+   */
+  isListed: boolean
   maintainers: LibraryMaintainer[]
   engine: string | null
   manifestId: string | null
-  /** Who sent the latest version, when the listing says. */
-  pushedBy: string | null
+  /** Null until the first share. */
+  latest: LibraryVersionDto | null
 }
 
 export interface CachedListing {
   /** `scheme://host[:port]` of the profile's server. */
   host: string
+  /** Every item the listing gave, every kind, as core sent it. */
+  items: CatalogItem[]
+  /** The desktop agents among {@link items}, as team sharing reads them. */
   agents: LibraryEntry[]
   fetchedAt: Date
   /**
@@ -56,21 +85,6 @@ export interface CachedListing {
    * an entry's absence from it as "removed from the library".
    */
   available: boolean
-}
-
-/** `LibraryAgent` as core sends it (README §4.2), loosely: every field is checked. */
-interface RawLibraryAgent {
-  repo_id?: unknown
-  slug?: unknown
-  name?: unknown
-  description?: unknown
-  clone_url?: unknown
-  head_sha?: unknown
-  updated_at?: unknown
-  access?: unknown
-  maintainers?: unknown
-  manifest?: unknown
-  pushed_by?: unknown
 }
 
 const cache = new Map<string, CachedListing>()
@@ -83,7 +97,7 @@ const cache = new Map<string, CachedListing>()
  */
 const started = new Map<string, number>()
 const applied = new Map<string, number>()
-/** Hosts already logged as having no library routes, so a 404 is said once. */
+/** Hosts already logged as having no catalog listing, so a 404 is said once. */
 const missingRoutesLogged = new Set<string>()
 let timer: ReturnType<typeof setInterval> | null = null
 let generation = 0
@@ -91,48 +105,83 @@ let generation = 0
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
 const strOrNull = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
+const record = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 
 function toAccess(value: unknown): LibraryAccess {
-  return value === 'write' || value === 'maintain' ? value : 'read'
+  return value === 'edit' || value === 'maintain' ? value : 'use'
 }
 
-/** snake_case listing row → {@link LibraryEntry}; null when it lacks what a Get needs. */
-export function toLibraryEntry(raw: RawLibraryAgent): LibraryEntry | null {
-  const repoId = str(raw.repo_id)
-  const cloneUrl = str(raw.clone_url)
-  const slug = str(raw.slug)
-  if (repoId === '' || cloneUrl === '' || slug === '') return null
-  const manifest =
-    raw.manifest && typeof raw.manifest === 'object' ? (raw.manifest as Record<string, unknown>) : {}
-  const runtime =
-    manifest.runtime && typeof manifest.runtime === 'object'
-      ? (manifest.runtime as Record<string, unknown>)
-      : {}
-  const maintainers = Array.isArray(raw.maintainers)
-    ? raw.maintainers.flatMap((entry): LibraryMaintainer[] => {
-        if (!entry || typeof entry !== 'object') return []
-        const row = entry as Record<string, unknown>
-        const userId = str(row.user_id)
-        return userId === '' ? [] : [{ userId, displayName: str(row.display_name) || userId }]
+function toVisibility(value: unknown): CatalogVisibility {
+  return value === 'public' || value === 'users' ? value : 'private'
+}
+
+/** `{user_id, display_name}` → a person; null without an id. */
+function toPerson(value: unknown): LibraryMaintainer | null {
+  const row = record(value)
+  const userId = str(row?.user_id)
+  return userId === '' ? null : { userId, displayName: str(row?.display_name) || userId }
+}
+
+/**
+ * One listing row, checked loosely: an object with a `uuid`, an `id` and a
+ * known `kind`. Kept as core sent it; null for anything else.
+ */
+export function toCatalogItem(raw: unknown): CatalogItem | null {
+  const row = record(raw)
+  if (!row) return null
+  if (str(row.uuid) === '' || str(row.id) === '') return null
+  if (row.kind !== 'agent' && row.kind !== 'skill') return null
+  return row as unknown as CatalogItem
+}
+
+/**
+ * A catalog item → a {@link LibraryEntry}, for a desktop agent that carries
+ * what a Get needs (`desktop.repo_id`, `clone_url`, `slug`); null otherwise.
+ */
+export function toLibraryEntry(raw: unknown): LibraryEntry | null {
+  const item = record(raw)
+  if (!item || item.kind !== 'agent' || item.runs_on !== 'desktop') return null
+  const desktop = record(item.desktop) ?? {}
+  const uuid = str(item.uuid)
+  const repoId = str(desktop.repo_id)
+  const cloneUrl = str(desktop.clone_url)
+  const slug = str(desktop.slug)
+  if (uuid === '' || repoId === '' || cloneUrl === '' || slug === '') return null
+  const maintainers = Array.isArray(item.maintainers)
+    ? item.maintainers.flatMap((entry): LibraryMaintainer[] => {
+        const person = toPerson(entry)
+        return person ? [person] : []
       })
     : []
-  const pushedBy =
-    raw.pushed_by && typeof raw.pushed_by === 'object'
-      ? strOrNull((raw.pushed_by as Record<string, unknown>).display_name)
-      : strOrNull(raw.pushed_by)
+  const latestRow = record(item.latest)
+  const number = latestRow && typeof latestRow.revision_number === 'number' ? latestRow.revision_number : null
+  const latest: LibraryVersionDto | null =
+    latestRow && number !== null
+      ? {
+          number,
+          publishedAt: str(latestRow.published_at),
+          publishedBy: toPerson(latestRow.published_by)?.displayName ?? null,
+          releaseNotes: strOrNull(latestRow.release_notes)
+        }
+      : null
   return {
+    uuid,
+    bundleId: str(item.id),
     repoId,
     slug,
-    name: str(raw.name) || str(manifest.name) || slug,
-    description: str(raw.description) || str(manifest.description),
+    name: str(item.display_name) || str(item.name) || slug,
+    description: str(item.description),
     cloneUrl,
-    headSha: str(raw.head_sha),
-    updatedAt: str(raw.updated_at),
-    access: toAccess(raw.access),
+    headSha: str(desktop.head_sha),
+    access: toAccess(item.access),
+    visibility: toVisibility(item.visibility),
+    // Core always sends it; a row without it is read as listed, as before it existed.
+    isListed: item.is_listed !== false,
     maintainers,
-    engine: strOrNull(runtime.engine),
-    manifestId: strOrNull(manifest.id),
-    pushedBy
+    engine: strOrNull(desktop.engine),
+    manifestId: strOrNull(desktop.manifest_id),
+    latest
   }
 }
 
@@ -141,7 +190,12 @@ function signature(listing: CachedListing | undefined): string {
   if (!listing) return ''
   return [
     listing.host,
-    ...listing.agents.map((agent) => `${agent.repoId}:${agent.headSha}:${agent.access}`).sort()
+    ...listing.agents
+      .map(
+        (agent) =>
+          `${agent.uuid}:${agent.repoId}:${agent.headSha}:${agent.access}:${agent.visibility}:${agent.isListed}:${agent.latest?.number ?? 0}`
+      )
+      .sort()
   ].join('|')
 }
 
@@ -182,10 +236,10 @@ export const libraryService = {
   },
 
   /**
-   * List the library again. Null for a profile that is not a Cinna one.
+   * List the catalog again. Null for a profile that is not a Cinna one.
    *
-   * A 404 or 403 is an **empty library**, said once in the log, not an error:
-   * the first is an instance without the library routes yet, the second one
+   * A 404 or 403 is an **empty listing**, said once in the log, not an error:
+   * the first is an instance without the catalog routes yet, the second one
    * that gates them by role — and treating a 403 as a dead session would pop
    * the re-auth prompt on every poll for a session that is fine.
    *
@@ -197,14 +251,14 @@ export const libraryService = {
     if (host === null) return null
     const seq = (started.get(userId) ?? 0) + 1
     started.set(userId, seq)
-    let agents: LibraryEntry[] = []
+    let items: CatalogItem[] = []
     let available = true
     try {
-      const body = await cinnaFetch<{ agents?: unknown }>(userId, '/api/v1/library')
-      const rows = Array.isArray(body?.agents) ? (body.agents as RawLibraryAgent[]) : []
-      agents = rows.flatMap((row) => {
-        const entry = row && typeof row === 'object' ? toLibraryEntry(row) : null
-        return entry ? [entry] : []
+      const body = await cinnaFetch<{ data?: unknown }>(userId, CATALOG_ITEMS_PATH)
+      const rows = Array.isArray(body?.data) ? body.data : []
+      items = rows.flatMap((row) => {
+        const item = toCatalogItem(row)
+        return item ? [item] : []
       })
     } catch (err) {
       const status = err instanceof CinnaApiError ? err.status : undefined
@@ -212,19 +266,23 @@ export const libraryService = {
         available = false
         if (!missingRoutesLogged.has(host)) {
           missingRoutesLogged.add(host)
-          logger.info('team library not available on this instance; treating it as empty', { status })
+          logger.info('catalog listing not available on this instance; treating it as empty', { status })
         }
       } else {
         throw err
       }
     }
+    const agents = items.flatMap((item) => {
+      const entry = toLibraryEntry(item)
+      return entry ? [entry] : []
+    })
     // This instance, answering this profile's session, says where its git is.
     for (const agent of agents) libraryTrust.learn(host, agent.cloneUrl)
     // A refresh that started after this one has already answered: the cache
     // is newer than this listing, and still no older than this call's start.
     const newer = cache.get(userId)
     if ((applied.get(userId) ?? 0) > seq && newer && newer.host === host) return newer
-    const listing: CachedListing = { host, agents, fetchedAt: new Date(), available }
+    const listing: CachedListing = { host, items, agents, fetchedAt: new Date(), available }
     applied.set(userId, seq)
     const before = signature(cache.get(userId))
     cache.set(userId, listing)

@@ -102,6 +102,8 @@ import { ENV_FILE, folderIndexLauncher, scannerService } from './scannerService'
 import { turnLock } from './turnLock'
 import { envValueProblem, mergeEnv } from './envFile'
 import { gitService } from './gitService'
+import { getProfileScopeUserId } from '../../auth/scope'
+import { catalogLocalInstalls } from '../catalogLocalInstalls'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { runtimeService } from './runtimeService'
@@ -540,14 +542,15 @@ function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: stri
  * Refuse Remove from this computer on a shared agent — its own repository,
  * with an `origin` — while it has changes the team does not have. Any other
  * folder, or a machine without git, passes: there is nothing to compare with.
+ * Answers the shared agent's `origin`, or null for a folder that is not one.
  *
  * @throws LocalAgentError `unshared_changes`
  */
-async function refuseUnsharedChanges(agentDir: string): Promise<void> {
-  if (!existsSync(join(agentDir, '.git'))) return
+async function refuseUnsharedChanges(agentDir: string): Promise<string | null> {
+  if (!existsSync(join(agentDir, '.git'))) return null
   const counts = await gitService.readShareStatus(agentDir, null, false)
-  if (!counts.ownRepo || counts.originUrl === null) return
-  if (counts.ahead === 0 && counts.changedFiles === 0) return
+  if (!counts.ownRepo || counts.originUrl === null) return null
+  if (counts.ahead === 0 && counts.changedFiles === 0) return counts.originUrl
   const n = Math.max(counts.changedFiles, 1)
   const named = unsharedFileList(counts.changedPaths)
   throw new LocalAgentError(
@@ -1336,7 +1339,7 @@ export const localAgentService = {
     // A shared agent's folder is the only copy of what it has not sent to the
     // team yet. Read without a fetch: this is about what is on disk here, and a
     // removal must not wait on (or fail with) the network.
-    if (!bare && trashFolder) await refuseUnsharedChanges(agentDir)
+    const sharedOrigin = !bare && trashFolder ? await refuseUnsharedChanges(agentDir) : null
 
     // Both branches take the lock, and for the same reason: forgetting an agent
     // mid-turn would leave a stream writing into a chat whose agent has gone,
@@ -1370,6 +1373,9 @@ export const localAgentService = {
     scannerService.scanRoot(userId, root)
     watcherService.refreshRoot(root.id)
     logger.info('local agent deleted', { agentId, rootId: root.id, trashed: trashFolder })
+    // A team agent leaves this computer: tell the catalog, in the background
+    // and best effort — the removal is done whatever it answers.
+    if (sharedOrigin !== null) void catalogLocalInstalls.reportRemovedByOrigin(getProfileScopeUserId(), sharedOrigin)
     return { agentId, trashed: trashFolder }
   },
 

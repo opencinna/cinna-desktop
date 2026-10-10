@@ -240,7 +240,7 @@ export function ShareConflictDialog({
   )
 }
 
-const ACCESS_CHOICES: LibraryAccess[] = ['read', 'write', 'maintain']
+const ACCESS_CHOICES: LibraryAccess[] = ['use', 'edit', 'maintain']
 
 /** The access select every people list uses: Can use / Can edit / Maintainer. */
 export function AccessSelect({
@@ -544,7 +544,7 @@ export function ShareWithTeamDialog({
         disabled={pending}
         exclude={new Set(people.map((person) => person.userId))}
         onPick={(person) =>
-          setPeople((list) => [...list, { userId: person.userId, access: 'read', label: personLabel(person) }])
+          setPeople((list) => [...list, { userId: person.userId, access: 'use', label: personLabel(person) }])
         }
       />
       <div className="space-y-1">
@@ -633,7 +633,7 @@ export function ShareWithPersonDialog({
 }): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   const [person, setPerson] = useState<PersonSearchResult | null>(null)
-  const [access, setAccess] = useState<LibraryAccess>('read')
+  const [access, setAccess] = useState<LibraryAccess>('use')
   return (
     <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef}>
       <div className="flex items-end gap-2">
@@ -682,6 +682,7 @@ export function RemoveSharingDialog({
   offerDelete,
   pending,
   error,
+  onChoiceChange,
   onConfirm,
   onCancel
 }: {
@@ -689,11 +690,14 @@ export function RemoveSharingDialog({
   offerDelete: boolean
   pending: boolean
   error: string | null
+  /** The delete box was ticked or unticked: the caller clears a refusal that answered the old choice. */
+  onChoiceChange?: () => void
   onConfirm: (deleteFromLibrary: boolean) => void
   onCancel: () => void
 }): React.JSX.Element {
   const cancelRef = useRef<HTMLButtonElement>(null)
   const [alsoDelete, setAlsoDelete] = useState(false)
+  const deleting = offerDelete && alsoDelete
   return (
     <DialogShell
       title={SHARE_UI_TEXT.removeSharingTitle}
@@ -712,19 +716,27 @@ export function RemoveSharingDialog({
             className="mt-0.5 accent-[var(--color-danger)]"
             checked={alsoDelete}
             disabled={pending}
-            onChange={(event) => setAlsoDelete(event.target.checked)}
+            onChange={(event) => {
+              setAlsoDelete(event.target.checked)
+              onChoiceChange?.()
+            }}
           />
           <span className="min-w-0">{SHARE_UI_TEXT.alsoDeleteFromLibrary}</span>
         </label>
       )}
       <ErrorLine error={error} />
+      {/* A refused delete ("2 people use this…") still leaves the way out:
+          removing sharing here alone needs no one's say. */}
+      {error && deleting && (
+        <p className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">{SHARE_UI_TEXT.removeSharingOnlyHint}</p>
+      )}
       <div className="flex justify-end gap-2">
         <button ref={cancelRef} type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
           {SHARE_UI_TEXT.cancel}
         </button>
         <button
           type="button"
-          onClick={() => onConfirm(offerDelete && alsoDelete)}
+          onClick={() => onConfirm(deleting)}
           disabled={pending}
           aria-busy={pending}
           // A fixed width, so the shorter "Removing…" does not pull Cancel sideways.
