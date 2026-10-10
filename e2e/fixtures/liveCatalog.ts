@@ -46,6 +46,60 @@ export interface CatalogFixture extends TeamFixtureBase {
   }
   /** A public cloud agent the catalog lists to everyone, when the instance has one. Read only. */
   cloudAgent: { uuid: string; id: string; display_name: string } | null
+  /** Only from `live-catalog.py create cloud`: A's own cloud agent, its skill and its bundle (`live-sharing-cloud.spec.ts`). */
+  cloud?: CloudFixture
+}
+
+/**
+ * A's cloud agent `Catalog cloud e2e <tag>` (a running environment), its skill
+ * `cloud-check-<tag>` published to B (visibility `users`, slot `erp-api`, a
+ * script `scripts/cloud_check` with no `.py` suffix), and the agent published
+ * as a cloud bundle at Version 1 that B may use (`users`, listed, a `use` grant).
+ */
+export interface CloudFixture {
+  agentId: string
+  envId: string
+  name: string
+  description: string
+  bundleId: string
+  bundleUuid: string
+  skill: { name: string; packageId: string; revision: number }
+  timings: Record<string, number>
+}
+
+/** The cloud bundle `bundleId` as the bearer of `token` sees it in core's catalog, or undefined (a failed read is undefined too: core may be restarting). */
+export async function cloudCatalogItem(fixture: TeamFixtureBase, token: string, bundleId: string): Promise<any> {
+  try {
+    const response = await fetch(`${fixture.server}/api/v1/catalog/items?kind=agent&runs_on=cloud`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!response.ok) return undefined
+    return ((await response.json()) as { data: any[] }).data.find((item) => item.id === bundleId)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * As A, publish the cloud agent's workspace as its next bundle version, and
+ * resolve once core lists that version to B. Publishing copies the workspace
+ * (with its `__init__.py`) under core's `/app/data`, so the dev server
+ * reloads: the request itself can be cut off, and core is briefly away.
+ */
+export async function publishCloudVersion(fixture: CatalogFixture, version: string, notes: string): Promise<number> {
+  const cloud = fixture.cloud!
+  const before = (await cloudCatalogItem(fixture, fixture.people.a.token, cloud.bundleId))?.latest?.revision_number ?? 0
+  try {
+    await fetch(`${fixture.server}/api/v1/agents/${cloud.agentId}/publish`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${fixture.people.a.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ release_notes: notes, version })
+    }).then((r) => r.text())
+  } catch {
+    // the reload can cut the answer off; the listing below is the witness
+  }
+  await expect
+    .poll(async () => (await cloudCatalogItem(fixture, fixture.people.b.token, cloud.bundleId))?.latest?.revision_number ?? null, { timeout: 90_000 })
+    .toBe(before + 1)
+  return before + 1
 }
 
 const fixturePath = (process.env.CINNA_CATALOG_LIVE_FIXTURE ?? '').trim()
@@ -662,7 +716,8 @@ export async function openSettings(app: PersonApp): Promise<void> {
   if (await page.getByRole('button', { name: 'MCP Providers', exact: true }).isVisible()) return
   const user = await page.evaluate(() => window.api.auth.getCurrent())
   await page.getByTitle(user?.cinnaFullName ?? user?.displayName ?? 'User', { exact: true }).click()
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  // The menu is portaled to the end of <body>: a cloud agent's page has a Settings button of its own.
+  await page.getByRole('button', { name: 'Settings', exact: true }).last().click()
   await expect(page.getByRole('button', { name: 'MCP Providers', exact: true })).toBeVisible()
 }
 

@@ -31,7 +31,24 @@ catalog lists to everyone (public and listed), when there is one: creating a
 cloud bundle needs a publisher's cloud environment, which a local stack does
 not run, so the specs use an existing public one read-only and never install it.
 
-``cleanup`` removes everything any run made, found by the ``catalog-e2e-``
+``create cloud`` (opt-in; ``live-sharing-cloud.spec.ts``) also makes A an
+``agent-developer``, gives A and B a placeholder Anthropic AI credential (an
+environment refuses to exist without one; nothing ever calls it), has A create
+the cloud agent ``Catalog cloud e2e <tag>`` (description and workflow prompt
+carry this script's marker; the prompts are set so core never asks a model to
+rewrite the description), waits (at most 300 s) for its environment to run,
+writes ``skills/cloud-check-<tag>/`` (an ``erp-api`` slot and a script with no
+``.py`` suffix) into its host-side workspace, publishes the skill to B
+(``users`` + a grant) and the agent as a cloud bundle B may use (``users``,
+listed, a ``use`` grant), and adds ``cloud`` to the JSON. A bundle publish
+copies the workspace under ``/app/data``, which reloads core's dev server; the
+script waits for it to come back.
+
+``cleanup`` first removes the cloud side, through core's own delete paths so
+their containers go too: agents owned by the ``catalog-e2e-`` people whose name
+is exactly ``Catalog cloud e2e <tag>`` and whose description or workflow prompt
+is this script's (found through the admin's environment listing), consumer
+installs first, then the bundle, then A's agent. Then it removes everything any run made, found by the ``catalog-e2e-``
 email prefix rather than by a fixture file: every desktop agent and skill
 package those people publish or maintain (with their repositories, versions,
 grants and reported local installs), the admin's ``ERP API catalog-e2e <tag>``
@@ -48,7 +65,9 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
+from pathlib import Path
 
 import httpx
 
@@ -59,6 +78,34 @@ CRED_NAME = "ERP API catalog-e2e"
 # Only credentials this script made: the exact name shape and the notes marker.
 CRED_PATTERN = re.compile(r"^ERP API catalog-e2e [0-9a-f]{8}( pair [12]| no local)?$")
 CRED_NOTES = "Made by cinna-desktop e2e/fixtures/live-catalog.py; cleanup deletes it."
+# ``create cloud`` only: one cloud agent of A's, its bundle and its skill. The
+# agent, the bundle and every install of it carry exactly this name and this
+# description, which is how cleanup finds them (with the owner's email prefix).
+CLOUD_NAME = "Catalog cloud e2e"
+CLOUD_NAME_PATTERN = re.compile(r"^Catalog cloud e2e [0-9a-f]{8}$")
+CLOUD_DESCRIPTION = "A cloud agent for the desktop catalog e2e. " + CRED_NOTES
+# Set at create so the database, not the environment's template, is the
+# prompts' first source: otherwise the first prompt sync pulls the template's
+# workflow prompt and core asks a model to rewrite the description.
+CLOUD_WORKFLOW = "# Catalog cloud e2e\n\nAnswer questions about orders. " + CRED_NOTES + "\n"
+CLOUD_SKILL_PATTERN = re.compile(r"^cloud-check-[0-9a-f]{8}$")
+ENV_INSTANCES_DIR = os.environ.get("ENV_INSTANCES_DIR", "/agent-environments")
+# The skill's script: the erp-api slot through the skill runtime's
+# ``core.cinna_api``, printed as its type and a hash prefix, never the value.
+# No ``.py`` suffix: core's dev server reloads on any ``.py`` under ``/app``,
+# and published skills are stored there.
+CLOUD_SKILL_SCRIPT = '''import hashlib
+import sys
+
+from core.cinna_api import credentials
+
+cred = credentials.by_slot("erp-api")
+if cred is None:
+    print("cloud-skill: erp-api=none")
+    sys.exit(0)
+value = (cred.get("credential_data") or {}).get("http_header_value", "")
+print(f"cloud-skill: erp-api={cred.get('type')} {hashlib.sha256(str(value).encode()).hexdigest()[:12]}")
+'''
 
 
 def ok(response: httpx.Response) -> httpx.Response:
@@ -83,7 +130,141 @@ def admin_token(client: httpx.Client) -> tuple[str, str]:
     return token, me["id"]
 
 
-def create(client: httpx.Client) -> None:
+def wait_for_core(client: httpx.Client, seconds: float = 90) -> None:
+    """Until core answers its health check: a bundle publish copies the
+    workspace (``__init__.py`` included) under ``/app/data/bundles``, and the
+    dev server's ``--reload`` restarts on it."""
+    deadline = time.monotonic() + seconds
+    time.sleep(2)
+    while time.monotonic() < deadline:
+        try:
+            if client.get(f"{API}/utils/health-check/").status_code == 200:
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(1)
+    raise SystemExit("core did not come back after a bundle publish")
+
+
+def publish_bundle(client: httpx.Client, token: str, agent_id: str, body: dict) -> dict:
+    """POST /agents/{id}/publish, surviving the reload it causes; answers the revision."""
+    try:
+        r = client.post(f"{API}/agents/{agent_id}/publish", headers=bearer(token), json=body, timeout=120)
+        revision = ok(r).json()
+    except httpx.HTTPError:
+        revision = None
+    wait_for_core(client)
+    if revision is None:
+        raise SystemExit("the bundle publish answered nothing (core restarted mid-request); check the catalog by hand")
+    return revision
+
+
+def create_cloud(client: httpx.Client, admin: str, people: dict, tag: str) -> dict:
+    """A's cloud agent with a skill, the skill published to B, the agent published as a bundle B may use."""
+    timings: dict[str, float] = {}
+    started = time.monotonic()
+    a, b = people["a"], people["b"]
+    ok(client.patch(f"{API}/users/{a['id']}/role", headers=bearer(admin), json={"role": "agent-developer"}))
+    # An environment refuses to exist without an AI key for its SDK
+    # (claude-code/anthropic by default). Nothing here runs a model, so the key
+    # is a placeholder: A's for the agent, B's for the install of its bundle.
+    # Both go when cleanup deletes their owners.
+    for label in ("a", "b"):
+        made = ok(client.post(f"{API}/ai-credentials/", headers=bearer(people[label]["token"]), json={
+            "name": f"Anthropic catalog-e2e {tag}",
+            "type": "anthropic",
+            "api_key": "sk-ant-catalog-e2e-placeholder-never-called",
+        })).json()
+        ok(client.post(f"{API}/ai-credentials/{made['id']}/set-default", headers=bearer(people[label]["token"])))
+    name = f"{CLOUD_NAME} {tag}"
+    agent = ok(client.post(f"{API}/agents/", headers=bearer(a["token"]), json={
+        "name": name,
+        "description": CLOUD_DESCRIPTION,
+        "workflow_prompt": CLOUD_WORKFLOW,
+        "entrypoint_prompt": "Ask about orders.",
+        "refiner_prompt": "",
+    }, timeout=120)).json()
+    agent_id = agent["id"]
+    envs = ok(client.get(f"{API}/agents/{agent_id}/environments", headers=bearer(a["token"]))).json()["data"]
+    if len(envs) != 1:
+        raise SystemExit(f"the new cloud agent has {len(envs)} environments, expected its default one")
+    env_id = envs[0]["id"]
+
+    # The default environment builds and starts in the background: bounded.
+    deadline = time.monotonic() + 300
+    status = ""
+    while time.monotonic() < deadline:
+        env = ok(client.get(f"{API}/environments/{env_id}", headers=bearer(a["token"]))).json()
+        status = env["status"]
+        if status == "running":
+            break
+        if status == "error":
+            raise SystemExit(f"the cloud agent's environment failed: {env.get('status_message')}")
+        time.sleep(3)
+    else:
+        raise SystemExit(f"the cloud agent's environment was still {status!r} after 300 s")
+    timings["environment_running_s"] = round(time.monotonic() - started, 1)
+    deadline = time.monotonic() + 60
+    while not ok(client.get(f"{API}/agents/{agent_id}", headers=bearer(a["token"]))).json().get("active_environment_id"):
+        if time.monotonic() > deadline:
+            raise SystemExit("the cloud agent's environment is running but was never activated")
+        time.sleep(2)
+
+    # The skill, written into the host-side workspace the publish reads.
+    skill = f"cloud-check-{tag}"
+    folder = Path(ENV_INSTANCES_DIR) / env_id / "app" / "workspace" / "skills" / skill
+    (folder / "scripts").mkdir(parents=True, exist_ok=True)
+    (folder / "SKILL.md").write_text(
+        "---\n"
+        f"name: {skill}\n"
+        "description: Checks which ERP credential this agent's skills can reach.\n"
+        "credentials:\n"
+        "  - slot: erp-api\n"
+        "    type: api_token\n"
+        "    description: The ERP API.\n"
+        "---\n\n"
+        "Run `scripts/cloud_check` before answering about orders.\n"
+    )
+    (folder / "scripts" / "cloud_check").write_text(CLOUD_SKILL_SCRIPT)
+    revision = ok(client.post(
+        f"{API}/agents/{agent_id}/skills/{skill}/publish",
+        headers=bearer(a["token"]),
+        json={"version": "1.0.0", "release_notes": "From the cloud e2e fixture", "visibility": "users", "grant_emails": [b["email"]]},
+        timeout=120,
+    )).json()
+    timings["skill_published_s"] = round(time.monotonic() - started, 1)
+
+    publish_bundle(client, a["token"], agent_id, {
+        "release_notes": "Version 1 from the cloud e2e fixture",
+        "display_name": name,
+        "description": CLOUD_DESCRIPTION,
+        "version": "1.0",
+    })
+    timings["bundle_published_s"] = round(time.monotonic() - started, 1)
+    agent = ok(client.get(f"{API}/agents/{agent_id}", headers=bearer(a["token"]))).json()
+    listed = ok(client.get(f"{API}/catalog/items", headers=bearer(a["token"]), params={"kind": "agent", "runs_on": "cloud"})).json()["data"]
+    item = next((i for i in listed if i["id"] == agent["bundle_id"]), None)
+    if item is None:
+        raise SystemExit("the published bundle is not in A's catalog")
+    ok(client.patch(f"{API}/catalog/items/{item['uuid']}", headers=bearer(a["token"]), json={"visibility": "users", "is_listed": True}))
+    grants = ok(client.get(f"{API}/catalog/items/{item['uuid']}/grants", headers=bearer(a["token"]))).json()
+    grants = [{"principal": g["principal"], "access": g["access"]} for g in grants if g["principal"].get("user_id") != b["id"]]
+    grants.append({"principal": {"user_id": b["id"]}, "access": "use"})
+    ok(client.put(f"{API}/catalog/items/{item['uuid']}/grants", headers=bearer(a["token"]), json=grants))
+    timings["total_s"] = round(time.monotonic() - started, 1)
+    return {
+        "agentId": agent_id,
+        "envId": env_id,
+        "name": name,
+        "description": CLOUD_DESCRIPTION,
+        "bundleId": item["id"],
+        "bundleUuid": item["uuid"],
+        "skill": {"name": skill, "packageId": str(revision["package_id"]), "revision": revision["revision_number"]},
+        "timings": timings,
+    }
+
+
+def create(client: httpx.Client, cloud_mode: bool = False) -> None:
     tag = uuid.uuid4().hex[:8]
     admin, admin_id = admin_token(client)
     people = {}
@@ -138,6 +319,8 @@ def create(client: httpx.Client) -> None:
     listed = ok(client.get(f"{API}/catalog/items", headers=bearer(people["b"]["token"]), params={"kind": "agent", "runs_on": "cloud"})).json()["data"]
     cloud = next(({"uuid": i["uuid"], "id": i["id"], "display_name": i["display_name"]} for i in listed if i.get("visibility") == "public"), None)
 
+    made = create_cloud(client, admin, people, tag) if cloud_mode else None
+
     print(json.dumps({
         "server": "http://localhost:8000",
         "tag": tag,
@@ -149,7 +332,58 @@ def create(client: httpx.Client) -> None:
             "noLocal": {"id": no_local, "name": no_local_name, "slot": no_local_slot},
         },
         "cloudAgent": cloud,
+        **({"cloud": made} if made else {}),
     }))
+
+
+def cleanup_cloud(client: httpx.Client, admin: str, ids: set[str]) -> dict:
+    """Every cloud agent ``create cloud`` made, every install of its bundle,
+    and the bundle, through core's own delete paths (which stop and remove
+    their containers). An agent is this script's only when its owner is one of
+    the ``catalog-e2e-`` people **and** its name is ``Catalog cloud e2e <tag>``
+    **and** its description is this script's; agents are found through the
+    admin's environment listing filtered by owner. Before the people go: a
+    deleted owner would strand the containers. Consumer installs first (they
+    hold the bundle), then the bundle, then the publisher's agent."""
+    agents: dict[str, dict] = {}
+    for owner in ids:
+        envs = ok(client.get(f"{API}/admin/agent-environments/", headers=bearer(admin), params={"owner_id": owner, "limit": 500})).json()["data"]
+        for env in envs:
+            if env["agent_id"] in agents:
+                continue
+            r = client.get(f"{API}/agents/{env['agent_id']}", headers=bearer(admin))
+            if r.status_code != 200:
+                continue
+            agent = r.json()
+            marked = agent.get("description") == CLOUD_DESCRIPTION or agent.get("workflow_prompt") == CLOUD_WORKFLOW
+            if CLOUD_NAME_PATTERN.match(agent["name"] or "") and marked:
+                agents[agent["id"]] = agent
+    removed = {"installs": 0, "bundles": 0, "agents": 0, "refused": []}
+    for agent in agents.values():
+        if agent.get("bundle_uuid") and not agent.get("is_publisher_install"):
+            r = client.post(f"{API}/agents/{agent['id']}/uninstall", headers=bearer(admin), timeout=120)
+            if r.status_code < 400:
+                removed["installs"] += 1
+            else:
+                removed["refused"].append(f"install {agent['id']}: {r.status_code} {r.text[:160]}")
+    items = ok(client.get(f"{API}/catalog/items", headers=bearer(admin), params={"kind": "agent", "runs_on": "cloud", "scope": "all"})).json()["data"]
+    for item in items:
+        people = {(item.get("publisher") or {}).get("user_id")} | {m.get("user_id") for m in item.get("maintainers") or []}
+        if people & ids and CLOUD_NAME_PATTERN.match(item.get("display_name") or "") and item.get("description") == CLOUD_DESCRIPTION:
+            r = client.delete(f"{API}/catalog/items/{item['uuid']}", headers=bearer(admin))
+            if r.status_code in (204, 404):
+                removed["bundles"] += 1
+            else:
+                removed["refused"].append(f"bundle {item['uuid']}: {r.status_code} {r.text[:160]}")
+    for agent in agents.values():
+        if agent.get("bundle_uuid") and not agent.get("is_publisher_install"):
+            continue
+        r = client.delete(f"{API}/agents/{agent['id']}", headers=bearer(admin), timeout=120)
+        if r.status_code < 400:
+            removed["agents"] += 1
+        else:
+            removed["refused"].append(f"agent {agent['id']}: {r.status_code} {r.text[:160]}")
+    return removed
 
 
 def cleanup(client: httpx.Client) -> None:
@@ -163,6 +397,7 @@ def cleanup(client: httpx.Client) -> None:
         if skip >= page["count"]:
             break
     ids = {u["id"] for u in users}
+    cloud = cleanup_cloud(client, admin, ids)
 
     # Items first, while their publisher and maintainers still name the people.
     doomed = []
@@ -198,6 +433,7 @@ def cleanup(client: httpx.Client) -> None:
         "refused": refused,
         "credentials": removed_creds,
         "users": removed_users,
+        "cloud": cloud,
     }))
 
 
@@ -205,8 +441,8 @@ if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     with httpx.Client(base_url=BASE, timeout=30) as http:
         if command == "create":
-            create(http)
+            create(http, cloud_mode=sys.argv[2:3] == ["cloud"])
         elif command == "cleanup":
             cleanup(http)
         else:
-            raise SystemExit("usage: python - create|cleanup < live-catalog.py")
+            raise SystemExit("usage: python - create [cloud]|cleanup < live-catalog.py")
