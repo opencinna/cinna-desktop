@@ -35,6 +35,7 @@
 
 import {
   CACHE_TTL_KNOWN,
+  GUESSED_CONTEXT_WINDOW,
   EMPTY_TOKEN_TALLY,
   type CacheInvalidationReason,
   type SessionTelemetry,
@@ -43,13 +44,6 @@ import {
   type TelemetryEngine,
   type TokenTally
 } from '../../../shared/sessionTelemetry'
-
-/**
- * The window `claude-agent-acp` streams when it knows none: no result has
- * confirmed one and the model id does not name 1M (`DEFAULT_CONTEXT_WINDOW`
- * in its `acp-agent.js`, 0.76.0).
- */
-const CLAUDE_ADAPTER_DEFAULT_WINDOW = 200_000
 
 export function emptySessionTelemetry(chatId: string, engine: TelemetryEngine, now: number): SessionTelemetry {
   return {
@@ -176,13 +170,14 @@ export function applyTelemetryChange(
       // Only the adapter's 200K default is a guess. Any other size it streams
       // is a window a result already confirmed, or one the model id names
       // (`opus[1m]`), so a long first turn shows its budget before it ends.
-      const named = change.engine === 'claude' && change.size !== undefined && change.size > 0 && change.size !== CLAUDE_ADAPTER_DEFAULT_WINDOW
+      const guess = GUESSED_CONTEXT_WINDOW[change.engine]
+      const named = guess !== null && change.size !== undefined && change.size > 0 && change.size !== guess
       // A size the model id named can still be wrong (a 200K lane under a
       // `[1m]` id), so the turn's costed reading, which carries the window the
       // result reported, still moves it; a confirmed size it does not.
-      const held = sameContext && base.context.sizeAuthoritative && change.engine !== 'codex'
+      const held = sameContext && base.context.sizeAuthoritative && guess !== null
       const proven = held && !(base.context.sizeNamed && change.costed)
-      const confirmed = (proven && !base.context.sizeNamed) || change.costed || change.engine === 'codex'
+      const confirmed = (proven && !base.context.sizeNamed) || change.costed || guess === null
       next.context = {
         ...base.context,
         used,

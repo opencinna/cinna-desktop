@@ -27,6 +27,15 @@ export type TelemetryEngine = 'claude' | 'codex'
 export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
 
 /**
+ * The context window an engine's adapter streams when it knows none, or null
+ * when every size it streams is the model's real window. `claude-agent-acp`
+ * streams 200K until a result confirms one and the model id does not name 1M
+ * (`DEFAULT_CONTEXT_WINDOW` in its `acp-agent.js`, 0.76.0); Codex reports the
+ * real window always.
+ */
+export const GUESSED_CONTEXT_WINDOW: Readonly<Record<TelemetryEngine, number | null>> = Object.freeze({ claude: 200_000, codex: null })
+
+/**
  * Whether the engine reports cache writes at all. Claude's usage splits them
  * out (and prices them); Codex reports cached reads only, so its cache-write
  * count is always 0 and says nothing.

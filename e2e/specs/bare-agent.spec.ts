@@ -108,7 +108,7 @@ async function openAdvanced(cinna: CinnaApp): Promise<Locator> {
 }
 
 /** A bare agent's Settings tabs, in order. */
-const BARE_TABS = ['Overview', 'Addons', 'Credentials', 'Permissions', 'Folder', 'Interface']
+const BARE_TABS = ['Overview', 'Addons', 'Credentials', 'Tasks', 'Permissions', 'Folder', 'Interface']
 
 const FOUND = [
   ['accounting_meta_agent', 'Accounting Meta Agent'],
@@ -264,7 +264,7 @@ test.describe('a folder defined by CLAUDE.md or AGENTS.md', () => {
       await row.click()
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('ledger-tools')
       await page.getByRole('button', { name: 'Settings', exact: true }).click()
-      // A bare agent has Addons like a kit one, no Commands or Schedules, and
+      // A bare agent has Addons and Tasks like a kit one, no Commands or Schedules, and
       // no Prompts tab: its one document, the instructions file, is on Overview.
       const tabs = page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab')
       await expect(tabs).toHaveText(BARE_TABS)
