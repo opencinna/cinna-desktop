@@ -3,14 +3,17 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CatalogEntryDto } from '../../../../shared/catalog'
+import type { CatalogItem, CatalogItemDetail, CatalogItemsListing } from '../../../../shared/catalogItems'
 import type { LibraryAgentDto, LibraryListingDto } from '../../../../shared/agentSharing'
-import type { TeamLibraryActions } from './TeamLibraryPanel'
+import type { CloudUpdateActions, DesktopAgentActions } from './CatalogBrowserModal'
 
 /**
- * The Agent Catalog dialog: a grid of every published bundle, a detail view
- * behind each tile, and an Install / Open action whose install the parent
- * runs. What has to hold is that the action lands in the right tile — the
- * spinner, the disabled siblings and the error all belong to one bundle.
+ * The one catalog: cloud agents, desktop agents and skills in one grid from
+ * main's cached listing, filtered by All / Agents / Skills, each tile with its
+ * kind badge and the action of its kind, and a detail whose versions are read
+ * when it opens. What has to hold is that every action lands in the right
+ * tile — the spinner, the disabled siblings and the error all belong to one
+ * item — and that nothing the detail fails to read closes the dialog.
  */
 
 vi.mock('../settings/CatalogCardCredentials', () => ({
@@ -19,318 +22,109 @@ vi.mock('../settings/CatalogCardCredentials', () => ({
     enabled,
     compact
   }: {
-    entry: CatalogEntryDto
+    entry: Pick<CatalogEntryDto, 'bundleId' | 'requiredCredentialSpecs'>
     enabled: boolean
     compact?: boolean
   }) =>
     createElement(
       'div',
       { 'data-testid': 'credentials' },
-      `${entry.bundleId}:${enabled}:${compact ? 'compact' : 'full'}`
+      `${entry.bundleId}:${entry.requiredCredentialSpecs.map((s) => s.name).join('+')}:${enabled}:${compact ? 'compact' : 'full'}`
     )
 }))
 
 window.api = {} as never
-const { CatalogBrowserModal } = await import('./CatalogBrowserModal')
+const { CatalogBrowserModal, _resetCatalogFilter } = await import('./CatalogBrowserModal')
 const { useAuthStore } = await import('../../stores/auth.store')
 const { SETTLE_MS } = await import('../../hooks/useSettleGuard')
-const { SHARE_UI_TEXT } = await import('../../utils/shareText')
+const { CATALOG_TEXT, CATALOG_KIND_TEXT } = await import('../../utils/catalogItems')
 
-function entry(overrides: Partial<CatalogEntryDto>): CatalogEntryDto {
+function item(overrides: Partial<CatalogItem>): CatalogItem {
   return {
-    bundleId: 'bundle',
-    bundleUuid: 'uuid',
-    displayName: 'Bundle',
+    kind: 'agent',
+    runs_on: 'cloud',
+    uuid: 'uuid',
+    id: 'test.core.item',
+    name: 'Item',
+    display_name: 'Item',
     description: null,
-    publisherName: null,
-    publisherEmail: null,
-    publisherHandle: null,
+    publisher: null,
+    maintainers: [],
+    access: 'use',
     visibility: 'public',
-    latestVersion: '1.0.0',
-    latestRevisionNumber: 1,
-    latestPublishedAt: null,
-    installCount: 0,
-    isInstalled: false,
-    userInstallId: null,
-    pendingUpdate: false,
-    requiredCredentialSpecs: [],
+    is_listed: true,
+    latest: { revision_number: 1, version: null, published_at: '2026-10-01T00:00:00Z', published_by: null, release_notes: null },
+    install_count: 0,
+    my_installs: [],
+    required_credential_specs: [],
+    skills: [],
+    desktop: null,
+    skill: null,
     ...overrides
   }
 }
 
-const INVOICES = entry({
-  bundleId: 'acme/invoices',
-  displayName: 'Invoice Watcher',
+const INVOICES = item({
+  uuid: 'u-invoices',
+  id: 'test.core.acme1',
+  name: 'Invoice Watcher',
+  display_name: 'Invoice Watcher',
   description: 'Flags invoices without a PO number.',
-  publisherName: 'Acme',
-  publisherEmail: 'ops@acme.test',
-  installCount: 12,
-  latestPublishedAt: '2026-03-01T00:00:00Z'
+  publisher: { user_id: 'acme', display_name: 'Acme' },
+  maintainers: [{ user_id: 'acme', display_name: 'Acme' }],
+  install_count: 12,
+  latest: { revision_number: 3, version: '1.2.0', published_at: '2026-03-01T00:00:00Z', published_by: null, release_notes: null },
+  required_credential_specs: [{ name: 'Odoo', type: 'api_token', provided_by: 'user' }, { name: 'IMAP', type: 'imap' }]
 })
-const RATES = entry({
-  bundleId: 'fx/rates',
-  displayName: 'Exchange Rates',
+const HELPDESK = item({
+  uuid: 'u-helpdesk',
+  id: 'test.core.help1',
+  name: 'Helpdesk',
+  display_name: 'Helpdesk',
+  maintainers: [{ user_id: 'acme', display_name: 'Acme' }],
+  latest: { revision_number: 4, version: null, published_at: '2026-03-01T00:00:00Z', published_by: null, release_notes: null },
+  my_installs: [{ where: 'cloud', install_id: 'install-1', device_id: null, host_manifest_id: null, revision_number: 4 }]
+})
+const RATES = item({
+  uuid: 'u-rates',
+  id: 'test.core.fx1',
+  name: 'Exchange Rates',
+  display_name: 'Exchange Rates',
   description: 'Daily FX digest.',
-  publisherName: 'FX Corp',
-  installCount: 1
+  latest: { revision_number: 5, version: null, published_at: '2026-03-01T00:00:00Z', published_by: null, release_notes: null },
+  my_installs: [{ where: 'cloud', install_id: 'install-2', device_id: null, host_manifest_id: null, revision_number: 2 }]
 })
-const HELPDESK = entry({
-  bundleId: 'acme/helpdesk',
-  displayName: 'Helpdesk',
-  publisherName: 'Acme',
-  isInstalled: true,
-  userInstallId: 'install-1',
-  latestVersion: null,
-  latestRevisionNumber: 4
+const PAYROLL = item({
+  runs_on: 'desktop',
+  uuid: 'u-payroll',
+  id: 'test.core.payroll1',
+  name: 'payroll-checker',
+  display_name: 'Payroll Checker',
+  description: 'Checks the payroll export.',
+  maintainers: [{ user_id: 'u1', display_name: 'Dana Ruiz' }],
+  latest: { revision_number: 7, version: null, published_at: '2026-10-01T00:00:00Z', published_by: null, release_notes: null }
 })
-
-let catalogList: ReturnType<typeof vi.fn>
-let libraryList: ReturnType<typeof vi.fn>
-const onClose = vi.fn()
-const onInstall = vi.fn()
-const onOpen = vi.fn()
-const cinnaReauth = vi.fn()
-
-beforeEach(() => {
-  vi.resetAllMocks()
-  useAuthStore.setState({
-    currentUser: {
-      id: 'p1',
-      type: 'cinna_user',
-      username: 'u',
-      displayName: 'U',
-      hasPassword: false
-    } as never
-  })
-  catalogList = vi.fn().mockResolvedValue({ success: true, value: [INVOICES, RATES, HELPDESK] })
-  libraryList = vi.fn().mockResolvedValue({ success: true, value: null })
-  window.api = {
-    catalog: { list: catalogList },
-    // No Team library unless a test gives the profile one.
-    sharing: { library: libraryList },
-    agents: {
-      list: vi.fn().mockResolvedValue([
-        { id: 'remote:helpdesk', name: 'Helpdesk', source: 'remote', remoteTargetId: 'install-1' }
-      ]),
-      syncRemote: vi.fn().mockResolvedValue(undefined),
-      onRemoteSyncComplete: () => () => {},
-      onReadinessChanged: () => () => {}
-    },
-    auth: { cinnaReauth }
-  } as never
+const LEDGER = item({ runs_on: 'desktop', uuid: 'u-ledger', id: 'test.core.ledger1', name: 'ledger', display_name: 'Ledger' })
+const ERP = item({
+  kind: 'skill',
+  runs_on: null,
+  uuid: 'u-erp',
+  id: 'test.core.skill.erp-lookup',
+  name: 'erp-lookup',
+  display_name: 'erp-lookup',
+  description: 'Look things up in the ERP.',
+  publisher: { user_id: 'u2', display_name: 'Anna Berg' },
+  required_credential_specs: [{ name: 'erp-api', type: 'api_token' }],
+  my_installs: [
+    { where: 'local', install_id: null, device_id: 'd1', host_manifest_id: 'AAAA-1', revision_number: 1 },
+    { where: 'local', install_id: null, device_id: 'd2', host_manifest_id: 'elsewhere', revision_number: 1 }
+  ]
 })
-
-function mount(props: Partial<Parameters<typeof CatalogBrowserModal>[0]> = {}): {
-  rerender: (next: Partial<Parameters<typeof CatalogBrowserModal>[0]>) => void
-} {
-  // `useCatalog` sets its own retry (none for an expired session); no delay
-  // between the attempts keeps a plain failure fast here.
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
-  const base = { onClose, onInstall, onOpen, installingBundleId: null, installError: null }
-  const tree = (p: typeof props): React.JSX.Element =>
-    createElement(
-      QueryClientProvider,
-      { client },
-      createElement(CatalogBrowserModal, { ...base, ...p })
-    )
-  const view = render(tree(props))
-  return { rerender: (next) => view.rerender(tree(next)) }
-}
-
-const tile = (name: string): HTMLElement => screen.getByRole('group', { name })
-
-describe('CatalogBrowserModal', () => {
-  it('shows every bundle, installed ones marked, with count and version', async () => {
-    mount()
-    expect(screen.getByRole('dialog', { name: 'Agent catalog' })).toBeTruthy()
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    const invoices = tile('Invoice Watcher')
-    expect(within(invoices).getByRole('button', { name: 'Invoice Watcher' })).toBeTruthy()
-    expect(within(invoices).getByText('v1.0.0')).toBeTruthy()
-    expect(within(invoices).getByText('by Acme')).toBeTruthy()
-    expect(within(invoices).getByText('12 installs')).toBeTruthy()
-    expect(within(tile('Exchange Rates')).getByText('1 install')).toBeTruthy()
-    const helpdesk = tile('Helpdesk')
-    expect(within(helpdesk).getByText('Installed')).toBeTruthy()
-    expect(within(helpdesk).getByText('rev 4')).toBeTruthy()
-    expect(within(helpdesk).queryByRole('button', { name: /Install/ })).toBeNull()
-  })
-
-  it('filters by name, description, publisher and bundle id', async () => {
-    mount()
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    const search = screen.getByRole('textbox', { name: 'Search the catalog' })
-    const names = (): string[] => screen.queryAllByRole('group').map((g) => g.getAttribute('aria-label')!)
-    fireEvent.change(search, { target: { value: 'ACME' } })
-    expect(names()).toEqual(['Invoice Watcher', 'Helpdesk'])
-    fireEvent.change(search, { target: { value: 'rates digest' } })
-    expect(names()).toEqual([])
-    expect(screen.getByText('No agents match your search.')).toBeTruthy()
-    fireEvent.change(search, { target: { value: 'fx/' } })
-    expect(names()).toEqual(['Exchange Rates'])
-    fireEvent.change(search, { target: { value: 'po number' } })
-    expect(names()).toEqual(['Invoice Watcher'])
-  })
-
-  it('opens a detail from the tile and Back returns to the same search', async () => {
-    mount()
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search the catalog' }), {
-      target: { value: 'invoice' }
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
-
-    expect(screen.getByRole('heading', { name: 'Invoice Watcher' })).toBeTruthy()
-    expect(screen.getByText('ops@acme.test', { exact: false })).toBeTruthy()
-    expect(screen.getByText('acme/invoices')).toBeTruthy()
-    expect(screen.getByText(new Date('2026-03-01T00:00:00Z').toLocaleDateString())).toBeTruthy()
-    // One step down the type scale inside the dialog.
-    expect(screen.getByTestId('credentials').textContent).toBe('acme/invoices:true:compact')
-    // Still mounted under the detail, but out of reach.
-    expect(screen.queryByRole('textbox', { name: 'Search the catalog' })).toBeNull()
-    expect(screen.queryAllByRole('group')).toHaveLength(0)
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Back to catalog' }))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Install' }))
-    expect(onInstall).toHaveBeenCalledWith('acme/invoices')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' }))
-    const search = screen.getByRole('textbox', { name: 'Search the catalog' }) as HTMLInputElement
-    expect(search.value).toBe('invoice')
-    expect(document.activeElement).toBe(search)
-    expect(screen.getAllByRole('group')).toHaveLength(1)
-  })
-
-  it('keeps the grid mounted behind a detail, so its scroll position survives', async () => {
-    mount()
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    const grid = tile('Invoice Watcher')
-    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
-    expect(grid.isConnected).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Back to catalog' }))
-    expect(tile('Invoice Watcher')).toBe(grid)
-  })
-
-  describe('right after a detail opens', () => {
-    beforeEach(() => {
-      vi.useFakeTimers({ shouldAdvanceTime: true })
-    })
-    afterEach(() => {
-      vi.useRealTimers()
-    })
-
-    it('ignores a pointer click on Install until the view has settled', async () => {
-      mount()
-      await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-      fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }), { detail: 1 })
-      // The second half of the double-click that opened the detail.
-      fireEvent.click(screen.getByRole('button', { name: 'Install' }), { detail: 2 })
-      expect(onInstall).not.toHaveBeenCalled()
-      // Enter on the focused button is deliberate, settled or not.
-      fireEvent.click(screen.getByRole('button', { name: 'Install' }), { detail: 0 })
-      expect(onInstall).toHaveBeenCalledTimes(1)
-      act(() => vi.advanceTimersByTime(SETTLE_MS))
-      fireEvent.click(screen.getByRole('button', { name: 'Install' }), { detail: 1 })
-      expect(onInstall).toHaveBeenCalledTimes(2)
-    })
-
-    it('ignores a pointer click on Open until the view has settled', async () => {
-      mount()
-      await waitFor(() =>
-        expect(within(tile('Helpdesk')).getByRole('button', { name: 'Open' })).toBeTruthy()
-      )
-      fireEvent.click(screen.getByRole('button', { name: 'Helpdesk' }), { detail: 1 })
-      fireEvent.click(screen.getByRole('button', { name: 'Open' }), { detail: 2 })
-      expect(onOpen).not.toHaveBeenCalled()
-      act(() => vi.advanceTimersByTime(SETTLE_MS))
-      fireEvent.click(screen.getByRole('button', { name: 'Open' }), { detail: 1 })
-      expect(onOpen).toHaveBeenCalledWith('remote:helpdesk')
-    })
-  })
-
-  it('installs from the tile, and while one runs every Install is disabled', async () => {
-    const view = mount()
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    fireEvent.click(within(tile('Exchange Rates')).getByRole('button', { name: 'Install' }))
-    expect(onInstall).toHaveBeenCalledWith('fx/rates')
-
-    view.rerender({ installingBundleId: 'fx/rates' })
-    const running = within(tile('Exchange Rates')).getByRole('button', { name: 'Installing…' })
-    expect((running as HTMLButtonElement).disabled).toBe(true)
-    const other = within(tile('Invoice Watcher')).getByRole('button', { name: 'Install' })
-    expect((other as HTMLButtonElement).disabled).toBe(true)
-    // Says why it is disabled; the running one needs no such note.
-    expect(other.getAttribute('title')).toBe('Another agent is installing')
-    expect(running.getAttribute('title')).toBeNull()
-  })
-
-  it('offers Open on an installed bundle that has synced, and passes its agent id', async () => {
-    mount()
-    const open = await waitFor(() => within(tile('Helpdesk')).getByRole('button', { name: 'Open' }))
-    fireEvent.click(open)
-    expect(onOpen).toHaveBeenCalledWith('remote:helpdesk')
-  })
-
-  it('has no Open for an installed bundle with no local agent yet', async () => {
-    ;(window.api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValue([])
-    mount()
-    await waitFor(() => expect(within(tile('Helpdesk')).getByText('Installed')).toBeTruthy())
-    expect(within(tile('Helpdesk')).queryByRole('button', { name: 'Open' })).toBeNull()
-  })
-
-  it('shows an install error inside the tile it belongs to, and only there', async () => {
-    mount({ installError: { bundleId: 'fx/rates', message: 'Quota reached.' } })
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    expect(within(tile('Exchange Rates')).getByRole('alert').textContent).toBe('Quota reached.')
-    expect(within(tile('Invoice Watcher')).queryByRole('alert')).toBeNull()
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-  })
-
-  it('says so when nothing is published', async () => {
-    catalogList.mockResolvedValue({ success: true, value: [] })
-    mount()
-    expect(await screen.findByText('No agents are published to your account yet.')).toBeTruthy()
-  })
-
-  it('offers Re-authenticate when the session expired, and reloads after it', async () => {
-    // The shape main really sends: the code as data, not on a thrown error.
-    catalogList.mockResolvedValue({ success: false, code: 'reauth_required', message: 'expired' })
-    cinnaReauth.mockResolvedValue({ success: false, error: 'Browser closed.' })
-    mount()
-    const button = await screen.findByRole('button', { name: 'Re-authenticate' })
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
-    // An expired session is not retried: asking again cannot succeed.
-    expect(catalogList).toHaveBeenCalledTimes(1)
-    fireEvent.click(button)
-    expect(await screen.findByText('Browser closed.')).toBeTruthy()
-  })
-
-  it('offers Retry for any other load failure', async () => {
-    catalogList.mockRejectedValue(new Error('boom'))
-    mount()
-    const retry = await screen.findByRole('button', { name: 'Retry' })
-    expect(screen.queryByRole('button', { name: 'Re-authenticate' })).toBeNull()
-    catalogList.mockResolvedValue({ success: true, value: [RATES] })
-    fireEvent.click(retry)
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(1))
-  })
-
-  it('closes on Escape and on a click outside', () => {
-    mount()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(onClose).toHaveBeenCalledTimes(1)
-    fireEvent.mouseDown(document.body)
-    expect(onClose).toHaveBeenCalledTimes(2)
-    fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Agent catalog' }))
-    expect(onClose).toHaveBeenCalledTimes(2)
-  })
-})
-
 
 function libraryAgent(overrides: Partial<LibraryAgentDto>): LibraryAgentDto {
   return {
-    uuid: 'item-1',
-    bundleId: 'test.core.item1',
+    uuid: 'u',
+    bundleId: 'b',
     repoId: 'r',
     slug: 'agent',
     name: 'Agent',
@@ -343,100 +137,516 @@ function libraryAgent(overrides: Partial<LibraryAgentDto>): LibraryAgentDto {
     maintainers: [],
     engine: null,
     manifestId: null,
-    latest: { number: 1, publishedAt: '2026-10-01T00:00:00Z', publishedBy: null, releaseNotes: null },
+    latest: null,
     localAgentId: null,
     updateAvailable: false,
     ...overrides
   }
 }
 
-const PAYROLL = libraryAgent({
-  repoId: 'r-payroll',
-  name: 'Payroll Checker',
-  description: 'Checks the payroll export.',
-  maintainers: [{ userId: 'u1', displayName: 'Dana Ruiz' }],
-  engine: 'claude'
+const PAYROLL_LIB = libraryAgent({ uuid: 'u-payroll', repoId: 'r-payroll', name: 'Payroll Checker' })
+const LEDGER_LIB = libraryAgent({ uuid: 'u-ledger', repoId: 'r-ledger', name: 'Ledger', localAgentId: 'folder:ledger', updateAvailable: true })
+
+function listing(items: CatalogItem[], available = true): CatalogItemsListing {
+  return { host: 'https://core.test', items, fetchedAt: '2026-10-10T00:00:00Z', available }
+}
+
+function library(agents: LibraryAgentDto[]): LibraryListingDto {
+  return { host: 'https://core.test', agents, fetchedAt: '2026-10-10T00:00:00Z' }
+}
+
+function desktopActions(overrides: Partial<DesktopAgentActions> = {}): DesktopAgentActions {
+  return { gettingRepoId: null, updatingAgentId: null, error: null, onGet: vi.fn(), onUpdate: vi.fn(), onOpenLocal: vi.fn(), ...overrides }
+}
+
+function cloudActions(overrides: Partial<CloudUpdateActions> = {}): CloudUpdateActions {
+  return { updatingInstallId: null, error: null, onUpdate: vi.fn(), ...overrides }
+}
+
+let itemsMock: ReturnType<typeof vi.fn>
+let itemMock: ReturnType<typeof vi.fn>
+let libraryMock: ReturnType<typeof vi.fn>
+const onClose = vi.fn()
+const onInstall = vi.fn()
+const onOpen = vi.fn()
+const cinnaReauth = vi.fn()
+
+beforeEach(() => {
+  vi.resetAllMocks()
+  _resetCatalogFilter()
+  useAuthStore.setState({
+    currentUser: { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false } as never
+  })
+  itemsMock = vi.fn().mockResolvedValue({ success: true, value: listing([INVOICES, HELPDESK, RATES, PAYROLL, LEDGER, ERP]) })
+  itemMock = vi.fn().mockResolvedValue({ success: true, value: { ...INVOICES, revisions: [] } })
+  libraryMock = vi.fn().mockResolvedValue({ success: true, value: library([PAYROLL_LIB, LEDGER_LIB]) })
+  window.api = {
+    catalog: { items: itemsMock, item: itemMock },
+    sharing: { library: libraryMock },
+    agents: {
+      list: vi.fn().mockResolvedValue([
+        { id: 'remote:helpdesk', name: 'Helpdesk', source: 'remote', remoteTargetId: 'install-1' },
+        { id: 'remote:rates', name: 'Exchange Rates', source: 'remote', remoteTargetId: 'install-2' }
+      ]),
+      syncRemote: vi.fn().mockResolvedValue(undefined),
+      onRemoteSyncComplete: () => () => {},
+      onReadinessChanged: () => () => {}
+    },
+    localAgents: {
+      list: vi.fn().mockResolvedValue({ roots: [], agents: [{ id: 'folder:aaaa-1', name: 'Alpha', manifestId: 'aaaa-1' }] })
+    },
+    auth: { cinnaReauth }
+  } as never
 })
-const EXPENSES = libraryAgent({ repoId: 'r-exp', name: 'Expenses', localAgentId: 'folder:exp' })
-const LEDGER = libraryAgent({ repoId: 'r-ledger', name: 'Ledger', localAgentId: 'folder:ledger', updateAvailable: true })
 
-function listing(agents: LibraryAgentDto[]): LibraryListingDto {
-  return { host: 'https://core.test', agents, fetchedAt: '2026-10-09T00:00:00Z' }
+let client: QueryClient
+function mount(props: Partial<Parameters<typeof CatalogBrowserModal>[0]> = {}): {
+  rerender: (next: Partial<Parameters<typeof CatalogBrowserModal>[0]>) => void
+  unmount: () => void
+} {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } })
+  const base = {
+    onClose,
+    onInstall,
+    onOpen,
+    installingBundleId: null,
+    installError: null,
+    desktop: desktopActions(),
+    cloudUpdate: cloudActions()
+  }
+  const tree = (p: typeof props): React.JSX.Element =>
+    createElement(QueryClientProvider, { client }, createElement(CatalogBrowserModal, { ...base, ...p }))
+  const view = render(tree(props))
+  return { rerender: (next) => view.rerender(tree({ ...props, ...next })), unmount: view.unmount }
 }
 
-function actions(overrides: Partial<TeamLibraryActions> = {}): TeamLibraryActions {
-  return {
-    gettingRepoId: null,
-    updatingAgentId: null,
-    error: null,
-    onGet: vi.fn(),
-    onUpdate: vi.fn(),
-    onOpenLocal: vi.fn(),
-    ...overrides
-  }
+const tile = (name: string): HTMLElement => screen.getByRole('group', { name })
+const names = (): string[] => screen.queryAllByRole('group').map((g) => g.getAttribute('aria-label')!)
+const ALL = ['Invoice Watcher', 'Helpdesk', 'Exchange Rates', 'Payroll Checker', 'Ledger', 'erp-lookup']
+async function loaded(): Promise<void> {
+  await waitFor(() => expect(names()).toEqual(ALL))
+  // The desktop agents' copies join from the sharing listing.
+  await waitFor(() => expect(within(tile('Ledger')).queryByRole('button', { name: CATALOG_TEXT.update })).toBeTruthy())
 }
 
-/**
- * The Team library is a second source of the same dialog, offered only when
- * the profile has one. Get, Update and Open act on the tile they sit in; the
- * dialog owns none of them.
- */
-describe('CatalogBrowserModal — Team library', () => {
-  async function openLibrary(agents: LibraryAgentDto[], library = actions()): Promise<TeamLibraryActions> {
-    libraryList.mockResolvedValue({ success: true, value: listing(agents) })
-    mount({ library })
-    fireEvent.click(await screen.findByRole('tab', { name: SHARE_UI_TEXT.librarySource }))
-    return library
-  }
-
-  it('is not offered without a Team library', async () => {
-    mount({ library: actions() })
-    await waitFor(() => expect(libraryList).toHaveBeenCalled())
-    await waitFor(() => expect(screen.getAllByRole('group')).toHaveLength(3))
-    expect(screen.queryByRole('tab', { name: SHARE_UI_TEXT.librarySource })).toBeNull()
+describe('CatalogBrowserModal — one list', () => {
+  it('asks main for a fresh listing when it opens, and shows every kind with its badge', async () => {
+    mount()
+    expect(screen.getByRole('dialog', { name: CATALOG_TEXT.title })).toBeTruthy()
+    await loaded()
+    expect(itemsMock).toHaveBeenCalledWith(true)
+    expect(within(tile('Invoice Watcher')).getByText(CATALOG_KIND_TEXT.cloud_agent)).toBeTruthy()
+    expect(within(tile('Payroll Checker')).getByText(CATALOG_KIND_TEXT.desktop_agent)).toBeTruthy()
+    expect(within(tile('erp-lookup')).getByText(CATALOG_KIND_TEXT.skill)).toBeTruthy()
   })
 
-  it('asks main for a fresh listing when the dialog opens', async () => {
-    await openLibrary([PAYROLL])
-    expect(libraryList).toHaveBeenCalledWith(true)
+  it('shows the maintainers, Version N beside the kind badge, and what it needs — not how many use it', async () => {
+    mount()
+    await loaded()
+    const invoices = tile('Invoice Watcher')
+    const version = within(invoices).getByText('Version 3 (1.2.0)')
+    // On the badge's line, so the name has its line to itself.
+    expect(version.parentElement?.textContent).toContain(CATALOG_KIND_TEXT.cloud_agent)
+    expect(within(invoices).getByText('Invoice Watcher').parentElement?.textContent).toBe('Invoice Watcher')
+    expect(within(invoices).getByText('by Acme')).toBeTruthy()
+    expect(within(invoices).getByText('Needs Odoo, IMAP')).toBeTruthy()
+    expect(within(invoices).queryByText(/users?$/)).toBeNull()
+    expect(within(tile('Payroll Checker')).getByText('Version 7')).toBeTruthy()
+    expect(within(tile('Payroll Checker')).getByText('by Dana Ruiz')).toBeTruthy()
+    // Without maintainers, the publisher.
+    expect(within(tile('erp-lookup')).getByText('by Anna Berg')).toBeTruthy()
   })
 
-  it('shows each agent with its maintainers and engine, and Get / Installed / Update available', async () => {
-    const library = await openLibrary([PAYROLL, EXPENSES, LEDGER])
+  it('filters by All / Agents / Skills, and keeps the choice across a detail and a search', async () => {
+    mount()
+    await loaded()
+    const filter = screen.getByRole('radiogroup', { name: CATALOG_TEXT.filterLabel })
+    expect(within(filter).getByRole('radio', { name: 'All' }).getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(within(filter).getByRole('radio', { name: 'Skills' }))
+    expect(names()).toEqual(['erp-lookup'])
+    fireEvent.click(within(filter).getByRole('radio', { name: 'Agents' }))
+    expect(names()).toEqual(ALL.filter((n) => n !== 'erp-lookup'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ledger' }))
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.back }))
+    expect(within(filter).getByRole('radio', { name: 'Agents' }).getAttribute('aria-checked')).toBe('true')
+    expect(names()).toEqual(ALL.filter((n) => n !== 'erp-lookup'))
+
+    // Search narrows inside the filter: the skill matches "erp" but is filtered out.
+    fireEvent.change(screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel }), { target: { value: 'erp' } })
+    expect(names()).toEqual([])
+    expect(screen.getByText(CATALOG_TEXT.noMatch)).toBeTruthy()
+    fireEvent.click(within(filter).getByRole('radio', { name: 'All' }))
+    expect(names()).toEqual(['erp-lookup'])
+  })
+
+  it('searches name, description, maintainers, publisher and catalog id', async () => {
+    mount()
+    await loaded()
+    const search = screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel })
+    fireEvent.change(search, { target: { value: 'ACME' } })
+    expect(names()).toEqual(['Invoice Watcher', 'Helpdesk'])
+    fireEvent.change(search, { target: { value: 'po number' } })
+    expect(names()).toEqual(['Invoice Watcher'])
+    fireEvent.change(search, { target: { value: 'dana' } })
+    expect(names()).toEqual(['Payroll Checker'])
+    fireEvent.change(search, { target: { value: 'anna berg' } })
+    expect(names()).toEqual(['erp-lookup'])
+    fireEvent.change(search, { target: { value: 'core.fx1' } })
+    expect(names()).toEqual(['Exchange Rates'])
+  })
+
+  it('says so when a filter holds nothing, and when the server has no catalog', async () => {
+    itemsMock.mockResolvedValue({ success: true, value: listing([INVOICES]) })
+    const view = mount()
+    await waitFor(() => expect(names()).toEqual(['Invoice Watcher']))
+    fireEvent.click(screen.getByRole('radio', { name: 'Skills' }))
+    expect(screen.getByText(CATALOG_TEXT.empty.skills)).toBeTruthy()
+    view.unmount()
+
+    itemsMock.mockResolvedValue({ success: true, value: listing([], false) })
+    mount()
+    expect(await screen.findByText(CATALOG_TEXT.unavailable)).toBeTruthy()
+  })
+})
+
+describe('CatalogBrowserModal — the action by kind', () => {
+  it('a cloud agent: Get runs the parent’s install, and while one runs every Get is disabled', async () => {
+    const view = mount()
+    await loaded()
+    fireEvent.click(within(tile('Invoice Watcher')).getByRole('button', { name: CATALOG_TEXT.get }))
+    expect(onInstall).toHaveBeenCalledWith('test.core.acme1')
+
+    view.rerender({ installingBundleId: 'test.core.acme1' })
+    const running = within(tile('Invoice Watcher')).getByRole('button', { name: CATALOG_TEXT.getting })
+    expect((running as HTMLButtonElement).disabled).toBe(true)
+    expect(running.getAttribute('title')).toBeNull()
+  })
+
+  it('a cloud agent installed and current: Open once it has synced, with no label beside it', async () => {
+    mount()
+    await loaded()
+    const helpdesk = tile('Helpdesk')
+    expect(within(helpdesk).queryByText(CATALOG_TEXT.installed)).toBeNull()
+    expect(within(helpdesk).queryByRole('button', { name: CATALOG_TEXT.get })).toBeNull()
+    fireEvent.click(within(helpdesk).getByRole('button', { name: CATALOG_TEXT.open }))
+    expect(onOpen).toHaveBeenCalledWith('remote:helpdesk')
+  })
+
+  it('a cloud agent installed but not synced yet: Installed, since there is nothing to Open', async () => {
+    ;(window.api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    mount()
+    await loaded()
+    const helpdesk = tile('Helpdesk')
+    expect(within(helpdesk).getByText(CATALOG_TEXT.installed)).toBeTruthy()
+    expect(within(helpdesk).queryByRole('button', { name: CATALOG_TEXT.open })).toBeNull()
+  })
+
+  it('a cloud agent with two installs acts on the one synced to this computer, on every read', async () => {
+    const twice = item({
+      ...HELPDESK,
+      my_installs: [
+        { where: 'cloud', install_id: 'install-0', device_id: null, host_manifest_id: null, revision_number: 1 },
+        { where: 'cloud', install_id: 'install-1', device_id: null, host_manifest_id: null, revision_number: 4 }
+      ]
+    })
+    itemsMock.mockResolvedValue({ success: true, value: listing([twice]) })
+    mount()
+    await waitFor(() => expect(names()).toEqual(['Helpdesk']))
+    // install-0 is behind but has no agent row here; install-1 has one.
+    await waitFor(() => expect(within(tile('Helpdesk')).getByRole('button', { name: CATALOG_TEXT.open })).toBeTruthy())
+    expect(within(tile('Helpdesk')).queryByRole('button', { name: CATALOG_TEXT.update })).toBeNull()
+  })
+
+  it('a cloud agent behind its latest version: Update applies it to the install, its failure in that tile only', async () => {
+    const cloudUpdate = cloudActions()
+    const view = mount({ cloudUpdate })
+    await loaded()
+    fireEvent.click(within(tile('Exchange Rates')).getByRole('button', { name: CATALOG_TEXT.update }))
+    expect(cloudUpdate.onUpdate).toHaveBeenCalledWith('install-2')
+    expect(within(tile('Helpdesk')).queryByRole('button', { name: CATALOG_TEXT.update })).toBeNull()
+
+    view.rerender({ cloudUpdate: cloudActions({ updatingInstallId: 'install-2' }) })
+    expect(within(tile('Exchange Rates')).getByRole('button', { name: CATALOG_TEXT.updating })).toBeTruthy()
+
+    view.rerender({ cloudUpdate: cloudActions({ error: { installId: 'install-2', message: 'Environment busy.' } }) })
+    expect(within(tile('Exchange Rates')).getByRole('alert').textContent).toBe('Environment busy.')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('a cloud agent’s synced row has the last word on whether it is behind', async () => {
+    ;(window.api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 'remote:rates',
+        name: 'Exchange Rates',
+        source: 'remote',
+        remoteTargetId: 'install-2',
+        remoteMetadata: { bundle_version: { update_available: false } }
+      }
+    ])
+    mount()
+    await waitFor(() => expect(within(tile('Exchange Rates')).getByRole('button', { name: CATALOG_TEXT.open })).toBeTruthy())
+    expect(within(tile('Exchange Rates')).queryByRole('button', { name: CATALOG_TEXT.update })).toBeNull()
+  })
+
+  it('a desktop agent: Get, Update and Open act on the tile they sit in, its refusal there only', async () => {
+    const desktop = desktopActions({ error: { repoId: 'r-payroll', message: 'Open Alpha instead.' } })
+    mount({ desktop })
+    await loaded()
     const payroll = tile('Payroll Checker')
-    expect(payroll.textContent).toContain(SHARE_UI_TEXT.maintainedBy('Dana Ruiz'))
-    expect(payroll.textContent).toContain('claude')
-    fireEvent.click(within(payroll).getByRole('button', { name: SHARE_UI_TEXT.get }))
-    expect(library.onGet).toHaveBeenCalledWith('r-payroll')
+    fireEvent.click(within(payroll).getByRole('button', { name: CATALOG_TEXT.get }))
+    expect(desktop.onGet).toHaveBeenCalledWith('r-payroll')
+    expect(within(payroll).getByRole('alert').textContent).toBe('Open Alpha instead.')
+    expect(within(tile('Ledger')).queryByRole('alert')).toBeNull()
 
-    const expenses = tile('Expenses')
-    expect(expenses.textContent).toContain(SHARE_UI_TEXT.installed)
-    expect(within(expenses).queryByRole('button', { name: SHARE_UI_TEXT.get })).toBeNull()
-    fireEvent.click(within(expenses).getByRole('button', { name: SHARE_UI_TEXT.open }))
-    expect(library.onOpenLocal).toHaveBeenCalledWith('folder:exp')
-
-    fireEvent.click(within(tile('Ledger')).getByRole('button', { name: SHARE_UI_TEXT.updateAvailable }))
-    expect(library.onUpdate).toHaveBeenCalledWith(LEDGER)
+    const ledger = tile('Ledger')
+    fireEvent.click(within(ledger).getByRole('button', { name: CATALOG_TEXT.update }))
+    expect(desktop.onUpdate).toHaveBeenCalledWith(LEDGER_LIB)
+    fireEvent.click(within(ledger).getByRole('button', { name: CATALOG_TEXT.open }))
+    expect(desktop.onOpenLocal).toHaveBeenCalledWith('folder:ledger')
   })
 
-  it('shows Getting… in the tile being got, and its refusal only there', async () => {
-    await openLibrary(
-      [PAYROLL, libraryAgent({ repoId: 'r-other', name: 'Other' })],
-      actions({ gettingRepoId: 'r-payroll', error: { repoId: 'r-other', message: 'Open Alpha instead.' } })
+  it('a desktop agent being got says so in its tile', async () => {
+    mount({ desktop: desktopActions({ gettingRepoId: 'r-payroll' }) })
+    await loaded()
+    await waitFor(() => expect(within(tile('Payroll Checker')).getByRole('button', { name: CATALOG_TEXT.getting })).toBeTruthy())
+  })
+
+  it('a skill: no action yet, only which of this computer’s agents already has it', async () => {
+    mount()
+    await loaded()
+    const erp = tile('erp-lookup')
+    // The tile's body is its only button: no Get, and no disabled stand-in for one.
+    expect(within(erp).getAllByRole('button')).toEqual([within(erp).getByRole('button', { name: 'erp-lookup' })])
+    expect(within(erp).getByText('Added to 1 agent')).toBeTruthy()
+
+    fireEvent.click(within(erp).getByRole('button', { name: 'erp-lookup' }))
+    const used = screen.getByText(CATALOG_TEXT.usedByLabel)
+    expect(used.nextElementSibling?.textContent).toBe('Alpha')
+    expect(screen.getByTestId('credentials').textContent).toBe('test.core.skill.erp-lookup:erp-api:false:compact')
+  })
+})
+
+describe('CatalogBrowserModal — a tile without an action', () => {
+  it('a skill none of the user’s agents has: no footer at all', async () => {
+    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({ roots: [], agents: [] })
+    mount()
+    await loaded()
+    const erp = tile('erp-lookup')
+    // The body is the tile's last part: nothing under it.
+    expect(erp.lastElementChild).toBe(within(erp).getByRole('button', { name: 'erp-lookup' }))
+    expect(tile('Invoice Watcher').lastElementChild).not.toBe(
+      within(tile('Invoice Watcher')).getByRole('button', { name: 'Invoice Watcher' })
     )
-    expect(within(tile('Payroll Checker')).getByRole('button', { name: SHARE_UI_TEXT.getting })).toBeTruthy()
-    expect(within(tile('Other')).getByRole('alert').textContent).toBe('Open Alpha instead.')
-    expect(within(tile('Payroll Checker')).queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('CatalogBrowserModal — detail', () => {
+  it('opens from the tile with the credentials, and Back returns to the same search', async () => {
+    mount()
+    await loaded()
+    fireEvent.change(screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel }), { target: { value: 'invoice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    expect(screen.getByRole('heading', { name: 'Invoice Watcher' })).toBeTruthy()
+    expect(screen.getByText('test.core.acme1')).toBeTruthy()
+    // Who stands behind it is the Maintainers row, not a "by" line in the header too.
+    expect(screen.getByText(CATALOG_TEXT.maintainersLabel).nextElementSibling?.textContent).toBe('Acme')
+    const header = screen.getByRole('heading', { name: 'Invoice Watcher' }).parentElement!
+    expect(header.textContent).toBe(`Invoice Watcher${CATALOG_KIND_TEXT.cloud_agent}Version 3 (1.2.0)`)
+    expect(screen.getByText(CATALOG_TEXT.usersLabel).nextElementSibling?.textContent).toBe('12')
+    // Not installed: the install context is checked.
+    expect(screen.getByTestId('credentials').textContent).toBe('test.core.acme1:Odoo+IMAP:true:compact')
+    expect(screen.queryByRole('textbox', { name: CATALOG_TEXT.searchLabel })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: CATALOG_TEXT.back }))
+
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.back }))
+    const search = screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel }) as HTMLInputElement
+    expect(search.value).toBe('invoice')
+    expect(document.activeElement).toBe(search)
   })
 
-  it('says so when nothing has been shared yet', async () => {
-    await openLibrary([])
-    expect(screen.getByText(SHARE_UI_TEXT.libraryEmpty)).toBeTruthy()
+  it('reads the versions when it opens, newest first, with who shared each and its notes', async () => {
+    let answer: (value: unknown) => void = () => undefined
+    itemMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    expect(screen.getByText(CATALOG_TEXT.versionsLoading)).toBeTruthy()
+    expect(itemMock).toHaveBeenCalledWith('u-invoices')
+    const detail: CatalogItemDetail = {
+      ...INVOICES,
+      revisions: [
+        { revision_number: 3, version: '1.2.0', published_at: '2026-09-13T12:00:00Z', published_by: { user_id: 'a', display_name: 'Anna' }, release_notes: 'Line one\nLine two\nLine three\nLine four', origin: 'publish', git_commit_sha: null },
+        { revision_number: 2, version: null, published_at: '2026-02-01T00:00:00Z', published_by: null, release_notes: 'Short note.', origin: 'publish', git_commit_sha: null }
+      ]
+    }
+    await act(async () => answer({ success: true, value: detail }))
+    const versions = screen.getByRole('region', { name: CATALOG_TEXT.versionsHeading })
+    const rows = await within(versions).findAllByRole('listitem')
+    expect(within(rows[0]).getByText('Version 3 (1.2.0)')).toBeTruthy()
+    expect(within(rows[0]).getByText('shared by Anna')).toBeTruthy()
+    // The month as a word: no reader has to guess the order.
+    expect(within(rows[0]).getByText('13 Sep 2026')).toBeTruthy()
+    expect(within(rows[1]).getByText('Version 2')).toBeTruthy()
+    // Long notes start clamped, with a control to open them; short ones have none.
+    const more = within(rows[0]).getByRole('button', { name: CATALOG_TEXT.showMore })
+    fireEvent.click(more)
+    expect(within(rows[0]).getByRole('button', { name: CATALOG_TEXT.showLess }).getAttribute('aria-expanded')).toBe('true')
+    expect(within(rows[1]).queryByRole('button')).toBeNull()
+
+    // Kept while the dialog is open: back and in again reads nothing.
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.back }))
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    expect(itemMock).toHaveBeenCalledTimes(1)
   })
 
-  it('opens a detail with the description', async () => {
-    await openLibrary([PAYROLL])
-    fireEvent.click(within(tile('Payroll Checker')).getByRole('button', { name: 'Payroll Checker' }))
-    expect(screen.getByText('Checks the payroll export.', { selector: 'p' })).toBeTruthy()
+  it('shows a failed read in the Versions section, keeps the dialog open, and retries there', async () => {
+    itemMock.mockResolvedValue({ success: false, code: 'request_failed', message: 'Not Found' })
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Payroll Checker' }))
+    const versions = screen.getByRole('region', { name: CATALOG_TEXT.versionsHeading })
+    await waitFor(() => expect(within(versions).getByRole('alert').textContent).toContain(CATALOG_TEXT.versionsFailed))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Payroll Checker' })).toBeTruthy()
+
+    itemMock.mockResolvedValue({ success: true, value: { ...PAYROLL, revisions: [] } })
+    fireEvent.click(within(versions).getByRole('button', { name: CATALOG_TEXT.retry }))
+    expect(await within(versions).findByText(CATALOG_TEXT.versionsEmpty)).toBeTruthy()
+  })
+
+  it('drops the versions it read when the dialog closes', async () => {
+    const view = mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    await waitFor(() => expect(itemMock).toHaveBeenCalledTimes(1))
+    expect(client.getQueryCache().findAll({ queryKey: ['catalog', 'item'] })).toHaveLength(1)
+    view.unmount()
+    expect(client.getQueryCache().findAll({ queryKey: ['catalog', 'item'] })).toHaveLength(0)
+  })
+
+  describe('right after a detail opens', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('ignores a pointer click on Get until the view has settled', async () => {
+      mount()
+      await loaded()
+      fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }), { detail: 1 })
+      // The second half of the double-click that opened the detail.
+      fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.get }), { detail: 2 })
+      expect(onInstall).not.toHaveBeenCalled()
+      // Enter on the focused button is deliberate, settled or not.
+      fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.get }), { detail: 0 })
+      expect(onInstall).toHaveBeenCalledTimes(1)
+      act(() => vi.advanceTimersByTime(SETTLE_MS))
+      fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.get }), { detail: 1 })
+      expect(onInstall).toHaveBeenCalledTimes(2)
+    })
+  })
+})
+
+describe('CatalogBrowserModal — loading the list', () => {
+  it('offers Re-authenticate when the session expired, and does not retry by itself', async () => {
+    itemsMock.mockResolvedValue({ success: false, code: 'reauth_required', message: 'expired' })
+    cinnaReauth.mockResolvedValue({ success: false, error: 'Browser closed.' })
+    mount()
+    const button = await screen.findByRole('button', { name: 'Re-authenticate' })
+    expect(screen.queryByRole('button', { name: CATALOG_TEXT.retry })).toBeNull()
+    expect(itemsMock).toHaveBeenCalledTimes(1)
+    fireEvent.click(button)
+    expect(await screen.findByText('Browser closed.')).toBeTruthy()
+  })
+
+  it('offers Retry for any other failure', async () => {
+    itemsMock.mockRejectedValue(new Error('boom'))
+    mount()
+    const retry = await screen.findByRole('button', { name: CATALOG_TEXT.retry })
+    itemsMock.mockResolvedValue({ success: true, value: listing([INVOICES]) })
+    fireEvent.click(retry)
+    await waitFor(() => expect(names()).toEqual(['Invoice Watcher']))
+  })
+
+  it('shows a failed refresh beside Refresh, and moves no tile', async () => {
+    mount()
+    await loaded()
+    const grid = tile('Invoice Watcher').parentElement!
+    const scroller = grid.parentElement!
+    expect(scroller.firstElementChild).toBe(grid)
+    itemsMock.mockResolvedValue({ success: false, code: 'request_failed', message: 'boom' })
+    const refresh = screen.getByRole('button', { name: CATALOG_TEXT.refresh })
+    expect(refresh.textContent).toBe(CATALOG_TEXT.refresh)
+    fireEvent.click(refresh)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(CATALOG_TEXT.refreshFailed)
+    // In the header, beside the button — the grid is still the body's first part.
+    expect(alert.parentElement).toBe(refresh.parentElement)
+    expect(scroller.firstElementChild).toBe(grid)
+    expect(names()).toEqual(ALL)
+  })
+
+  it('shows the read in progress, not the last failure, while the next read runs', async () => {
+    const view = mount()
+    await loaded()
+    itemsMock.mockResolvedValue({ success: false, code: 'request_failed', message: 'boom' })
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.refresh }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    view.unmount()
+
+    // Reopened: the failure is still cached beside the list, and the new read is on its way.
+    itemsMock.mockReturnValue(new Promise(() => undefined))
+    render(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(CatalogBrowserModal, { onClose, onInstall, onOpen, installingBundleId: null, installError: null })
+      )
+    )
+    const refresh = screen.getByRole('button', { name: CATALOG_TEXT.refresh })
+    await waitFor(() => expect(refresh.getAttribute('aria-busy')).toBe('true'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText(CATALOG_TEXT.loadFailed)).toBeNull()
+    expect(names()).toEqual(ALL)
+  })
+
+  it('keeps the filter for the session: the next open shows the same kind', async () => {
+    const view = mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('radio', { name: 'Skills' }))
+    view.unmount()
+    mount()
+    await waitFor(() => expect(names()).toEqual(['erp-lookup']))
+    expect(screen.getByRole('radio', { name: 'Skills' }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('Escape on a detail goes back to the grid, with its filter and search; Escape on the grid closes', async () => {
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('radio', { name: 'Agents' }))
+    fireEvent.change(screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel }), { target: { value: 'ledger' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ledger' }))
+    expect(screen.getByRole('heading', { name: 'Ledger' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByRole('heading', { name: 'Ledger' })).toBeNull()
+    expect((screen.getByRole('textbox', { name: CATALOG_TEXT.searchLabel }) as HTMLInputElement).value).toBe('ledger')
+    expect(screen.getByRole('radio', { name: 'Agents' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes on Escape and on a click outside', () => {
+    mount()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    fireEvent.mouseDown(document.body)
+    expect(onClose).toHaveBeenCalledTimes(2)
+    fireEvent.mouseDown(screen.getByRole('dialog', { name: CATALOG_TEXT.title }))
+    expect(onClose).toHaveBeenCalledTimes(2)
   })
 })

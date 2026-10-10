@@ -29,7 +29,8 @@ import type {
 import { useInstallContext } from '../../hooks/useCatalog'
 
 interface CatalogCardCredentialsProps {
-  entry: CatalogEntryDto
+  /** A catalog entry, or the same two facts of any catalog item (the catalog dialog's). */
+  entry: Pick<CatalogEntryDto, 'bundleId' | 'requiredCredentialSpecs'>
   /** Gates the lazy install-context fetch; pass false for installed bundles. */
   enabled: boolean
   /** One step down the type scale (12px → 11px), for the catalog dialog's detail. */

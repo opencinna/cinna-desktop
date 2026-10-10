@@ -22,6 +22,7 @@ import { useAuthStore } from '../stores/auth.store'
 import { useFinishSetupStore } from '../stores/finishSetup.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
+import { readCatalogItemsFromCache } from './useCatalog'
 import { LOCAL_AGENTS_KEY, LOCAL_AGENT_ROOTS_KEY, localAgentKey } from './useLocalAgents'
 
 /**
@@ -212,7 +213,10 @@ export function useSharingWatch(): void {
       // Every sharing read — statuses, each agent's status, the library, and
       // the Sharing tab's People and History — sits under this prefix.
       void queryClient.invalidateQueries({ queryKey: SHARING_KEY })
-      // The Inbox's "The team changed X" cards are derived from the same
+      // The catalog dialog reads the same listing, every kind of item in it —
+      // from main's cache, which the event says is already fresh.
+      void readCatalogItemsFromCache(queryClient)
+      // The Inbox's "Update available" cards are derived from the same
       // listing, on every read.
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
     })

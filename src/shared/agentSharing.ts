@@ -176,6 +176,8 @@ export interface LibraryMaintainer {
 export interface LibraryVersionDto {
   /** "Version N". */
   number: number
+  /** The publisher's own label (`1.2.0`), shown as `Version N (1.2.0)`; null when it has none. */
+  label: string | null
   /** ISO 8601. */
   publishedAt: string
   /** Who shared it, when the catalog says. */

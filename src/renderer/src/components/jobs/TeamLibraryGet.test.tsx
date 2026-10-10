@@ -31,7 +31,7 @@ function libraryAgent(overrides: Partial<LibraryAgentDto> = {}): LibraryAgentDto
     maintainers: [],
     engine: null,
     manifestId: 'm-1',
-    latest: { number: 1, publishedAt: '2026-10-01T00:00:00Z', publishedBy: null, releaseNotes: null },
+    latest: { number: 1, label: null, publishedAt: '2026-10-01T00:00:00Z', publishedBy: null, releaseNotes: null },
     localAgentId: null,
     updateAvailable: false,
     ...overrides

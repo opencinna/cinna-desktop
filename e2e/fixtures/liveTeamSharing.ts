@@ -547,13 +547,23 @@ export async function shareWithTeam(
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 }
 
-/** Agents → + → Install from catalog → Team library → the tile's Get. */
-export async function getFromLibrary(app: PersonApp, name: string): Promise<void> {
+/**
+ * Agents → + → Install from catalog → the one catalog, showing Agents. The
+ * dialog lists cloud agents, desktop agents and skills together; a tile is
+ * found by its name.
+ */
+export async function openCatalogAgents(app: PersonApp) {
   await app.page.getByRole('button', { name: 'Agents', exact: true }).click()
   await app.page.getByRole('button', { name: 'Add an agent' }).click()
   await app.page.getByRole('dialog', { name: 'Add an agent' }).getByRole('button', { name: /Install from catalog/ }).click()
-  const catalog = app.page.getByRole('dialog', { name: 'Agent catalog' })
-  await catalog.getByRole('tablist', { name: 'Catalog source' }).getByRole('tab', { name: 'Team library' }).click()
+  const catalog = app.page.getByRole('dialog', { name: 'Catalog' })
+  await catalog.getByRole('radiogroup', { name: 'Show' }).getByRole('radio', { name: 'Agents', exact: true }).click()
+  return catalog
+}
+
+/** The catalog's Agents → the tile's Get, landing on the new agent's page. */
+export async function getFromLibrary(app: PersonApp, name: string): Promise<void> {
+  const catalog = await openCatalogAgents(app)
   await catalog.getByRole('group', { name }).getByRole('button', { name: 'Get', exact: true }).click()
   await expect(catalog).toHaveCount(0, { timeout: 60_000 })
   await expect(app.page.getByRole('heading', { level: 1 })).toHaveText(name)
@@ -648,7 +658,7 @@ export async function findAgent(app: PersonApp, name: string): Promise<{ id: str
   return { id: row.id, path: row.path, readiness: row.readiness, slug: row.slug }
 }
 
-/** Re-read the Team library now — what opening the catalog or the Sharing tab does. */
+/** Re-read the catalog now — what opening the catalog or the Sharing tab does. */
 export async function refreshLibrary(app: PersonApp): Promise<void> {
   const listed = await app.page.evaluate(() => window.api.sharing.library(true))
   expect(listed.success).toBe(true)

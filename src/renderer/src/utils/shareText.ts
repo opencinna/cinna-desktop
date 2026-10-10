@@ -9,8 +9,8 @@ import type {
 /**
  * Every sentence the team-sharing surfaces show, in one place.
  *
- * The vocabulary is a contract (team-sharing plan, S9): the user reads Team
- * library, Get, Update, Share changes, "Up to date with the team", "N changes
+ * The vocabulary is a contract (team-sharing plan, S9; catalog plan U12): the
+ * user reads the catalog, Get, Update, Share changes, "Up to date with the team", "N changes
  * you haven't shared", "The team changed this agent" — and never the git words
  * underneath (`FORBIDDEN_SHARE_WORDS`). Keeping the prose here is what lets one
  * test read all of it, and lets the component tests assert on a code's entry
@@ -28,13 +28,13 @@ export const SHARE_REFUSAL_TEXT: Record<ShareRefusal, string> = {
   dirty: 'Share your changes first — Share changes brings in the team’s version too.',
   diverged_conflict: 'Choose which version to keep — the team changed this agent too.',
   fetch_failed: 'Check your connection and try again — the team’s version couldn’t be reached.',
-  push_rejected: 'Fix what the team library refused, then share again.',
+  push_rejected: 'Fix what the catalog refused, then share again.',
   no_access: 'Ask a maintainer for edit access — you can use this agent but not change it for the team.',
   nothing_to_share: 'Nothing to share — this agent matches the team’s version.',
   remote_exists: 'Use Share changes instead — this agent is already shared.',
   exists: 'Open the copy you already have — this agent is already on this computer.',
   not_an_agent: 'Ask the maintainer to check it — what was shared isn’t an agent.',
-  not_in_library: 'Refresh the Team library — this agent is no longer in it.',
+  not_in_library: 'Refresh the catalog — this agent is no longer in it.',
   turn_in_progress: 'Wait for the agent to finish its turn, then try again — nothing was changed.',
   unshared_changes: 'Share your changes first — removing this agent would lose them.',
   // A non-developer cannot take a recorded file out of the agent's history
@@ -163,7 +163,7 @@ export const SHARE_UI_TEXT = {
   shareWithTeam: 'Share with the team…',
   shareWithTeamTitle: 'Share with the team',
   shareWithTeamBody:
-    'Put this agent in your Team library. Only you and the people you choose here can get it — you can add more people later.',
+    'Put this agent in the catalog. Only you and the people you choose here can get it — you can add more people later.',
   nameLabel: 'Name',
   loadingDraft: 'Loading…',
   peopleLabel: 'People',
@@ -188,7 +188,7 @@ export const SHARE_UI_TEXT = {
     'This agent’s folder is linked to a team version. Update brings the team’s changes in; Share changes sends yours. Nothing is sent until you choose to.',
   serverLabel: 'Server',
   ownServer: 'Your own server',
-  libraryNameLabel: 'Name in the library',
+  libraryNameLabel: 'Name in the catalog',
   libraryFolderLabel: 'Folder name',
   yourAccessLabel: 'Your access',
   maintainersLabel: 'Maintainers',
@@ -202,7 +202,7 @@ export const SHARE_UI_TEXT = {
   privateItem: 'Only people who can edit it — it’s private in the catalog',
   peopleSection: 'People',
   peopleInfo:
-    'Only the people listed here can get this agent from the Team library. A maintainer can change who has access and what they may do.',
+    'Only the people listed here can get this agent from the catalog. A maintainer can change who has access and what they may do.',
   peopleOnlyMaintainer: 'Only a maintainer can change who has access.',
   peopleNoAccess: 'Only a maintainer can change who has access to this agent.',
   peopleLoading: 'Loading…',
@@ -227,30 +227,20 @@ export const SHARE_UI_TEXT = {
   removingSharing: 'Removing…',
   removeSharingBody: (name: string) =>
     `Stop sharing ${name} with the team? Its folder, files and history stay on this computer, and it becomes an ordinary agent you can share again later. Teammates keep their own copies.`,
-  alsoDeleteFromLibrary: 'Also delete it from the team library — teammates can no longer get it',
+  alsoDeleteFromLibrary: 'Also delete it from the catalog — teammates can no longer get it',
   removeSharingOnlyHint: 'Untick the box above to remove sharing from this computer only.',
-  deleteNoAccess: 'Only a maintainer can delete it from the team library.',
+  deleteNoAccess: 'Only a maintainer can delete it from the catalog.',
   noLongerSharedNote: (name: string) => `${name} is no longer shared with the team.`,
   removeFromComputer: 'Remove from this computer',
   removeFromComputerMenu: 'Remove from this computer…',
   removeFromComputerBody: (name: string) =>
-    `Remove ${name} from this computer? Its folder goes to the Trash and can be put back from there. The team’s version stays in the Team library, untouched — you can Get it again any time.`,
-  bundlesSource: 'Cinna bundles',
-  librarySource: 'Team library',
+    `Remove ${name} from this computer? Its folder goes to the Trash and can be put back from there. The team’s version stays in the catalog, untouched — you can Get it again any time.`,
   get: 'Get',
   getting: 'Getting…',
-  getFromLibrary: (name: string) => `Get ${name} from the team library`,
-  installed: 'Installed',
-  open: 'Open',
-  updateAvailable: 'Update available',
-  libraryEmpty: 'Nothing has been shared with the team yet.',
-  libraryLoading: 'Loading the Team library…',
-  libraryError: 'The Team library couldn’t be loaded.',
-  maintainedBy: (names: string) => `Maintained by ${names}`,
-  teamChangedLead: 'The team changed',
-  teamChanged: (name: string) => `The team changed ${name}`,
-  teamChangedBy: (who: string) => `by ${who}`,
-  updated: 'Updated. This agent now has the team’s latest version.'
+  getFromLibrary: (name: string) => `Get ${name} from the catalog`,
+  updateAvailableLead: 'Update available for',
+  updateAvailableFor: (name: string) => `Update available for ${name}`,
+  updated: 'Updated. This agent now has the latest version.'
 } as const
 
 /**

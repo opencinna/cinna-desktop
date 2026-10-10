@@ -27,6 +27,7 @@ import { useTrayIcon } from './hooks/useTrayIcon'
 import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useSharingWatch } from './hooks/useSharing'
+import { useCatalogItemsWatch } from './hooks/useCatalog'
 import { useEngineWatch } from './hooks/useEngine'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
@@ -127,6 +128,9 @@ function Shell(): React.JSX.Element {
   // A shared agent's state and the Team library move on main's schedule (a
   // teammate shares, a fetch lands); one subscription refreshes every surface.
   useSharingWatch()
+  // Catalog items that are not team sharing's (a cloud install, a skill's
+  // version) move on the same schedule, under a lighter event.
+  useCatalogItemsWatch()
   // The engine's slow transitions — a first-use download, a crash between two
   // turns — happen while nobody is watching a particular screen, so the
   // subscription is here rather than in the card that renders the state.

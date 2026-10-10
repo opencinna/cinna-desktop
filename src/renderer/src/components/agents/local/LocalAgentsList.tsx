@@ -13,7 +13,7 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 import { ManagedAgentModal } from '../ManagedAgentModal'
 import { CustomAgentModal } from '../CustomAgentModal'
-import { useAgents } from '../../../hooks/useAgents'
+import { useAgents, useApplyBundleUpdate } from '../../../hooks/useAgents'
 import { A2AAgentForm } from '../../settings/A2AAgentForm'
 import { serverLabel } from '../../../utils/agentNavigation'
 import { AgentTypeIcon } from '../AgentTypeIcon'
@@ -27,7 +27,7 @@ import { useOpenAgentPage } from '../../../hooks/useOpenAgentPage'
 import type { AgentShareResult } from '../../../../../shared/agentSharing'
 import { shareRefusalSentence } from '../../../utils/shareText'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import type { TeamLibraryActions } from '../TeamLibraryPanel'
+import type { CloudUpdateActions, DesktopAgentActions } from '../CatalogBrowserModal'
 
 function AgentChatShortcut({ agentId, name, available = true }: {
   agentId: string
@@ -205,15 +205,38 @@ export function LocalAgentsList(): React.JSX.Element {
     setCatalogOpen(false)
     clearCatalogError()
     setLibraryError(null)
+    // A finished update's failure belongs to this visit; one still running keeps going.
+    if (!applyCloudUpdate.isPending) applyCloudUpdate.reset()
   }
   /**
-   * The Team library's Get and Update, owned here rather than by the dialog,
+   * A cloud agent's Update (apply the catalog's latest version to the
+   * install), owned here like the install. Its busy state and failure are
+   * read from the mutation itself rather than from callbacks, which a closed
+   * dialog would drop.
+   */
+  const applyCloudUpdate = useApplyBundleUpdate()
+  const cloudUpdateActions: CloudUpdateActions = {
+    updatingInstallId: applyCloudUpdate.isPending ? (applyCloudUpdate.variables ?? null) : null,
+    error:
+      applyCloudUpdate.isError && applyCloudUpdate.variables
+        ? {
+            installId: applyCloudUpdate.variables,
+            message:
+              (applyCloudUpdate.error as { code?: string }).code === 'reauth_required'
+                ? 'Cinna session expired — re-authenticate to update.'
+                : unwrapIpcError(applyCloudUpdate.error, 'Update failed.')
+          }
+        : null,
+    onUpdate: (installId) => applyCloudUpdate.mutate(installId)
+  }
+  /**
+   * Desktop agents' Get and Update, owned here rather than by the dialog,
    * with hook-level callbacks: closing the dialog mid-Get loses nothing, and
    * the landing on the agent page — a store write — happens either way.
    * A refusal belongs to the tile it came from.
    */
   const openAgentPage = useOpenAgentPage()
-  const [libraryError, setLibraryError] = useState<TeamLibraryActions['error']>(null)
+  const [libraryError, setLibraryError] = useState<DesktopAgentActions['error']>(null)
   const refusalText = (result: AgentShareResult): string =>
     shareRefusalSentence(result.refusal ?? 'failed', result.detail)
   const getFromLibrary = useGetFromLibrary({
@@ -239,7 +262,7 @@ export function LocalAgentsList(): React.JSX.Element {
       }
     }
   })
-  const libraryActions: TeamLibraryActions = {
+  const libraryActions: DesktopAgentActions = {
     gettingRepoId: getFromLibrary.isPending ? (getFromLibrary.variables ?? null) : null,
     updatingAgentId: updateShared.isPending ? (updateShared.variables ?? null) : null,
     error: libraryError,
@@ -404,7 +427,8 @@ export function LocalAgentsList(): React.JSX.Element {
             closeCatalog()
             openExternalAgent(agentId)
           }}
-          library={libraryActions}
+          cloudUpdate={cloudUpdateActions}
+          desktop={libraryActions}
         />
       )}
       {addingA2A && <A2AAgentForm key={profileId} onClose={() => setAddingA2A(false)} />}

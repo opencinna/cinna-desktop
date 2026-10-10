@@ -790,7 +790,7 @@ describe('which account a remote belongs to', () => {
     listed(libraryAgent('r1', 'alpha', null))
     await libraryService.refresh(PROFILE)
     expect(await sharingService.teamChanges(USER)).toEqual([
-      expect.objectContaining({ kind: 'team_changed', agentId, agentName: 'Alpha', repoId: 'r1', changedBy: 'Bob' })
+      expect.objectContaining({ kind: 'update_available', target: 'desktop_agent', agentId, agentName: 'Alpha', repoId: 'r1', changedBy: 'Bob' })
     ])
     void rootId
   }, 30_000)
@@ -1550,7 +1550,7 @@ describe('the catalog listing', () => {
       maintainers: [{ userId: 'u1', displayName: 'Ann' }],
       engine: 'claude',
       manifestId: 'm-1',
-      latest: { number: 4, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' }
+      latest: { number: 4, label: null, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' }
     })
     // Delisted is carried; a row without the flag reads as listed.
     expect(toLibraryEntry(libraryAgent('r5', 'eps', null, { isListed: false }))).toMatchObject({ isListed: false })

@@ -23,11 +23,12 @@ import { agentService } from './agentService'
 import { completeNestedContinuation, nestedToolCallId } from './nestedContinuationService'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { libraryService } from './libraryService'
+import { cloudUpdateItems } from './cloudUpdateNotices'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
 import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
-import type { InboxAnswerResult, InboxEntry, InboxSnapshot, TeamChangedInboxItem } from '../../shared/inbox'
+import type { InboxAnswerResult, InboxEntry, InboxSnapshot, UpdateAvailableInboxItem } from '../../shared/inbox'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
 
 const logger = createLogger('inbox')
@@ -208,13 +209,13 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
 }
 
 /**
- * "The team changed *X*" items: shared agents (machine-local, settings scope)
- * the active profile's cached team-library listing is ahead of. Imported
- * lazily, because the sharing service sits on top of the local-agent services
- * this module's own dependencies reach; a failure is an empty list, never a
- * failed Inbox.
+ * "Update available" for desktop agents: shared agents (machine-local,
+ * settings scope) the active profile's cached catalog listing is ahead of.
+ * Imported lazily, because the sharing service sits on top of the local-agent
+ * services this module's own dependencies reach; a failure is an empty list,
+ * never a failed Inbox.
  */
-async function teamChangedItems(): Promise<TeamChangedInboxItem[]> {
+async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
   try {
     // Nothing listed, nothing to compare: the common case costs no import and no git.
     if (!libraryService.cached(getProfileScopeUserId())?.agents.length) return []
@@ -565,15 +566,15 @@ export const inboxService = {
       })
       .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
     const dispatchPending = taskDispatchInboxItems(userId)
-    const teamChangesPending = teamChangedItems()
+    const desktopUpdatesPending = desktopUpdateItems()
     const remote = await pending
     const dispatch = await dispatchPending
-    const teamChanges = await teamChangesPending
+    const updates = [...(await desktopUpdatesPending), ...cloudUpdateItems()]
     return {
       entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
       unreadable: remote.unreadable,
       dispatch,
-      teamChanges
+      updates
     }
   },
 

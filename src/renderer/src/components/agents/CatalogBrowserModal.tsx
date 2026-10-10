@@ -1,82 +1,84 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, ChevronLeft, Download, Loader2, RefreshCw, Search, Store, X } from 'lucide-react'
-import { useCatalog, useRefreshCatalogState } from '../../hooks/useCatalog'
+import { useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, RefreshCw, Search, X } from 'lucide-react'
+import { useCatalogItems, useRefreshCatalogState } from '../../hooks/useCatalog'
 import { useAgents } from '../../hooks/useAgents'
+import { useLocalAgents } from '../../hooks/useLocalAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
-import { unwrapIpcError } from '../../utils/ipcError'
-import { isUnsettledClick, useSettleGuard } from '../../hooks/useSettleGuard'
-import type { CatalogInstallError } from '../../hooks/useCatalogInstall'
-import type { CatalogEntryDto } from '../../../../shared/catalog'
-import { CatalogCardCredentials } from '../settings/CatalogCardCredentials'
 import { useTeamLibrary } from '../../hooks/useSharing'
-import { SHARE_UI_TEXT } from '../../utils/shareText'
-import { TeamLibraryPanel, type TeamLibraryActions } from './TeamLibraryPanel'
+import { useSettleGuard } from '../../hooks/useSettleGuard'
+import { unwrapIpcError } from '../../utils/ipcError'
+import type { CatalogInstallError } from '../../hooks/useCatalogInstall'
+import type { CatalogItem } from '../../../../shared/catalogItems'
+import type { LibraryAgentDto } from '../../../../shared/agentSharing'
+import {
+  CATALOG_FILTER_TEXT,
+  CATALOG_TEXT,
+  catalogCredentialSpecs,
+  catalogItemKind,
+  catalogItemName,
+  catalogItemPeople,
+  catalogVersionLabel,
+  cloudInstallOf,
+  inCatalogFilter,
+  matchesCatalogQuery,
+  skillHostManifestIds,
+  type CatalogFilter
+} from '../../utils/catalogItems'
+import {
+  CatalogItemAction,
+  CatalogItemDetailView,
+  CatalogItemTile,
+  hasCatalogAction,
+  PRIMARY,
+  SECONDARY,
+  type CatalogEntryView,
+  type CloudUpdateActions,
+  type DesktopAgentActions
+} from './CatalogItemViews'
+
+export type { CloudUpdateActions, DesktopAgentActions } from './CatalogItemViews'
 
 interface CatalogBrowserModalProps {
   onClose: () => void
-  /** Bundle whose install is in flight. The owner runs the install, not this modal. */
+  /** Cloud agent whose install (Get) is in flight. The owner runs the install, not this modal. */
   installingBundleId: string | null
   installError: CatalogInstallError | null
   onInstall: (bundleId: string) => void
-  /** Open the local agent an installed bundle became. */
+  /** Open the agent a cloud install synced into. */
   onOpen: (agentId: string) => void
-  /**
-   * Get and Update for the Team library source, run by the parent. Without
-   * it, or while the active profile has no Team library, the dialog is the
-   * bundles grid alone.
-   */
-  library?: TeamLibraryActions
+  /** Update of an installed cloud agent, run by the parent. Without it, an installed one only says so. */
+  cloudUpdate?: CloudUpdateActions
+  /** Get and Update of desktop agents, run by the parent. Without it, a desktop agent has no action. */
+  desktop?: DesktopAgentActions
 }
 
-type CatalogSource = 'bundles' | 'library'
+const FILTERS: CatalogFilter[] = ['all', 'agents', 'skills']
 
-const PRIMARY =
-  'inline-flex min-w-[5.5rem] items-center justify-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium ' +
-  'bg-[var(--color-accent)] text-white transition-colors hover:bg-[var(--color-accent-hover)] ' +
-  'disabled:cursor-not-allowed disabled:opacity-40'
-const SECONDARY =
-  'inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2.5 py-1 ' +
-  'text-[11px] font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] ' +
-  'disabled:cursor-not-allowed disabled:opacity-50'
-const CHIP =
-  'shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-px text-[10px] text-[var(--color-text-muted)]'
-const ANOTHER_INSTALLING = 'Another agent is installing'
+/**
+ * The filter last chosen, kept for the session: the next open shows the same
+ * kind of item. Module state, not disk — a restart starts from All.
+ */
+let sessionFilter: CatalogFilter = 'all'
 
-function versionLabel(entry: CatalogEntryDto): string | null {
-  if (entry.latestVersion) return `v${entry.latestVersion}`
-  if (entry.latestRevisionNumber !== null) return `rev ${entry.latestRevisionNumber}`
-  return null
-}
-
-function installsLabel(count: number): string {
-  return `${count} ${count === 1 ? 'install' : 'installs'}`
-}
-
-function publisherOf(entry: CatalogEntryDto): string | null {
-  return entry.publisherName ?? entry.publisherHandle ?? null
-}
-
-function matches(entry: CatalogEntryDto, query: string): boolean {
-  if (query === '') return true
-  return [
-    entry.displayName,
-    entry.description,
-    entry.publisherName,
-    entry.publisherHandle,
-    entry.bundleId
-  ].some((value) => value?.toLowerCase().includes(query))
+/** Tests only: the next open starts from All. */
+export function _resetCatalogFilter(): void {
+  sessionFilter = 'all'
 }
 
 /**
- * The Agent Catalog: every bundle published to the user's Cinna account, as a
- * grid of tiles with a detail view behind each.
+ * The catalog: every item the active Cinna profile may use — agents that run
+ * in Cinna, agents that run on this computer, and skills — as one grid of
+ * tiles with a detail behind each, filtered by All / Agents / Skills and a
+ * search. It reads main's one cached listing (`catalog:items`), which opening
+ * the dialog refreshes.
  *
- * The dialog has a **fixed height**, so switching between the grid and a
- * detail, filtering, and an install error appearing never resize it
- * (ux_rules rule 1); the body scrolls instead. It owns no install: the parent
- * runs it, so closing the dialog mid-install loses nothing, and the parent
- * lands the user on the new agent when it finishes.
+ * The dialog has a **fixed height**, so switching the filter, searching,
+ * opening a detail and an error appearing never resize it (ux_rules rule 1);
+ * the body scrolls instead. It owns no action: Get, Update and the cloud
+ * install run in the parent, so closing the dialog mid-action loses nothing,
+ * and the parent lands the user on the agent when it finishes.
  */
 export function CatalogBrowserModal({
   onClose,
@@ -84,28 +86,40 @@ export function CatalogBrowserModal({
   installError,
   onInstall,
   onOpen,
-  library
+  cloudUpdate,
+  desktop
 }: CatalogBrowserModalProps): React.JSX.Element {
-  const catalog = useCatalog()
-  // Opening the dialog is when the user wants the Team library as it is now.
-  const teamLibrary = useTeamLibrary({ refresh: true })
-  const hasLibrary = library !== undefined && teamLibrary.data != null
-  const [sourcePick, setSource] = useState<CatalogSource>('bundles')
-  const source: CatalogSource = hasLibrary ? sourcePick : 'bundles'
+  const queryClient = useQueryClient()
+  // Opening the dialog is when the user wants the catalog as it is now.
+  const catalog = useCatalogItems({ refresh: true })
+  // This computer's copies of desktop agents, from the same cached listing.
+  const teamLibrary = useTeamLibrary()
   const { data: agents } = useAgents()
+  const { data: localAgents } = useLocalAgents()
   const refresh = useRefreshCatalogState()
   const cinnaReauth = useCinnaReauth()
   const cardRef = useRef<HTMLDivElement>(null)
+  const [filter, setFilterState] = useState<CatalogFilter>(() => sessionFilter)
+  const setFilter = (next: CatalogFilter): void => {
+    sessionFilter = next
+    setFilterState(next)
+  }
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedUuid, setSelectedUuid] = useState<string | null>(null)
   const [reauthError, setReauthError] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  // The detail's Install / Open opens under the pointer that clicked the tile.
-  const detailSettled = useSettleGuard(selectedId)
+  // The detail's actions open under the pointer that clicked the tile.
+  const detailSettled = useSettleGuard(selectedUuid)
 
+  // Escape steps back one level: from a detail to the grid (filter and
+  // search kept), from the grid out of the dialog.
+  const selectedRef = useRef(selectedUuid)
+  selectedRef.current = selectedUuid
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (selectedRef.current !== null) setSelectedUuid(null)
+      else onClose()
     }
     const onClick = (e: MouseEvent): void => {
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
@@ -118,22 +132,70 @@ export function CatalogBrowserModal({
     }
   }, [onClose])
 
-  /** Installed bundle → the local agent it synced into. */
-  const agentIdByInstall = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const agent of agents ?? []) {
-      if (agent.remoteTargetId) map.set(agent.remoteTargetId, agent.id)
-    }
-    return map
-  }, [agents])
+  // Versions are kept while the dialog is open; the next visit reads them afresh.
+  useEffect(() => () => queryClient.removeQueries({ queryKey: ['catalog', 'item'] }), [queryClient])
 
-  const entries = useMemo(() => catalog.data ?? [], [catalog.data])
+  const views = useMemo((): CatalogEntryView[] => {
+    const items = catalog.data?.items ?? []
+    const libraryByUuid = new Map<string, LibraryAgentDto>(
+      (teamLibrary.data?.agents ?? []).map((agent) => [agent.uuid, agent])
+    )
+    const agentByInstall = new Map<string, NonNullable<typeof agents>[number]>()
+    for (const agent of agents ?? []) if (agent.remoteTargetId) agentByInstall.set(agent.remoteTargetId, agent)
+    const localByManifest = new Map<string, string>()
+    for (const agent of localAgents?.agents ?? []) {
+      if (agent.manifestId) localByManifest.set(agent.manifestId.toLowerCase(), agent.name)
+    }
+    return items.map((item: CatalogItem): CatalogEntryView => {
+      const kind = catalogItemKind(item)
+      const latest = item.latest
+      let cloud: CatalogEntryView['cloud'] = null
+      if (kind === 'cloud_agent') {
+        const install = cloudInstallOf(item, (installId) => agentByInstall.has(installId))
+        const installId = install?.install_id ?? null
+        const row = installId ? agentByInstall.get(installId) : undefined
+        // The server's own answer, once the agent has synced; the listing's numbers before that.
+        const bundleVersion = row?.remoteMetadata?.bundle_version
+        const updateAvailable = bundleVersion
+          ? Boolean(bundleVersion.update_available)
+          : !!latest && install?.revision_number != null && install.revision_number < latest.revision_number
+        cloud = { installId, agentId: row?.id ?? null, updateAvailable: installId !== null && updateAvailable }
+      }
+      return {
+        item,
+        kind,
+        name: catalogItemName(item),
+        people: catalogItemPeople(item),
+        version: latest ? catalogVersionLabel(latest.revision_number, latest.version) : null,
+        specs: catalogCredentialSpecs(item),
+        cloud,
+        desktop: kind === 'desktop_agent' ? (libraryByUuid.get(item.uuid) ?? null) : null,
+        usedBy:
+          kind === 'skill'
+            ? skillHostManifestIds(item).flatMap((id) => {
+                const name = localByManifest.get(id)
+                return name ? [name] : []
+              })
+            : []
+      }
+    })
+  }, [catalog.data, teamLibrary.data, agents, localAgents])
+
   const needle = query.trim().toLowerCase()
-  const filtered = useMemo(() => entries.filter((e) => matches(e, needle)), [entries, needle])
-  // A refresh can drop the bundle being viewed; fall back to the grid then.
-  const selected = selectedId ? (entries.find((e) => e.bundleId === selectedId) ?? null) : null
+  const shown = useMemo(
+    () => views.filter((view) => inCatalogFilter(view.kind, filter) && matchesCatalogQuery(view.item, needle)),
+    [views, filter, needle]
+  )
+  const inFilter = useMemo(() => views.filter((view) => inCatalogFilter(view.kind, filter)), [views, filter])
+  // A refresh can drop the item being viewed; fall back to the grid then.
+  const selected = selectedUuid ? (views.find((view) => view.item.uuid === selectedUuid) ?? null) : null
 
   const errorCode = (catalog.error as { code?: string } | null)?.code
+  // A read is on its way: whatever the last one failed with is not the answer
+  // any more, so it shows as loading (with nothing on screen) or as the
+  // Refresh spinner (over tiles), never as an error beside a disabled Retry.
+  const hasList = catalog.data !== undefined
+  const failed = catalog.error !== null && !catalog.isFetching
 
   // The grid stays mounted behind a detail, so focus has to come back to it
   // by hand — on mount too, in place of `autoFocus`.
@@ -155,29 +217,29 @@ export function CatalogBrowserModal({
     }
   }
 
-  const actionFor = (entry: CatalogEntryDto, settled = true): React.JSX.Element => (
-    <EntryAction
-      entry={entry}
-      agentId={entry.userInstallId ? (agentIdByInstall.get(entry.userInstallId) ?? null) : null}
-      installing={installingBundleId === entry.bundleId}
-      anyInstalling={installingBundleId !== null}
-      settled={settled}
-      onInstall={onInstall}
-      onOpen={onOpen}
-    />
+  const install = { installingBundleId, onInstall, onOpen }
+  const actionFor = (view: CatalogEntryView, settled = true): React.JSX.Element | null => (
+    <CatalogItemAction view={view} install={install} cloudUpdate={cloudUpdate} desktop={desktop} settled={settled} />
   )
-  const errorFor = (entry: CatalogEntryDto): string | null =>
-    installError?.bundleId === entry.bundleId ? installError.message : null
+  const errorFor = (view: CatalogEntryView): string | null => {
+    if (view.kind === 'cloud_agent') {
+      if (installError?.bundleId === view.item.id) return installError.message
+      const installId = view.cloud?.installId
+      if (installId && cloudUpdate?.error?.installId === installId) return cloudUpdate.error.message
+      return null
+    }
+    if (view.kind === 'desktop_agent' && view.desktop && desktop?.error?.repoId === view.desktop.repoId) {
+      return desktop.error.message
+    }
+    return null
+  }
 
-  const errorPanel = catalog.error ? (
+  // Nothing to show: the failure takes the body, with its Retry.
+  const errorPanel = failed && !hasList ? (
     <div className="flex items-start gap-2 rounded-md border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-2 text-[11px] text-[var(--color-text-secondary)]">
       <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
       <div className="min-w-0 flex-1">
-        <div>
-          {errorCode === 'reauth_required'
-            ? 'Cinna session expired. Re-authenticate to load the catalog.'
-            : 'Could not load the catalog.'}
-        </div>
+        <div>{errorCode === 'reauth_required' ? CATALOG_TEXT.reauth : CATALOG_TEXT.loadFailed}</div>
         {errorCode === 'reauth_required' ? (
           <button
             type="button"
@@ -186,7 +248,7 @@ export function CatalogBrowserModal({
             className={`${PRIMARY} mt-1.5`}
           >
             <RefreshCw size={10} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
-            Re-authenticate
+            {CATALOG_TEXT.reauthenticate}
           </button>
         ) : (
           <button
@@ -195,39 +257,84 @@ export function CatalogBrowserModal({
             disabled={catalog.isFetching}
             className={`${SECONDARY} mt-1.5`}
           >
-            Retry
+            {CATALOG_TEXT.retry}
           </button>
         )}
-        {reauthError && (
-          <div className="mt-1.5 text-[10px] text-[var(--color-danger)]">{reauthError}</div>
-        )}
+        {reauthError && <div className="mt-1.5 text-[10px] text-[var(--color-danger)]">{reauthError}</div>}
       </div>
     </div>
   ) : null
+
+  // Tiles on screen: a failed refresh is one line beside the Refresh button,
+  // in space the header always has — nothing below it moves (rule 1).
+  const refreshFailure =
+    failed && hasList ? (
+      <span role="alert" className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-danger)]">
+        <AlertTriangle size={11} className="shrink-0" aria-hidden="true" />
+        <span className="truncate" title={reauthError ?? unwrapIpcError(catalog.error, CATALOG_TEXT.loadFailed)}>
+          {errorCode === 'reauth_required' ? (reauthError ?? CATALOG_TEXT.refreshReauth) : CATALOG_TEXT.refreshFailed}
+        </span>
+        {errorCode === 'reauth_required' && (
+          <button
+            type="button"
+            onClick={() => void handleReauth()}
+            disabled={cinnaReauth.isPending}
+            className="shrink-0 font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+          >
+            {CATALOG_TEXT.reauthenticate}
+          </button>
+        )}
+      </span>
+    ) : null
+
+  const body = errorPanel ? (
+    errorPanel
+  ) : !hasList && (catalog.isFetching || catalog.isLoading) ? (
+    <EmptyState text={CATALOG_TEXT.loading} />
+  ) : catalog.data && !catalog.data.available ? (
+    <EmptyState text={CATALOG_TEXT.unavailable} />
+  ) : inFilter.length === 0 ? (
+    <EmptyState text={CATALOG_TEXT.empty[filter]} />
+  ) : shown.length === 0 ? (
+    <EmptyState text={CATALOG_TEXT.noMatch} />
+  ) : (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+      {shown.map((view) => (
+        <CatalogItemTile
+          key={view.item.uuid}
+          view={view}
+          action={hasCatalogAction(view, desktop) ? actionFor(view) : null}
+          error={errorFor(view)}
+          onSelect={() => setSelectedUuid(view.item.uuid)}
+        />
+      ))}
+    </div>
+  )
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4">
       <div
         ref={cardRef}
         role="dialog"
-        aria-label="Agent catalog"
+        aria-label={CATALOG_TEXT.title}
         className="flex h-[36rem] max-h-[90vh] w-full max-w-[48rem] flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg"
       >
         <div className="flex items-center justify-between gap-2 px-5 pt-4 pb-3">
-          <div className="text-sm font-semibold text-[var(--color-text)]">Agent catalog</div>
-          <div className="flex items-center gap-1.5">
+          <div className="shrink-0 text-sm font-semibold text-[var(--color-text)]">{CATALOG_TEXT.title}</div>
+          <div className="flex min-w-0 items-center gap-2">
+            {refreshFailure}
             <button
               type="button"
-              onClick={source === 'library' ? () => void teamLibrary.refetch() : refresh}
-              disabled={source === 'library' ? teamLibrary.isFetching : catalog.isFetching}
-              className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-              title="Refresh catalog"
-              aria-label="Refresh catalog"
+              onClick={() => {
+                refresh()
+                void teamLibrary.refetch()
+              }}
+              disabled={catalog.isFetching}
+              aria-busy={catalog.isFetching}
+              className={`${SECONDARY} shrink-0`}
             >
-              <RefreshCw
-                size={12}
-                className={(source === 'library' ? teamLibrary.isFetching : catalog.isFetching) ? 'animate-spin' : ''}
-              />
+              <RefreshCw size={11} className={catalog.isFetching ? 'animate-spin' : ''} aria-hidden="true" />
+              {CATALOG_TEXT.refresh}
             </button>
             <button
               type="button"
@@ -241,56 +348,17 @@ export function CatalogBrowserModal({
           </div>
         </div>
 
-        {/* Two sources, one dialog. The switch exists only while the profile
-            has a Team library, so a profile without one sees the dialog as it
-            always was; it sits above both sources at a fixed height, and the
-            dialog's own height is fixed, so switching moves nothing. */}
-        {hasLibrary && (
-          <div role="tablist" aria-label="Catalog source" className="mx-5 mb-3 flex gap-1 rounded-md bg-[var(--color-bg)] p-0.5">
-            {(
-              [
-                ['bundles', SHARE_UI_TEXT.bundlesSource],
-                ['library', SHARE_UI_TEXT.librarySource]
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={source === id}
-                onClick={() => setSource(id)}
-                className={`flex-1 rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  source === id
-                    ? 'bg-[var(--color-bg-secondary)] text-[var(--color-text)] shadow-sm'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        {source === 'library' && library ? (
-          <TeamLibraryPanel
-            listing={teamLibrary.data}
-            isLoading={teamLibrary.isLoading}
-            isError={teamLibrary.isError}
-            isFetching={teamLibrary.isFetching}
-            onRetry={() => void teamLibrary.refetch()}
-            actions={library}
-          />
-        ) : (
-        /* The grid stays mounted (and keeps its scroll position) under a
-            detail, which is a layer over it; hidden from pointer and screen
-            reader while it is covered. */
+        {/* The grid stays mounted (and keeps its scroll position, search and
+            filter) under a detail, which is a layer over it; hidden from
+            pointer and screen reader while it is covered. */}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             aria-hidden={selected ? true : undefined}
             inert={selected ? true : undefined}
             className={`flex min-h-0 flex-1 flex-col ${selected ? 'invisible' : ''}`}
           >
-            <div className="px-5 pb-3">
-              <div className="relative">
+            <div className="flex items-center gap-2 px-5 pb-3">
+              <div className="relative min-w-0 flex-1">
                 <Search
                   size={13}
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]"
@@ -298,118 +366,47 @@ export function CatalogBrowserModal({
                 <input
                   ref={searchRef}
                   type="text"
-                  aria-label="Search the catalog"
+                  aria-label={CATALOG_TEXT.searchLabel}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search agents…"
+                  placeholder={CATALOG_TEXT.searchPlaceholder}
                   className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] py-1.5 pl-7 pr-2.5 text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none"
                 />
               </div>
+              <div
+                role="radiogroup"
+                aria-label={CATALOG_TEXT.filterLabel}
+                className="flex shrink-0 gap-0.5 rounded-md bg-[var(--color-bg)] p-0.5"
+              >
+                {FILTERS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={filter === id}
+                    onClick={() => setFilter(id)}
+                    className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      filter === id
+                        ? 'bg-[var(--color-bg-secondary)] text-[var(--color-text)] shadow-sm'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                    }`}
+                  >
+                    {CATALOG_FILTER_TEXT[id]}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-5">
-              {errorPanel}
-              {catalog.isLoading ? (
-                <EmptyState text="Loading catalog…" />
-              ) : catalog.error && entries.length === 0 ? null : entries.length === 0 ? (
-                <EmptyState text="No agents are published to your account yet." />
-              ) : filtered.length === 0 ? (
-                <EmptyState text="No agents match your search." />
-              ) : (
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                  {filtered.map((entry) => (
-                    <CatalogTile
-                      key={entry.bundleId}
-                      entry={entry}
-                      action={actionFor(entry)}
-                      error={errorFor(entry)}
-                      onSelect={() => setSelectedId(entry.bundleId)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">{body}</div>
           </div>
           {selected && (
-            <div className="absolute inset-0 space-y-3 overflow-y-auto bg-[var(--color-bg-secondary)] px-5 pb-5">
-              <div className="flex items-start gap-2">
-                <button
-                  type="button"
-                  autoFocus
-                  onClick={() => setSelectedId(null)}
-                  aria-label="Back to catalog"
-                  title="Back to catalog"
-                  className="-ml-1.5 mt-1.5 shrink-0 rounded p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <div className="mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
-                  <Store size={18} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h3 className="text-sm font-semibold text-[var(--color-text)]">
-                      {selected.displayName}
-                    </h3>
-                    {versionLabel(selected) && <span className={CHIP}>{versionLabel(selected)}</span>}
-                    {selected.isInstalled && <InstalledPill />}
-                  </div>
-                  {publisherOf(selected) && (
-                    <div className="text-[11px] text-[var(--color-text-muted)]">
-                      by {publisherOf(selected)}
-                    </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">{actionFor(selected, detailSettled)}</div>
-              </div>
-              {errorFor(selected) && (
-                <div role="alert" className="text-[10px] text-[var(--color-danger)]">
-                  {errorFor(selected)}
-                </div>
-              )}
-              {selected.description && (
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text-secondary)]">
-                  {selected.description}
-                </p>
-              )}
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[11px]">
-                {publisherOf(selected) && (
-                  <>
-                    <dt className="text-[var(--color-text-muted)]">Publisher</dt>
-                    <dd className="min-w-0 break-words text-[var(--color-text)]">
-                      {publisherOf(selected)}
-                      {selected.publisherEmail && (
-                        <span className="text-[var(--color-text-muted)]">
-                          {' '}
-                          &lt;{selected.publisherEmail}&gt;
-                        </span>
-                      )}
-                    </dd>
-                  </>
-                )}
-                {selected.latestPublishedAt && (
-                  <>
-                    <dt className="text-[var(--color-text-muted)]">Published</dt>
-                    <dd className="text-[var(--color-text)]">
-                      {new Date(selected.latestPublishedAt).toLocaleDateString()}
-                    </dd>
-                  </>
-                )}
-                <dt className="text-[var(--color-text-muted)]">Installs</dt>
-                <dd className="text-[var(--color-text)]">{selected.installCount}</dd>
-                <dt className="text-[var(--color-text-muted)]">Bundle</dt>
-                <dd className="min-w-0">
-                  <span className="inline-block max-w-full truncate rounded bg-[var(--color-bg)] px-1.5 py-0.5 align-middle font-mono text-[10px] text-[var(--color-text-secondary)]">
-                    {selected.bundleId}
-                  </span>
-                </dd>
-              </dl>
-              <div className="space-y-2">
-                <CatalogCardCredentials entry={selected} enabled={!selected.isInstalled} compact />
-              </div>
-            </div>
+            <CatalogItemDetailView
+              view={selected}
+              action={hasCatalogAction(selected, desktop) ? actionFor(selected, detailSettled) : null}
+              error={errorFor(selected)}
+              onBack={() => setSelectedUuid(null)}
+            />
           )}
         </div>
-        )}
       </div>
     </div>,
     document.body
@@ -417,150 +414,5 @@ export function CatalogBrowserModal({
 }
 
 function EmptyState({ text }: { text: string }): React.JSX.Element {
-  return (
-    <div className="flex h-40 items-center justify-center text-xs text-[var(--color-text-muted)]">
-      {text}
-    </div>
-  )
-}
-
-function InstalledPill(): React.JSX.Element {
-  return (
-    <span className="shrink-0 rounded bg-[var(--color-success)]/12 px-1.5 py-px text-[10px] font-medium text-[var(--color-success)]">
-      Installed
-    </span>
-  )
-}
-
-interface EntryActionProps {
-  entry: CatalogEntryDto
-  agentId: string | null
-  installing: boolean
-  anyInstalling: boolean
-  /** False right after the detail opened: a pointer click is then ignored. */
-  settled: boolean
-  onInstall: (bundleId: string) => void
-  onOpen: (agentId: string) => void
-}
-
-/** Install for a bundle not yet installed; Installed (and Open, once synced) otherwise. */
-function EntryAction({
-  entry,
-  agentId,
-  installing,
-  anyInstalling,
-  settled,
-  onInstall,
-  onOpen
-}: EntryActionProps): React.JSX.Element {
-  if (entry.isInstalled) {
-    return (
-      <>
-        <InstalledPill />
-        {agentId && (
-          <button
-            type="button"
-            onClick={(event) => {
-              if (!isUnsettledClick(settled, event)) onOpen(agentId)
-            }}
-            className={SECONDARY}
-          >
-            Open
-          </button>
-        )}
-      </>
-    )
-  }
-  return (
-    <button
-      type="button"
-      disabled={anyInstalling}
-      title={anyInstalling && !installing ? ANOTHER_INSTALLING : undefined}
-      onClick={(event) => {
-        if (!isUnsettledClick(settled, event)) onInstall(entry.bundleId)
-      }}
-      className={PRIMARY}
-    >
-      {installing ? (
-        <>
-          <Loader2 size={11} className="animate-spin" />
-          Installing…
-        </>
-      ) : (
-        <>
-          <Download size={11} />
-          Install
-        </>
-      )}
-    </button>
-  )
-}
-
-interface CatalogTileProps {
-  entry: CatalogEntryDto
-  action: React.JSX.Element
-  error: string | null
-  onSelect: () => void
-}
-
-/**
- * One bundle in the grid. The body and the action are siblings, not a button
- * inside a button; the body is named by the agent's name alone and opens the
- * detail. An install error renders last in the tile, so it never moves the
- * button that caused it (ux_rules rules 1 and 6).
- */
-function CatalogTile({ entry, action, error, onSelect }: CatalogTileProps): React.JSX.Element {
-  const nameId = useId()
-  const descriptionId = useId()
-  const version = versionLabel(entry)
-  const publisher = publisherOf(entry)
-  return (
-    <div
-      role="group"
-      aria-label={entry.displayName}
-      className="flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 transition-colors hover:border-[var(--color-accent)]/30"
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-labelledby={nameId}
-        aria-describedby={entry.description ? descriptionId : undefined}
-        className="flex flex-1 flex-col gap-1 rounded-t-lg p-3 text-left"
-      >
-        <span className="flex w-full min-w-0 items-center gap-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
-            <Store size={14} />
-          </span>
-          <span id={nameId} className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">
-            {entry.displayName}
-          </span>
-          {version && <span className={CHIP}>{version}</span>}
-        </span>
-        {publisher && (
-          <span className="block truncate text-[10px] text-[var(--color-text-muted)]">
-            by {publisher}
-          </span>
-        )}
-        {entry.description && (
-          <span
-            id={descriptionId}
-            className="line-clamp-3 text-[11px] leading-relaxed text-[var(--color-text-secondary)]"
-          >
-            {entry.description}
-          </span>
-        )}
-      </button>
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
-        <span className="text-[10px] text-[var(--color-text-muted)]">
-          {installsLabel(entry.installCount)}
-        </span>
-        <span className="flex items-center gap-1.5">{action}</span>
-      </div>
-      {error && (
-        <div role="alert" className="px-3 pb-2 text-[10px] text-[var(--color-danger)]">
-          {error}
-        </div>
-      )}
-    </div>
-  )
+  return <div className="flex h-40 items-center justify-center text-xs text-[var(--color-text-muted)]">{text}</div>
 }

@@ -23,6 +23,7 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 - `src/main/ipc/agent.ipc.ts` — `agent:apply-bundle-update` handler
 - `src/main/services/catalogService.ts` — `projectEntry` maps `user_install_pending_update` → `pendingUpdate`
 - `src/main/errors.ts` — `AgentErrorCode` gains `update_failed`
+- `src/main/services/inboxService.ts` — `list()` appends `cloudUpdateItems()` to the desktop agents' items in `InboxSnapshot.updates`
 
 ### Preload
 - `src/preload/index.ts` — `window.api.agents.applyBundleUpdate(installId)` typed binding (the catalog namespace has no apply-update method — the action is agents-scoped)
@@ -33,6 +34,8 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 - `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — joins catalog entries to synced agents' `bundle_version`; `handleUpdate`; `updatingBundleId`
 - `src/renderer/src/components/settings/CatalogCard.tsx` — `bundleVersion` prop; the "Update to v\<latest>" header action
 - `src/renderer/src/components/settings/AgentCard.tsx` — Connection update banner from `agent.remoteMetadata.bundle_version`
+- `src/renderer/src/components/agents/CatalogItemViews.tsx`, `CatalogBrowserModal.tsx` — the Catalog dialog's **Update** on a Runs in Cinna tile; `LocalAgentsList.tsx` owns its `useApplyBundleUpdate` (see [Bundles Catalog tech](./bundles_catalog_tech.md#sidebar-catalog-dialog))
+- `src/main/services/cloudUpdateNotices.ts` — `cloudUpdateItems(profileUserId?)`, the Inbox's cloud **Update available** cards; `src/renderer/src/components/inbox/InboxUpdateCard.tsx` — `UpdateAvailableCard`, whose Update for a cloud agent is `useApplyBundleUpdate`
 
 ## Database Schema
 
@@ -83,6 +86,15 @@ Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server 
 - Reads `agent.remoteMetadata.bundle_version` directly; `showUpdate = isBundleInstall && bundleUpdate.updateAvailable`
 - The routed agent page passes `connectionOnly`: its legacy header pills are hidden, and Profile → Agents renders visibility rows instead of cards.
 - Settings → Connection: amber banner "Bundle update available · v1.0 → v1.2" + "Update to v\<latest>" button (`useApplyBundleUpdate`, `applyUpdate.isPending` spinner). `updateError` local state renders inline; `reauth_required` code maps to a re-auth message
+
+### Catalog dialog tile
+- The **Update** on a Runs in Cinna tile reads the synced row's `bundle_version.update_available` (the row found by `remoteTargetId` = the install id), and before the agent has synced, the listing's own numbers: the install's `revision_number` below the item's `latest.revision_number`. It is offered whatever the `update_mode`. Its busy state and failure come from `LocalAgentsList`'s `useApplyBundleUpdate`
+
+### Inbox card (`cloudUpdateItems`)
+- One `UpdateAvailableInboxItem` (`target: 'cloud_agent'`, `installId`) per synced remote agent of the active profile (`agentRepo.listRemote`) whose `bundle_version.update_available` is true, whose `update_mode` is not `automatic`, and which has a `remoteTargetId`. A server that applies updates on its own needs no button, so it gets no card
+- `version` / `versionLabel` from `bundle_version.latest_revision_number` / `latest_version`, else from the cached listing's item; `changedBy` / `changedAt` from the listing's `latest.published_by` / `published_at`. The item is the one with `kind: agent`, `runs_on` not `desktop` and this install id in `my_installs` — a skill's `my_installs` can carry the id of the agent it is linked to, so matching any kind would borrow a skill's version
+- Local reads only, never a request; a failure is logged and is an empty list, never a failed Inbox. Without a cached listing the card still appears, without who and when
+- `UpdateAvailableCard`'s Update for this target calls `useApplyBundleUpdate(installId)`; success shows **Updated.**, and the next read no longer lists it once the sync has landed the new `bundle_version`. `reauth_required` reads as an expired session; anything else is the message, beside the button
 
 ## Security
 - The apply-update call runs only in the main process; the Bearer JWT never reaches the renderer. Server owner-gates the install (403 for non-owner) and the desktop validates UUID shape before issuing the request

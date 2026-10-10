@@ -11,6 +11,7 @@ import {
   findAgent,
   finishWithWeather,
   getFromLibrary,
+  openCatalogAgents,
   catalogEntry,
   catalogEntryOrFail,
   openAgent,
@@ -26,8 +27,8 @@ import {
 /**
  * A shared agent's life outside the day-to-day, against the real local
  * cinna-core: sharing removed, access taken away, a Get that would land on
- * an agent already here, the Inbox's "The team changed X", and a blocked job
- * fetching its agent from the Team library, and core refusing Claude's
+ * an agent already here, the Inbox's "Update available for X", and a blocked job
+ * fetching its agent from the catalog, and core refusing Claude's
  * per-machine settings file. Setup:
  * `e2e/fixtures/live-team-sharing.py`.
  */
@@ -120,7 +121,7 @@ test('A’s Remove sharing with delete is refused while B holds it; after B remo
     await section(a, 'Remove sharing').getByRole('button', { name: 'Remove sharing…', exact: true }).click()
     const dialog = a.page.getByRole('dialog', { name: 'Remove sharing' })
     await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
-    await dialog.getByRole('checkbox', { name: 'Also delete it from the team library — teammates can no longer get it' }).check()
+    await dialog.getByRole('checkbox', { name: 'Also delete it from the catalog — teammates can no longer get it' }).check()
     await dialog.getByRole('button', { name: 'Remove sharing', exact: true }).click()
     return dialog
   }
@@ -202,11 +203,7 @@ test('Get refuses to land on an agent already here, by folder name or by manifes
     expect(mine.slug).toBe(built.slug)
     await b.relaunch()
     const folders = before()
-    await b.page.getByRole('button', { name: 'Agents', exact: true }).click()
-    await b.page.getByRole('button', { name: 'Add an agent' }).click()
-    await b.page.getByRole('dialog', { name: 'Add an agent' }).getByRole('button', { name: /Install from catalog/ }).click()
-    const catalog = b.page.getByRole('dialog', { name: 'Agent catalog' })
-    await catalog.getByRole('tablist', { name: 'Catalog source' }).getByRole('tab', { name: 'Team library' }).click()
+    const catalog = await openCatalogAgents(b)
     const tile = catalog.getByRole('group', { name })
     await tile.getByRole('button', { name: 'Get', exact: true }).click()
     await expect(tile.getByRole('alert')).toHaveText(/this agent is already on this computer\.$/)
@@ -234,7 +231,7 @@ test('Get refuses to land on an agent already here, by folder name or by manifes
   })
 })
 
-test('the Inbox card The team changed X updates the agent and says Updated.', async ({ team }) => {
+test('the Inbox card Update available for X updates the agent and says Updated.', async ({ team }) => {
   test.setTimeout(300_000)
   const { fixture } = team
   const { a, b, name, aPath } = await shared(team)
@@ -242,14 +239,14 @@ test('the Inbox card The team changed X updates the agent and says Updated.', as
   await shareChanges(a, name, 'News from A')
   await refreshLibrary(b)
   await b.page.getByRole('button', { name: /^Inbox/ }).click()
-  const card = b.page.getByRole('article', { name: `The team changed ${name}` })
+  const card = b.page.getByRole('article', { name: `Update available for ${name}` })
   await expect(card).toContainText(`by ${fixture.people.a.name}`)
   await card.getByRole('button', { name: 'Update', exact: true }).click()
-  await expect(card.getByRole('status')).toHaveText('Updated. This agent now has the team’s latest version.', { timeout: 60_000 })
+  await expect(card.getByRole('status')).toHaveText('Updated. This agent now has the latest version.', { timeout: 60_000 })
   expect(readFileSync(join((await findAgent(b, name)).path, 'knowledge/acme.md'), 'utf8')).toContain('News from A.')
 })
 
-test('a blocked job offers Get X from the team library, and the Get unblocks it', async ({ team }) => {
+test('a blocked job offers Get X from the catalog, and the Get unblocks it', async ({ team }) => {
   // A job can only be bound to an agent this machine knows (setAgents drops
   // an unknown id), so B binds it to its copy and then the folder goes
   // missing — the state blocked-job.spec.ts arranges — while the team has it.
@@ -275,7 +272,7 @@ test('a blocked job offers Get X from the team library, and the Get unblocks it'
   await b.page.getByText(title, { exact: true }).click()
   await expect(b.page.getByText('Agent unavailable', { exact: true })).toBeVisible()
   await expect(b.page.getByRole('button', { name: 'Run', exact: true })).toBeDisabled()
-  await b.page.getByRole('button', { name: `Get ${name} from the team library`, exact: true }).click()
+  await b.page.getByRole('button', { name: `Get ${name} from the catalog`, exact: true }).click()
   await expect(b.page.getByText('Agent unavailable', { exact: true })).toHaveCount(0, { timeout: 60_000 })
   await expect(b.page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled()
   expect((await findAgent(b, name)).id).toBe(aId)

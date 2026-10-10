@@ -12,6 +12,7 @@ import {
   finishDialog,
   finishWithWeather,
   getFromLibrary,
+  openCatalogAgents,
   catalogEntryOrFail,
   openAgent,
   refreshLibrary,
@@ -227,12 +228,9 @@ test('edits here and a team that moved: Update is refused, Share changes combine
   // tab offer only Share changes (canUpdate), so Update is the catalog tile's.
   await openAgent(b, name)
   await expect(badge(b, 'You and the team both changed it')).toBeVisible()
-  await b.page.getByRole('button', { name: 'Add an agent' }).click()
-  await b.page.getByRole('dialog', { name: 'Add an agent' }).getByRole('button', { name: /Install from catalog/ }).click()
-  const catalog = b.page.getByRole('dialog', { name: 'Agent catalog' })
-  await catalog.getByRole('tablist', { name: 'Catalog source' }).getByRole('tab', { name: 'Team library' }).click()
+  const catalog = await openCatalogAgents(b)
   const tile = catalog.getByRole('group', { name })
-  await tile.getByRole('button', { name: 'Update available', exact: true }).click()
+  await tile.getByRole('button', { name: 'Update', exact: true }).click()
   await expect(tile.getByRole('alert')).toHaveText('Share your changes first — Share changes brings in the team’s version too.')
   await catalog.getByRole('button', { name: 'Close', exact: true }).click()
   expect(readFileSync(join(bPath, ACME_MD), 'utf8')).not.toContain('The team moved.')
@@ -325,7 +323,7 @@ for (const refusal of [
     const dialog = a.page.getByRole('dialog', { name: 'Share changes' })
     await dialog.getByRole('textbox').fill(`Adds ${refusal.title}`)
     await dialog.getByRole('button', { name: 'Share', exact: true }).click()
-    await expect(dialog.getByRole('alert')).toHaveText(`Fix what the team library refused, then share again. ${refusal.sentence}`, { timeout: 60_000 })
+    await expect(dialog.getByRole('alert')).toHaveText(`Fix what the catalog refused, then share again. ${refusal.sentence}`, { timeout: 60_000 })
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     expect((await catalogEntryOrFail(fixture, slug)).desktop.head_sha).toBe(before)
     await openSharingTab(a, name)

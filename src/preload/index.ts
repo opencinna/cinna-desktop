@@ -172,6 +172,8 @@ import type {
   SetupCredentialSummaryDto,
   SetupStatusDto
 } from '../shared/catalog'
+import type { CatalogItemDetail, CatalogItemsListing } from '../shared/catalogItems'
+import { CATALOG_ITEMS_CHANGED_CHANNEL } from '../shared/catalogItems'
 import type {
   McpRegistryInfo,
   McpRegistrySearchAllResult
@@ -1493,7 +1495,23 @@ const api = {
       ipcRenderer.invoke('catalog:setup-status', installId),
     setupCredentials: (installId: string): Promise<SetupCredentialSummaryDto[]> =>
       ipcRenderer.invoke('catalog:setup-credentials', installId),
-    serverUrl: (): Promise<string> => ipcRenderer.invoke('catalog:server-url')
+    serverUrl: (): Promise<string> => ipcRenderer.invoke('catalog:server-url'),
+    /**
+     * Every catalog item of every kind (cloud agents, desktop agents, skills)
+     * from main's cached listing; `refresh` lists again first. Null for a
+     * profile that is not a Cinna one.
+     */
+    items: (refresh?: boolean): Promise<CatalogOutcome<CatalogItemsListing | null>> =>
+      ipcRenderer.invoke('catalog:items', { refresh }),
+    /** One item with its versions, newest first. */
+    item: (uuid: string): Promise<CatalogOutcome<CatalogItemDetail>> =>
+      ipcRenderer.invoke('catalog:item', { uuid }),
+    /** Fires when main's cached listing moved in a way only the catalog's items show (not team sharing). */
+    onItemsChanged: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(CATALOG_ITEMS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(CATALOG_ITEMS_CHANGED_CHANNEL, listener)
+    }
   },
 
   /**

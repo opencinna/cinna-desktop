@@ -28,7 +28,18 @@ let externalAgents: Array<Record<string, unknown>> = []
 let showAgentSidebarSections = true
 vi.mock('../../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { showAgentSidebarSections } }) }))
 const setActiveExternalAgentId = vi.fn()
-vi.mock('../../../hooks/useAgents', () => ({ useAgents: () => ({ data: externalAgents }) }))
+const applyUpdate = vi.hoisted(() => ({
+  isPending: false,
+  isError: false,
+  variables: undefined as string | undefined,
+  error: null as (Error & { code?: string }) | null,
+  mutate: vi.fn(),
+  reset: vi.fn()
+}))
+vi.mock('../../../hooks/useAgents', () => ({
+  useAgents: () => ({ data: externalAgents }),
+  useApplyBundleUpdate: () => applyUpdate
+}))
 vi.mock('../../../stores/ui.store', () => {
   const state = (): Record<string, unknown> => ({
     activeLocalAgentId: null,
@@ -105,11 +116,17 @@ let catalogProps: {
   onOpen: (agentId: string) => void
   installingBundleId: string | null
   installError: { bundleId: string; message: string } | null
+  cloudUpdate?: {
+    updatingInstallId: string | null
+    error: { installId: string; message: string } | null
+    onUpdate: (installId: string) => void
+  }
+  desktop?: unknown
 } | null = null
 vi.mock('../CatalogBrowserModal', () => ({
   CatalogBrowserModal: (props: NonNullable<typeof catalogProps>) => {
     catalogProps = props
-    return createElement('div', { role: 'dialog', 'aria-label': 'Agent catalog' })
+    return createElement('div', { role: 'dialog', 'aria-label': 'Catalog' })
   }
 }))
 
@@ -257,13 +274,13 @@ describe('LocalAgentsList — Install from catalog', () => {
     renderList()
     fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
     act(() => newAgentProps!.onCatalog!())
-    expect(screen.getByRole('dialog', { name: 'Agent catalog' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Catalog' })).toBeTruthy()
 
     act(() => catalogProps!.onInstall('b'))
     await waitFor(() => expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:inv'))
     expect(setActiveView).toHaveBeenCalledWith('external-agent')
     expect(setAgentPageMode).toHaveBeenCalledWith('chat')
-    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Catalog' })).toBeNull()
     await waitFor(() => expect(setupStatus).toHaveBeenCalledWith('inst-1'))
     await act(async () => {})
     expect(useCatalogInstallStore.getState().pendingSetup).toBeNull()
@@ -319,7 +336,7 @@ describe('LocalAgentsList — Install from catalog', () => {
     act(() => useCatalogInstallStore.setState({ error: { bundleId: 'b', message: 'Again.' } }))
     expect(catalogProps!.installError?.message).toBe('Again.')
     act(() => catalogProps!.onClose())
-    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Catalog' })).toBeNull()
     expect(useCatalogInstallStore.getState().error).toBeNull()
   })
 
@@ -328,12 +345,38 @@ describe('LocalAgentsList — Install from catalog', () => {
     renderList()
     fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
     act(() => newAgentProps!.onCatalog!())
-    expect(screen.getByRole('dialog', { name: 'Agent catalog' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Catalog' })).toBeTruthy()
     act(() => useAuthStore.setState({ currentUser: { ...CINNA, id: 'p2' } as never }))
-    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Catalog' })).toBeNull()
     // And it stays closed on the way back.
     act(() => useAuthStore.setState({ currentUser: CINNA as never }))
-    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Catalog' })).toBeNull()
+  })
+
+  it('runs a cloud agent’s Update here, and hands the dialog its busy install and its failure', () => {
+    useAuthStore.setState({ currentUser: CINNA as never })
+    const client = new QueryClient()
+    const tree = (): React.JSX.Element => createElement(QueryClientProvider, { client }, createElement(LocalAgentsList))
+    const view = render(tree())
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    expect(catalogProps!.desktop).toBeTruthy()
+    expect(catalogProps!.cloudUpdate).toMatchObject({ updatingInstallId: null, error: null })
+    act(() => catalogProps!.cloudUpdate!.onUpdate('inst-1'))
+    expect(applyUpdate.mutate).toHaveBeenCalledWith('inst-1')
+
+    Object.assign(applyUpdate, { isPending: true, variables: 'inst-1' })
+    view.rerender(tree())
+    expect(catalogProps!.cloudUpdate!.updatingInstallId).toBe('inst-1')
+
+    Object.assign(applyUpdate, { isPending: false, isError: true, error: Object.assign(new Error('Environment busy.'), { code: 'request_failed' }) })
+    view.rerender(tree())
+    expect(catalogProps!.cloudUpdate!.error).toEqual({ installId: 'inst-1', message: 'Environment busy.' })
+
+    // Closing the catalog forgets the finished update's failure.
+    act(() => catalogProps!.onClose())
+    expect(applyUpdate.reset).toHaveBeenCalled()
+    Object.assign(applyUpdate, { isPending: false, isError: false, variables: undefined, error: null })
   })
 
   it('opens an installed agent from the catalog', () => {
@@ -344,7 +387,7 @@ describe('LocalAgentsList — Install from catalog', () => {
     act(() => catalogProps!.onOpen('remote:other'))
     expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:other')
     expect(setActiveView).toHaveBeenCalledWith('external-agent')
-    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Catalog' })).toBeNull()
   })
 })
 

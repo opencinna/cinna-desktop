@@ -77,11 +77,11 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 ### Installing from the catalog
 
-1. On a Cinna account, **+ → Install from catalog** closes Add an agent and opens **Agent catalog**: a search field over a grid of tiles, one per bundle published to the account, each with its name, version, publisher, description, install count and an **Install** button (or **Installed** and **Open** once it is installed and synced). An icon-only refresh ("Refresh catalog", spinning while it fetches) beside the close button re-fetches the catalog and syncs remote agents. When the catalog cannot load, a banner says so with **Retry** — or, when the Cinna session has expired, **Re-authenticate**
-2. Clicking a tile's body opens its detail over the grid: description, publisher and email, publish date, install count, bundle id, and the same credential preview as Settings → Profile → Catalog. A Back arrow returns to the grid with its search and scroll intact
-3. **Install** spins on that tile and disables every other Install, in this dialog and in the chat `[+]` picker alike. The user may close the dialog, or switch to another sidebar tab, while it runs
+1. On a Cinna account, **+ → Install from catalog** closes Add an agent and opens **Catalog**: a search field and an **All / Agents / Skills** filter over one grid of tiles — agents that run in Cinna, agents that run on this computer ([shared agents](team_sharing.md)) and skills — each with its kind badge, **Version N**, who maintains it, its description and the credentials it needs, and its action: **Get**, or **Open** with **Update** beside it while a newer version waits; a skill has none yet. **Refresh** beside the close button re-lists the catalog and syncs remote agents. When the catalog cannot load, the grid says so with **Retry** — or, when the Cinna session has expired, **Re-authenticate**; a refresh that fails over tiles already shown is one line beside Refresh. See [Bundles Catalog](../bundles_catalog/bundles_catalog.md#installing-from-the-agents-sidebar)
+2. Clicking a tile's body opens its detail over the grid: description, maintainers, install count, catalog id, the same credential preview as Settings → Profile → Catalog, and every version with its notes. A Back arrow — or Escape — returns to the grid with its filter, search and scroll intact
+3. **Get** on an agent that runs in Cinna spins on that tile and disables every other cloud Get here and every Install in the chat `[+]` picker. The user may close the dialog, or switch to another sidebar tab, while it runs
 4. When the install has synced, the dialog closes (if still open) and the user lands on the new agent's page in chat mode. If its credentials are incomplete — or the check fails — the setup dialog from Settings → Catalog opens over it, deep-linking each missing credential to the Cinna web pages. See [Bundles Catalog](../bundles_catalog/bundles_catalog.md)
-5. A failed install shows its message at the bottom of that bundle's tile (and under the detail header) and closes nothing; the next install attempt, or reopening the dialog, clears it
+5. A failed install shows its message at the bottom of that item's tile (and under the detail header) and closes nothing; the next install attempt, or reopening the dialog, clears it
 
 ### Opening the folder in a tool
 
@@ -109,7 +109,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 ### Removing a shared agent
 
 1. For a [shared agent](team_sharing.md) the menu item, the dialog's title and its button all read **Remove from this computer** — the folder is this machine's copy of the team's version, and that is all that goes
-2. The dialog says the folder goes to the Trash, the team's version stays in the Team library untouched, and the agent can be Got again any time
+2. The dialog says the folder goes to the Trash, the team's version stays in the catalog untouched, and the agent can be Got again any time
 3. While this machine has changes the team does not have, main refuses (`unshared_changes`) and names up to three of the files: trashing the folder would lose them. The check reads the folder without reaching the network, so a removal never waits on, or fails with, the team's server
 
 ### A shared agent's page

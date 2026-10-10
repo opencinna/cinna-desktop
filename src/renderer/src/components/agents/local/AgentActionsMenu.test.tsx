@@ -130,7 +130,7 @@ describe('AgentActionsMenu — removing a shared agent', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.removeFromComputerMenu }))
     const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeFromComputer })
     expect(dialog.textContent).toContain('Trash')
-    expect(dialog.textContent).toContain('Team library')
+    expect(dialog.textContent).toContain('stays in the catalog')
     expect(screen.queryByRole('dialog', { name: /delete agent/i })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removeFromComputer }))

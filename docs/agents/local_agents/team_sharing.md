@@ -2,25 +2,25 @@
 
 ## Purpose
 
-Let a team work on the same folder agent from several machines. A `Local/<slug>/` kit agent can be put in the active Cinna account's **Team library**; a teammate **Gets** it, both of them change it, and the app moves those changes between the machines with three verbs — **Update**, **Share changes**, and, when the two sides do not fit together, a two-button choice. Underneath it is git, and the user never has to know that.
+Let a team work on the same folder agent from several machines. A `Local/<slug>/` kit agent can be put in the active Cinna account's catalog, where it is listed as an agent that **Runs on your computer**; a teammate **Gets** it, both of them change it, and the app moves those changes between the machines with three verbs — **Update**, **Share changes**, and, when the two sides do not fit together, a two-button choice. Underneath it is git, and the user never has to know that.
 
 ## Core Concepts
 
 - **Shared agent** — A kit agent directly under a root's `Local/` whose folder is **its own** git working tree with an `origin`. That is the whole definition: an agent a developer cloned by hand is recognised exactly like one the app fetched. A folder inside an enclosing repository (the workshop's), a bare agent, and an agent outside `Local/` are never shared
 - **Team version** — What the team has: `origin`'s `main`. For a Cinna remote, the catalog listing's `desktop.head_sha` says where it is without a fetch
-- **Team library** — The desktop agents in the active Cinna account's catalog: the items of `GET /api/v1/catalog/items` with `kind: agent` and `runs_on: desktop`, each with the caller's access (`use`, `edit`, `maintain`), its visibility, whether the catalog lists it, its maintainers and its latest version. Shown as a second source of the Agent catalog dialog. The user-facing name stays **Team library**; the server's name for an entry is a catalog item
+- **Team library** — The desktop agents in the active Cinna account's catalog: the items of `GET /api/v1/catalog/items` with `kind: agent` and `runs_on: desktop`, each with the caller's access (`use`, `edit`, `maintain`), its visibility, whether the catalog lists it, its maintainers and its latest version. The name is this doc's and the code's (`libraryService`, `useTeamLibrary`, `TeamLibraryGet`) for that slice of the listing; **the user never reads it**. They see one [Catalog](../bundles_catalog/bundles_catalog.md) dialog, where these agents sit beside agents that run in Cinna and skills under a **Runs on your computer** badge, and every sentence says *the catalog*.: one catalog, so there is no source name to learn and no second place to look for an agent
 - **Version** — What the catalog numbers each accepted send of a team agent: **Version N**, with who shared it, when, and the notes it was shared with. An entry has none until its first send
 - **Catalog id** — The entry's `bundle_id` on the server (`<reversed host>.<8 hex of the manifest id>`, core mints it). Recorded per machine in the agent's `app-data/desktop.json` and shown read-only in the Sharing tab; the user never types it
 - **Local install** — The catalog's record that this computer holds a team agent at a given version, keyed by a per-installation device id. Core counts them, and refuses to delete an entry while other people hold it
 - **Remote kind** — `cinna` when `origin` is `…/git/<repo_id>.git` on a git origin that the instance of a Cinna profile on this machine uses: either its own origin or one it named itself (see [An instance's git may live on another origin](#an-instances-git-may-live-on-another-origin)). `external` covers anything else (the user's own GitHub, GitLab or SSH remote, authenticated by their own git setup)
-- **Get** — Fetch a library agent into the agents home's `Local/<slug>/`
+- **Get** — Fetch a desktop agent from the catalog into the agents home's `Local/<slug>/`
 - **Update** — Bring the team's changes in, when they apply cleanly
 - **Share changes** — Record everything this machine changed under one note (pre-filled by an AI summary) and send it to the team
-- **Share with the team** — Put a not-yet-shared agent in the Team library, in place, for the people chosen and nobody else
+- **Share with the team** — Put a not-yet-shared agent in the catalog, in place, for the people chosen and nobody else
 - **Use the team's version** — The answer to a collision: this folder becomes the team's version, and what was here is kept beside it as `<slug>-mine`, named "*Name* (my copy)"
 - **Share badge** — A shared agent's state with the team, as the first badge in the agent page's chat-mode row of runtime badges, with **Update** and **Share changes…** beside it when the state allows. A click opens the Sharing tab
 - **Sharing tab** — The agent page's Settings tab for a shared agent, and only for one: **Where it's shared**, **People**, **History** and **Remove sharing**
-- **People** — Who may get the agent from the Team library, and with what access: **Can use** (`use`), **Can edit** (`edit`), **Maintainer** (`maintain`). The catalog item's grants, read and written whole, plus **Everyone on this server**, which is not a grant on the server but the item's `public` visibility
+- **People** — Who may get the agent from the catalog, and with what access: **Can use** (`use`), **Can edit** (`edit`), **Maintainer** (`maintain`). The catalog item's grants, read and written whole, plus **Everyone on this server**, which is not a grant on the server but the item's `public` visibility
 - **Remove sharing** — Disconnect this folder from the team. It stays on this computer as an ordinary agent, history and all; a maintainer may also delete the entry from the catalog
 - **Remove from this computer** — Deleting a shared agent: the folder goes to the Trash, the team's version is untouched
 
@@ -28,11 +28,11 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ### Getting an agent from the team
 
-1. On a Cinna account, **Agents → + → Install from catalog** opens the Agent catalog. A source switch above the grid reads **Cinna bundles | Team library**; it exists only while the account has a Team library, so any other account sees the dialog it always had
-2. The Team library lists one tile per shared agent — name, description, maintainers — with **Get**, or, when this machine already has it, **Installed** and **Open**, or **Update available**
+1. On a Cinna account, **Agents → + → Install from catalog** opens the **Catalog**. Shared agents are tiles in the one grid, among agents that run in Cinna and skills, each with the **Runs on your computer** badge; **Agents** narrows the grid to agents of both kinds
+2. A shared agent's tile has its name, **Version N**, **by** its maintainers, its description and the credentials it needs, with **Get** — or, when this machine already has it, **Open**, and **Update** beside it while the team has moved past this computer's copy. Its detail adds every version with who shared it, when, and its notes
 3. **Get** fetches the agent into `Local/<slug>/`, the dialog closes, and the user lands on the new agent's page. A refusal stays on the tile it came from and closes nothing
 4. If the agent needs a credential this computer does not have, the page opens **Finish setting up *Name*** (below)
-5. Opening the dialog re-reads the library, so what the user browses is the team's list as it is now
+5. Opening the dialog re-reads the catalog, so what the user browses is the team's list as it is now
 
 ### Seeing where an agent stands
 
@@ -44,16 +44,16 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ### The Sharing tab
 
-1. **Where it's shared** — the state and its buttons, then: the server (a Cinna instance's host, which opens it in the browser, or **Your own server** and the remote's address for an `external` remote); for a library agent, its name in the library, its folder name, **Your access**, its maintainers, then the latest version as three facts — **Version** *N*, **Shared by** *who*, **Shared on** *when* — each only when the catalog says (an entry not sent to yet shows none), and last the **Catalog id**, read-only and truncated with the whole id in its tooltip. When the catalog itself narrows who can get the agent, one more fact, **Who can get it**, says so: *Only people who can edit it — it isn't listed in the catalog*, or *— it's private in the catalog*. Opening the tab re-reads the library, so these are the library's facts as they are now
+1. **Where it's shared** — the state and its buttons, then: the server (a Cinna instance's host, which opens it in the browser, or **Your own server** and the remote's address for an `external` remote); for a library agent, **Name in the catalog**, its folder name, **Your access**, its maintainers, then the latest version as three facts — **Version** *N*, **Shared by** *who*, **Shared on** *when* — each only when the catalog says (an entry not sent to yet shows none), and last the **Catalog id**, read-only and truncated with the whole id in its tooltip. When the catalog itself narrows who can get the agent, one more fact, **Who can get it**, says so: *Only people who can edit it — it isn't listed in the catalog*, or *— it's private in the catalog*. Opening the tab re-reads the library, so these are the library's facts as they are now
 2. **People** — only for a Cinna team version on the active account that the library still lists. A maintainer sees everyone with access, each with an access select; a grant can also be **Everyone with the *X* role**, listed and removed like a person. **Everyone on this server** is a row too while the entry is public and listed: always **Can use**, with no select (that is what sharing with everyone means), and a remove like any other row. Nobody changes their own access here. A maintainer is already named under **Maintainers** above, so their own row is left out of People; anyone else's own row reads **You** with their access shown read-only and no remove. Every change still saves the whole list, own grant included, unchanged. With no one else on it the list reads **No one else has access yet.** Removing anyone else asks in the row (**Remove *X*'s access?** with **Cancel** and **Remove**), not in a dialog. **Share with a person…** opens a search by name or email: two characters at least, asked once typing settles, people who already have access left out. The person picked joins as **Can use** unless the select says otherwise. Anyone who is not a maintainer sees only the maintainers and **Only a maintainer can change who has access.**
 3. **History** — this folder's versions, newest first, at most thirty: each version's note, who recorded it and when. A version recorded here and not on the team version yet carries **Not shared yet**. It is a list to read; nothing in it is clickable
 4. **Remove sharing** — last, and asking before it does anything (below)
 
 ### Updating
 
-1. **Update** — from the share badge, the Sharing tab, the library tile, or the Inbox card — brings the team's changes in, and the agent's page, sidebar and catalog reflect them at once
+1. **Update** — from the share badge, the Sharing tab, the catalog tile, or the Inbox card — brings the team's changes in, and the agent's page, sidebar and catalog reflect them at once
 2. Edits here that are not shared yet are in the way: Update refuses and says to share them first. Share changes brings the team's version in as part of sending
-3. When the team changed this agent too and the two do not combine, the Inbox card and the library tile take the user to the agent page, where the choice lives
+3. When the team changed this agent too and the two do not combine, the Inbox card and the catalog tile take the user to the agent page, where the choice lives
 4. An Update that brought changes attaches matching credentials like a Get, and opens **Finish setting up *Name*** only if a required slot is now missing that was not missing before the Update (below)
 
 ### Finishing setup
@@ -71,7 +71,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ### Sharing an agent with the team for the first time
 
-1. **⋯ → Share with the team…** on a kit agent that is not shared yet, on a Cinna account whose Team library answered
+1. **⋯ → Share with the team…** on a kit agent that is not shared yet, on a Cinna account whose catalog listing answered
 2. The dialog asks two things: a **Name**, pre-filled from the manifest, and **People**, found by name or email and each added as **Can use** unless changed. The list starts as **Only you, for now.** There is no description field: the manifest's description is sent as it is. **Share** creates the agent in the catalog for the sharer (as maintainer) and the people chosen — one request, so it exists for nobody else at any moment — and only then sends this folder as its first version. The folder stays where it is. An agent whose `cinna-agent.json` has no `id` is refused before anything reaches the server, since the catalog binds the entry to that id for good
 3. An agent whose team version was **deleted from the library** is offered Share with the team again. Its badge reads "No longer shared". Main first re-reads the library rather than trusting the cache. The restart goes ahead only when all three hold:
    - that read was a real listing, not a `404`/`403` standing in as empty
@@ -83,25 +83,25 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ### Removing a shared agent
 
-1. **⋯ → Remove from this computer…** opens a dialog of that title: the folder goes to the Trash, the team's version stays in the Team library, and the user can Get it again any time
+1. **⋯ → Remove from this computer…** opens a dialog of that title: the folder goes to the Trash, the team's version stays in the catalog, untouched, and the user can Get it again any time
 2. While this machine has changes the team does not have, main refuses and names up to three of the files: removing would lose them
 
 ### Removing sharing
 
 1. **Settings → Sharing → Remove sharing…** opens a confirmation in the danger tone, focused on **Cancel**. It says what stays first: the folder, its files and its history stay on this computer, the agent becomes an ordinary one that can be shared again later, and teammates keep their own copies
-2. A maintainer of an entry the library still lists also sees an unchecked **Also delete it from the team library — teammates can no longer get it**
+2. A maintainer of an entry the library still lists also sees an unchecked **Also delete it from the catalog — teammates can no longer get it**
 3. **Remove sharing** disconnects the folder; the badge and the Sharing tab go, and the page's note says *X* **is no longer shared with the team.** A refusal stays in the dialog and closes nothing
 4. The server refuses the delete while other people have the agent on their computers, in its own words (**1 person uses this. It can be removed once nobody does.**). The dialog then adds **Untick the box above to remove sharing from this computer only.**: the way out needs nobody's say. Ticking or unticking the box clears the refusal, since it answered the other choice
 5. Unshared changes do not stop it, unlike Remove from this computer: nothing on this machine is lost
 
 ### A teammate changed something
 
-1. The Inbox lists **The team changed *X*** — who sent it and when, when the library says — with **Update**. The agent's name opens its page
-2. After Update the card says **Updated.** and stays until the user leaves the Inbox
+1. The Inbox lists **Update available for *X*** with the **Runs on your computer** badge, **Version N**, who shared it and the date, when the catalog says, and **Update**. The agent's name opens its page. It is the same card an agent that runs in Cinna gets when its install is behind ([Bundles Catalog](../bundles_catalog/bundles_catalog.md#update-available)): one kind of notice for one kind of event, whichever computer the agent runs on
+2. After Update the card says **Updated. This agent now has the latest version.** and stays until the user leaves the Inbox
 
 ### A blocked job needs an agent the team has
 
-1. A job bound to a folder agent this machine lacks is blocked ([Local Agents Are Not Synced](local_only.md)). When the Team library lists an agent with that dependency's manifest id, and this machine has no copy, its row offers **Get *X* from the team library**
+1. A job bound to a folder agent this machine lacks is blocked ([Local Agents Are Not Synced](local_only.md)). When the Team library lists an agent with that dependency's manifest id, and this machine has no copy, its row offers **Get *X* from the catalog**
 2. After the Get the dependency resolves against the new folder and the job unblocks
 
 ## Business Rules
@@ -119,7 +119,7 @@ Four things are written down, and none of them is the answer to "is this shared"
 
 ### The library is polled, not pushed
 
-There is one listing, `GET /api/v1/catalog/items`, read once and kept whole: every kind the caller may see (cloud agents, desktop agents, skills), with the team library derived from the desktop agents in it. A desktop agent that lacks what a Get needs (`desktop.repo_id`, `clone_url`, `slug`) is left out of the team library. Core emits two realtime events for the catalog, `catalog.updated` after an accepted send and `catalog.granted` to people who just gained access, each to the reader's own room. **The desktop does not consume them**: it polls. Main lists the catalog when a Cinna profile becomes active (and on wake), every five minutes while it stays active, and on demand: when the catalog opens, and after Update, Share changes, Share with the team and Use the team's version. The renderer is told (`sharing:changed`) only when the set of desktop agents, their heads, latest version numbers, visibility, listing or the caller's access moved, not on every poll. Reads can overlap (the poll, the catalog opening, an action's own re-read) and answer out of order; an answer older than one already taken is dropped, and its caller gets the newer listing. The Sharing tab's People and History are re-read on that same signal, and after any action that changed them; they have no poll of their own. Polling stops on profile switch, sign-out, sleep and an expired session; re-activation starts it again.
+There is one listing, `GET /api/v1/catalog/items`, read once and kept whole: every kind the caller may see (cloud agents, desktop agents, skills), with the team library derived from the desktop agents in it. A desktop agent that lacks what a Get needs (`desktop.repo_id`, `clone_url`, `slug`) is left out of the team library. Core emits two realtime events for the catalog, `catalog.updated` after an accepted send and `catalog.granted` to people who just gained access, each to the reader's own room. **The desktop does not consume them**: it polls. Main lists the catalog when a Cinna profile becomes active (and on wake), every five minutes while it stays active, and on demand: when the catalog opens, and after Update, Share changes, Share with the team and Use the team's version. The renderer is told (`sharing:changed`) only when the set of desktop agents, their heads, latest version numbers, visibility, listing or the caller's access moved, not on every poll. A move in any other item of the listing (a cloud agent's install, a skill's version) is the lighter `catalog:items-changed`, which re-reads the Catalog dialog and the Inbox and none of the sharing reads: every shared agent's status re-reads on `sharing:changed`, and costs git to answer. Reads can overlap (the poll, the catalog opening, an action's own re-read) and answer out of order; an answer older than one already taken is dropped, and its caller gets the newer listing. The Sharing tab's People and History are re-read on that same signal, and after any action that changed them; they have no poll of their own. Polling stops on profile switch, sign-out, sleep and an expired session; re-activation starts it again.
 
 A listing is what lets a shared agent say **The team changed this agent** without a network fetch per folder per screen. For an `external` remote there is no listing, so its page fetches on open — at most once a minute per agent, whatever triggered the read.
 
@@ -127,7 +127,7 @@ Core's listing shows a new head a few seconds after a send lands, not at once. A
 
 ### An instance without the catalog listing is an empty library
 
-A `404` or a `403` from `GET /api/v1/catalog/items` is an **empty Team library**, logged once per host, not an error. The first is a Cinna server that does not have the routes yet; the second one that gates them by role. Treating either as a failure would show a broken source to every user of a server that simply does not offer the feature, and treating a `403` as a dead session would raise the re-auth prompt on every poll for a session that is fine.
+A `404` or a `403` from `GET /api/v1/catalog/items` is an **empty listing** — no shared agents, and **This server has no catalog yet.** in the Catalog dialog — logged once per host, not an error. The first is a Cinna server that does not have the routes yet; the second one that gates them by role. Treating either as a failure would show a broken catalog to every user of a server that simply does not offer the feature, and treating a `403` as a dead session would raise the re-auth prompt on every poll for a session that is fine.
 
 ### Words the user never reads
 
@@ -261,7 +261,7 @@ History is this folder's own versions, read locally with no network, newest firs
 
 Remove sharing removes `origin`, clears the `shared_remote` link in `desktop.json` (catalog id included) and unsets `cinna.server`. The folder, its files and its own `.git` history stay, and the agent becomes an ordinary local one that Share with the team offers again. It takes the turn lock like every verb that writes `.git`, and refuses while a turn runs. Unshared changes do not block it, since nothing is lost. It works for any shared agent, including one shared on another account or with an `external` remote.
 
-**Also delete it from the team library** is offered only to a maintainer of an entry the library still lists. The delete (`DELETE /api/v1/catalog/items/{uuid}`) is done **first**: if the server refuses it (a `403` reads **Only a maintainer can delete it from the team library.**, anything else carries the server's sentence — most often **N people use this. It can be removed once nobody does.**), nothing on this machine changes. An entry already gone (`404`, or a real listing that no longer has it) counts as deleted; a listing the instance refused (`404`/`403` standing in as empty) says nothing about the entry and is refused as unreachable ("Check your connection and try again…"), never read as a delete.
+**Also delete it from the catalog** is offered only to a maintainer of an entry the library still lists. The delete (`DELETE /api/v1/catalog/items/{uuid}`) is done **first**: if the server refuses it (a `403` reads **Only a maintainer can delete it from the catalog.**, anything else carries the server's sentence — most often **N people use this. It can be removed once nobody does.**), nothing on this machine changes. An entry already gone (`404`, or a real listing that no longer has it) counts as deleted; a listing the instance refused (`404`/`403` standing in as empty) says nothing about the entry and is refused as unreachable ("Check your connection and try again…"), never read as a delete.
 
 Without the delete, the entry stays, and the catalog is told in the background that this computer no longer holds it. Otherwise this machine's install would keep counting against a maintainer's delete for a copy that is no longer a team copy at all. If the delete succeeded and the local disconnect then failed, the folder reads "No longer shared", and Remove sharing again finishes the disconnect (the delete is no longer offered, and would count as done). Teammates' copies are untouched either way. After a delete, their folders read "No longer shared" at their next poll.
 
@@ -310,7 +310,7 @@ When a `Local/<slug>/` becomes its own repository inside a workshop that is itse
 ## Architecture Overview
 
 ```
-Catalog (Team library) / share badge / Sharing tab / ⋯ menu / Inbox card / blocked-job row
+Catalog (Runs on your computer tiles) / share badge / Sharing tab / ⋯ menu / Inbox card / blocked-job row
   → useSharing hooks → window.api.sharing.* → sharing:* IPC (activation gate, settings scope)
       → sharingService (core: resolves every folder from an agent id)
           → gitService share verbs (execFile git, token env per child)
@@ -327,11 +327,11 @@ Catalog (Team library) / share badge / Sharing tab / ⋯ menu / Inbox card / blo
 ## Integration Points
 
 - [Agents Tab & Agent Page](agents_tab.md) — the share badge in the chat-mode runtime row, the **Sharing** settings tab, the ⋯ menu's **Share with the team…** and **Remove from this computer…**
-- [Bundles Catalog](../bundles_catalog/bundles_catalog.md) — the Agent catalog dialog the Team library is a source of
+- [Bundles Catalog](../bundles_catalog/bundles_catalog.md) — the Catalog dialog that lists shared agents among every other kind of item, from the same cached listing
 - [Agents Folder Updates](folder_updates.md) — the root-level git panel, whose never-write rule still holds for roots
 - [Local Agents Are Not Synced](local_only.md) — the product position this is a deliberate exception to, for shared agents only
-- [The Inbox](../../jobs/tasks/inbox.md) — the **The team changed *X*** cards
-- [Jobs](../../jobs/jobs/jobs.md) — the blocked-job row's **Get *X* from the team library**
+- [The Inbox](../../jobs/tasks/inbox.md) — the **Update available for *X*** cards
+- [Jobs](../../jobs/jobs/jobs.md) — the blocked-job row's **Get *X* from the catalog**
 - [AI Functions](../../llm/ai_functions/ai_functions.md) — the share summary
 - [Kit Contract & Manifest Layer](kit_contract.md) — the agent ignore template, the `secret_files` rules and `shared_remote` (`never_travels`, `local_state`) that sharing enforces
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the rescan every action ends with, the turn lock the writing verbs take, and the credential readiness Finish setup restates

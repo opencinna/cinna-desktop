@@ -68,7 +68,7 @@ import {
   type SetPeopleResult,
   type ShareWithTeamPerson
 } from '../../../shared/agentSharing'
-import type { TeamChangedInboxItem } from '../../../shared/inbox'
+import type { UpdateAvailableInboxItem } from '../../../shared/inbox'
 import type { CatalogVisibility } from '../../../shared/catalogItems'
 import type { AgentRootRow } from '../../db/agentRoots'
 import type { LocalAgentDto } from '../../../shared/localAgents'
@@ -1451,19 +1451,20 @@ export const sharingService = {
   },
 
   /**
-   * "The team changed *X*": every shared Cinna agent this machine has whose
-   * team version, per the cached listing, is past its folder. No network.
+   * "Update available" for desktop agents: every shared Cinna agent this
+   * machine has whose team version, per the cached listing, is past its
+   * folder. No network.
    *
    * The Inbox reads this every few seconds while focused, and a fresh answer
    * costs four git children per shared agent; so each agent's answer is kept
    * until the listing is fetched again or the folder's `.git` state moves
    * ({@link gitStateKey}, read from files), and a steady state spawns none.
    */
-  async teamChanges(userId: string): Promise<TeamChangedInboxItem[]> {
+  async teamChanges(userId: string): Promise<UpdateAvailableInboxItem[]> {
     const listing = libraryService.cached(getProfileScopeUserId())
     if (!listing || listing.agents.length === 0) return []
     const byRepo = new Map(listing.agents.map((agent) => [agent.repoId, agent]))
-    const items: TeamChangedInboxItem[] = []
+    const items: UpdateAvailableInboxItem[] = []
     const seen = new Set<string>()
     // The listing's own content as well as its time: two fetches can share a millisecond.
     const listed = listing.agents
@@ -1477,7 +1478,7 @@ export const sharingService = {
           ? null
           : [listing.host, listing.fetchedAt.getTime(), listed, agent.path, agent.name, state].join('\n')
       const memo = teamChangeMemo.get(agent.id)
-      let item: TeamChangedInboxItem | null
+      let item: UpdateAvailableInboxItem | null
       if (key !== null && memo?.key === key) item = memo.item
       else {
         item = await teamChangeOf(agent, listing.host, byRepo)
@@ -1492,14 +1493,14 @@ export const sharingService = {
 }
 
 /** `teamChanges`' per-agent answers, each with the key it was derived under. */
-const teamChangeMemo = new Map<string, { key: string; item: TeamChangedInboxItem | null }>()
+const teamChangeMemo = new Map<string, { key: string; item: UpdateAvailableInboxItem | null }>()
 
-/** One agent's "the team changed it" item, from git. */
+/** One agent's "Update available" item, from git. */
 async function teamChangeOf(
   agent: LocalAgentDto,
   host: string,
   byRepo: Map<string, LibraryEntry>
-): Promise<TeamChangedInboxItem | null> {
+): Promise<UpdateAvailableInboxItem | null> {
   const remote = await gitService.readShareRemote(agent.path)
   if (!remote.ownRepo || remote.originUrl === null) return null
   const parsed = remoteOf(remote.originUrl, remote.cinnaServer)
@@ -1509,10 +1510,13 @@ async function teamChangeOf(
   if (!(await gitService.isBehindLibrary(agent.path, entry.headSha))) return null
   const changedAt = entry.latest?.publishedAt ? new Date(entry.latest.publishedAt) : null
   return {
-    kind: 'team_changed',
+    kind: 'update_available',
+    target: 'desktop_agent',
     agentId: agent.id,
     agentName: agent.name,
     repoId: entry.repoId,
+    version: entry.latest?.number ?? null,
+    versionLabel: entry.latest?.label ?? null,
     changedBy: entry.latest?.publishedBy ?? null,
     changedAt: changedAt && !Number.isNaN(changedAt.getTime()) ? changedAt : null
   }

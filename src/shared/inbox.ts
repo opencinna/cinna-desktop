@@ -100,28 +100,52 @@ export interface InboxSnapshot {
    */
   dispatch?: TaskDispatchInboxItem[]
   /**
-   * Shared agents on this machine the team has moved past, derived on every
-   * read from the cached team-library listing and the folders' own heads — no
-   * table, so an Update (or the folder catching up any other way) clears it.
-   * Optional for the same reason as `dispatch`.
+   * Agents with a newer version waiting, one card type across kinds: shared
+   * desktop agents on this machine the team has moved past (derived on every
+   * read from the cached catalog listing and the folders' own heads), and
+   * cloud agents whose install is behind its catalog item and is not updated
+   * by the server on its own. No table: an Update — or the agent catching up
+   * any other way — clears it. Optional for the same reason as `dispatch`.
    */
-  teamChanges?: TeamChangedInboxItem[]
+  updates?: UpdateAvailableInboxItem[]
+}
+
+/** What the Update on an "Update available" card acts on. */
+export type UpdateAvailableTarget = 'desktop_agent' | 'cloud_agent'
+
+interface UpdateAvailableBase {
+  kind: 'update_available'
+  /** The agent's row: a folder agent's id, or a synced cloud agent's. */
+  agentId: string
+  agentName: string
+  /** The newest catalog version (`Version N`), when known. */
+  version: number | null
+  /**
+   * The publisher's own label for that version (`1.2.0`), shown beside it as
+   * `Version N (1.2.0)`; null when it has none.
+   */
+  versionLabel: string | null
+  /** Who shared or published that version, when the listing says. */
+  changedBy: string | null
+  /** When that version was shared or published, when the listing says. */
+  changedAt: Date | null
 }
 
 /**
- * "The team changed *X*", with an Update action that runs `sharing:update`.
- * One per shared agent whose team version is ahead of this folder's.
+ * "Update available" for one agent, with an Update action — `sharing:update`
+ * for a desktop agent, `agent:apply-bundle-update` for a cloud agent.
  */
-export interface TeamChangedInboxItem {
-  kind: 'team_changed'
-  agentId: string
-  agentName: string
-  repoId: string
-  /** Who sent the team's latest version, when the listing says. */
-  changedBy: string | null
-  /** The listing's `updated_at` for the repository. */
-  changedAt: Date | null
-}
+export type UpdateAvailableInboxItem =
+  | (UpdateAvailableBase & {
+      target: 'desktop_agent'
+      /** The team's repository the folder follows. */
+      repoId: string
+    })
+  | (UpdateAvailableBase & {
+      target: 'cloud_agent'
+      /** The install on Cinna (the agent row's `remoteTargetId`) the update applies to. */
+      installId: string
+    })
 
 /**
  * An approval the dispatcher asks for before it runs a task whose file was

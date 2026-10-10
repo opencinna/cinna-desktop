@@ -1,6 +1,7 @@
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { catalogService } from '../services/catalogService'
+import { libraryService } from '../services/libraryService'
 import { ipcHandle } from './_wrap'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { DomainError } from '../errors'
@@ -36,6 +37,24 @@ export function registerCatalogHandlers(): void {
   ipcHandle('catalog:list', async () => {
     userActivation.requireActivated()
     return outcome('catalog:list', () => catalogService.list(getProfileScopeUserId()))
+  })
+
+  /**
+   * The one-catalog dialog's list: every item of every kind, from the same
+   * cached listing team sharing reads. `refresh` lists again first.
+   */
+  ipcHandle('catalog:items', async (_event, input?: { refresh?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('catalog:items', () =>
+      libraryService.items(getProfileScopeUserId(), input?.refresh === true)
+    )
+  })
+
+  /** One item with its versions, for the dialog's detail. */
+  ipcHandle('catalog:item', async (_event, input?: { uuid?: unknown }) => {
+    userActivation.requireActivated()
+    const uuid = typeof input?.uuid === 'string' ? input.uuid : ''
+    return outcome('catalog:item', () => libraryService.itemDetail(getProfileScopeUserId(), uuid))
   })
 
   ipcHandle('catalog:quick-install', async (_event, bundleId: string) => {

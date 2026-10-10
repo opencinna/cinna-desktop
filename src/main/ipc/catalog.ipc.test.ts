@@ -27,6 +27,11 @@ const installMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/catalogService', () => ({
   catalogService: { list: listMock, quickInstall: installMock }
 }))
+const itemsMock = vi.hoisted(() => vi.fn())
+const itemDetailMock = vi.hoisted(() => vi.fn())
+vi.mock('../services/libraryService', () => ({
+  libraryService: { items: itemsMock, itemDetail: itemDetailMock }
+}))
 vi.mock('electron', () => ({ net: { fetch: vi.fn() }, shell: {}, app: { on: () => undefined } }))
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -87,5 +92,43 @@ describe('catalog handlers return a failure code as data', () => {
     expect(thrown).toBeInstanceOf(Error)
     expect((thrown as { code?: string }).code).toBe('reauth_required')
     expect((thrown as Error).message).toBe('Session expired')
+  })
+})
+
+/**
+ * The one-catalog dialog's reads: the whole listing from main's cache, and one
+ * item's versions. Both under the profile scope, and both return a failure's
+ * code as data so the detail can say it in place.
+ */
+describe('catalog:items and catalog:item', () => {
+  it('reads the cached listing, and lists again only when the renderer asks', async () => {
+    const listing = { host: 'https://core.test', items: [], fetchedAt: '2026-10-10T00:00:00.000Z', available: true }
+    itemsMock.mockResolvedValue(listing)
+    expect(await invoke('catalog:items', { refresh: true })).toEqual({ success: true, value: listing })
+    expect(itemsMock).toHaveBeenLastCalledWith('u-cinna', true)
+    await invoke('catalog:items')
+    expect(itemsMock).toHaveBeenLastCalledWith('u-cinna', false)
+    // Only a real `true` refreshes.
+    await invoke('catalog:items', { refresh: 'yes' })
+    expect(itemsMock).toHaveBeenLastCalledWith('u-cinna', false)
+  })
+
+  it('reads one item by uuid, and nothing else as the uuid', async () => {
+    itemDetailMock.mockResolvedValue({ uuid: 'u1', revisions: [] })
+    expect(await invoke('catalog:item', { uuid: 'u1' })).toEqual({ success: true, value: { uuid: 'u1', revisions: [] } })
+    expect(itemDetailMock).toHaveBeenLastCalledWith('u-cinna', 'u1')
+    await invoke('catalog:item', { uuid: 42 })
+    expect(itemDetailMock).toHaveBeenLastCalledWith('u-cinna', '')
+  })
+
+  it('returns a refused detail and an expired session as codes', async () => {
+    itemDetailMock.mockRejectedValue(new CinnaApiError('request_failed', 'Not Found', undefined, 404))
+    expect(await invoke('catalog:item', { uuid: 'gone' })).toEqual({
+      success: false,
+      code: 'request_failed',
+      message: 'Not Found'
+    })
+    itemsMock.mockRejectedValue(new CinnaReauthRequired())
+    expect(await invoke('catalog:items', { refresh: true })).toMatchObject({ success: false, code: 'reauth_required' })
   })
 })

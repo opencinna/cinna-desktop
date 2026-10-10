@@ -35,6 +35,7 @@ Let the final user install a catalog agent at the exact moment they want to use 
 
 - **Cinna-only** — the Catalog Section is driven by `useCatalog()`, which is gated on `currentUser.type === 'cinna_user'`. Non-Cinna profiles get an empty section (no group rendered).
 - **Only non-installed bundles** — `catalogItems` filters `useCatalog()` to `!isInstalled`; installed bundles already appear as regular agent cards after the remote-agent sync.
+- **Bundles only, from the older list** — `useCatalog()` reads `GET /api/v1/catalog/`, not the item listing the sidebar's Catalog dialog reads. The picker therefore lists agents that run in Cinna and nothing else: no desktop agents, no skills, no kind badge or **Version N**.
 - **Picker opens for catalog-only users** — the composer `[+]` "Add agents / MCP" row shows when `hasCapabilities || catalogItems.length > 0`, so a user with no agents/MCP yet can still reach the picker to install their first agent.
 - **One install at a time, app-wide** — while an install is in flight (`installingBundleId !== null`, from the shared store) all Install buttons disable; the in-flight card shows the spinner. The guard covers the Agents sidebar's catalog too.
 - **The selection belongs to the picker as it was when clicked** — the completion is captured at click time, and runs only while the picker is still mounted. If the picker has gone, the install still completes but nothing is selected: there is nowhere to select it. `ChatInput` switches chats without remounting, so a callback read at completion time would have selected the agent in whichever chat was on screen by then.
@@ -77,7 +78,7 @@ New chat → [+] → Add agents / MCP → AgentPickerModal (Catalog section)
 - The local-agent join field (`remoteTargetId`) is populated by `src/main/db/agents.ts` `syncRemote()` (`remoteTargetId = target.targetId`); remote-synced agents default to `enabled: true`, so the installed agent is immediately selectable.
 
 ## Integration Points
-- **[Bundles Catalog](bundles_catalog.md)** — same Quick Install / server contract; this is the in-chat entry point alongside Settings → Profile → Catalog and the Agents sidebar's Agent catalog dialog, with which it shares the install store.
+- **[Bundles Catalog](bundles_catalog.md)** — same Quick Install / server contract; this is the in-chat entry point alongside Settings → Profile → Catalog and the Agents sidebar's Catalog dialog, with which it shares the install store.
 - **[Composer `[+]` Menu](../../chat/composer_menu/composer_menu.md)** — hosts the Capability Picker the Catalog Section lives in; auto-select reuses its `toggleCapability` routing.
 - **[Remote Agents](../remote_agents/remote_agents.md)** — `agents.syncRemote()` pulls the new install into the local `agents` table; the agent then behaves like any other remote agent.
 - **[Agents](../agents/agents.md)** — handles the "setup not complete" auto-reply that covers incomplete-credential installs, which is why this flow can skip the setup modal.

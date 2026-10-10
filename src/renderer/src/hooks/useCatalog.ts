@@ -6,9 +6,10 @@
  * reflects the server immediately.
  */
 import { useCallback, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
+import { INBOX_QUERY_KEY } from './useInbox'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -17,6 +18,7 @@ import type {
   SetupStatusDto
 } from '../../../shared/catalog'
 import { unwrapCatalogOutcome } from '../../../shared/catalog'
+import type { CatalogItemDetail, CatalogItemsListing } from '../../../shared/catalogItems'
 
 export function useCatalog() {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
@@ -27,6 +29,91 @@ export function useCatalog() {
     // An expired session does not heal on retry; show Re-authenticate now.
     retry: (failures, err) => !isReauthRequiredError(err) && failures < 3,
     staleTime: 60_000
+  })
+}
+
+/**
+ * The catalog dialog's list: every item of every kind from main's cached
+ * `GET /catalog/items` — the listing team sharing reads too. Keyed by
+ * profile, since a list read under one account is not the next one's; under
+ * `['catalog']`, so every install, update and Refresh that invalidates the
+ * catalog re-reads it. `refresh` is the dialog opening: main lists again then,
+ * and on every re-read while the dialog is open.
+ */
+export function catalogItemsKey(profileId: string | null): readonly unknown[] {
+  return ['catalog', 'items', profileId] as const
+}
+
+/** One item's versions, read while the dialog shows its detail. */
+export function catalogItemKey(profileId: string | null, uuid: string): readonly unknown[] {
+  return ['catalog', 'item', profileId, uuid] as const
+}
+
+export function useCatalogItems(options: { refresh?: boolean } = {}) {
+  const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  const refresh = options.refresh === true
+  return useQuery<CatalogItemsListing | null>({
+    queryKey: catalogItemsKey(profileId),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.catalog.items(refresh)),
+    enabled: isCinnaUser,
+    staleTime: 60_000,
+    refetchOnMount: refresh ? 'always' : true,
+    retry: (failures, err) => !isReauthRequiredError(err) && failures < 2
+  })
+}
+
+/**
+ * Bring the catalog's items up to main's cached listing **without listing
+ * again**: main has just refreshed it (that is what its events mean), so a
+ * plain invalidation — whose re-read lists again while the dialog is open —
+ * would fetch the same listing twice. Only when a read is cached; a profile
+ * switch while the answer is on its way drops it.
+ */
+export async function readCatalogItemsFromCache(queryClient: QueryClient): Promise<void> {
+  const profileId = useAuthStore.getState().currentUser?.id ?? null
+  const key = catalogItemsKey(profileId)
+  if (queryClient.getQueryState(key) === undefined) return
+  try {
+    const value = unwrapCatalogOutcome(await window.api.catalog.items(false))
+    if ((useAuthStore.getState().currentUser?.id ?? null) !== profileId) return
+    queryClient.setQueryData(key, value)
+  } catch {
+    // The next open or Refresh lists again; nothing to say now.
+  }
+}
+
+/**
+ * Subscribe to main's `catalog:items-changed` for the app's lifetime: an item
+ * the dialog shows moved (a cloud agent installed, a skill's new version).
+ * Re-reads the dialog's items from main's cache and the Inbox (whose cloud
+ * "Update available" cards read the same listing) — never the sharing reads,
+ * which only `sharing:changed` touches. Mount once, beside `useSharingWatch`.
+ */
+export function useCatalogItemsWatch(): void {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    return window.api.catalog.onItemsChanged(() => {
+      void readCatalogItemsFromCache(queryClient)
+      void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+    })
+  }, [queryClient])
+}
+
+/**
+ * One item with its versions (`GET /catalog/items/{uuid}`), fetched when the
+ * detail opens and kept for as long as the dialog is open — the dialog drops
+ * these queries when it closes, so the next visit reads afresh.
+ */
+export function useCatalogItemDetail(uuid: string | null) {
+  const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  return useQuery<CatalogItemDetail>({
+    queryKey: catalogItemKey(profileId, uuid ?? ''),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.catalog.item(uuid as string)),
+    enabled: isCinnaUser && uuid !== null,
+    staleTime: Infinity,
+    retry: (failures, err) => !isReauthRequiredError(err) && failures < 1
   })
 }
 

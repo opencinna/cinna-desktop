@@ -11,6 +11,14 @@
  * (`libraryService`).
  */
 
+/**
+ * Main → renderer, no payload: the cached listing moved in a way the catalog
+ * dialog shows but team sharing does not care about (a cloud agent's install,
+ * a skill's new version). Desktop-agent moves are `sharing:changed`, which
+ * re-reads the catalog's items as well.
+ */
+export const CATALOG_ITEMS_CHANGED_CHANNEL = 'catalog:items-changed'
+
 /** What the caller may do with an item: see and install, publish new versions, manage access. */
 export type CatalogAccessLevel = 'use' | 'edit' | 'maintain'
 
@@ -107,4 +115,28 @@ export interface CatalogRevisionWire {
   /** `publish` (cloud agent), `share` (desktop agent) or `skill`. */
   origin: string
   git_commit_sha: string | null
+}
+
+/** One item with its versions, as `GET /api/v1/catalog/items/{uuid}` answers. */
+export interface CatalogItemDetail extends CatalogItem {
+  /** Newest first. */
+  revisions: CatalogRevisionWire[]
+}
+
+/**
+ * The active Cinna profile's catalog listing as the renderer reads it: every
+ * item main's cached `GET /api/v1/catalog/items` gave, every kind, as core
+ * sent it (`catalog:items`).
+ */
+export interface CatalogItemsListing {
+  /** The instance the listing came from, `https://host[:port]`. */
+  host: string
+  items: CatalogItem[]
+  /** When main fetched it. */
+  fetchedAt: string
+  /**
+   * False when the instance answered 404 or 403 and the listing stands in as
+   * empty — an older server without the catalog routes, or one that gates them.
+   */
+  available: boolean
 }

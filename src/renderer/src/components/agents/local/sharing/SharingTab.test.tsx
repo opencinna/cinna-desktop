@@ -60,7 +60,7 @@ function entry(overrides: Partial<LibraryAgentDto> = {}): LibraryAgentDto {
     maintainers: [{ userId: 'u1', displayName: 'Ann' }],
     engine: null,
     manifestId: null,
-    latest: { number: 3, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' },
+    latest: { number: 3, label: null, publishedAt: '2026-10-09T10:00:00Z', publishedBy: 'Bob', releaseNotes: 'Tightened the prompt' },
     localAgentId: AGENT.id,
     updateAvailable: false,
     ...overrides

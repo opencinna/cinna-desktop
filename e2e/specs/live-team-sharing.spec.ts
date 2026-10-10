@@ -103,7 +103,7 @@ test('A shares an agent with B as Can use; B gets it, finishes setup and runs it
   })
 
   const b = await team.open('b')
-  await test.step('B: Get from the Team library lands on the agent, files and id as A shared them', async () => {
+  await test.step('B: Get from the catalog lands on the agent, files and id as A shared them', async () => {
     await getFromLibrary(b, name)
     const listed = await b.page.evaluate(() => window.api.localAgents.list())
     const got = listed.agents.find((row) => row.name === name)

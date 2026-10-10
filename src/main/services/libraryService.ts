@@ -18,18 +18,28 @@
  *
  * `sharing:changed` is published when the set of desktop agents, their heads,
  * versions, visibility, listing or the caller's access moved — not on every poll — so
- * the renderer refetches only when there is something new to show.
+ * the renderer refetches only when there is something new to show. Any other
+ * move of an item the catalog dialog shows (a cloud agent installed, a
+ * skill's new version) is the lighter `catalog:items-changed`, which re-reads
+ * only the catalog's items and the Inbox, never the sharing reads.
  */
 import { publishEvent } from '../host/events'
 import { userRepo } from '../db/users'
 import { cinnaFetch } from './cinna-http'
-import { CinnaApiError } from '../errors'
+import { CinnaApiError, DomainError } from '../errors'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { libraryTrust } from './libraryTrust'
 import { createLogger } from '../logger/logger'
 import { SHARING_CHANGED_CHANNEL } from '../../shared/agentSharing'
 import type { LibraryAccess, LibraryMaintainer, LibraryVersionDto } from '../../shared/agentSharing'
-import type { CatalogItem, CatalogVisibility } from '../../shared/catalogItems'
+import { CATALOG_ITEMS_CHANGED_CHANNEL } from '../../shared/catalogItems'
+import type {
+  CatalogItem,
+  CatalogItemDetail,
+  CatalogItemsListing,
+  CatalogRevisionWire,
+  CatalogVisibility
+} from '../../shared/catalogItems'
 
 const logger = createLogger('team-library')
 
@@ -160,6 +170,7 @@ export function toLibraryEntry(raw: unknown): LibraryEntry | null {
     latestRow && number !== null
       ? {
           number,
+          label: strOrNull(typeof latestRow.version === 'string' ? latestRow.version.trim() : null),
           publishedAt: str(latestRow.published_at),
           publishedBy: toPerson(latestRow.published_by)?.displayName ?? null,
           releaseNotes: strOrNull(latestRow.release_notes)
@@ -185,8 +196,13 @@ export function toLibraryEntry(raw: unknown): LibraryEntry | null {
   }
 }
 
-/** What decides whether the renderer has to be told. */
-function signature(listing: CachedListing | undefined): string {
+/**
+ * What decides whether team sharing has to be told (`sharing:changed`): the
+ * desktop agents as team sharing reads them. Every sharing read in the
+ * renderer — each shared agent's git status among them — re-reads on it, so
+ * nothing else belongs here.
+ */
+function sharingSignature(listing: CachedListing | undefined): string {
   if (!listing) return ''
   return [
     listing.host,
@@ -197,6 +213,47 @@ function signature(listing: CachedListing | undefined): string {
       )
       .sort()
   ].join('|')
+}
+
+/**
+ * What decides whether the catalog dialog has to be told
+ * (`catalog:items-changed`): for every item of every kind the facts it shows
+ * and acts on — name, access, version and the caller's own installs — so a
+ * cloud agent's install or a skill's new version reaches an open dialog. Not
+ * `install_count`: someone else's install is no reason to re-read anything.
+ */
+function itemsSignature(listing: CachedListing | undefined): string {
+  if (!listing) return ''
+  return [listing.host, listing.available, ...listing.items.map(itemSignature).sort()].join('|')
+}
+
+function itemSignature(item: CatalogItem): string {
+  const installs = Array.isArray(item.my_installs)
+    ? item.my_installs
+        .map((install) => `${install?.where}/${install?.install_id ?? ''}/${install?.host_manifest_id ?? ''}/${install?.revision_number ?? ''}`)
+        .sort()
+        .join(',')
+    : ''
+  return [
+    item.kind,
+    item.uuid,
+    item.display_name,
+    item.access,
+    item.latest?.revision_number ?? 0,
+    item.latest?.version ?? '',
+    installs
+  ].join(':')
+}
+
+/** A detail answer's revisions, newest first; rows without a number are dropped. */
+function toRevisions(raw: unknown): CatalogRevisionWire[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((row): row is CatalogRevisionWire => {
+      const rec = record(row)
+      return rec !== null && typeof rec.revision_number === 'number'
+    })
+    .sort((a, b) => b.revision_number - a.revision_number)
 }
 
 /** The origin of a Cinna profile's server, or null for any other profile. */
@@ -284,10 +341,47 @@ export const libraryService = {
     if ((applied.get(userId) ?? 0) > seq && newer && newer.host === host) return newer
     const listing: CachedListing = { host, items, agents, fetchedAt: new Date(), available }
     applied.set(userId, seq)
-    const before = signature(cache.get(userId))
+    const previous = cache.get(userId)
     cache.set(userId, listing)
-    if (signature(listing) !== before) publishEvent(SHARING_CHANGED_CHANNEL)
+    // `sharing:changed` re-reads the catalog items too, so one event at most.
+    if (sharingSignature(listing) !== sharingSignature(previous)) publishEvent(SHARING_CHANGED_CHANNEL)
+    else if (itemsSignature(listing) !== itemsSignature(previous)) publishEvent(CATALOG_ITEMS_CHANGED_CHANNEL)
     return listing
+  },
+
+  /**
+   * The whole listing, every kind, for the catalog dialog — the same cache
+   * team sharing reads; `refresh` lists again first (the dialog opening, its
+   * Refresh). Null for a profile that is not a Cinna one.
+   */
+  async items(userId: string, refresh: boolean): Promise<CatalogItemsListing | null> {
+    if (hostOf(userId) === null) return null
+    const listing = (!refresh && libraryService.cached(userId)) || (await libraryService.refresh(userId))
+    if (!listing) return null
+    return {
+      host: listing.host,
+      items: listing.items,
+      fetchedAt: listing.fetchedAt.toISOString(),
+      available: listing.available
+    }
+  },
+
+  /**
+   * One item with its versions (`GET /api/v1/catalog/items/{uuid}`), read
+   * when the dialog opens its detail. Not cached here: the renderer keeps it
+   * while the dialog is open.
+   *
+   * @throws DomainError `not_a_cinna_profile` for any other profile,
+   *   `invalid_id` for an empty uuid, and whatever `cinnaFetch` throws — a
+   *   404 when the caller may no longer see the item.
+   */
+  async itemDetail(userId: string, uuid: string): Promise<CatalogItemDetail> {
+    if (hostOf(userId) === null) throw new DomainError('not_a_cinna_profile', 'The catalog needs a Cinna account.')
+    if (uuid.trim() === '') throw new DomainError('invalid_id', 'No catalog item was named.')
+    const body = await cinnaFetch<unknown>(userId, catalogItemPath(uuid))
+    const item = toCatalogItem(body)
+    if (!item) throw new DomainError('invalid_response', 'The catalog answered with something that is not an item.')
+    return { ...item, revisions: toRevisions(record(body)?.revisions) }
   },
 
   /** {@link refresh} for timers and hooks: never throws, logs what went wrong. */

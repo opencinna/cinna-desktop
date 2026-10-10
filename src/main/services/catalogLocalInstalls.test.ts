@@ -110,7 +110,7 @@ describe('Get, Update, Share changes: reportInstalled', () => {
     ({
       uuid: 'item-1',
       headSha: HEAD,
-      latest: { number: 4, publishedAt: '', publishedBy: null, releaseNotes: null },
+      latest: { number: 4, label: null, publishedAt: '', publishedBy: null, releaseNotes: null },
       ...over
     }) as unknown as Parameters<typeof catalogLocalInstalls.reportInstalled>[1]
   const post = (revision: number): unknown[] => [
