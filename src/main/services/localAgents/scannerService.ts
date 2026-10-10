@@ -667,7 +667,13 @@ export const scannerService = {
       // and skills do not decide whether the agent runs.
       // Each declared credential slot says whether a strictly matching
       // attachment fills it; a gap is a warning on the row, never readiness.
-      skills: judgeSkillRows(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve), attached),
+      // A pin refused as not available (404) is worded by this agent's own tracked state: a
+      // `shared_remote` link to a Cinna team agent reads "update to the team's version", any
+      // other "access withdrawn" (`catalogSkillCache.resolverFor`).
+      skills: judgeSkillRows(
+        agentSkillRows(agentDir, manifest, catalogSkillCache.resolverFor(desktop.shared_remote?.kind === 'cinna')),
+        attached
+      ),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),

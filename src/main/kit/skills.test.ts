@@ -272,6 +272,12 @@ describe('scanning an agent’s skills', () => {
     ])
   })
 
+  it('says nothing about a link inside a folder Share never packs (.pytest_cache)', () => {
+    const dir = skill('cached', md('name: cached\ndescription: x'), { '.pytest_cache/v/cache/nodeids': '[]', 'docs/a.md': 'a' })
+    symlinkSync(join(dir, 'docs'), join(dir, '.pytest_cache', 'link'), 'dir')
+    expect(only('cached').issues).toEqual([])
+  })
+
   it('matches core’s secret filenames', () => {
     for (const name of ['.env', '.env.local', 'prod.env', 'credentials.json', 'id_ed25519', 'a.key', 'b.p12']) {
       expect(isSecretFilename(name), name).toBe(true)

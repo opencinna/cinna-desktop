@@ -34,7 +34,7 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { libraryService } from './libraryService'
 import { createLogger } from '../logger/logger'
 import { writeSkillTree, type SkillArchive } from '../kit/skillArchive'
-import { isCatalogPinName, type CatalogSkillCacheState, type CatalogSkillRef } from '../kit/skills'
+import { isCatalogPinName, type CatalogSkillCacheState, type CatalogSkillRef, type CatalogSkillResolver } from '../kit/skills'
 
 const logger = createLogger('catalog-skill-cache')
 
@@ -93,8 +93,30 @@ export function revisionKeyOf(pin: unknown): string | null {
   return `${uuid}/${revision as number}`
 }
 
+/**
+ * A 404 on a download (U7) for an agent a team tracks: the teammate's copy pins a version the
+ * team has moved past.
+ */
+export const BEHIND_SENTENCE =
+  'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
+/** The same 404 for an agent no team tracks: the publisher withdrew the person's access, or the package is gone. */
+export const WITHDRAWN_SENTENCE =
+  'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
+
+/**
+ * What a "not available" (404) download means depends on the agent asking, not on the revision:
+ * the failure record is shared by every agent that pins the revision, so it keeps only the fact,
+ * and each reader words it with its own agent's {@link BEHIND_SENTENCE} or {@link WITHDRAWN_SENTENCE}.
+ */
+export function notAvailableSentence(teamTracked: boolean): string {
+  return teamTracked ? BEHIND_SENTENCE : WITHDRAWN_SENTENCE
+}
+
+/** A failure record: a sentence that is the same for every agent, or the agent-independent 404. */
+type FailureRecord = { kind: 'message'; message: string } | { kind: 'not_available' }
+
 let rootOverride: string | null = null
-const failures = new Map<string, string>()
+const failures = new Map<string, FailureRecord>()
 
 function cacheRoot(): string | null {
   if (rootOverride) return rootOverride
@@ -273,6 +295,27 @@ function sweepStaging(parent: string, revision: string): void {
   }
 }
 
+/** {@link catalogSkillCache.resolve}, with a 404 worded for an agent that is (or is not) team-tracked. */
+function lookup(ref: CatalogSkillRef, teamTracked: boolean): CatalogSkillCacheState {
+  const safe = cacheRefOf(ref)
+  const root = cacheRoot()
+  if (safe === null || root === null) return { state: 'missing' }
+  const active = activeInstance()
+  const instances: string[] = active ? [active] : []
+  try {
+    for (const name of readdirSync(root)) if (name !== active && !name.startsWith('.')) instances.push(name)
+  } catch {
+    /* no cache yet */
+  }
+  for (const instance of instances) {
+    const dir = readyDir(join(root, instance, safe.uuid, safe.revision), safe)
+    if (dir) return { state: 'ready', dir }
+  }
+  const failure = failures.get(failureKey(safe))
+  if (!failure) return { state: 'missing' }
+  return { state: 'failed', message: failure.kind === 'message' ? failure.message : notAvailableSentence(teamTracked) }
+}
+
 export const catalogSkillCache = {
   instanceKey,
   activeInstance,
@@ -292,26 +335,34 @@ export const catalogSkillCache = {
 
   /**
    * Where a pinned revision stands on this computer: `ready` with its skill
-   * folder, `failed` with the last download's sentence, or `missing`. What
-   * `kit/skills.ts` is handed as its resolver. Never throws.
+   * folder, `failed` with the last download's sentence, or `missing`. A 404
+   * reads as for a team-tracked agent (the hedged sentence); a row of a known
+   * agent words it through {@link resolverFor}. Never throws.
    */
   resolve(ref: CatalogSkillRef): CatalogSkillCacheState {
-    const safe = cacheRefOf(ref)
+    return lookup(ref, true)
+  },
+
+  /**
+   * {@link resolve} for one agent: a recorded 404 reads as
+   * {@link notAvailableSentence}`(teamTracked)` of that agent. What
+   * `kit/skills.ts` is handed as its resolver.
+   */
+  resolverFor(teamTracked: boolean): CatalogSkillResolver {
+    return (ref) => lookup(ref, teamTracked)
+  },
+
+  /**
+   * The cache instance a path inside the cache belongs to (its first folder
+   * under the root), or null for a path outside it.
+   */
+  instanceOfPath(path: string): string | null {
     const root = cacheRoot()
-    if (safe === null || root === null) return { state: 'missing' }
-    const active = activeInstance()
-    const instances: string[] = active ? [active] : []
-    try {
-      for (const name of readdirSync(root)) if (name !== active && !name.startsWith('.')) instances.push(name)
-    } catch {
-      /* no cache yet */
-    }
-    for (const instance of instances) {
-      const dir = readyDir(join(root, instance, safe.uuid, safe.revision), safe)
-      if (dir) return { state: 'ready', dir }
-    }
-    const failure = failures.get(failureKey(safe))
-    return failure ? { state: 'failed', message: failure } : { state: 'missing' }
+    if (root === null || !path) return null
+    const rel = relative(root, path)
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null
+    const first = rel.split(sep)[0]
+    return first && !first.startsWith('.') ? first : null
   },
 
   /** Whether `instance` already holds the pinned revision. */
@@ -393,7 +444,13 @@ export const catalogSkillCache = {
   /** Remember why the last download of a revision failed, for the Skills section. */
   recordFailure(ref: CatalogSkillRef, message: string): void {
     const safe = cacheRefOf(ref)
-    if (safe) failures.set(failureKey(safe), message)
+    if (safe) failures.set(failureKey(safe), { kind: 'message', message })
+  },
+
+  /** Remember that the last download of a revision was refused as not available (404), worded per agent. */
+  recordNotAvailable(ref: CatalogSkillRef): void {
+    const safe = cacheRefOf(ref)
+    if (safe) failures.set(failureKey(safe), { kind: 'not_available' })
   },
 
   clearFailure(ref: CatalogSkillRef): void {

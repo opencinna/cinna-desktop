@@ -14,6 +14,7 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { libraryService, type CachedListing } from './libraryService'
 import { desktopStateService } from './localAgents/desktopStateService'
 import { CATALOG_ISSUE_MESSAGES } from '../kit/skills'
+import { catalogSkillCache, instanceKey } from './catalogSkillCache'
 import type { LocalAgentDto, LocalAgentSkill } from '../../shared/localAgents'
 import type { UpdateAvailableInboxItem } from '../../shared/inbox'
 
@@ -63,12 +64,16 @@ export function changeableFromLink(dir: string, listing: CachedListing | null): 
  * from a listing that actually loaded, and only while the cached copy is
  * here — a row not on this computer keeps its own state, and Try again says
  * why. A warning: the copy stays deliverable, and it is no validator finding.
+ * Only for a copy cached under the listing's own server (`instance`): a
+ * lookup falls back to other instances, and a copy fetched under another
+ * profile's server says nothing about this listing.
  */
-function withUnavailableWarning(row: LocalAgentSkill): LocalAgentSkill {
+function withUnavailableWarning(row: LocalAgentSkill, instance: string): LocalAgentSkill {
   const issues = row.issues ?? []
   if (issues.some((issue) => issue.code === 'not_downloaded' || issue.code === 'download_failed' || issue.code === 'catalog_unavailable')) {
     return row
   }
+  if (catalogSkillCache.instanceOfPath(row.path) !== instance) return row
   return {
     ...row,
     issues: [...issues, { code: 'catalog_unavailable', message: CATALOG_ISSUE_MESSAGES.catalog_unavailable, severity: 'warning' }]
@@ -102,6 +107,7 @@ export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
     const changeable = changeableFromLink(agent.path, listing)
     // Absence means something only in a listing that loaded, for an agent the person's own grants reach.
     const absenceCounts = listing !== null && listing.available === true && !linkedEntry(agent.path, listing).linked
+    const listingInstance = typeof listing?.host === 'string' ? instanceKey(listing.host) : null
     const skills = new Set((listing?.items ?? []).filter((item) => item.kind === 'skill').map((item) => item.uuid.toLowerCase()))
     return {
       ...agent,
@@ -112,7 +118,7 @@ export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
         const updatable =
           changeable && latestRevision !== null && typeof row.revisionNumber === 'number' && latestRevision > row.revisionNumber
         const folded = { ...row, title: titles.get(key) ?? null, latestRevision, latestVersion: latestLabel.get(key) ?? null, updatable }
-        return absenceCounts && !skills.has(key) ? withUnavailableWarning(folded) : folded
+        return absenceCounts && listingInstance !== null && !skills.has(key) ? withUnavailableWarning(folded, listingInstance) : folded
       })
     }
   } catch {

@@ -65,6 +65,13 @@ const SKIP_DIR_NAMES: ReadonlySet<string> = new Set([
   '.git', '.venv', '__pycache__', '.mypy_cache', '.ruff_cache', 'node_modules'
 ])
 
+/**
+ * Folders core walks but Share never packs (`skillPack.SKIPPED_DIRS` beyond
+ * {@link SKIP_DIR_NAMES}): a link inside one is not a `links` warning, since
+ * Share would not refuse it.
+ */
+const UNPACKED_DIR_NAMES: ReadonlySet<string> = new Set(['.pytest_cache'])
+
 const SECRET_FILENAMES: ReadonlySet<string> = new Set([
   'credentials.json', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'
 ])
@@ -380,13 +387,14 @@ export function isSecretFilename(name: string): boolean {
  * Total bytes, the secret-looking files and the links of a skill tree, in one
  * walk. Symlinks are skipped at both levels and the junk directories never
  * entered, as core's `_walk_files` does; an unreadable directory is skipped
- * silently. The links are collected only to warn: Share refuses them.
+ * silently. The links are collected only to warn: Share refuses them, so a
+ * link in a folder Share does not pack ({@link UNPACKED_DIR_NAMES}) is not one.
  */
 function measureTree(root: string): { size: number; secrets: string[]; links: string[] } {
   let size = 0
   const secrets: string[] = []
   const links: string[] = []
-  const walk = (dir: string, rel: string): void => {
+  const walk = (dir: string, rel: string, packed: boolean): void => {
     let entries: Dirent[]
     try {
       entries = readdirSync(dir, { withFileTypes: true })
@@ -397,11 +405,11 @@ function measureTree(root: string): { size: number; secrets: string[]; links: st
     for (const entry of entries) {
       const relative = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isSymbolicLink()) {
-        links.push(relative)
+        if (packed) links.push(relative)
         continue
       }
       if (entry.isDirectory()) {
-        if (!SKIP_DIR_NAMES.has(entry.name)) walk(join(dir, entry.name), relative)
+        if (!SKIP_DIR_NAMES.has(entry.name)) walk(join(dir, entry.name), relative, packed && !UNPACKED_DIR_NAMES.has(entry.name))
         continue
       }
       try {
@@ -412,7 +420,7 @@ function measureTree(root: string): { size: number; secrets: string[]; links: st
       if (isSecretFilename(entry.name)) secrets.push(relative)
     }
   }
-  walk(root, '')
+  walk(root, '', true)
   return { size, secrets, links }
 }
 
