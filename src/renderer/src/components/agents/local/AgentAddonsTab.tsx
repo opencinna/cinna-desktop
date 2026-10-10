@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2 } from 'lucide-react'
-import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
+import type { LocalAgentDto, LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
 import { useListedShareStatus } from '../../../hooks/useSharing'
@@ -49,10 +49,15 @@ export function useAddonsBadge(
 /**
  * Whether a skill counts toward the tab's attention badge: any issue except
  * `not_downloaded`, which a catalog pin carries only until its revision is
- * fetched — transient, and its Try again is on the row itself.
+ * fetched — transient, and its Try again is on the row itself; or, on a
+ * deliverable skill, a declared slot no ready attachment fills — the badge
+ * and the row's Finish setup are how that warning is announced, never a banner.
  */
 function needsAttention(skill: LocalAgentSkill): boolean {
-  return skill.issues.some((issue) => issue.code !== 'not_downloaded')
+  return (
+    skill.issues.some((issue) => issue.code !== 'not_downloaded') ||
+    (skill.deliverable && skill.credentials.some((credential) => credential.filled === false))
+  )
 }
 
 /** A skill's state as the shared status glyph draws it: the first error, else the warnings, else fine. */
@@ -103,6 +108,19 @@ function BusyIcon({ busy, children }: { busy: boolean; children: React.ReactNode
 const MAX_SLOT_CHIPS = 2
 
 /**
+ * A declared slot's state as the shared status glyph draws it, from the scan's
+ * `filled` (a ready attachment of its type whose Service URI is the slot).
+ * Null where the scan did not judge it. Never an error: an unfilled skill slot
+ * is a warning, and never blocks the agent.
+ */
+function slotHealth(credential: LocalAgentSkillCredential): CredentialHealth | null {
+  if (credential.filled === undefined) return null
+  if (credential.filled) return { tone: 'ok', label: `A credential for ${credential.slot} is attached` }
+  if (credential.attachment) return { tone: 'warning', label: `The credential attached for ${credential.slot} is not ready` }
+  return { tone: 'warning', label: `No credential for ${credential.slot} is attached yet` }
+}
+
+/**
  * One skill: its name, where it came from, its state and a reveal of its
  * `SKILL.md` on the title line; then the description, the credential slots it
  * declares and the issues — each only when there are any — and last a reveal
@@ -114,9 +132,11 @@ const MAX_SLOT_CHIPS = 2
  * its files are in the folder. The title line keeps the button's height either
  * way, so a list mixing the two does not step.
  *
- * The slots sit on their own neutral "Needs" line, never beside the status
- * glyph: a ✓ followed by code is how a credential row says *connected*, and
- * nothing here checks the slots.
+ * The slots sit on their own neutral "Needs" line, never beside the skill's
+ * status glyph. Each chip wears its own glyph once the scan judged it — a ✓
+ * where a ready attachment fills it, a triangle where none does — as a
+ * credential row says *connected* (rule 13). A deliverable skill with an
+ * unfilled slot ends the line with Finish setup, which lists exactly those.
  *
  * A catalog row's actions are icons on the title line (rule 13): Update when
  * the catalog has a newer version, Try again when the pinned revision is not
@@ -129,11 +149,14 @@ function SkillRow({
   revealError,
   onReveal,
   onShare,
+  onFinishSetup,
   catalogActions
 }: {
   skill: LocalAgentSkill
   revealError: string | null
   onReveal: () => void
+  /** Opens the agent's Finish setting up dialog; offered on a deliverable skill with an unfilled slot. */
+  onFinishSetup?: () => void
   /** Authored rows the person may share (`skill.shareable`): opens the Share dialog. */
   onShare?: () => void
   catalogActions?: CatalogRowActions
@@ -160,8 +183,13 @@ function SkillRow({
   const shown = skill.credentials.slice(0, MAX_SLOT_CHIPS)
   const hidden = skill.credentials.length - shown.length
   const slotsTitle = skill.credentials
-    .map((credential) => `${credential.slot} (${credential.type})${credential.description ? ` — ${credential.description}` : ''}`)
+    .map((credential) => {
+      const state = credential.filled === undefined ? '' : credential.filled ? ' · attached' : ' · not attached'
+      return `${credential.slot} (${credential.type})${state}${credential.description ? ` — ${credential.description}` : ''}`
+    })
     .join('\n')
+  const finishSetup =
+    onFinishSetup && skill.deliverable && skill.credentials.some((credential) => credential.filled === false) ? onFinishSetup : null
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
       <div className="flex min-h-12 items-center gap-2 px-4 py-2.5">
@@ -265,15 +293,28 @@ function SkillRow({
           className="-mt-1 flex min-w-0 items-center gap-1.5 px-4 pb-2.5 text-[12px]"
         >
           <span className="shrink-0 text-[var(--color-text-muted)]">Needs</span>
-          {shown.map((credential) => (
-            <code
-              key={credential.slot}
-              className="min-w-0 truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]"
-            >
-              {credential.slot}
-            </code>
-          ))}
+          {shown.map((credential) => {
+            const health = slotHealth(credential)
+            return (
+              <span key={credential.slot} className="flex min-w-0 items-center gap-1">
+                {health && <CredentialStatusGlyph health={health} size={12} />}
+                <code className="min-w-0 truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">
+                  {credential.slot}
+                </code>
+              </span>
+            )
+          })}
           {hidden > 0 && <span className="shrink-0 text-[var(--color-text-muted)]">+{hidden}</span>}
+          {finishSetup && (
+            <button
+              type="button"
+              onClick={finishSetup}
+              title={`Attach the credentials ${skill.name} needs`}
+              className="ml-auto shrink-0 font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
+            >
+              Finish setup
+            </button>
+          )}
         </div>
       )}
       {skill.issues.length > 0 && (
@@ -333,7 +374,14 @@ function SkillRow({
  * with the same card (ux_rules rule 13): toggling, editing or reconnecting it
  * here changes it everywhere. Detach only removes the link to this agent.
  */
-export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+export function AgentAddonsTab({
+  agent,
+  onFinishSetup
+}: {
+  agent: LocalAgentDto
+  /** Opens the agent's Finish setting up dialog, which the page owns. */
+  onFinishSetup?: () => void
+}): React.JSX.Element {
   const { data: ids, error: idsError } = useAgentMcpProviders(agent.id)
   const { data: providers } = useMcpProviders()
   // Owned here, not in the modal: an attach outlives the modal closing.
@@ -497,6 +545,7 @@ export function AgentAddonsTab({ agent }: { agent: LocalAgentDto }): React.JSX.E
                     skill={skill}
                     revealError={revealError?.skill === skill.name ? revealError.message : null}
                     catalogActions={skill.source === 'catalog' ? catalogActionsFor(skill) : undefined}
+                    onFinishSetup={onFinishSetup}
                     onShare={
                       skill.source === 'authored'
                         ? () => {

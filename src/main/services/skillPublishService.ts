@@ -46,6 +46,7 @@ import { createLogger } from '../logger/logger'
 import { cinnaSend } from './cinna-http'
 import { getStoredCinnaSubject } from '../auth/cinna-tokens'
 import { libraryService } from './libraryService'
+import { activeListing, changeableFromLink, linkedEntry } from './catalogSkillUpdates'
 import { localAgentService } from './localAgents/localAgentService'
 import { scannerService } from './localAgents/scannerService'
 import { findSkillPublication, upsertSkillPublication } from '../kit/publications'
@@ -84,6 +85,8 @@ export const SKILL_PUBLISH_SENTENCES: Record<SkillPublishRefusal, string> = {
   no_account: 'Sharing a skill needs a Cinna account.',
   not_found: 'That agent or skill is no longer here.',
   not_kit_agent: 'Only an agent with a cinna-agent.json can share its skills.',
+  read_only: 'This agent is shared with you to use, so its skills can’t be shared from here. Nothing was sent.',
+  access_unknown: 'This shared agent is not in your catalog listing, so its skills can’t be shared from here. Nothing was sent.',
   skill_invalid: 'Fix this skill’s SKILL.md before sharing it.',
   has_link: 'Replace the links in this skill with the files themselves — only files and folders can be shared. Nothing was sent.',
   special_file: 'Remove what is not a file or a folder from this skill — only files and folders can be shared. Nothing was sent.',
@@ -142,6 +145,18 @@ function locateSkill(userId: string, agentId: string, name: string): SkillTarget
   const row = agent.skills.find((skill) => skill.source === 'authored' && skill.name === name)
   if (!row) return refused('not_found')
   return { rootId: agent.rootId, agentId, dir: agent.path, skillDir: join(agent.path, SKILLS_DIR, name), row }
+}
+
+/**
+ * Whether the person may change the agent, by the rule its rows' `shareable`
+ * is drawn by (`changeableFromLink`): a share writes `SKILL.md` and
+ * `publications.json` into the folder, which a team agent they may only use
+ * could never send back. Re-checked here because the row is the renderer's.
+ */
+function unchangeableRefusal(profile: string, dir: string): SkillPublishRefused | null {
+  const listing = activeListing(profile)
+  if (changeableFromLink(dir, listing)) return null
+  return refused(linkedEntry(dir, listing).access === null ? 'access_unknown' : 'read_only')
 }
 
 /** The skill's first error as the refusal, when it has one: core refuses such a skill too. */
@@ -511,6 +526,8 @@ export const skillPublishService = {
       const name = typeof input?.name === 'string' ? input.name : ''
       const target = locateSkill(userId, typeof input?.agentId === 'string' ? input.agentId : '', name)
       if ('ok' in target) return target
+      const unchangeable = unchangeableRefusal(who.profile, target.dir)
+      if (unchangeable) return unchangeable
       const invalid = invalidRefusal(target.row)
       if (invalid) return invalid
 

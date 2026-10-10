@@ -22,7 +22,7 @@ import { useAuthStore } from '../stores/auth.store'
 import { useFinishSetupStore } from '../stores/finishSetup.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
-import { readCatalogItemsFromCache } from './useCatalog'
+import { invalidateLocalAgentsAfterListing, readCatalogItemsFromCache } from './useCatalog'
 import { LOCAL_AGENTS_KEY, LOCAL_AGENT_ROOTS_KEY, localAgentKey } from './useLocalAgents'
 
 /**
@@ -219,6 +219,9 @@ export function useSharingWatch(): void {
       // The Inbox's "Update available" cards are derived from the same
       // listing, on every read.
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      // A skill's new version can arrive with a desktop agent's move, which
+      // publishes only this event; and an agent's access decides `updatable`.
+      invalidateLocalAgentsAfterListing(queryClient)
     })
   }, [queryClient])
   useEffect(() => {

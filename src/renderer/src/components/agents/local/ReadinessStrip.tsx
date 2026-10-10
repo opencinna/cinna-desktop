@@ -1,6 +1,7 @@
 import { AlertTriangle, Info } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isSkillFinding } from '../../../../../shared/kit/findings'
+import { unattachedSkillSlots } from '../../../utils/localAgents'
 
 type Severity = 'ok' | 'warning' | 'error' | 'info'
 
@@ -63,7 +64,7 @@ interface ReadinessStripProps {
   stampError?: string | null
   /** Where the full findings live now — the Folder tab. */
   onShowDetails?: () => void
-  /** Open the Finish setup dialog; offered while a credential is missing. */
+  /** Open the Finish setup dialog; offered while an agent or a deliverable skill's credential is missing. */
   onFinishSetup?: () => void
 }
 
@@ -103,6 +104,11 @@ export function ReadinessStrip({
     showLegacy &&
     agent.validation.errors.every((finding) => finding.code.startsWith('manifest.id.') || isSkillFinding(finding))
   const showReadiness = agent.readiness !== 'ok' && !onlyIdMissing
+  // A skill slot no attachment fills never changes readiness (it is a
+  // warning, announced by the Addons badge and the row's Finish setup), so it
+  // never raises a banner of its own (rule 2); beside a readiness line it only
+  // adds Finish setup there.
+  const skillSlots = unattachedSkillSlots(agent.skills)
 
   if (!showReadiness && !showLegacy && !drafting && !draftNote) return null
 
@@ -123,7 +129,7 @@ export function ReadinessStrip({
               {findings} finding{findings === 1 ? '' : 's'}
             </button>
           )}
-          {agent.readiness === 'credentials_needed' && onFinishSetup && (
+          {(agent.readiness === 'credentials_needed' || skillSlots.length > 0) && onFinishSetup && (
             <button
               type="button"
               onClick={onFinishSetup}

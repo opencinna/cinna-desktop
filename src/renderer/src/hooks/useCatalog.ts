@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { useAuthStore } from '../stores/auth.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
+import { LOCAL_AGENTS_KEY } from './useLocalAgents'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -84,11 +85,25 @@ export async function readCatalogItemsFromCache(queryClient: QueryClient): Promi
 }
 
 /**
+ * Re-read the folder agents after main's cached listing moved. Their catalog
+ * Skills rows carry `latestRevision` / `updatable` (and an own skill its shared
+ * version), which main folds in from that listing on every `local-agent:get`
+ * and `list` — not from the folder, so no folder push follows a new version.
+ * The list and every open agent page (`['local-agent', id]`); the events carry
+ * no payload saying which kind of item moved, so this runs on each one.
+ */
+export function invalidateLocalAgentsAfterListing(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+  void queryClient.invalidateQueries({ queryKey: ['local-agent'] })
+}
+
+/**
  * Subscribe to main's `catalog:items-changed` for the app's lifetime: an item
  * the dialog shows moved (a cloud agent installed, a skill's new version).
- * Re-reads the dialog's items from main's cache and the Inbox (whose cloud
- * "Update available" cards read the same listing) — never the sharing reads,
- * which only `sharing:changed` touches. Mount once, beside `useSharingWatch`.
+ * Re-reads the dialog's items from main's cache, the Inbox (whose cloud
+ * "Update available" cards read the same listing) and the folder agents (whose
+ * Skills rows show Update from it) — never the sharing reads, which only
+ * `sharing:changed` touches. Mount once, beside `useSharingWatch`.
  */
 export function useCatalogItemsWatch(): void {
   const queryClient = useQueryClient()
@@ -96,6 +111,7 @@ export function useCatalogItemsWatch(): void {
     return window.api.catalog.onItemsChanged(() => {
       void readCatalogItemsFromCache(queryClient)
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      invalidateLocalAgentsAfterListing(queryClient)
     })
   }, [queryClient])
 }

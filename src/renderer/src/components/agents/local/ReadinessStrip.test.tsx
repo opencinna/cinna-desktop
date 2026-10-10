@@ -42,6 +42,25 @@ describe('ReadinessStrip', () => {
     expect(screen.queryByRole('button', { name: 'Finish setup' })).toBeNull()
   })
 
+  it('adds Finish setup to a readiness line for a deliverable skill’s unattached slot, and raises no banner of its own', () => {
+    const skill = (name: string, filled: boolean) => ({
+      name, description: '', version: null, source: 'authored', path: `skills/${name}/SKILL.md`, deliverable: true, issues: [],
+      credentials: [{ slot: `${name}.example.com`, type: 'api_token', description: null, filled }]
+    })
+    const onFinishSetup = vi.fn()
+    const { rerender, container } = render(
+      createElement(ReadinessStrip, {
+        agent: agent({ readiness: 'invalid', readinessReason: 'Broken.', skills: [skill('docs', false)] as never }),
+        onFinishSetup
+      })
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }))
+    expect(onFinishSetup).toHaveBeenCalledTimes(1)
+    // Otherwise ready: the Addons badge and the row announce it, not a banner (rule 2).
+    rerender(createElement(ReadinessStrip, { agent: agent({ skills: [skill('docs', false)] as never }), onFinishSetup }))
+    expect(container.innerHTML).toBe('')
+  })
+
   it('renders nothing for a ready folder', () => {
     const { container } = render(createElement(ReadinessStrip, { agent: agent() }))
     expect(container.innerHTML).toBe('')

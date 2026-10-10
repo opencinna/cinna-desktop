@@ -100,6 +100,9 @@ export interface SkillPublishInput {
  * Why a skill was not shared (or previewed).
  *
  * Before anything is sent: `no_account`, `not_found`, `not_kit_agent`,
+ * `read_only` (a team agent shared with this person to use only) and
+ * `access_unknown` (a team agent the cached listing does not give an access
+ * for) — the rule `shareable` is drawn by —
  * `skill_invalid` (the skill has an error; the message is its sentence),
  * `has_link` / `special_file` (only files and folders travel), `secrets`
  * (a secret-looking file is in the folder), `unreadable`, `too_large`
@@ -115,6 +118,8 @@ export type SkillPublishRefusal =
   | 'no_account'
   | 'not_found'
   | 'not_kit_agent'
+  | 'read_only'
+  | 'access_unknown'
   | 'skill_invalid'
   | 'has_link'
   | 'special_file'

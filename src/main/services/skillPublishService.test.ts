@@ -309,6 +309,43 @@ describe('publish preflight: nothing is sent', () => {
   })
 })
 
+describe('publish: an agent the person may not change', () => {
+  function linkToTeamAgent(): void {
+    mkdirSync(join(agentDir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(agentDir, 'app-data', 'desktop.json'),
+      JSON.stringify({ shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` } })
+    )
+  }
+
+  it('refuses a team agent shared to use only, and one the listing gives no access for, before anything is sent or written', async () => {
+    linkToTeamAgent()
+    listing.value = { items: [], agents: [{ repoId: 'r1', access: 'use' }] }
+    expect(await skillPublishService.publish(USER, { agentId: AGENT_ID, name: 'erp-lookup' })).toEqual({
+      ok: false,
+      code: 'read_only',
+      message: SKILL_PUBLISH_SENTENCES.read_only
+    })
+    listing.value = { items: [], agents: [] }
+    expect(await skillPublishService.publish(USER, { agentId: AGENT_ID, name: 'erp-lookup' })).toMatchObject({
+      ok: false,
+      code: 'access_unknown'
+    })
+    expect(cinnaSend).not.toHaveBeenCalled()
+    expect(existsSync(join(agentDir, 'publications.json'))).toBe(false)
+    expect(readFileSync(join(skillDir(), 'SKILL.md'), 'utf8')).toBe(SKILL_MD)
+  })
+
+  it('shares from a team agent the person may edit', async () => {
+    linkToTeamAgent()
+    listing.value = { items: [], agents: [{ repoId: 'r1', access: 'edit' }] }
+    cinnaSend.mockResolvedValueOnce({ status: 200, ok: true, body: revisionBody() })
+    cinnaSend.mockResolvedValue({ status: 200, ok: true, body: previewBody() })
+    expect(await skillPublishService.publish(USER, { agentId: AGENT_ID, name: 'erp-lookup' })).toMatchObject({ ok: true, revisionNumber: 1 })
+    expect(uploads()).toHaveLength(1)
+  })
+})
+
 describe('publish', () => {
   it('uploads the folder under <name>/ with meta, then writes the version into SKILL.md and the entry into publications.json', async () => {
     cinnaSend.mockResolvedValueOnce({ status: 200, ok: true, body: revisionBody() })

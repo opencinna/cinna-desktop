@@ -235,6 +235,25 @@ describe('the Skills section', () => {
     await waitFor(() => expect(badge).toEqual({ count: 4, problems: 3, skills: 3 }))
   })
 
+  it('counts a deliverable skill with an unattached slot as needing attention, not one that is attached or unjudged', async () => {
+    attached = []
+    const slot = (filled?: boolean) => [{ slot: 'docs.example.com', type: 'api_token', description: null, ...(filled === undefined ? {} : { filled }) }]
+    const skills = [
+      skill('gap', { credentials: slot(false) }),
+      skill('done', { credentials: slot(true) }),
+      skill('raw', { credentials: slot() }),
+      skill('off', { deliverable: false, credentials: slot(false) })
+    ]
+    let badge: ReturnType<typeof useAddonsBadge> | null = null
+    function Probe(): null {
+      badge = useAddonsBadge('folder:a', skills)
+      return null
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(createElement(QueryClientProvider, { client }, createElement(Probe)))
+    await waitFor(() => expect(badge).toEqual({ count: 4, problems: 1, skills: 4 }))
+  })
+
   it('does not count a catalog pin that is only not downloaded yet as needing attention', async () => {
     attached = []
     const pin = skill('csv-export', {
@@ -268,6 +287,39 @@ describe('the Skills section', () => {
     expect(within(line).getByText('+4')).toBeTruthy()
     for (const slot of slots) expect(line.title).toContain(slot)
     expect(line.className).not.toMatch(/--color-(success|warning|danger)/)
+  })
+
+  it('marks each judged slot attached or not, and offers Finish setup on a deliverable skill with an unattached one', async () => {
+    const onFinishSetup = vi.fn()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const agent = {
+      id: 'folder:a', kind: 'kit',
+      skills: [
+        skill('docs', {
+          credentials: [
+            { slot: 'docs.example.com', type: 'api_token', description: null, filled: true, attachment: { credentialId: 'c1', state: 'ready' } },
+            { slot: 'mail.example.com', type: 'api_token', description: null, filled: false, attachment: null }
+          ]
+        }),
+        skill('done', { credentials: [{ slot: 'ok.example.com', type: 'api_token', description: null, filled: true }] }),
+        skill('broken', {
+          deliverable: false,
+          credentials: [{ slot: 'never.example.com', type: 'api_token', description: null, filled: false }]
+        })
+      ]
+    } as unknown as LocalAgentDto
+    render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent, onFinishSetup })))
+    await screen.findByText('No connectors attached.')
+    const [docs, done, broken] = [...document.querySelectorAll('[data-skill-slots]')] as HTMLElement[]
+    expect(within(docs).getByRole('img', { name: 'A credential for docs.example.com is attached' })).toBeTruthy()
+    expect(within(docs).getByRole('img', { name: 'No credential for mail.example.com is attached yet' }).className).toContain('--color-warning')
+    expect(docs.title).toContain('mail.example.com (api_token) · not attached')
+    fireEvent.click(within(docs).getByRole('button', { name: 'Finish setup' }))
+    expect(onFinishSetup).toHaveBeenCalledTimes(1)
+    // All attached, or a skill no session gets (Finish setup does not list it): no way in.
+    expect(within(done).queryByRole('button', { name: 'Finish setup' })).toBeNull()
+    expect(within(broken).getByRole('img', { name: 'No credential for never.example.com is attached yet' })).toBeTruthy()
+    expect(within(broken).queryByRole('button', { name: 'Finish setup' })).toBeNull()
   })
 
   it('clamps a long description to two lines with the full text on hover', async () => {

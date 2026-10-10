@@ -15,7 +15,8 @@ import type {
   AgentRootDto,
   FileStamp,
   LocalAgentDto,
-  LocalAgentReadiness
+  LocalAgentReadiness,
+  LocalAgentSkill
 } from '../../../shared/localAgents'
 import { describedAs } from '../../../shared/localAgents'
 import { LAUNCHABLE_TOOL_KINDS, type DetectedTool } from '../../../shared/localTools'
@@ -45,6 +46,22 @@ export function resolveDefaultTool(
 ): DetectedTool | null {
   if (settingId === '') return null
   return launchable.find((tool) => tool.id === settingId) ?? null
+}
+
+/**
+ * The Service URIs the agent's **deliverable** skills declare that no ready
+ * attachment fills (the scan's `filled === false`), once each, in first-seen
+ * order. Finish setting up lists exactly these skills' slots, so a way into it
+ * for a skill gap is offered only for them. Never a readiness decision: an
+ * unfilled skill slot is a warning.
+ */
+export function unattachedSkillSlots(skills: readonly LocalAgentSkill[] | undefined): string[] {
+  const slots = new Set<string>()
+  for (const skill of skills ?? []) {
+    if (!skill.deliverable) continue
+    for (const credential of skill.credentials) if (credential.filled === false) slots.add(credential.slot)
+  }
+  return [...slots]
 }
 
 /**

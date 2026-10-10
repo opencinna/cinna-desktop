@@ -514,7 +514,7 @@ export function LocalAgentPage(): React.JSX.Element {
           {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
           {activeTab === 'tasks' && <AgentTasksTab key={agent.id} agent={agent} />}
-          {activeTab === 'addons' && <AgentAddonsTab key={agent.id} agent={agent} />}
+          {activeTab === 'addons' && <AgentAddonsTab key={agent.id} agent={agent} onFinishSetup={finishSetup.open} />}
           {activeTab === 'overview' &&
             /* Three of the kit cards name a file only a kit folder has:
                `app-data/storage/STATUS.md`, and the manifest twice. A card is a

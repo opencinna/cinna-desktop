@@ -69,7 +69,7 @@ The verb's result says what was attached (`autoAttached`, slot and record names)
 
 ### The dialog
 
-Opened that way, or from **Finish setup** on the agent page's readiness strip whenever the agent reads `credentials_needed`. One row per slot, each in the scanner's own verdict, so the dialog can never call ready what readiness calls missing:
+Opened that way, from **Finish setup** on the agent page's readiness strip whenever the agent reads `credentials_needed` (or its readiness line shows while a deliverable skill's slot is unfilled), or from **Finish setup** on such a skill's row on the Addons tab. One row per slot, each in the scanner's own verdict, so the dialog can never call ready what readiness calls missing:
 
 - **Connected automatically** / **Connected** — a matching attachment is ready; *automatically* when main attached it without asking during this app session
 - **Set on this computer** — no attachment, and `credentials/.env` fills the slot
@@ -101,7 +101,7 @@ A kit agent's [skills](../local_agents/skills.md) — its own and the catalog sk
 - **Strict match.** A slot is filled only by an attached record of the slot's type whose Service URI **is** the slot, exactly. There is no name fallback, unlike an agent slot without `service_uri`: the script asks by Service URI and would not find a record matched any other way
 - **Never blocking.** A missing skill slot changes no readiness, never sets `setupNeeded`, and never opens Finish setup by itself. The script fails at call time with core's sentence naming the slot, which the agent relays. Core treats skill slots the same way
 - **Only deliverable skills count.** One entry per `(slot, type)` across the agent's deliverable skills, listing the skills that declare it. A skill no engine is given needs no credential
-- **The scan judges them.** Each declared slot on the agent's skill rows carries whether a strictly matching attachment is ready, and which attachment it was judged by. The Skills row on the Addons tab does not draw that yet; Finish setup does
+- **The scan judges them.** Each declared slot on the agent's skill rows carries whether a strictly matching attachment is ready, and which attachment it was judged by. The Skills row on the Addons tab marks each slot with it (✓ attached, a warning triangle when not), counts a deliverable skill's unfilled slot toward the Addons badge, and ends that row's **Needs** line with **Finish setup**; the dialog lists them
 
 ### Filling them without asking
 
@@ -119,7 +119,9 @@ Add and Update answer at once and do this in the background, because `provision-
 
 Below the agent's own slots, a **Skills** group: "Skills find these by Service URI. A missing one does not stop the agent; the skill fails when it needs it." One row per skill slot, drawn by the same row as an agent slot, with **Needed by skill(s) *names* · *type*** under the name. It offers the account's strictly fitting records with **Use this**, never `.env` names (a skill reads only the credentials file). A missing row with nothing to offer says why, in this order: an attached record has the Service URI but another type ("*name* has this Service URI but is a *type* credential, not *type*."); the publisher provides it but not for this computer; the publisher provides it but cannot share it with you; or "Nothing in your account fits it: it needs a credential of type *type* whose Service URI is *slot*." A skill slot is remembered under `skill:<slot>`, so it never reads as an agent slot of the same name.
 
-Not built: an entry into Finish setup from the readiness strip when the only gaps are skill slots (the strip opens it only for `credentials_needed`), and detaching what was attached for a skill when that skill is removed — nothing records why an attachment was made.
+Ways in for skill slots: the **Finish setup** link on a Skills row with an unfilled slot, and the readiness strip's **Finish setup**, which it adds for an unfilled skill slot to a readiness line it already shows. A skill-only gap raises no strip of its own — the agent is ready, and a banner is for what needs attention ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 2).
+
+Not built: detaching what was attached for a skill when that skill is removed — nothing records why an attachment was made.
 
 ## Credential rows
 

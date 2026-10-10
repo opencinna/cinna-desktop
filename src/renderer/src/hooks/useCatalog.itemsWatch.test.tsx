@@ -91,6 +91,23 @@ describe('catalog:items-changed', () => {
     expect(client.getQueryState(['inbox'])?.isInvalidated).toBe(true)
   })
 
+  it('re-reads the folder agents, whose Skills rows show Update from the listing', () => {
+    const client = new QueryClient()
+    function Page(): null {
+      useCatalogItemsWatch()
+      return null
+    }
+    render(createElement(QueryClientProvider, { client }, createElement(Page)))
+    client.setQueryData(['local-agents'], { roots: [], agents: [] })
+    client.setQueryData(['local-agent', 'a1'], { id: 'a1' })
+    client.setQueryData(['local-agent-doc', 'a1', 'readme'], { text: '' })
+    pushItemsChanged()
+    expect(client.getQueryState(['local-agents'])?.isInvalidated).toBe(true)
+    expect(client.getQueryState(['local-agent', 'a1'])?.isInvalidated).toBe(true)
+    // The documents are files; a listing move does not touch them.
+    expect(client.getQueryState(['local-agent-doc', 'a1', 'readme'])?.isInvalidated).toBe(false)
+  })
+
   it('reads nothing when no catalog read is cached', () => {
     const client = new QueryClient()
     function Page(): null {
@@ -115,5 +132,19 @@ describe('sharing:changed', () => {
     await waitFor(() => expect(seen.names).toEqual(['first', 'desktop']))
     expect(items.mock.calls).toEqual([[true], [false]])
     expect(client.getQueryState(['sharing', 'statuses', 'p1'])?.isInvalidated).toBe(true)
+  })
+
+  it('re-reads the folder agents too: a skill version can arrive with a desktop agent’s move', () => {
+    const client = new QueryClient()
+    function Page(): null {
+      useSharingWatch()
+      return null
+    }
+    render(createElement(QueryClientProvider, { client }, createElement(Page)))
+    client.setQueryData(['local-agents'], { roots: [], agents: [] })
+    client.setQueryData(['local-agent', 'a1'], { id: 'a1' })
+    pushSharingChanged()
+    expect(client.getQueryState(['local-agents'])?.isInvalidated).toBe(true)
+    expect(client.getQueryState(['local-agent', 'a1'])?.isInvalidated).toBe(true)
   })
 })
