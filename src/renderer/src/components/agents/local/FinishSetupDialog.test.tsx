@@ -28,7 +28,7 @@ let skillAttached: AutoAttachedCredential[] = []
 const setupSkills = vi.fn(async () => ({ ok: true, value: skillAttached }))
 const skillSlot = (over: Partial<CredentialSetupSkillSlot>): CredentialSetupSkillSlot => ({
   slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], description: null, state: 'missing', attached: null,
-  typeMismatch: null, options: [], provision: null, ...over
+  typeMismatch: null, notLocal: null, options: [], provision: null, ...over
 })
 const openCredentials = vi.fn(async (): Promise<unknown> => ({ created: false, revealed: false }))
 const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): Promise<unknown> => {
@@ -287,7 +287,8 @@ describe('Finish setup', () => {
             options: [{ group: 'acct', ref: 'erp-1', credential: record({ id: 'erp-1', name: 'ERP key', serviceUri: 'erp-api' }) }]
           }),
           skillSlot({ slot: 'crm', type: 'odoo', skills: ['crm-sync'] }),
-          skillSlot({ slot: 'mail', type: 'email_imap', skills: ['inbox'], provision: 'not_allowed_locally' })
+          skillSlot({ slot: 'mail', type: 'email_imap', skills: ['inbox'], provision: 'not_allowed_locally' }),
+          skillSlot({ slot: 'vault', skills: ['vault-read'], notLocal: record({ id: 'v-1', name: 'Vault key', serviceUri: 'vault' }) })
         ]
       }
       renderHarness()
@@ -300,6 +301,7 @@ describe('Finish setup', () => {
       expect(skillRow('erp-api').querySelector('input')).toBeNull()
       expect(within(skillRow('crm')).getByText('Nothing in your account fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
       expect(within(skillRow('mail')).getByText('The publisher provides it, but not for use on this computer.')).toBeTruthy()
+      expect(within(skillRow('vault')).getByText('Vault key is shared with you, but not for use on this computer.')).toBeTruthy()
 
       fireEvent.click(within(skillRow('erp-api')).getByRole('button', { name: 'Use this' }))
       await waitFor(() => expect(attach).toHaveBeenCalledWith(AGENT, 'acct', 'erp-1'))

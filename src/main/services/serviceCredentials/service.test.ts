@@ -1037,6 +1037,14 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
     expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', attached: null, typeMismatch: { name: 'ERP mail', type: 'email_imap' } })
   })
 
+  it('names a record of the slot’s type and Service URI that may not be used on this computer, when nothing fits', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('far', 'ERP (cloud only)', 'erp-api', { local_use_allowed: false, relation: 'shared' })]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', options: [], notLocal: { name: 'ERP (cloud only)' } })
+  })
+
   it('attaches only when exactly one record fits, the owned one before shared ones, and offers the rest', async () => {
     const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
     world.metadata = [rec('one', 'ERP one', 'erp-api'), rec('two', 'ERP two', 'erp-api')]

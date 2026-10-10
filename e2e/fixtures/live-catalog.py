@@ -20,7 +20,13 @@ create one ``api_token`` service credential ``ERP API catalog-e2e <tag>`` with
 ``service_uri: erp-api``, Allow local use and sharing on, shared with A and B
 (not C), and prints one JSON document in the shape ``liveTeamSharing.ts``
 reads (people with their web tokens, the admin's token) plus
-``credentials.erp``. It also names one cloud agent (``runs_on: cloud``) the
+``credentials.erp``. For ``live-sharing-skill-credentials.spec.ts`` the admin
+also makes, each shared with B only and carrying the same notes marker:
+``ERP API catalog-e2e <tag> pair 1`` and ``… pair 2`` (``api_token``, Allow
+local use, both with ``service_uri: ledger-pair-<tag>``: two candidates for
+one skill slot, ``credentials.pair``), and ``ERP API catalog-e2e <tag> no
+local`` (``api_token``, ``service_uri: ledger-nolocal-<tag>``, local use
+**not** allowed, ``credentials.noLocal``). It also names one cloud agent (``runs_on: cloud``) the
 catalog lists to everyone (public and listed), when there is one: creating a
 cloud bundle needs a publisher's cloud environment, which a local stack does
 not run, so the specs use an existing public one read-only and never install it.
@@ -29,7 +35,8 @@ not run, so the specs use an existing public one read-only and never install it.
 email prefix rather than by a fixture file: every desktop agent and skill
 package those people publish or maintain (with their repositories, versions,
 grants and reported local installs), the admin's ``ERP API catalog-e2e <tag>``
-credentials carrying this script's notes marker (their shares, including those ``provision-local`` made, go with
+credentials (and their ``pair 1`` / ``pair 2`` / ``no local``
+siblings) carrying this script's notes marker (their shares, including those ``provision-local`` made, go with
 them), and the people. Items are listed first (``scope=all``), the people
 deleted next (their local installs go with them, which lifts core's "N people
 use this" guard), the items last. It prints counts only.
@@ -50,7 +57,7 @@ API = "/api/v1"
 PREFIX = "catalog-e2e-"
 CRED_NAME = "ERP API catalog-e2e"
 # Only credentials this script made: the exact name shape and the notes marker.
-CRED_PATTERN = re.compile(r"^ERP API catalog-e2e [0-9a-f]{8}$")
+CRED_PATTERN = re.compile(r"^ERP API catalog-e2e [0-9a-f]{8}( pair [12]| no local)?$")
 CRED_NOTES = "Made by cinna-desktop e2e/fixtures/live-catalog.py; cleanup deletes it."
 
 
@@ -102,6 +109,31 @@ def create(client: httpx.Client) -> None:
         r = ok(client.post(f"{API}/credentials/{erp}/shares", headers=bearer(admin), json={"shared_with_email": people[label]["email"]}))
         shares[label] = r.json()["id"]
 
+    def admin_credential_for_b(name: str, service_uri: str, secret: str, local: bool) -> str:
+        made = ok(client.post(f"{API}/credentials/", headers=bearer(admin), json={
+            "name": name,
+            "notes": CRED_NOTES,
+            "type": "api_token",
+            "service_uri": service_uri,
+            "allow_sharing": True,
+            "allow_local_use": local,
+            "credential_data": {"api_token_type": "bearer", "api_token": secret},
+        })).json()["id"]
+        ok(client.post(f"{API}/credentials/{made}/shares", headers=bearer(admin), json={"shared_with_email": people["b"]["email"]}))
+        return made
+
+    # Two credentials B may use for one skill slot: nothing is attached without asking.
+    pair_slot = f"ledger-pair-{tag}"
+    pair = []
+    for n in (1, 2):
+        secret_n = f"ledger-pair-{n}-{uuid.uuid4().hex[:12]}"
+        name_n = f"{CRED_NAME} {tag} pair {n}"
+        pair.append({"id": admin_credential_for_b(name_n, pair_slot, secret_n, True), "name": name_n, "secret": secret_n})
+    # One B is shared, for a skill slot, without Allow local use.
+    no_local_slot = f"ledger-nolocal-{tag}"
+    no_local_name = f"{CRED_NAME} {tag} no local"
+    no_local = admin_credential_for_b(no_local_name, no_local_slot, f"ledger-nolocal-{uuid.uuid4().hex[:12]}", False)
+
     # A cloud agent B can see without a grant: public and listed. Read only.
     listed = ok(client.get(f"{API}/catalog/items", headers=bearer(people["b"]["token"]), params={"kind": "agent", "runs_on": "cloud"})).json()["data"]
     cloud = next(({"uuid": i["uuid"], "id": i["id"], "display_name": i["display_name"]} for i in listed if i.get("visibility") == "public"), None)
@@ -111,7 +143,11 @@ def create(client: httpx.Client) -> None:
         "tag": tag,
         "admin": {"id": admin_id, "token": admin},
         "people": people,
-        "credentials": {"erp": {"id": erp, "name": f"{CRED_NAME} {tag}", "secret": secret, "shares": shares}},
+        "credentials": {
+            "erp": {"id": erp, "name": f"{CRED_NAME} {tag}", "secret": secret, "shares": shares},
+            "pair": {"slot": pair_slot, "items": pair},
+            "noLocal": {"id": no_local, "name": no_local_name, "slot": no_local_slot},
+        },
         "cloudAgent": cloud,
     }))
 

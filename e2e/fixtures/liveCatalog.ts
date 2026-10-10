@@ -37,7 +37,13 @@ import {
  */
 
 export interface CatalogFixture extends TeamFixtureBase {
-  credentials: { erp: { id: string; name: string; secret: string; shares: Record<'a' | 'b', string> } }
+  credentials: {
+    erp: { id: string; name: string; secret: string; shares: Record<'a' | 'b', string> }
+    /** Two admin `api_token` credentials for one slot, both shared with B (`live-sharing-skill-credentials.spec.ts`). */
+    pair?: { slot: string; items: { id: string; name: string; secret: string }[] }
+    /** An admin `api_token` credential for `slot`, shared with B, local use **not** allowed. */
+    noLocal?: { id: string; name: string; slot: string }
+  }
   /** A public cloud agent the catalog lists to everyone, when the instance has one. Read only. */
   cloudAgent: { uuid: string; id: string; display_name: string } | null
 }
@@ -60,23 +66,28 @@ export const ERP_SLOT = { name: 'erp', type: 'api_token', service_uri: 'erp-api'
 
 /**
  * `scripts/slot_check.py`: what a skill script does in cinna-core — the
- * credential for slot `erp-api` through `core.cinna_api` — and prints its type
- * and a hash prefix of its header value, never the value.
+ * credential for `slot` (default `erp-api`) through `core.cinna_api` — and
+ * prints its type and a hash prefix of its header value, never the value.
  */
-export function slotCheckScript(prefix: string): string {
+export function slotCheckScript(prefix: string, slot = 'erp-api'): string {
   return `import hashlib
 import sys
 
 from core.cinna_api import credentials
 
-cred = credentials.by_slot("erp-api")
+cred = credentials.by_slot("${slot}")
 if cred is None:
     # Exit 0: a failed command folds its output behind Details.
-    print("${prefix}: erp-api=none")
+    print("${prefix}: ${slot}=none")
     sys.exit(0)
 value = (cred.get("credential_data") or {}).get("http_header_value", "")
-print(f"${prefix}: erp-api={cred.get('type')} {hashlib.sha256(str(value).encode()).hexdigest()[:12]}")
+print(f"${prefix}: ${slot}={cred.get('type')} {hashlib.sha256(str(value).encode()).hexdigest()[:12]}")
 `
+}
+
+/** What {@link slotCheckScript} prints for an `api_token` (bearer) credential whose token is `secret`. */
+export function slotLine(prefix: string, slot: string, secret: string): string {
+  return `${prefix}: ${slot}=api_token ${shortHash(`Bearer ${secret}`)}`
 }
 
 const SLOT_CHECK = slotCheckScript('slot-check')
@@ -233,7 +244,14 @@ export async function shareSkill(
   app: PersonApp,
   agent: string,
   skill: string,
-  input: { people?: SharingPerson[]; note?: string; newVersion?: boolean; everyone?: boolean }
+  input: {
+    people?: SharingPerson[]
+    note?: string
+    newVersion?: boolean
+    everyone?: boolean
+    /** Per slot, the option to pick in `What people need for <slot>`: a credential's name, or `Each person connects their own`. */
+    provide?: Record<string, string>
+  }
 ): Promise<void> {
   await openSkills(app, agent)
   const verb = input.newVersion ? `Share a new version of ${skill}…` : `Share ${skill}…`
@@ -245,6 +263,9 @@ export async function shareSkill(
     await dialog.getByRole('option', { name: `${person.name} <${person.email}>` }).click()
   }
   if (input.everyone) await dialog.getByRole('checkbox', { name: 'Everyone on this server can use it', exact: true }).check()
+  for (const [slot, label] of Object.entries(input.provide ?? {})) {
+    await dialog.getByRole('combobox', { name: `What people need for ${slot}`, exact: true }).selectOption({ label })
+  }
   if (input.note) await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(input.note)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
@@ -563,4 +584,69 @@ export async function startOllamaStub(model: string): Promise<{ host: string; cl
     host: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     close: () => new Promise<void>((resolve) => server.close(() => resolve()))
   }
+}
+
+/**
+ * A credential owned by the bearer of `token`, made over core's REST as the
+ * web UI would: `api_token` (bearer) unless `type` says otherwise. Deleted
+ * with its owner, so a fixture person's credentials need no cleanup of their own.
+ */
+export async function createCoreCredential(
+  fixture: TeamFixtureBase,
+  token: string,
+  input: { name: string; serviceUri: string; allowSharing?: boolean; allowLocalUse?: boolean; type?: 'api_token' | 'odoo' }
+): Promise<{ id: string; name: string; secret: string }> {
+  const secret = `${input.serviceUri}-${randomBytes(6).toString('hex')}`
+  const type = input.type ?? 'api_token'
+  const response = await fetch(`${fixture.server}/api/v1/credentials/`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: input.name,
+      type,
+      service_uri: input.serviceUri,
+      allow_sharing: input.allowSharing ?? false,
+      allow_local_use: input.allowLocalUse ?? true,
+      credential_data:
+        type === 'odoo'
+          ? { url: 'https://odoo.example.com', database_name: 'e2e', login: 'e2e@example.com', api_token: secret }
+          : { api_token_type: 'bearer', api_token: secret }
+    })
+  })
+  const body = (await response.json()) as { id?: string; detail?: unknown }
+  expect(response.status, JSON.stringify(body.detail ?? '')).toBe(200)
+  return { id: String(body.id), name: input.name, secret }
+}
+
+/**
+ * A command `command` on the agent at `agentPath` that runs `file` (a script
+ * of a cached catalog skill, by absolute path). `uv run python <file>`, not
+ * `python3 <file>`: the runner turns `python …` into `uv run …`, which runs
+ * only a `.py` file as a script.
+ */
+export async function addScriptCommand(app: PersonApp, agentPath: string, command: string, file: string): Promise<void> {
+  const yaml = join(agentPath, 'docs/CLI_COMMANDS.yaml')
+  writeFileSync(
+    yaml,
+    `${readFileSync(yaml, 'utf8')}  - name: ${command}\n    description: A catalog skill's own script.\n    command: uv run python ${JSON.stringify(file)}\n`
+  )
+  await app.page.evaluate(() => window.api.localAgents.rescan())
+}
+
+/** Each skill slot of main's setup read, with the last `provision-local` outcome, the offered records and a wrong-type attachment. */
+export async function skillSlotDetails(
+  app: PersonApp,
+  agentId: string
+): Promise<{ slot: string; type: string; state: string; attached: string | null; provision: string | null; options: string[]; typeMismatch: string | null }[]> {
+  const setup = await app.page.evaluate((id) => window.api.serviceCredentials.setupState(id), agentId)
+  if (!setup.ok) throw new Error(setup.message)
+  return setup.value.skillSlots.map((slot) => ({
+    slot: slot.slot,
+    type: slot.type,
+    state: slot.state,
+    attached: slot.attached?.credential.name ?? null,
+    provision: slot.provision,
+    options: slot.options.map((option) => option.credential.name),
+    typeMismatch: slot.typeMismatch?.name ?? null
+  }))
 }

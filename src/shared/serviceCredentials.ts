@@ -126,6 +126,11 @@ export interface CredentialSetupSkillSlot {
   attached: { credential: ServiceCredentialDto; state: ServiceCredentialAttachmentState } | null
   /** An attached record with this Service URI but another type: the skill's `by_slot` would find it, and it does not fit. */
   typeMismatch: ServiceCredentialDto | null
+  /**
+   * When nothing fits: an account record of the slot's type and Service URI that this
+   * computer may not use (Allow local use is off), so the dialog can say why it is not offered.
+   */
+  notLocal: ServiceCredentialDto | null
   /** The active account's records that fit strictly, best first; empty when connected. */
   options: CredentialSetupOption[]
   /** What the last `provision-local` call this app session answered for this slot, if any. */
