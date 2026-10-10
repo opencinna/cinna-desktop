@@ -60,6 +60,8 @@ const api: Record<string, unknown> = new Proxy(
       }
       if (ns === 'run') return namespace({ start: spies.runSend, cancel: () => undefined })
       if (ns === 'sessionActivity') return namespace({ get: async () => activity.current })
+      // The folder agents' snapshot, which the composer's catalog picker reads too.
+      if (ns === 'localAgents') return namespace({ list: async () => ({ roots: [], agents: [] }) })
       return namespace({})
     }
   }

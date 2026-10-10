@@ -32,7 +32,7 @@
 - `src/renderer/src/components/settings/TaskConcurrencySetting.tsx` — Default → Agents → Tasks row; device-wide admission limit
 - `src/renderer/src/components/settings/ProfileChatModesSection.tsx` — Account-provisioned chat modes (Profile scope), off the same `useChatModes` hook as the Default tab
 - `src/renderer/src/components/settings/ProfileLLMSection.tsx` — Account-provisioned (managed) providers (Profile scope)
-- `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — Bundle catalog install/uninstall; see [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md)
+- `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — the catalog (agents and skills) at the Settings scale, built from the catalog dialog's parts; see [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md)
 - `src/renderer/src/components/settings/CloudSyncSettingsSection.tsx` — Device pairing and sync state; see [Data Sync](../../sync/data_sync/data_sync.md)
 - `src/renderer/src/components/settings/TrashSection.tsx` — Deleted chats management
 
@@ -58,7 +58,7 @@
 - `src/renderer/src/hooks/useLocalTools.ts` — Detected assistants and editors, the default-tool value and `openIn`
 - `src/renderer/src/hooks/useEngine.ts` — Read-only engine binary state and explicit resolution/retry
 - `src/renderer/src/hooks/useLocalDev.ts` — Main-owned `LocalDevState`, the independent `managed-local-dev-cli` query refetched on phase changes, PATH mutation with rejected IPC errors converted to inline refusals, and profile-keyed `useCinnaCliUpdate` / shared-key `useUpdateCinnaCli`
-- `src/renderer/src/hooks/useCatalog.ts` — Bundle catalog listing and install/uninstall
+- `src/renderer/src/hooks/useCatalog.ts` — the catalog's cached listing, item detail, install context, uninstall and setup status
 - `src/renderer/src/hooks/useSync.ts` — Cloud Sync state and device pairing
 
 ## State Management

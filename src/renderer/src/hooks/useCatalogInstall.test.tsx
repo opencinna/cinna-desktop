@@ -277,25 +277,6 @@ describe('completion callbacks', () => {
   })
 })
 
-describe('useCatalogPicker', () => {
-  it('shows only the error of the install it started', async () => {
-    const { useCatalogPicker } = await import('./useCatalogPicker')
-    const client = new QueryClient()
-    const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
-      createElement(QueryClientProvider, { client }, children)
-    const { result } = renderHook(() => useCatalogPicker(vi.fn()), { wrapper })
-    // A failure the sidebar catalog left behind.
-    act(() =>
-      useCatalogInstallStore.setState({ error: { bundleId: 'other/bundle', message: 'sidebar failure' } })
-    )
-    expect(result.current.error).toBeNull()
-    quickInstall.mockResolvedValue({ success: false, code: 'forbidden', message: 'server said no' })
-    act(() => result.current.install('acme/invoices'))
-    await waitFor(() => expect(result.current.error).toBe('server said no'))
-    await idle()
-  })
-})
-
 describe('landCatalogInstall', () => {
   it('opens the agent and raises no setup when its credentials are ready', async () => {
     const client = new QueryClient()

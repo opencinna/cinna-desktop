@@ -1,277 +1,149 @@
 /**
- * Settings → Profile → Catalog. Lists agent bundles published on the
- * connected cinna-server and lets the user one-click install them.
+ * Settings → Profile → Catalog: the catalog dialog's list on a settings page —
+ * every agent and skill the active Cinna profile may use, with the same
+ * filter, search, tiles, detail and actions (Get / Update / Open / Add to
+ * agent… / Uninstall), built from the same hooks and components and set at
+ * the Settings type scale (ux_rules rules 12 and 13).
  *
- * Quick install always submits an empty payload (cinna-server applies
- * the same defaults the install form would use) — the bundle becomes
- * an Active install on the next catalog refetch. If the runtime gate
- * comes back as `needs_setup` / `publisher_broken`, we open the
- * {@link CatalogSetupModal} so the user fills the draft credentials on
- * the server; the modal polls and auto-closes when it goes ready.
+ * The detail takes the grid's place rather than covering it; the filter and
+ * the search are kept behind it. An action that ends on an agent lands the
+ * user on its page, as it does from the dialog.
  */
-import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, AlertTriangle } from 'lucide-react'
-import {
-  useCatalog,
-  useQuickInstallBundle,
-  useRefreshCatalogState
-} from '../../hooks/useCatalog'
-import { useAgents, useApplyBundleUpdate } from '../../hooks/useAgents'
-import type { BundleVersionInfo } from '../../../../shared/agentMetadata'
-import { useAuthStore } from '../../stores/auth.store'
-import { useCinnaReauth } from '../../hooks/useAuth'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CatalogCard } from './CatalogCard'
-import { unwrapIpcError } from '../../utils/ipcError'
-import { CatalogSetupModal } from './CatalogSetupModal'
-
-interface ActiveSetup {
-  installId: string
-  agentName: string
-}
+import { RefreshCw } from 'lucide-react'
+import { useRefreshCatalogState } from '../../hooks/useCatalog'
+import { useCatalogActions } from '../../hooks/useCatalogActions'
+import { useCatalogEntries } from '../../hooks/useCatalogEntries'
+import { useSettleGuard } from '../../hooks/useSettleGuard'
+import { useAuthStore } from '../../stores/auth.store'
+import { CATALOG_TEXT, type CatalogFilter } from '../../utils/catalogItems'
+import { CatalogItemDetailView } from '../agents/CatalogItemViews'
+import {
+  CatalogListBody,
+  CatalogRefreshFailure,
+  CatalogSearchRow,
+  CatalogTileGrid,
+  catalogActionFor,
+  useCatalogReauth,
+  useFilteredCatalog
+} from '../agents/CatalogBrowserParts'
+import { CatalogSurfaceProvider } from '../agents/catalogSurface'
+import { SettingsButton, SettingsSection } from './SettingsLayout'
 
 export function CatalogSettingsSection(): React.JSX.Element {
-  const currentUser = useAuthStore((s) => s.currentUser)
-  const isCinnaUser = currentUser?.type === 'cinna_user'
-  const catalog = useCatalog()
-  const queryClient = useQueryClient()
-  const quickInstall = useQuickInstallBundle()
-  const applyUpdate = useApplyBundleUpdate()
-  const agents = useAgents()
-  const refreshCatalogState = useRefreshCatalogState()
-  const cinnaReauth = useCinnaReauth()
-  const [reauthError, setReauthError] = useState<string | null>(null)
-  const [pendingBundleId, setPendingBundleId] = useState<string | null>(null)
-  const [updatingBundleId, setUpdatingBundleId] = useState<string | null>(null)
-  const [activeSetup, setActiveSetup] = useState<ActiveSetup | null>(null)
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
-
-  useEffect(() => {
-    if (!toast) return
-    const t = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(t)
-  }, [toast])
-
-  // Join the install's authoritative version state (installed + latest +
-  // update_available) from the synced agents, keyed by install id. The catalog
-  // list only carries the `pendingUpdate` boolean + latest version, so the card
-  // needs this to render "v1.0 → v1.2". Matches catalog `userInstallId` against
-  // a synced agent's `remoteTargetId` (both are the cinna-server Agent UUID).
-  // Declared before the early return below to keep hook order stable.
-  const bundleVersionByInstall = useMemo(() => {
-    const map = new Map<string, BundleVersionInfo>()
-    for (const a of agents.data ?? []) {
-      if (a.source === 'remote' && a.remoteTargetType === 'agent' && a.remoteTargetId) {
-        const bv = a.remoteMetadata?.bundle_version
-        if (bv) map.set(a.remoteTargetId, bv)
-      }
-    }
-    return map
-  }, [agents.data])
-
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   if (!isCinnaUser) {
-    return (
-      <div className="text-[14px] text-[var(--color-text-muted)]">
-        The bundles catalog is available when signed in to a Cinna account.
-      </div>
-    )
+    return <p className="text-[13px] text-[var(--color-text-muted)]">{CATALOG_TEXT.signedOut}</p>
   }
+  return (
+    <CatalogSurfaceProvider value="settings">
+      <CatalogSettingsList />
+    </CatalogSurfaceProvider>
+  )
+}
 
-  const handleInstall = async (bundleId: string, displayName: string): Promise<void> => {
-    if (pendingBundleId) return
-    setPendingBundleId(bundleId)
-    try {
-      const result = await quickInstall.mutateAsync(bundleId)
-      // Check the runtime gate. If everything's green we're done; otherwise
-      // open the setup modal so the user fixes drafts on the web. Go through
-      // queryClient.fetchQuery so the modal's `useSetupStatus` reads from
-      // cache on first render instead of re-fetching.
-      let status: 'ready' | 'needs_setup' | 'publisher_broken' = 'ready'
-      try {
-        const s = await queryClient.fetchQuery({
-          queryKey: ['catalog', 'setup-status', result.installId],
-          queryFn: () => window.api.catalog.setupStatus(result.installId)
-        })
-        status = s.status
-      } catch {
-        // Treat a failed status check as "needs check" — open the modal so the
-        // user can see the polling and the open-on-server fallback link.
-        status = 'needs_setup'
-      }
-      if (status === 'ready') {
-        setToast({ kind: 'ok', text: `${result.agentName} installed` })
-      } else {
-        setActiveSetup({ installId: result.installId, agentName: result.agentName })
-      }
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code
-      if (code === 'reauth_required') {
-        setToast({
-          kind: 'err',
-          text: `Cinna session expired — re-authenticate to install ${displayName}.`
-        })
-      } else {
-        // Uncoded failures still arrive as a thrown IPC error; strip its prefix.
-        const msg = unwrapIpcError(err, 'unknown error')
-        setToast({ kind: 'err', text: `Install failed: ${msg.slice(0, 160)}` })
-      }
-    } finally {
-      setPendingBundleId(null)
-    }
+function CatalogSettingsList(): React.JSX.Element {
+  const queryClient = useQueryClient()
+  // Opening the tab is when the user wants the catalog as it is now.
+  const { catalog, teamLibrary, views } = useCatalogEntries({ refresh: true })
+  const refresh = useRefreshCatalogState()
+  const reauth = useCatalogReauth(catalog)
+  // Landing on an agent leaves Settings; there is nothing here to close.
+  const actions = useCatalogActions({ onLanded: () => undefined })
+  const [filter, setFilter] = useState<CatalogFilter>('all')
+  const [query, setQuery] = useState('')
+  const [selectedUuid, setSelectedUuid] = useState<string | null>(null)
+  // The detail's actions open under the pointer that clicked the tile.
+  const detailSettled = useSettleGuard(selectedUuid)
+  const { shown, inFilter, selected } = useFilteredCatalog(views, filter, query, selectedUuid)
+
+  // A failure left by another visit (or by the dialog) is not this one's.
+  const { clearErrors } = actions
+  useEffect(() => {
+    clearErrors()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Versions are kept while the tab is open; the next visit reads them afresh.
+  useEffect(() => () => queryClient.removeQueries({ queryKey: ['catalog', 'item'] }), [queryClient])
+
+  const handlers = { install: actions.install, cloudUpdate: actions.cloudUpdate, desktop: actions.desktop }
+
+  /**
+   * Back to the catalog returns to the place in the grid: the detail replaces
+   * the grid, so the settings page's scroll is saved on opening a tile and
+   * put back, with focus on that tile, when the grid returns (rule 1).
+   */
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const returnTo = useRef<{ uuid: string; scrollTop: number } | null>(null)
+  const scroller = (): HTMLElement | null => bodyRef.current?.closest<HTMLElement>('[data-settings-scroller]') ?? null
+  const openItem = (uuid: string): void => {
+    returnTo.current = { uuid, scrollTop: scroller()?.scrollTop ?? 0 }
+    setSelectedUuid(uuid)
   }
-
-  const handleUpdate = async (
-    bundleId: string,
-    installId: string | null,
-    displayName: string
-  ): Promise<void> => {
-    if (updatingBundleId || pendingBundleId) return
-    if (!installId) {
-      setToast({ kind: 'err', text: `Can't update ${displayName}: missing install id.` })
-      return
-    }
-    setUpdatingBundleId(bundleId)
-    try {
-      await applyUpdate.mutateAsync(installId)
-      setToast({ kind: 'ok', text: `${displayName} updated` })
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code
-      if (code === 'reauth_required') {
-        setToast({
-          kind: 'err',
-          text: `Cinna session expired — re-authenticate to update ${displayName}.`
-        })
-      } else {
-        const msg = err instanceof Error ? err.message : String(err)
-        setToast({ kind: 'err', text: `Update failed: ${msg.slice(0, 160)}` })
-      }
-    } finally {
-      setUpdatingBundleId(null)
-    }
-  }
-
-  const handleReauth = async (): Promise<void> => {
-    setReauthError(null)
-    const result = await cinnaReauth.mutateAsync()
-    if (!result.success) {
-      setReauthError(result.error ?? 'Re-authentication failed')
-      return
-    }
-    void catalog.refetch()
-  }
-
-  const handleModalReady = (): void => {
-    if (!activeSetup) return
-    setToast({ kind: 'ok', text: `${activeSetup.agentName} is ready` })
-    setActiveSetup(null)
-    refreshCatalogState()
-  }
-
-  const entries = catalog.data ?? []
-  const errorCode = (catalog.error as { code?: string } | null)?.code
+  const showingDetail = selected !== null
+  useLayoutEffect(() => {
+    if (showingDetail || returnTo.current === null) return
+    const { uuid, scrollTop } = returnTo.current
+    returnTo.current = null
+    const page = scroller()
+    if (page) page.scrollTop = scrollTop
+    bodyRef.current
+      ?.querySelector<HTMLElement>(`[data-catalog-item="${CSS.escape(uuid)}"] button`)
+      ?.focus({ preventScroll: true })
+  }, [showingDetail])
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[12px] text-[var(--color-text-muted)]">
-          Published bundles on your Cinna account
-        </span>
-        <button
-          onClick={() => refreshCatalogState()}
-          disabled={catalog.isFetching}
-          className="flex items-center gap-1 text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={10} className={catalog.isFetching ? 'animate-spin' : ''} />
-          {catalog.isFetching ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </div>
-
-      {catalog.error && (
-        <div
-          className="flex items-start gap-2 px-2.5 py-2 mb-2 rounded-md
-            border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
-            text-[12px] text-[var(--color-text-secondary)]"
-        >
-          <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
-          <div className="flex-1 min-w-0">
-            <div>
-              {errorCode === 'reauth_required'
-                ? 'Cinna session expired. Re-authenticate to load the catalog.'
-                : 'Failed to load the catalog. Try again, or check the logger overlay (⌘`).'}
-            </div>
-            {errorCode === 'reauth_required' && (
-              <>
-                <button
-                  onClick={handleReauth}
-                  disabled={cinnaReauth.isPending}
-                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium
-                    bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
-                    disabled:opacity-50"
-                >
-                  <RefreshCw size={10} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
-                  {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
-                </button>
-                {reauthError && (
-                  <div className="mt-1.5 text-[12px] text-[var(--color-danger)]">{reauthError}</div>
-                )}
-              </>
-            )}
-          </div>
+    <SettingsSection
+      title={CATALOG_TEXT.sectionTitle}
+      action={
+        <div className="flex min-w-0 items-center gap-2">
+          <CatalogRefreshFailure catalog={catalog} reauth={reauth} />
+          <SettingsButton
+            onClick={() => {
+              refresh()
+              void teamLibrary.refetch()
+            }}
+            disabled={catalog.isFetching}
+            aria-busy={catalog.isFetching}
+          >
+            <RefreshCw size={12} className={catalog.isFetching ? 'animate-spin' : ''} aria-hidden="true" />
+            {CATALOG_TEXT.refresh}
+          </SettingsButton>
         </div>
-      )}
-
-      {catalog.isLoading && (
-        <div className="text-[12px] text-[var(--color-text-muted)] py-2">Loading catalog…</div>
-      )}
-
-      {!catalog.isLoading && !catalog.error && entries.length === 0 && (
-        <div className="text-[12px] text-[var(--color-text-muted)] py-2">
-          No bundles are visible to your account yet.
-        </div>
-      )}
-
-      <div className="space-y-2">
-        {entries.map((entry) => (
-          <CatalogCard
-            key={entry.bundleId}
-            entry={entry}
-            bundleVersion={
-              entry.userInstallId ? bundleVersionByInstall.get(entry.userInstallId) : undefined
-            }
-            installing={pendingBundleId === entry.bundleId}
-            updating={updatingBundleId === entry.bundleId}
-            disabled={
-              (pendingBundleId !== null && pendingBundleId !== entry.bundleId) ||
-              (updatingBundleId !== null && updatingBundleId !== entry.bundleId)
-            }
-            onInstall={() => void handleInstall(entry.bundleId, entry.displayName)}
-            onUpdate={() =>
-              void handleUpdate(entry.bundleId, entry.userInstallId, entry.displayName)
-            }
+      }
+    >
+      <div ref={bodyRef}>
+        {selected ? (
+          <CatalogItemDetailView
+            view={selected}
+            action={catalogActionFor(selected, handlers, detailSettled)}
+            error={actions.errorFor(selected)}
+            onBack={() => setSelectedUuid(null)}
+            settled={detailSettled}
+            uninstall={actions.uninstall}
           />
-        ))}
+        ) : (
+          <div className="space-y-3">
+            <CatalogSearchRow query={query} onQuery={setQuery} filter={filter} onFilter={setFilter} />
+            <CatalogListBody
+              catalog={catalog}
+              reauth={reauth}
+              filter={filter}
+              inFilterCount={inFilter.length}
+              shownCount={shown.length}
+            >
+              <CatalogTileGrid
+                views={shown}
+                handlers={handlers}
+                errorFor={actions.errorFor}
+                onSelect={openItem}
+                className="grid grid-cols-2 gap-3"
+              />
+            </CatalogListBody>
+          </div>
+        )}
       </div>
-
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 px-3 py-2 rounded-md text-[14px] shadow-lg border z-40 ${
-            toast.kind === 'ok'
-              ? 'border-[var(--color-success)]/40 bg-[var(--color-success)]/15 text-[var(--color-text-secondary)]'
-              : 'border-[var(--color-danger)]/40 bg-[var(--color-danger)]/15 text-[var(--color-text-secondary)]'
-          }`}
-        >
-          {toast.text}
-        </div>
-      )}
-
-      {activeSetup && (
-        <CatalogSetupModal
-          installId={activeSetup.installId}
-          agentName={activeSetup.agentName}
-          onClose={() => setActiveSetup(null)}
-          onReady={handleModalReady}
-        />
-      )}
-    </div>
+    </SettingsSection>
   )
 }

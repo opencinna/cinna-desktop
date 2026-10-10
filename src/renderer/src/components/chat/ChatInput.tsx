@@ -834,14 +834,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onTogglePendingMcp
   })
 
-  // Catalog section of the picker — not-yet-installed bundles the user can
-  // quick-install inline. On success the new agent is selected via the same
-  // `toggleCapability` routing (it's freshly synced and unselected, so toggle
+  // Catalog section of the picker — catalog agents not on this computer yet,
+  // which the user can Get inline. On success the new agent is selected via
+  // the same `toggleCapability` routing (it's new and unselected, so toggle
   // engages it: pending buffer for a new chat, on-demand attach for active).
   const {
     catalogItems,
-    installingBundleId,
-    install: installCatalogBundle,
+    installingId: installingCatalogId,
+    busy: catalogBusy,
+    install: installCatalogItem,
     error: catalogInstallError
   } = useCatalogPicker(toggleCapability)
 
@@ -1873,8 +1874,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         selectedIds={selectedCapabilityIds}
         onToggle={handleToggleCapability}
         catalogItems={catalogItems}
-        installingBundleId={installingBundleId}
-        onInstallCatalog={installCatalogBundle}
+        installingCatalogId={installingCatalogId}
+        catalogBusy={catalogBusy}
+        onInstallCatalog={installCatalogItem}
         catalogError={catalogInstallError}
         onClose={() => setCapabilityPickerOpen(false)}
         searchPlaceholder="Search agents and MCP servers…"

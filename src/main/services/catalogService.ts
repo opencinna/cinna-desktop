@@ -1,16 +1,15 @@
 /**
- * Bundles catalog proxy — forwards `/api/v1/catalog/*` and the install
- * setup-status endpoints to the active Cinna server. The desktop does NOT
- * own the install lifecycle; cinna-server is the source of truth. We only
- * project DTOs into camelCase and hide secrets, so the renderer can render
- * a "Catalog" tab that mirrors the cinna-server catalog page.
+ * Cloud-agent install proxy — forwards the quick install, install-context,
+ * uninstall and setup-status endpoints to the active Cinna server. The
+ * desktop does NOT own the install lifecycle; cinna-server is the source of
+ * truth. We only project DTOs into camelCase and hide secrets. The catalog's
+ * list itself is `libraryService.items` (`GET /api/v1/catalog/items`).
  */
 import { CinnaApiError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { cinnaFetch, resolveBaseUrl } from './cinna-http'
+import { libraryService } from './libraryService'
 import type {
-  CatalogEntryDto,
-  CatalogCredentialSpec,
   CatalogInstallResultDto,
   InstallContextDto,
   InstallContextPublisherSummaryDto,
@@ -22,33 +21,22 @@ import type {
 
 const logger = createLogger('catalog-api')
 
-interface ServerCatalogEntry {
-  bundle_id: string
-  bundle_uuid: string
-  display_name: string
-  description: string | null
-  publisher_handle: string | null
-  publisher_name: string | null
-  publisher_email: string | null
-  visibility: string
-  latest_version: string | null
-  latest_revision_number: number | null
-  latest_published_at: string | null
-  install_count: number
-  is_installed: boolean
-  user_install_id: string | null
-  user_install_pending_update?: boolean
-  required_credential_specs: Array<{
-    name: string
-    type: string
-    description?: string | null
-    provided_by?: string | null
-  }>
-}
+/** How long an install or uninstall answer waits for the listing to catch up. */
+const RELIST_WAIT_MS = 5_000
 
-interface ServerCatalogList {
-  data: ServerCatalogEntry[]
-  count: number
+/**
+ * List the catalog again after an install changed, waiting at most
+ * {@link RELIST_WAIT_MS}: past that the answer goes without it, and the
+ * listing publishes `catalog:items-changed` when it lands. Never throws.
+ */
+async function relistBounded(userId: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const waited = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, RELIST_WAIT_MS)
+    timer.unref?.()
+  })
+  await Promise.race([libraryService.refreshQuietly(userId), waited])
+  clearTimeout(timer)
 }
 
 interface ServerSetupStatus {
@@ -193,39 +181,6 @@ function buildDefaultAISelections(
   }
 }
 
-function projectSpec(s: ServerCatalogEntry['required_credential_specs'][number]): CatalogCredentialSpec {
-  const providedBy = s.provided_by === 'publisher' || s.provided_by === 'template'
-    ? s.provided_by
-    : 'user'
-  return {
-    name: s.name,
-    type: s.type,
-    description: s.description ?? null,
-    providedBy
-  }
-}
-
-function projectEntry(e: ServerCatalogEntry): CatalogEntryDto {
-  return {
-    bundleId: e.bundle_id,
-    bundleUuid: e.bundle_uuid,
-    displayName: e.display_name,
-    description: e.description ?? null,
-    publisherName: e.publisher_name ?? null,
-    publisherEmail: e.publisher_email ?? null,
-    publisherHandle: e.publisher_handle ?? null,
-    visibility: e.visibility,
-    latestVersion: e.latest_version ?? null,
-    latestRevisionNumber: e.latest_revision_number ?? null,
-    latestPublishedAt: e.latest_published_at ?? null,
-    installCount: e.install_count,
-    isInstalled: e.is_installed,
-    userInstallId: e.user_install_id ?? null,
-    pendingUpdate: Boolean(e.user_install_pending_update),
-    requiredCredentialSpecs: (e.required_credential_specs ?? []).map(projectSpec)
-  }
-}
-
 function projectMissing(m: ServerSetupStatus['missing'][number]): SetupMissingItemDto {
   return {
     specName: m.spec_name,
@@ -236,11 +191,6 @@ function projectMissing(m: ServerSetupStatus['missing'][number]): SetupMissingIt
 }
 
 export const catalogService = {
-  async list(userId: string): Promise<CatalogEntryDto[]> {
-    const body = await cinnaFetch<ServerCatalogList>(userId, '/api/v1/catalog/')
-    return (body.data ?? []).map(projectEntry)
-  },
-
   /**
    * Quick install — two-step flow mirroring cinna-core's frontend
    * `useQuickInstall` hook:
@@ -288,6 +238,11 @@ export const catalogService = {
       }
       const agentName = typeof data.name === 'string' ? data.name : 'Agent'
       logger.info('quick install done', { bundleId, installId, agentName })
+      // The catalog reads its installs from the cached listing; list again
+      // before answering, so the re-read that follows sees this install and
+      // no surface offers Get on the bundle a second time. Bounded: the
+      // install has happened, and a slow listing lands later on its own.
+      await relistBounded(userId)
       return { installId, bundleId, agentName }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -347,6 +302,8 @@ export const catalogService = {
       logger.error('uninstall failed', { installId, code, error: message })
       throw err
     }
+    // As after a quick install: the cached listing must stop naming the install.
+    await relistBounded(userId)
   },
 
   async getSetupStatus(userId: string, installId: string): Promise<SetupStatusDto> {

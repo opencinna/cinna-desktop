@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CatalogEntryDto } from '../../../../shared/catalog'
+import type { CatalogCredentialSpec } from '../../../../shared/catalog'
 import type { CatalogItem, CatalogItemDetail, CatalogItemsListing } from '../../../../shared/catalogItems'
 import type { LibraryAgentDto, LibraryListingDto } from '../../../../shared/agentSharing'
 import type { CloudUpdateActions, DesktopAgentActions } from './CatalogBrowserModal'
@@ -22,7 +22,7 @@ vi.mock('../settings/CatalogCardCredentials', () => ({
     enabled,
     compact
   }: {
-    entry: Pick<CatalogEntryDto, 'bundleId' | 'requiredCredentialSpecs'>
+    entry: { bundleId: string; requiredCredentialSpecs: CatalogCredentialSpec[] }
     enabled: boolean
     compact?: boolean
   }) =>
@@ -758,6 +758,29 @@ describe('CatalogBrowserModal — detail', () => {
       fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.get }), { detail: 1 })
       expect(onInstall).toHaveBeenCalledTimes(2)
     })
+
+    it('ignores a pointer click on the first version’s Show more until the view has settled', async () => {
+      itemMock.mockResolvedValue({
+        success: true,
+        value: {
+          ...INVOICES,
+          revisions: [
+            { revision_number: 3, version: null, published_at: null, published_by: null, release_notes: 'One\nTwo\nThree\nFour', origin: 'publish', git_commit_sha: null }
+          ]
+        }
+      })
+      // Versions read before: they show the moment the detail opens, under the pointer.
+      mount()
+      await loaded()
+      await act(() => client.prefetchQuery({ queryKey: ['catalog', 'item', 'p1', 'u-invoices'], queryFn: async () => (await itemMock()).value }))
+      fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }), { detail: 1 })
+      const more = screen.getByRole('button', { name: CATALOG_TEXT.showMore })
+      fireEvent.click(more, { detail: 2 })
+      expect(more.getAttribute('aria-expanded')).toBe('false')
+      act(() => vi.advanceTimersByTime(SETTLE_MS))
+      fireEvent.click(more, { detail: 1 })
+      expect(more.getAttribute('aria-expanded')).toBe('true')
+    })
   })
 })
 
@@ -793,7 +816,8 @@ describe('CatalogBrowserModal — loading the list', () => {
     expect(refresh.textContent).toBe(CATALOG_TEXT.refresh)
     fireEvent.click(refresh)
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain(CATALOG_TEXT.refreshFailed)
+    // The reason is text, not only a tooltip.
+    expect(alert.textContent).toBe(`${CATALOG_TEXT.refreshFailed} boom`)
     // In the header, beside the button — the grid is still the body's first part.
     expect(alert.parentElement).toBe(refresh.parentElement)
     expect(scroller.firstElementChild).toBe(grid)
@@ -858,5 +882,62 @@ describe('CatalogBrowserModal — loading the list', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
     fireEvent.mouseDown(screen.getByRole('dialog', { name: CATALOG_TEXT.title }))
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('CatalogBrowserModal — Uninstall', () => {
+  it('an installed cloud agent’s detail offers Uninstall behind a confirm that Escape closes alone', async () => {
+    const onUninstall = vi.fn()
+    const clearError = vi.fn()
+    mount({ uninstall: { uninstallingInstallId: null, error: null, onUninstall, clearError } })
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Helpdesk' }))
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.uninstallLabel('Helpdesk') }))
+    const confirm = screen.getByRole('dialog', { name: 'Uninstall Helpdesk' })
+    // Escape closes the confirm, not the detail under it nor the dialog.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Uninstall Helpdesk' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Helpdesk' })).toBeTruthy()
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.uninstallLabel('Helpdesk') }))
+    expect(confirm).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Helpdesk' })).getByRole('button', { name: 'Uninstall' }))
+    expect(onUninstall).toHaveBeenCalledWith('install-1', expect.any(Function))
+  })
+
+  it('a confirm belongs to its install: when the detail moves to another install of the bundle, it closes', async () => {
+    const second = { where: 'cloud' as const, install_id: 'install-3', device_id: null, host_manifest_id: null, revision_number: 4 }
+    itemsMock.mockResolvedValue({
+      success: true,
+      value: listing([INVOICES, { ...HELPDESK, my_installs: [...HELPDESK.my_installs, second] }, RATES, PAYROLL, LEDGER, ERP])
+    })
+    const onUninstall = vi.fn()
+    mount({ uninstall: { uninstallingInstallId: null, error: null, onUninstall, clearError: vi.fn() } })
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Helpdesk' }))
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.uninstallLabel('Helpdesk') }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Helpdesk' })).getByRole('button', { name: 'Uninstall' }))
+    expect(onUninstall).toHaveBeenCalledWith('install-1', expect.any(Function))
+    // The removal of install-1 shows up in the listing before its own answer does.
+    itemsMock.mockResolvedValue({
+      success: true,
+      value: listing([INVOICES, { ...HELPDESK, my_installs: [second] }, RATES, PAYROLL, LEDGER, ERP])
+    })
+    const reads = itemsMock.mock.calls.length
+    await act(() => client.invalidateQueries({ queryKey: ['catalog'] }))
+    await waitFor(() => expect(itemsMock.mock.calls.length).toBeGreaterThan(reads))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Uninstall Helpdesk' })).toBeNull())
+    expect(screen.getByRole('heading', { name: 'Helpdesk' })).toBeTruthy()
+  })
+
+  it('a cloud agent not installed, and a host without uninstall, offer none', async () => {
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Helpdesk' }))
+    expect(screen.queryByRole('button', { name: CATALOG_TEXT.uninstallLabel('Helpdesk') })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.back }))
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    expect(screen.queryByRole('button', { name: CATALOG_TEXT.uninstallLabel('Invoice Watcher') })).toBeNull()
   })
 })

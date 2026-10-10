@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { unwrapCatalogOutcome, type CatalogOutcome } from '../../shared/catalog'
 
 /**
- * `catalog:list` and `catalog:quick-install` must deliver their failure
+ * `catalog:items` and `catalog:quick-install` must deliver their failure
  * **code** to the renderer. A thrown code is stripped by `ipcMain.handle` and
  * `contextBridge` (see `_wrap.ts`), which left the catalog's Re-authenticate
  * button and the install's "session expired" message unreachable. So the
@@ -22,10 +22,9 @@ vi.mock('./_wrap', () => ({
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: () => undefined } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'u-cinna' }))
 
-const listMock = vi.hoisted(() => vi.fn())
 const installMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/catalogService', () => ({
-  catalogService: { list: listMock, quickInstall: installMock }
+  catalogService: { quickInstall: installMock }
 }))
 const itemsMock = vi.hoisted(() => vi.fn())
 const itemDetailMock = vi.hoisted(() => vi.fn())
@@ -51,15 +50,17 @@ const invoke = (channel: string, ...args: unknown[]): Promise<CatalogOutcome<unk
   Promise.resolve(handlers.get(channel)!({}, ...args)) as Promise<CatalogOutcome<unknown>>
 
 describe('catalog handlers return a failure code as data', () => {
-  it('wraps a successful list', async () => {
-    listMock.mockResolvedValue([{ bundleId: 'b' }])
-    expect(await invoke('catalog:list')).toEqual({ success: true, value: [{ bundleId: 'b' }] })
-    expect(listMock).toHaveBeenCalledWith('u-cinna')
+  it('wraps a successful install', async () => {
+    installMock.mockResolvedValue({ installId: 'i1', bundleId: 'acme/invoices', agentName: 'Invoices' })
+    expect(await invoke('catalog:quick-install', 'acme/invoices')).toEqual({
+      success: true,
+      value: { installId: 'i1', bundleId: 'acme/invoices', agentName: 'Invoices' }
+    })
   })
 
   it('returns an expired session from the api layer as reauth_required', async () => {
-    listMock.mockRejectedValue(new CinnaApiError('reauth_required', 'Session expired'))
-    expect(await invoke('catalog:list')).toEqual({
+    installMock.mockRejectedValue(new CinnaApiError('reauth_required', 'Session expired'))
+    expect(await invoke('catalog:quick-install', 'acme/invoices')).toEqual({
       success: false,
       code: 'reauth_required',
       message: 'Session expired'
@@ -79,8 +80,8 @@ describe('catalog handlers return a failure code as data', () => {
   })
 
   it('round-trips: the renderer rebuilds an error that still carries the code', async () => {
-    listMock.mockRejectedValue(new CinnaApiError('reauth_required', 'Session expired'))
-    const outcome = await invoke('catalog:list')
+    installMock.mockRejectedValue(new CinnaApiError('reauth_required', 'Session expired'))
+    const outcome = await invoke('catalog:quick-install', 'acme/invoices')
     // What crosses IPC is plain data; cloning it is what the boundary does.
     const received = structuredClone(outcome)
     let thrown: unknown
@@ -101,6 +102,10 @@ describe('catalog handlers return a failure code as data', () => {
  * code as data so the detail can say it in place.
  */
 describe('catalog:items and catalog:item', () => {
+  it('has no second list: the old catalog:list channel is gone', () => {
+    expect(handlers.has('catalog:list')).toBe(false)
+  })
+
   it('reads the cached listing, and lists again only when the renderer asks', async () => {
     const listing = { host: 'https://core.test', items: [], fetchedAt: '2026-10-10T00:00:00.000Z', available: true }
     itemsMock.mockResolvedValue(listing)

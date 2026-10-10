@@ -5,6 +5,7 @@ import { usePopover } from '../ui/usePopover'
 import { isUnsettledClick } from '../../hooks/useSettleGuard'
 import { useAddCatalogSkill, useCatalogSkillAdds } from '../../hooks/useCatalogSkills'
 import { CATALOG_SKILL_TEXT } from '../../utils/catalogItems'
+import { sizedButton, useCatalogType } from './catalogSurface'
 
 /**
  * One of the user's kit agents as the picker lists it, and why it cannot take
@@ -31,7 +32,7 @@ const TRIGGER =
   'bg-[var(--color-accent)] text-white transition-colors hover:bg-[var(--color-accent-hover)] ' +
   'disabled:cursor-not-allowed disabled:opacity-40'
 const ROW =
-  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--color-text)] ' +
+  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[var(--color-text)] ' +
   'transition-colors enabled:hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed'
 
 /**
@@ -61,6 +62,7 @@ export function CatalogSkillAddMenu({
   settled: boolean
 }): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
+  const type = useCatalogType()
   const add = useAddCatalogSkill(packageUuid)
   // From the mutation cache, not local state: the tile and the detail each
   // mount a menu, and an add outlives the one that started it.
@@ -135,7 +137,7 @@ export function CatalogSkillAddMenu({
         onClick={(event) => {
           if (!isUnsettledClick(settled, event)) setOpen(!open)
         }}
-        className={TRIGGER}
+        className={sizedButton(TRIGGER, type)}
       >
         {CATALOG_SKILL_TEXT.addToAgent}
         <ChevronDown size={11} aria-hidden="true" />
@@ -152,7 +154,7 @@ export function CatalogSkillAddMenu({
             className="app-popover-surface z-[60] max-h-72 w-64 overflow-y-auto rounded-lg border border-[var(--color-border)] p-1 shadow-xl"
           >
             {targets.length === 0 ? (
-              <div className="px-2 py-1.5 text-[11px] text-[var(--color-text-muted)]">{CATALOG_SKILL_TEXT.noAgents}</div>
+              <div className={`px-2 py-1.5 ${type.body} text-[var(--color-text-muted)]`}>{CATALOG_SKILL_TEXT.noAgents}</div>
             ) : (
               targets.map((target) => {
                 const reason = reasonText(target)
@@ -175,22 +177,22 @@ export function CatalogSkillAddMenu({
                             : CATALOG_SKILL_TEXT.addTo(skillName, target.name)
                       }
                       onClick={() => pick(target)}
-                      className={ROW}
+                      className={`${ROW} ${type.text}`}
                     >
                       <span className={`min-w-0 flex-1 truncate ${reason ? 'text-[var(--color-text-muted)]' : ''}`}>
                         {target.name}
                       </span>
                       {adding ? (
-                        <span className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
+                        <span className={`flex shrink-0 items-center gap-1 ${type.meta} text-[var(--color-text-muted)]`}>
                           <Loader2 size={11} className="animate-spin" aria-hidden="true" />
                           {CATALOG_SKILL_TEXT.adding}
                         </span>
                       ) : reason ? (
-                        <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]">{reason}</span>
+                        <span className={`shrink-0 ${type.meta} text-[var(--color-text-muted)]`}>{reason}</span>
                       ) : null}
                     </button>
                     {rowError && (
-                      <div role="alert" className="px-2 pb-1.5 text-[10px] text-[var(--color-danger)]">
+                      <div role="alert" className={`px-2 pb-1.5 ${type.meta} text-[var(--color-danger)]`}>
                         {rowError}
                       </div>
                     )}

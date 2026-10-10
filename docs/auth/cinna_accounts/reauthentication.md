@@ -36,7 +36,7 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 3. On success the overlay refetches and the status grid renders normally
 
 ### Trigger: any Cinna request fails app-wide (global modal)
-1. Any IPC handler hits a dead session — `catalog:list` *throws* `CinnaApiError('reauth_required')`, `agent-status:list` *returns* `{ success: false, code: 'reauth_required' }` after catching internally, remote sync hits `cinna_reauth_required`, etc.
+1. Any IPC handler hits a dead session — `catalog:uninstall` *throws* `CinnaApiError('reauth_required')`, `catalog:items` *returns* a `CatalogOutcome` with `code: 'reauth_required'`, `agent-status:list` *returns* `{ success: false, code: 'reauth_required' }` after catching internally, remote sync hits `cinna_reauth_required`, etc.
 2. `ipc/_wrap.ts` sees the code on either the thrown error or the returned shape and calls `broadcastReauthRequired(channel)`, which resolves the active profile (`getProfileScopeUserId` → `userRepo`) and sends `{ account, serverUrl, source }` to the renderer
 3. `ReauthModal` (app root, `z-[100]`) flips `useReauthStore` via the broadcast listener and pops a centered "Cinna session expired" prompt that **names the account + server** ("The connection to *Full Name* on *host* was lost while loading agent status …") with "Re-authenticate" and "Not now" buttons — visible on any screen
 4. "Re-authenticate" runs the same OAuth flow. On success `useCinnaReauth.onSuccess` clears the store and the modal invalidates every query so the surfaces that failed while the session was dead recover; "Not now" (or Escape / backdrop click) sets the session `dismissed` flag so the next failed poll doesn't re-open it

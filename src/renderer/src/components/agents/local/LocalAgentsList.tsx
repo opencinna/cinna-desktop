@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
@@ -13,21 +12,15 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 import { ManagedAgentModal } from '../ManagedAgentModal'
 import { CustomAgentModal } from '../CustomAgentModal'
-import { useAgents, useApplyBundleUpdate } from '../../../hooks/useAgents'
+import { useAgents } from '../../../hooks/useAgents'
 import { A2AAgentForm } from '../../settings/A2AAgentForm'
 import { serverLabel } from '../../../utils/agentNavigation'
 import { AgentTypeIcon } from '../AgentTypeIcon'
 import { useChosenAgentColor } from '../../../utils/agentColors'
 import { useAuthStore } from '../../../stores/auth.store'
 import { CatalogBrowserModal } from '../CatalogBrowserModal'
-import { useCatalogInstall } from '../../../hooks/useCatalogInstall'
-import { landCatalogInstall } from '../../../stores/catalogInstall.store'
-import { useGetFromLibrary, useShareStatuses, useUpdateShared } from '../../../hooks/useSharing'
-import { useOpenAgentPage } from '../../../hooks/useOpenAgentPage'
-import type { AgentShareResult } from '../../../../../shared/agentSharing'
-import { shareRefusalSentence } from '../../../utils/shareText'
-import { unwrapIpcError } from '../../../utils/ipcError'
-import type { CloudUpdateActions, DesktopAgentActions } from '../CatalogBrowserModal'
+import { useCatalogActions } from '../../../hooks/useCatalogActions'
+import { useShareStatuses } from '../../../hooks/useSharing'
 
 function AgentChatShortcut({ agentId, name, available = true }: {
   agentId: string
@@ -174,7 +167,6 @@ export function LocalAgentsList(): React.JSX.Element {
     setCatalogProfileId(profileId)
     setCatalogOpen(false)
   }
-  const queryClient = useQueryClient()
   const openExternalAgent = useCallback(
     (agentId: string): void => {
       setAgentPageMode('chat')
@@ -184,106 +176,21 @@ export function LocalAgentsList(): React.JSX.Element {
     [setAgentPageMode, setActiveExternalAgentId, setActiveView]
   )
   /**
-   * The catalog install runs in a store, not in the catalog dialog or in this
-   * list: the user may close the dialog, or switch sidebar tabs (which
-   * unmounts this list), mid-install, and the landing must still happen. The
-   * landing — open the agent, raise the setup dialog if its credentials are
-   * incomplete — touches only stores, so it runs either way; closing the
-   * dialog is this list's own state and only matters while it is mounted.
+   * The catalog's actions run here, not in the dialog: the user may close the
+   * dialog, or switch sidebar tabs (which unmounts this list), mid-action, and
+   * the landing on the agent must still happen (see `useCatalogActions`).
+   * Landing closes the dialog while this list is still mounted.
    */
-  const catalogInstall = useCatalogInstall({
-    onInstalled: () => setCatalogOpen(false),
-    onInstalledDetached: (agentId, result) => landCatalogInstall(queryClient, agentId, result)
-  })
-  const { clearError: clearCatalogError } = catalogInstall
-  /** A stale install error belongs to the last visit, not the next one. */
+  const catalogActions = useCatalogActions({ onLanded: () => setCatalogOpen(false) })
+  const { clearErrors: clearCatalogErrors } = catalogActions
+  /** A stale failure belongs to the last visit, not the next one. */
   const openCatalog = (): void => {
-    clearCatalogError()
+    clearCatalogErrors()
     setCatalogOpen(true)
   }
   const closeCatalog = (): void => {
     setCatalogOpen(false)
-    clearCatalogError()
-    setLibraryError(null)
-    // A finished update's failure belongs to this visit; one still running keeps going.
-    if (!applyCloudUpdate.isPending) applyCloudUpdate.reset()
-  }
-  /**
-   * A cloud agent's Update (apply the catalog's latest version to the
-   * install), owned here like the install. Its busy state and failure are
-   * read from the mutation itself rather than from callbacks, which a closed
-   * dialog would drop.
-   */
-  const applyCloudUpdate = useApplyBundleUpdate()
-  const cloudUpdateActions: CloudUpdateActions = {
-    updatingInstallId: applyCloudUpdate.isPending ? (applyCloudUpdate.variables ?? null) : null,
-    error:
-      applyCloudUpdate.isError && applyCloudUpdate.variables
-        ? {
-            installId: applyCloudUpdate.variables,
-            message:
-              (applyCloudUpdate.error as { code?: string }).code === 'reauth_required'
-                ? 'Cinna session expired — re-authenticate to update.'
-                : unwrapIpcError(applyCloudUpdate.error, 'Update failed.')
-          }
-        : null,
-    onUpdate: (installId) => applyCloudUpdate.mutate(installId)
-  }
-  /**
-   * Desktop agents' Get and Update, owned here rather than by the dialog,
-   * with hook-level callbacks: closing the dialog mid-Get loses nothing, and
-   * the landing on the agent page — a store write — happens either way.
-   * A refusal belongs to the tile it came from.
-   */
-  const openAgentPage = useOpenAgentPage()
-  const [libraryError, setLibraryError] = useState<DesktopAgentActions['error']>(null)
-  const refusalText = (result: AgentShareResult): string =>
-    shareRefusalSentence(result.refusal ?? 'failed', result.detail)
-  const getFromLibrary = useGetFromLibrary({
-    onResult: (result, repoId) => {
-      if (result.done && result.agentId) {
-        setCatalogOpen(false)
-        openAgentPage({ id: result.agentId })
-      } else if (!result.done) {
-        setLibraryError({ repoId, message: refusalText(result) })
-      }
-    }
-  })
-  const [updatingRepoId, setUpdatingRepoId] = useState<string | null>(null)
-  const updateShared = useUpdateShared({
-    onResult: (result, agentId) => {
-      // Combining needs the agent page's two-button choice, which the page
-      // offers from its status line; take the user there.
-      if (result.refusal === 'diverged_conflict') {
-        setCatalogOpen(false)
-        openAgentPage({ id: agentId })
-      } else if (!result.done && updatingRepoId) {
-        setLibraryError({ repoId: updatingRepoId, message: refusalText(result) })
-      }
-    }
-  })
-  const libraryActions: DesktopAgentActions = {
-    gettingRepoId: getFromLibrary.isPending ? (getFromLibrary.variables ?? null) : null,
-    updatingAgentId: updateShared.isPending ? (updateShared.variables ?? null) : null,
-    error: libraryError,
-    onGet: (repoId) => {
-      setLibraryError(null)
-      getFromLibrary.mutate(repoId, {
-        onError: (err) => setLibraryError({ repoId, message: unwrapIpcError(err) })
-      })
-    },
-    onUpdate: (agent) => {
-      if (!agent.localAgentId) return
-      setLibraryError(null)
-      setUpdatingRepoId(agent.repoId)
-      updateShared.mutate(agent.localAgentId, {
-        onError: (err) => setLibraryError({ repoId: agent.repoId, message: unwrapIpcError(err) })
-      })
-    },
-    onOpenLocal: (agentId) => {
-      closeCatalog()
-      openAgentPage({ id: agentId })
-    }
+    clearCatalogErrors()
   }
   const { data: agentData } = useAgents()
   // Read here, though the rows no longer show it: the agent page decides
@@ -420,15 +327,13 @@ export function LocalAgentsList(): React.JSX.Element {
       {catalogOpen && isCinna && (
         <CatalogBrowserModal
           onClose={closeCatalog}
-          installingBundleId={catalogInstall.installingBundleId}
-          installError={catalogInstall.error}
-          onInstall={catalogInstall.install}
-          onOpen={(agentId) => {
-            closeCatalog()
-            openExternalAgent(agentId)
-          }}
-          cloudUpdate={cloudUpdateActions}
-          desktop={libraryActions}
+          installingBundleId={catalogActions.install.installingBundleId}
+          installError={catalogActions.installError}
+          onInstall={catalogActions.install.onInstall}
+          onOpen={catalogActions.install.onOpen}
+          cloudUpdate={catalogActions.cloudUpdate}
+          desktop={catalogActions.desktop}
+          uninstall={catalogActions.uninstall}
         />
       )}
       {addingA2A && <A2AAgentForm key={profileId} onClose={() => setAddingA2A(false)} />}

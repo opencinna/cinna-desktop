@@ -164,7 +164,7 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 - [The Codex Engine](../../agents/local_agents/codex_engine.md) — the managed Codex CLI behind the Runtime row's Codex status line (*Install now* / *Try again* / *Fix path*), the Developer Tools Codex row and the Codex Path
 - [The Claude Engine](../../agents/local_agents/claude_engine.md) — the pinned Claude Code behind the same three surfaces for Claude Agent, and the Claude Path
 - [Local Development](../../agents/local_dev/local_dev.md) — Local Development section: the managed uv / cinna-cli / Mutagen toolchain, its consent and repair actions
-- [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) — Catalog section (Profile group) installs and uninstalls bundles
+- [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) — Catalog section (Profile group): the one catalog of agents and skills, with Get, Update, Open, Add to agent… and Uninstall
 - [Data Sync](../../sync/data_sync/data_sync.md) — Cloud Sync section (Profile group) manages device pairing and sync state
 - [Remote Agents](../../agents/remote_agents/remote_agents.md) — Agents section (Profile group) lists Cinna-synced remote agents with per-profile enable/disable overrides
 - [Adapters](../../llm/adapters/adapters.md) — LLM settings section manages provider configuration consumed by the adapter layer

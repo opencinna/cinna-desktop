@@ -1,12 +1,13 @@
 /**
- * Confirmation dialog for catalog-card uninstall. Mirrors cinna-server's
- * `UninstallAgent` component — same wording (app-data preserved across
- * reinstall) so the desktop and web UX read the same.
+ * Confirmation dialog for uninstalling a cloud agent from the catalog's
+ * detail. Mirrors cinna-server's `UninstallAgent` component — same wording
+ * (app-data preserved across reinstall) so the desktop and web UX read the
+ * same.
  *
- * Owner (CatalogCard) holds the modal state and the mutation; this component
- * is pure presentation + button wiring. Errors are rendered inline instead of
- * surfaced as a global toast so the user sees them in the same context as
- * the action that produced them.
+ * The detail holds the modal state and its host the mutation
+ * (`useCatalogActions`); this component is pure presentation + button
+ * wiring. Errors are rendered inline instead of surfaced as a global toast so
+ * the user sees them in the same context as the action that produced them.
  */
 import { Loader2, PackageX, AlertTriangle, X } from 'lucide-react'
 

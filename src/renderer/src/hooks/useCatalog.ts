@@ -12,8 +12,6 @@ import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { LOCAL_AGENTS_KEY } from './useLocalAgents'
 import type {
-  CatalogEntryDto,
-  CatalogInstallResultDto,
   InstallContextDto,
   SetupCredentialSummaryDto,
   SetupStatusDto
@@ -21,20 +19,9 @@ import type {
 import { unwrapCatalogOutcome } from '../../../shared/catalog'
 import type { CatalogItemDetail, CatalogItemsListing } from '../../../shared/catalogItems'
 
-export function useCatalog() {
-  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
-  return useQuery<CatalogEntryDto[]>({
-    queryKey: ['catalog'],
-    queryFn: async () => unwrapCatalogOutcome(await window.api.catalog.list()),
-    enabled: isCinnaUser,
-    // An expired session does not heal on retry; show Re-authenticate now.
-    retry: (failures, err) => !isReauthRequiredError(err) && failures < 3,
-    staleTime: 60_000
-  })
-}
-
 /**
- * The catalog dialog's list: every item of every kind from main's cached
+ * The catalog's list — the dialog's, Settings → Catalog's and the composer
+ * picker's: every item of every kind from main's cached
  * `GET /catalog/items` — the listing team sharing reads too. Keyed by
  * profile, since a list read under one account is not the next one's; under
  * `['catalog']`, so every install, update and Refresh that invalidates the
@@ -54,14 +41,52 @@ export function useCatalogItems(options: { refresh?: boolean } = {}) {
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const refresh = options.refresh === true
-  return useQuery<CatalogItemsListing | null>({
+  const queryClient = useQueryClient()
+  const result = useQuery<CatalogItemsListing | null>({
     queryKey: catalogItemsKey(profileId),
-    queryFn: async () => unwrapCatalogOutcome(await window.api.catalog.items(refresh)),
+    queryFn: async ({ client, queryKey }) => {
+      const relist = listingSurfaceOpen(client, queryKey)
+      inFlightRelists.set(client.getQueryCache().find({ queryKey, exact: true })?.queryHash ?? '', relist)
+      return unwrapCatalogOutcome(await window.api.catalog.items(relist))
+    },
     enabled: isCinnaUser,
     staleTime: 60_000,
     refetchOnMount: refresh ? 'always' : true,
+    meta: { [RELIST]: refresh },
     retry: (failures, err) => !isReauthRequiredError(err) && failures < 2
   })
+  // A surface that lists again, mounting while the picker's cache-only read is
+  // on its way, joins that read instead of starting its own (TanStack runs one
+  // fetch per query): cancel it and list again. After the query's own mount
+  // effects, so a fetch this mount started has already decided to list.
+  // TanStack cancels only a re-read (the query holds data); a first read is
+  // joined, and the listing main starts with the profile answers that one.
+  useEffect(() => {
+    if (!refresh || !isCinnaUser) return
+    const query = queryClient.getQueryCache().find({ queryKey: catalogItemsKey(profileId), exact: true })
+    if (query?.state.fetchStatus === 'fetching' && inFlightRelists.get(query.queryHash) === false) {
+      void queryClient.refetchQueries({ queryKey: catalogItemsKey(profileId), exact: true }, { cancelRefetch: true })
+    }
+  }, [refresh, isCinnaUser, profileId, queryClient])
+  return result
+}
+
+const RELIST = 'catalogRelist'
+
+/** Per query: whether its latest fetch lists again, so a surface mounting mid-fetch knows. */
+const inFlightRelists = new Map<string, boolean>()
+
+/**
+ * Whether a surface that lists again (the dialog, Settings → Catalog) is
+ * observing the query now. Asked of the observers, each by its own options:
+ * the query is shared with the composer picker, which reads the cache, and
+ * TanStack hands the query the options of whichever observer rendered last —
+ * so a `queryFn` closing over its own `refresh` made the dialog's Refresh read
+ * the stale cache whenever the picker had rendered after it.
+ */
+function listingSurfaceOpen(client: QueryClient, queryKey: readonly unknown[]): boolean {
+  const query = client.getQueryCache().find({ queryKey, exact: true })
+  return query?.observers.some((observer) => observer.options.meta?.[RELIST] === true) ?? false
 }
 
 /**
@@ -153,27 +178,11 @@ export function useRefreshCatalogState() {
 }
 
 /**
- * Quick install — POST /catalog/{bundle_id}/install with empty payload.
- * On success the shared catalog-state refresh runs so the card flips to
- * "Active" and the new install appears in the agent selector without a
- * page refresh.
- */
-export function useQuickInstallBundle() {
-  const refreshCatalogState = useRefreshCatalogState()
-  return useMutation<CatalogInstallResultDto, Error, string>({
-    mutationFn: async (bundleId: string) =>
-      unwrapCatalogOutcome(await window.api.catalog.quickInstall(bundleId)),
-    onSuccess: refreshCatalogState
-  })
-}
-
-/**
  * Uninstall — `POST /agents/{installId}/uninstall` on cinna-server. On
- * success runs the shared catalog-state refresh so the card flips back to
- * uninstalled and the remote-agent sync drops the row immediately. Errors
- * are surfaced to the caller (CatalogCard renders a toast); we deliberately
- * don't show a global toast here because the card needs to keep the
- * confirmation modal open so the user sees the error in context.
+ * success runs the shared catalog-state refresh so the item reads as not
+ * installed and the remote-agent sync drops the row immediately. Errors are
+ * read from the mutation by the caller (`useCatalogActions`), which keeps the
+ * confirmation open so the user sees the error in context.
  */
 export function useUninstallBundle() {
   const refreshCatalogState = useRefreshCatalogState()

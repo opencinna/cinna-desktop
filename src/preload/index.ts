@@ -165,7 +165,6 @@ import {
 import type { TaskDelegationsDto } from '../shared/delegations'
 import type { HandoverDto, HandoverIgnoreCheck, HandoverSetting } from '../shared/handovers'
 import type {
-  CatalogEntryDto,
   CatalogInstallResultDto,
   CatalogOutcome,
   InstallContextDto,
@@ -1489,7 +1488,6 @@ const api = {
   catalog: {
     // Both resolve with a `CatalogOutcome`; the renderer unwraps it, since a
     // code thrown from here would not survive contextBridge.
-    list: (): Promise<CatalogOutcome<CatalogEntryDto[]>> => ipcRenderer.invoke('catalog:list'),
     quickInstall: (bundleId: string): Promise<CatalogOutcome<CatalogInstallResultDto>> =>
       ipcRenderer.invoke('catalog:quick-install', bundleId),
     installContext: (bundleId: string): Promise<InstallContextDto> =>

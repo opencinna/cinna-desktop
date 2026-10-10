@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, Bot, Check, Download, Loader2, Plug, Search, Sparkles, X } from 'lucide-react'
+import { CATALOG_TEXT } from '../../utils/catalogItems'
+import { CatalogKindBadge } from './CatalogKindBadge'
+import { CHIP, KindIcon, PRIMARY } from './CatalogItemViews'
+import { useCatalogType } from './catalogSurface'
 
 export interface AgentPickerItem {
   id: string
@@ -15,19 +19,24 @@ export interface AgentPickerItem {
 }
 
 /**
- * A not-yet-installed catalog bundle, rendered in the dedicated "Catalog"
- * section at the bottom of the picker. Unlike {@link AgentPickerItem} these
- * carry an Install action rather than a selection toggle — installing one
- * makes it a normal selectable capability (see `useCatalogPicker`).
+ * A catalog agent not on this computer yet, rendered in the dedicated
+ * "Catalog" section at the bottom of the picker. Unlike {@link AgentPickerItem}
+ * these carry a Get action rather than a selection toggle — getting one makes
+ * it a normal selectable capability (see `useCatalogPicker`).
  */
 export interface CatalogPickerItem {
-  bundleId: string
+  /** The catalog item's uuid. */
+  id: string
+  /** Runs in Cinna or on this computer: its badge, as the catalog dialog shows it. */
+  kind: 'cloud_agent' | 'desktop_agent'
   name: string
   description?: string | null
-  /** Publisher attribution shown under the name. */
+  /** Who stands behind it (maintainers or publisher), shown under the name. */
   meta?: string | null
-  /** Publisher email, shown alongside the attribution. */
-  email?: string | null
+  /** The latest version's label, in a chip beside the badge. */
+  version?: string | null
+  /** "Needs …": the credentials it asks for. */
+  needs?: string | null
 }
 
 interface AgentPickerModalProps {
@@ -63,15 +72,16 @@ interface AgentPickerModalProps {
   activeFirst?: boolean
   // --- catalog section (optional, multi-select only) ---
   /**
-   * Not-yet-installed catalog bundles shown in a dedicated section at the
-   * bottom of the list. Each renders with an Install button instead of a
-   * selection toggle; installing one quick-installs it and hands the new
-   * agent id back through `onInstallCatalog` so the owner can select it.
+   * Catalog agents not on this computer yet, shown in a dedicated section at
+   * the bottom of the list. Each renders with a Get button instead of a
+   * selection toggle; the owner gets it and selects the agent it lands as.
    */
   catalogItems?: CatalogPickerItem[]
-  /** Bundle id whose install is currently in flight (drives the spinner). */
-  installingBundleId?: string | null
-  onInstallCatalog?: (bundleId: string) => void
+  /** Catalog item whose Get is in flight (drives the spinner). */
+  installingCatalogId?: string | null
+  /** A Get is running: every Get button waits. */
+  catalogBusy?: boolean
+  onInstallCatalog?: (id: string) => void
   /** Section label for the catalog group. */
   catalogLabel?: string
   /** Last install error, shown inline above the catalog cards. */
@@ -113,7 +123,8 @@ export function AgentPickerModal({
   onToggle,
   activeFirst = false,
   catalogItems,
-  installingBundleId = null,
+  installingCatalogId = null,
+  catalogBusy = false,
   onInstallCatalog,
   catalogLabel = 'Catalog',
   catalogError = null
@@ -123,6 +134,8 @@ export function AgentPickerModal({
   const cardRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const cardRefs = useRef<(HTMLButtonElement | null)[]>([])
+  // The catalog cards take the catalog dialog's scale, as its tiles do.
+  const type = useCatalogType()
 
   // Active-first snapshot. Read selection through a ref so toggling doesn't
   // re-sort the list (the snapshot only refreshes on open or when the item
@@ -451,8 +464,8 @@ export function AgentPickerModal({
                 </div>
               ))}
 
-              {/* Catalog section — not-yet-installed bundles with a quick
-                  Install action. Sits at the very bottom, after the user's
+              {/* Catalog section — catalog agents not on this computer yet,
+                  with a Get action. Sits at the very bottom, after the user's
                   own agents/MCP. */}
               {filteredCatalog.length > 0 && (
                 <div>
@@ -471,12 +484,14 @@ export function AgentPickerModal({
                   )}
                   <div className="grid grid-cols-2 gap-2">
                     {filteredCatalog.map((item) => {
-                      const isInstalling = installingBundleId === item.bundleId
-                      const busy = installingBundleId !== null
+                      const isInstalling = installingCatalogId === item.id
+                      // The catalog tile's lines, in its order and at its scale (ux_rules rule 13).
                       return (
                         <div
-                          key={item.bundleId}
-                          className="relative flex flex-col p-3 rounded-lg border bg-[var(--color-bg-secondary)] border-[var(--color-border)]"
+                          key={item.id}
+                          role="group"
+                          aria-label={item.name}
+                          className="relative flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40"
                         >
                           {isInstalling && (
                             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-[var(--color-bg-secondary)]/70 backdrop-blur-sm">
@@ -486,45 +501,55 @@ export function AgentPickerModal({
                               />
                             </div>
                           )}
-                          <div className="flex items-center gap-2">
-                            <div className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)]">
-                              <Bot size={14} />
-                            </div>
-                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">
-                              {item.name}
+                          <div className="flex flex-1 flex-col gap-1 p-3">
+                            <span className="flex w-full min-w-0 items-center gap-2">
+                              <KindIcon kind={item.kind} size="tile" />
+                              <span title={item.name} className={`min-w-0 flex-1 truncate ${type.name} font-medium text-[var(--color-text)]`}>
+                                {item.name}
+                              </span>
                             </span>
-                          </div>
-                          {item.description && (
-                            <div className="mt-1.5 text-[10px] line-clamp-2 text-[var(--color-text-muted)]">
-                              {item.description}
-                            </div>
-                          )}
-                          {(item.meta || item.email) && (
-                            <div className="mt-1.5 text-[9px] text-[var(--color-text-muted)] truncate">
-                              by {item.meta ?? item.email}
-                              {item.meta && item.email && ` <${item.email}>`}
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => onInstallCatalog?.(item.bundleId)}
-                            className="mt-2 inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
-                              bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
-                              disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                          >
-                            {isInstalling ? (
-                              <>
-                                <Loader2 size={11} className="animate-spin" />
-                                Installing…
-                              </>
-                            ) : (
-                              <>
-                                <Download size={11} />
-                                Install
-                              </>
+                            <span className="flex w-full min-w-0 flex-wrap items-center gap-1.5">
+                              <CatalogKindBadge kind={item.kind} />
+                              {item.version && <span className={`${CHIP} ${type.meta}`}>{item.version}</span>}
+                            </span>
+                            {item.meta && (
+                              <span className={`block w-full truncate ${type.meta} text-[var(--color-text-muted)]`} title={CATALOG_TEXT.by(item.meta)}>
+                                {CATALOG_TEXT.by(item.meta)}
+                              </span>
                             )}
-                          </button>
+                            {item.description && (
+                              <span className={`line-clamp-3 ${type.body} leading-relaxed text-[var(--color-text-secondary)]`}>
+                                {item.description}
+                              </span>
+                            )}
+                            {item.needs && (
+                              <span className={`block w-full truncate ${type.meta} text-[var(--color-text-muted)]`} title={item.needs}>
+                                {item.needs}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-end gap-1.5 border-t border-[var(--color-border)] px-3 py-2">
+                            <button
+                              type="button"
+                              disabled={catalogBusy}
+                              aria-busy={isInstalling}
+                              title={catalogBusy && !isInstalling ? CATALOG_TEXT.anotherGetting : undefined}
+                              onClick={() => onInstallCatalog?.(item.id)}
+                              className={PRIMARY}
+                            >
+                              {isInstalling ? (
+                                <>
+                                  <Loader2 size={11} className="animate-spin" />
+                                  {CATALOG_TEXT.getting}
+                                </>
+                              ) : (
+                                <>
+                                  <Download size={11} />
+                                  {CATALOG_TEXT.get}
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       )
                     })}

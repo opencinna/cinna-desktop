@@ -68,6 +68,15 @@ export const CATALOG_TEXT = {
   /** A cloud agent installed but not synced to this computer yet, so there is nothing to Open. */
   installed: 'Installed',
   open: 'Open',
+  openInCinna: 'Open in Cinna',
+  openInCinnaLabel: (name: string) => `Open ${name} in Cinna`,
+  uninstall: 'Uninstall',
+  uninstallLabel: (name: string) => `Uninstall ${name}`,
+  uninstallFailed: 'The agent could not be uninstalled.',
+  /** Settings → Catalog, when the active profile is not a Cinna account. */
+  signedOut: 'The catalog is available when signed in to a Cinna account.',
+  /** Settings → Catalog's one section. */
+  sectionTitle: 'Agents and skills',
   anotherGetting: 'Another agent is being added',
   needs: (names: string) => `Needs ${names}`,
   by: (names: string) => `by ${names}`,

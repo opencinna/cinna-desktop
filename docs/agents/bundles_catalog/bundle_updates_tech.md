@@ -2,12 +2,12 @@
 
 Cross-cutting technical reference for detecting that an installed bundle is behind the publisher's latest revision and applying the update in-app. Business behavior lives in [Bundles Catalog → Update Available](./bundles_catalog.md#update-available); this file documents the implementation, which spans the **catalog** and **agents** domains plus a shared Cinna HTTP client.
 
-## Data Source: sync, not catalog
+## Data Source: the sync first, the listing before it
 
-The version state rides the **agent-sync feed**, not the catalog list:
+The version state rides the **agent-sync feed**:
 
 - `GET /api/v1/external/agents` attaches a `bundle_version` object to each consumer-install target (`installed_version` / `installed_revision_number`, `latest_version` / `latest_revision_number`, `update_available`, `update_mode`, `last_update_status`). Present only for the caller's own consumer installs (`target_type='agent'`, has `bundle_uuid`, `is_publisher_install=false`); `null` otherwise. Server-computed read-only (discovery never mutates `pending_update`).
-- The catalog list (`GET /api/v1/catalog/`) still carries only `user_install_pending_update` (boolean) + `latest_version`. The desktop projects this to `CatalogEntryDto.pendingUpdate` and uses it as a **fallback** when the matching synced agent hasn't loaded yet (the boolean can flag an update but can't name the installed version).
+- Before an install has synced into an agent row, the catalog's item listing (`GET /api/v1/catalog/items`) is the **fallback**: the caller's install in the item's `my_installs` has a `revision_number`, and an install below the item's `latest.revision_number` is behind. The listing can flag an update but carries no `update_mode`, so the catalog offers **Update** whatever the mode.
 
 Server reference: `workflow-runner-core/backend/app/models/external/external_agents.py` (`BundleVersionInfo`), `ExternalAgentCatalogService.build_bundle_version_info`, and the native routes in `backend/app/api/routes/external_agents.py`.
 
@@ -15,13 +15,12 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 
 ### Shared
 - `src/shared/agentMetadata.ts` — `BundleVersionInfo` interface; `RemoteAgentMetadata.bundle_version` field (the data carrier persisted on synced agents)
-- `src/shared/catalog.ts` — `CatalogEntryDto.pendingUpdate` (fallback boolean from the catalog list)
+- `src/shared/catalogItems.ts` — `CatalogInstallWire.revision_number` and `CatalogLatestWire.revision_number` (the fallback comparison)
 
 ### Main Process
 - `src/main/services/cinna-http.ts` — shared authenticated Cinna HTTP client (`cinnaFetch`, `resolveBaseUrl`); used by both `agentService` and `catalogService`
 - `src/main/services/agentService.ts` — `ExternalTarget.bundle_version` ingest field; sync mapping carries `bundle_version` into `remoteMetadata`; `applyBundleUpdate(userId, installId)`
 - `src/main/ipc/agent.ipc.ts` — `agent:apply-bundle-update` handler
-- `src/main/services/catalogService.ts` — `projectEntry` maps `user_install_pending_update` → `pendingUpdate`
 - `src/main/errors.ts` — `AgentErrorCode` gains `update_failed`
 - `src/main/services/inboxService.ts` — `list()` appends `cloudUpdateItems()` to the desktop agents' items in `InboxSnapshot.updates`
 
@@ -29,12 +28,10 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 - `src/preload/index.ts` — `window.api.agents.applyBundleUpdate(installId)` typed binding (the catalog namespace has no apply-update method — the action is agents-scoped)
 
 ### Renderer
-- `src/renderer/src/utils/bundleVersion.ts` — `deriveBundleUpdate(bundleVersion)` → `BundleUpdateState` (`updateAvailable`, `installedLabel`, `latestLabel`); shared label/gate derivation for both surfaces
+- `src/renderer/src/utils/bundleVersion.ts` — `deriveBundleUpdate(bundleVersion)` → `BundleUpdateState` (`updateAvailable`, `installedLabel`, `latestLabel`); the agent page's label/gate derivation
 - `src/renderer/src/hooks/useAgents.ts` — `useApplyBundleUpdate()` mutation
-- `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — joins catalog entries to synced agents' `bundle_version`; `handleUpdate`; `updatingBundleId`
-- `src/renderer/src/components/settings/CatalogCard.tsx` — `bundleVersion` prop; the "Update to v\<latest>" header action
 - `src/renderer/src/components/settings/AgentCard.tsx` — Connection update banner from `agent.remoteMetadata.bundle_version`
-- `src/renderer/src/components/agents/CatalogItemViews.tsx`, `CatalogBrowserModal.tsx` — the Catalog dialog's **Update** on a Runs in Cinna tile; `LocalAgentsList.tsx` owns its `useApplyBundleUpdate` (see [Bundles Catalog tech](./bundles_catalog_tech.md#sidebar-catalog-dialog))
+- `src/renderer/src/hooks/useCatalogEntries.ts` (`catalogEntryViews`: `updateAvailable`), `src/renderer/src/components/agents/CatalogItemViews.tsx` — the catalog's **Update** on a Runs in Cinna tile and detail, in the dialog and Settings → Catalog; `src/renderer/src/hooks/useCatalogActions.ts` owns its `useApplyBundleUpdate` (see [Bundles Catalog tech](./bundles_catalog_tech.md#the-shared-catalog-entries-actions-parts))
 - `src/main/services/cloudUpdateNotices.ts` — `cloudUpdateItems(profileUserId?)`, the Inbox's cloud **Update available** cards; `src/renderer/src/components/inbox/InboxUpdateCard.tsx` — `UpdateAvailableCard`, whose Update for a cloud agent is `useApplyBundleUpdate`
 
 ## Database Schema
@@ -47,7 +44,7 @@ None new. `bundle_version` is persisted inside the existing `agents.remote_metad
 |---------|------|---------|
 | `agent:apply-bundle-update` | `installId: string` | `{ success: boolean; bundleVersion?: BundleVersionInfo; code?: string; error?: string }` |
 
-Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server Agent UUID — i.e. the catalog entry's `userInstallId` or a synced agent's `remoteTargetId` (both the same value). Gated by `userActivation.requireActivated()` + `getProfileScopeUserId()`.
+Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server Agent UUID — i.e. the `install_id` in a catalog item's `my_installs` or a synced agent's `remoteTargetId` (both the same value). Gated by `userActivation.requireActivated()` + `getProfileScopeUserId()`.
 
 ## Services & Key Methods
 
@@ -55,40 +52,30 @@ Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server 
 - Validates `installId` against `UUID_RE`, throwing `AgentError('invalid_id')` before any request is built
 - `POST /api/v1/external/agents/{installId}/apply-update` via the shared `cinnaFetch` → returns the post-update `BundleVersionInfo` snapshot
 - Logs `apply bundle update start` / `done` (with `installedRevision`, `latestRevision`, `durationMs`) / `failed` (with the `CinnaApiError.code`)
-- Error contract inherited from `cinnaFetch`: 401/403 → `CinnaApiError('reauth_required')`, other non-2xx → `request_failed`. The renderer can branch on `err.code === 'reauth_required'` **because the handler returns the code as data, not because it survives a throw**: `agent:apply-bundle-update` catches internally, calls `ipcErrorShape(err)`, and returns `{success:false, code, error}`, which `useApplyBundleUpdate` turns back into a `code`-tagged `Error` renderer-side. A thrown `DomainError` loses its `code` at two boundaries — see [Main-Process Layering](../../development/main_layering/main_layering_llm.md). This distinction is load-bearing: `catalog:list` and `catalog:quick-install` return a `CatalogOutcome` for the same reason (their `reauth_required` branches were dead until 17 Sep 2026, when they still threw), while the other `catalog:*` channels still throw — see Security in [Bundles Catalog tech](./bundles_catalog_tech.md)
+- Error contract inherited from `cinnaFetch`: 401/403 → `CinnaApiError('reauth_required')`, other non-2xx → `request_failed`. The renderer can branch on `err.code === 'reauth_required'` **because the handler returns the code as data, not because it survives a throw**: `agent:apply-bundle-update` catches internally, calls `ipcErrorShape(err)`, and returns `{success:false, code, error}`, which `useApplyBundleUpdate` turns back into a `code`-tagged `Error` renderer-side. A thrown `DomainError` loses its `code` at two boundaries — see [Main-Process Layering](../../development/main_layering/main_layering_llm.md). This distinction is load-bearing: `catalog:items`, `catalog:item` and `catalog:quick-install` return a `CatalogOutcome` for the same reason (the list's and the install's `reauth_required` branches were dead until 17 Sep 2026, when they still threw), while the other `catalog:*` channels still throw — see Security in [Bundles Catalog tech](./bundles_catalog_tech.md)
 - Server applies the latest revision in place (stop env → swap bundle folders → restart → refresh prompts); per-bundle App Data + credentials preserved
 
 ### `cinnaFetch<T>(userId, path, opts)` (`src/main/services/cinna-http.ts`)
 - The single Cinna HTTP client, extracted from `catalogService` so both services share auth, error mapping, and latency logging (scope `cinna-http`). See [Bundles Catalog tech](./bundles_catalog_tech.md) for the full error-mapping table
 
 ### `deriveBundleUpdate(bundleVersion)` (`src/renderer/src/utils/bundleVersion.ts`)
-- Pure helper. Produces `updateAvailable` (trusts `bundle_version.update_available`) and the `installedLabel` / `latestLabel` strings (`v<version>` preferred, `rev <n>` fallback, `null` when neither known). Shared by `CatalogCard` and `AgentCard` so the two surfaces render identical labels
+- Pure helper. Produces `updateAvailable` (trusts `bundle_version.update_available`) and the `installedLabel` / `latestLabel` strings (`v<version>` preferred, `rev <n>` fallback, `null` when neither known). Used by `AgentCard`; the catalog's **Update** needs only the gate, which it reads from `bundle_version.update_available` directly
 
 ### `useApplyBundleUpdate()` (`src/renderer/src/hooks/useAgents.ts`)
 - Mutation over `window.api.agents.applyBundleUpdate`; rejects with a `code`-tagged `Error` so callers branch on `reauth_required`
 - `onSuccess`: invalidates `['catalog']` and fires `window.api.agents.syncRemote()`. Deliberately does **not** invalidate `['agents']` directly — the sync's `agents:remote-sync-complete` broadcast does it once the fresh `bundle_version` has landed, avoiding the stale-read race (same rule as `useRefreshCatalogState`)
-- The card's update state is driven by the synced `bundle_version`, so refreshing it depends on `['agents']` being invalidated. The `agent:sync-remote` IPC handler now emits `agents:remote-sync-complete` via `notifyRemoteSyncComplete` (`src/main/agents/remote-sync.ts`) — previously only the periodic/activation runner did, so a renderer-triggered sync wrote the DB but never told the renderer to refetch, leaving the "Update available" affordance stuck on screen after a successful update
+- The catalog's and the agent page's update state is driven by the synced `bundle_version`, so refreshing it depends on `['agents']` being invalidated. The `agent:sync-remote` IPC handler now emits `agents:remote-sync-complete` via `notifyRemoteSyncComplete` (`src/main/agents/remote-sync.ts`) — previously only the periodic/activation runner did, so a renderer-triggered sync wrote the DB but never told the renderer to refetch, leaving the "Update available" affordance stuck on screen after a successful update
 - Note: the desktop does not call the server's `POST /external/agents/{id}/check-updates` route — the discovery snapshot (`bundle_version` on sync) is the only update-state source the UI reads
 
 ## Renderer Components
-
-### `CatalogSettingsSection`
-- Builds `bundleVersionByInstall: Map<installId, BundleVersionInfo>` via `useMemo` over `useAgents()` data, keyed by `remoteTargetId` for `source === 'remote'` && `remoteTargetType === 'agent'` agents. Declared before the `!isCinnaUser` early return to keep hook order stable
-- Passes `bundleVersion={bundleVersionByInstall.get(entry.userInstallId)}` to each `CatalogCard`
-- `handleUpdate(bundleId, installId, displayName)` tracks `updatingBundleId` (one install/update at a time), calls `applyUpdate.mutateAsync(installId)`, toasts success/error (reauth code → re-auth-prompted toast)
-
-### `CatalogCard`
-- New `bundleVersion?` prop. `hasUpdate = entry.isInstalled && (bundleVersion ? bundleUpdate.updateAvailable : entry.pendingUpdate)` — trusts the synced snapshot, falls back to the catalog boolean
-- When `hasUpdate`: status dot turns amber, the neutral `v<latest>` chip is replaced by an amber `v1.0 → v1.2` transition chip (or "Update available" when only one end is known), and the right-side action becomes an amber **"Update to v\<latest>"** button (`ArrowUpCircle`, → "Update" when no version string). Header slot is the same one the Install button / "Installed" indicator occupy
-- Gates on `updating`/`disabled` from the parent
 
 ### `AgentCard`
 - Reads `agent.remoteMetadata.bundle_version` directly; `showUpdate = isBundleInstall && bundleUpdate.updateAvailable`
 - The routed agent page passes `connectionOnly`: its legacy header pills are hidden, and Profile → Agents renders visibility rows instead of cards.
 - Settings → Connection: amber banner "Bundle update available · v1.0 → v1.2" + "Update to v\<latest>" button (`useApplyBundleUpdate`, `applyUpdate.isPending` spinner). `updateError` local state renders inline; `reauth_required` code maps to a re-auth message
 
-### Catalog dialog tile
-- The **Update** on a Runs in Cinna tile reads the synced row's `bundle_version.update_available` (the row found by `remoteTargetId` = the install id), and before the agent has synced, the listing's own numbers: the install's `revision_number` below the item's `latest.revision_number`. It is offered whatever the `update_mode`. Its busy state and failure come from `LocalAgentsList`'s `useApplyBundleUpdate`
+### Catalog tile and detail (the dialog and Settings → Catalog)
+- The **Update** on a Runs in Cinna tile or detail reads the synced row's `bundle_version.update_available` (the row found by `remoteTargetId` = the install id), and before the agent has synced, the listing's own numbers: the install's `revision_number` below the item's `latest.revision_number`. It is offered whatever the `update_mode`. Its busy state and failure come from the `useApplyBundleUpdate` that `useCatalogActions` holds for the surface's host; all Updates wait while one runs
 
 ### Inbox card (`cloudUpdateItems`)
 - One `UpdateAvailableInboxItem` (`target: 'cloud_agent'`, `installId`) per synced remote agent of the active profile (`agentRepo.listRemote`) whose `bundle_version.update_available` is true, whose `update_mode` is not `automatic`, and which has a `remoteTargetId`. A server that applies updates on its own needs no button, so it gets no card

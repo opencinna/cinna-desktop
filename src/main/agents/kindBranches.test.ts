@@ -343,12 +343,6 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'the bundle-install pill and update belong to a Cinna-synced install'
   },
   {
-    file: 'src/renderer/src/components/settings/CatalogSettingsSection.tsx',
-    category: 'source',
-    count: 1,
-    why: "a synced install's bundle version, keyed by its Cinna install id"
-  },
-  {
     file: 'src/renderer/src/components/jobs/JobEditForm.tsx',
     category: 'source',
     count: 1,

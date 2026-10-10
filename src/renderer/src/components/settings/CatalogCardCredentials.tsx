@@ -22,15 +22,15 @@ import {
 } from 'lucide-react'
 import type {
   CatalogCredentialSpec,
-  CatalogEntryDto,
   InstallContextPublisherSummaryDto,
   InstallContextSpecDto
 } from '../../../../shared/catalog'
 import { useInstallContext } from '../../hooks/useCatalog'
+import { useCatalogType } from '../agents/catalogSurface'
 
 interface CatalogCardCredentialsProps {
-  /** A catalog entry, or the same two facts of any catalog item (the catalog dialog's). */
-  entry: Pick<CatalogEntryDto, 'bundleId' | 'requiredCredentialSpecs'>
+  /** The two facts of a catalog item this reads: its catalog id and its credential slots. */
+  entry: { bundleId: string; requiredCredentialSpecs: CatalogCredentialSpec[] }
   /** Gates the lazy install-context fetch; pass false for installed bundles. */
   enabled: boolean
   /** One step down the type scale (12px → 11px), for the catalog dialog's detail. */
@@ -201,6 +201,8 @@ export function CatalogCardCredentials({
   compact = false
 }: CatalogCardCredentialsProps): React.JSX.Element | null {
   const text: TextSize = compact ? 'text-[11px]' : 'text-[12px]'
+  // Its block labels are the detail's sub-headings, styled as Versions is.
+  const { subheading } = useCatalogType()
   const installContext = useInstallContext(entry.bundleId, enabled)
   const ctxBySpec = useMemo(
     () =>
@@ -242,7 +244,7 @@ export function CatalogCardCredentials({
 
       {entry.requiredCredentialSpecs.length > 0 && (
         <div>
-          <label className={`flex items-center gap-1.5 ${text} text-[var(--color-text-muted)] mb-1`}>
+          <label className={`flex items-center gap-1.5 ${subheading} text-[var(--color-text-muted)] mb-1`}>
             Required credentials ({entry.requiredCredentialSpecs.length})
             {installContext.isFetching && (
               <Loader2
@@ -286,7 +288,7 @@ export function CatalogCardCredentials({
        */}
       {installContext.data && (
         <div>
-          <label className={`flex items-center gap-1.5 ${text} text-[var(--color-text-muted)] mb-1`}>
+          <label className={`flex items-center gap-1.5 ${subheading} text-[var(--color-text-muted)] mb-1`}>
             AI credentials
           </label>
           <div className="space-y-0.5">

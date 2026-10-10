@@ -1,5 +1,6 @@
 import { Cloud, Monitor, Puzzle, type LucideIcon } from 'lucide-react'
 import { CATALOG_KIND_TEXT, type CatalogItemKind } from '../../utils/catalogItems'
+import { useCatalogType } from './catalogSurface'
 
 /** The icon each kind of catalog item wears, on a tile, a detail and an Inbox card. */
 export const CATALOG_KIND_ICON: Record<CatalogItemKind, LucideIcon> = {
@@ -14,8 +15,9 @@ export const CATALOG_KIND_ICON: Record<CatalogItemKind, LucideIcon> = {
  * dialog's tiles and detail, and the Inbox's "Update available" cards.
  */
 export function CatalogKindBadge({ kind }: { kind: CatalogItemKind }): React.JSX.Element {
+  const type = useCatalogType()
   return (
-    <span className="inline-flex shrink-0 items-center rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px text-[10px] font-medium text-[var(--color-text-secondary)]">
+    <span className={`inline-flex shrink-0 items-center rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px ${type.meta} font-medium text-[var(--color-text-secondary)]`}>
       {CATALOG_KIND_TEXT[kind]}
     </span>
   )

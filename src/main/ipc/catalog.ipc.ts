@@ -34,11 +34,6 @@ async function outcome<T>(channel: string, run: () => Promise<T>): Promise<Catal
 }
 
 export function registerCatalogHandlers(): void {
-  ipcHandle('catalog:list', async () => {
-    userActivation.requireActivated()
-    return outcome('catalog:list', () => catalogService.list(getProfileScopeUserId()))
-  })
-
   /**
    * The one-catalog dialog's list: every item of every kind, from the same
    * cached listing team sharing reads. `refresh` lists again first.

@@ -3,36 +3,10 @@
  * the main-process service, preload bindings, and the renderer settings UI
  * so the wire shape stays consistent.
  *
- * Mirrors a subset of cinna-server's `CatalogEntryPublic`,
- * `SetupStatusResponse`, and `SetupCredentialSummary` Pydantic models — only
- * the fields the desktop renders are kept.
+ * Mirrors a subset of cinna-server's `SetupStatusResponse` and
+ * `SetupCredentialSummary` Pydantic models — only the fields the desktop
+ * renders are kept.
  */
-
-export interface CatalogEntryDto {
-  bundleId: string
-  bundleUuid: string
-  displayName: string
-  description: string | null
-  publisherName: string | null
-  publisherEmail: string | null
-  publisherHandle: string | null
-  visibility: string
-  latestVersion: string | null
-  latestRevisionNumber: number | null
-  latestPublishedAt: string | null
-  installCount: number
-  isInstalled: boolean
-  /** Set when `isInstalled` — the user's local Agent UUID on the server. */
-  userInstallId: string | null
-  /**
-   * True when `isInstalled` AND the user's install is behind the bundle's
-   * latest published revision — i.e. an update to `latestVersion` is
-   * available. Mirrors cinna-server's `user_install_pending_update`. Drives
-   * the catalog card's "Update to v<latestVersion>" affordance.
-   */
-  pendingUpdate: boolean
-  requiredCredentialSpecs: CatalogCredentialSpec[]
-}
 
 export interface CatalogCredentialSpec {
   name: string
@@ -124,7 +98,7 @@ export interface InstallContextDto {
 }
 
 /**
- * What `catalog:list` and `catalog:quick-install` resolve with.
+ * What `catalog:items`, `catalog:item` and `catalog:quick-install` resolve with.
  *
  * A failure is returned, not thrown: a thrown error's `code` does not survive
  * `ipcMain.handle` and `contextBridge` (see `src/main/ipc/_wrap.ts`), and the
