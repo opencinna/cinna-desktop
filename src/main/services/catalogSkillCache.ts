@@ -25,8 +25,8 @@
  * Core: no Electron. Paths come from `runtimeHost`.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { getProfileScopeUserId } from '../auth/scope'
 import { libraryService } from './libraryService'
@@ -112,8 +112,44 @@ function readMarker(revisionDir: string): CachedRevisionMarker | null {
   }
 }
 
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Whether `path` is a real folder: there, a directory, and not a link to one. */
+function isRealDir(path: string): boolean {
+  try {
+    const stat = lstatSync(path)
+    return stat.isDirectory() && !stat.isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The folders from the cache root down to `dir`, root first, or null when
+ * `dir` is not under the root. Every one is checked with `lstat`: a link
+ * anywhere in the chain would make the cache read, or write, somewhere else.
+ */
+function chainFrom(root: string, dir: string): string[] | null {
+  const rel = relative(root, dir)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null
+  const chain = [root]
+  for (const part of rel.split(sep)) chain.push(join(chain[chain.length - 1], part))
+  return chain
+}
+
 /** The skill folder in `revisionDir` when its marker matches the pin. */
 function readyDir(revisionDir: string, ref: NonNullable<ReturnType<typeof cacheRefOf>>): string | null {
+  // A linked `<uuid>` or revision folder is not a cached skill, whatever its marker says.
+  const root = cacheRoot()
+  const chain = root === null ? null : chainFrom(root, revisionDir)
+  if (chain === null || !chain.every(isRealDir)) return null
   const marker = readMarker(revisionDir)
   if (!marker) return null
   if (typeof marker.archive_sha256 !== 'string' || marker.archive_sha256.toLowerCase() !== ref.sha) return null
@@ -182,6 +218,11 @@ export const catalogSkillCache = {
   instanceKey,
   activeInstance,
 
+  /** The cache's root folder (`<userData>/catalog-skills`), or null on a host without `userData`. */
+  root(): string | null {
+    return cacheRoot()
+  },
+
   /** The revision folder a pin would be cached in on `instance`, or null for an unusable pin. */
   revisionDir(instance: string, ref: CatalogSkillRef): string | null {
     const root = cacheRoot()
@@ -233,7 +274,20 @@ export const catalogSkillCache = {
     const finalDir = catalogSkillCache.revisionDir(instance, ref)
     if (safe === null || finalDir === null) throw new Error('This pin cannot be cached.')
     const parent = join(finalDir, '..')
-    mkdirSync(parent, { recursive: true })
+    const root = cacheRoot()
+    const chain = root === null ? null : chainFrom(root, parent)
+    if (root === null || chain === null) throw new Error('This pin cannot be cached.')
+    // Folder by folder, never through a link: `mkdirSync(recursive)` would
+    // follow a linked `<instance>` or `<uuid>` folder and write wherever it points.
+    mkdirSync(dirname(root), { recursive: true })
+    for (const dir of chain) {
+      try {
+        mkdirSync(dir)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err
+      }
+      if (!isRealDir(dir)) throw new Error('The catalog skill cache holds a link where a folder should be.')
+    }
     sweepStaging(parent, safe.revision)
     const existing = readyDir(finalDir, safe)
     if (existing) return existing
@@ -241,7 +295,8 @@ export const catalogSkillCache = {
     const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
     // Something at the final path that is not this revision (no marker, or
     // another digest) is moved aside first, so the rename below can land.
-    if (existsSync(finalDir)) {
+    // `lstat`, not `exists`: a link there (even a dangling one) is moved aside, never followed.
+    if (lexists(finalDir)) {
       const aside = join(parent, `${safe.revision}.old-${stamp}`)
       renameSync(finalDir, aside)
       removeTree(aside)

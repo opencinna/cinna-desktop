@@ -178,6 +178,8 @@ export interface KitAgentSkillsPlugin {
   dir: string
   /** The deliverable skill names it links. */
   skills: string[]
+  /** Where linked catalog skills really live (the cache root); only when it links one. */
+  readPaths?: string[]
 }
 
 /**
@@ -193,7 +195,9 @@ export function ensureKitAgentSkillsPlugin(agent: { id: string; path: string }):
   const skills = kitAgentDeliverableSkills(agent.path, manifest)
   if (skills.length === 0) return null
   const dir = ensureAgentSkillsPlugin({ agentId: agent.id, slug, agentDir: agent.path, skills })
-  return dir ? { dir, skills: skills.map((skill) => skill.name) } : null
+  if (!dir) return null
+  const cacheRoot = skills.some((skill) => skill.source === 'catalog') ? catalogSkillCache.root() : null
+  return { dir, skills: skills.map((skill) => skill.name), ...(cacheRoot ? { readPaths: [cacheRoot] } : {}) }
 }
 
 /**

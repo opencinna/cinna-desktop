@@ -214,6 +214,7 @@ describe('pinned catalog skills', () => {
     writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ slug: 'invoice-reader', catalog_skills: [pinned] }))
     // Not on this computer yet: the agent's own skills only.
     expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.skills).toEqual(['broken', 'ledger', 'pdf-tools'])
+    expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.readPaths).toBeUndefined()
 
     const cached = catalogSkillCache.install(
       'https-cinna.test',
@@ -222,6 +223,8 @@ describe('pinned catalog skills', () => {
     )
     const built = ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })!
     expect(built.skills).toEqual(['broken', 'erp-lookup', 'ledger', 'pdf-tools'])
+    // OpenCode may read the real cache path a link resolves to.
+    expect(built.readPaths).toEqual([join(root, 'userData', 'catalog-skills')])
     expect(readlinkSync(join(built.dir, 'skills', 'erp-lookup'))).toBe(cached)
     expect(readlinkSync(join(built.dir, 'skills', 'ledger'))).toBe(join(agentDir, 'skills', 'ledger'))
     expect(readFileSync(join(built.dir, 'skills', 'erp-lookup', 'SKILL.md'), 'utf8')).toContain('name: erp-lookup')

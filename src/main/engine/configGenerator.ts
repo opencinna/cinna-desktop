@@ -400,6 +400,13 @@ export interface EngineAgentInput {
    * beside `cinna-tasks` so opening one does not stop the turn for a click.
    */
   skills?: string[]
+  /**
+   * Folders the linked skills really live in (the shared catalog-skill
+   * cache), allowed for reads only and never added to `skills.paths`.
+   * OpenCode checks the literal path a tool names: links work, but a model
+   * quoting the real cache path would otherwise stop the turn for a click.
+   */
+  skillReadPaths?: string[]
 }
 
 export interface EngineConfigInput {
@@ -684,7 +691,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       prompt: agent.prompt,
       permission: agent.permissionMode === 'replace'
         ? { '*': 'deny', ...agent.permissions }
-        : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], agent.skillPaths ?? []))
+        : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? [])]))
     }
     for (const path of agent.skillPaths ?? []) if (!skillPaths.includes(path)) skillPaths.push(path)
   }
@@ -839,8 +846,10 @@ function mergePermissions(
  * — the last matching rule wins, so `'*': 'ask'` stays first and still covers
  * any skill the agent did not author — and reads under its links folder
  * allowed the way the bundle's are: OpenCode reports a linked skill's
- * location under the links folder, outside the project. A manifest's own
- * `skill` or `external_directory` entry still replaces the whole entry.
+ * location under the links folder, outside the project. `skillPaths` here
+ * also carries the agent's `skillReadPaths` (the catalog-skill cache). A
+ * manifest's own `skill` or `external_directory` entry still replaces the
+ * whole entry.
  */
 function profileWithOwnSkills(
   profile: Record<string, unknown>,

@@ -289,9 +289,13 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
  * `cinna-tasks` there replaced the platform's. Nothing for a bare agent, for
  * one with no deliverable skill, or when the links folder could not be written.
  */
-function ownSkills(plugin: KitAgentSkillsPlugin | null): Pick<EngineAgentInput, 'skillPaths' | 'skills'> {
+function ownSkills(plugin: KitAgentSkillsPlugin | null): Pick<EngineAgentInput, 'skillPaths' | 'skills' | 'skillReadPaths'> {
   if (!plugin) return {}
-  return { skillPaths: [join(plugin.dir, SKILLS_DIR)], skills: plugin.skills }
+  return {
+    skillPaths: [join(plugin.dir, SKILLS_DIR)],
+    skills: plugin.skills,
+    ...(plugin.readPaths?.length ? { skillReadPaths: plugin.readPaths } : {})
+  }
 }
 
 /**

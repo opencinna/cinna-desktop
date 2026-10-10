@@ -36,11 +36,12 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 import { cinnaFetchBytes } from './cinna-http'
 import { libraryService, type CachedListing } from './libraryService'
-import { catalogSkillCache, instanceKey } from './catalogSkillCache'
+import { cacheRefOf, catalogSkillCache, instanceKey } from './catalogSkillCache'
 import { catalogLocalInstalls } from './catalogLocalInstalls'
 import { localAgentService } from './localAgents/localAgentService'
 import { scannerService } from './localAgents/scannerService'
 import { activeListing, linkedEntry } from './catalogSkillUpdates'
+import { libraryTrust } from './libraryTrust'
 import { gitService } from './localAgents/gitService'
 import { manifestPath, readManifest, readWithStamp, writeIfUnchanged } from '../kit/manifestIo'
 import { MAX_ARCHIVE_BYTES, readSkillArchive, SkillArchiveError } from '../kit/skillArchive'
@@ -135,14 +136,19 @@ function downloadRefusal(err: unknown): Refused {
  */
 function fetchRevision(profile: string, host: string, target: PinTarget): Promise<{ ok: true } | Refused> {
   const instance = instanceKey(host)
-  const key = `${instance}/${target.packageUuid.toLowerCase()}/${target.revisionNumber}`
+  // Nothing reaches the request path that is not a UUID, a revision number and a digest.
+  const safe = cacheRefOf(target)
+  if (safe === null) return Promise.resolve(refused('download_failed', 'This pin does not name a catalog skill version that can be downloaded.'))
+  // The digest is part of the key: two pins of one revision with different
+  // digests are two checks, and one must never answer for the other.
+  const key = `${instance}/${safe.uuid}/${safe.revision}/${safe.sha}`
   const running = inFlight.get(key)
   if (running) return running
   const run = (async (): Promise<{ ok: true } | Refused> => {
     if (catalogSkillCache.has(instance, target)) return { ok: true }
     let outcome: { ok: true } | Refused
     try {
-      const answer = await cinnaFetchBytes(profile, skillDownloadPath(target.packageUuid, target.revisionNumber), {
+      const answer = await cinnaFetchBytes(profile, skillDownloadPath(safe.uuid, Number(safe.revision)), {
         maxBytes: MAX_ARCHIVE_BYTES
       })
       if (!answer.ok) {
@@ -221,13 +227,36 @@ function targetOf(pin: Record<string, unknown>): PinTarget | null {
   }
 }
 
-const repoIdOf = (originUrl: string): string | null => {
+/**
+ * The repository id of an `origin` that is a Cinna team agent's, or null for
+ * any other remote. Cinna-ness is decided as `sharingService.parseRemote`
+ * decides it — `…/git/<repo_id>.git` on a git origin a Cinna instance this
+ * machine has a profile for has itself named (`libraryTrust`) — or by the
+ * folder's recorded `cinna.server`. The recorded server can only make this
+ * stricter (a refusal), never hand out a token, so it is enough here.
+ */
+function cinnaRepoIdOf(originUrl: string, cinnaServer: string | null): string | null {
+  let parsed: URL
   try {
-    const match = new URL(originUrl).pathname.match(/\/git\/([^/]+)\.git\/?$/)
-    return match ? decodeURIComponent(match[1]) : null
+    parsed = new URL(originUrl)
   } catch {
     return null
   }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+  const match = parsed.pathname.match(/\/git\/([^/]+)\.git\/?$/)
+  if (!match) return null
+  let repoId: string
+  try {
+    repoId = decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+  if (cinnaServer !== null) return repoId
+  const hosts = libraryService.knownHosts()
+  const trusted = [parsed.origin, ...libraryTrust.serversFor(parsed.origin)].some(
+    (server) => hosts.has(server) && libraryTrust.trusts(server, parsed.origin)
+  )
+  return trusted ? repoId : null
 }
 
 /**
@@ -235,16 +264,18 @@ const repoIdOf = (originUrl: string): string | null => {
  * shared repository may always; a shared one only with `edit` or
  * `maintain` in the catalog listing. Read from the folder's git `origin`,
  * matched to the listing by repository id, with the `shared_remote` link as
- * a second key.
+ * a second key. When git cannot answer (missing, or the read failed), the
+ * link alone decides, as `changeableFromLink` does for the rows.
  */
 async function changeability(dir: string, listing: CachedListing | null): Promise<'ok' | 'read_only' | 'access_unknown'> {
   const remote = await gitService.readShareRemote(dir)
   const linked = linkedEntry(dir, listing)
   if (!remote.ownRepo || remote.originUrl === null) {
-    // Not a repository of its own: a link alone, left by a folder copied out of one, decides nothing.
-    return 'ok'
+    if (!linked.linked) return 'ok'
+    if (linked.access === null) return 'access_unknown'
+    return linked.access === 'use' ? 'read_only' : 'ok'
   }
-  const repoId = repoIdOf(remote.originUrl)
+  const repoId = cinnaRepoIdOf(remote.originUrl, remote.cinnaServer)
   const entry = listing?.agents.find((agent) => agent.cloneUrl === remote.originUrl || (repoId !== null && agent.repoId === repoId))
   const access = entry?.access ?? linked.access
   if (access !== null) return access === 'use' ? 'read_only' : 'ok'

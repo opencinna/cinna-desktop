@@ -800,6 +800,23 @@ describe('a kit agent’s own skills', () => {
     expect('skills' in buildEngineConfig(skipped).config).toBe(false)
   })
 
+  it('allows reads of the catalog-skill cache a linked skill lives in, without listing it as a skills path', () => {
+    const base = input()
+    base.agents[0] = {
+      ...base.agents[0],
+      skillPaths: ['/data/links/skills'],
+      skills: ['erp-lookup'],
+      skillReadPaths: ['/data/catalog-skills']
+    }
+    const built = buildEngineConfig(base)
+    expect(built.config.skills).toEqual({ paths: ['/data/links/skills'] })
+    expect(agentOf(built).permission.external_directory).toEqual({
+      '*': 'ask',
+      '/data/links/skills/*': 'allow',
+      '/data/catalog-skills/*': 'allow'
+    })
+  })
+
   it('lets a manifest’s own skill rule replace the entry, as every override does', () => {
     const base = input()
     base.agents[0] = { ...base.agents[0], skills: ['pdf-tools'], permissions: { skill: 'deny' } }
