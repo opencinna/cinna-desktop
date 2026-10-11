@@ -2562,6 +2562,24 @@ describe('session telemetry', () => {
     expect(changes.find((change) => change.type === 'model')).toEqual({ type: 'model', engine: 'codex', selected: 'gpt-5.5-codex' })
   })
 
+  it('reports the model its setup set, not the one session/new answered with', async () => {
+    // Mutation: drop `onConfig` from `applySetup` and the session reads as
+    // running the server's default, its first model, whatever the agent chose.
+    const { changes, telemetry } = reporter()
+    const modelOption = (currentValue: string): unknown[] => [{ id: 'model', type: 'select', currentValue, options: [] }]
+    const w = world({ launcher: 'antigravity', deps: { telemetry }, setup: {
+      configOptions: [{ configId: 'model', value: 'gemini-flash-high', optional: true }]
+    }, script: {
+      newSession: { response: { configOptions: modelOption('gemini-pro') } },
+      setConfigOption: { response: { configOptions: modelOption('gemini-flash-high') } },
+      prompt: SAYS_HELLO.prompt
+    } })
+    await w.run()
+    await waitFor(() => changes.filter((change) => change.type === 'model').length === 2, 'the set model')
+    expect(changes.filter((change) => change.type === 'model').map((change) => (change as { selected: string }).selected))
+      .toEqual(['gemini-pro', 'gemini-flash-high'])
+  })
+
   it('does not zero a loaded session twice when its first turn failed after taking a reading', async () => {
     const { telemetry } = reporter()
     // A new process loads the session; the first prompt fails after a costed

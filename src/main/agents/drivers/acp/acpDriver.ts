@@ -1490,7 +1490,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     try {
       runtime.validate(chatId)
-      await duringStart(applySetup(connection, sessionId, plan, offeredConfig, agent.id))
+      await duringStart(
+        applySetup(connection, sessionId, plan, offeredConfig, agent.id, (config) =>
+          ctx.telemetry?.model(selectedModelOf(config))
+        )
+      )
       runtime.validate(chatId)
     } catch (err) {
       if (input.signal.aborted || hitCeiling) {
@@ -2255,15 +2259,20 @@ function noteForeignAuth(
  * gave — the model the launcher chose first, so the mode is asked of the model
  * the turn will actually run on (Claude downgrades `auto` on a model without
  * the classifier, and the fallback notice must see that).
+ *
+ * `onConfig` gets the config options each accepted set answers with: the model
+ * a set chose is the session's from then on, and the `session/new` answer only
+ * knew the server's default (Antigravity's is always its first model).
  */
 async function applySetup(
   connection: AcpConnection,
   sessionId: string,
   plan: AcpLaunchPlan,
   offeredConfig: unknown,
-  agentId: string
+  agentId: string,
+  onConfig: (configOptions: unknown) => void
 ): Promise<void> {
-  if (plan.setup.model) await assertModel(connection, sessionId, plan.setup.model, offeredConfig, agentId)
+  if (plan.setup.model) await assertModel(connection, sessionId, plan.setup.model, offeredConfig, agentId, onConfig)
   if (plan.setup.modeId) {
     await connection.setSessionMode({ sessionId, modeId: plan.setup.modeId })
   }
@@ -2274,11 +2283,11 @@ async function applySetup(
       value: option.value
     })
     if (!option.optional) {
-      await set
+      onConfig((await set)?.configOptions)
       continue
     }
     try {
-      await set
+      onConfig((await set)?.configOptions)
     } catch (err) {
       // See `AcpSessionSetup.configOptions`: an optional option is one the
       // session has already been told through its config, and refusing a turn
@@ -2305,7 +2314,8 @@ async function assertModel(
   sessionId: string,
   requested: string,
   offeredConfig: unknown,
-  agentId: string
+  agentId: string,
+  onConfig: (configOptions: unknown) => void
 ): Promise<void> {
   const match = resolveOfferedModel(offeredConfig, requested)
   if (!match || !match.value) {
@@ -2319,7 +2329,7 @@ async function assertModel(
   }
   if (match.current === match.value) return
   try {
-    await connection.setSessionConfigOption({ sessionId, configId: match.configId, value: match.value })
+    onConfig((await connection.setSessionConfigOption({ sessionId, configId: match.configId, value: match.value }))?.configOptions)
     logger.info('re-asserted the agent’s model over the session’s own choice', {
       agentId,
       requested,

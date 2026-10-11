@@ -95,7 +95,7 @@ Run kit and bare folder agents, plain chats and AI Functions on Google Antigravi
 
 ### What the engine reports, and what it does not
 
-- **No cost and no per-turn tokens.** A prompt answers with its stop reason alone. The context meter comes from the server's `usage_update {used, size}` after each model call. There is no cost from the server, and none is estimated: a Google account login has no per-token price to estimate from. There is no cache clock and no context breakdown.
+- **No cost and no per-turn tokens.** A prompt answers with its stop reason alone. The context meter comes from the server's `usage_update {used, size}` after each model call. There is no cost from the server, and none is estimated: a Google account login has no per-token price to estimate from. There is no cache clock and no context breakdown. The selected model telemetry shows is the one Cinna set, not the server's default it opened the session on.
 - **The login kind is read from the home.** A signed-in home reports a *Google account* subscription.
 - **Session titles are ignored.** The server names sessions `Session <hex>`, which is never a chat's name, so Cinna's own titles apply.
 - **No mid-turn steering.** The server does not advertise the steering extension, so a message sent during a turn is queued for the next one ([Pending Messages](../../chat/pending_messages/pending_messages.md)).
