@@ -1,11 +1,11 @@
 {
   "comment": "Written by `make kit-sync` (scripts/kit-sync/sync.mjs). Never edit this or resources/cinna-agent-kit/ by hand.",
-  "core_commit": "fe7efdf182efa649a27194e792f41bd390493c5b",
-  "core_source": "ref:fe7efdf1",
+  "core_commit": "034cbbe8de87427f10ef3c277eda6b111d65c7b0",
+  "core_source": "working-tree",
   "core_dirty": false,
-  "contract_version": "1.10.0",
-  "kit_version": "e64733bfb7e17bed",
-  "file_count": 88,
-  "tree_hash": "a304eca8e7815977db5434bfd3824e4abdee0ed6b80207b7a2a7d5af194256e2",
+  "contract_version": "1.11.0",
+  "kit_version": "7cdab6154be21880",
+  "file_count": 91,
+  "tree_hash": "9c8f67e41f49c56793f1ed072dd0059c1b3a430815c215448a14c04a8a12adad",
   "tree_hash_algorithm": "sha256 over \"<path>\\0<sha256 hex of file>\\n\" per file, paths relative and POSIX, sorted by UTF-8 bytes (src/main/kit/contractTreeHash.ts)"
 }
