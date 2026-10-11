@@ -11,6 +11,7 @@ import { useAuthStore } from '../stores/auth.store'
 import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { LOCAL_AGENTS_KEY } from './useLocalAgents'
+import { invalidateAfterPush } from '../utils/queryInvalidation'
 import type {
   InstallContextDto,
   SetupCredentialSummaryDto,
@@ -118,8 +119,8 @@ export async function readCatalogItemsFromCache(queryClient: QueryClient): Promi
  * no payload saying which kind of item moved, so this runs on each one.
  */
 export function invalidateLocalAgentsAfterListing(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
-  void queryClient.invalidateQueries({ queryKey: ['local-agent'] })
+  invalidateAfterPush(queryClient, { queryKey: LOCAL_AGENTS_KEY })
+  invalidateAfterPush(queryClient, { queryKey: ['local-agent'] })
 }
 
 /**
@@ -135,7 +136,7 @@ export function useCatalogItemsWatch(): void {
   useEffect(() => {
     return window.api.catalog.onItemsChanged(() => {
       void readCatalogItemsFromCache(queryClient)
-      void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      invalidateAfterPush(queryClient, { queryKey: INBOX_QUERY_KEY })
       invalidateLocalAgentsAfterListing(queryClient)
     })
   }, [queryClient])

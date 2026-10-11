@@ -24,6 +24,7 @@ import { isReauthRequiredError } from '../stores/reauth.store'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { invalidateLocalAgentsAfterListing, readCatalogItemsFromCache } from './useCatalog'
 import { LOCAL_AGENTS_KEY, LOCAL_AGENT_ROOTS_KEY, localAgentKey } from './useLocalAgents'
+import { invalidateAfterPush } from '../utils/queryInvalidation'
 
 /**
  * Team sharing of folder agents, as the renderer reads and drives it.
@@ -211,14 +212,15 @@ export function useSharingWatch(): void {
   useEffect(() => {
     return window.api.sharing.onChanged(() => {
       // Every sharing read — statuses, each agent's status, the library, and
-      // the Sharing tab's People and History — sits under this prefix.
-      void queryClient.invalidateQueries({ queryKey: SHARING_KEY })
+      // the Sharing tab's People and History — sits under this prefix. A
+      // first read still out when the push lands is read again after it.
+      invalidateAfterPush(queryClient, { queryKey: SHARING_KEY })
       // The catalog dialog reads the same listing, every kind of item in it —
       // from main's cache, which the event says is already fresh.
       void readCatalogItemsFromCache(queryClient)
       // The Inbox's "Update available" cards are derived from the same
       // listing, on every read.
-      void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      invalidateAfterPush(queryClient, { queryKey: INBOX_QUERY_KEY })
       // A skill's new version can arrive with a desktop agent's move, which
       // publishes only this event; and an agent's access decides `updatable`.
       invalidateLocalAgentsAfterListing(queryClient)
