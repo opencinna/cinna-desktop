@@ -292,12 +292,14 @@ test('T2.2 a pin B cannot see and a pin not yet downloaded reach no engine, and 
     await openSkills(b, mine)
     await skillRow(b, hidden, 'From the catalog').getByRole('button', { name: `Download ${hidden} again`, exact: true }).click()
     const hiddenRow = skillRow(b, hidden, 'From the catalog')
-    // The row's status and its one issue are the download's sentence (core answers 404 to someone with no
-    // access); B's own agent is tracked by no team, so it reads as access withdrawn, not as an agent behind.
-    const why = 'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
+    // Core answers 404 to someone with no access. On B's own agent, which no team tracks and which has no
+    // copy, that is Disconnected: the row says the agent can't download it, and offers Check again (not
+    // Download again) in case access comes back.
+    const why = 'Disconnected — this skill is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.'
     await expect(hiddenRow.getByRole('img', { name: why, exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(hiddenRow.getByRole('listitem')).toHaveText([why])
-    await expect(hiddenRow.getByRole('button', { name: `Download ${hidden} again`, exact: true })).toBeVisible()
+    await expect(hiddenRow.getByRole('button', { name: `Check ${hidden} again`, exact: true })).toBeVisible()
+    await expect(hiddenRow.getByRole('button', { name: `Download ${hidden} again`, exact: true })).toHaveCount(0)
     await expect(skillRow(b, seen, 'From the catalog').getByRole('img', { name: 'Every engine of this agent gets this skill', exact: true })).toBeVisible({ timeout: 60_000 })
     expect(cachedSkillDir(b, hiddenItem.uuid, 1, hidden)).toBeNull()
     expect(cachedSkillDir(b, seenItem.uuid, 1, seen)).not.toBeNull()

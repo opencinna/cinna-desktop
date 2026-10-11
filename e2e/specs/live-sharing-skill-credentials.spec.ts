@@ -554,12 +554,9 @@ test('T4.8 (i) A turns sharing off on the credential A provides: B’s skill no 
 })
 
 test('T4.8 (ii) A unshares the credential from B only: B’s Finish setup must not share it again, and the skill no longer reads it', async ({ team }) => {
-  // Core defect: provision-local re-creates a share its owner revoked from B
-  // (credential_provisioner.py, the `_insert_share` after `existing is None`),
-  // and B's Finish setup calls it on every opening. Observed: core's share
-  // list for the credential is `[<B>:skill_local_install]` again, the row
-  // says "Connected automatically" and the script reads A's hash.
-  test.fail()
+  // Core f8691400: an owner's unshare holds — provision-local answers
+  // not_shareable for B until A shares with B directly again (B's Finish
+  // setup calls it on every opening, which used to re-create the share).
   test.setTimeout(600_000)
   const { fixture, personA, personB, skill, slot, mine, provided, b, agent } = await providedThenAdded(team, 'ledger-unshared')
   const sharesOf = async () => {
