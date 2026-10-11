@@ -106,6 +106,12 @@ const ANON_MESSAGE_ID = 'anon:acp'
 
 /** How much of a tool's most identifying argument a narration line shows. */
 const NARRATION_LIMIT = 160
+/**
+ * A tool result kept in the transcript, in characters: the head and the tail of
+ * a longer output, with the gap named. Codex sends a command's whole output, and
+ * the part is re-saved on every update, so megabytes must not reach it.
+ */
+export const TOOL_RESULT_LIMIT = 64 * 1024
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
@@ -708,7 +714,7 @@ export class AcpMessageStream {
   ): boolean {
     const status = str(update.status)
     if (status !== 'completed' && status !== 'failed') return false
-    const text = toolOutputText(update.content) || toolOutputText(update.rawOutput)
+    const text = capToolResult(toolOutputText(update.content) || toolOutputText(update.rawOutput))
     if (!text) return false
 
     const idx = this.slot(state, `result:${toolCallId}`, () => ({
@@ -913,6 +919,18 @@ function nonEmptyRecord(value: unknown): Record<string, unknown> | undefined {
  * `rawOutput` for Bash and Write, an array of blocks for an MCP tool, and a
  * fenced copy in `content[]`. A reader that knew only one of those would render
  * `[object Object]` — or nothing — for half the tools in a turn.
+ *
+ * codex-acp (1.11.0) sends a command's output in neither: its completing
+ * `tool_call_update` carries `rawOutput: {formatted_output, exit_code}` (the
+ * app-server's `aggregatedOutput`, the whole output) and no `content`; the
+ * `content[]` of its opening `tool_call` is only a `{type:'terminal'}`
+ * reference, and the bytes also stream as `_meta.terminal_output_delta`
+ * fragments. The final `formatted_output` is read and the deltas are not: it is
+ * complete, and the slot holds one cumulative text per result. A non-zero
+ * `exit_code` is kept as a trailing line, since a tool_result has no field for it.
+ * A Codex function-call output (`rawOutput.output`) may be a list of
+ * `{type:'input_text', text}` items rather than a string, so it is flattened too,
+ * and a Codex MCP call's `rawOutput: {result, error}` is read by {@link mcpOutputText}.
  */
 function toolOutputText(value: unknown): string {
   if (typeof value === 'string') return value
@@ -925,6 +943,9 @@ function toolOutputText(value: unknown): string {
         // bare content block; both appear, so unwrap one level when it is there.
         const inner = record(block.content) ?? block
         if (typeof inner.text === 'string') return inner.text
+        // codex-acp's pointer to a terminal it never asks the client to run;
+        // the output arrives in `rawOutput.formatted_output` instead.
+        if (block.type === 'terminal') return ''
         if (block.type === 'diff') return `[diff] ${str(block.path) ?? ''}`.trim()
         // Naming the type beats inventing a representation for it.
         return typeof block.type === 'string' ? `[${block.type}]` : ''
@@ -934,7 +955,45 @@ function toolOutputText(value: unknown): string {
   }
   const r = record(value)
   if (!r) return ''
-  return str(r.output) ?? str(r.error) ?? ''
+  if (typeof r.formatted_output === 'string') return commandOutputText(r.formatted_output, r.exit_code)
+  return toolOutputText(r.output) || str(r.error) || mcpOutputText(r.result, r.error)
+}
+
+/**
+ * A Codex MCP call's output: codex-acp passes the app-server item through as
+ * `rawOutput: { result: { content, structuredContent, _meta } | null, error: { message } | null }`.
+ * A tool that answered `isError` arrives as `status: failed` with its message
+ * in `result.content` and `error: null` (watched on the pinned CLI); `error` is
+ * the call itself failing. `structuredContent` stands in only when there is no content.
+ */
+function mcpOutputText(result: unknown, error: unknown): string {
+  const r = record(result)
+  let text = r ? toolOutputText(r.content) : ''
+  if (!text && r && r.structuredContent !== undefined && r.structuredContent !== null) {
+    text = JSON.stringify(r.structuredContent)
+  }
+  const failure = str(record(error)?.message)
+  return [text, failure].filter(Boolean).join('\n')
+}
+
+/** The head and tail of an output over {@link TOOL_RESULT_LIMIT}, with the gap named. */
+export function capToolResult(text: string): string {
+  if (text.length <= TOOL_RESULT_LIMIT) return text
+  const half = Math.floor(TOOL_RESULT_LIMIT / 2)
+  const omitted = text.length - 2 * half
+  return `${text.slice(0, half)}\n… ${omitted} characters left out …\n${text.slice(text.length - half)}`
+}
+
+/**
+ * A Codex command's output, with a non-zero exit code as its last line. A
+ * negative code is a command the user stopped (`-1`, watched), not a failure
+ * worth a line of its own.
+ */
+function commandOutputText(output: string, exitCode: unknown): string {
+  if (typeof exitCode !== 'number' || exitCode <= 0) return output
+  const tail = `Exit code ${exitCode}`
+  if (!output) return tail
+  return `${output}${output.endsWith('\n') ? '' : '\n'}${tail}`
 }
 
 /**

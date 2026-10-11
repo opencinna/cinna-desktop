@@ -1,9 +1,10 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, type Dirent, readdirSync, readFileSync, readlinkSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 import type { CinnaApp, Sandbox } from '../fixtures/app'
@@ -87,8 +88,37 @@ import { PersonApp, runCommand } from '../fixtures/liveTeamSharing'
  *     downloaded (`~/Library/Application Support/cinna-desktop/runtimes/`),
  *     set as `localAgentsClaudePath`; the test skips when it is not there and
  *     never downloads. Exactly one turn, never retried.
+ * - T2.3c is the same exception for **Codex**, opt-in with
+ *   `CINNA_E2E_CODEX_REAL_HOME=1` (plus the live fixture): one real Codex turn
+ *   on the developer's own Codex login (`~/.codex`, or `CODEX_HOME` when the
+ *   shell sets it — the launcher passes it through and never reads the login).
+ *   The shared real-HOME setup is `onRealHome` below, with the same safety
+ *   measures as T2.3b (temp userData, `--use-mock-keychain`, a fresh
+ *   `~/.cinna-e2e-codex-*` agents home set before `homeGrant` and removed
+ *   afterwards, `~/Documents/CinnaAgents` mtimes compared). Codex-specific:
+ *   - The binary is the pinned `codex` the installed app downloaded
+ *     (`…/cinna-desktop/runtimes/codex-<pin>/codex`), else the verified pin in
+ *     the runtime cache `scripts/install-runtime.mjs` fills
+ *     (`~/.cache/cinna-runtimes/codex-<pin>/codex`, as `runtime-flow` uses);
+ *     the test skips when neither is there and never downloads.
+ *   - Model: Codex has no complexity tier for models (complexity is only the
+ *     reasoning effort, `codexEffortForComplexity`), and without
+ *     `runtime.model` a turn runs on `~/.codex/config.toml`'s `model`. So the
+ *     agent names `gpt-5.6-luna`, the cheapest slug in the pinned CLI's catalog
+ *     (contract snapshot `codex-0.155.0.json`), and the test asserts the model
+ *     the thread's own rollout recorded for the turn.
+ *   - `~/.codex/config.toml` and `auth.json` are never written by the test;
+ *     their SHA-256 before and after is compared (config must be unchanged; a
+ *     changed `auth.json` would only be the CLI's own token refresh, recorded).
+ *     The rollout files whose `session_meta.cwd` is under the agents home, and
+ *     any other new `~/.codex` file named after one of their thread ids, are
+ *     deleted; every other new file is listed in `b-evidence.json`, and a new
+ *     session file that is not this run's fails the test. Rows the CLI appends
+ *     to its shared SQLite stores (`state_*.sqlite`, `logs_*.sqlite`) stay.
+ *   - Cost: one short turn on a ChatGPT login (subscription usage; the
+ *     telemetry estimate at API prices is a few cents). At most one turn.
  *
- * Model turns in this file: 1 OpenCode, 1 Claude (opt-in).
+ * Model turns in this file: 1 OpenCode, 1 Claude (opt-in), 1 Codex (opt-in).
  */
 
 const MODEL = 'qwen3:8b'
@@ -178,22 +208,26 @@ async function fakeOpenCodeTurn(b: PersonApp, fake: Awaited<ReturnType<typeof us
   return written!
 }
 
+/** Write the agent's runtime over `updateField` (the Runtime panel's save); the caller relaunches. */
+async function setAgentRuntime(
+  b: PersonApp,
+  agentId: string,
+  value: { engine: 'claude' | 'codex'; credential: null; modelId: string | null; complexity: 'simple' | 'medium' | 'complex' | null }
+): Promise<void> {
+  const current = await b.page.evaluate((id) => window.api.localAgents.get(id), agentId)
+  if (!current.ok) throw new Error(current.message)
+  const saved = await b.page.evaluate(
+    (input) => window.api.localAgents.updateField({ agentId: input.id, expectedStamp: input.stamp, update: { field: 'runtime', value: input.value } }),
+    { id: agentId, stamp: current.value.stamps[MANIFEST_FILE]!, value }
+  )
+  expect(saved.ok).toBe(true)
+}
+
 /** Switch the agent to Codex on the scripted app-server, relaunch, and answer the developer instructions of one turn. */
 async function fakeCodexPrompt(b: PersonApp, agent: BuiltAgent, text: string): Promise<string> {
   const executable = installFakeCodex(b)
   await b.page.evaluate((path) => window.api.settings.set('localAgentsCodexPath', path), executable)
-  const current = await b.page.evaluate((id) => window.api.localAgents.get(id), agent.id)
-  if (!current.ok) throw new Error(current.message)
-  const saved = await b.page.evaluate(
-    (input) =>
-      window.api.localAgents.updateField({
-        agentId: input.id,
-        expectedStamp: input.stamp,
-        update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: null, complexity: 'medium' } }
-      }),
-    { id: agent.id, stamp: current.value.stamps[MANIFEST_FILE]! }
-  )
-  expect(saved.ok).toBe(true)
+  await setAgentRuntime(b, agent.id, { engine: 'codex', credential: null, modelId: null, complexity: 'medium' })
   await b.relaunch()
   await expect.poll(() => b.page.evaluate(() => window.api.localTools.codexAuth())).toEqual({ state: 'logged_in', method: 'chatgpt' })
   const before = codexThreadStarts(b).length
@@ -441,7 +475,6 @@ test.describe('real model turns', () => {
     const skill = skillName('erp-check')
     const mine = uniqueName(fixture, 'Ledger bot')
     const realHome = homedir()
-    const before = realProfileFingerprint()
     const projectsBefore = claudeProjects()
 
     const a = await team.open('a')
@@ -449,145 +482,328 @@ test.describe('real model turns', () => {
     const item = await skillItem(fixture, fixture.people.b.token, skill)
     expect(item?.access).toBe('use')
 
-    // B: a throwaway userData and agents home; only HOME is the real one.
-    const root = mkdtempSync(join(tmpdir(), 'cinna-e2e-claude-'))
-    const sandbox: Sandbox = { root, home: realHome, userData: join(root, 'userData') }
-    mkdirSync(sandbox.userData, { recursive: true })
-    const agentsHome = mkdtempSync(join(realHome, '.cinna-e2e-claude-'))
-    const b = new RealHomePerson(fixture.people.b, sandbox, fixture, agentsHome, claudePath)
-    const evidence: Record<string, unknown> = {}
-    let prompt = ''
-    let passed = false
-    try {
-      await b.setUp()
-      expect(b.rootPath).toBe(agentsHome)
-      await b.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
-      const agent = await buildAgent(b, fixture, { name: mine })
-      expect(agent.path.startsWith(`${agentsHome}/`)).toBe(true)
-      // Claude, haiku (the `simple` tier), and Ask every time: haiku has no auto-mode reviewer, so the CLI
-      // would run `default` anyway, and on some CLIs `set_mode auto` fails the turn on haiku.
-      const current = await b.page.evaluate((id) => window.api.localAgents.get(id), agent.id)
-      if (!current.ok) throw new Error(current.message)
-      const saved = await b.page.evaluate(
-        (input) =>
-          window.api.localAgents.updateField({
-            agentId: input.id,
-            expectedStamp: input.stamp,
-            update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: 'simple' } }
-          }),
-        { id: agent.id, stamp: current.value.stamps[MANIFEST_FILE]! }
-      )
-      expect(saved.ok).toBe(true)
-      const approval = await b.page.evaluate((id) => window.api.localAgents.setClaudeApproval(id, 'ask'), agent.id)
-      expect(approval.ok).toBe(true)
-      await b.relaunch()
-      await addSkillToAgent(b, skill, mine)
-      await expect.poll(() => cachedSkillDir(b, item.uuid, 1, skill)).not.toBeNull()
-      await expectErpSlotConnected(b, fixture, agent.id)
+    const evidence = await onRealHome(
+      fixture,
+      { prefix: 'claude', pathSetting: 'localAgentsClaudePath', binary: claudePath },
+      async ({ b, agentsHome, evidence }) => {
+        const agent = await buildAgent(b, fixture, { name: mine })
+        expect(agent.path.startsWith(`${agentsHome}/`)).toBe(true)
+        // Claude, haiku (the `simple` tier), and Ask every time: haiku has no auto-mode reviewer, so the CLI
+        // would run `default` anyway, and on some CLIs `set_mode auto` fails the turn on haiku.
+        await setAgentRuntime(b, agent.id, { engine: 'claude', credential: null, modelId: null, complexity: 'simple' })
+        const approval = await b.page.evaluate((id) => window.api.localAgents.setClaudeApproval(id, 'ask'), agent.id)
+        expect(approval.ok).toBe(true)
+        await b.relaunch()
+        await addSkillToAgent(b, skill, mine)
+        await expect.poll(() => cachedSkillDir(b, item.uuid, 1, skill)).not.toBeNull()
+        await expectErpSlotConnected(b, fixture, agent.id)
 
-      // As the engine probe asked it: the skill by its bare name, so `<plugin>:<name>` is the CLI's listing, not the prompt's.
-      prompt = `Check the ERP credential using your ${skill} skill (invoke it with the Skill tool), and reply with only the line its script prints.`
-      await startAgentChat(b, mine, prompt)
-      const asks: string[] = []
-      await expect
-        .poll(
-          async () => {
-            const block = b.page.getByText(/^The agent is asking to /)
-            if ((await block.count()) > 0) {
-              if (asks.length >= 4) return 'too many asks'
-              asks.push(await block.first().innerText())
-              await b.page.getByRole('button', { name: 'Allow once', exact: true }).first().click()
-              return 'answered an ask'
-            }
-            const chat = await chatStartedWith(b, prompt)
-            const error = chat?.messages.find((message: any) => message.role === 'error')
-            if (error) return `error: ${String(error.content).slice(0, 300)}`
-            const busy = (await b.page.getByRole('button', { name: 'Stop', exact: true }).count()) > 0
-            const answered = chat?.messages.some((message: any) => message.role === 'assistant')
-            return !busy && answered ? 'done' : 'running'
-          },
-          { timeout: 300_000, intervals: [1000] }
+        // As the engine probe asked it: the skill by its bare name, so `<plugin>:<name>` is the CLI's listing, not the prompt's.
+        const prompt = `Check the ERP credential using your ${skill} skill (invoke it with the Skill tool), and reply with only the line its script prints.`
+        const asks = await runOneTurn(b, mine, prompt)
+
+        const chat = await chatStartedWith(b, prompt)
+        const assistant = chat.messages.filter((message: any) => message.role === 'assistant')
+        const parts = assistant.flatMap((message: any) => message.parts ?? [])
+        const tools = parts.filter((part: any) => part.kind === 'tool')
+        const results = parts.filter((part: any) => part.kind === 'tool_result')
+        const plugin = JSON.parse(readFileSync(join(skillsPluginDir(b, agent.id), '.claude-plugin', 'plugin.json'), 'utf8')).name
+        evidence.model = assistant.map((message: any) => message.telemetry?.model).filter(Boolean)
+        evidence.costUsd = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
+        // The agent's model, not the user's own Claude settings model.
+        expect((evidence.model as string[]).length, 'the turn reports its model').toBeGreaterThan(0)
+        for (const model of evidence.model as string[]) expect(model).toMatch(/haiku/i)
+        test.info().annotations.push(
+          { type: 'plugin', description: String(plugin) },
+          { type: 'tool calls', description: JSON.stringify(tools.map((part: any) => ({ id: part.toolId, name: part.toolName, input: part.toolInput }))).slice(0, 2000) },
+          { type: 'asks', description: JSON.stringify(asks) }
         )
-        .toMatch(/^(done|too many asks|error: .*)$/)
-
-      const chat = await chatStartedWith(b, prompt)
-      const assistant = chat.messages.filter((message: any) => message.role === 'assistant')
-      const parts = assistant.flatMap((message: any) => message.parts ?? [])
-      const tools = parts.filter((part: any) => part.kind === 'tool')
-      const results = parts.filter((part: any) => part.kind === 'tool_result')
-      const plugin = JSON.parse(readFileSync(join(skillsPluginDir(b, agent.id), '.claude-plugin', 'plugin.json'), 'utf8')).name
-      evidence.model = assistant.map((message: any) => message.telemetry?.model).filter(Boolean)
-      evidence.costUsd = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
-      // The agent's model, not the user's own Claude settings model.
-      expect((evidence.model as string[]).length, 'the turn reports its model').toBeGreaterThan(0)
-      for (const model of evidence.model as string[]) expect(model).toMatch(/haiku/i)
-      test.info().annotations.push(
-        { type: 'plugin', description: String(plugin) },
-        { type: 'tool calls', description: JSON.stringify(tools.map((part: any) => ({ id: part.toolId, name: part.toolName, input: part.toolInput }))).slice(0, 2000) },
-        { type: 'asks', description: JSON.stringify(asks) }
-      )
-      expect(plugin).toBe(/^[a-z0-9]+(-[a-z0-9]+)*$/.test(agent.slug) && agent.slug.length <= 64 ? agent.slug : 'agent-skills')
-      const skillCalls = tools.filter((part: any) => part.toolName === 'Skill')
-      evidence.storedSkillParts = skillCalls
-      evidence.storedPermissionParts = tools.filter((part: any) => part.toolName === 'cinna_permission_request')
-      // The CLI's own record of the call (its project folder for this temp cwd; deleted in `finally`).
-      evidence.transcriptSkillCalls = [...claudeProjects()]
-        .filter((name) => !projectsBefore.has(name) && name.startsWith(`${claudeProjectName(agentsHome)}-`))
-        .flatMap((name) => transcriptToolUses(join(realHome, '.claude', 'projects', name), 'Skill'))
-      expect(skillCalls.length, 'a Skill tool part was stored').toBeGreaterThan(0)
-      expect(evidence.transcriptSkillCalls, 'the CLI invoked the catalog skill as <plugin>:<name>').toContainEqual({ name: 'Skill', input: expect.objectContaining({ skill: `${plugin}:${skill}` }) })
-      // No ask for loading the skill: no permission part links back to a Skill call.
-      const skillIds = new Set(skillCalls.map((part: any) => part.toolId))
-      const permissionAsks = tools.filter((part: any) => part.toolName === 'cinna_permission_request')
-      expect(permissionAsks.filter((part: any) => skillIds.has(part.toolInput?.callId))).toEqual([])
-      expect(results.some((part: any) => String(part.text).includes(skillCheckLine(fixture))), 'the skill’s script printed the ERP slot line').toBe(true)
-      // Last, so the checks above run while this defect stands: the stored part names it too (any input field).
-      expect(skillCalls.flatMap((part: any) => Object.values(part.toolInput ?? {})), 'the stored Skill call names the catalog skill under its plugin').toContain(`${plugin}:${skill}`)
-      passed = true
-    } finally {
-      if (!passed) {
-        try {
-          writeFileSync(test.info().outputPath('b-screen.yaml'), await b.page.locator('body').ariaSnapshot())
-          await b.page.screenshot({ path: test.info().outputPath('b-screen.png') })
-        } catch {
-          // the app may be gone already
-        }
+        expect(plugin).toBe(/^[a-z0-9]+(-[a-z0-9]+)*$/.test(agent.slug) && agent.slug.length <= 64 ? agent.slug : 'agent-skills')
+        const skillCalls = tools.filter((part: any) => part.toolName === 'Skill')
+        evidence.storedSkillParts = skillCalls
+        evidence.storedPermissionParts = tools.filter((part: any) => part.toolName === 'cinna_permission_request')
+        // The CLI's own record of the call (its project folder for this temp cwd; deleted afterwards).
+        evidence.transcriptSkillCalls = [...claudeProjects()]
+          .filter((name) => !projectsBefore.has(name) && name.startsWith(`${claudeProjectName(agentsHome)}-`))
+          .flatMap((name) => transcriptToolUses(join(realHome, '.claude', 'projects', name), 'Skill'))
+        expect(skillCalls.length, 'a Skill tool part was stored').toBeGreaterThan(0)
+        expect(evidence.transcriptSkillCalls, 'the CLI invoked the catalog skill as <plugin>:<name>').toContainEqual({ name: 'Skill', input: expect.objectContaining({ skill: `${plugin}:${skill}` }) })
+        // No ask for loading the skill: no permission part links back to a Skill call.
+        const skillIds = new Set(skillCalls.map((part: any) => part.toolId))
+        const permissionAsks = tools.filter((part: any) => part.toolName === 'cinna_permission_request')
+        expect(permissionAsks.filter((part: any) => skillIds.has(part.toolInput?.callId))).toEqual([])
+        expect(results.some((part: any) => String(part.text).includes(skillCheckLine(fixture))), 'the skill’s script printed the ERP slot line').toBe(true)
+        // Last, so the checks above run while this defect stands: the stored part names it too (any input field).
+        expect(skillCalls.flatMap((part: any) => Object.values(part.toolInput ?? {})), 'the stored Skill call names the catalog skill under its plugin').toContain(`${plugin}:${skill}`)
+      },
+      ({ agentsHome, evidence }) => {
+        // The one Claude project folder this run's temp cwd produced, nothing else.
+        const prefix = claudeProjectName(agentsHome)
+        const made = [...claudeProjects()].filter((name) => !projectsBefore.has(name))
+        const ours = made.filter((name) => name.startsWith(`${prefix}-`))
+        for (const name of ours) rmSync(join(realHome, '.claude', 'projects', name), { recursive: true, force: true })
+        evidence.claudeProjectsRemoved = ours.length
+        evidence.otherNewClaudeProjects = made.length - ours.length
       }
-      await b.close().catch(() => {})
-      // The agents home and the one Claude project folder this run's temp cwd produced, nothing else.
-      const prefix = claudeProjectName(agentsHome)
-      const made = [...claudeProjects()].filter((name) => !projectsBefore.has(name))
-      const ours = made.filter((name) => name.startsWith(`${prefix}-`))
-      for (const name of ours) rmSync(join(realHome, '.claude', 'projects', name), { recursive: true, force: true })
-      evidence.claudeProjectsRemoved = ours.length
-      evidence.otherNewClaudeProjects = made.length - ours.length
-      execFileSync('chmod', ['-R', 'u+w', agentsHome], { stdio: 'ignore' })
-      rmSync(agentsHome, { recursive: true, force: true })
-      evidence.agentsHomeRemoved = !existsSync(agentsHome)
-      // B's temp root too, pass or fail: b-evidence.json in the test's output folder is the record.
-      try {
-        execFileSync('chmod', ['-R', 'u+w', root], { stdio: 'ignore' })
-      } catch {
-        // already gone
-      }
-      rmSync(root, { recursive: true, force: true })
-      evidence.realAgentsHomeBefore = before
-      evidence.realAgentsHomeAfter = realProfileFingerprint()
-      test.info().annotations.push({ type: 'real-HOME safety', description: JSON.stringify(evidence) })
-      writeFileSync(test.info().outputPath('b-evidence.json'), JSON.stringify(evidence, null, 2))
-    }
-    expect(evidence.agentsHomeRemoved).toBe(true)
+    )
     expect(evidence.otherNewClaudeProjects).toBe(0)
-    expect(evidence.realAgentsHomeAfter).toEqual(before)
+  })
+
+  test('T2.3c Codex: B’s agent reads the catalog skill listed in its prompt and runs its script', async ({ team }) => {
+    test.skip(
+      !CODEX_REAL_HOME,
+      'Opt-in: set CINNA_E2E_CODEX_REAL_HOME=1 to run one Codex turn on your own Codex login (B’s app gets your real HOME; see the file header)'
+    )
+    test.skip(!LIVE_REQUESTED, 'live specs run only through make e2e-live or make e2e-one SPEC=<live spec>')
+    const codexPath = pinnedCodexPath()
+    test.skip(codexPath === null, `the pinned Codex ${RUNTIME_PINS.codex.cli} is neither in the real app's runtimes folder nor in ~/.cache/cinna-runtimes`)
+    test.setTimeout(600_000)
+    // Desktop defect this test found on 2026-10-11, fixed: a Codex command's output was never stored —
+    // codex-acp sends it as `rawOutput: { formatted_output, exit_code }`, which `toolOutputText` did not read.
+    const { fixture } = team
+    const skill = skillName('erp-check')
+    const mine = uniqueName(fixture, 'Ledger bot')
+    const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')
+    const startedAt = Date.now()
+    const codexBefore = filesUnder(codexHome)
+    const configBefore = sha256Of(join(codexHome, 'config.toml'))
+    const authBefore = sha256Of(join(codexHome, 'auth.json'))
+
+    const a = await team.open('a')
+    await shareFromA(a, fixture, [{ name: skill, people: [fixture.people.b] }])
+    const item = await skillItem(fixture, fixture.people.b.token, skill)
+    expect(item?.access).toBe('use')
+
+    const evidence = await onRealHome(
+      fixture,
+      { prefix: 'codex', pathSetting: 'localAgentsCodexPath', binary: codexPath! },
+      async ({ b, agentsHome, evidence }) => {
+        const agent = await buildAgent(b, fixture, { name: mine })
+        expect(agent.path.startsWith(`${agentsHome}/`)).toBe(true)
+        // A named model: Codex maps complexity to reasoning effort only, so without one the turn would
+        // run on `~/.codex/config.toml`'s model. Ask every time (read-only sandbox, asks answered below).
+        await setAgentRuntime(b, agent.id, { engine: 'codex', credential: null, modelId: CODEX_MODEL, complexity: null })
+        const approval = await b.page.evaluate((id) => window.api.localAgents.setCodexApproval(id, 'ask'), agent.id)
+        expect(approval.ok).toBe(true)
+        await b.relaunch()
+        await expect.poll(async () => (await b.page.evaluate(() => window.api.localTools.codexAuth())).state, { timeout: 60_000 }).toBe('logged_in')
+        await addSkillToAgent(b, skill, mine)
+        await expect.poll(() => cachedSkillDir(b, item.uuid, 1, skill)).not.toBeNull()
+        const cached = cachedSkillDir(b, item.uuid, 1, skill)!
+        await expectErpSlotConnected(b, fixture, agent.id)
+
+        // The prompt itself (its `## Your skills` line with the cached SKILL.md) is T2.1's structural check.
+        const prompt = `Check the ERP credential using your ${skill} skill: read its SKILL.md from the path in your instructions, follow it, and reply with only the line its script prints.`
+        const asks = await runOneTurn(b, mine, prompt)
+
+        const chat = await chatStartedWith(b, prompt)
+        const assistant = chat.messages.filter((message: any) => message.role === 'assistant')
+        const parts = assistant.flatMap((message: any) => message.parts ?? [])
+        const tools = parts.filter((part: any) => part.kind === 'tool')
+        const results = parts.filter((part: any) => part.kind === 'tool_result')
+        const text = (part: unknown): string => JSON.stringify(part)
+        evidence.model = assistant.map((message: any) => message.telemetry?.model).filter(Boolean)
+        evidence.costUsd = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
+        evidence.errors = chat.messages.filter((message: any) => message.role === 'error').map((message: any) => String(message.content).slice(0, 500))
+        // The thread's own record: each rollout under ~/.codex/sessions whose cwd is this agent.
+        const rollouts = codexRollouts(codexHome, codexBefore, agentsHome, skillCheckLine(fixture))
+        evidence.threads = rollouts.map((rollout) => rollout.id)
+        evidence.rolloutModels = rollouts.flatMap((rollout) => rollout.models)
+        evidence.rolloutSlotLineIn = rollouts.flatMap((rollout) => rollout.needleIn)
+        const toolSummary = tools.map((part: any) => ({ name: part.toolName, input: part.toolInput }))
+        const resultSummary = results.map((part: any) => String(part.text ?? '').slice(0, 600))
+        evidence.toolCalls = toolSummary
+        evidence.toolResults = resultSummary
+        evidence.asks = asks
+        test.info().annotations.push(
+          { type: 'tool calls', description: JSON.stringify(toolSummary).slice(0, 3000) },
+          { type: 'tool results', description: JSON.stringify(resultSummary).slice(0, 3000) },
+          { type: 'asks', description: JSON.stringify(asks) }
+        )
+
+        // The agent's model, not the user's own config.toml model: as Codex recorded it, and as telemetry reports it.
+        expect(evidence.threads as string[], 'Codex recorded a thread for the agent’s folder').not.toEqual([])
+        expect(evidence.rolloutModels as string[], 'the thread’s turns ran on the agent’s model').not.toEqual([])
+        for (const model of evidence.rolloutModels as string[]) expect(model).toBe(CODEX_MODEL)
+        for (const model of evidence.model as string[]) expect(model).toBe(CODEX_MODEL)
+        expect(evidence.errors, 'the turn ended without an error message').toEqual([])
+        // Read the cached SKILL.md (or the skill folder) the prompt listed.
+        expect(tools.some((part: any) => text(part).includes(cached)), 'a tool call reads the cached skill').toBe(true)
+        // Ran its script with python3.
+        expect(
+          tools.some((part: any) => /python3?\b/.test(text(part)) && text(part).includes('scripts/skill_check')),
+          'a command runs python3 <cache>/scripts/skill_check'
+        ).toBe(true)
+        // core.cinna_api reached core from inside Codex's sandbox and found the slot, as Codex recorded the command's output.
+        expect(evidence.rolloutSlotLineIn as string[], 'Codex’s record of the command output holds the ERP slot line').toContainEqual(
+          // A tool output record (`function_call_output`, `custom_tool_call_output`) or `exec_command_end`, never the reply.
+          expect.stringMatching(/(^|_)output$|^exec_command_end$/)
+        )
+        // The desktop's stored chat must hold that output too; asserted after the safety checks (the known defect).
+        evidence.storedSlotLine = results.some((part: any) => String(part.text).includes(skillCheckLine(fixture)))
+      },
+      ({ agentsHome, evidence }) => {
+        const ours = codexRollouts(codexHome, codexBefore, agentsHome, '')
+        const ids = ours.map((rollout) => rollout.id).filter((id) => id.length >= 8)
+        const made = [...filesUnder(codexHome).keys()].filter((path) => !codexBefore.has(path))
+        const removed: string[] = []
+        const others: string[] = []
+        for (const path of made) {
+          if (ours.some((rollout) => rollout.file === path) || ids.some((id) => path.includes(id))) {
+            rmSync(path, { force: true })
+            removed.push(relative(codexHome, path))
+          } else {
+            others.push(relative(codexHome, path))
+          }
+        }
+        // The `sessions/<y>/<m>/<d>` folders the run's rollouts made, once empty; never one that was there before.
+        for (const rollout of ours) {
+          for (let dir = dirname(rollout.file); dir.startsWith(`${join(codexHome, 'sessions')}${sep}`); dir = dirname(dir)) {
+            if (readdirSync(dir).length > 0 || statSync(dir).birthtimeMs < startedAt) break
+            rmdirSync(dir)
+            removed.push(`${relative(codexHome, dir)}${sep}`)
+          }
+        }
+        evidence.codexFilesRemoved = removed
+        evidence.otherNewCodexFiles = others
+        evidence.otherNewCodexSessionFiles = others.filter((path) => path.startsWith(`sessions${sep}`))
+        evidence.codexFilesChanged = [...filesUnder(codexHome)]
+          .filter(([path, mtime]) => codexBefore.has(path) && codexBefore.get(path) !== mtime)
+          .map(([path]) => relative(codexHome, path))
+        evidence.codexConfigUnchanged = sha256Of(join(codexHome, 'config.toml')) === configBefore
+        evidence.codexAuthUnchanged = sha256Of(join(codexHome, 'auth.json')) === authBefore
+      }
+    )
+    expect(evidence.codexConfigUnchanged).toBe(true)
+    expect(evidence.otherNewCodexSessionFiles).toEqual([])
+    expect(evidence.storedSlotLine, 'the stored chat holds the script’s ERP slot line as a tool_result').toBe(true)
   })
 })
 
 /** Whether the developer opted into T2.3b's real-HOME Claude turn. */
 const CLAUDE_REAL_HOME = process.env.CINNA_E2E_CLAUDE_REAL_HOME === '1'
 
+/** Whether the developer opted into T2.3c's real-HOME Codex turn. */
+const CODEX_REAL_HOME = process.env.CINNA_E2E_CODEX_REAL_HOME === '1'
+
+/** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.155.0.json`). */
+const CODEX_MODEL = 'gpt-5.6-luna'
+
 /** The pinned Claude Code as the developer's own installed app keeps it (read only; never downloaded here). */
 function pinnedClaudePath(): string {
   return join(homedir(), 'Library', 'Application Support', 'cinna-desktop', 'runtimes', `claude-${RUNTIME_PINS.claude.cli}`, 'claude')
+}
+
+/**
+ * The pinned Codex the developer already has (read only; never downloaded here): the installed app's
+ * runtimes folder, else the verified runtime cache `scripts/install-runtime.mjs` fills.
+ */
+function pinnedCodexPath(): string | null {
+  const folder = `codex-${RUNTIME_PINS.codex.cli}`
+  const candidates = [
+    join(homedir(), 'Library', 'Application Support', 'cinna-desktop', 'runtimes', folder, 'codex'),
+    join(process.env.CINNA_RUNTIME_CACHE ?? join(homedir(), '.cache', 'cinna-runtimes'), folder, 'codex')
+  ]
+  return candidates.find((path) => existsSync(path)) ?? null
+}
+
+/** Ask-and-answer until one turn ends: every ask gets `Allow once`, at most four; never a second prompt. */
+async function runOneTurn(b: PersonApp, agentName: string, prompt: string): Promise<string[]> {
+  await startAgentChat(b, agentName, prompt)
+  const asks: string[] = []
+  await expect
+    .poll(
+      async () => {
+        const block = b.page.getByText(/^The agent is asking to /)
+        if ((await block.count()) > 0) {
+          if (asks.length >= 4) return 'too many asks'
+          asks.push(await block.first().innerText())
+          await b.page.getByRole('button', { name: 'Allow once', exact: true }).first().click()
+          return 'answered an ask'
+        }
+        const chat = await chatStartedWith(b, prompt)
+        const error = chat?.messages.find((message: any) => message.role === 'error')
+        if (error) return `error: ${String(error.content).slice(0, 300)}`
+        const busy = (await b.page.getByRole('button', { name: 'Stop', exact: true }).count()) > 0
+        const answered = chat?.messages.some((message: any) => message.role === 'assistant')
+        return !busy && answered ? 'done' : 'running'
+      },
+      { timeout: 300_000, intervals: [1000] }
+    )
+    .toMatch(/^(done|too many asks|error: .*)$/)
+  return asks
+}
+
+/** The run of a real-HOME test, handed to its body and its cleanup. */
+interface RealHomeRun {
+  b: RealHomePerson
+  agentsHome: string
+  evidence: Record<string, unknown>
+}
+
+/**
+ * B on the developer's real `HOME` (see the file header), for one engine's real CLI: a throwaway
+ * userData under the temp dir and a fresh `~/.cinna-e2e-<prefix>-*` agents home. Runs `body`, then —
+ * pass or fail — closes B, runs the engine's own `cleanup`, removes the agents home and B's temp root,
+ * and compares `~/Documents/CinnaAgents`. Answers the evidence, also written to `b-evidence.json`.
+ */
+async function onRealHome(
+  fixture: CatalogFixture,
+  engine: { prefix: 'claude' | 'codex'; pathSetting: 'localAgentsClaudePath' | 'localAgentsCodexPath'; binary: string },
+  body: (run: RealHomeRun) => Promise<void>,
+  cleanup: (run: RealHomeRun) => void
+): Promise<Record<string, unknown>> {
+  const realHome = homedir()
+  const before = realProfileFingerprint()
+  // B: a throwaway userData and agents home; only HOME is the real one.
+  const root = mkdtempSync(join(tmpdir(), `cinna-e2e-${engine.prefix}-`))
+  const sandbox: Sandbox = { root, home: realHome, userData: join(root, 'userData') }
+  mkdirSync(sandbox.userData, { recursive: true })
+  const agentsHome = mkdtempSync(join(realHome, `.cinna-e2e-${engine.prefix}-`))
+  const b = new RealHomePerson(fixture.people.b, sandbox, fixture, agentsHome, engine.pathSetting, engine.binary)
+  const run: RealHomeRun = { b, agentsHome, evidence: {} }
+  const { evidence } = run
+  let passed = false
+  try {
+    await b.setUp()
+    expect(b.rootPath).toBe(agentsHome)
+    await b.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+    await body(run)
+    passed = true
+  } finally {
+    if (!passed) {
+      try {
+        writeFileSync(test.info().outputPath('b-screen.yaml'), await b.page.locator('body').ariaSnapshot())
+        await b.page.screenshot({ path: test.info().outputPath('b-screen.png') })
+      } catch {
+        // the app may be gone already
+      }
+    }
+    await b.close().catch(() => {})
+    try {
+      cleanup(run)
+    } catch (error) {
+      evidence.cleanupError = String(error)
+    }
+    execFileSync('chmod', ['-R', 'u+w', agentsHome], { stdio: 'ignore' })
+    rmSync(agentsHome, { recursive: true, force: true })
+    evidence.agentsHomeRemoved = !existsSync(agentsHome)
+    // B's temp root too, pass or fail: b-evidence.json in the test's output folder is the record.
+    try {
+      execFileSync('chmod', ['-R', 'u+w', root], { stdio: 'ignore' })
+    } catch {
+      // already gone
+    }
+    rmSync(root, { recursive: true, force: true })
+    evidence.realAgentsHomeBefore = before
+    evidence.realAgentsHomeAfter = realProfileFingerprint()
+    test.info().annotations.push({ type: 'real-HOME safety', description: JSON.stringify(evidence).slice(0, 4000) })
+    writeFileSync(test.info().outputPath('b-evidence.json'), JSON.stringify(evidence, null, 2))
+  }
+  expect(evidence.cleanupError).toBeUndefined()
+  expect(evidence.agentsHomeRemoved).toBe(true)
+  expect(evidence.realAgentsHomeAfter).toEqual(before)
+  return evidence
 }
 
 /** How Claude Code names a cwd's folder under `~/.claude/projects`. */
@@ -619,6 +835,81 @@ function claudeProjects(): Set<string> {
   return new Set(existsSync(dir) ? readdirSync(dir) : [])
 }
 
+/** Every regular file under `dir` (symlinks not followed), with its mtime. */
+function filesUnder(dir: string): Map<string, number> {
+  const out = new Map<string, number>()
+  const walk = (current: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const path = join(current, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile()) {
+        try {
+          out.set(path, statSync(path).mtimeMs)
+        } catch {
+          // removed meanwhile
+        }
+      }
+    }
+  }
+  walk(dir)
+  return out
+}
+
+/** SHA-256 of a file, or null when it is absent; the contents are never kept. */
+function sha256Of(path: string): string | null {
+  return existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null
+}
+
+/**
+ * The rollouts this run made: new files under `<codexHome>/sessions` whose `session_meta` cwd is under
+ * `agentsHome`, with the thread id, the model of each `turn_context`, and the record types (`payload.type`)
+ * of the lines holding `needle` (nothing else is read out).
+ */
+function codexRollouts(
+  codexHome: string,
+  before: Map<string, number>,
+  agentsHome: string,
+  needle: string
+): { file: string; id: string; models: string[]; needleIn: string[] }[] {
+  const out: { file: string; id: string; models: string[]; needleIn: string[] }[] = []
+  for (const file of filesUnder(join(codexHome, 'sessions')).keys()) {
+    if (before.has(file) || !file.endsWith('.jsonl')) continue
+    let id = ''
+    let cwd = ''
+    const models: string[] = []
+    const needleIn: string[] = []
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      if (needle !== '' && line.includes(needle)) {
+        try {
+          needleIn.push(String(JSON.parse(line)?.payload?.type ?? ''))
+        } catch {
+          // a partial line
+        }
+      }
+      if (!line.includes('"session_meta"') && !line.includes('"turn_context"')) continue
+      try {
+        const record = JSON.parse(line)
+        if (record?.type === 'session_meta') {
+          id = String(record.payload?.id ?? '')
+          cwd = String(record.payload?.cwd ?? '')
+        } else if (record?.type === 'turn_context' && typeof record.payload?.model === 'string') {
+          models.push(record.payload.model)
+        }
+      } catch {
+        // a partial line
+      }
+    }
+    if (cwd === agentsHome || cwd.startsWith(`${agentsHome}/`)) out.push({ file, id, models, needleIn })
+  }
+  return out
+}
+
 /**
  * Whether `~/Documents/CinnaAgents` exists, and the mtimes of it and its `Local/` and `Cloud/`:
  * B's app must create nothing there and add or remove no agent folder.
@@ -630,8 +921,8 @@ function realProfileFingerprint(): Record<string, number | null> {
 }
 
 /**
- * Person B on the developer's real `HOME`, so the pinned `claude` finds their login — but with a
- * throwaway userData and an agents home in a fresh `~/.cinna-e2e-claude-*` folder, set before
+ * Person B on the developer's real `HOME`, so the pinned CLI finds their login — but with a
+ * throwaway userData and an agents home in a fresh `~/.cinna-e2e-<engine>-*` folder, set before
  * anything can create or grant the default `~/Documents/CinnaAgents`. On a fresh database that
  * default is a guarded path nobody acknowledged, so `ensureHome` refuses it until then.
  */
@@ -641,7 +932,8 @@ class RealHomePerson extends PersonApp {
     sandbox: Sandbox,
     fixture: CatalogFixture,
     private readonly agentsHome: string,
-    private readonly claudePath: string
+    private readonly pathSetting: 'localAgentsClaudePath' | 'localAgentsCodexPath',
+    private readonly binary: string
   ) {
     super('b', person, sandbox, fixture)
   }
@@ -665,7 +957,7 @@ class RealHomePerson extends PersonApp {
     const roots = await this.page.evaluate(() => window.api.localAgents.rootsList())
     if (roots.length !== 1 || roots[0].path !== this.agentsHome || !roots[0].isDefault) throw new Error('B has a root outside the throwaway agents home')
     this.rootPath = this.agentsHome
-    await this.page.evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), this.claudePath)
+    await this.page.evaluate((input) => window.api.settings.set(input.key, input.path), { key: this.pathSetting, path: this.binary })
     await this.relaunch()
     const current = await this.page.evaluate(() => window.api.auth.getCurrent())
     expect(current?.username).toBe(this.person.email)

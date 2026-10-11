@@ -57,6 +57,20 @@ async function runTurn(params, turn) {
     complete(threadId, turn, `Codex approval: ${result.decision}.`)
     return
   }
+  if (text === 'Run a command') {
+    // A shell command, as the app-server reports one: its output streams as
+    // deltas and arrives whole as `aggregatedOutput` on completion. The pinned
+    // adapter maps that to `rawOutput: { formatted_output, exit_code }`.
+    const item = { type: 'commandExecution', id: `exec-${turn.id}`, command: "/bin/zsh -lc 'python3 probe.py'",
+      cwd: process.cwd(), processId: null, source: 'agent', status: 'inProgress', commandActions: [],
+      aggregatedOutput: null, exitCode: null, durationMs: null }
+    notify('item/started', { threadId, turnId: turn.id, item })
+    notify('item/commandExecution/outputDelta', { threadId, turnId: turn.id, itemId: item.id, delta: 'probe ' })
+    notify('item/commandExecution/outputDelta', { threadId, turnId: turn.id, itemId: item.id, delta: 'output\n' })
+    notify('item/completed', { threadId, turnId: turn.id, item: { ...item, status: 'completed', aggregatedOutput: 'probe output\n', exitCode: 0, durationMs: 5 } })
+    complete(threadId, turn, 'Command ran.')
+    return
+  }
   if (text === 'Ask a question') {
     const result = await ask('item/tool/requestUserInput', {
       threadId, turnId: turn.id, itemId: `question-${turn.id}`, autoResolutionMs: null,

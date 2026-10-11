@@ -135,6 +135,20 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'no step reads a file outside the working folder' }
   },
   {
+    id: 'codex.tool.command-output', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call_update rawOutput.formatted_output',
+    expectation: 'A shell command’s completing `tool_call_update` carries its whole output as `rawOutput: { formatted_output, exit_code }` and no `content`; the opening `tool_call`’s `content` is only a `{type:"terminal"}` reference, and the bytes also stream as `_meta.terminal_output_delta`. The desktop stores `formatted_output` as the call’s tool_result.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#formatted_output'],
+    feature: 'Every Codex command runs with no output in the chat: the transcript keeps the call and never what it printed.',
+    flow: { steps: ['none'], note: 'the whole flow’s turns call Cinna tools, not shell commands' }
+  },
+  {
+    id: 'codex.tool.mcp-output', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call_update rawOutput.result / error',
+    expectation: 'An MCP call’s completing `tool_call_update` carries `rawOutput: { result: { content, structuredContent, _meta }, error }` and no `content`. A tool answering `isError` arrives as `status: "failed"` with its message in `result.content` and `error: null`. The desktop stores the content’s text as the call’s tool_result.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#mcpOutputText'],
+    feature: 'A Codex agent’s MCP calls — Cinna’s own tools included — show no result in the chat, and a failed call shows no reason.',
+    flow: { steps: ['none'], note: 'the whole flow does not assert stored tool results' }
+  },
+  {
     id: 'codex.mcp.folder-session-load', area: 'tools & MCP', surface: 'ACP field', name: 'native folder session/new and session/load mcpServers',
     expectation: 'With native tools still enabled, two sessions on one adapter connect different cinna bearer descriptors and call their own provider; session/load with the first descriptor calls that provider again. Descriptor data stays in per-session RPC, outside process configuration.',
     owners: ['src/main/agents/drivers/acp/acpDriver.ts#session/load'],

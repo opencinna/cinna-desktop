@@ -12,6 +12,9 @@ import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
 import { airClientMeta } from '../acpActivity'
 import { readQuotaTotal } from '../acpTelemetry'
+import { AcpMessageStream } from '../acpMessages'
+import { KIND_METADATA_KEY } from '../../../streamPartsAccumulator'
+import type { SessionNotification } from '@agentclientprotocol/sdk'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CODEX_CONTRACT } from './codex.contract'
 import { lineDiff, sorted } from './snapshotTools'
@@ -766,7 +769,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
   })
 
   it(entry('codex.sandbox.read-outside-workspace'), () => {
-    expect(seen.handover?.reads.map(({ outputs: _outputs, ...read }) => read)).toEqual([
+    expect(seen.handover?.reads.map(({ outputs: _outputs, updates: _updates, sessionId: _sessionId, ...read }) => read)).toEqual([
       { mode: 'read-only', permissionCount: 0, kinds: [], read: true, promptError: null },
       { mode: 'agent', permissionCount: 0, kinds: [], read: true, promptError: null }
     ])
@@ -780,6 +783,39 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(seen.handover?.writes[1]).toMatchObject({ mode: 'read-only:escalated', permissionCount: 1, kinds: ['execute'], wrote: true })
     expect(seen.handover?.writes[3]).toMatchObject({ mode: 'agent:escalated', permissionCount: 0, wrote: false })
     expect(seen.handover?.writes[3].outputs.join(' ')).toContain('Automatic approval review failed')
+  })
+
+  it(entry('codex.tool.command-output'), () => {
+    expect(seen.handover?.reads.length).toBeGreaterThan(0)
+    for (const read of seen.handover?.reads ?? []) {
+      // The wire: the completing update carries the whole output and the exit code.
+      const done = read.updates.find((update) => update.sessionUpdate === 'tool_call_update' && update.status === 'completed')
+      const rawOutput = done?.rawOutput as Record<string, unknown> | undefined
+      expect(String(rawOutput?.formatted_output ?? ''), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
+      expect(rawOutput?.exit_code, read.mode).toBe(0)
+      // Our reader: the same turn, folded as the driver folds it, stores that output.
+      const stream = new AcpMessageStream({ launcher: 'codex' })
+      const results = read.updates.flatMap((update) => stream.apply({ sessionId: read.sessionId, update } as unknown as SessionNotification).message?.parts ?? [])
+        .filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result')
+      expect(results.map((part) => part.text).join('\n'), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
+    }
+  })
+
+  it(entry('codex.tool.mcp-output'), () => {
+    const updates = seen.handover?.mcpUpdates ?? []
+    const ends = updates.filter((update) => update.sessionUpdate === 'tool_call_update' && (update.status === 'completed' || update.status === 'failed'))
+    const failed = ends.filter((update) => update.status === 'failed')
+    // The wire: an isError answer is a failed call whose message is in result.content, with no error.
+    expect(failed).toHaveLength(1)
+    expect(failed[0].content).toBeUndefined()
+    expect(failed[0].rawOutput).toMatchObject({ result: { content: [{ type: 'text', text: 'HANDOVER_TOOL_FAILED' }] }, error: null })
+    expect(ends.some((update) => JSON.stringify(update.rawOutput).includes('HANDOVER_SESSION_first'))).toBe(true)
+    // Our reader stores both as tool_results.
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    const texts = updates.flatMap((update) => stream.apply({ sessionId: 'mcp', update } as unknown as SessionNotification).message?.parts ?? [])
+      .filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result').map((part) => part.text).join('\n')
+    expect(texts).toContain('HANDOVER_SESSION_first')
+    expect(texts).toContain('HANDOVER_TOOL_FAILED')
   })
 
   it(entry('codex.mcp.folder-session-load'), () => {

@@ -8,6 +8,8 @@ import { isRefusal, newSessionParams } from './acpLaunchers'
 import { toInputQuestions, toElicitationContent } from './acpQuestions'
 import { toAcpPermissionRequest } from './acpPermissions'
 import { startAcpConnection } from './acpConnection'
+import { AcpMessageStream } from './acpMessages'
+import { KIND_METADATA_KEY } from '../../streamPartsAccumulator'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 
 describe('pinned Codex adapter over real stdio', () => {
@@ -59,6 +61,13 @@ describe('pinned Codex adapter over real stdio', () => {
         expect((await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: prompt }] })).stopReason).toBe('end_turn')
         expect(JSON.stringify(updates)).toContain(answer)
       }
+      // A command's output is stored as its tool_result (rawOutput.formatted_output).
+      const beforeCommand = updates.length
+      expect((await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'Run a command' }] })).stopReason).toBe('end_turn')
+      const stream = new AcpMessageStream({ launcher: 'codex' })
+      const results = updates.slice(beforeCommand).flatMap((update) => stream.apply(update).message?.parts ?? [])
+        .filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result')
+      expect(results.map((part) => part.text)).toEqual(['probe output\n'])
       const hanging = connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'Wait until stopped' }] })
       // Wait for the actual native turn, so cancellation cannot race session setup.
       const deadline = Date.now() + 3000

@@ -14,14 +14,20 @@ export interface HandoverProbe {
    * of it, not a temp root), per mode — how a folder agent reaches the
    * `cinna-tasks` SKILL.md under the app's resources.
    */
-  reads: { mode: string; permissionCount: number; kinds: string[]; read: boolean; outputs: string[]; promptError: unknown }[]
+  /**
+   * Codex only: the `session/update`s of the MCP calls, as codex-acp sent them,
+   * ending with one call whose tool answers `isError` (`codex.tool.mcp-output`).
+   * Not snapshotted.
+   */
+  mcpUpdates: Json[]
+  reads: { mode: string; sessionId: string; permissionCount: number; kinds: string[]; read: boolean; outputs: string[]; updates: Json[]; promptError: unknown }[]
 }
 const allow = (request: AdapterMessage): Json | undefined => {
   const options = request.params?.options as Json[] | undefined
   const option = options?.find((value) => value.kind === 'allow_once')
   return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : undefined
 }
-const initial = (): HandoverProbe => ({ writes: [], reads: [], mcp: { nativeTools: false, first: false, second: false, loaded: false, calls: [], listReads: 0, differentDescriptors: false, outputs: [] } })
+const initial = (): HandoverProbe => ({ writes: [], reads: [], mcpUpdates: [], mcp: { nativeTools: false, first: false, second: false, loaded: false, calls: [], listReads: 0, differentDescriptors: false, outputs: [] } })
 
 export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: string, adapterPath: string, trap?: EgressTrap): Promise<HandoverProbe> {
   const result = initial()
@@ -73,13 +79,17 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
       if (codex) {
         const before = connection.clientRequests.length
         const beforeTurns = codex.turns.length
+        const beforeUpdates = connection.updates.length
         codexScript = [{ kind: 'tool', name: 'exec_command', args: JSON.stringify({ cmd: `cat '${skillFile}'`, yield_time_ms: 1000, max_output_tokens: 1000 }) }]
         const prompt = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: `Read the file ${skillFile}.` }] }, 60_000)
         const permissions = connection.clientRequests.slice(before).filter((request) => request.method === 'session/request_permission')
         const outputs = codex.turns.slice(beforeTurns).flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : []).map((output) => output.replaceAll(scratch.home, '<scratch>'))
-        result.reads.push({ mode, permissionCount: permissions.length,
+        result.reads.push({ mode, sessionId, permissionCount: permissions.length,
           kinds: permissions.map((request) => String((request.params?.toolCall as Json)?.kind ?? '')),
-          read: outputs.some((output) => output.includes(readMarker)), outputs, promptError: prompt.error ?? null })
+          read: outputs.some((output) => output.includes(readMarker)), outputs,
+          // The `session/update`s of the read's turn, as codex-acp sent them: the
+          // command's output shape (`codex.tool.command-output`).
+          updates: connection.updates.slice(beforeUpdates), promptError: prompt.error ?? null })
       }
     }
     const sessions = await Promise.all(['first', 'second'].map((identity) => mcp.ensureSession(`handover-${identity}`, { getProviders: () => {
@@ -94,6 +104,7 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
       await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: `Call the cinna probe for ${identity}.` }] }, 60_000)
     }
     const ids: string[] = []
+    const beforeMcpUpdates = connection.updates.length
     for (let index = 0; index < sessions.length; index++) {
       const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [sessions[index].descriptor], ...(meta ? { _meta: meta } : {}) }, 60_000)
       const id = String(created.result?.sessionId ?? '')
@@ -106,6 +117,16 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
     const loaded = await connection.rpc('session/load', { sessionId: ids[0], cwd: scratch.cwd, mcpServers: [sessions[0].descriptor], ...(meta ? { _meta: meta } : {}) }, 60_000)
     if (!loaded.error) await call(ids[0], 'loaded first')
     result.mcp.loaded = !loaded.error && result.mcp.calls.slice(beforeLoad).includes('first')
+    if (codex) {
+      // A tool that throws: the conductor answers `isError: true` with the message as text.
+      const failing = await mcp.ensureSession('handover-failing', { getProviders: () => [{ providerType: 'mcp', displayName: 'handover probe',
+        getTools: () => [{ name: 'probe', description: 'Return the session identity.', inputSchema: { type: 'object', properties: {} }, providerType: 'mcp', mcpProviderId: 'probe' }],
+        callTool: async () => { throw new Error('HANDOVER_TOOL_FAILED') } }] } as never)
+      const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [failing.descriptor] }, 60_000)
+      const id = String(created.result?.sessionId ?? '')
+      if (id) await call(id, 'failing')
+    }
+    result.mcpUpdates = codex ? connection.updates.slice(beforeMcpUpdates) : []
     result.mcp.nativeTools = claude ? claude.turns.some((turn) => turn.tools.includes('Write') && turn.tools.includes('mcp__cinna__probe')) : codex!.turns.some((turn) => turn.tools.some((name) => name.endsWith('exec_command')))
     result.mcp.outputs = (claude ? claude.turns.flatMap((turn) => turn.toolResults) : codex!.turns.flatMap((turn) => turn.outputs)).filter((output) => output.includes('HANDOVER_SESSION_'))
     return result
@@ -127,6 +148,6 @@ export function handoverProbeSnapshot(probe: HandoverProbe | null): Json | null 
       reviewUnavailable: outputs.some((output) => /could not evaluate|approval review failed/.test(output)) })),
     mcp: { ...probe.mcp, listReads: probe.mcp.listReads > 0, outputs: [...new Set(probe.mcp.outputs.flatMap((output) => output.match(/HANDOVER_SESSION_(first|second)/g) ?? []))].sort() },
     // Codex only; absent for Claude, whose snapshot this probe does not touch.
-    ...(probe.reads.length ? { reads: probe.reads.map(({ outputs: _outputs, ...read }) => read) } : {})
+    ...(probe.reads.length ? { reads: probe.reads.map(({ outputs: _outputs, updates: _updates, sessionId: _sessionId, ...read }) => read) } : {})
   }
 }

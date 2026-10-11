@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
-import { AcpMessageStream, describeAcpToolCall, resolveOfferedModel } from './acpMessages'
+import { AcpMessageStream, TOOL_RESULT_LIMIT, capToolResult, describeAcpToolCall, resolveOfferedModel } from './acpMessages'
 import {
   KIND_METADATA_KEY,
   PARENT_TOOL_ID_METADATA_KEY,
@@ -51,7 +51,7 @@ interface AcpFixture {
   params?: Record<string, unknown>
 }
 
-function load(launcher: 'opencode' | 'claude', name: string): AcpFixture {
+function load(launcher: 'opencode' | 'claude' | 'codex', name: string): AcpFixture {
   return JSON.parse(readFileSync(join(FIXTURES, launcher, `${name}.json`), 'utf8')) as AcpFixture
 }
 
@@ -753,6 +753,146 @@ describe('a Skill call, as claude-agent-acp 0.76.0 sends it', () => {
       kind: 'tool', text: 'Skill: ledger-bot:erp-check', toolName: 'Skill', toolId: 'toolu_skill',
       toolInput: { skill: 'ledger-bot:erp-check' }
     }])
+  })
+})
+
+describe('a command, as codex-acp 1.11.0 sends it', () => {
+  // `createCommandExecutionUpdate` / `completeCommandExecutionEvent` in the
+  // pinned adapter: the call opens with a `{type:'terminal'}` content block,
+  // the output streams as `_meta.terminal_output_delta`, and the completing
+  // update carries it whole as `rawOutput.formatted_output` with no `content`.
+  const ID = 'exec-0f1e'
+  const opened: SessionNotification = { sessionId: 'thr', update: {
+    sessionUpdate: 'tool_call', toolCallId: ID, status: 'in_progress', kind: 'execute', title: 'python3 run.py',
+    content: [{ type: 'terminal', terminalId: ID }],
+    rawInput: { command: "/bin/zsh -lc 'python3 run.py'", cwd: '/tmp/w' },
+    _meta: { terminal_info: { cwd: '/tmp/w', terminal_id: ID } }
+  } as unknown as SessionNotification['update'] }
+  const delta = (data: string): SessionNotification => ({ sessionId: 'thr', update: {
+    sessionUpdate: 'tool_call_update', toolCallId: ID,
+    _meta: { terminal_output_delta: { data, terminal_id: ID } }
+  } as unknown as SessionNotification['update'] })
+  const completed = (status: string, output: string, exitCode: number): SessionNotification => ({ sessionId: 'thr', update: {
+    sessionUpdate: 'tool_call_update', toolCallId: ID, status,
+    rawOutput: { formatted_output: output, exit_code: exitCode },
+    _meta: { terminal_exit: { exit_code: exitCode, signal: null, terminal_id: ID } }
+  } as unknown as SessionNotification['update'] })
+
+  const store = (notifications: SessionNotification[]): ReturnType<StreamPartsAccumulator['snapshotParts']> => {
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    const acc = new StreamPartsAccumulator()
+    const port = { postMessage: (): void => {} }
+    for (const n of notifications) {
+      const update = stream.apply(n)
+      if (update.message) acc.ingestMessage(update.message, port)
+    }
+    return acc.snapshotParts()
+  }
+
+  it('stores the final output as the call’s tool_result, not the streamed deltas', () => {
+    const parts = store([opened, delta('slot='), delta('ok\n'), completed('completed', 'slot=ok\n', 0)])
+    expect(parts.map((p) => p.kind)).toEqual(['tool', 'tool_result'])
+    expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'slot=ok\n', toolId: ID, toolStream: 'stdout' })
+  })
+
+  it('keeps a non-zero exit code as the last line of a failed command', () => {
+    const parts = store([opened, completed('failed', 'Traceback: boom', 2)])
+    expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'Traceback: boom\nExit code 2', toolStream: 'stderr' })
+    expect(store([opened, completed('failed', '', 127)])[1]?.text).toBe('Exit code 127')
+  })
+
+  it('adds no exit-code line for a command the user stopped (exit -1), so it does not read as an error', () => {
+    expect(store([opened, completed('failed', '', -1)]).map((p) => p.kind)).toEqual(['tool'])
+    expect(store([opened, completed('failed', 'partial\n', -1)])[1]?.text).toBe('partial\n')
+  })
+
+  it('keeps the head and tail of an output over the limit, naming the gap', () => {
+    const big = 'a'.repeat(TOOL_RESULT_LIMIT) + 'MIDDLE' + 'z'.repeat(TOOL_RESULT_LIMIT)
+    const text = store([opened, completed('completed', big, 0)])[1]!.text
+    expect(text.length).toBeLessThan(TOOL_RESULT_LIMIT + 100)
+    expect(text.startsWith('aaa')).toBe(true)
+    expect(text.endsWith('zzz')).toBe(true)
+    expect(text).toContain(`… ${big.length - TOOL_RESULT_LIMIT} characters left out …`)
+    expect(capToolResult('short')).toBe('short')
+  })
+
+  it('stores nothing for a silent command that succeeded', () => {
+    expect(store([opened, completed('completed', '', 0)]).map((p) => p.kind)).toEqual(['tool'])
+  })
+
+  it('does not read the opening terminal reference as output', () => {
+    // A call the adapter replays already completed still has only the reference.
+    const done = { ...opened, update: { ...opened.update, status: 'completed' } } as SessionNotification
+    expect(store([done]).map((p) => p.kind)).toEqual(['tool'])
+  })
+
+  it('stores a background command’s output from the recorded fixture', () => {
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    const { messages } = foldAll(stream, load('codex', 'async_task_background_terminal'))
+    const result = [...messages.values()].flat().find((p) => kindOf(p) === 'tool_result')
+    expect(result?.text).toBe('probe-done\n')
+    expect(toolIdOf(result!)).toBe('exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68')
+  })
+
+  it('flattens a function-call output given as input_text items', () => {
+    const parts = store([
+      { sessionId: 'thr', update: { sessionUpdate: 'tool_call', toolCallId: 'call_1', title: 'apply_patch', kind: 'other', status: 'in_progress' } as unknown as SessionNotification['update'] },
+      { sessionId: 'thr', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_1', status: 'completed',
+        rawOutput: { output: [{ type: 'input_text', text: 'Done.' }] } } as unknown as SessionNotification['update'] }
+    ])
+    expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'Done.' })
+  })
+})
+
+describe('an MCP call, as codex-acp 1.11.0 sends it', () => {
+  // Watched in `make contract ENGINE=codex` (codex.tool.mcp-output): the
+  // app-server item passes through as `rawOutput: { result, error }`.
+  const ID = 'call_18'
+  const input = { server: 'cinna', tool: 'probe', arguments: {} }
+  const opened: SessionNotification = { sessionId: 'thr', update: {
+    sessionUpdate: 'tool_call', toolCallId: ID, kind: 'execute', title: 'mcp.cinna.probe', status: 'in_progress',
+    rawInput: input, _meta: { is_mcp_tool_call: true }
+  } as unknown as SessionNotification['update'] }
+  const done = (status: string, rawOutput: unknown): SessionNotification => ({ sessionId: 'thr', update: {
+    sessionUpdate: 'tool_call_update', toolCallId: ID, status, rawInput: input, rawOutput
+  } as unknown as SessionNotification['update'] })
+  const result = (content: unknown[], structuredContent: unknown = null): Record<string, unknown> =>
+    ({ result: { content, structuredContent, _meta: null }, error: null })
+
+  const resultOf = (notifications: SessionNotification[]): PartLike | undefined => {
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    let parts: PartLike[] = []
+    for (const n of notifications) parts = stream.apply(n).message?.parts ?? parts
+    return parts.find((p) => kindOf(p) === 'tool_result')
+  }
+
+  it('stores the text content as the call’s tool_result', () => {
+    const part = resultOf([opened, done('completed', result([{ type: 'text', text: 'HANDOVER_SESSION_first' }]))])
+    expect(part?.text).toBe('HANDOVER_SESSION_first')
+    expect(toolIdOf(part!)).toBe(ID)
+    expect(part?.metadata?.[TOOL_STREAM_METADATA_KEY]).toBe('stdout')
+  })
+
+  it('stores a tool’s isError answer as stderr, from result.content', () => {
+    const part = resultOf([opened, done('failed', result([{ type: 'text', text: 'HANDOVER_TOOL_FAILED' }]))])
+    expect(part?.text).toBe('HANDOVER_TOOL_FAILED')
+    expect(part?.metadata?.[TOOL_STREAM_METADATA_KEY]).toBe('stderr')
+  })
+
+  it('stores the call’s own error message', () => {
+    expect(resultOf([opened, done('failed', { result: null, error: { message: 'tool call timed out' } })])?.text).toBe('tool call timed out')
+  })
+
+  it('falls back to structuredContent only when there is no content', () => {
+    expect(resultOf([opened, done('completed', result([], { rows: 2 }))])?.text).toBe('{"rows":2}')
+    expect(resultOf([opened, done('completed', result([{ type: 'text', text: 'two rows' }], { rows: 2 }))])?.text).toBe('two rows')
+  })
+
+  it('stores the output of a call replayed already completed (session/load)', () => {
+    const replayed: SessionNotification = { sessionId: 'thr', update: {
+      ...(opened.update as object), status: 'completed', rawOutput: result([{ type: 'text', text: 'HANDOVER_SESSION_first' }])
+    } as unknown as SessionNotification['update'] }
+    expect(resultOf([replayed])?.text).toBe('HANDOVER_SESSION_first')
   })
 })
 
