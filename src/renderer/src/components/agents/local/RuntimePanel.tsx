@@ -845,6 +845,9 @@ export function RuntimePanel({
   // The reset first: on mount both run, and it must not wipe the command just kept.
   useEffect(() => { resetLogin(); setLoginCommand(null) }, [agent.id, loginEngine, resetLogin])
   useEffect(() => { if (failedCommand) setLoginCommand(failedCommand) }, [failedCommand])
+  // Gone outside a login (a cancel, a fix that made it stale): a retry must not
+  // bring back a command naming the binary that was replaced.
+  useEffect(() => { if (!login.pending && !failedCommand) setLoginCommand(null) }, [login.pending, failedCommand])
   const shownLoginCommand = login.pending ? loginCommand : failedCommand
   /**
    * **The managed CLI's state, not PATH detection.** Every Codex session runs on

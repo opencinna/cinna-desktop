@@ -6,7 +6,7 @@ import { DEFAULT_RUNTIME_KEY } from './useEngine'
 
 const logger = createLogger('app-settings')
 
-const APP_SETTINGS_KEY = ['app-settings'] as const
+export const APP_SETTINGS_KEY = ['app-settings'] as const
 
 /**
  * Where AI Functions will run, as main decides it. Derived in main from the

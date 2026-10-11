@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   DetectedTool,
@@ -9,9 +9,10 @@ import type {
   ToolInstallPlan,
   ToolInstallProgress
 } from '../../../shared/localTools'
-import type { EngineLoginId, EngineLoginPhase, EngineLoginResult } from '../../../shared/engine'
-import { DEFAULT_RUNTIME_KEY } from './useEngine'
-import { useAppSettings, useSetAppSetting } from './useAppSettings'
+import type { EngineBinaryState, EngineLoginId, EngineLoginPhase, EngineLoginResult } from '../../../shared/engine'
+import type { AppSettingsSchema } from '../../../shared/appSettings'
+import { ANTIGRAVITY_BINARY_KEY, CLAUDE_BINARY_KEY, CODEX_BINARY_KEY, DEFAULT_RUNTIME_KEY } from './useEngine'
+import { APP_SETTINGS_KEY, useAppSettings, useSetAppSetting } from './useAppSettings'
 import { launchableTools, resolveDefaultTool } from '../utils/localAgents'
 import { unwrapIpcError } from '../utils/ipcError'
 
@@ -161,6 +162,48 @@ const ENGINE_AUTH_KEY: Record<EngineLoginId, readonly string[]> = {
   antigravity: ANTIGRAVITY_AUTH_KEY
 }
 
+/**
+ * Each engine's managed binary, as the Settings rows read it — key and fetcher
+ * both. An observer writes its options onto the shared query, so one that
+ * observes without fetching still has to carry the real fetcher: a global
+ * invalidate would otherwise run whatever it carried.
+ */
+const ENGINE_BINARY_QUERY: Record<
+  EngineLoginId,
+  { key: readonly string[]; fetch: () => Promise<EngineBinaryState> }
+> = {
+  claude: { key: CLAUDE_BINARY_KEY, fetch: () => window.api.engine.claudeBinary() },
+  codex: { key: CODEX_BINARY_KEY, fetch: () => window.api.engine.codexBinary() },
+  antigravity: { key: ANTIGRAVITY_BINARY_KEY, fetch: () => window.api.engine.antigravityBinary() }
+}
+
+/** Each engine's Path setting. */
+const ENGINE_PATH_SETTING: Record<EngineLoginId, keyof AppSettingsSchema & `localAgents${string}Path`> = {
+  claude: 'localAgentsClaudePath',
+  codex: 'localAgentsCodexPath',
+  antigravity: 'localAgentsAntigravityPath'
+}
+
+/**
+ * The engine a login ended against: its Path setting and where its binary was
+ * ready (`null`: known, not ready). `undefined` is "not known then", which
+ * nothing later can be compared with.
+ */
+interface SettledEngine {
+  path: string | undefined
+  binary: string | null | undefined
+  /** Latched: a failure hidden once is not shown again by a change back. */
+  outdated: boolean
+}
+
+function pathSettingOf(settings: AppSettingsSchema | undefined, engine: EngineLoginId): string | undefined {
+  return settings ? (settings[ENGINE_PATH_SETTING[engine]] ?? '').trim() : undefined
+}
+
+function readyPathOf(binary: EngineBinaryState | undefined): string | null | undefined {
+  return binary ? (binary.state === 'ready' ? binary.path : null) : undefined
+}
+
 export interface EngineLoginControl {
   /** Start the login, or join the one main is already running for this engine. */
   start: () => void
@@ -194,6 +237,7 @@ export interface EngineLoginControl {
 export function useEngineLogin(engine: EngineLoginId | null): EngineLoginControl {
   const queryClient = useQueryClient()
   const running = useEngineLoginRunning(engine !== null)
+  const settledEngine = useRef<SettledEngine | null>(null)
   const mutation = useMutation<EngineLoginResult, Error, void>({
     mutationKey: ['engine-login', engine],
     mutationFn: () => {
@@ -208,6 +252,15 @@ export function useEngineLogin(engine: EngineLoginId | null): EngineLoginControl
       return result
     },
     onSettled: () => {
+      // Runs before the outcome is rendered, so the failure is never shown
+      // against anything but the engine as it stood when the login ended.
+      settledEngine.current = engine
+        ? {
+            path: pathSettingOf(queryClient.getQueryData<AppSettingsSchema>(APP_SETTINGS_KEY), engine),
+            binary: readyPathOf(queryClient.getQueryData<EngineBinaryState>(ENGINE_BINARY_QUERY[engine].key)),
+            outdated: false
+          }
+        : null
       if (engine) void queryClient.invalidateQueries({ queryKey: ENGINE_AUTH_KEY[engine] })
       void queryClient.invalidateQueries({ queryKey: ENGINE_LOGIN_RUNNING_KEY })
       void queryClient.invalidateQueries({ queryKey: ['agents'] })
@@ -218,6 +271,34 @@ export function useEngineLogin(engine: EngineLoginId | null): EngineLoginControl
   const { mutate, reset } = mutation
   const runningPhase = engine !== null ? (running.data?.[engine] || null) : null
   const pending = mutation.isPending || runningPhase !== null
+  /**
+   * **A failure is forgotten once the engine it failed on is a different one**:
+   * a new Path in Settings, or the binary ready at a path it was not at when
+   * the login ended (an *Install now* that worked). Otherwise "Sign-in didn't
+   * finish: … could not be installed" outlives the fix until the page reloads,
+   * on every surface.
+   *
+   * The engine is noted in `onSettled`, from the cache, rather than compared
+   * to a `reset()` fired on change: the login moves the binary itself, and a
+   * reset of a pending login drops its outcome. A binary that is resolving,
+   * failed or unknown is no evidence either way, so a *Check again* that lands
+   * on the same path keeps the line; once hidden, it stays hidden.
+   */
+  const { data: settings } = useAppSettings()
+  const { data: binary } = useQuery<EngineBinaryState>({
+    queryKey: engine ? ENGINE_BINARY_QUERY[engine].key : ['engine-binary-none'],
+    queryFn: engine ? ENGINE_BINARY_QUERY[engine].fetch : () => Promise.reject(new Error('no engine')),
+    enabled: false
+  })
+  const settled = mutation.isPending ? null : settledEngine.current
+  if (settled && engine && !settled.outdated) {
+    const path = pathSettingOf(settings, engine)
+    const ready = readyPathOf(binary)
+    settled.outdated =
+      (settled.path !== undefined && path !== undefined && path !== settled.path) ||
+      (settled.binary !== undefined && ready !== undefined && ready !== null && ready !== settled.binary)
+  }
+  const outdated = settled?.outdated === true
   const data = mutation.data
   const failure = mutation.error
     ? { outcome: 'failed' as const, command: null, reason: unwrapIpcError(mutation.error, 'the login could not start') }
@@ -237,7 +318,7 @@ export function useEngineLogin(engine: EngineLoginId | null): EngineLoginControl
     },
     pending,
     phase: pending ? (runningPhase ?? 'preparing') : null,
-    failure: mutation.isPending ? null : failure,
+    failure: mutation.isPending || outdated ? null : failure,
     reset
   }
 }
