@@ -27,8 +27,17 @@ import { cloudUpdateItems } from './cloudUpdateNotices'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
-import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
-import type { InboxAnswerResult, InboxEntry, InboxSnapshot, UpdateAvailableInboxItem } from '../../shared/inbox'
+import { ASK_NO_LONGER_WAITING, disconnectedKey } from '../../shared/inbox'
+import type {
+  InboxAnswerResult,
+  InboxEntry,
+  InboxSnapshot,
+  SkillDisconnectedDismissal,
+  SkillDisconnectedInboxItem,
+  UpdateAvailableInboxItem
+} from '../../shared/inbox'
+import type { LocalAgentDto } from '../../shared/localAgents'
+import { inboxDismissalRepo } from '../db/inboxDismissals'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
 
 const logger = createLogger('inbox')
@@ -215,7 +224,7 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
  * services this module's own dependencies reach; a failure is an empty list,
  * never a failed Inbox.
  */
-async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
+async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[] | null> {
   try {
     // Nothing listed, nothing to compare: the common case costs no import and no git.
     if (!libraryService.cached(getProfileScopeUserId())?.agents.length) return []
@@ -223,7 +232,25 @@ async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
     return await sharingService.teamChanges(getSettingsScopeUserId())
   } catch (err) {
     logger.warn('team change notices could not be read', { error: err instanceof Error ? err.message : String(err) })
-    return []
+    // Null, not empty: the Disconnected cards of tracked agents must not read a failure as "not behind".
+    return null
+  }
+}
+
+/**
+ * This machine's kit agents (settings scope) as `localAgentService.list`
+ * answers them, catalog skill rows folded with the cached listing — read once
+ * per Inbox read for both kinds of skill card. Null without a cached listing
+ * (no skill card can be derived then) or when the list could not be read.
+ */
+async function kitAgentsForSkillCards(): Promise<LocalAgentDto[] | null> {
+  try {
+    if (!libraryService.cached(getProfileScopeUserId())) return null
+    const { localAgentService } = await import('./localAgents/localAgentService')
+    return localAgentService.list(getSettingsScopeUserId()).agents
+  } catch (err) {
+    logger.warn('local agents could not be read for skill notices', { error: err instanceof Error ? err.message : String(err) })
+    return null
   }
 }
 
@@ -234,17 +261,47 @@ async function desktopUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
  * folders; imported lazily for the same reason as {@link desktopUpdateItems}.
  * A failure is an empty list, never a failed Inbox.
  */
-async function skillUpdateItems(): Promise<UpdateAvailableInboxItem[]> {
+async function skillUpdateItems(agentsPending: Promise<LocalAgentDto[] | null>): Promise<UpdateAvailableInboxItem[]> {
   try {
-    // No skill in the listing, nothing to compare: no import, no scan.
+    // No skill in the listing, nothing to compare.
     if (!libraryService.cached(getProfileScopeUserId())?.items.some((item) => item.kind === 'skill')) return []
-    const [{ localAgentService }, { catalogSkillUpdateItems }] = await Promise.all([
-      import('./localAgents/localAgentService'),
-      import('./catalogSkillUpdates')
-    ])
-    return catalogSkillUpdateItems(localAgentService.list(getSettingsScopeUserId()).agents)
+    const agents = await agentsPending
+    if (!agents) return []
+    const { catalogSkillUpdateItems } = await import('./catalogSkillUpdates')
+    return catalogSkillUpdateItems(agents)
   } catch (err) {
     logger.warn('catalog skill update notices could not be read', { error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
+/**
+ * "Disconnected" for catalog skills: pins the catalog no longer gives this
+ * person (`catalogSkillDisconnectedItems`), minus the ones this profile
+ * dismissed in that state — and the dismissals whose state is over are
+ * forgotten here, so a later disconnect shows a new card. A team-tracked
+ * agent's card needs the desktop agents' "Update available" read (`behind`).
+ * A failure is an empty list, never a failed Inbox.
+ */
+async function skillDisconnectedItems(
+  userId: string,
+  agentsPending: Promise<LocalAgentDto[] | null>,
+  desktopUpdatesPending: Promise<UpdateAvailableInboxItem[] | null>
+): Promise<SkillDisconnectedInboxItem[]> {
+  try {
+    const agents = await agentsPending
+    if (!agents) return []
+    const desktopUpdates = await desktopUpdatesPending
+    const behind = desktopUpdates === null ? null : new Set(desktopUpdates.filter((item) => item.target === 'desktop_agent').map((item) => item.agentId))
+    const { catalogSkillDisconnectedItems } = await import('./catalogSkillUpdates')
+    const { items, clear } = catalogSkillDisconnectedItems(agents, {
+      behind,
+      dismissed: inboxDismissalRepo.keys(userId, 'skill_disconnected')
+    })
+    inboxDismissalRepo.clear(userId, 'skill_disconnected', clear)
+    return items
+  } catch (err) {
+    logger.warn('catalog skill disconnected notices could not be read', { error: err instanceof Error ? err.message : String(err) })
     return []
   }
 }
@@ -589,16 +646,32 @@ export const inboxService = {
       .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
     const dispatchPending = taskDispatchInboxItems(userId)
     const desktopUpdatesPending = desktopUpdateItems()
-    const skillUpdatesPending = skillUpdateItems()
+    const kitAgentsPending = kitAgentsForSkillCards()
+    const skillUpdatesPending = skillUpdateItems(kitAgentsPending)
+    const disconnectedPending = skillDisconnectedItems(userId, kitAgentsPending, desktopUpdatesPending)
     const remote = await pending
     const dispatch = await dispatchPending
-    const updates = [...(await desktopUpdatesPending), ...cloudUpdateItems(), ...(await skillUpdatesPending)]
+    const updates = [...((await desktopUpdatesPending) ?? []), ...cloudUpdateItems(), ...(await skillUpdatesPending)]
     return {
       entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
       unreadable: remote.unreadable,
       dispatch,
-      updates
+      updates,
+      disconnected: await disconnectedPending
     }
+  },
+
+  /**
+   * Dismiss a "Disconnected" card: hidden for this profile until that pin is
+   * connected again (or removed), when the next read forgets the dismissal.
+   * A malformed address is ignored.
+   */
+  dismissDisconnected(userId: string, input: SkillDisconnectedDismissal): void {
+    const agentId = typeof input?.agentId === 'string' ? input.agentId : ''
+    const packageUuid = typeof input?.packageUuid === 'string' ? input.packageUuid.trim() : ''
+    const revision = typeof input?.revision === 'number' && Number.isInteger(input.revision) ? input.revision : null
+    if (agentId === '' || packageUuid === '') return
+    inboxDismissalRepo.put(userId, 'skill_disconnected', disconnectedKey(agentId, packageUuid, revision))
   },
 
   /**

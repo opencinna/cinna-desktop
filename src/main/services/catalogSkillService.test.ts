@@ -85,7 +85,8 @@ vi.mock('./localAgents/gitService', () => ({
 const { catalogSkillService } = await import('./catalogSkillService')
 const { catalogSkillCache, removeTree } = await import('./catalogSkillCache')
 const { catalogLocalInstalls } = await import('./catalogLocalInstalls')
-const { catalogSkillUpdateItems, withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
+const { beginTeamBehindRead, catalogSkillDisconnectedItems, catalogSkillUpdateItems, noteTeamBehind, withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
+const { disconnectedKey } = await import('../../shared/inbox')
 const { agentSkillRows, deliverableSkills } = await import('../kit/skills')
 const { CinnaApiError } = await import('../errors')
 const { libraryTrust } = await import('./libraryTrust')
@@ -159,6 +160,7 @@ beforeEach(() => {
   catalogSkillCache._reset()
   catalogSkillService._reset()
   catalogLocalInstalls._reset(join(root, 'catalog-device.json'))
+  noteTeamBehind(new Map())
 })
 
 afterEach(() => {
@@ -823,8 +825,9 @@ describe('the update signal (U9)', () => {
 
 describe('a pin the catalog no longer lists for this person', () => {
   const unavailable = {
-    code: 'catalog_unavailable',
-    message: 'This skill is no longer in the catalog for you. The copy on this computer keeps working, but it won’t get updates.',
+    code: 'catalog_disconnected',
+    message:
+      'Disconnected — this skill is no longer in the catalog for you. The copy on this computer is now a local version: it keeps working but no longer syncs or gets updates.',
     severity: 'warning'
   }
   const ready = (issues: unknown[] = [], instance = 'https-cinna.test') => ({
@@ -927,5 +930,218 @@ describe('the Inbox items (Update available for a skill)', () => {
       expect.objectContaining({ skillTitle: 'erp-lookup', version: 3, versionLabel: null, changedBy: null, changedAt: null })
     ])
     expect(catalogSkillUpdateItems([{ id: 'folder:bare', name: 'Bare', path: agentDir }] as never)).toEqual([])
+  })
+})
+
+describe('the Inbox items (Disconnected)', () => {
+  const AGENT = 'folder:a'
+  const KEY = (revision = 1) => disconnectedKey(AGENT, UUID, revision)
+  const cachedPath = join('catalog-skills', 'https-cinna.test', UUID, '1', 'erp-lookup', 'SKILL.md')
+  const pinRow = (over: Record<string, unknown> = {}) => ({
+    name: 'erp-lookup',
+    source: 'catalog',
+    packageUuid: UUID,
+    revisionNumber: 1,
+    path: join(host.userData, cachedPath),
+    deliverable: true,
+    issues: [],
+    ...over
+  })
+  /** The agent as `localAgentService.list` answers it: folded with the listing. */
+  const listed = (rows: Record<string, unknown>[] = [pinRow()]) =>
+    [withCatalogSkillUpdates({ id: AGENT, name: 'Invoices', path: agentDir, skills: rows } as never)] as never
+  const loaded = (items: unknown[], agents: unknown[] = []) => {
+    listing.value = { host: HOST, items, agents, available: true } as never
+  }
+  const compute = (agents: never, dismissed: string[] = [], behind: ReadonlySet<string> | null = new Set()) =>
+    catalogSkillDisconnectedItems(agents, { behind, dismissed: new Set(dismissed) })
+  const track = () => {
+    mkdirSync(join(agentDir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(agentDir, 'app-data', 'desktop.json'),
+      JSON.stringify({ shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: `${HOST}/git/r1.git` } })
+    )
+  }
+  const teamAgent = (access = 'maintain') => ({ repoId: 'r1', bundleId: 'b', cloneUrl: `${HOST}/git/r1.git`, access })
+  const refused = () =>
+    catalogSkillCache.recordNotAvailable({ packageUuid: UUID, revisionNumber: 1, name: 'erp-lookup', archiveSha256: 'a'.repeat(64) })
+  const failedRow = () => pinRow({ path: '', deliverable: false, issues: [{ code: 'download_failed', message: 'x', severity: 'error' }] })
+
+  it('shows a card for a pin of an agent no team tracks once the catalog no longer lists it, and none once it is listed again', () => {
+    loaded([])
+    expect(compute(listed())).toEqual({
+      items: [
+        {
+          kind: 'skill_disconnected', agentId: AGENT, agentName: 'Invoices', skillName: 'erp-lookup', skillTitle: 'erp-lookup',
+          packageUuid: UUID, revision: 1, removable: true, cached: true
+        }
+      ],
+      clear: []
+    })
+    loaded([skillItem(1, skillTgz('erp-lookup'))])
+    expect(compute(listed()).items).toEqual([])
+  })
+
+  it('hides a dismissed card while the pin stays disconnected, and forgets the dismissal once it is connected again', () => {
+    loaded([])
+    expect(compute(listed(), [KEY()])).toEqual({ items: [], clear: [] })
+    // Listed again: the dismissal is over…
+    loaded([skillItem(1, skillTgz('erp-lookup'))])
+    expect(compute(listed(), [KEY()])).toEqual({ items: [], clear: [KEY()] })
+    // …so a later disconnect is a new card.
+    loaded([])
+    expect(compute(listed(), []).items).toHaveLength(1)
+  })
+
+  it('keeps a dismissal while the state is not known, and forgets it once the pin or its agent is gone', () => {
+    // No listing that loaded: neither connected nor disconnected.
+    listing.value = { host: HOST, items: [], agents: [], available: false } as never
+    expect(compute(listed(), [KEY()])).toEqual({ items: [], clear: [] })
+    loaded([])
+    // The skill removed from the agent, or moved to another revision.
+    expect(compute(listed([]), [KEY()]).clear).toEqual([KEY()])
+    expect(compute(listed([pinRow({ revisionNumber: 2, path: '' })]), [KEY()]).clear).toEqual([KEY()])
+    // The agent gone.
+    expect(compute([] as never, [KEY()]).clear).toEqual([KEY()])
+  })
+
+  describe('a pin with no copy here whose download was refused as not available', () => {
+    const disconnected = {
+      code: 'catalog_disconnected',
+      message:
+        'Disconnected — this skill is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.',
+      severity: 'warning'
+    }
+    const rowIssues = (agents: never) => (agents as { skills: { issues: unknown[] }[] }[])[0].skills[0].issues
+
+    it('on an agent no team tracks: the row and the card say Disconnected, not cached, and the row has no download failure left', () => {
+      loaded([])
+      // Not refused: the row keeps its own failure, and no card.
+      expect(rowIssues(listed([failedRow()]))).toEqual([{ code: 'download_failed', message: 'x', severity: 'error' }])
+      expect(compute(listed([failedRow()])).items).toEqual([])
+      refused()
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+      expect(compute(listed([failedRow()])).items).toEqual([expect.objectContaining({ agentId: AGENT, revision: 1, cached: false })])
+      // No listing loaded: the refusal alone still says it.
+      listing.value = null
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+    })
+
+    it('on an agent no team tracks: listed again, the row keeps its failure (Try again) and the card goes', () => {
+      refused()
+      loaded([skillItem(1, skillTgz('erp-lookup'))])
+      expect(rowIssues(listed([failedRow()]))).toEqual([{ code: 'download_failed', message: 'x', severity: 'error' }])
+      expect(compute(listed([failedRow()])).items).toEqual([])
+    })
+
+    it('on a team-tracked agent: the row says Disconnected only while the last read found the folder not behind', () => {
+      track()
+      loaded([], [teamAgent()])
+      refused()
+      const failure = [{ code: 'download_failed', message: 'x', severity: 'error' }]
+      // Not known yet: the row keeps the behind sentence and its Try again.
+      expect(rowIssues(listed([failedRow()]))).toEqual(failure)
+      expect(noteTeamBehind(new Map([[AGENT, false]]))).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+      expect(compute(listed([failedRow()])).items).toEqual([expect.objectContaining({ agentId: AGENT, cached: false })])
+      // Behind the team's version: updating the agent is the way out.
+      expect(noteTeamBehind(new Map([[AGENT, true]]))).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual(failure)
+      // The same answer again changes nothing; an agent no longer read is a change.
+      expect(noteTeamBehind(new Map([[AGENT, true]]))).toEqual([])
+      expect(noteTeamBehind(new Map())).toEqual([AGENT])
+      // Not behind, but the team agent is not in the listing: nothing.
+      noteTeamBehind(new Map([[AGENT, false]]))
+      loaded([], [])
+      expect(rowIssues(listed([failedRow()]))).toEqual(failure)
+    })
+
+    it('on a team-tracked agent: a read made under another profile says nothing about this one’s rows', () => {
+      track()
+      loaded([], [teamAgent()])
+      refused()
+      const failure = [{ code: 'download_failed', message: 'x', severity: 'error' }]
+      expect(noteTeamBehind(new Map([[AGENT, false]]), 'another-profile')).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual(failure)
+      // The active profile's own read, and the other profile's answer stays its own.
+      expect(noteTeamBehind(new Map([[AGENT, false]]), PROFILE)).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+      expect(noteTeamBehind(new Map([[AGENT, true]]), 'another-profile')).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+    })
+
+    it('on a team-tracked agent: a read that finishes after a newer one was applied is dropped', () => {
+      track()
+      loaded([], [teamAgent()])
+      refused()
+      const older = beginTeamBehindRead()
+      const newer = beginTeamBehindRead()
+      // The newer read (not behind) lands first; the older one (behind) last.
+      expect(noteTeamBehind(new Map([[AGENT, false]]), PROFILE, newer)).toEqual([AGENT])
+      expect(noteTeamBehind(new Map([[AGENT, true]]), PROFILE, older)).toEqual([])
+      expect(rowIssues(listed([failedRow()]))).toEqual([disconnected])
+      // A read begun later still applies.
+      expect(noteTeamBehind(new Map([[AGENT, true]]), PROFILE, beginTeamBehindRead())).toEqual([AGENT])
+      expect(rowIssues(listed([failedRow()]))).toEqual([{ code: 'download_failed', message: 'x', severity: 'error' }])
+    })
+
+    it('on a team-tracked agent: Check again (the same fetch) clears the refusal once access is back, and the row and the card go', async () => {
+      track()
+      loaded([], [teamAgent()])
+      const archive = skillTgz('erp-lookup')
+      writeManifest({
+        catalog_skills: [{ package_id: 'p.skill.erp-lookup', package_uuid: UUID, name: 'erp-lookup', revision_number: 1, archive_sha256: sha256Of(archive) }]
+      })
+      noteTeamBehind(new Map([[AGENT, false]]))
+      /** The rows as the agent list folds them, from the real scan and cache. */
+      const scanned = () => listed(agentSkillRows(agentDir, manifest(), catalogSkillCache.resolverFor(true)) as never)
+      serve({})
+      expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: true, failed: [{ name: 'erp-lookup' }] })
+      expect(rowIssues(scanned())).toEqual([disconnected])
+      expect(compute(scanned()).items).toHaveLength(1)
+      // Still refused: still Disconnected.
+      expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: true, failed: [{ name: 'erp-lookup' }] })
+      expect(rowIssues(scanned())).toEqual([disconnected])
+      // Access back, no new team version: the download lands and the refusal is gone.
+      serve({ 1: archive })
+      expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: true, fetched: ['erp-lookup'], failed: [] })
+      expect(catalogSkillCache.notAvailable(UUID, 1)).toBe(false)
+      expect(rowIssues(scanned())).toEqual([])
+      expect(compute(scanned())).toEqual({ items: [], clear: [] })
+    })
+  })
+
+  it('offers no Remove where the person may not change the agent', () => {
+    track()
+    loaded([], [teamAgent('use')])
+    refused()
+    expect(compute(listed([failedRow()])).items).toEqual([expect.objectContaining({ removable: false })])
+  })
+
+  describe('an agent a team tracks', () => {
+    beforeEach(() => track())
+
+    it('shows a card only when the pinned revision was refused as not available and the folder is not behind the team', () => {
+      loaded([], [teamAgent()])
+      // Not refused (yet): nothing.
+      expect(compute(listed([failedRow()])).items).toEqual([])
+      refused()
+      expect(compute(listed([failedRow()])).items).toEqual([expect.objectContaining({ agentId: AGENT, revision: 1, removable: true })])
+      // Behind the team's version: the refusal is the old version's, nothing.
+      expect(compute(listed([failedRow()]), [], new Set([AGENT])).items).toEqual([])
+      // Whether it is behind could not be read: nothing.
+      expect(compute(listed([failedRow()]), [], null).items).toEqual([])
+      // The team agent not in the listing: nothing.
+      loaded([], [])
+      expect(compute(listed([failedRow()])).items).toEqual([])
+    })
+
+    it('never reads the person’s own listing for it, and forgets a dismissal once the revision is on this computer', () => {
+      // Listed or not, a ready copy is connected: its pins come with the team’s version.
+      loaded([], [teamAgent()])
+      expect(compute(listed([pinRow()]), [KEY()])).toEqual({ items: [], clear: [KEY()] })
+      refused()
+      expect(compute(listed([failedRow()]), [KEY()])).toEqual({ items: [], clear: [] })
+    })
   })
 })

@@ -1,17 +1,18 @@
 import { useEffect, useId, useState } from 'react'
-import { ChevronLeft, Download, ExternalLink, Loader2, PackageX, RefreshCw } from 'lucide-react'
+import { ChevronLeft, Download, ExternalLink, Loader2, PackageX, RefreshCw, Users } from 'lucide-react'
 import type { CatalogItem } from '../../../../shared/catalogItems'
 import type { CatalogCredentialSpec } from '../../../../shared/catalog'
 import type { LibraryAgentDto } from '../../../../shared/agentSharing'
 import { isUnsettledClick } from '../../hooks/useSettleGuard'
 import { useCatalogItemDetail, useCatalogServerUrl } from '../../hooks/useCatalog'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { CATALOG_SKILL_TEXT, CATALOG_TEXT, catalogDateLabel, catalogVersionLabel, type CatalogItemKind } from '../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogDateLabel, catalogVersionLabel, type CatalogItemKind } from '../../utils/catalogItems'
 import { CatalogCardCredentials } from '../settings/CatalogCardCredentials'
 import { CatalogUninstallModal } from '../settings/CatalogUninstallModal'
 import { SettingsIconButton } from '../settings/SettingsLayout'
 import { CATALOG_KIND_ICON, CatalogKindBadge } from './CatalogKindBadge'
-import { CatalogSkillAddMenu, type CatalogSkillTarget } from './CatalogSkillAddMenu'
+import { CATALOG_POPOVER_ATTR, CatalogSkillAddMenu, type CatalogSkillTarget } from './CatalogSkillAddMenu'
+import { WhoCanUseSkillDialog } from './local/sharing/WhoCanUseSkillDialog'
 import { sizedButton, useCatalogSurface, useCatalogType } from './catalogSurface'
 
 /**
@@ -409,6 +410,9 @@ export function CatalogItemDetailView({
           {action}
           {/* Keyed by the install: a confirm belongs to the install it was opened on. */}
           {installId && <CloudInstallControls key={installId} name={view.name} installId={installId} uninstall={uninstall} />}
+          {view.kind === 'skill' && item.access === 'maintain' && (
+            <SkillPeopleControl key={item.uuid} name={view.name} itemUuid={item.uuid} />
+          )}
         </div>
       </div>
       {error && (
@@ -455,6 +459,39 @@ export function CatalogItemDetailView({
       </div>
       <CatalogVersions uuid={item.uuid} settled={settled} />
     </div>
+  )
+}
+
+/**
+ * A skill's Who can use, for a maintainer of it: an icon beside its action
+ * (Settings' row icon button, the dialog's bare icon) that opens the skill's
+ * People. The dialog it opens takes Escape before the catalog dialog does and
+ * marks its backdrop as the catalog's, so neither closes the other.
+ */
+function SkillPeopleControl({ name, itemUuid }: { name: string; itemUuid: string }): React.JSX.Element {
+  const surface = useCatalogSurface()
+  const [open, setOpen] = useState(false)
+  const label = SKILL_SHARE_TEXT.whoCanUseAction(name)
+  return (
+    <>
+      {surface === 'settings' ? (
+        <SettingsIconButton onClick={() => setOpen(true)} title={label} aria-label={label}>
+          <Users size={14} aria-hidden="true" />
+        </SettingsIconButton>
+      ) : (
+        <button type="button" onClick={() => setOpen(true)} title={label} aria-label={label} className={ICON_BUTTON}>
+          <Users size={13} aria-hidden="true" />
+        </button>
+      )}
+      {open && (
+        <WhoCanUseSkillDialog
+          itemUuid={itemUuid}
+          skillName={name}
+          onClose={() => setOpen(false)}
+          overlayAttrs={{ [CATALOG_POPOVER_ATTR]: '' }}
+        />
+      )}
+    </>
   )
 }
 

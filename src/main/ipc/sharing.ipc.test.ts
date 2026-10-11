@@ -25,8 +25,10 @@ vi.mock('../agents/drivers', () => ({ acpProcessPool: { retire } }))
 
 const useTeamVersion = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
+const itemPeople = vi.hoisted(() => vi.fn())
+const setItemPeople = vi.hoisted(() => vi.fn())
 vi.mock('../services/localAgents/sharingService', () => ({
-  sharingService: { useTeamVersion, update }
+  sharingService: { useTeamVersion, update, itemPeople, setItemPeople }
 }))
 
 const { registerSharingHandlers } = await import('./sharing.ipc')
@@ -38,6 +40,8 @@ beforeEach(() => {
   retire.mockReset()
   useTeamVersion.mockReset()
   update.mockReset()
+  itemPeople.mockReset()
+  setItemPeople.mockReset()
 })
 
 describe('sharing:use-team-version', () => {
@@ -60,5 +64,21 @@ describe('sharing:update', () => {
     update.mockResolvedValue(answer(true))
     await handlers.get('sharing:update')!({}, { agentId: 'folder:a1' })
     expect(retire).not.toHaveBeenCalled()
+  })
+})
+
+describe('a catalog skill\'s people', () => {
+  it('passes only a string uuid on, and the list as sent for main to check', async () => {
+    itemPeople.mockResolvedValue(null)
+    expect(await handlers.get('sharing:item-people')!({}, { itemUuid: 'pkg-1' })).toEqual({ success: true, value: null })
+    expect(itemPeople).toHaveBeenLastCalledWith('pkg-1')
+    await handlers.get('sharing:item-people')!({}, { itemUuid: 42 })
+    expect(itemPeople).toHaveBeenLastCalledWith('')
+    setItemPeople.mockResolvedValue({ ...answer(true), people: null })
+    const people = [{ principal: { kind: 'everyone' }, access: 'use' }]
+    await handlers.get('sharing:set-item-people')!({}, { itemUuid: 'pkg-1', people })
+    expect(setItemPeople).toHaveBeenLastCalledWith('pkg-1', people)
+    await handlers.get('sharing:set-item-people')!({}, undefined)
+    expect(setItemPeople).toHaveBeenLastCalledWith('', undefined)
   })
 })

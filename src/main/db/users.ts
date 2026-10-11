@@ -12,6 +12,7 @@ import {
   agentShortcuts,
   agentColors,
   managedOverrides,
+  inboxDismissals,
   jobs,
   jobFolders,
   notes,
@@ -186,6 +187,8 @@ export const userRepo = {
       // Managed providers/modes are profile-scoped (deleted via llmProviders /
       // chatModes above); drop their local enable/disable overrides too.
       tx.delete(managedOverrides).where(eq(managedOverrides.userId, id)).run()
+      // Dismissed Inbox cards: keyed by profile, no FK.
+      tx.delete(inboxDismissals).where(eq(inboxDismissals.userId, id)).run()
       tx.delete(users).where(eq(users.id, id)).run()
     })
   },

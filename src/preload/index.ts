@@ -153,7 +153,7 @@ import type {
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type { TaskDeletePreview, TaskDeleteResult, TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
-import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, TaskDispatchGateAction, TaskDispatchGateResult } from '../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, SkillDisconnectedDismissal, TaskDispatchGateAction, TaskDispatchGateResult } from '../shared/inbox'
 import {
   TASK_DISPATCH_CHANGED_CHANNEL,
   type AgentDispatchState,
@@ -1438,7 +1438,10 @@ const api = {
       ipcRenderer.invoke('inbox:answer', data),
     /** Approve (trust and run) or skip a dispatcher approval of outside content (`snapshot.dispatch`). */
     answerDispatchGate: (gateId: string, action: TaskDispatchGateAction): Promise<TaskDispatchGateResult> =>
-      ipcRenderer.invoke('inbox:dispatch-gate', gateId, action)
+      ipcRenderer.invoke('inbox:dispatch-gate', gateId, action),
+    /** Hide a "Disconnected" skill card (`snapshot.disconnected`) until that pin is connected again. */
+    dismissDisconnected: (input: SkillDisconnectedDismissal): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('inbox:dismiss-disconnected', input)
   },
 
   /**
@@ -2054,6 +2057,12 @@ const api = {
     /** Replace who has access with this whole list. */
     setPeople: (agentId: string, people: LibraryGrantInput[]): Promise<SharingOutcome<SetPeopleResult>> =>
       ipcRenderer.invoke('sharing:set-people', { agentId, people }),
+    /** Who has access to a catalog skill, by its package uuid; null when the active account's listing does not carry it. */
+    itemPeople: (itemUuid: string): Promise<SharingOutcome<AgentPeopleDto | null>> =>
+      ipcRenderer.invoke('sharing:item-people', { itemUuid }),
+    /** Replace who has access to a catalog skill with this whole list. */
+    setItemPeople: (itemUuid: string, people: LibraryGrantInput[]): Promise<SharingOutcome<SetPeopleResult>> =>
+      ipcRenderer.invoke('sharing:set-item-people', { itemUuid, people }),
     /** People on the active account's server, by name or email (two characters at least). */
     searchPeople: (query: string): Promise<SharingOutcome<PersonSearchResult[]>> =>
       ipcRenderer.invoke('sharing:search-people', { query }),

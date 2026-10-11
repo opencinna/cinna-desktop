@@ -115,6 +115,15 @@ describe('deleteWithCascade', () => {
     expect(row).toEqual({ user_id: KEEPER })
   })
 
+  it('takes the profile’s dismissed Inbox cards with it, and leaves another profile’s alone', async () => {
+    const { inboxDismissalRepo } = await import('./inboxDismissals')
+    inboxDismissalRepo.put(USER, 'skill_disconnected', 'a')
+    inboxDismissalRepo.put(KEEPER, 'skill_disconnected', 'b')
+    userRepo.deleteWithCascade(USER)
+    expect(count('inbox_dismissals')).toBe(1)
+    expect([...inboxDismissalRepo.keys(KEEPER, 'skill_disconnected')]).toEqual(['b'])
+  })
+
   it('leaves referential integrity intact afterwards', () => {
     seedTask(USER, 't-1')
     userRepo.deleteWithCascade(USER)

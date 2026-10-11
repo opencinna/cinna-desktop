@@ -898,11 +898,11 @@ describe('remote inbox', () => {
     const { adapter } = remote()
     vi.mocked(adapter.listOpenAsks).mockRejectedValue(new Error('offline'))
     expect(await inboxService.list(USER)).toEqual({
-      entries: [], unreadable: [{ adapter: 'service', reason: 'offline' }], dispatch: [], updates: []
+      entries: [], unreadable: [{ adapter: 'service', reason: 'offline' }], dispatch: [], updates: [], disconnected: []
     })
     adapter.availability = async () => ({ ready: false, reason: 'Sign in again.' })
     expect(await inboxService.list(USER)).toEqual({
-      entries: [], unreadable: [{ adapter: 'service', reason: 'Sign in again.' }], dispatch: [], updates: []
+      entries: [], unreadable: [{ adapter: 'service', reason: 'Sign in again.' }], dispatch: [], updates: [], disconnected: []
     })
   })
 

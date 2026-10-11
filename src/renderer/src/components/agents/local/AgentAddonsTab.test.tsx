@@ -387,6 +387,39 @@ describe('the Skills section — a catalog skill’s actions', () => {
     expect((await within(row('erp-lookup')).findByRole('alert')).textContent).toBe('This version is not available to you.')
   })
 
+  it('offers Check again, not Try again, on a Disconnected pin with no copy here, with the card’s sentence; a 404 adds no error line', async () => {
+    const sentence =
+      'Disconnected — this skill is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.'
+    ensureSkills.mockResolvedValue({
+      ok: true, fetched: [], failed: [{ name: 'erp-lookup', code: 'download_failed', message: 'This skill is no longer available to you.' }]
+    })
+    renderTab({
+      skills: [pin('erp-lookup', { path: '', deliverable: false, issues: [{ code: 'catalog_disconnected', message: sentence, severity: 'warning' }] })]
+    })
+    await screen.findByRole('button', { name: 'Remove erp-lookup from this agent' })
+    expect(within(row('erp-lookup')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Check erp-lookup again',
+      'Remove erp-lookup from this agent'
+    ])
+    expect(within(row('erp-lookup')).getByText(sentence)).toBeTruthy()
+    // The same fetch as Try again; refused again, the row just stays Disconnected.
+    fireEvent.click(screen.getByRole('button', { name: 'Check erp-lookup again' }))
+    await waitFor(() => expect(ensureSkills).toHaveBeenCalledWith('folder:a'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Check erp-lookup again' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(within(row('erp-lookup')).queryByRole('alert')).toBeNull()
+    expect(within(row('erp-lookup')).getByText(sentence)).toBeTruthy()
+  })
+
+  it('offers no Check again on a Disconnected pin whose copy is here: that copy keeps working', async () => {
+    renderTab({
+      skills: [pin('erp-lookup', { issues: [{ code: 'catalog_disconnected', message: 'Disconnected — a local version.', severity: 'warning' }] })]
+    })
+    await screen.findByRole('button', { name: 'Remove erp-lookup from this agent' })
+    expect(within(row('erp-lookup')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Remove erp-lookup from this agent'
+    ])
+  })
+
   it('removes only after the confirm inside the card, which says what is kept', async () => {
     let finish!: (outcome: Outcome) => void
     removeSkill.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
@@ -471,5 +504,30 @@ describe('the Skills section — a catalog skill’s actions', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Download erp-lookup again' }) as HTMLButtonElement).disabled).toBe(false))
     expect(within(row('erp-lookup')).queryByRole('alert')).toBeNull()
     expect(within(row('erp-lookup')).getAllByText(sentence)).toHaveLength(1)
+  })
+
+  it('offers Who can use on an own shared skill only to a maintainer of its package, and opens its People', async () => {
+    const api = window.api as unknown as { sharing: Record<string, unknown>; catalog?: unknown }
+    api.sharing.itemPeople = vi.fn(async () => ({ success: true, value: { visible: true, people: [], selfUserId: null } }))
+    api.catalog = { items: vi.fn(async () => ({ success: true, value: null })) }
+    const shared = (access: 'use' | 'edit' | 'maintain' | null) => ({ packageUuid: 'pkg-1', packageId: 'test.erp', revisionNumber: 2, access })
+    const skill = (name: string, extra: Partial<LocalAgentSkill>): LocalAgentSkill =>
+      pin(name, { source: 'authored', path: `skills/${name}/SKILL.md`, packageId: undefined, packageUuid: undefined, ...extra })
+    renderTab({
+      skills: [
+        skill('erp-lookup', { shared: shared('maintain'), shareable: true }),
+        skill('csv-tools', { shared: shared('edit'), shareable: true }),
+        skill('pdf-tools', { shared: null, shareable: true })
+      ]
+    })
+    await screen.findByText('No connectors attached.')
+    expect(within(row('csv-tools')).queryByRole('button', { name: 'Who can use csv-tools…' })).toBeNull()
+    expect(within(row('pdf-tools')).queryByRole('button', { name: 'Who can use pdf-tools…' })).toBeNull()
+    fireEvent.click(within(row('erp-lookup')).getByRole('button', { name: 'Who can use erp-lookup…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Who can use erp-lookup' })
+    await within(dialog).findByText('No one else has access yet.')
+    expect(api.sharing.itemPeople).toHaveBeenCalledWith('pkg-1')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 })

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2, Users } from 'lucide-react'
 import type { LocalAgentDto, LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
@@ -15,6 +15,7 @@ import { CATALOG_SKILL_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../..
 import { usePublishSkill } from '../../../hooks/useSkillPublish'
 import type { SkillPublishInput } from '../../../../../shared/skillPublish'
 import { ShareSkillDialog } from './ShareSkillDialog'
+import { WhoCanUseSkillDialog } from './sharing/WhoCanUseSkillDialog'
 import { AnimatedCollapse } from '../../ui/AnimatedCollapse'
 import { MCPProviderCard } from '../../settings/MCPProviderCard'
 import { CredentialStatusGlyph } from '../../settings/CredentialRow'
@@ -90,6 +91,12 @@ interface CatalogRowActions {
   confirming: boolean
   onUpdate: () => void
   onEnsure: () => void
+  /**
+   * Check again on a not-cached Disconnected row: the same fetch as Try
+   * again, but the row's own refusal is no error line — on a 404 the row
+   * simply stays Disconnected; any other failure becomes the row's issue.
+   */
+  onCheck: () => void
   onAskRemove: () => void
   onCancelRemove: () => void
   onRemove: () => void
@@ -98,6 +105,16 @@ interface CatalogRowActions {
 /** Whether a catalog row's revision is not on this computer, so Try again can fetch it. */
 function notHere(skill: LocalAgentSkill): boolean {
   return skill.issues.some((issue) => issue.code === 'not_downloaded' || issue.code === 'download_failed')
+}
+
+/**
+ * Whether a catalog row is Disconnected with no copy on this computer (no
+ * path): its download was refused as not available, and Check again asks once
+ * more — access may have come back. A cached Disconnected copy keeps working,
+ * so it gets no Check again.
+ */
+function disconnectedNotHere(skill: LocalAgentSkill): boolean {
+  return !skill.path && skill.issues.some((issue) => issue.code === 'catalog_disconnected')
 }
 
 function BusyIcon({ busy, children }: { busy: boolean; children: React.ReactNode }): React.JSX.Element {
@@ -138,9 +155,14 @@ function slotHealth(credential: LocalAgentSkillCredential): CredentialHealth | n
  * credential row says *connected* (rule 13). A deliverable skill with an
  * unfilled slot ends the line with Finish setup, which lists exactly those.
  *
+ * An authored skill shared to the catalog shows, to a maintainer of its
+ * package (the listing's access), a Who can use icon that opens the skill's
+ * People.
+ *
  * A catalog row's actions are icons on the title line (rule 13): Update when
  * the catalog has a newer version, Try again when the pinned revision is not
- * on this computer, and Remove, whose confirm opens inside the card. Update
+ * on this computer, Check again on a Disconnected row with no copy here, and
+ * Remove, whose confirm opens inside the card. Update
  * and Remove are not shown on an agent shared with the user to use only. A
  * verb in flight spins its icon; a refusal is the card's last line (rule 6).
  */
@@ -149,6 +171,7 @@ function SkillRow({
   revealError,
   onReveal,
   onShare,
+  onWhoCanUse,
   onFinishSetup,
   catalogActions
 }: {
@@ -159,6 +182,8 @@ function SkillRow({
   onFinishSetup?: () => void
   /** Authored rows the person may share (`skill.shareable`): opens the Share dialog. */
   onShare?: () => void
+  /** Authored rows shared to the catalog: opens Who can use, offered only to a maintainer of the package. */
+  onWhoCanUse?: () => void
   catalogActions?: CatalogRowActions
 }): React.JSX.Element {
   const catalog = skill.source === 'catalog'
@@ -228,6 +253,15 @@ function SkillRow({
             <Share2 size={14} />
           </SettingsIconButton>
         )}
+        {!catalog && skill.shared?.access === 'maintain' && onWhoCanUse && (
+          <SettingsIconButton
+            onClick={onWhoCanUse}
+            title={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
+            aria-label={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
+          >
+            <Users size={14} />
+          </SettingsIconButton>
+        )}
         {!catalog && (
           <SettingsIconButton
             onClick={onReveal}
@@ -257,6 +291,18 @@ function SkillRow({
                 disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
                 title={CATALOG_SKILL_TEXT.tryAgain(title)}
                 aria-label={CATALOG_SKILL_TEXT.tryAgain(title)}
+              >
+                <BusyIcon busy={catalogActions.busy === 'ensure'}>
+                  <RotateCw size={14} />
+                </BusyIcon>
+              </SettingsIconButton>
+            )}
+            {disconnectedNotHere(skill) && (
+              <SettingsIconButton
+                onClick={catalogActions.onCheck}
+                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                title={CATALOG_SKILL_TEXT.checkAgain(title)}
+                aria-label={CATALOG_SKILL_TEXT.checkAgain(title)}
               >
                 <BusyIcon busy={catalogActions.busy === 'ensure'}>
                   <RotateCw size={14} />
@@ -405,6 +451,8 @@ export function AgentAddonsTab({
   const publishSkill = usePublishSkill()
   const [sharingSkill, setSharingSkill] = useState<string | null>(null)
   const [shareError, setShareError] = useState<string | null>(null)
+  // Who can use a shared skill: the dialog owns its own write and closes on Close only.
+  const [peopleOf, setPeopleOf] = useState<{ uuid: string; name: string } | null>(null)
   const sharingRow = sharingSkill ? (agent.skills ?? []).find((skill) => skill.source === 'authored' && skill.name === sharingSkill) ?? null : null
   const shareSkill = (input: SkillPublishInput): void => {
     if (publishSkill.isPending) return
@@ -466,6 +514,17 @@ export function AgentAddonsTab({
           // One fetch covers every pin; this row's answer is its own failure, if any.
           const failed = result.failed.find((failure) => failure.name === skill.name)
           return failed ? { ok: false as const, message: failed.message } : { ok: true as const }
+        },
+        CATALOG_SKILL_TEXT.tryAgainFailed
+      ),
+    onCheck: () =>
+      runSkillVerb(
+        skill.name,
+        'ensure',
+        async () => {
+          const result = await ensureSkills.mutateAsync({ agentId: agent.id })
+          // This row's own refusal is its state after the rescan, not an error line.
+          return result.ok ? { ok: true as const } : result
         },
         CATALOG_SKILL_TEXT.tryAgainFailed
       ),
@@ -554,6 +613,11 @@ export function AgentAddonsTab({
                           }
                         : undefined
                     }
+                    onWhoCanUse={
+                      skill.source === 'authored' && skill.shared
+                        ? () => setPeopleOf({ uuid: skill.shared!.packageUuid, name: skill.name })
+                        : undefined
+                    }
                     onReveal={() => {
                       setRevealError(null)
                       const missing = skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
@@ -586,6 +650,14 @@ export function AgentAddonsTab({
             setSharingSkill(null)
             setShareError(null)
           }}
+        />
+      )}
+      {peopleOf && (
+        <WhoCanUseSkillDialog
+          key={peopleOf.uuid}
+          itemUuid={peopleOf.uuid}
+          skillName={peopleOf.name}
+          onClose={() => setPeopleOf(null)}
         />
       )}
       <McpAttachModal

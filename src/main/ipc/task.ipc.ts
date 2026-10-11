@@ -16,7 +16,7 @@ import { parseAnswerPayload } from '../services/askDelivery'
 import { TaskError } from '../errors'
 import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
 import { ipcHandle } from './_wrap'
-import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, TaskDispatchGateResult } from '../../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, SkillDisconnectedDismissal, TaskDispatchGateResult } from '../../shared/inbox'
 import { taskDispatchService } from '../services/taskDispatchService'
 import type { HandoverDto } from '../../shared/handovers'
 import {
@@ -463,6 +463,16 @@ export function registerTaskHandlers(): void {
     const parsed = parseAnswerPayload(data)
     if (!parsed) return { ok: false, reason: 'Malformed answer', code: 'malformed' }
     return inboxService.answer(getProfileScopeUserId(), data.requestId, parsed)
+  })
+
+  /**
+   * Dismiss a "Disconnected" catalog skill card (`snapshot.disconnected`) for
+   * this profile, until that pin is connected again.
+   */
+  ipcHandle('inbox:dismiss-disconnected', async (_event, input: SkillDisconnectedDismissal): Promise<{ ok: true }> => {
+    userActivation.requireActivated()
+    inboxService.dismissDisconnected(getProfileScopeUserId(), input)
+    return { ok: true }
   })
 
   /**

@@ -690,11 +690,20 @@ export function catalogPinClashes(
 export const CATALOG_ISSUE_MESSAGES: Readonly<Record<string, string>> = {
   not_downloaded: 'Not on this computer yet.',
   download_failed: 'It could not be downloaded.',
-  catalog_unavailable: 'This skill is no longer in the catalog for you. The copy on this computer keeps working, but it won’t get updates.',
+  catalog_disconnected:
+    'Disconnected — this skill is no longer in the catalog for you. The copy on this computer is now a local version: it keeps working but no longer syncs or gets updates.',
   duplicate_pin: 'Another catalog skill of this agent has the same name.',
   name_clash: 'This agent’s own skills/ folder has a skill of the same name. Remove the pin or rename the folder.',
   reserved_name: 'This name is reserved by a platform skill.'
 }
+
+/**
+ * The `catalog_disconnected` sentence for a pin with no copy on this computer
+ * whose download was refused as not available (404): the same state as the
+ * cached one, but nothing keeps working, so it says what to do instead.
+ */
+export const CATALOG_DISCONNECTED_NOT_CACHED =
+  'Disconnected — this skill is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.'
 
 const CLASH_CODES: Readonly<Record<CatalogPinClash, string>> = {
   duplicate: 'duplicate_pin',

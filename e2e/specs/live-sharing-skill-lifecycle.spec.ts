@@ -1,9 +1,10 @@
-import { appendFileSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   test,
   expect,
   addSkillToAgent,
+  addToWhoCanUse,
   buildAgent,
   cachedSkillDir,
   catalogPins,
@@ -12,8 +13,11 @@ import {
   getAgent,
   openCodeConfigOf,
   openSkills,
+  openWhoCanUse,
   publishSkill,
+  removeFromWhoCanUse,
   removeSkillFromAgent,
+  searchSkills,
   skillDownloadStatus,
   skillItem,
   skillLocalInstalls,
@@ -33,17 +37,22 @@ import {
   type BuiltAgent,
   type CatalogFixture
 } from '../fixtures/liveCatalog'
-import { coreCall, openAgent, refreshLibrary, runCommand, shareChanges, shareWithTeam, type PersonApp } from '../fixtures/liveTeamSharing'
+import { catalogGrants, coreCall, openAgent, refreshLibrary, runCommand, shareChanges, shareWithTeam, type PersonApp } from '../fixtures/liveTeamSharing'
 
 /**
  * T3 — a catalog skill's life after install, against the real local
  * cinna-core (`e2e/fixtures/live-catalog.py`, people A–D):
  *
- * - T3.1 / T3.2 A withdraws B's access (the grant, then visibility private).
- *   The desktop offers no way to change a skill's people or visibility after
- *   its first share, nor to delete a skill, so A does those over core's REST
- *   (`PUT /catalog/items/{uuid}/grants`, `PATCH /catalog/items/{uuid}`,
- *   `DELETE /catalog/items/{uuid}`) as the web UI would.
+ * - T3.1 / T3.2 A withdraws B's access through A's own Who can use dialog
+ *   (the authored Skills row's `Who can use <skill>…`): T3.1 promotes B to Can
+ *   edit, then removes B; T3.2 shares with everyone, then removes B and
+ *   Everyone. B's copy turns Disconnected (row warning, Inbox card). T3.1
+ *   then dismisses the card, has A share with B again (connected, the
+ *   dismissal forgotten), removes B once more (a new card) and removes the
+ *   pin from the card. The dialog never writes `visibility: private` — with
+ *   Everyone gone it asks for `users` — so T3.2 ends at `users` with A alone.
+ *   A still deletes a skill over core's REST (`DELETE /catalog/items/{uuid}`):
+ *   the desktop has no skill delete.
  * - T3.3 delete while held: core's guard, then the delete once B removed it.
  * - T3.4 U7 "behind": a teammate whose clone pins a revision no longer the
  *   team's latest cannot fetch it until they Update the agent.
@@ -56,6 +65,13 @@ import { coreCall, openAgent, refreshLibrary, runCommand, shareChanges, shareWit
  */
 
 const MODEL = 'qwen3:8b'
+const SHOTS = '/tmp/cinna-live/shots'
+
+/** A screenshot for a human to look at, outside the repository. */
+async function shot(app: PersonApp, file: string): Promise<void> {
+  mkdirSync(SHOTS, { recursive: true })
+  await app.page.screenshot({ path: join(SHOTS, file), animations: 'disabled' })
+}
 let ollama: Awaited<ReturnType<typeof startOllamaStub>>
 
 test.beforeAll(async () => {
@@ -72,8 +88,17 @@ const NOT_HERE = 'Not on this computer yet.'
 const NOT_AVAILABLE = 'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
 /** Try again's 404 on an agent no team tracks: the person's own access went. */
 const WITHDRAWN = 'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
-/** The row's warning once a loaded listing no longer has the package, on an agent no team tracks. */
-const NOT_IN_CATALOG = 'This skill is no longer in the catalog for you. The copy on this computer keeps working, but it won’t get updates.'
+/** The row's Disconnected warning once a loaded listing no longer has the package, on an agent no team tracks. */
+const NOT_IN_CATALOG =
+  'Disconnected — this skill is no longer in the catalog for you. The copy on this computer is now a local version: it keeps working but no longer syncs or gets updates.'
+/** The row once a download of a pin with no copy here was refused as not available, where the Inbox card applies too. */
+const DISCONNECTED_NOT_CACHED =
+  'Disconnected — this skill is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.'
+/** The Disconnected card's body, with the copy still on this computer… */
+const CARD_CACHED =
+  'It is no longer in the catalog for you. The copy on this computer keeps working as a local version, but it no longer syncs or gets updates.'
+/** …and with none, its download refused. */
+const CARD_NOT_CACHED = 'It is no longer in the catalog for you, so this agent can’t download it. Ask a maintainer for access, or remove it.'
 const SKILL_DESCRIPTION = 'Check which ERP API credential this agent can reach.'
 
 /**
@@ -113,8 +138,7 @@ async function addSkillCheckCommand(app: PersonApp, agent: BuiltAgent, cached: s
 
 /** Every Inbox card's accessible name, as the Inbox shows them now. */
 async function inboxCards(app: PersonApp): Promise<string[]> {
-  await app.page.getByRole('button', { name: /^Inbox/ }).click()
-  await expect(app.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+  await openInbox(app)
   const cards = app.page.getByRole('article')
   const names: string[] = []
   for (let i = 0; i < (await cards.count()); i++) names.push((await cards.nth(i).getAttribute('aria-label')) ?? (await cards.nth(i).innerText()))
@@ -122,20 +146,44 @@ async function inboxCards(app: PersonApp): Promise<string[]> {
 }
 
 /**
+ * The Inbox, freshly mounted: leaving for the Agents tab first, since a card
+ * acted on keeps its place until the view is left.
+ */
+async function openInbox(app: PersonApp): Promise<void> {
+  await app.page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await app.page.getByRole('button', { name: /^Inbox/ }).click()
+  await expect(app.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+}
+
+/** The Inbox's "Disconnected" card for `skill` in `agent`: its title leads with the state. */
+function disconnectedCard(app: PersonApp, skill: string, agent: string) {
+  return app.page.getByRole('article', { name: `Disconnected: ${skill} in ${agent}`, exact: true })
+}
+
+/** Main's own Inbox read (what the view's poll runs): the Disconnected cards it answers, as `<skill>@<agent>`. */
+async function disconnectedRead(app: PersonApp): Promise<string[]> {
+  const read = await app.page.evaluate(() => window.api.inbox.list())
+  return (read.disconnected ?? []).map((item) => `${item.skillName}@${item.agentName}`)
+}
+
+/**
  * T3.1 / T3.2: B holds A's skill in B's own agent, A withdraws B's access
- * `how`, and B's cached copy keeps working while a new download is refused.
+ * `how` through A's own Who can use dialog, and B's cached copy keeps
+ * working, Disconnected, while a new download is refused.
  */
 async function withdrawnWhileHeld(
   team: { fixture: CatalogFixture; open: (label: 'a' | 'b') => Promise<PersonApp> },
-  how: 'grant' | 'private'
+  how: 'grant' | 'everyone'
 ): Promise<void> {
   const { fixture } = team
   const { a: personA, b: personB } = fixture.people
-  const skill = skillName(how === 'grant' ? 'erp-revoked' : 'erp-private')
+  const skill = skillName(how === 'grant' ? 'erp-revoked' : 'erp-unshared')
   const mine = uniqueName(fixture, 'Ledger bot')
+  const grants = () => catalogGrants(fixture, personA.token, item.uuid)
+  const onlyA = [`user:${personA.id}:maintain`]
 
   const a = await team.open('a')
-  const { item } = await shareFromA(a, fixture, skill, [personB])
+  const { workshop, item } = await shareFromA(a, fixture, skill, [personB])
   expect((await skillItem(fixture, personB.token, skill))?.access).toBe('use')
 
   const b = await team.open('b')
@@ -148,22 +196,56 @@ async function withdrawnWhileHeld(
   await expect.poll(() => skillSlotStates(b, agent.id), { timeout: 30_000 }).toEqual([`erp-api:api_token:connected:${fixture.credentials.erp.name}`])
   await addSkillCheckCommand(b, agent, cached)
 
-  await test.step(how === 'grant' ? 'A takes B’s grant away (core PUT …/grants: A alone, maintain)' : 'A makes the skill private (core PATCH visibility private)', async () => {
-    if (how === 'grant') {
-      const put = await coreCall(fixture, personA.token, `/catalog/items/${item.uuid}/grants`, {
-        method: 'PUT',
-        body: [{ principal: { user_id: personA.id }, access: 'maintain' }]
-      })
-      expect(put.status, JSON.stringify(put.body)).toBe(200)
-    } else {
-      const patch = await coreCall(fixture, personA.token, `/catalog/items/${item.uuid}`, { method: 'PATCH', body: { visibility: 'private' } })
-      expect(patch.status, JSON.stringify(patch.body)).toBe(200)
-      expect((await skillItem(fixture, personA.token, skill))?.visibility).toBe('private')
+  if (how === 'grant') {
+    await test.step('B, who can only use it, has no Who can use on their row', async () => {
+      await openSkills(b, mine)
+      await expect(skillRow(b, skill, 'From the catalog').getByRole('img', { name: READY, exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(b.page.getByRole('button', { name: `Who can use ${skill}…`, exact: true })).toHaveCount(0)
+    })
+
+    await test.step('A promotes B to Can edit from the Skills row’s Who can use (core grants: edit)', async () => {
+      const dialog = await openWhoCanUse(a, workshop.name, skill)
+      const access = dialog.getByRole('combobox', { name: `Access for ${personB.name}`, exact: true })
+      await expect(access).toHaveValue('use')
+      await expect(dialog.getByRole('button', { name: 'Share with everyone', exact: true })).toBeVisible()
+      await shot(a, 'who-can-use-people.png')
+      await access.selectOption('edit')
+      await expect.poll(grants, { timeout: 30_000 }).toEqual([`user:${personA.id}:maintain`, `user:${personB.id}:edit`].sort())
+      await expect(access).toHaveValue('edit')
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+    })
+  }
+
+  await test.step(
+    how === 'grant' ? 'A removes B in Who can use (core: A alone)' : 'A shares with everyone, removes B, then removes Everyone (core: public, then users with A alone)',
+    async () => {
+      const dialog = await openWhoCanUse(a, workshop.name, skill)
+      if (how === 'everyone') {
+        await dialog.getByRole('button', { name: 'Share with everyone', exact: true }).click()
+        await expect(dialog.getByRole('button', { name: 'Remove Everyone on this server', exact: true })).toBeVisible({ timeout: 30_000 })
+        await expect(dialog.getByRole('button', { name: 'Share with everyone', exact: true })).toHaveCount(0)
+        await expect.poll(async () => (await skillItem(fixture, personA.token, skill))?.visibility, { timeout: 30_000 }).toBe('public')
+        await removeFromWhoCanUse(dialog, personB.name)
+        await expect.poll(grants, { timeout: 30_000 }).toEqual(onlyA)
+        // Still public: B keeps it through Everyone.
+        expect((await skillItem(fixture, personB.token, skill))?.access).toBe('use')
+        await removeFromWhoCanUse(dialog, 'Everyone on this server')
+        // The dialog never writes `private`: with Everyone gone it asks for `users`, where only grants count.
+        await expect.poll(async () => (await skillItem(fixture, personA.token, skill))?.visibility, { timeout: 30_000 }).toBe('users')
+        await expect(dialog.getByText('No one else has access yet.', { exact: true })).toBeVisible()
+      } else {
+        await removeFromWhoCanUse(dialog, personB.name)
+        await expect(dialog.getByText('No one else has access yet.', { exact: true })).toBeVisible()
+      }
+      expect(await grants()).toEqual(onlyA)
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      expect(await skillItem(fixture, personB.token, skill)).toBeUndefined()
+      // A new download of the very revision B holds: core answers 404 to B.
+      expect(await skillDownloadStatus(fixture, personB.token, item.uuid, 1)).toBe(404)
     }
-    expect(await skillItem(fixture, personB.token, skill)).toBeUndefined()
-    // A new download of the very revision B holds: core answers 404 to B.
-    expect(await skillDownloadStatus(fixture, personB.token, item.uuid, 1)).toBe(404)
-  })
+  )
 
   await test.step('B, after a restart and a fresh listing: the catalog no longer lists the skill', async () => {
     await b.relaunch()
@@ -171,19 +253,20 @@ async function withdrawnWhileHeld(
     await expectSkillNotListed(b, skill)
   })
 
-  await test.step('B’s cached copy keeps working: the row warns it is no longer in the catalog, the skill’s script reads the ERP slot', async () => {
+  await test.step('B’s cached copy keeps working: the row says Disconnected, the skill’s script reads the ERP slot', async () => {
     await openSkills(b, mine)
     const row = skillRow(b, skill, 'From the catalog')
     // A warning, not an error: the copy is still delivered (the next steps run it and link it).
     await expect(row.getByRole('img', { name: NOT_IN_CATALOG, exact: true })).toBeVisible()
     await expect(row.getByRole('listitem')).toHaveText([NOT_IN_CATALOG])
+    if (how === 'grant') await shot(b, 'disconnected-row.png')
     await runCommand(b, mine, 'skill-check')
     await expect(b.page.getByText(slotCheckLine(fixture, 'skill-check'))).toBeVisible({ timeout: 60_000 })
   })
 
   await test.step('…and is still linked for the engines: OpenCode’s next turn gets the link to the cached revision, allowed by name', async () => {
     const before = fake.received('session/prompt').length
-    await startAgentChat(b, mine, `Hello after ${how === 'grant' ? 'the revoke' : 'going private'}.`)
+    await startAgentChat(b, mine, `Hello after ${how === 'grant' ? 'the revoke' : 'the unshare'}.`)
     await expect.poll(() => fake.received('session/prompt').length, { timeout: 60_000 }).toBeGreaterThan(before)
     const links = join(skillsPluginDir(b, agent.id), 'skills')
     expect(readdirSync(links)).toEqual([skill])
@@ -193,7 +276,73 @@ async function withdrawnWhileHeld(
     expect(written?.entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', [skill]: 'allow' })
   })
 
-  await test.step('a new download is refused: with the copy gone, Try again fails on the row in words', async () => {
+  await test.step('B’s Inbox has the Disconnected card: the agent, Remove, Dismiss', async () => {
+    await openInbox(b)
+    const card = disconnectedCard(b, skill, mine)
+    await expect(card).toBeVisible({ timeout: 20_000 })
+    await expect(card.getByRole('button')).toHaveText([mine, 'Remove', 'Dismiss'])
+    await expect(card.getByText(CARD_CACHED, { exact: true })).toBeVisible()
+    if (how === 'grant') await shot(b, 'disconnected-inbox-card.png')
+  })
+
+  if (how === 'grant') {
+    await test.step('Dismiss: the card says so, and is gone from the next Inbox', async () => {
+      const card = disconnectedCard(b, skill, mine)
+      await card.getByRole('button', { name: 'Dismiss', exact: true }).click()
+      await expect(card.getByRole('status')).toHaveText('Dismissed. It shows again only if this skill is disconnected again.')
+      await openInbox(b)
+      await expect(b.page.getByRole('article').first().or(b.page.getByText('Nothing is waiting on you.', { exact: true }))).toBeVisible({ timeout: 20_000 })
+      await expect(disconnectedCard(b, skill, mine)).toHaveCount(0)
+    })
+
+    await test.step('A shares it with B again through Share with a person…: B’s row is connected again, and no card', async () => {
+      const dialog = await openWhoCanUse(a, workshop.name, skill)
+      await addToWhoCanUse(dialog, personB, 'use', () => shot(a, 'who-can-use-add-form.png'))
+      await expect.poll(grants, { timeout: 30_000 }).toEqual([`user:${personA.id}:maintain`, `user:${personB.id}:use`].sort())
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      expect((await skillItem(fixture, personB.token, skill))?.access).toBe('use')
+
+      await refreshLibrary(b)
+      await openSkills(b, mine)
+      await expect(skillRow(b, skill, 'From the catalog').getByRole('img', { name: READY, exact: true })).toBeVisible({ timeout: 30_000 })
+      await openInbox(b)
+      await expect(disconnectedCard(b, skill, mine)).toHaveCount(0)
+      // Main's read while connected: no card, and the dismissal is forgotten.
+      expect(await disconnectedRead(b)).toEqual([])
+    })
+
+    await test.step('A removes B again: B’s row is Disconnected again and a new card appears', async () => {
+      const dialog = await openWhoCanUse(a, workshop.name, skill)
+      await removeFromWhoCanUse(dialog, personB.name)
+      await expect.poll(grants, { timeout: 30_000 }).toEqual(onlyA)
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+
+      await refreshLibrary(b)
+      await openSkills(b, mine)
+      await expect(skillRow(b, skill, 'From the catalog').getByRole('img', { name: NOT_IN_CATALOG, exact: true })).toBeVisible({ timeout: 30_000 })
+      await openInbox(b)
+      await expect(disconnectedCard(b, skill, mine)).toBeVisible({ timeout: 20_000 })
+    })
+
+    await test.step('B removes it from the card: confirm, Removed, the pin is gone and core hears of it', async () => {
+      expect((await skillItem(fixture, personA.token, skill))?.install_count).toBe(1)
+      const card = disconnectedCard(b, skill, mine)
+      await card.getByRole('button', { name: 'Remove', exact: true }).click()
+      const confirm = card.getByRole('group', { name: `Remove ${skill} from ${mine}`, exact: true })
+      await confirm.getByRole('button', { name: 'Remove skill', exact: true }).click()
+      await expect(card.getByRole('status')).toHaveText(`Removed. ${skill} is no longer in ${mine}.`, { timeout: 30_000 })
+      expect(catalogPins(agent.path)).toEqual([])
+      // B no longer sees the item, so core's record is read as A: nobody holds it.
+      await expect.poll(async () => (await skillItem(fixture, personA.token, skill))?.install_count, { timeout: 20_000 }).toBe(0)
+      await openInbox(b)
+      await expect(disconnectedCard(b, skill, mine)).toHaveCount(0)
+    })
+    return
+  }
+
+  await test.step('a new download is refused: with the copy gone, Try again turns the row Disconnected — Check again instead of Try again, Remove stays', async () => {
     dropCachedRevision(b, item.uuid, 1, skill)
     // A copy gone behind the app's back reaches an agent page only on a fresh read: a later start.
     await b.relaunch()
@@ -201,10 +350,28 @@ async function withdrawnWhileHeld(
     const row = skillRow(b, skill, 'From the catalog')
     await expect(row.getByRole('img', { name: NOT_HERE, exact: true })).toBeVisible()
     await row.getByRole('button', { name: `Download ${skill} again`, exact: true }).click()
-    // B's own agent, no team behind it: the 404 is B's access gone, not a version B is behind on.
-    await expect(row.getByRole('img', { name: WITHDRAWN, exact: true })).toBeVisible({ timeout: 60_000 })
-    await expect(row.getByRole('listitem')).toHaveText([WITHDRAWN])
+    // B's own agent, no team behind it: the 404 is B's access gone — the card's state, not WITHDRAWN with a Try again.
+    await expect(row.getByRole('img', { name: DISCONNECTED_NOT_CACHED, exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(row.getByRole('listitem')).toHaveText([DISCONNECTED_NOT_CACHED])
+    await expect(row.getByRole('img', { name: WITHDRAWN, exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: `Download ${skill} again`, exact: true })).toHaveCount(0)
+    // Still refused: Check again leaves the row Disconnected, with no error line.
+    const check = row.getByRole('button', { name: `Check ${skill} again`, exact: true })
+    await check.click()
+    await expect(check).toBeEnabled({ timeout: 60_000 })
+    await expect(row.getByRole('listitem')).toHaveText([DISCONNECTED_NOT_CACHED])
+    await expect(row.getByRole('alert')).toHaveCount(0)
+    await expect(row.getByRole('button', { name: `Remove ${skill} from this agent`, exact: true })).toBeVisible()
     expect(cachedSkillDir(b, item.uuid, 1, skill)).toBeNull()
+  })
+
+  await test.step('…and the Inbox card says the agent cannot download it', async () => {
+    await openInbox(b)
+    const card = disconnectedCard(b, skill, mine)
+    await expect(card).toBeVisible({ timeout: 20_000 })
+    await expect(card.getByText(CARD_NOT_CACHED, { exact: true })).toBeVisible()
+    await expect(card.getByRole('button')).toHaveText([mine, 'Remove', 'Dismiss'])
+    await shot(b, 'disconnected-inbox-card-not-cached.png')
   })
 
   await test.step('the Inbox, as it stands', async () => {
@@ -215,14 +382,32 @@ async function withdrawnWhileHeld(
   })
 }
 
-test('T3.1 A revokes B’s grant: B’s cached copy keeps working and stays linked; a new download is refused, and the row says so', async ({ team }) => {
-  test.setTimeout(480_000)
+test('T3.1 A removes B in Who can use: B’s copy keeps working and stays linked, Disconnected; the card dismisses, a re-share reconnects it, a second removal brings a new card, and its Remove takes the pin out', async ({ team }) => {
+  test.setTimeout(600_000)
   await withdrawnWhileHeld(team, 'grant')
 })
 
-test('T3.2 A makes the skill private: B’s cached copy keeps working and stays linked; a new download is refused, and the row says so', async ({ team }) => {
+test('T3.2 A shares with everyone, then removes B and Everyone in Who can use: B’s copy keeps working and stays linked, the card appears; a new download is refused, and the row says so', async ({ team }) => {
   test.setTimeout(480_000)
-  await withdrawnWhileHeld(team, 'private')
+  await withdrawnWhileHeld(team, 'everyone')
+})
+
+test('T3.7 A opens Who can use from the catalog’s skill detail, and closes it back onto the detail', async ({ team }) => {
+  test.setTimeout(240_000)
+  const { fixture } = team
+  const skill = skillName('erp-detail')
+  const a = await team.open('a')
+  await shareFromA(a, fixture, skill, [fixture.people.b])
+  const { catalog, tile } = await searchSkills(a, skill)
+  await tile.getByRole('button', { name: skill, exact: true }).click()
+  await expect(catalog.getByRole('heading', { level: 3, name: skill, exact: true })).toBeVisible()
+  await catalog.getByRole('button', { name: `Who can use ${skill}…`, exact: true }).click()
+  const dialog = a.page.getByRole('dialog', { name: `Who can use ${skill}`, exact: true })
+  await expect(dialog.getByRole('combobox', { name: `Access for ${fixture.people.b.name}`, exact: true })).toHaveValue('use', { timeout: 30_000 })
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  // The catalog dialog stays, on the detail.
+  await expect(catalog.getByRole('heading', { level: 3, name: skill, exact: true })).toBeVisible()
 })
 
 test('T3.3 A cannot delete a skill B holds; once B removes it from their agent (reported to core), A’s delete succeeds', async ({ team }) => {

@@ -132,6 +132,20 @@ export function registerSharingHandlers(): void {
     )
   })
 
+  // A catalog skill's People, by its package uuid; the listing it is checked
+  // against is the active profile's, which the service reads itself.
+  ipcHandle('sharing:item-people', (_event, input?: { itemUuid?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:item-people', () => sharingService.itemPeople(str(input?.itemUuid)))
+  })
+
+  ipcHandle('sharing:set-item-people', (_event, input?: { itemUuid?: unknown; people?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:set-item-people', () =>
+      sharingService.setItemPeople(str(input?.itemUuid), input?.people)
+    )
+  })
+
   ipcHandle('sharing:search-people', (_event, input?: { query?: unknown }) => {
     userActivation.requireActivated()
     return outcome('sharing:search-people', () => sharingService.searchPeople(input?.query))

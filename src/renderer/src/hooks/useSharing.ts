@@ -69,6 +69,11 @@ export function sharingPeopleKey(profileId: string | null, agentId: string): rea
   return ['sharing', 'people', profileId, agentId] as const
 }
 
+/** Who has access to one catalog skill, by its package uuid, under the active profile. */
+export function sharingItemPeopleKey(profileId: string | null, itemUuid: string): readonly unknown[] {
+  return ['sharing', 'item-people', profileId, itemUuid] as const
+}
+
 /** One shared folder's versions — the Sharing tab's History. */
 export function sharingHistoryKey(profileId: string | null, agentId: string): readonly unknown[] {
   return ['sharing', 'history', profileId, agentId] as const
@@ -187,6 +192,22 @@ export function useSharePeople(agentId: string, enabled: boolean): UseQueryResul
   return useQuery<AgentPeopleDto | null>({
     queryKey: sharingPeopleKey(profileId, agentId),
     queryFn: async () => unwrapCatalogOutcome(await window.api.sharing.people(agentId)),
+    enabled,
+    staleTime: 30_000,
+    retry: (failures, err) => !isReauthRequiredError(err) && failures < 1
+  })
+}
+
+/**
+ * Who has access to a catalog skill, for its Who can use dialog. Null when the
+ * active account's listing does not carry it; `visible: false` when the
+ * caller may not see the list.
+ */
+export function useItemPeople(itemUuid: string, enabled: boolean): UseQueryResult<AgentPeopleDto | null> {
+  const profileId = useProfileId()
+  return useQuery<AgentPeopleDto | null>({
+    queryKey: sharingItemPeopleKey(profileId, itemUuid),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.sharing.itemPeople(itemUuid)),
     enabled,
     staleTime: 30_000,
     retry: (failures, err) => !isReauthRequiredError(err) && failures < 1
@@ -392,6 +413,29 @@ export function useSetSharePeople(
       if (result.done && result.people) queryClient.setQueryData(key, result.people)
       void queryClient.invalidateQueries({ queryKey: key })
       if (result.done) void queryClient.invalidateQueries({ queryKey: ['sharing', 'library'] })
+      options.onResult?.(result, variables)
+    }
+  })
+}
+
+/**
+ * Replace who has access to a catalog skill with this whole list. Main
+ * re-lists the catalog after the write and pushes `sharing:changed`, which
+ * re-reads the catalog's items and the agents' Skills rows.
+ */
+export function useSetItemPeople(
+  options: { onResult?: (result: SetPeopleResult, variables: { itemUuid: string; people: LibraryGrantInput[] }) => void } = {}
+) {
+  const queryClient = useQueryClient()
+  return useMutation<SetPeopleResult, Error, { itemUuid: string; people: LibraryGrantInput[] }>({
+    mutationFn: async ({ itemUuid, people }) =>
+      unwrapCatalogOutcome(await window.api.sharing.setItemPeople(itemUuid, people)),
+    onSuccess: (result, variables) => {
+      const profileId = useAuthStore.getState().currentUser?.id ?? null
+      const key = sharingItemPeopleKey(profileId, variables.itemUuid)
+      // As for an agent: the list as the server now has it, at once.
+      if (result.done && result.people) queryClient.setQueryData(key, result.people)
+      void queryClient.invalidateQueries({ queryKey: key })
       options.onResult?.(result, variables)
     }
   })

@@ -46,8 +46,9 @@ import {
 } from '../libraryService'
 import { catalogLocalInstalls } from '../catalogLocalInstalls'
 import { catalogSkillService } from '../catalogSkillService'
+import { beginTeamBehindRead, noteTeamBehind } from '../catalogSkillUpdates'
 import { createLogger } from '../../logger/logger'
-import { AGENTS_SUBDIR, folderAgentId } from '../../../shared/localAgents'
+import { AGENTS_SUBDIR, LOCAL_AGENT_CHANGED_CHANNEL, folderAgentId } from '../../../shared/localAgents'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import {
   SHARING_CHANGED_CHANNEL,
@@ -763,6 +764,95 @@ function selfIn(profile: string, people: LibraryPerson[]): string | null {
   return people.some((p) => p.principal.kind === 'user' && p.principal.userId === sub) ? sub : null
 }
 
+/** What the People list needs of a catalog item: its uuid, and how the listing says it reaches people. */
+type PeopleItem = Pick<LibraryEntry, 'uuid' | 'visibility' | 'isListed'>
+
+/**
+ * Who has access to a catalog item: `GET …/grants`, plus "Everyone on this
+ * server" when it is public and listed. A `403` is `visible: false`, a `404`
+ * null — the item the listing named is gone.
+ */
+async function readItemPeople(profile: string, item: PeopleItem): Promise<AgentPeopleDto | null> {
+  try {
+    const body = await cinnaFetch<unknown>(profile, grantsPath(item.uuid))
+    const list = withEveryone(fromCoreGrants(body), item.visibility, item.isListed)
+    return { visible: true, people: list, selfUserId: selfIn(profile, list) }
+  } catch (err) {
+    if (err instanceof CinnaApiError && err.status === 403) return { visible: false, people: [], selfUserId: null }
+    if (err instanceof CinnaApiError && err.status === 404) return null
+    throw err
+  }
+}
+
+/**
+ * The write behind {@link sharingService.setPeople} and
+ * {@link sharingService.setItemPeople}, for any catalog item: the grants with
+ * `PUT …/grants`, then the visibility only when Everyone was added or removed,
+ * the listing re-read and `sharing:changed` published. `reread` is the list
+ * as the server now has it, for a PUT that answered nothing usable.
+ */
+async function writeItemPeople(
+  profile: string,
+  item: PeopleItem,
+  people: unknown,
+  agentId: string | null,
+  reread: () => Promise<AgentPeopleDto | null>
+): Promise<SetPeopleResult> {
+  const grants = parseGrantInputs(people)
+  if (grants === null) return { ...refused('failed', 'That list of people could not be read.'), people: null }
+  const write = await libraryWrite(profile, grantsPath(item.uuid), 'PUT', toCoreGrants(grants))
+  if ('refusal' in write) return { ...refused(write.refusal, write.detail), people: null }
+  const wanted = visibilityFor(grants)
+  let visibility = item.visibility
+  let visibilityRefusal: { refusal: ShareRefusal; detail: string | null } | null = null
+  // An unlisted public item shows no Everyone row (it reaches no one), so a
+  // list without one is not a request to make it non-public: left as is.
+  const keepsHiddenPublic = !item.isListed && item.visibility === 'public' && wanted === 'users'
+  if (wanted !== item.visibility && !keepsHiddenPublic) {
+    const patch = await libraryWrite(profile, catalogItemPath(item.uuid), 'PATCH', { visibility: wanted })
+    if ('refusal' in patch) visibilityRefusal = patch
+    else visibility = wanted
+  }
+  // The listing's maintainers, visibility and the caller's own access may have moved.
+  await refreshListing()
+  // The list as the server now has it: what the PUT answered, or a fresh
+  // read when it answered nothing usable — never the list sent, which
+  // lacks the names.
+  const answered = fromCoreGrants(write.body)
+  const shown = withEveryone(answered, visibility, item.isListed)
+  const now: AgentPeopleDto | null =
+    answered.length > 0
+      ? { visible: true, people: shown, selfUserId: selfIn(profile, shown) }
+      : await reread().catch(() => null)
+  publishEvent(SHARING_CHANGED_CHANNEL)
+  if (visibilityRefusal) return { ...refused(visibilityRefusal.refusal, visibilityRefusal.detail), people: now }
+  return { ...result({ done: true, refusal: null }, null, agentId), people: now }
+}
+
+/**
+ * A skill package in the active profile's catalog, by its uuid (compared
+ * without case, as `publications.json` may spell it). `entry` comes from the
+ * cached listing — or a fresh one when `fresh` or when the cache does not
+ * have it — and is null when the listing does not carry it. Null for an
+ * empty uuid or a profile that is not a Cinna one.
+ */
+async function skillTarget(
+  itemUuid: string,
+  fresh = false
+): Promise<{ profile: string; entry: PeopleItem | null } | null> {
+  const uuid = itemUuid.trim().toLowerCase()
+  if (uuid === '') return null
+  const profile = getProfileScopeUserId()
+  if (libraryService.hostOf(profile) === null) return null
+  const find = (listing: CachedListing | null): PeopleItem | null => {
+    const item = listing?.items.find((candidate) => candidate.kind === 'skill' && candidate.uuid.toLowerCase() === uuid)
+    return item ? { uuid: item.uuid, visibility: item.visibility, isListed: item.is_listed !== false } : null
+  }
+  let entry = fresh ? null : find(libraryService.cached(profile))
+  if (!entry) entry = find(await libraryService.refresh(profile))
+  return { profile, entry }
+}
+
 /**
  * The catalog entry behind a shared agent, when the active profile can speak
  * for it: a Cinna remote on the active profile's own instance. `entry` is the
@@ -1220,15 +1310,7 @@ export const sharingService = {
   async people(userId: string, agentId: string): Promise<AgentPeopleDto | null> {
     const target = await libraryTarget(userId, agentId)
     if (!target?.entry) return null
-    try {
-      const body = await cinnaFetch<unknown>(target.profile, grantsPath(target.entry.uuid))
-      const list = withEveryone(fromCoreGrants(body), target.entry.visibility, target.entry.isListed)
-      return { visible: true, people: list, selfUserId: selfIn(target.profile, list) }
-    } catch (err) {
-      if (err instanceof CinnaApiError && err.status === 403) return { visible: false, people: [], selfUserId: null }
-      if (err instanceof CinnaApiError && err.status === 404) return null
-      throw err
-    }
+    return readItemPeople(target.profile, target.entry)
   },
 
   /**
@@ -1248,35 +1330,35 @@ export const sharingService = {
     if (!target) return { ...refused('not_shared'), people: null }
     const { entry, profile } = target
     if (!entry) return { ...refused('not_in_library'), people: null }
-    const grants = parseGrantInputs(people)
-    if (grants === null) return { ...refused('failed', 'That list of people could not be read.'), people: null }
-    const write = await libraryWrite(profile, grantsPath(entry.uuid), 'PUT', toCoreGrants(grants))
-    if ('refusal' in write) return { ...refused(write.refusal, write.detail), people: null }
-    const wanted = visibilityFor(grants)
-    let visibility = entry.visibility
-    let visibilityRefusal: { refusal: ShareRefusal; detail: string | null } | null = null
-    // An unlisted public item shows no Everyone row (it reaches no one), so a
-    // list without one is not a request to make it non-public: left as is.
-    const keepsHiddenPublic = !entry.isListed && entry.visibility === 'public' && wanted === 'users'
-    if (wanted !== entry.visibility && !keepsHiddenPublic) {
-      const patch = await libraryWrite(profile, catalogItemPath(entry.uuid), 'PATCH', { visibility: wanted })
-      if ('refusal' in patch) visibilityRefusal = patch
-      else visibility = wanted
-    }
-    // The listing's maintainers, visibility and the caller's own access may have moved.
-    await refreshListing()
-    // The list as the server now has it: what the PUT answered, or a fresh
-    // read when it answered nothing usable — never the list sent, which
-    // lacks the names.
-    const answered = fromCoreGrants(write.body)
-    const shown = withEveryone(answered, visibility, entry.isListed)
-    const now: AgentPeopleDto | null =
-      answered.length > 0
-        ? { visible: true, people: shown, selfUserId: selfIn(profile, shown) }
-        : await sharingService.people(userId, agentId).catch(() => null)
-    publishEvent(SHARING_CHANGED_CHANNEL)
-    if (visibilityRefusal) return { ...refused(visibilityRefusal.refusal, visibilityRefusal.detail), people: now }
-    return { ...result({ done: true, refusal: null }, null, agentId), people: now }
+    return writeItemPeople(profile, entry, people, agentId, () => sharingService.people(userId, agentId))
+  },
+
+  /**
+   * Who has access to a catalog skill, by its package uuid — the People list
+   * of an authored skill shared to the active profile's catalog. The same
+   * read as {@link people}, with the visibility and listing taken from the
+   * cached `/catalog/items` row. Null when the listing does not carry the
+   * skill (or the profile is not a Cinna one); `visible: false` when the
+   * caller may not see the list.
+   */
+  async itemPeople(itemUuid: string): Promise<AgentPeopleDto | null> {
+    const target = await skillTarget(itemUuid)
+    if (!target?.entry) return null
+    return readItemPeople(target.profile, target.entry)
+  },
+
+  /**
+   * Replace who has access to a catalog skill with `people` — {@link setPeople}
+   * for a skill package addressed by its uuid: grants first, then the
+   * visibility only when Everyone was added or removed, then the listing is
+   * re-read so every catalog surface (the Skills row's access, the catalog's
+   * detail) follows.
+   */
+  async setItemPeople(itemUuid: string, people: unknown): Promise<SetPeopleResult> {
+    const target = await skillTarget(itemUuid, true)
+    if (!target) return { ...refused('failed', 'Who can use a skill can be changed only on a Cinna account.'), people: null }
+    if (!target.entry) return { ...refused('failed', 'This skill isn’t in the catalog any more.'), people: null }
+    return writeItemPeople(target.profile, target.entry, people, null, () => sharingService.itemPeople(itemUuid))
   },
 
   /**
@@ -1491,16 +1573,25 @@ export const sharingService = {
    * ({@link gitStateKey}, read from files), and a steady state spawns none.
    */
   async teamChanges(userId: string): Promise<UpdateAvailableInboxItem[]> {
-    const listing = libraryService.cached(getProfileScopeUserId())
-    if (!listing || listing.agents.length === 0) return []
+    // Captured before any await: the answers belong to this profile, and a
+    // read that finishes after a newer one is dropped (noteTeamBehind).
+    const profile = getProfileScopeUserId()
+    const read = { profile, sequence: beginTeamBehindRead() }
+    const listing = libraryService.cached(profile)
+    if (!listing || listing.agents.length === 0) {
+      noteBehind([], new Map(), read)
+      return []
+    }
     const byRepo = new Map(listing.agents.map((agent) => [agent.repoId, agent]))
     const items: UpdateAvailableInboxItem[] = []
     const seen = new Set<string>()
+    const behind = new Map<string, boolean>()
+    const candidates = repoCandidates(userId)
     // The listing's own content as well as its time: two fetches can share a millisecond.
     const listed = listing.agents
       .map((a) => `${a.repoId}:${a.headSha}:${a.latest?.number ?? 0}:${a.latest?.publishedAt ?? ''}:${a.latest?.publishedBy ?? ''}`)
       .join(',')
-    for (const agent of repoCandidates(userId)) {
+    for (const agent of candidates) {
       seen.add(agent.id)
       const state = gitStateKey(agent.path)
       const key =
@@ -1515,10 +1606,32 @@ export const sharingService = {
         if (key !== null) teamChangeMemo.set(agent.id, { key, item })
         else teamChangeMemo.delete(agent.id)
       }
+      behind.set(agent.id, item !== null)
       if (item) items.push(item)
     }
     for (const id of teamChangeMemo.keys()) if (!seen.has(id)) teamChangeMemo.delete(id)
+    noteBehind(candidates, behind, read)
     return items
+  }
+}
+
+/**
+ * Hand a `teamChanges` read to the catalog rows' fold ({@link noteTeamBehind}):
+ * a tracked agent's row reads Disconnected only while its folder is known not
+ * to be behind, so an agent whose answer moved is re-read by the renderer.
+ * `read` is the profile and sequence captured when the read began.
+ */
+function noteBehind(
+  agents: readonly LocalAgentDto[],
+  behind: ReadonlyMap<string, boolean>,
+  read: { profile: string; sequence: number }
+): void {
+  const changed = new Set(noteTeamBehind(behind, read.profile, read.sequence))
+  if (changed.size === 0) return
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+  for (const id of changed) {
+    const rootId = byId.get(id)?.rootId
+    if (rootId) publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId, agentId: id, reason: 'rescan' }, 'all')
   }
 }
 

@@ -177,6 +177,8 @@ export const SHARE_UI_TEXT = {
   removePersonAction: 'Remove',
   peopleOnlyMe: 'Only you, for now.',
   peopleNoOneElse: 'No one else has access yet.',
+  /** The same empty list when someone else maintains it: they have access without a row here. */
+  peopleOnlyMaintainers: 'No one but the maintainers has access yet.',
   accessLabel: 'Access',
   addPerson: 'Add',
   removePerson: (name: string) => `Remove ${name}`,

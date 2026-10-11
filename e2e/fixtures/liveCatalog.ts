@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { repoRoot } from '../playwright.config'
+import type { Locator } from '@playwright/test'
 import type { CinnaApp } from './app'
 import { installFakeAcpEngine, type FakeAcpEngine } from './fakeAcpEngine'
 import {
@@ -12,6 +13,7 @@ import {
   findAgent,
   makeTeamTest,
   openAgent,
+  refreshLibrary,
   runCommand,
   shortHash,
   syncCredentials,
@@ -789,4 +791,42 @@ export async function closeSettings(app: PersonApp): Promise<void> {
   if (!(await page.getByRole('button', { name: 'MCP Providers', exact: true }).isVisible())) return
   await page.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(page.getByRole('button', { name: 'MCP Providers', exact: true })).toHaveCount(0)
+}
+
+/**
+ * The authored Skills row's `Who can use <skill>…` on `agent` (a maintainer's
+ * shared skill) → the dialog `Who can use <skill>`, with its People loaded.
+ */
+export async function openWhoCanUse(app: PersonApp, agent: string, skill: string) {
+  await refreshLibrary(app)
+  await openSkills(app, agent)
+  await skillRow(app, skill, 'Authored').getByRole('button', { name: `Who can use ${skill}…`, exact: true }).click()
+  const dialog = app.page.getByRole('dialog', { name: `Who can use ${skill}`, exact: true })
+  await expect(dialog.getByText('Loading…', { exact: true })).toHaveCount(0, { timeout: 30_000 })
+  return dialog
+}
+
+/** In the Who can use dialog: `Remove <name>` → the row's confirm `Remove`; waits until the row left. */
+export async function removeFromWhoCanUse(dialog: Locator, name: string): Promise<void> {
+  await dialog.getByRole('button', { name: `Remove ${name}`, exact: true }).click()
+  await expect(dialog.getByText(`Remove ${name}’s access?`, { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Remove', exact: true }).click()
+  await expect(dialog.getByText(`Remove ${name}’s access?`, { exact: true })).toHaveCount(0, { timeout: 30_000 })
+  await expect(dialog.getByRole('button', { name: `Remove ${name}`, exact: true })).toHaveCount(0)
+}
+
+/** In the Who can use dialog: Share with a person… → `person` at `access` → Add; waits until the list is back with their row. */
+export async function addToWhoCanUse(
+  dialog: Locator,
+  person: SharingPerson,
+  access: 'use' | 'edit' | 'maintain' = 'use',
+  beforeAdd?: () => Promise<void>
+): Promise<void> {
+  await dialog.getByRole('button', { name: 'Share with a person…', exact: true }).click()
+  await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
+  await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
+  await dialog.getByRole('combobox', { name: 'Access', exact: true }).selectOption(access)
+  await beforeAdd?.()
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(dialog.getByRole('combobox', { name: `Access for ${person.name}`, exact: true })).toHaveValue(access, { timeout: 30_000 })
 }

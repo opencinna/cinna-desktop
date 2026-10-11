@@ -797,15 +797,22 @@ describe('which account a remote belongs to', () => {
   }, 30_000)
 
   it('answers a repeat Inbox read without running git while nothing changed, and reads again when the folder moves', async () => {
+    const { noteTeamBehind } = await import('../catalogSkillUpdates')
+    noteTeamBehind(new Map())
     makeOwnRepo(`${HOST}/git/r1.git`)
     listed(libraryAgent('r1', 'alpha', null))
     await libraryService.refresh(PROFILE)
+    publishEvent.mockClear()
     const first = await sharingService.teamChanges(USER)
     expect(first).toHaveLength(1)
+    // The agent's catalog rows read whether it is behind: its new answer re-reads it.
+    expect(publishEvent).toHaveBeenCalledWith('local-agent:changed', { rootId, agentId, reason: 'rescan' }, 'all')
 
     spawned.count = 0
+    publishEvent.mockClear()
     expect(await sharingService.teamChanges(USER)).toEqual(first)
     expect(spawned.count).toBe(0)
+    expect(publishEvent).not.toHaveBeenCalledWith('local-agent:changed', expect.anything(), 'all')
 
     // A new local version moves HEAD's ref, so the answer is derived again.
     writeFileSync(join(agentDir, 'notes.md'), 'x\n')
@@ -1400,6 +1407,129 @@ describe('people', () => {
       { userId: 'u3', email: 'c@x.test', name: 'c@x.test' }
     ])
     expect(cinnaFetch.mock.calls[0][1]).toBe('/api/v1/users/search?q=bo&limit=10')
+  })
+})
+
+describe('a catalog skill\'s people', () => {
+  const PKG = 'PKG-Uuid-1'
+  const ANN = { principal: { user_id: 'u1' }, access: 'maintain', display_name: 'Ann' }
+
+  /** A skill package in the listing, uuid `PKG`, at `visibility`; `grants` is core's answer to GET/PUT. */
+  async function skillListed(visibility = 'users', grants: unknown[] = [], isListed = true, access = 'maintain'): Promise<Record<string, unknown>> {
+    const item: Record<string, unknown> = {
+      ...libraryAgent('s1', 'erp-lookup', null, { access, visibility, isListed }),
+      kind: 'skill',
+      runs_on: null,
+      uuid: PKG,
+      id: 'test.cinna.erp-lookup',
+      desktop: null,
+      skill: { frontmatter: {}, archive_sha256: null, size_bytes: 1 }
+    }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string
+      const method = (args[2] as { method?: string } | undefined)?.method ?? 'GET'
+      if (path === '/api/v1/catalog/items' && method === 'GET') return { data: [item] }
+      if (path === `/api/v1/catalog/items/${PKG}/grants`) return grants
+      if (method === 'PATCH' && path === `/api/v1/catalog/items/${PKG}`) {
+        item.visibility = (args[2] as { body: { visibility: string } }).body.visibility
+        return item
+      }
+      throw new Error(`unexpected ${method} ${path}`)
+    })
+    await libraryService.refresh(PROFILE)
+    cinnaFetch.mockClear()
+    publishEvent.mockClear()
+    return item
+  }
+
+  it('reads who has access by the package uuid, any case, Everyone when it is public', async () => {
+    await skillListed('public', [ANN])
+    expect(await sharingService.itemPeople('pkg-uuid-1')).toEqual({
+      visible: true,
+      people: [
+        { principal: { kind: 'user', userId: 'u1' }, access: 'maintain', displayName: 'Ann' },
+        { principal: { kind: 'everyone' }, access: 'use', displayName: '' }
+      ],
+      selfUserId: 'u1'
+    })
+    // From the cached listing: the grants are the one read.
+    expect(cinnaFetch.mock.calls.map((call) => call[1])).toEqual([`/api/v1/catalog/items/${PKG}/grants`])
+  })
+
+  it('is not visible on a 403, and null for a uuid the listing does not carry', async () => {
+    await skillListed('users', [ANN], true, 'use')
+    cinnaFetch.mockRejectedValueOnce(new CinnaApiError('reauth_required', 'Cinna 403', '403', 403))
+    expect(await sharingService.itemPeople(PKG)).toEqual({ visible: false, people: [], selfUserId: null })
+    expect(await sharingService.itemPeople('nope')).toBeNull()
+    expect(await sharingService.itemPeople('')).toBeNull()
+  })
+
+  it('reads no desktop agent through the skill route', async () => {
+    listed(libraryAgent('r1', 'alpha', null, { access: 'maintain' }))
+    await libraryService.refresh(PROFILE)
+    expect(await sharingService.itemPeople('item-r1')).toBeNull()
+  })
+
+  it('adding Everyone puts the grants, then makes the skill public, re-lists and says so', async () => {
+    await skillListed('users', [ANN])
+    const saved = await sharingService.setItemPeople(PKG, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'everyone' }, access: 'use' }
+    ])
+    expect(saved).toMatchObject({ done: true, refusal: null, agentId: null })
+    expect(calls('PUT')).toEqual([[`/api/v1/catalog/items/${PKG}/grants`, [{ principal: { user_id: 'u1' }, access: 'maintain' }]]])
+    expect(calls('PATCH')).toEqual([[`/api/v1/catalog/items/${PKG}`, { visibility: 'public' }]])
+    const order = cinnaFetch.mock.calls.map((call) => (call[2] as { method?: string } | undefined)?.method ?? 'GET')
+    expect(order.indexOf('PUT')).toBeLessThan(order.indexOf('PATCH'))
+    // The listing is read again after the write, so catalog surfaces follow.
+    expect(order.lastIndexOf('GET')).toBeGreaterThan(order.indexOf('PATCH'))
+    expect(saved.people?.people.map((p) => p.principal.kind)).toEqual(['user', 'everyone'])
+    expect(publishEvent).toHaveBeenCalledWith('sharing:changed')
+  })
+
+  it('removing Everyone makes it users-only; an unchanged Everyone writes no visibility', async () => {
+    await skillListed('public', [ANN])
+    const narrowed = await sharingService.setItemPeople(PKG, [{ principal: { kind: 'user', userId: 'u1' }, access: 'maintain' }])
+    expect(narrowed.done).toBe(true)
+    expect(calls('PATCH')).toEqual([[`/api/v1/catalog/items/${PKG}`, { visibility: 'users' }]])
+    cinnaFetch.mockClear()
+    const same = await sharingService.setItemPeople(PKG, [
+      { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
+      { principal: { kind: 'user', userId: 'u2' }, access: 'edit' }
+    ])
+    expect(same.done).toBe(true)
+    expect(calls('PUT')).toHaveLength(1)
+    expect(calls('PATCH')).toEqual([])
+  })
+
+  it('returns refusals as data: no access, the server’s sentence, an unreadable list, a skill gone', async () => {
+    await skillListed('users', [ANN])
+    const base = cinnaFetch.getMockImplementation()!
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'PUT') {
+        throw new CinnaApiError('reauth_required', 'Cinna 403', '403', 403)
+      }
+      return base(...args)
+    })
+    expect(await sharingService.setItemPeople(PKG, [])).toMatchObject({ done: false, refusal: 'no_access', people: null })
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'PUT') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'A skill needs at least one maintainer.', 409)
+      }
+      return base(...args)
+    })
+    expect(await sharingService.setItemPeople(PKG, [{ principal: { kind: 'everyone' }, access: 'use' }])).toMatchObject({
+      done: false,
+      refusal: 'failed',
+      detail: 'A skill needs at least one maintainer.'
+    })
+    expect(calls('PATCH')).toEqual([])
+    cinnaFetch.mockImplementation(base)
+    expect(await sharingService.setItemPeople(PKG, [{ principal: { kind: 'user' }, access: 'use' }])).toMatchObject({
+      done: false,
+      detail: 'That list of people could not be read.'
+    })
+    expect(await sharingService.setItemPeople('gone', [])).toMatchObject({ done: false, detail: 'This skill isn’t in the catalog any more.' })
   })
 })
 

@@ -110,6 +110,14 @@ export interface InboxSnapshot {
    * Optional for the same reason as `dispatch`.
    */
   updates?: UpdateAvailableInboxItem[]
+  /**
+   * Catalog skills an agent on this machine pins that the catalog no longer
+   * gives this person: the copy on this computer is now a local version. One
+   * per agent and pin, minus the ones dismissed in that state. Derived on
+   * every read; leaves by itself when access returns or the pin goes.
+   * Optional for the same reason as `dispatch`.
+   */
+  disconnected?: SkillDisconnectedInboxItem[]
 }
 
 /** What the Update on an "Update available" card acts on. */
@@ -159,6 +167,50 @@ export type UpdateAvailableInboxItem =
       /** The pinned revision the agent has now. */
       pinnedRevision: number | null
     })
+
+/**
+ * "Disconnected: *skill* in *agent*": a catalog skill one of the person's
+ * agents pins that the catalog no longer gives them (their access was taken
+ * away, or it was made private or removed). A copy on this computer keeps
+ * working as a local version that no longer syncs (`cached`); without one,
+ * the agent cannot download it. Remove takes the pin out
+ * (`catalog-skills:remove`), Dismiss (`inbox:dismiss-disconnected`) hides the
+ * card until the pin is connected again.
+ */
+export interface SkillDisconnectedInboxItem {
+  kind: 'skill_disconnected'
+  /** The folder agent's id. */
+  agentId: string
+  agentName: string
+  /** The pin's `name` in the agent's `catalog_skills[]` — what Remove names. */
+  skillName: string
+  /** The skill's catalog title when known, else the pin's name. */
+  skillTitle: string
+  /** The pin's `package_uuid`, lowercase. */
+  packageUuid: string
+  /** The pinned revision; null when the pin's is not a whole number. */
+  revision: number | null
+  /** Whether this person may change the agent's pins, so Remove is offered. */
+  removable: boolean
+  /**
+   * Whether the pinned revision is on this computer: the copy keeps working
+   * as a local version. False when there is no copy and its download was
+   * refused as not available — the agent cannot get the skill at all.
+   */
+  cached: boolean
+}
+
+/** The key a Disconnected card — and its dismissal — is known by: the agent, the package, the pinned revision. */
+export function disconnectedKey(agentId: string, packageUuid: string, revision: number | null): string {
+  return `${agentId}\n${packageUuid.trim().toLowerCase()}\n${revision ?? ''}`
+}
+
+/** `inbox:dismiss-disconnected` — the card a Dismiss names. */
+export interface SkillDisconnectedDismissal {
+  agentId: string
+  packageUuid: string
+  revision: number | null
+}
 
 /**
  * An approval the dispatcher asks for before it runs a task whose file was

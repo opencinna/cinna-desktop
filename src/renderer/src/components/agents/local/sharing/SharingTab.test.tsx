@@ -373,7 +373,7 @@ describe('SharingTab — people', () => {
     expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })).toBeTruthy()
   })
 
-  it('keeps Share with everyone after a refusal, with the server’s sentence under the header, above the list', async () => {
+  it('keeps Share with everyone after a refusal, with the server’s sentence under the list, so nothing is pushed down', async () => {
     sharing.setPeople.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: 'Public items are turned off here.' })))
     sharing.library.mockResolvedValue(ok({ host: 'https://core.test', agents: [entry({ visibility: 'users' })], fetchedAt: '' }))
     sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [PEOPLE.people[0], BOB] }))
@@ -385,7 +385,9 @@ describe('SharingTab — people', () => {
     const alert = within(people).getByRole('alert')
     const list = people.querySelector('[data-sharing-people]')!
     expect(alert.parentElement).toBe(list)
-    expect(list.firstElementChild).toBe(alert)
+    expect(list.lastElementChild).toBe(alert)
+    // The rows did not move: the list is still first.
+    expect(list.firstElementChild).not.toBe(alert)
     const button = within(people).getByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone }) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     expect(button.getAttribute('aria-busy')).not.toBe('true')

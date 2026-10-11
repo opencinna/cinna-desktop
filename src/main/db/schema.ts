@@ -1138,6 +1138,24 @@ export const appSettings = sqliteTable('app_settings', {
 })
 
 /**
+ * Inbox cards the user dismissed, per profile: the card's kind and the key
+ * its computation derives. Cleared by that computation once the state the
+ * card was dismissed in is over. See `migrations/inbox-dismissals.ts`.
+ */
+export const inboxDismissals = sqliteTable(
+  'inbox_dismissals',
+  {
+    userId: text('user_id').notNull(),
+    kind: text('kind').notNull(),
+    itemKey: text('item_key').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.kind, table.itemKey] })]
+)
+
+/**
  * `handovers` — one `.cinna/handovers/<id>/` folder, as the desktop sees it.
  *
  * The requester writes `brief.md`, the executor writes `report.md`, and Cinna

@@ -12,24 +12,28 @@ import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
 import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
 import { DispatchGateCard, DispatchPausedCard } from './InboxDispatchCards'
 import { UpdateAvailableCard } from './InboxUpdateCard'
-import { ASK_NO_LONGER_WAITING } from '../../../../shared/inbox'
+import { SkillDisconnectedCard } from './InboxDisconnectedCard'
+import { ASK_NO_LONGER_WAITING, disconnectedKey } from '../../../../shared/inbox'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
   InboxAnswerCode,
   InboxEntry,
+  SkillDisconnectedInboxItem,
   TaskDispatchInboxItem,
   UpdateAvailableInboxItem
 } from '../../../../shared/inbox'
 
 /**
  * One row of the list: an ask, one of the task dispatcher's cards (an
- * approval of outside content, a paused queue), or an agent with an update
- * available. All kinds share the order and the retention.
+ * approval of outside content, a paused queue), an agent with an update
+ * available, or a catalog skill that is disconnected. All kinds share the
+ * order and the retention.
  */
 type InboxRowItem =
-  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined; update?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem; update?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update: UpdateAvailableInboxItem }
+  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined; update?: undefined; disconnected?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem; update?: undefined; disconnected?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update: UpdateAvailableInboxItem; disconnected?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update?: undefined; disconnected: SkillDisconnectedInboxItem }
 
 function dispatchKey(item: TaskDispatchInboxItem): string {
   return item.kind === 'dispatch_gate' ? `gate:${item.gateId}` : `paused:${item.agentId}:${item.pausedAt.getTime()}`
@@ -38,7 +42,8 @@ function dispatchKey(item: TaskDispatchInboxItem): string {
 function rowsOf(
   entries: readonly InboxEntry[],
   dispatch: readonly TaskDispatchInboxItem[],
-  updates: readonly UpdateAvailableInboxItem[] = []
+  updates: readonly UpdateAvailableInboxItem[] = [],
+  disconnected: readonly SkillDisconnectedInboxItem[] = []
 ): InboxRowItem[] {
   return [
     ...entries.map((ask): InboxRowItem => ({ key: ask.requestId, at: ask.createdAt, ask })),
@@ -54,6 +59,12 @@ function rowsOf(
       key: `update:${item.agentId}:${item.target === 'skill' ? `skill:${item.skillName}:` : ''}${item.version ?? item.changedAt?.getTime() ?? ''}`,
       at: item.changedAt ?? new Date(0),
       update: item
+    })),
+    // One card per agent and pin: a pin disconnected again after a reconnect is the same key, and a new mount.
+    ...disconnected.map((item): InboxRowItem => ({
+      key: `disconnected:${disconnectedKey(item.agentId, item.packageUuid, item.revision)}`,
+      at: new Date(0),
+      disconnected: item
     }))
   ]
 }
@@ -147,7 +158,7 @@ export function InboxView(): React.JSX.Element {
   const entries = useMemo(() => {
     const byId = new Map<string, InboxRowItem>()
     for (const row of retained) byId.set(row.key, row)
-    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [], data?.updates ?? [])) {
+    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [], data?.updates ?? [], data?.disconnected ?? [])) {
       byId.set(row.key, row)
     }
     const known = new Set(order.current)
@@ -269,6 +280,8 @@ export function InboxView(): React.JSX.Element {
                 />
               ) : row.update ? (
                 <UpdateAvailableCard key={row.key} item={row.update} onActed={() => retain(row)} />
+              ) : row.disconnected ? (
+                <SkillDisconnectedCard key={row.key} item={row.disconnected} onActed={() => retain(row)} />
               ) : row.dispatch.kind === 'dispatch_gate' ? (
                 <DispatchGateCard
                   key={row.key}

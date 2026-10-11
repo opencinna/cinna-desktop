@@ -113,6 +113,8 @@ export const CATALOG_SKILL_TEXT = {
   updateFailed: 'The skill could not be updated.',
   tryAgain: (skill: string) => `Download ${skill} again`,
   tryAgainFailed: 'The skill could not be downloaded.',
+  /** A Disconnected row with no copy here: asks the catalog once more whether the pinned version is available. */
+  checkAgain: (skill: string) => `Check ${skill} again`,
   remove: (skill: string) => `Remove ${skill} from this agent`,
   removeConfirm: (skill: string) =>
     `Remove ${skill} from this agent? It stays in the catalog; you can add it again. ${skill} stops being available to this agent in new chats.`,
@@ -162,7 +164,12 @@ export const SKILL_SHARE_TEXT = {
   sharing: 'Sharing…',
   cancel: 'Cancel',
   previewFailed: 'What this share would be couldn’t be read.',
-  shareFailed: 'The skill couldn’t be shared.'
+  shareFailed: 'The skill couldn’t be shared.',
+  /** The Skills row's and the catalog detail's icon (tooltip and name), for a maintainer of a shared skill: opens Who can use. */
+  whoCanUseAction: (skill: string) => `Who can use ${skill}…`,
+  whoCanUseTitle: (skill: string) => `Who can use ${skill}`,
+  peopleNoAccess: 'Only a maintainer can change who has access to this skill.',
+  close: 'Close'
 } as const
 
 /**

@@ -31,6 +31,7 @@ import { migrateHandovers } from './handovers'
 import { migrateDelegations } from './delegations'
 import { migrateNotes } from './notes'
 import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
+import { migrateInboxDismissals } from './inbox-dismissals'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
 import { shareLocalAgentChats } from './share-local-agent-chats'
@@ -106,6 +107,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateLocalScheduleCursors(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)
+  // Dismissed Inbox cards; creation only, no FK, no DML.
+  migrateInboxDismissals(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).
   runSyncMigrations(sqlite)
   // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).

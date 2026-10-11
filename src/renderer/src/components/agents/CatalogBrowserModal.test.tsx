@@ -941,3 +941,37 @@ describe('CatalogBrowserModal — Uninstall', () => {
     expect(screen.queryByRole('button', { name: CATALOG_TEXT.uninstallLabel('Invoice Watcher') })).toBeNull()
   })
 })
+
+describe('CatalogBrowserModal — who can use a skill', () => {
+  it('offers a maintainer Who can use on the skill’s detail; its dialog closes on Escape alone and a press inside closes nothing', async () => {
+    itemsMock.mockResolvedValue({ success: true, value: listing([INVOICES, HELPDESK, RATES, PAYROLL, LEDGER, { ...ERP, access: 'maintain' }]) })
+    const itemPeople = vi.fn().mockResolvedValue({ success: true, value: { visible: true, people: [], selfUserId: null } })
+    Object.assign((window.api as unknown as { sharing: object }).sharing, { itemPeople })
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'erp-lookup' }))
+    const icon = screen.getByRole('button', { name: 'Who can use erp-lookup…' })
+    // The tooltip says what the accessible name says.
+    expect(icon.getAttribute('title')).toBe('Who can use erp-lookup…')
+    fireEvent.click(icon)
+    const dialog = screen.getByRole('dialog', { name: 'Who can use erp-lookup' })
+    await within(dialog).findByText('No one else has access yet.')
+    expect(itemPeople).toHaveBeenCalledWith('u-erp')
+    fireEvent.mouseDown(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Who can use erp-lookup' })).toBeNull()
+    // The detail under it stays, and so does the catalog.
+    expect(screen.getByRole('heading', { name: 'erp-lookup' })).toBeTruthy()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('offers no Who can use to someone who can only use or edit the skill', async () => {
+    itemsMock.mockResolvedValue({ success: true, value: listing([INVOICES, HELPDESK, RATES, PAYROLL, LEDGER, { ...ERP, access: 'edit' }]) })
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'erp-lookup' }))
+    expect(screen.getByRole('heading', { name: 'erp-lookup' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Who can use erp-lookup…' })).toBeNull()
+  })
+})

@@ -47,6 +47,7 @@ export function DialogShell({
   danger = false,
   width = 'w-[28rem]',
   align = 'center',
+  overlayAttrs,
   children
 }: {
   title: string
@@ -65,12 +66,21 @@ export function DialogShell({
    * it scrolls inside, keeping the heading and the footer on screen.
    */
   align?: 'center' | 'top'
+  /**
+   * Extra attributes on the backdrop: a dialog opened from inside another
+   * surface that closes on an outside click (the catalog dialog) marks itself
+   * as part of that surface with them.
+   */
+  overlayAttrs?: Record<string, string>
   children: ReactNode
 }): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
   useDialogChrome({ modalRef, initialFocusRef, pending, onDismiss })
   return createPortal(
-    <div className={`fixed inset-0 z-50 flex justify-center bg-black/25 ${align === 'top' ? 'items-start pt-16' : 'items-center'}`}>
+    <div
+      {...overlayAttrs}
+      className={`fixed inset-0 z-50 flex justify-center bg-black/25 ${align === 'top' ? 'items-start pt-16' : 'items-center'}`}
+    >
       <div
         ref={modalRef}
         role="dialog"
@@ -700,10 +710,48 @@ export function ShareWithPersonDialog({
   onCancel: () => void
 }): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
-  const [person, setPerson] = useState<PersonSearchResult | null>(null)
-  const [access, setAccess] = useState<LibraryAccess>('use')
   return (
     <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef}>
+      <ShareWithPersonForm exclude={exclude} pending={pending} error={error} onAdd={onAdd} onCancel={onCancel} inputRef={searchRef} />
+    </DialogShell>
+  )
+}
+
+/**
+ * The body of {@link ShareWithPersonDialog} — the search, what they may do,
+ * the refusal and Cancel / Add — for a surface that is already a dialog (a
+ * skill's Who can use) and shows it in place of its list rather than opening
+ * a second dialog over itself. `focusOnMount` puts the cursor in the search
+ * when it replaces the list.
+ */
+export function ShareWithPersonForm({
+  exclude,
+  pending,
+  error,
+  onAdd,
+  onCancel,
+  inputRef,
+  focusOnMount = false
+}: {
+  exclude: ReadonlySet<string>
+  pending: boolean
+  error: string | null
+  onAdd: (person: PersonSearchResult, access: LibraryAccess) => void
+  onCancel: () => void
+  inputRef?: React.RefObject<HTMLInputElement | null>
+  focusOnMount?: boolean
+}): React.JSX.Element {
+  const ownRef = useRef<HTMLInputElement>(null)
+  const searchRef = inputRef ?? ownRef
+  const [person, setPerson] = useState<PersonSearchResult | null>(null)
+  const [access, setAccess] = useState<LibraryAccess>('use')
+  useEffect(() => {
+    if (focusOnMount) searchRef.current?.focus()
+    // Once, on mount: the list it replaced had the focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
+    <>
       <div className="flex items-end gap-2">
         <div className="min-w-0 flex-1">
           <PeopleSearch
@@ -733,7 +781,7 @@ export function ShareWithPersonDialog({
           {SHARE_UI_TEXT.addPerson}
         </button>
       </div>
-    </DialogShell>
+    </>
   )
 }
 

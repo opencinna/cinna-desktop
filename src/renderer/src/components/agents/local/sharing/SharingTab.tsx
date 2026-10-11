@@ -1,12 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import { Loader2, Trash2 } from 'lucide-react'
-import type {
-  AgentShareStatus,
-  LibraryAgentDto,
-  LibraryGrantInput,
-  LibraryPerson,
-  LibraryPrincipal
-} from '../../../../../../shared/agentSharing'
+import { useEffect, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import type { AgentShareStatus, LibraryAgentDto } from '../../../../../../shared/agentSharing'
 import {
   useSetSharePeople,
   useShareHistory,
@@ -28,16 +22,15 @@ import {
   SettingsButton,
   SettingsCard,
   SettingsHint,
-  SettingsIconButton,
   SettingsInfoTip,
   SettingsRow,
   SettingsRows,
   SettingsSection,
-  SettingsStatusRow,
-  settingsInputClass
+  SettingsStatusRow
 } from '../../../settings/SettingsLayout'
 import { useAgentShareStatus } from './AgentShareBadge'
-import { RemoveSharingDialog, ShareWithPersonDialog } from './ShareDialogs'
+import { RemoveSharingDialog } from './ShareDialogs'
+import { PeopleSection, usePeopleEditor } from './PeopleSection'
 import { canShareChanges, canUpdate, type ShareActions } from './useShareActions'
 
 const DATE = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -59,16 +52,6 @@ function hostOf(origin: string): string {
 /** A Cinna team version on the active account, whose library entry the tab can talk about. */
 function onActiveLibrary(status: AgentShareStatus): boolean {
   return status.remote.kind === 'cinna' && status.state !== 'other_account' && status.state !== 'removed'
-}
-
-function samePrincipal(a: LibraryPrincipal, b: LibraryPrincipal): boolean {
-  if (a.kind === 'user' && b.kind === 'user') return a.userId === b.userId
-  if (a.kind === 'role' && b.kind === 'role') return a.role === b.role
-  return a.kind === b.kind
-}
-
-function principalKey(p: LibraryPrincipal): string {
-  return p.kind === 'user' ? `user:${p.userId}` : p.kind === 'role' ? `role:${p.role}` : 'everyone'
 }
 
 /**
@@ -105,7 +88,7 @@ export function SharingTab({
   return (
     <div className="space-y-6">
       <WhereSection status={status} entry={entry} actions={actions} bindActionErrors={bindActionErrors} />
-      {onActiveLibrary(status) && <PeopleSection agentId={agent.id} entry={entry} />}
+      {onActiveLibrary(status) && <AgentPeopleSection agentId={agent.id} entry={entry} />}
       <HistorySection agentId={agent.id} />
       <RemoveSection agent={agent} status={status} entry={entry} onNote={onNote} />
     </div>
@@ -254,275 +237,21 @@ function WhereSection({
   )
 }
 
-// The settings input without its `w-full`, which otherwise beats `w-36` and
-// takes the whole row, leaving the person's name no width at all.
-const ACCESS_SELECT = settingsInputClass.replace(/\bw-full\b\s*/, '')
-
-function personName(person: LibraryPerson, entry: LibraryAgentDto | null): string {
-  const { principal } = person
-  if (principal.kind === 'everyone') return SHARE_UI_TEXT.everyone
-  if (principal.kind === 'role') return person.displayName || SHARE_UI_TEXT.roleMembers(principal.role)
-  return (
-    person.displayName ||
-    entry?.maintainers.find((m) => m.userId === principal.userId)?.displayName ||
-    principal.userId
-  )
-}
-
-function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgentDto | null }): React.JSX.Element {
+/** The agent's People: the shared list, over its catalog entry's grants. */
+function AgentPeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgentDto | null }): React.JSX.Element {
   const people = useSharePeople(agentId, true)
-  const [error, setError] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [addError, setAddError] = useState<string | null>(null)
-  /** The row asking "Remove … access?", by principal. */
-  const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
-  // Which surface the change came from, so its refusal lands beside it: the
-  // dialog for an Add, the list for a select, a remove or Share with everyone.
-  const fromDialogRef = useRef(false)
-  /** Share with everyone is the change in flight: its button carries the spinner. */
-  const [addingEveryone, setAddingEveryone] = useState(false)
-  /** Share with everyone's refusal, shown under the section's header beside its button. */
-  const [everyoneError, setEveryoneError] = useState<string | null>(null)
-  const fromEveryoneRef = useRef(false)
-  const set = useSetSharePeople({
-    onResult: (result) => {
-      setAddingEveryone(false)
-      const message = result.done ? null : libraryRefusalSentence(result, SHARE_UI_TEXT.peopleNoAccess)
-      if (fromEveryoneRef.current) {
-        setEveryoneError(message)
-      } else if (fromDialogRef.current) {
-        if (result.done) setAdding(false)
-        else setAddError(message)
-      } else {
-        setError(message)
-        if (result.done) setConfirmingKey(null)
-      }
-    }
-  })
-  const editable = people.data?.visible === true
-  // The whole list: every change is saved on it, your own grant included.
-  const list = editable ? people.data!.people : []
-  const selfId = people.data?.selfUserId ?? null
-  const isSelf = (person: LibraryPerson): boolean =>
-    selfId !== null && person.principal.kind === 'user' && person.principal.userId === selfId
-  // Your own access is never edited here. As a maintainer you are already
-  // named under Maintainers above, so your row is left out; otherwise it is
-  // shown, read-only.
-  const selfIsMaintainer = selfId !== null && (entry?.maintainers ?? []).some((m) => m.userId === selfId)
-  const rows = list.filter((person) => !(isSelf(person) && selfIsMaintainer))
-  // Offered only while it would change something: not public yet, by either
-  // the list (a listed public item) or the catalog entry (an unlisted one).
-  const offerEveryone =
-    editable && entry?.visibility !== 'public' && !list.some((person) => person.principal.kind === 'everyone')
-
-  const save = (next: LibraryGrantInput[], fromDialog = false, fromEveryone = false): void => {
-    fromDialogRef.current = fromDialog
-    fromEveryoneRef.current = fromEveryone
-    setEveryoneError(null)
-    if (fromDialog) setAddError(null)
-    else setError(null)
-    set.mutate(
-      { agentId, people: next },
-      {
-        onError: (err) => {
-          setAddingEveryone(false)
-          if (fromEveryone) setEveryoneError(unwrapIpcError(err))
-          else if (fromDialog) setAddError(unwrapIpcError(err))
-          else setError(unwrapIpcError(err))
-        }
-      }
-    )
-  }
-  const asInput = (rows: LibraryPerson[]): LibraryGrantInput[] =>
-    rows.map(({ principal, access }) => ({ principal, access }))
-
+  const editor = usePeopleEditor(SHARE_UI_TEXT.peopleNoAccess)
+  const set = useSetSharePeople({ onResult: editor.onResult })
   return (
-    <SettingsSection
-      title={SHARE_UI_TEXT.peopleSection}
+    <PeopleSection
+      people={people}
+      maintainers={entry?.maintainers ?? []}
+      visibility={entry?.visibility ?? null}
+      editor={editor}
+      pending={set.isPending}
+      onSave={(next) => set.mutate({ agentId, people: next }, { onError: editor.onError })}
       info={<SettingsInfoTip label={`About ${SHARE_UI_TEXT.peopleSection}`}>{SHARE_UI_TEXT.peopleInfo}</SettingsInfoTip>}
-      action={
-        editable ? (
-          <div className="flex items-center gap-2">
-            {offerEveryone && (
-              <SettingsButton
-                onClick={() => {
-                  setConfirmingKey(null)
-                  setAddingEveryone(true)
-                  save([...asInput(list), { principal: { kind: 'everyone' }, access: 'use' }], false, true)
-                }}
-                disabled={set.isPending}
-                aria-busy={set.isPending && addingEveryone}
-              >
-                {set.isPending && addingEveryone && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-                {SHARE_UI_TEXT.shareWithEveryone}
-              </SettingsButton>
-            )}
-            <SettingsButton
-              onClick={() => {
-                setAddError(null)
-                setAdding(true)
-              }}
-              disabled={set.isPending}
-            >
-              {SHARE_UI_TEXT.shareWithPerson}
-            </SettingsButton>
-          </div>
-        ) : undefined
-      }
-    >
-      <div data-sharing-people>
-        {everyoneError && (
-          <p role="alert" className="mb-3 text-[13px] text-[var(--color-danger)]">
-            {everyoneError}
-          </p>
-        )}
-        <SettingsRows>
-          {people.isPending ? (
-            <SettingsRow>
-              <SettingsHint>{SHARE_UI_TEXT.peopleLoading}</SettingsHint>
-            </SettingsRow>
-          ) : people.isError ? (
-            <SettingsRow>
-              <p role="alert" className="text-[13px] text-[var(--color-danger)]">
-                {unwrapIpcError(people.error, SHARE_UI_TEXT.peopleLoadFailed)}
-              </p>
-            </SettingsRow>
-          ) : editable ? (
-            rows.length === 0 ? (
-              <SettingsRow>
-                <SettingsHint>{SHARE_UI_TEXT.peopleNoOneElse}</SettingsHint>
-              </SettingsRow>
-            ) : rows.map((person) => {
-              const key = principalKey(person.principal)
-              const self = isSelf(person)
-              const name = self ? SHARE_UI_TEXT.you : personName(person, entry)
-              const confirming = confirmingKey === key
-              return (
-                <SettingsRow key={key} className="flex items-center gap-3">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]" title={name}>
-                    {confirming ? SHARE_UI_TEXT.removePersonConfirm(name) : name}
-                  </span>
-                  {confirming ? (
-                    <>
-                      <SettingsButton onClick={() => setConfirmingKey(null)} disabled={set.isPending}>
-                        {SHARE_UI_TEXT.cancel}
-                      </SettingsButton>
-                      <button
-                        type="button"
-                        disabled={set.isPending}
-                        aria-busy={set.isPending}
-                        onClick={() =>
-                          save(asInput(list.filter((p) => !samePrincipal(p.principal, person.principal))))
-                        }
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--color-danger)] px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
-                      >
-                        {set.isPending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-                        {SHARE_UI_TEXT.removePersonAction}
-                      </button>
-                    </>
-                  ) : self ? (
-                    <>
-                      {/* Your own access is not yours to change. The slot after
-                          it keeps the column aligned with the rows that remove. */}
-                      <SettingsBadge>{SHARE_ACCESS_TEXT[person.access]}</SettingsBadge>
-                      <span className="w-[28px] shrink-0" aria-hidden="true" />
-                    </>
-                  ) : person.principal.kind === 'everyone' ? (
-                    <>
-                      {/* Everyone on the server can only use it: that is what
-                          sharing with everyone means, so there is no choice. */}
-                      <SettingsBadge>{SHARE_ACCESS_TEXT.use}</SettingsBadge>
-                      <SettingsIconButton
-                        title={SHARE_UI_TEXT.removePerson(name)}
-                        aria-label={SHARE_UI_TEXT.removePerson(name)}
-                        danger
-                        disabled={set.isPending}
-                        onClick={() => {
-                          setError(null)
-                          setConfirmingKey(key)
-                        }}
-                      >
-                        <Trash2 size={13} aria-hidden="true" />
-                      </SettingsIconButton>
-                    </>
-                  ) : (
-                    <>
-                      <select
-                        aria-label={SHARE_UI_TEXT.accessFor(name)}
-                        value={person.access}
-                        disabled={set.isPending}
-                        onChange={(event) =>
-                          save(
-                            asInput(
-                              list.map((p) =>
-                                samePrincipal(p.principal, person.principal)
-                                  ? { ...p, access: event.target.value as LibraryPerson['access'] }
-                                  : p
-                              )
-                            )
-                          )
-                        }
-                        className={`${ACCESS_SELECT} w-36 shrink-0 disabled:opacity-50`}
-                      >
-                        {(['use', 'edit', 'maintain'] as const).map((access) => (
-                          <option key={access} value={access}>
-                            {SHARE_ACCESS_TEXT[access]}
-                          </option>
-                        ))}
-                      </select>
-                      <SettingsIconButton
-                        title={SHARE_UI_TEXT.removePerson(name)}
-                        aria-label={SHARE_UI_TEXT.removePerson(name)}
-                        danger
-                        disabled={set.isPending}
-                        onClick={() => {
-                          setError(null)
-                          setConfirmingKey(key)
-                        }}
-                      >
-                        <Trash2 size={13} aria-hidden="true" />
-                      </SettingsIconButton>
-                    </>
-                  )}
-                </SettingsRow>
-              )
-            })
-          ) : (
-            <>
-              {(entry?.maintainers ?? []).map((m) => (
-                <SettingsRow key={m.userId} className="flex items-center gap-3">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]">
-                    {m.displayName}
-                  </span>
-                  <SettingsBadge>{SHARE_ACCESS_TEXT.maintain}</SettingsBadge>
-                </SettingsRow>
-              ))}
-              <SettingsRow>
-                <SettingsHint>{SHARE_UI_TEXT.peopleOnlyMaintainer}</SettingsHint>
-              </SettingsRow>
-            </>
-          )}
-        </SettingsRows>
-        {error && (
-          <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">
-            {error}
-          </p>
-        )}
-      </div>
-      {adding && (
-        <ShareWithPersonDialog
-          exclude={
-            new Set(list.flatMap((p) => (p.principal.kind === 'user' ? [p.principal.userId] : [])))
-          }
-          pending={set.isPending}
-          error={addError}
-          onAdd={(person, access) =>
-            save([...asInput(list), { principal: { kind: 'user', userId: person.userId }, access }], true)
-          }
-          onCancel={() => setAdding(false)}
-        />
-      )}
-    </SettingsSection>
+    />
   )
 }
 

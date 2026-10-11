@@ -1,11 +1,12 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import type {
   AskAnswerPayload,
   InboxAnswerResult,
   InboxSnapshot,
-  InboxUnreadableSource
+  InboxUnreadableSource,
+  SkillDisconnectedDismissal
 } from '../../../shared/inbox'
 
 /**
@@ -184,4 +185,17 @@ export function useAnswerAsk(): (payload: AskAnswerPayload) => Promise<AskAnswer
     },
     [queryClient]
   )
+}
+
+/**
+ * Dismiss a "Disconnected" skill card: main hides it for this profile until
+ * that pin is connected again. The re-read is the hook's, not the caller's,
+ * so it runs even when the card that asked has gone.
+ */
+export function useDismissDisconnected(): UseMutationResult<{ ok: true }, Error, SkillDisconnectedDismissal> {
+  const queryClient = useQueryClient()
+  return useMutation<{ ok: true }, Error, SkillDisconnectedDismissal>({
+    mutationFn: (input) => window.api.inbox.dismissDisconnected(input),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+  })
 }

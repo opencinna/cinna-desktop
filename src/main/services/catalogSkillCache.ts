@@ -453,6 +453,18 @@ export const catalogSkillCache = {
     if (safe) failures.set(failureKey(safe), { kind: 'not_available' })
   },
 
+  /**
+   * Whether the last download of a package's revision was refused as not
+   * available (404), whichever pin (digest) asked. In memory only: a restart
+   * forgets it until the next download is refused again.
+   */
+  notAvailable(packageUuid: string, revision: number | null): boolean {
+    if (typeof revision !== 'number') return false
+    const prefix = `${packageUuid.trim().toLowerCase()}/${revision}/`
+    for (const [key, failure] of failures) if (failure.kind === 'not_available' && key.startsWith(prefix)) return true
+    return false
+  },
+
   clearFailure(ref: CatalogSkillRef): void {
     const safe = cacheRefOf(ref)
     if (safe) failures.delete(failureKey(safe))

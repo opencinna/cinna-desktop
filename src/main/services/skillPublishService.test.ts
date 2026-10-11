@@ -519,9 +519,11 @@ describe('withSkillPublications', () => {
       shareable: true
     })
     listing.value = { items: [{ kind: 'skill', uuid: UUID, id: PACKAGE_ID, access: 'use' }], agents: [] }
-    expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shareable: false })
+    expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shareable: false, shared: { access: 'use' } })
+    listing.value = { items: [{ kind: 'skill', uuid: UUID.toUpperCase(), id: PACKAGE_ID, access: 'maintain' }], agents: [] }
+    expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shareable: true, shared: { access: 'maintain' } })
     listing.value = { items: [], agents: [] }
-    expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shareable: false })
+    expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shareable: false, shared: { access: null } })
     // Another server's entry is not this account's share.
     account.host = 'https://other.test'
     expect(withSkillPublications(dto([row()])).skills?.[0]).toMatchObject({ shared: null, shareable: true })

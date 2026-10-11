@@ -21,7 +21,8 @@ import type { LocalAgentDto } from '../../shared/localAgents'
 const sameOrigin = (a: string, b: string): boolean => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 
 /**
- * `shared` and `shareable` on every authored skill row. Share is offered on a
+ * `shared` (with the person's `access` to the package, from the cached
+ * listing) and `shareable` on every authored skill row. Share is offered on a
  * deliverable skill while a Cinna account is active and the person may change
  * the agent (`changeableFromLink`: never in a team agent they may only use,
  * where a share would write `SKILL.md` and `publications.json` they cannot
@@ -44,16 +45,22 @@ export function withSkillPublications(agent: LocalAgentDto): LocalAgentDto {
       skills: rows.map((row) => {
         if (row.source !== 'authored') return row
         const entry = entries.find((candidate) => candidate.name === row.name) ?? null
+        const item = entry
+          ? listing?.items.find(
+              (candidate) => candidate.kind === 'skill' && candidate.uuid.toLowerCase() === entry.package_uuid.toLowerCase()
+            )
+          : undefined
+        // The listing's access is what the row's Who can use offers on (`maintain`).
         const shared = entry
-          ? { packageUuid: entry.package_uuid, packageId: entry.package_id, revisionNumber: entry.revision_number }
+          ? {
+              packageUuid: entry.package_uuid,
+              packageId: entry.package_id,
+              revisionNumber: entry.revision_number,
+              access: item?.access ?? null
+            }
           : null
         let shareable = changeable && row.deliverable
-        if (shareable && shared) {
-          const item = listing?.items.find(
-            (candidate) => candidate.kind === 'skill' && candidate.uuid.toLowerCase() === shared.packageUuid.toLowerCase()
-          )
-          shareable = item?.access === 'edit' || item?.access === 'maintain'
-        }
+        if (shareable && shared) shareable = item?.access === 'edit' || item?.access === 'maintain'
         return { ...row, shared, shareable }
       })
     }

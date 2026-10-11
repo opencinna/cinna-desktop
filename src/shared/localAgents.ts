@@ -459,6 +459,12 @@ export interface LocalAgentSkillShared {
   packageUuid: string
   packageId: string
   revisionNumber: number
+  /**
+   * The person's access to the package as the active account's cached
+   * listing gives it; null when the listing does not carry it. `maintain`
+   * is what offers "Who can use <skill>…" on the row.
+   */
+  access?: 'use' | 'edit' | 'maintain' | null
 }
 
 /**
