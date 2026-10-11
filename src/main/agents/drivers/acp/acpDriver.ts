@@ -77,7 +77,7 @@ import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
 import type { AgentEngine } from '../../../../shared/engine'
 import type { AgentDriver, FollowUpOpener, FollowUpScope, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
-import { AcpMessageStream, selectedModelOf } from './acpMessages'
+import { AcpMessageStream, resolveOfferedModel, selectedModelOf } from './acpMessages'
 import {
   AUTH_STATUS_METHOD,
   connectionAuthOf,
@@ -885,6 +885,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * on" and "I was asked for every command" are indistinguishable from a bug.
    */
   let reportedMode: string | null = null
+  /**
+   * The config options `session/new` or `session/load` answered with: what the
+   * setup resolves the launcher's model against ({@link applySetup}).
+   */
+  let offeredConfig: unknown
 
   /**
    * Mid-turn messages, over the steering extension.
@@ -1377,7 +1382,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // the session, zeroed or not: a turn that fails after taking a reading
         // must not have the next turn zero it again and count it twice.
         noteSessionLive(connection, remembered, fingerprint)
-        ctx.telemetry?.model(selectedModelOf((loaded as { configOptions?: unknown } | null)?.configOptions))
+        offeredConfig = (loaded as { configOptions?: unknown } | null)?.configOptions
+        ctx.telemetry?.model(selectedModelOf(offeredConfig))
       } catch (err) {
         // **A remembered session is verified by use, not by a probe** — there
         // is nothing to ask. A load against a session the engine has forgotten
@@ -1414,7 +1420,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         sessionId = created.sessionId
         noteSessionLive(connection, sessionId, fingerprint)
         ctx.telemetry?.session(sessionId, true, fingerprint, connection)
-        ctx.telemetry?.model(selectedModelOf((created as { configOptions?: unknown }).configOptions))
+        offeredConfig = (created as { configOptions?: unknown }).configOptions
+        ctx.telemetry?.model(selectedModelOf(offeredConfig))
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         logger.warn('an ACP session could not be created', { agentId: agent.id, error: message })
@@ -1462,7 +1469,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     try {
       runtime.validate(chatId)
-      await duringStart(applySetup(connection, sessionId, plan))
+      await duringStart(applySetup(connection, sessionId, plan, offeredConfig, agent.id))
       runtime.validate(chatId)
     } catch (err) {
       if (input.signal.aborted || hitCeiling) {
@@ -2216,12 +2223,20 @@ function noteForeignAuth(
   )
 }
 
-/** `session/set_mode` and `session/set_config_option`, in the order the launcher gave. */
+/**
+ * `session/set_mode` and `session/set_config_option`, in the order the launcher
+ * gave — the model the launcher chose first, so the mode is asked of the model
+ * the turn will actually run on (Claude downgrades `auto` on a model without
+ * the classifier, and the fallback notice must see that).
+ */
 async function applySetup(
   connection: AcpConnection,
   sessionId: string,
-  plan: AcpLaunchPlan
+  plan: AcpLaunchPlan,
+  offeredConfig: unknown,
+  agentId: string
 ): Promise<void> {
+  if (plan.setup.model) await assertModel(connection, sessionId, plan.setup.model, offeredConfig, agentId)
   if (plan.setup.modeId) {
     await connection.setSessionMode({ sessionId, modeId: plan.setup.modeId })
   }
@@ -2246,6 +2261,51 @@ async function applySetup(
         error: err instanceof Error ? err.message : String(err)
       })
     }
+  }
+}
+
+/**
+ * Re-assert the model the desktop chose through the session's own `model`
+ * config option ({@link AcpSessionSetup.model}).
+ *
+ * **Never a reason to refuse the turn.** A model the session does not offer, a
+ * session with no model option, or a set the adapter declines is logged and the
+ * turn runs on what the session has — the model is the desktop's preference,
+ * not a policy like the mode, and an answer on another model beats no answer.
+ */
+async function assertModel(
+  connection: AcpConnection,
+  sessionId: string,
+  requested: string,
+  offeredConfig: unknown,
+  agentId: string
+): Promise<void> {
+  const match = resolveOfferedModel(offeredConfig, requested)
+  if (!match || !match.value) {
+    logger.warn('the agent’s model is not offered by its session; running on the session’s own', {
+      agentId,
+      requested,
+      current: match?.current ?? null,
+      offered: match?.offered ?? []
+    })
+    return
+  }
+  if (match.current === match.value) return
+  try {
+    await connection.setSessionConfigOption({ sessionId, configId: match.configId, value: match.value })
+    logger.info('re-asserted the agent’s model over the session’s own choice', {
+      agentId,
+      requested,
+      value: match.value,
+      was: match.current ?? null
+    })
+  } catch (err) {
+    logger.warn('an ACP session declined the agent’s model; running on the session’s own', {
+      agentId,
+      requested,
+      value: match.value,
+      error: err instanceof Error ? err.message : String(err)
+    })
   }
 }
 

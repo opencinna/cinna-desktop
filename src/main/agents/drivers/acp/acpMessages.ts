@@ -150,6 +150,109 @@ export function selectedModelOf(configOptions: unknown): string | undefined {
   return undefined
 }
 
+/** Where a requested model lands among a session's offered model values ({@link resolveOfferedModel}). */
+export interface OfferedModelMatch {
+  /** The model option's id — what `session/set_config_option` names. */
+  configId: string
+  /** The option's `currentValue` as the session reported it. */
+  current?: string
+  /** The offered value the request resolved to, or null when none matches. */
+  value: string | null
+  /** Every value the session offered, for a log line when nothing matched. */
+  offered: string[]
+}
+
+/** Words that name no model family: `default` is whatever the CLI picks, `claude` is in every id. */
+const NOT_A_FAMILY = new Set(['claude', 'default', 'latest', 'context'])
+
+/** A model value's context tier (`opus[1m]` → `1m`), or null for the standard one. */
+function contextHintOf(value: string): string | null {
+  return value.trim().toLowerCase().match(/\[(\d+m)\]$/)?.[1] ?? null
+}
+
+/**
+ * The model generation a text names (`claude-sonnet-4-5` → `4.5`, `Opus 4.7` →
+ * `4.7`), or null. The adapter's own pattern (`session-model.js`
+ * `extractModelFamilyVersion`), context hints dropped first.
+ */
+function modelVersionOf(value: string | undefined): string | null {
+  const match = value?.replace(/\[\d+m\]/gi, '').match(/\b(\d+)(?:[-.](\d+))?\b/)
+  if (!match) return null
+  return match[2] ? `${match[1]}.${match[2]}` : match[1]
+}
+
+function modelFamilies(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/\[\d+m\]/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter((token) => /^[a-z]+$/.test(token) && !NOT_A_FAMILY.has(token))
+}
+
+/**
+ * The offered value a model the desktop chose resolves to, out of a session's
+ * config options (`session/new` / `session/load`).
+ *
+ * The desktop names a Claude model by **alias** (`haiku`, from a work
+ * complexity) or by a value the session itself once offered (a chat mode picks
+ * from the recorded catalogue). So, in order: the exact value; the same value
+ * ignoring case and a context hint (`opus` ↔ `opus[1m]`); then the first
+ * offered value sharing a family word with the request (`claude-haiku-4-5` →
+ * `haiku`) — never `default`, which names whatever the CLI would pick. That
+ * last step keeps the adapter's own guards (`resolveModelPreference`): the
+ * context tier must be the request's (`claude-sonnet-4-5` is `sonnet`, not
+ * `sonnet[1m]`), and a version the request names must not differ from one
+ * the candidate's value, name or description names (`claude-opus-4-1` is not
+ * `opus` described as Opus 4.7). Nothing safe → null, and the session keeps
+ * its own model.
+ *
+ * Null when the session offers no model option at all.
+ */
+export function resolveOfferedModel(configOptions: unknown, requested: string): OfferedModelMatch | null {
+  if (!Array.isArray(configOptions)) return null
+  const option = configOptions.map(record).find((o) => o && (o.id === 'model' || o.category === 'model'))
+  const configId = option ? str(option.id) : undefined
+  if (!option || !configId) return null
+  const offered: { value: string; name: string; description: string }[] = []
+  const collect = (items: unknown): void => {
+    if (!Array.isArray(items)) return
+    for (const item of items) {
+      const o = record(item)
+      if (!o) continue
+      // A grouped select nests its values one level down.
+      if (Array.isArray(o.options)) collect(o.options)
+      const value = str(o.value)
+      if (value && !offered.some((known) => known.value === value)) {
+        offered.push({ value, name: str(o.name) ?? '', description: str(o.description) ?? '' })
+      }
+    }
+  }
+  collect(option.options)
+  const current = str(option.currentValue)
+  const plain = (value: string): string => value.trim().toLowerCase().replace(/\[\d+m\]$/, '')
+  const wanted = requested.trim()
+  const families = modelFamilies(wanted)
+  const wantedHint = contextHintOf(wanted)
+  const wantedVersion = modelVersionOf(wanted)
+  // As the adapter's `modelVersionsCompatible`: the first version the value,
+  // name or description names must be the one the request names, if both do.
+  const versionFits = (o: { value: string; name: string; description: string }): boolean => {
+    if (!wantedVersion) return true
+    const version = modelVersionOf(o.value) ?? modelVersionOf(o.name) ?? modelVersionOf(o.description)
+    return !version || version === wantedVersion
+  }
+  const match =
+    offered.find((o) => o.value === wanted) ??
+    offered.find((o) => o.value.toLowerCase() === wanted.toLowerCase()) ??
+    offered.find((o) => o.value !== 'default' && plain(o.value) === plain(wanted)) ??
+    offered.find((o) =>
+      o.value !== 'default' &&
+      contextHintOf(o.value) === wantedHint &&
+      versionFits(o) &&
+      modelFamilies(`${o.value} ${o.name}`).some((family) => families.includes(family)))
+  return { configId, ...(current ? { current } : {}), value: match?.value ?? null, offered: offered.map((o) => o.value) }
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -854,6 +957,9 @@ export function describeAcpToolCall(name: string, input?: Record<string, unknown
   }
   const detail = first(
     'command',
+    // Claude's Skill tool: `{skill: "<plugin>:<name>", args?}`, filled in by a
+    // `tool_call_update` after the call opened with `rawInput: {}`.
+    'skill',
     'filePath',
     'file_path',
     'path',

@@ -7,7 +7,7 @@ import type {
 } from '../../../shared/messageParts'
 import type { InputRequest, InputResumeMode, RunEvent } from '../../../shared/runEvents'
 import type { MessageAttachment } from '../../../shared/attachments'
-import { continuingPartIndex } from '../../../shared/partMerge'
+import { continuingPartIndex, mergedToolInput } from '../../../shared/partMerge'
 
 export type { ContentKind, ToolStream }
 
@@ -119,7 +119,7 @@ function appendAgentDeltaPart(
     out[index] = {
       ...last,
       text: last.text + text,
-      toolInput: last.toolInput ?? toolInput,
+      toolInput: mergedToolInput(last, { toolInput, toolId }),
       toolId: last.toolId ?? toolId,
       commandInvocation: last.commandInvocation ?? commandInvocation
     }
@@ -411,7 +411,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         blocks[index] = {
           ...last,
           content: last.content + text,
-          toolInput: last.toolInput ?? toolInput,
+          // The same call's later input replaces its earlier one.
+          toolInput: mergedToolInput(last, { toolInput, toolId }),
           toolId: last.toolId ?? toolId,
           commandInvocation: last.commandInvocation ?? commandInvocation
         }

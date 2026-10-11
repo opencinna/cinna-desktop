@@ -146,6 +146,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'not observable from a chat' }
   },
   {
+    id: 'claude.session.model-over-user-settings', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_config_option (model)',
+    expectation: 'With `"model": "Sonnet"` in the user’s own `settings.json` and `settingSources: []`, a session created with `options.model: "haiku"` reports `sonnet` and its first turn runs on Sonnet — the adapter takes `ANTHROPIC_MODEL`, then the settings model, over the options and `setModel`s it unless the settings value was offered verbatim (`session-model.js` `getAvailableModels`). `session/set_config_option` on the `model` option with the offered value the alias resolves to (`haiku`) is accepted, and the next turn’s Messages requests name a Haiku model.',
+    owners: [`${DRIVER}#assertModel`, 'src/main/agents/drivers/acp/acpMessages.ts#resolveOfferedModel'],
+    feature: 'An agent runs on whatever model the user’s own Claude settings name — Opus for an agent set to Haiku — and is billed for it.',
+    flow: { steps: ['none'], note: 'no step runs with a settings.json model that disagrees with the agent’s' }
+  },
+  {
     id: 'claude.session.load-replay', area: 'session lifecycle', surface: 'ACP method', name: 'session/load',
     expectation: 'Loading a session by id succeeds and replays its history as `user_message_chunk`, `agent_message_chunk` and `tool_call` updates; the next prompt continues the same conversation.',
     owners: [`${DRIVER}#session/load`],

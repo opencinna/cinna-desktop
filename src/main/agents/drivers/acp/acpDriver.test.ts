@@ -388,6 +388,114 @@ describe('a turn', () => {
     ])
   })
 
+  describe('the model the launcher chose', () => {
+    /** As claude-agent-acp 0.76.0 answers `session/new` when the user's settings say `"model": "opus"`. */
+    const offered = (current: string): Record<string, unknown> => ({
+      configOptions: [
+        { id: 'mode', category: 'mode', type: 'select', currentValue: 'default', options: [] },
+        {
+          id: 'model', category: 'model', type: 'select', currentValue: current,
+          options: [
+            { value: 'default', name: 'Default (recommended)' },
+            { value: 'opus[1m]', name: 'Opus (1M context)' },
+            { value: 'sonnet', name: 'Sonnet' },
+            { value: 'haiku', name: 'Haiku' }
+          ]
+        }
+      ]
+    })
+    const requests = (w: World): { method?: string; params?: Record<string, unknown> }[] =>
+      w.fake.log().filter((entry) => entry.dir === 'in' && entry.kind === 'request')
+
+    it('re-asserts it over the session’s own choice after session/new, before the mode', async () => {
+      // Mutation: drop `assertModel` from `applySetup` and the turn runs on the
+      // user's `opus[1m]` with no set_config_option at all.
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'haiku' }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(requests(w).map((entry) => entry.method)).toEqual([
+        'initialize', 'session/new', 'session/set_config_option', 'session/set_mode', 'session/prompt'
+      ])
+      expect(w.fake.received('session/set_config_option')[0]?.params).toMatchObject({ configId: 'model', value: 'haiku' })
+    })
+
+    it('re-asserts it after session/load too', async () => {
+      const w = world({
+        launcher: 'claude',
+        remembered: 'ses_fake',
+        script: { ...SAYS_HELLO, loadSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'haiku' }
+      })
+      await w.run()
+      expect(w.fake.received('session/load')).toHaveLength(1)
+      expect(w.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ sessionId: 'ses_fake', configId: 'model', value: 'haiku' })
+      ])
+    })
+
+    it('resolves a model id the session offers only as an alias', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('default') } },
+        setup: { model: 'claude-haiku-4-5' }
+      })
+      await w.run()
+      expect(w.fake.received('session/set_config_option')[0]?.params).toMatchObject({ configId: 'model', value: 'haiku' })
+    })
+
+    it('says nothing when the session already runs it', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('haiku') } },
+        setup: { model: 'haiku' }
+      })
+      await w.run()
+      expect(w.fake.received('session/set_config_option')).toHaveLength(0)
+    })
+
+    it('runs the turn on the session’s own model when the one asked for is not offered', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'mythos-9' }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(result.text).toContain('Hello.')
+      expect(w.fake.received('session/set_config_option')).toHaveLength(0)
+    })
+
+    it('runs the turn when the session declines the model', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: {
+          ...SAYS_HELLO,
+          newSession: { response: offered('opus[1m]') },
+          setConfigOption: { error: { code: -32602, message: 'Invalid value for config option model: haiku' } }
+        },
+        setup: { modeId: 'default', model: 'haiku' }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(result.text).toContain('Hello.')
+      expect(w.fake.received('session/set_mode')).toHaveLength(1)
+    })
+
+    it('leaves the session’s model alone when the launcher chose none', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default' }
+      })
+      await w.run()
+      expect(w.fake.received('session/set_config_option')).toHaveLength(0)
+    })
+  })
+
   it('reports a stop reason the user needs to know about', async () => {
     const w = world({ script: { prompt: { response: { stopReason: 'max_tokens' } } } })
     const result = await w.run()

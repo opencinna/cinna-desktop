@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
-import { AcpMessageStream, describeAcpToolCall } from './acpMessages'
+import { AcpMessageStream, describeAcpToolCall, resolveOfferedModel } from './acpMessages'
 import {
   KIND_METADATA_KEY,
   PARENT_TOOL_ID_METADATA_KEY,
@@ -721,5 +721,88 @@ describe('describeAcpToolCall', () => {
     // The limit is on the argument, ellipsis included.
     expect(long.length).toBe('bash: '.length + 160)
     expect(long.endsWith('…')).toBe(true)
+  })
+})
+
+describe('a Skill call, as claude-agent-acp 0.76.0 sends it', () => {
+  // The call opens with `rawInput: {}`; the skill's name arrives in a later
+  // `tool_call_update`, with the title `Load skill: <name>`.
+  const opened: SessionNotification = { sessionId: 'ses', update: {
+    sessionUpdate: 'tool_call', toolCallId: 'toolu_skill', title: 'Load skill', kind: 'other', status: 'pending',
+    rawInput: {}, content: [], _meta: { claudeCode: { toolName: 'Skill' } }
+  } as SessionNotification['update'] }
+  const filled: SessionNotification = { sessionId: 'ses', update: {
+    sessionUpdate: 'tool_call_update', toolCallId: 'toolu_skill', title: 'Load skill: ledger-bot:erp-check',
+    rawInput: { skill: 'ledger-bot:erp-check' }, _meta: { claudeCode: { toolName: 'Skill' } }
+  } as SessionNotification['update'] }
+
+  it('is narrated with its skill’s name', () => {
+    // Mutation: drop `skill` from `describeAcpToolCall` and the line stays `Skill`.
+    expect(describeAcpToolCall('Skill', { skill: 'ledger-bot:erp-check' })).toBe('Skill: ledger-bot:erp-check')
+  })
+
+  it('reaches the stored transcript with its input and its name', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const acc = new StreamPartsAccumulator()
+    const port = { postMessage: (): void => {} }
+    for (const n of [opened, filled]) {
+      const update = stream.apply(n)
+      if (update.message) acc.ingestMessage(update.message, port)
+    }
+    expect(acc.snapshotParts()).toEqual([{
+      kind: 'tool', text: 'Skill: ledger-bot:erp-check', toolName: 'Skill', toolId: 'toolu_skill',
+      toolInput: { skill: 'ledger-bot:erp-check' }
+    }])
+  })
+})
+
+describe('resolveOfferedModel', () => {
+  const options = (current: string, values: (string | { group: string[] })[]): unknown[] => [
+    { id: 'mode', category: 'mode', currentValue: 'default', options: [] },
+    { id: 'model', category: 'model', currentValue: current, options: values.map((v) =>
+      typeof v === 'string' ? { value: v, name: v } : { group: 'g', name: 'Group', options: v.group.map((value) => ({ value, name: value })) }) }
+  ]
+  const CLAUDE = ['default', 'opus[1m]', 'sonnet', 'haiku']
+
+  it('takes the exact value, then the same one ignoring case and a context hint', () => {
+    expect(resolveOfferedModel(options('opus[1m]', CLAUDE), 'haiku')).toEqual({
+      configId: 'model', current: 'opus[1m]', value: 'haiku', offered: CLAUDE
+    })
+    expect(resolveOfferedModel(options('default', CLAUDE), 'Sonnet')?.value).toBe('sonnet')
+    expect(resolveOfferedModel(options('default', CLAUDE), 'opus')?.value).toBe('opus[1m]')
+  })
+
+  it('resolves a model id by its family word, never to default', () => {
+    expect(resolveOfferedModel(options('default', CLAUDE), 'claude-haiku-4-5-20251001')?.value).toBe('haiku')
+    expect(resolveOfferedModel(options('opus[1m]', CLAUDE), 'claude-default')?.value).toBeNull()
+    expect(resolveOfferedModel(options('opus[1m]', CLAUDE), 'mythos-9')).toMatchObject({ value: null, offered: CLAUDE })
+  })
+
+  it('keeps the request’s context tier and generation in the family step', () => {
+    // Mutation: drop the hint / version guards in `resolveOfferedModel` → `sonnet[1m]` and `opus[1m]`.
+    const tiers = ['default', 'sonnet[1m]', 'sonnet', 'haiku']
+    expect(resolveOfferedModel(options('default', tiers), 'claude-sonnet-4-5')?.value).toBe('sonnet')
+    expect(resolveOfferedModel(options('default', tiers), 'claude-sonnet-4-5[1m]')?.value).toBe('sonnet[1m]')
+    expect(resolveOfferedModel(options('default', ['default', 'opus[1m]', 'sonnet']), 'claude-opus-4-1')).toMatchObject({
+      value: null, offered: ['default', 'opus[1m]', 'sonnet']
+    })
+    // A version in the name or description that differs from the request's.
+    const described = [
+      { id: 'model', category: 'model', currentValue: 'default', options: [
+        { value: 'default', name: 'Default' },
+        { value: 'opus', name: 'Opus', description: 'Opus 4.7 · Most capable' },
+        { value: 'haiku', name: 'Haiku 4.5', description: 'Fastest' }
+      ] }
+    ]
+    expect(resolveOfferedModel(described, 'claude-opus-4-1')?.value).toBeNull()
+    expect(resolveOfferedModel(described, 'claude-opus-4-7')?.value).toBe('opus')
+    expect(resolveOfferedModel(described, 'claude-haiku-4-5-20251001')?.value).toBe('haiku')
+    expect(resolveOfferedModel(described, 'claude-haiku-3-5')?.value).toBeNull()
+  })
+
+  it('reads a grouped select, and answers null when there is no model option', () => {
+    expect(resolveOfferedModel(options('a', [{ group: ['a', 'haiku'] }]), 'haiku')?.value).toBe('haiku')
+    expect(resolveOfferedModel([{ id: 'mode', currentValue: 'default', options: [] }], 'haiku')).toBeNull()
+    expect(resolveOfferedModel(undefined, 'haiku')).toBeNull()
   })
 })

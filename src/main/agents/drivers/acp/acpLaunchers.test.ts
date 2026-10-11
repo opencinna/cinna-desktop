@@ -434,6 +434,40 @@ describe('the Claude launcher', () => {
     expect(typeof kit.systemPrompt).toBe('string')
   })
 
+  it('re-asserts the agent’s model after the session starts, on both branches, outside the environment', async () => {
+    // The adapter `setModel`s the user's own `~/.claude/settings.json` `model`
+    // over `options.model`, under any `settingSources` (claude-agent-acp 0.76.0
+    // `getAvailableModels`): an agent set to Haiku ran on `claude-opus-5[1m]`.
+    // Mutation: drop `model` from the setup and both branches lose it.
+    for (const ctx of [CTX, BARE_CTX]) {
+      const p = plan(await createClaudeLauncher({ ...deps, model: () => 'haiku' }).plan(ctx))
+      expect(p.setup.model).toBe('haiku')
+      // Not through `ANTHROPIC_MODEL`: the env is the warm process's key.
+      expect(p.spec.env.ANTHROPIC_MODEL).toBeUndefined()
+    }
+    const sonnet = plan(await createClaudeLauncher(deps).plan(CTX))
+    const haiku = plan(await createClaudeLauncher({ ...deps, model: () => 'haiku' }).plan(CTX))
+    expect(haiku.spec.key).toBe(sonnet.spec.key)
+  })
+
+  it('does not re-assert the desktop’s floor model on a native folder, whose user settings may name one; a sealed session still gets it', async () => {
+    const floor = { ...deps, model: () => 'sonnet', modelIsFloor: () => true }
+    const native = plan(await createClaudeLauncher(floor).plan(BARE_CTX))
+    expect('model' in native.setup).toBe(false)
+    const sealed = plan(await createClaudeLauncher(floor).plan(CTX))
+    expect(sealed.setup.model).toBe('sonnet')
+    const named = plan(await createClaudeLauncher({ ...deps, model: () => 'haiku', modelIsFloor: () => false }).plan(BARE_CTX))
+    expect(named.setup.model).toBe('haiku')
+  })
+
+  it('leaves the session’s model alone when the desktop chose none', async () => {
+    for (const ctx of [CTX, BARE_CTX]) {
+      const p = plan(await createClaudeLauncher({ ...deps, model: () => null }).plan(ctx))
+      expect('model' in p.setup).toBe(false)
+      expect('model' in claudeOptions(p)).toBe(false)
+    }
+  })
+
   it('sets the session mode on a native folder too, where the folder’s own defaultMode would otherwise win', async () => {
     // `_meta.claudeCode.options.permissionMode` was watched being ignored — a
     // session sent `default` came up in the project's `acceptEdits` — so

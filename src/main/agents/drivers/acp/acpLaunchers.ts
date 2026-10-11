@@ -119,6 +119,20 @@ export interface AcpSessionSetup {
   /** `session/set_mode`. Claude's approval mode; OpenCode's agent definition would also fit. */
   modeId?: string
   /**
+   * A model the desktop chose, re-asserted through the session's own `model`
+   * config option, resolved against the values the session offered
+   * (`resolveOfferedModel`). Applied before `modeId`.
+   *
+   * Claude's: the adapter picks a session's model as `ANTHROPIC_MODEL`, then
+   * the user's own `~/.claude/settings.json` `model` (read even under
+   * `settingSources: []`), then a resumed session's model, then its first —
+   * and `setModel`s it, so the `model` in `_meta.claudeCode.options` loses to
+   * a user's `"model": "opus"` (claude-agent-acp 0.76.0 `session-model.js`
+   * `getAvailableModels`). Not a refusal when the session offers no match: the
+   * turn runs on the session's own model, and the driver logs it.
+   */
+  model?: string
+  /**
    * `session/set_config_option` calls, in order.
    *
    * `optional` marks one the turn may run without. It exists for exactly one
@@ -451,6 +465,12 @@ export interface ClaudeLauncherDeps {
   systemPrompt(userId: string, agentId: string, mode: AcpRuntimeMode): string
   /** The model alias this agent's runtime resolved to, or null for the CLI's default. */
   model(userId: string, agentId: string): string | null
+  /**
+   * Whether {@link model} is only the desktop's floor (no model or tier named
+   * for the agent). A native folder then keeps the model its user's own Claude
+   * settings name; absent means "chosen".
+   */
+  modelIsFloor?(userId: string, agentId: string): boolean
   /** The desktop's approval choice for this agent, with the default already applied. */
   approval(userId: string, agentId: string): ClaudeApproval
   /**
@@ -671,7 +691,19 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           // `acceptEdits` from the project's `settings.local.json`), so
           // "simplifying" this into the `session/new` options would silently
           // hand a bare folder its own permission mode.
-          modeId: approval === 'auto' ? 'auto' : 'default'
+          modeId: approval === 'auto' ? 'auto' : 'default',
+          // **After every `new` and `load`, on both branches, when the desktop
+          // chose a model.** The `model` in the options above loses to the
+          // user's own `~/.claude/settings.json` `model`, which the adapter
+          // reads under any `settingSources` and `setModel`s over ours: an
+          // agent set to Haiku ran on `claude-opus-5[1m]` because the user's
+          // settings say `"opus"`. Not `ANTHROPIC_MODEL`, which would win too
+          // but is part of the process's environment, and so of the spec key:
+          // one warm adapter per model instead of per agent.
+          // A native folder runs on its user's own settings, so there only a
+          // model the agent names (declared, or by tier) is re-asserted, never
+          // the desktop's floor; a sealed session never reads them by design.
+          ...(model && !(native && safely(() => deps.modelIsFloor?.(ctx.userId, ctx.agentId) ?? false, false)) ? { model } : {})
         }
       }
     }

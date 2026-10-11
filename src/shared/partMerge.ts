@@ -68,3 +68,24 @@ export function continuingPartIndex(parts: readonly (PartMergeKey | undefined)[]
   while (index >= 0 && parts[index]?.parentToolId !== next.parentToolId) index -= 1
   return index >= 0 && parts[index] && continuesPart(parts[index]!, next) ? index : -1
 }
+
+/**
+ * The tool input a part keeps when a fragment continues it — the same rule for
+ * the accumulator, the live run cache and the renderer's live blocks.
+ *
+ * A fragment of the **same call** (same `toolId`) carrying a non-empty input
+ * replaces the part's input: an engine fills a call's input in as the model
+ * writes it (Claude's adapter opens a Skill call with `{}` and names the skill
+ * in a later update), so the last one seen is the complete call. Otherwise the
+ * first input captured stays, since an A2A backend may send `cinna.tool_input`
+ * on the first frame of a part only.
+ */
+export function mergedToolInput(
+  last: { toolInput?: Record<string, unknown>; toolId?: string },
+  next: { toolInput?: Record<string, unknown>; toolId?: string }
+): Record<string, unknown> | undefined {
+  if (!next.toolInput) return last.toolInput
+  if (!last.toolInput) return next.toolInput
+  const sameCall = !!next.toolId && last.toolId === next.toolId
+  return sameCall && Object.keys(next.toolInput).length > 0 ? next.toolInput : last.toolInput
+}

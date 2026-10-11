@@ -1,7 +1,7 @@
 import { createCredentialEventStream } from '../security/serviceCredentialRedaction'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunWatchMessage } from '../../shared/runWatch'
-import { continuesPart } from '../../shared/partMerge'
+import { continuesPart, mergedToolInput } from '../../shared/partMerge'
 import { QUESTION_TOOL_NAME, isPermissionRequestTool } from '../../shared/localAgentRequests'
 import { createLogger } from '../logger/logger'
 
@@ -44,8 +44,11 @@ function merge(last: RunEvent, next: RunEvent): { event: RunEvent; growth: numbe
   if (last.type === 'delta' && next.type === 'delta' && !next.newPart && continuesPart(last, next)) {
     // An adopted input is copied: its size is measured once, here, so a caller
     // that later mutated its own object must not grow the cache unaccounted.
+    // The same call's later non-empty input replaces the earlier one, as in the
+    // renderer's own merge (`mergedToolInput`).
+    const input = mergedToolInput(last, next)
     const event = { ...last, text: last.text + next.text,
-      toolInput: last.toolInput ?? (next.toolInput && structuredClone(next.toolInput)), toolId: last.toolId ?? next.toolId,
+      toolInput: input === last.toolInput ? last.toolInput : input && structuredClone(input), toolId: last.toolId ?? next.toolId,
       commandInvocation: last.commandInvocation ?? next.commandInvocation }
     // JSON escaping is per character, so the joined text costs the fragment's
     // escaped bytes minus its quotes — exact, or an overcount when the join
@@ -53,7 +56,7 @@ function merge(last: RunEvent, next: RunEvent): { event: RunEvent; growth: numbe
     // only a field the last fragment lacked is measured, once.
     let growth = size(next.text) - 2
     for (const key of ADOPTED) {
-      if (last[key] == null && event[key] != null) growth += memberSize(key, event[key]) - memberSize(key, last[key])
+      if (event[key] !== last[key]) growth += memberSize(key, event[key]) - memberSize(key, last[key])
     }
     return { event, growth }
   }

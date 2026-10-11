@@ -163,3 +163,53 @@ describe('lanes: a different source part after another lane', () => {
     expect(events.every((e) => !('newPart' in e))).toBe(true)
   })
 })
+
+describe('a tool call’s later input', () => {
+  const tool = (text: string, input?: Record<string, unknown>) => ({ kind: 'text', text, metadata: {
+    'cinna.content_kind': 'tool', 'cinna.tool_name': 'Skill', 'cinna.tool_id': 'toolu_skill',
+    ...(input ? { 'cinna.tool_input': input } : {})
+  } })
+
+  it('is stored when the narration did not grow', () => {
+    // Claude's adapter opens a Skill call with `rawInput: {}` and names the
+    // skill in a later `tool_call_update`. Mutation: restore `if (!delta) return`
+    // and the part keeps no input.
+    const calls: unknown[] = []
+    const accumulator = new StreamPartsAccumulator({ onToolCall: (call) => { calls.push(call) } })
+    const events: unknown[] = []
+    const port = { postMessage: (event: unknown) => { events.push(event) } }
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill')] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', { skill: 'ledger-bot:erp-check' })] }, port)
+    expect(accumulator.snapshotParts()).toEqual([
+      { kind: 'tool', text: 'Skill', toolName: 'Skill', toolId: 'toolu_skill', toolInput: { skill: 'ledger-bot:erp-check' } }
+    ])
+    // The input goes out as a delta with no text, so the live block shows it.
+    // Mutation: drop the port post in `refreshToolInput` → one event.
+    expect(events).toEqual([
+      expect.objectContaining({ text: 'Skill', toolId: 'toolu_skill' }),
+      { type: 'delta', kind: 'tool', text: '', toolName: 'Skill', toolInput: { skill: 'ledger-bot:erp-check' }, toolId: 'toolu_skill' }
+    ])
+    expect(calls).toEqual([{ partKey: 'msg:m:0', name: 'Skill', input: { skill: 'ledger-bot:erp-check' } }])
+  })
+
+  it('replaces the same call’s earlier input', () => {
+    const accumulator = new StreamPartsAccumulator()
+    const port = { postMessage: () => {} }
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', { skill: 'a' })] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', { skill: 'a', args: 'x' })] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill: a', { skill: 'a', args: 'xy' })] }, port)
+    expect(accumulator.snapshotParts()[0]).toMatchObject({ text: 'Skill: a', toolInput: { skill: 'a', args: 'xy' } })
+  })
+
+  it('posts nothing when the input did not change, and an empty input never replaces a filled one', () => {
+    const accumulator = new StreamPartsAccumulator()
+    const events: unknown[] = []
+    const port = { postMessage: (event: unknown) => { events.push(event) } }
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', { skill: 'a' })] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', { skill: 'a' })] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill', {})] }, port)
+    accumulator.ingestMessage({ messageId: 'm', parts: [tool('Skill: a', {})] }, port)
+    expect(events).toHaveLength(2)
+    expect(accumulator.snapshotParts()[0]).toMatchObject({ text: 'Skill: a', toolInput: { skill: 'a' } })
+  })
+})

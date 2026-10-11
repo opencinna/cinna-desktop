@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { continuesPart, continuingPartIndex, type PartMergeKey } from './partMerge'
+import { continuesPart, continuingPartIndex, mergedToolInput, type PartMergeKey } from './partMerge'
 
 const cases: [string, PartMergeKey, PartMergeKey, boolean][] = [
   ['text continues text', { kind: 'text' }, { kind: 'text' }, true],
@@ -83,5 +83,16 @@ describe('continuingPartIndex lanes', () => {
     const parts: PartMergeKey[] = [{ kind: 'text' }, { kind: 'tool', toolName: 'Bash' }]
     expect(continuingPartIndex(parts, { kind: 'text' })).toBe(-1)
     expect(continuingPartIndex(parts, { kind: 'tool', toolName: 'Bash' })).toBe(1)
+  })
+})
+
+describe('mergedToolInput', () => {
+  it('takes the same call’s later non-empty input, otherwise keeps the first', () => {
+    expect(mergedToolInput({ toolId: 't', toolInput: {} }, { toolId: 't', toolInput: { a: 1 } })).toEqual({ a: 1 })
+    expect(mergedToolInput({ toolId: 't', toolInput: { a: 1 } }, { toolId: 't', toolInput: {} })).toEqual({ a: 1 })
+    expect(mergedToolInput({ toolId: 't', toolInput: { a: 1 } }, { toolId: 't' })).toEqual({ a: 1 })
+    expect(mergedToolInput({ toolInput: { a: 1 } }, { toolInput: { a: 2 } })).toEqual({ a: 1 })
+    expect(mergedToolInput({ toolId: 't', toolInput: { a: 1 } }, { toolId: 'u', toolInput: { a: 2 } })).toEqual({ a: 1 })
+    expect(mergedToolInput({}, { toolInput: {} })).toEqual({})
   })
 })

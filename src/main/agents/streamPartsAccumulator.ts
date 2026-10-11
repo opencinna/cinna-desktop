@@ -79,7 +79,7 @@ import type {
 } from '../../shared/messageParts'
 import type { RunDeltaEvent } from '../../shared/runEvents'
 import { stripCinnaAttachTags } from '../../shared/cinnaAttach'
-import { continuingPartIndex } from '../../shared/partMerge'
+import { continuingPartIndex, mergedToolInput } from '../../shared/partMerge'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
@@ -307,7 +307,13 @@ export class StreamPartsAccumulator {
       const prior = this.seenPartText.get(key) ?? ''
       const text = part.text
       const delta = text.startsWith(prior) ? text.slice(prior.length) : text
-      if (!delta) return
+      if (!delta) {
+        // A tool call's input can arrive after its narration stopped growing:
+        // Claude's adapter opens a Skill call with `rawInput: {}` and names the
+        // skill in a later `tool_call_update`. Kept, though there is no text.
+        if (this.seenPartText.has(key) && !replay) this.refreshToolInput(key, part, port)
+        return
+      }
       this.seenPartText.set(key, text)
       const kind = partKindOf(part)
       if (replay && this.replayMatch(part, kind, matched)) return
@@ -353,10 +359,51 @@ export class StreamPartsAccumulator {
         ...(newPart ? { newPart } : {})
       })
 
-      if (toolName && toolInput && !this.loggedToolCalls.has(key)) {
-        this.loggedToolCalls.add(key)
-        this.opts.onToolCall?.({ partKey: key, name: toolName, input: toolInput })
-      }
+      if (toolName && toolInput) this.logToolCall(key, toolName, toolInput)
+    })
+  }
+
+  private logToolCall(key: string, name: string, input: Record<string, unknown>): void {
+    if (this.loggedToolCalls.has(key)) return
+    this.loggedToolCalls.add(key)
+    this.opts.onToolCall?.({ partKey: key, name, input })
+  }
+
+  /**
+   * Store a tool part's later input when its text did not grow (see `ingest`).
+   * The part is found by tool id, else by the source key that last fed it; a
+   * later non-empty input replaces an earlier one, since the last one seen is
+   * the complete call (`mergedToolInput`). The change goes out as a delta with
+   * no text, so the live block shows the new input; only for a call with an
+   * id, since that is what the renderer's merge replaces an input by.
+   */
+  private refreshToolInput(key: string, part: PartLike, port: DeltaPort): void {
+    if (partKindOf(part) !== 'tool') return
+    const toolInput = partToolInputOf(part)
+    if (!toolInput) return
+    const toolId = partToolIdOf(part)
+    let index = toolId ? this.parts.findIndex((p) => p.kind === 'tool' && p.toolId === toolId) : -1
+    if (index < 0) {
+      for (const [at, source] of this.partSource) if (source === key && this.parts[at]?.kind === 'tool') index = at
+    }
+    const target = this.parts[index]
+    if (!target) return
+    // Found by its source key, the part is this same call even when the
+    // fragment repeats no id.
+    const next = mergedToolInput(target, { toolInput, toolId: toolId ?? target.toolId })
+    if (!next || (target.toolInput && JSON.stringify(target.toolInput) === JSON.stringify(next))) return
+    target.toolInput = next
+    const toolName = partToolNameOf(part) ?? target.toolName
+    if (toolName) this.logToolCall(key, toolName, next)
+    if (!target.toolId) return
+    port.postMessage({
+      type: 'delta',
+      kind: 'tool',
+      text: '',
+      toolName: target.toolName,
+      toolInput: next,
+      toolId: target.toolId,
+      ...(target.parentToolId ? { parentToolId: target.parentToolId } : {})
     })
   }
 
@@ -452,7 +499,9 @@ export class StreamPartsAccumulator {
       // Backend may attach `tool_input` / `tool_id` / `command_invocation` only
       // on the first frame of a part — preserve once captured rather than
       // overwriting with undefined.
-      if (toolInput && !last.toolInput) last.toolInput = toolInput
+      // The same call's later input replaces its earlier one (`mergedToolInput`).
+      const mergedInput = mergedToolInput(last, { toolInput, toolId })
+      if (mergedInput) last.toolInput = mergedInput
       if (toolId && !last.toolId) last.toolId = toolId
       if (commandInvocation && !last.commandInvocation) last.commandInvocation = commandInvocation
       this.partSource.set(index, source)

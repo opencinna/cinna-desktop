@@ -73,3 +73,43 @@ it('keeps a delegated agent’s subagent lane apart in its live sub-thread', () 
     ['Next', undefined]
   ])
 })
+
+it('replaces a live tool block’s input with the same call’s later non-empty one, in place', () => {
+  // Main fills a call's input in after its narration (Claude's Skill opens
+  // with `{}`) and posts it as a delta with no text. Mutation: restore
+  // `last.toolInput ?? toolInput` in `appendDelta` → the block keeps `{}`.
+  useChatStore.getState().startStreaming('request')
+  const append = useChatStore.getState().appendDelta
+  append('Skill', 'tool', 'Skill', {}, 'toolu_skill')
+  append('ok', 'tool_result', undefined, undefined, 'toolu_skill', 'stdout')
+  append('', 'tool', 'Skill', { skill: 'ledger-bot:erp-check' }, 'toolu_skill')
+  append('', 'tool', 'Skill', {}, 'toolu_skill')
+  append('', 'tool', 'Bash', { command: 'pwd' }, 'other')
+  const blocks = useChatStore.getState().streamingBlocks
+  expect(blocks).toHaveLength(3)
+  expect(blocks[0]).toMatchObject({ type: 'text', content: 'Skill', toolId: 'toolu_skill', toolInput: { skill: 'ledger-bot:erp-check' } })
+})
+
+it('keeps the first input of a block whose fragments name no call id', () => {
+  useChatStore.getState().startStreaming('request')
+  const append = useChatStore.getState().appendDelta
+  append('Run', 'tool', 'bash', { command: 'pwd' })
+  append(' more', 'tool', 'bash', { command: 'ls' })
+  expect(useChatStore.getState().streamingBlocks).toEqual([
+    expect.objectContaining({ content: 'Run more', toolInput: { command: 'pwd' } })
+  ])
+})
+
+it('replaces a live sub-thread tool part’s input with the same call’s later one', () => {
+  // Mutation: restore `last.toolInput ?? toolInput` in `appendAgentDeltaPart`.
+  const store = useChatStore.getState()
+  store.startStreaming('request')
+  store.addToolCall({ id: 'tc-1', name: 'ask_specialist', input: {}, providerType: 'agent' })
+  const sub = (text: string, extra: Partial<Extract<RunEvent, { type: 'delta' }>> = {}): void =>
+    useChatStore.getState().appendToolSubEvent('tc-1', { type: 'delta', kind: 'tool', toolName: 'Skill', toolId: 's1', text, ...extra })
+  sub('Skill', { toolInput: {} })
+  sub('', { toolInput: { skill: 'x' } })
+  const block = useChatStore.getState().streamingBlocks.find((b) => b.type === 'tool_call')
+  const subParts = block?.type === 'tool_call' ? block.subParts ?? [] : []
+  expect(subParts).toEqual([expect.objectContaining({ text: 'Skill', toolId: 's1', toolInput: { skill: 'x' } })])
+})

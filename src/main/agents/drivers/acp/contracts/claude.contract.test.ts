@@ -10,6 +10,7 @@ import { applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { parseClaudeAuthStatus } from '../claudeAuth'
 import { airClientMeta } from '../acpActivity'
 import { readContextCategories } from '../acpTelemetry'
+import { resolveOfferedModel, selectedModelOf } from '../acpMessages'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CLAUDE_CONTRACT } from './claude.contract'
 import { runCli, spawnAdapter, type AdapterConnection, type AdapterMessage } from './codexHarness'
@@ -126,7 +127,11 @@ const seen = {
   load: { ok: false, mode: null as unknown, replayed: [] as string[], continuedUserMessages: 0 },
   rateLimit: null as AdapterMessage | null,
   otherRequests: [] as string[],
-  egress: [] as string[]
+  egress: [] as string[],
+  /** Scenario C: the user's `settings.json` names a model, the desktop re-asserts its own. */
+  model: { error: null as unknown, startedOn: null as string | null, resolved: null as string | null, set: false,
+    /** The conversation's models before the re-assert, and after it. */
+    before: [] as string[], after: [] as string[] }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -342,6 +347,67 @@ async function policyScenario(binary: string, trap: EgressTrap): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario C */
+
+/**
+ * What the user's own `~/.claude/settings.json` asks for, and what the agent was
+ * set to. `Sonnet`, capitalised, because it is **not** an offered value
+ * verbatim: the adapter skips its `setModel` only for a settings value the SDK
+ * offered as is, assuming the CLI read the same file — which under
+ * `settingSources: []` it did not. So `"sonnet"` reports `sonnet` but runs the
+ * options' model, while `"Sonnet"` is `setModel`led and runs Sonnet. The real
+ * report's `"opus"` resolves to `opus[1m]` the same way, but against this fake
+ * provider's API key the 1M variant is not applied and the turn stays on the
+ * options' model (observed 2026-10-11, 2.1.276 / adapter 0.76.0), so it cannot
+ * show the defect here.
+ */
+const SETTINGS_MODEL = 'Sonnet'
+const AGENT_MODEL = 'haiku'
+
+/**
+ * The user's settings name a model; the agent was set to another. Kept out of
+ * the snapshot: what it observes is this entry's alone, and the baseline
+ * describes the two scenarios above.
+ */
+async function modelScenario(binary: string, trap: EgressTrap): Promise<void> {
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : { kind: 'text', text: 'OK' })
+  const scratch = makeClaudeScratch('cinna-contract-claude-model-', { providerPort: provider.port, trapPort: trap.port })
+  try {
+    // Where the adapter's SettingsManager reads the user's settings: `CLAUDE_CONFIG_DIR/settings.json`.
+    mkdirSync(join(scratch.home, '.claude'), { recursive: true })
+    writeFileSync(join(scratch.home, '.claude', 'settings.json'), JSON.stringify({ model: SETTINGS_MODEL }))
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary } })
+    await connection.rpc('initialize', initParams)
+    // The launcher's isolated options, `model` included — what the desktop sent before the re-assert.
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+      systemPrompt: SYSTEM_MARKER, model: AGENT_MODEL, settingSources: [], strictMcpConfig: true, mcpServers: {} } } } }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { seen.model.error = created.error ?? 'no session'; return }
+    seen.model.startedOn = selectedModelOf(created.result?.configOptions) ?? null
+    const prompt = async (): Promise<string[]> => {
+      const before = provider!.turns.length
+      await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Answer OK.' }] }, 90_000)
+      return conversation(provider!.turns.slice(before)).map((turn) => String(turn.model))
+    }
+    seen.model.before = await prompt()
+    // The driver's own resolution, against what this session offered.
+    const match = resolveOfferedModel(created.result?.configOptions, AGENT_MODEL)
+    seen.model.resolved = match?.value ?? null
+    if (match?.value) {
+      const set = await connection.rpc('session/set_config_option', { sessionId, configId: match.configId, value: match.value })
+      seen.model.set = !set.error
+      if (set.error) seen.model.error = set.error
+    }
+    seen.model.after = await prompt()
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 /** Shapes only: no paths, ids, ports, tokens, timestamps or prompt text, so two versions diff cleanly. */
@@ -426,6 +492,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     try {
       await folderScenario(binary, trap)
       await policyScenario(binary, trap)
+      await modelScenario(binary, trap)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
     } finally {
       seen.egress = [...trap.attempts]
@@ -512,6 +579,20 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   it(entry('claude.session.permission-mode-meta-inert'), () => {
     expect(seen.policyOptions).toMatchObject({ permissionMode: 'bypassPermissions' })
     expect(seen.bypassInMetaMode).toBe('default')
+  })
+
+  it(entry('claude.session.model-over-user-settings'), () => {
+    expect(seen.model.error, JSON.stringify(seen.model.error)).toBeNull()
+    // The finding: `options.model` loses to the user's settings.json — reported and run.
+    expect(seen.model.startedOn).toBe('sonnet')
+    expect(seen.model.before.length).toBeGreaterThan(0)
+    expect(seen.model.before.every((model) => /sonnet/i.test(model)),
+      `before the re-assert the turn ran on ${seen.model.before.join(', ')} — options.model may now win on its own`).toBe(true)
+    // The fix: the alias resolves among the offered values, the set is accepted, and the conversation moves.
+    expect(seen.model.resolved).toBe(AGENT_MODEL)
+    expect(seen.model.set).toBe(true)
+    expect(seen.model.after.length).toBeGreaterThan(0)
+    expect(seen.model.after.every((model) => /haiku/i.test(model)), seen.model.after.join(', ')).toBe(true)
   })
 
   it(entry('claude.session.load-replay'), () => {

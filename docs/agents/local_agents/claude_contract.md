@@ -401,6 +401,45 @@ Two corrections to how the older evidence should be read, both discovered by the
 
 **Codex and OpenCode were not probed** — neither CLI is installed on that machine.
 
+## 2b. Addendum, 2026-10-11 — the user's own `settings.json` picks the model
+
+**Conditions:** pinned `claude` **2.1.276**, adapter `@agentclientprotocol/claude-agent-acp`
+**0.76.0**. Seen first on a real login (an E2E with the user's real `HOME`): an agent set to Haiku
+(complexity *simple*) ran its turn on `claude-opus-5[1m]`, because the user's
+`~/.claude/settings.json` says `"model": "opus"`. Reproduced against the fake provider by the
+contract entry `claude.session.model-over-user-settings`.
+
+**`_meta.claudeCode.options.model` is not the session's model.** The adapter picks it in
+`dist/session-model.js` `getAvailableModels`, highest first:
+
+1. `ANTHROPIC_MODEL` in the adapter's environment
+2. `model` from the user's settings — read by the adapter's own `SettingsManager` from
+   `$CLAUDE_CONFIG_DIR/settings.json` and the folder's `.claude/settings*.json`, **even under
+   `settingSources: []`** (the same reader that leaks `defaultMode`, §2a)
+3. a resumed session's live model
+4. the first offered model
+
+— and then calls `setModel` with it. The one exception: a settings value the SDK offered *verbatim*
+is assumed to be what the CLI already runs, so no `setModel` is sent. Under `settingSources: []`
+the CLI never read that file, so that case **reports** the settings model while the turn runs on the
+options' — the session's `configOptions` cannot be trusted to say which model a turn used.
+
+| `settings.json` `model` | reported `currentValue` | first turn ran on |
+|---|---|---|
+| `"sonnet"` (offered verbatim) | `sonnet` | the options' model |
+| `"Sonnet"` (not verbatim) | `sonnet` | **Sonnet** |
+| `"opus"` → `opus[1m]` | `opus[1m]` | the options' model on the fake provider's API key; **Opus 1M on a subscription** (the real report) |
+
+**What the desktop does:** when it has chosen a model (the launcher's `deps.model` is not null), the
+Claude launcher puts it in `setup.model` on both branches — on a native folder only when the agent names a model (declared, or by tier), never the desktop's floor, since that folder runs on its user's own settings — and after every `session/new` **and**
+`session/load` the driver resolves it against the session's offered model values
+(`resolveOfferedModel`: exact, then case and context hint, then family word) and sends
+`session/set_config_option` on the `model` option (`assertModel`), before `session/set_mode`. The
+turn then runs on the desktop's model (the contract asserts the Messages request names Haiku). A
+model the session does not offer, or a set it declines, is logged and the turn runs on the
+session's own — never a refusal. `ANTHROPIC_MODEL` would also win, but it is part of the adapter's
+environment and so of the warm process's spec key: one process per model instead of per agent.
+
 ## 3. Disproven — believed by the plan, and false
 
 | The plan says | What happens |
@@ -414,6 +453,7 @@ Two corrections to how the older evidence should be read, both discovered by the
 | *"`total_cost_usd` … on a subscription is a shadow price"* | correct, and understated — see §6 |
 | A string `prompt` is one user turn, and `result` ends it | a string prompt **closes the CLI's stdin at the first `result`**, and a background subagent outlives that result. Its permission ask then fails *inside the CLI* as `Stream closed` and is relayed as a denial. The prompt must be an iterable held open until the last `result` (§2) |
 | `settingSources: []` hides settings files, `CLAUDE.md`, project skills and plugins — and nothing else that matters | it also hides **`.claude/agents/*.md`**, the folder's own subagents. Handed back through `options.agents` (§2) |
+| `_meta.claudeCode.options.model` sets the session's model | the adapter `setModel`s the user's own `settings.json` `model` over it, under any `settingSources`; re-asserted with `session/set_config_option` after every new and load (§2b) |
 
 ## 4. Errors arrive as exceptions, not as messages
 

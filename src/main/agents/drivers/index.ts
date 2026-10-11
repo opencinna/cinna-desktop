@@ -602,6 +602,15 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         return null
       }
     },
+    // Only a folder agent's runtime can fall to the floor; every other source above names its model.
+    modelIsFloor: (userId, agentId) => {
+      try {
+        const agent = localAgentService.get(userId, agentId)
+        return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelSource === 'floor'
+      } catch {
+        return false
+      }
+    },
     // The desktop's own decision, beside the grants it governs. The default is
     // applied here so the launcher never has to know that "no choice" exists.
     // Unreadable state falls to the default too: the turn still runs, and every

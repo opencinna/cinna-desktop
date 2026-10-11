@@ -154,6 +154,20 @@ describe('live run hub', () => {
     expect(tools).toHaveLength(1)
     expect(tools[0]).toMatchObject({ kind: 'tool', toolId: 't1', toolInput })
   })
+  it('replays the same call’s latest non-empty input to a late watcher', () => {
+    // Mutation: restore `last.toolInput ?? next.toolInput` in `merge` → the late view keeps `{}`.
+    const hub = createLiveRunHub()
+    const run = hub.begin('u', 'c', 'r', [])
+    run.push({ type: 'request-id', requestId: 'req' })
+    run.push({ type: 'delta', kind: 'tool', text: 'Skill', toolName: 'Skill', toolId: 's1', toolInput: {} })
+    run.push({ type: 'delta', kind: 'tool', text: '', toolName: 'Skill', toolId: 's1', toolInput: { skill: 'x' } })
+    run.push({ type: 'delta', kind: 'tool', text: '', toolName: 'Skill', toolId: 's1', toolInput: {} })
+    const late: RunWatchMessage[] = []
+    hub.watch('u', 'c', (m) => late.push(m))
+    const snapshot = late[0] as Extract<RunWatchMessage, { type: 'snapshot' }>
+    const tools = snapshot.events.filter((e) => e.type === 'delta')
+    expect(tools).toEqual([expect.objectContaining({ text: 'Skill', toolId: 's1', toolInput: { skill: 'x' } })])
+  })
   it('shrinks tool output and long tool arguments before giving up replay, keeping every tool part', () => {
     const hub = createLiveRunHub()
     const run = hub.begin('u', 'c', 'r', [])
