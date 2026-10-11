@@ -502,7 +502,7 @@ describe('the Claude launcher', () => {
     for (const ctx of [CTX, BARE_CTX]) {
       const options = claudeOptions(plan(await createClaudeLauncher(withPlugin).plan(ctx)))
       expect(options.plugins).toEqual([{ type: 'local', path: '/data/cinna-plugins/cinna-tasks' }])
-      // The adapter's own SDK (0.3.257) has no `pluginDelivery`; argv is its only delivery.
+      // Default argv delivery, the one the contract checks; no `pluginDelivery`.
       expect('pluginDelivery' in options).toBe(false)
     }
     for (const ctx of [CTX, BARE_CTX]) {

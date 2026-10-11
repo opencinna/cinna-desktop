@@ -183,7 +183,7 @@ let defaultRuntime: { engine: string } | undefined = { engine: 'opencode' }
 /** The managed Codex CLI's state — what decides whether Codex can run, not PATH detection. */
 let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 /** Ready by default: the pinned CLI is what every Claude case here runs on; PATH detection no longer decides it. */
-let claudeBinary: Record<string, unknown> | undefined = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+let claudeBinary: Record<string, unknown> | undefined = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
 let antigravityBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 vi.mock('../../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
@@ -224,7 +224,7 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 beforeEach(() => {
   defaultRuntime = { engine: 'opencode' }
   codexBinary = { state: 'unresolved' }
-  claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+  claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
   codexInstalled = false
   codexAuth = { state: 'logged_in' }
   antigravityBinary = { state: 'unresolved' }
@@ -1080,8 +1080,8 @@ describe('RuntimePanel', () => {
     })
 
     it.each([
-      ['a managed copy', { source: 'managed', path: '/data/runtimes/claude-2.1.276/claude', version: '2.1.276 (Claude Code)' }, 'Claude Code 2.1.276 managed'],
-      ['the user’s install at exactly the pin', { source: 'path-pinned', path: '/Users/x/.local/bin/claude', version: '2.1.276 (Claude Code)' }, 'Claude Code 2.1.276 (your install)'],
+      ['a managed copy', { source: 'managed', path: '/data/runtimes/claude-2.1.296/claude', version: '2.1.296 (Claude Code)' }, 'Claude Code 2.1.296 managed'],
+      ['the user’s install at exactly the pin', { source: 'path-pinned', path: '/Users/x/.local/bin/claude', version: '2.1.296 (Claude Code)' }, 'Claude Code 2.1.296 (your install)'],
       ['an explicit path', { source: 'configured', path: '/opt/claude', version: '2.1.300 (Claude Code)' }, 'Claude Code 2.1.300 unverified']
     ])('names in the Engine cell which Claude Code runs: %s', (_label, ready, text) => {
       claudeInstalled = false // the PATH copy's 2.1.266 must never be what is reported
@@ -1142,7 +1142,7 @@ describe('RuntimePanel', () => {
       expect(loginEngines).toContain('claude')
       // The Engine column still reports which binary runs — that and its
       // version are facts, and the reserved line carries what they mean.
-      expect(screen.getByText(/Claude Code 2\.1\.276 managed/)).toBeTruthy()
+      expect(screen.getByText(/Claude Code 2\.1\.296 managed/)).toBeTruthy()
     })
 
     it('waits on the browser with Cancel, and a press while pending starts nothing', () => {
@@ -1161,18 +1161,18 @@ describe('RuntimePanel', () => {
 
     it('offers the terminal command, with a copy button, after a sign-in that did not finish', async () => {
       claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
-      loginFailure = { outcome: 'timeout', command: "'/data/runtimes/claude-2.1.276/claude' auth login" }
+      loginFailure = { outcome: 'timeout', command: "'/data/runtimes/claude-2.1.296/claude' auth login" }
       const writeText = vi.fn(async () => ({ success: true }))
       const host = window as unknown as { api: unknown }
       const previous = host.api
       host.api = { clipboard: { writeText } }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       expect(screen.getByText('Sign-in timed out. You can also run this in a terminal:')).toBeTruthy()
-      expect(screen.getByText("'/data/runtimes/claude-2.1.276/claude' auth login")).toBeTruthy()
+      expect(screen.getByText("'/data/runtimes/claude-2.1.296/claude' auth login")).toBeTruthy()
       // Log in stays where it was, so the line does not shift.
       expect(screen.getByRole('button', { name: 'Log in' })).toBeTruthy()
       fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
-      expect(writeText).toHaveBeenCalledWith("'/data/runtimes/claude-2.1.276/claude' auth login")
+      expect(writeText).toHaveBeenCalledWith("'/data/runtimes/claude-2.1.296/claude' auth login")
       expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy()
       host.api = previous
     })
@@ -1228,7 +1228,7 @@ describe('RuntimePanel', () => {
       // this same slot green means *the process is running*.
       claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      const row = screen.getByText(/Claude Code 2\.1\.276 managed/).closest('div')
+      const row = screen.getByText(/Claude Code 2\.1\.296 managed/).closest('div')
       expect(row?.parentElement?.innerHTML).toContain('--color-warning')
     })
 
@@ -1241,7 +1241,7 @@ describe('RuntimePanel', () => {
       // not go green here for the reason above.
       claudeAuth = answer as typeof claudeAuth
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      const row = screen.getByText(/Claude Code 2\.1\.276 managed/).closest('div')
+      const row = screen.getByText(/Claude Code 2\.1\.296 managed/).closest('div')
       const html = row?.parentElement?.innerHTML ?? ''
       expect(html).toContain('--color-text-muted')
       expect(html).not.toContain('--color-warning')
@@ -1296,7 +1296,7 @@ describe('RuntimePanel', () => {
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       expect(screen.queryByText(/opencode/)).toBeNull()
       expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
-      expect(screen.getByText(/Claude Code 2\.1\.276 managed/)).toBeTruthy()
+      expect(screen.getByText(/Claude Code 2\.1\.296 managed/)).toBeTruthy()
     })
 
     it('does not wait for the model registry it will never consult', () => {

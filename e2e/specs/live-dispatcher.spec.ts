@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
-import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { adoptFolder, openTasksTab } from '../fixtures/dispatcher'
 
 /**
@@ -30,10 +30,12 @@ import { adoptFolder, openTasksTab } from '../fixtures/dispatcher'
  * Two OpenCode turns of 2–4 requests each over a ~10k-token system prompt on
  * the first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini normally): about
  * **$0.02–0.06 a run**. Run deliberately: `make e2e-one SPEC=live-dispatcher`.
+ * With `CINNA_E2E_LIVE_ENGINE=claude|codex` the agent runs on the developer's
+ * own Claude Code / Codex login instead (`e2e/fixtures/liveEngine.ts`).
  */
 
-test.use({ engine: true })
-test.beforeEach(() => requireLiveKey())
+test.use(liveEngineOptions())
+test.beforeEach(() => requireLiveEngine())
 
 const HEADING = 'Tally Desk'
 const FIRST = 'Tally the crate counts'
@@ -62,13 +64,14 @@ const fileText = (path: string): string => (existsSync(path) ? readFileSync(path
 test('@live One at a time runs two Ready tasks of a real agent in order, each reported done, and never pauses', async ({ cinna }) => {
   test.setTimeout(8 * 60_000)
   await cinna.skipOnboarding()
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   console.log(`live-dispatcher model: ${model}`)
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
 
   const folder = homeDir(cinna, 'tally-desk')
   writeFileSync(join(folder, 'CLAUDE.md'), INSTRUCTIONS)
   const agentId = await adoptFolder(cinna, folder)
+  await useLiveRuntime(cinna, agentId)
   // Adopted agents and seeded credentials reach the agent page and the dispatcher after a restart.
   await cinna.relaunch()
   await cinna.skipOnboarding()

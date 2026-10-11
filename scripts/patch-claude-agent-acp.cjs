@@ -3,21 +3,47 @@ const { join, resolve } = require('node:path')
 const { createHash } = require('node:crypto')
 const policy = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
 
-// The pinned adapter never exposes the SDK's `query.getContextUsage()`, so the
-// split of a session's context by category (system prompt, tools, memory
-// files, MCP tools, messages…) cannot be read over ACP. This adds one
-// extension request, `_cinna/contextUsage {sessionId}`, registered on the
-// adapter's own request builder beside its other extension methods. It answers
-// only between turns (a running or queued turn is refused as busy, an ended
-// query as closed) and returns a trimmed copy of the SDK's answer — never
-// the rendering grid. The desktop asks only
-// for a session a prompt has already been answered on in this process: before
-// that the SDK stalls on the control request. The user's Claude Code
-// executable is never modified.
+// The pinned adapter never exposes the SDK's `query.getContextUsage()` to the
+// client (it calls it itself, in the background on session/new and on a model
+// switch, only for the context window), so the split of a session's context by
+// category (system prompt, tools, memory files, MCP tools, messages…) cannot be
+// read over ACP. This adds one extension request, `_cinna/contextUsage
+// {sessionId}`, registered as the last link of the adapter's own request
+// builder chain beside its other extension methods. It answers only between
+// turns (a running or queued turn is refused as busy, an ended query as closed)
+// and returns a trimmed copy of the SDK's answer — never the rendering grid.
+// The SDK serializes control requests, so a measurement waits behind any the
+// adapter has in flight. The desktop asks only for a session a prompt has
+// already been answered on in this process: before that the SDK stalls on the
+// control request. The user's Claude Code executable is never modified.
 const METHOD = '_cinna/contextUsage'
-const routeAnchor = '        .onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))\n'
-const route = `        .onRequest("${METHOD}", { parse: cinnaContextUsageParams }, (ctx) => cinnaContextUsage(agent, ctx.params))\n`
+// The goal route ends the chain, so its `;` moves to the end of ours.
+const routeAnchor = '        .onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));\n'
+const route = `        .onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))
+        .onRequest("${METHOD}", { parse: cinnaContextUsageParams }, (ctx) => cinnaContextUsage(agent, ctx.params));\n`
 const handlerAnchor = 'export function runAcp(logger) {\n'
+
+// Cinna declares `_meta.jetbrains.air` (acpActivity.ts `airClientMeta`) only to
+// negotiate the `asyncTasks` and `nativeSubagentSessions` capabilities. From
+// 0.8x the adapter also reads that declaration as "this client is the JetBrains
+// AIR UI" (`toolCallCapabilities.air.client`) and reshapes every tool call for
+// AIR's own renderer: Read and path-scoped Grep/Glob results lose their text and
+// `rawOutput`, Edit/Write lose `old_string`/`new_string`/`content` from
+// `rawInput` (in the transcript and in permission asks), the first `tool_call`
+// has no `rawInput`, a permission's `toolCall` loses `name`/`kind`/`content`,
+// and repeated `tool_call_update` `_meta` is thinned. Cinna is not AIR and reads
+// the plain shapes, so this sets `air.client` back to false right where
+// `initialize` decides it, the only place it is decided; every AIR-only branch
+// reads it from there. `rawInputRendering`/`planFile` stay as negotiated, and
+// the async-task and subagent capabilities are read from the raw
+// `clientCapabilities`, so they are untouched.
+const airClientAnchor = `        this.toolCallCapabilities = ToolCallClientCapabilities.from(request.clientCapabilities, {
+            v2: this.v2,
+        });
+`
+const airClientOff = `${airClientAnchor}        // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): not the AIR UI; keep the plain tool call shapes.
+        this.toolCallCapabilities.air = { ...this.toolCallCapabilities.air, client: false };
+`
 const handler = `/** Cinna Desktop: \`${METHOD}\` (scripts/patch-claude-agent-acp.cjs). */
 function cinnaContextUsageParams(params) {
     if (!params || typeof params !== "object" || typeof params.sessionId !== "string" || params.sessionId.length === 0) {
@@ -42,7 +68,8 @@ async function cinnaContextUsage(agent, params) {
     if (session.activeTurn || (session.turnQueue ?? []).some((turn) => !turn.settled)) {
         throw RequestError.internalError({ reason: "busy" }, "busy: a turn is in progress on this session");
     }
-    return cinnaTrimContextUsage(await session.query.getContextUsage());
+    // \`full\` (the SDK default) makes the CLI call the provider's count_tokens per category.
+    return cinnaTrimContextUsage(await session.query.getContextUsage({ detail: "full" }));
 }
 function cinnaTrimContextUsage(usage) {
     const u = usage ?? {};
@@ -80,7 +107,7 @@ function adapter(root) {
 
 function verifyClaudeAgentAcpPatch(root) {
   if (digest(readFileSync(adapter(root))) !== policy.patchedSha256) {
-    throw new Error('Claude ACP context-usage patch is missing or changed')
+    throw new Error('Claude ACP patch (context usage, AIR client off) is missing or changed')
   }
 }
 
@@ -91,10 +118,13 @@ function patchClaudeAgentAcp(root) {
   if (digest(content) !== policy.originalSha256) {
     throw new Error('Claude ACP source differs from the reviewed pinned adapter; refusing to patch')
   }
-  for (const anchor of [routeAnchor, handlerAnchor]) {
-    if (content.split(anchor).length !== 2) throw new Error('Claude ACP context-usage patch target changed')
+  for (const anchor of [routeAnchor, handlerAnchor, airClientAnchor]) {
+    if (content.split(anchor).length !== 2) throw new Error('Claude ACP patch target changed')
   }
-  const patched = content.replace(routeAnchor, () => routeAnchor + route).replace(handlerAnchor, () => handler + handlerAnchor)
+  const patched = content
+    .replace(routeAnchor, () => route)
+    .replace(handlerAnchor, () => handler + handlerAnchor)
+    .replace(airClientAnchor, () => airClientOff)
   if (digest(patched) !== policy.patchedSha256) throw new Error('Claude ACP patch output does not match reviewed content')
   const temporary = `${path}.${process.pid}.tmp`
   writeFileSync(temporary, patched, { mode: 0o644 })
@@ -102,5 +132,6 @@ function patchClaudeAgentAcp(root) {
   verifyClaudeAgentAcpPatch(root)
 }
 
-module.exports = { patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD: METHOD, contextUsageHandlerSource: handler, contextUsageRoute: route }
+module.exports = { patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD: METHOD, contextUsageHandlerSource: handler, contextUsageRouteAnchor: routeAnchor, contextUsageRoute: route,
+  airClientAnchor, airClientOff }
 if (require.main === module) patchClaudeAgentAcp(resolve(__dirname, '..'))

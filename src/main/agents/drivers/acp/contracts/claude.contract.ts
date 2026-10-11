@@ -91,9 +91,9 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
   /* ------------------------------------------------------- session lifecycle */
   {
     id: 'claude.session.initialize', area: 'session lifecycle', surface: 'ACP method', name: 'initialize',
-    expectation: 'Answers protocol version 1 as `@agentclientprotocol/claude-agent-acp` at the pinned version, with `loadSession: true`, HTTP MCP capability, and the AIR capabilities `asyncTasks` and `nativeSubagentSessions`.',
-    owners: [`${LAUNCHERS}#createClaudeLauncher`],
-    feature: 'Sessions cannot be resumed, injected MCP servers are refused, or background work and subagents stop being reported.',
+    expectation: 'Answers protocol version 1 as `@agentclientprotocol/claude-agent-acp` at the pinned version, with `loadSession: true` and HTTP MCP capability. With the adapter patch it answers as to a plain client: the steering extension, and no `_meta.jetbrains` — the advertisement the adapter keeps for the JetBrains AIR UI, which Cinna does not read.',
+    owners: [`${LAUNCHERS}#createClaudeLauncher`, 'scripts/patch-claude-agent-acp.cjs#airClientOff'],
+    feature: 'Sessions cannot be resumed or injected MCP servers are refused. A `jetbrains` key here means the adapter treats Cinna as the AIR UI again, and tool calls arrive reshaped for it.',
     flow: { steps: ['A'] }
   },
   {
@@ -173,6 +173,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     feature: 'The session telemetry cannot split a Claude chat’s context by category; only the coarse baseline-and-conversation split remains.',
     flow: { steps: ['none'], note: 'asked on demand by the telemetry popover, which no step opens' }
   },
+  {
+    id: 'claude.session.air-activity', area: 'session lifecycle', surface: '_meta key', name: '_meta.jetbrains.air capabilities (asyncTasks, nativeSubagentSessions)',
+    expectation: 'Declared at `initialize` as the desktop does, and with the adapter patch keeping the adapter off its AIR UI shapes, the two capabilities are still honoured: a `run_in_background` Bash reports `async_task_spawned` with an `asyncTaskId` and later `async_task_state_update`, and an `Agent` call reports `subagent_spawned` with a `subagentSessionId` and `subagent_state_update`.',
+    owners: [`${LAUNCHERS}#airClientMeta`, 'src/main/agents/drivers/acp/acpActivity.ts#async_task_spawned', 'src/main/agents/drivers/acp/acpActivity.ts#subagent_spawned', 'scripts/patch-claude-agent-acp.cjs#airClientOff'],
+    feature: 'Background work and subagents stop showing under the composer and cannot be stopped; a follow-up turn after a background task is not expected.',
+    flow: { steps: ['none'], note: 'no step starts a background task or a subagent' }
+  },
   /* -------------------------------------------------------------- tools & MCP */
   {
     id: 'claude.mcp.session-injection', area: 'tools & MCP', surface: 'ACP field', name: 'session/new.mcpServers (http)',
@@ -194,6 +201,20 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     owners: ['src/main/services/conductorToolCorrelation.ts#toolName'],
     feature: 'A tool call in the transcript cannot be tied to the Cinna call it caused; handover cards detach from their turn.',
     flow: { steps: ['B', 'D'] }
+  },
+  {
+    id: 'claude.tools.read-result-text', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call_update.content / rawOutput (Read)',
+    expectation: 'A native `Read` of a file in the session folder completes with the file’s text in the `tool_call_update`’s `content` or `rawOutput`.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#toolOutputText', 'scripts/patch-claude-agent-acp.cjs#airClientOff'],
+    feature: 'A Read in the transcript shows an empty result: the user cannot see what the agent read, and a reloaded chat loses it.',
+    flow: { steps: ['none'], note: 'no step has the agent read a file' }
+  },
+  {
+    id: 'claude.tools.edit-raw-input', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call.rawInput / request_permission.toolCall.rawInput (Edit)',
+    expectation: 'A native `Edit` reports `rawInput` from its first `tool_call`, an update of it carries the full input with `old_string` and `new_string`, and in `default` mode its permission ask’s `toolCall.rawInput` carries both as well. `allow_once` applies the edit.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#TOOL_INPUT_METADATA_KEY', 'src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'scripts/patch-claude-agent-acp.cjs#airClientOff'],
+    feature: 'An Edit card and its approval show a file name and no change: the user approves an edit they cannot see, and the transcript keeps no record of it.',
+    flow: { steps: ['none'], note: 'no step has the agent edit a file' }
   },
   {
     id: 'claude.mcp.tool-use-id', area: 'tools & MCP', surface: 'MCP request', name: '_meta["claudecode/toolUseId"]',
@@ -219,8 +240,8 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'claude.question.elicitation-form', area: 'permissions & questions', surface: 'ACP method', name: 'elicitation/create (form)',
-    expectation: 'With `elicitation.form` advertised, `AskUserQuestion` is offered to the model and a call to it arrives as `elicitation/create` in `form` mode, one `question_<n>` property per question with its options as `oneOf`; the accepted answer goes back to the model as the tool result.',
-    owners: ['src/main/agents/drivers/acp/acpQuestions.ts#requestedSchema', `${LAUNCHERS}#elicitation`],
+    expectation: 'With `elicitation.form` advertised, `AskUserQuestion` is offered to the model and a call to it arrives as `elicitation/create` in `form` mode, one `question_<n>` property per question with its options as `oneOf`, and its free-text `question_<n>_custom` companion (unmarked from adapter 0.89 for a client that is not AIR) read as no extra question; the accepted answer goes back to the model as the tool result.',
+    owners: ['src/main/agents/drivers/acp/acpQuestions.ts#requestedSchema', 'src/main/agents/drivers/acp/acpQuestions.ts#isCustomAnswerField', `${LAUNCHERS}#elicitation`],
     feature: 'An agent can no longer ask the user anything: the tool is withdrawn, or its question never reaches the chat.',
     flow: { steps: ['none'], note: 'no step has the model ask a question' }
   },

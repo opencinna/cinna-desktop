@@ -38,7 +38,6 @@
       "ScheduleWakeup",
       "SendMessage",
       "Skill",
-      "TaskOutput",
       "TaskStop",
       "WebFetch",
       "WebSearch",
@@ -79,30 +78,10 @@
       "agentInfo": {
         "name": "@agentclientprotocol/claude-agent-acp",
         "title": "Claude Agent",
-        "version": "0.76.0"
+        "version": "0.89.1"
       },
       "authMethodIds": [],
       "meta": {
-        "goal": {
-          "actions": [
-            "set",
-            "clear"
-          ],
-          "controlMethod": "_session/goal",
-          "version": 1
-        },
-        "jetbrains": {
-          "air": {
-            "capabilities": [
-              "sessionFailure",
-              "agentFileChangeReport",
-              "nativeSubagentSessions",
-              "asyncTasks",
-              "recommendedValue"
-            ],
-            "version": 1
-          }
-        },
         "steering": {
           "supported": true
         }
@@ -132,21 +111,19 @@
       "sessionStartedIn": "default"
     },
     "permissionRequest": {
-      "metaKeys": [
-        "permission"
-      ],
+      "metaKeys": [],
       "options": [
         "allow_always:allow-with-updates",
         "allow_once:allow-once",
         "reject_once:reject"
       ],
       "paramKeys": [
-        "_meta",
         "options",
         "sessionId",
         "toolCall"
       ],
       "toolCallKeys": [
+        "_meta",
         "content",
         "kind",
         "name",
@@ -201,6 +178,7 @@
         "_meta",
         "content",
         "kind",
+        "name",
         "rawInput",
         "sessionUpdate",
         "status",
@@ -216,7 +194,7 @@
       "usage_update"
     ]
   },
-  "adapter": "0.76.0",
+  "adapter": "0.89.1",
   "cli": {
     "authStatusApiKey": {
       "exitCode": 0,
@@ -296,7 +274,7 @@
       "dummy"
     ],
     "conversationModels": [
-      "claude-opus-5"
+      "claude-opus-5-5"
     ],
     "otherRequests": [],
     "paths": [
@@ -308,10 +286,10 @@
     "title": {
       "folderSession": {
         "maxTokens": [
-          64000
+          128000
         ],
         "models": [
-          "claude-opus-5"
+          "claude-opus-5-5"
         ],
         "sentMoreThanOnce": true,
         "stream": [
@@ -321,10 +299,10 @@
       },
       "restrictedChat": {
         "maxTokens": [
-          64000
+          128000
         ],
         "models": [
-          "claude-opus-5"
+          "claude-opus-5-5"
         ],
         "sentMoreThanOnce": true,
         "stream": [
@@ -350,5 +328,5 @@
     }
   },
   "tool": "claude",
-  "version": "2.1.276 (Claude Code)"
+  "version": "2.1.296 (Claude Code)"
 }

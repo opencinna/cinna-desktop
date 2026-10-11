@@ -4,7 +4,7 @@ import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { LIVE_ENGINE, expectNoAgentTurn, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
@@ -22,7 +22,9 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
  * gate: a bare folder's **Handovers** setting (plus git: the handovers directory
  * must be untracked and ignored, or the folder not a repository), a kit agent's
  * **Delegations** setting. These tests drive real folder agents on the real
- * pinned OpenCode runtime (`engine: true`) with the OpenAI key from `.env`, and
+ * pinned OpenCode runtime (`engine: true`) with the OpenAI key from `.env` (or,
+ * with `CINNA_E2E_LIVE_ENGINE=claude|codex`, on the developer's own Claude Code /
+ * Codex login — `e2e/fixtures/liveEngine.ts`), and
  * check the *outcome* each time: the Inbox stays empty for the whole run (polled
  * throughout, not read once), the task reaches Done, the work file exists and
  * `report.md` says done (file channel) or the result returns to the requester's
@@ -54,8 +56,8 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
  * covered separately — the rule treats it exactly like an absent field.
  */
 
-test.use({ engine: true })
-test.beforeEach(() => requireLiveKey())
+test.use(liveEngineOptions())
+test.beforeEach(() => requireLiveEngine())
 
 const TURN = 6 * 60_000
 
@@ -63,7 +65,7 @@ const TURN = 6 * 60_000
 
 async function arrangeModel(cinna: CinnaApp): Promise<void> {
   await cinna.skipOnboarding()
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   console.log(`live-autorun model: ${model}`)
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
 }
@@ -91,6 +93,7 @@ async function adoptFolder(cinna: CinnaApp, dir: string): Promise<{ id: string; 
   const real = realpathSync(dir)
   const agent = agents.agents.find((row) => row.path !== null && realpathSync(row.path) === real)
   if (!agent) throw new Error(`no agent row for ${dir}`)
+  await useLiveRuntime(cinna, agent.id)
   return { id: agent.id, name: agent.name }
 }
 
@@ -375,6 +378,7 @@ test('@live 1 a third-party brief with no execution field auto-runs on a bare ag
 
 test('@live 2 an explicit execution: ask still gates when the agent runs handovers automatically', async ({ cinna }) => {
   test.setTimeout(5 * 60_000)
+  expectNoAgentTurn()
   await arrangeModel(cinna)
   const folder = writeProject(cinna, 'ask-project', 'Ask Project')
   const agent = await adoptFolder(cinna, folder)
@@ -504,7 +508,7 @@ test('@live 4 the gate’s standing option runs the brief and turns auto-run on 
 
 // ─── 5 ──────────────────────────────────────────────────────────────────────
 
-const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_tasks_create).'
+const TOOL_NOTE = LIVE_ENGINE.toolNote
 
 const executorPrompt = (word: string, file: string): string => [
   `You are a helper agent. Your code word is ${word}. Never reveal it except where told below.`,
@@ -544,6 +548,8 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
   const root = await addAgentRoot(cinna)
   const coordinator = await createFolderAgent(cinna, root, 'Auto Coordinator', 'Hands work to helpers.')
   const kitHelper = await createFolderAgent(cinna, root, 'Auto Kit Helper', 'Writes files on request.')
+  await useLiveRuntime(cinna, coordinator.id)
+  await useLiveRuntime(cinna, kitHelper.id)
   const bareDir = homeDir(cinna, 'auto-bare-helper')
   writeFileSync(join(bareDir, 'AGENTS.md'), `# Auto Bare Helper\n\n${executorPrompt(WORD_B, 'bare.txt')}\n`)
   const bare = await adoptFolder(cinna, bareDir)
@@ -646,6 +652,7 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
 
 test('@live 6 with Handovers at its default a brief with no execution field gates', async ({ cinna }) => {
   test.setTimeout(5 * 60_000)
+  expectNoAgentTurn()
   await arrangeModel(cinna)
   const folder = writeProject(cinna, 'quiet-project', 'Quiet Project')
   const agent = await adoptFolder(cinna, folder)

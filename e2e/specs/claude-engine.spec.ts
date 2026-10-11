@@ -335,9 +335,10 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
         groups.map((entry) => (entry as HTMLOptGroupElement).label)
       )
     ).resolves.toEqual([
-      // Always: both CLIs are Cinna-managed, so neither group waits on PATH
+      // Always: every engine is Cinna-managed, so no group waits on PATH
       // detection — only a *failed* install withdraws one.
       'Codex CLI',
+      'Google Antigravity',
       MACHINE_GROUP,
       CREDENTIAL_GROUP
     ])

@@ -80,10 +80,10 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
   const questions: InputQuestion[] = []
   const fields: { key: string; multiple: boolean }[] = []
   const entries = Object.entries(properties)
-  const askable = entries.filter(([, value]) => {
+  const askable = entries.filter(([key, value]) => {
     const field = asRecord(value)
     const codex = asRecord(asRecord(field?._meta)?.codex)
-    return !isCustomAnswerField(field) && codex?.isOtherAnswer !== true
+    return !isCustomAnswerField(key, field, properties) && codex?.isOtherAnswer !== true
   })
 
   for (const [key, raw] of askable) {
@@ -177,9 +177,21 @@ function enumOptions(field: Record<string, unknown>): { label: string; descripti
     .filter((option): option is { label: string; description?: string } => option !== null)
 }
 
-function isCustomAnswerField(field: Record<string, unknown> | undefined): boolean {
+/**
+ * The free-text companion of an option question. The Claude adapter marks it in
+ * `_meta`, but from 0.89 only for a JetBrains AIR client, which Cinna's patched
+ * adapter does not claim to be. So an unmarked `question_<n>_custom` with no
+ * options of its own, beside its `question_<n>`, is the companion too.
+ */
+function isCustomAnswerField(
+  key: string,
+  field: Record<string, unknown> | undefined,
+  properties: Record<string, unknown>
+): boolean {
   const meta = asRecord(field?._meta)
-  return meta !== undefined && CUSTOM_ANSWER_META_KEY in meta
+  if (meta !== undefined && CUSTOM_ANSWER_META_KEY in meta) return true
+  const companion = /^(question_\d+)_custom$/.exec(key)
+  return companion !== null && companion[1] in properties && enumOptions(field ?? {}).length === 0
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

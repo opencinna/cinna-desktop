@@ -3,7 +3,7 @@ import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
@@ -17,7 +17,9 @@ import {
 /**
  * @live — tasks processed by a **real** agent: a folder agent on the real
  * pinned OpenCode runtime (`engine: true`) answering through the real OpenAI
- * key in `.env`. Skipped without the key.
+ * key in `.env`. Skipped without the key. `CINNA_E2E_LIVE_ENGINE=claude|codex`
+ * runs the same tests on the developer's own Claude Code / Codex login instead
+ * (`e2e/fixtures/liveEngine.ts`); every agent is put on that engine's cheap model.
  *
  * Every assertion is on an outcome — a file on disk, the task's status and
  * chat in main, the Inbox, the words the task page and board show — never on
@@ -40,9 +42,9 @@ import {
  * interrupted. Job-run tasks and Cinna-server tasks are not covered here.
  */
 
-test.beforeEach(() => requireLiveKey())
+test.beforeEach(() => requireLiveEngine())
 
-test.use({ engine: true })
+test.use(liveEngineOptions())
 
 const AGENT = 'File Clerk'
 
@@ -84,11 +86,12 @@ function contentOf(path: string): string | null {
  */
 async function arrangeClerk(cinna: CinnaApp): Promise<{ agentId: string; folder: string }> {
   await cinna.skipOnboarding()
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   console.log(`live-tasks model: ${model}`)
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
   const root = await addAgentRoot(cinna)
   const agent = await createFolderAgent(cinna, root, AGENT, 'Writes the files a task asks for.')
+  await useLiveRuntime(cinna, agent.id)
   for (const prompt of ['workflow', 'entrypoint'] as const) {
     const outcome = await cinna.page.evaluate(
       async ({ agentId, prompt, value }) => {
@@ -260,7 +263,7 @@ test('@live two tasks for the same agent run at once without cross-talk', async 
 test('@live a brief written from outside the app is run by a real agent through the file protocol', async ({ cinna }) => {
   test.setTimeout(360_000)
   await cinna.skipOnboarding()
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   console.log(`live-tasks model: ${model}`)
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
 
@@ -276,6 +279,13 @@ test('@live a brief written from outside the app is run by a real agent through 
     { path: pick.path, relPaths: pick.found.map((entry) => entry.relPath) }
   )
   expect(added.ok, 'the folder is adopted').toBe(true)
+  if (LIVE_ENGINE.runtime) {
+    const real = realpathSync(folder)
+    const rows = (await cinna.page.evaluate(() => window.api.localAgents.list())).agents
+    const row = rows.find((entry) => entry.path !== null && realpathSync(entry.path) === real)
+    if (!row) throw new Error(`no agent row for ${folder}`)
+    await useLiveRuntime(cinna, row.id)
+  }
 
   const id = '20261002-1200-tide-note'
   const title = 'Write the tide note'

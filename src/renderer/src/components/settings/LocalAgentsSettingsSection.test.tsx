@@ -256,7 +256,7 @@ describe('LocalAgentsSettingsSection', () => {
   })
 
   describe('with Claude Agent as the default runtime', () => {
-    const MANAGED = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+    const MANAGED = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
     beforeEach(() => {
       appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'claude' }
     })
@@ -266,7 +266,7 @@ describe('LocalAgentsSettingsSection', () => {
       // would simply install Claude Code on is told its agents cannot run.
       claudeBinary = { state: 'unresolved', assetBytes: 215_643_408 }
       render(<LocalAgentsSettingsSection />)
-      const status = screen.getByText('Claude Code 2.1.276 installs on first use, about 215 MB.')
+      const status = screen.getByText('Claude Code 2.1.296 installs on first use, about 215 MB.')
       expect(status.className).toContain('text-[var(--color-text-muted)]')
       expect(status.parentElement!.className).toContain('min-h-[1lh]')
       expect(screen.queryByText(/not found/i)).toBeNull()
@@ -275,9 +275,9 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it.each([
-      ['a managed copy', MANAGED, 'Claude Code 2.1.276 (managed) — runs on your Claude login.', 'Claude Agent2.1.276 managed'],
+      ['a managed copy', MANAGED, 'Claude Code 2.1.296 (managed) — runs on your Claude login.', 'Claude Agent2.1.296 managed'],
       ['the user’s install at exactly the pin', { ...MANAGED, source: 'path-pinned', path: '/Users/x/.local/bin/claude' },
-        'Claude Code 2.1.276 — your own install, the tested version.', 'Claude Agent2.1.276 (your install)']
+        'Claude Code 2.1.296 — your own install, the tested version.', 'Claude Agent2.1.296 (your install)']
     ])('says the same on the button as in the line under it: %s', (_label, state, line, button) => {
       claudeBinary = state
       render(<LocalAgentsSettingsSection />)
@@ -291,7 +291,7 @@ describe('LocalAgentsSettingsSection', () => {
       claudeBinary = { state: 'resolving', received: 107_821_704, total: 215_643_408, assetBytes: 215_643_408 }
       resolveClaude = { ...mutation(), isPending: true }
       render(<LocalAgentsSettingsSection />)
-      const status = screen.getByText('Downloading Claude Code 2.1.276 — 107 of 215 MB.')
+      const status = screen.getByText('Downloading Claude Code 2.1.296 — 107 of 215 MB.')
       expect(status.parentElement!.className).toContain('min-h-[1lh]')
       expect((screen.getByRole('button', { name: 'Installing…' }) as HTMLButtonElement).disabled).toBe(true)
     })
@@ -325,7 +325,7 @@ describe('LocalAgentsSettingsSection', () => {
     it('says nothing while the state is still being read', () => {
       claudeBinary = undefined
       render(<LocalAgentsSettingsSection />)
-      expect(screen.queryByText(/Claude Code 2\.1\.276/)).toBeNull()
+      expect(screen.queryByText(/Claude Code 2\.1\.296/)).toBeNull()
     })
   })
 

@@ -118,23 +118,23 @@ describe('the Claude Code row', () => {
   const claudeRow = (): HTMLElement => screen.getByText('Claude Code', { selector: 'td' }).closest('tr')!
 
   it('sits under the Codex row and names the Claude Code Cinna runs — not whatever is on PATH', async () => {
-    mocks.claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+    mocks.claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
     renderTools()
     await screen.findByRole('button', { name: 'Update' })
     const row = claudeRow()
     expect(row.previousElementSibling?.querySelector('td')?.textContent).toBe('Codex')
-    expect(within(row).getByText('2.1.276 managed').className).toContain('font-mono')
-    expect(row.querySelector('td')?.title).toBe('/data/runtimes/claude-2.1.276/claude')
+    expect(within(row).getByText('2.1.296 managed').className).toContain('font-mono')
+    expect(row.querySelector('td')?.title).toBe('/data/runtimes/claude-2.1.296/claude')
     // One row for Claude Code: the detected-tools list leaves runtimes out, so
     // the PATH copy cannot appear beside it as a second, contradicting version.
     expect(screen.getAllByText('Claude Code', { selector: 'td' })).toHaveLength(1)
   })
 
   it('says whose copy it is: the user’s exact-version install, or an unverified path', async () => {
-    mocks.claudeBinary = { state: 'ready', path: '/Users/x/.local/bin/claude', source: 'path-pinned', version: '2.1.276 (Claude Code)' }
+    mocks.claudeBinary = { state: 'ready', path: '/Users/x/.local/bin/claude', source: 'path-pinned', version: '2.1.296 (Claude Code)' }
     const view = render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><DeveloperToolsSettingsSection /></QueryClientProvider>)
     await screen.findByRole('button', { name: 'Update' })
-    expect(within(claudeRow()).getByText('2.1.276 (your install)')).toBeTruthy()
+    expect(within(claudeRow()).getByText('2.1.296 (your install)')).toBeTruthy()
     view.unmount()
 
     mocks.claudeBinary = { state: 'ready', path: '/opt/claude', source: 'configured', version: '2.1.300 (Claude Code)' }

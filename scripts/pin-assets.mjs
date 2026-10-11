@@ -17,7 +17,7 @@
 //   default: ~900 MB across four platforms is a lot to fetch to re-derive a
 //   number the vendor's installer itself trusts. `--verify` downloads each
 //   binary anyway and refuses a row whose bytes disagree with the manifest —
-//   use it before committing a bump. (The 2.1.276 rows were verified that way.)
+//   use it before committing a bump. (The 2.1.296 rows were verified that way.)
 // - antigravity — every zip is DOWNLOADED from Google's release path and
 //   hashed here, as for codex: nothing is published to compare against.
 //

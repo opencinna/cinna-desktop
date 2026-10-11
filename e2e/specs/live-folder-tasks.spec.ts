@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
-import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { filterTasksByAgent } from '../fixtures/tasksView'
 
 /**
@@ -31,10 +31,12 @@ import { filterTasksByAgent } from '../fixtures/tasksView'
  * first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini normally): about
  * **$0.01–0.03 a run**. Chat auto-titles are off. Run deliberately:
  * `make e2e-one SPEC=live-folder-tasks`.
+ * With `CINNA_E2E_LIVE_ENGINE=claude|codex` the agent runs on the developer's
+ * own Claude Code / Codex login instead (`e2e/fixtures/liveEngine.ts`).
  */
 
-test.use({ engine: true })
-test.beforeEach(() => requireLiveKey())
+test.use(liveEngineOptions())
+test.beforeEach(() => requireLiveEngine())
 
 const AGENT_HEADING = 'Release Desk'
 const TITLE = 'Publish the release notes'
@@ -78,13 +80,14 @@ const folderColumn = (cinna: CinnaApp, word: string) => cinna.page.locator(`[dat
 test('@live a real agent moves its own task by editing the task file', async ({ cinna }) => {
   test.setTimeout(5 * 60_000)
   await cinna.skipOnboarding()
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   console.log(`live-folder-tasks model: ${model}`)
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
 
   const folder = homeDir(cinna, 'release-desk')
   writeFileSync(join(folder, 'CLAUDE.md'), `# ${AGENT_HEADING}\n\nYou own this project. Do what the user asks with your file tools, then say done. Never ask the user anything.\n`)
   const agent = await adoptFolder(cinna, folder)
+  await useLiveRuntime(cinna, agent.id)
   // Seeded agents and credentials reach the sidebar, the composer and the Agent filter only after a restart.
   await cinna.relaunch()
   await cinna.skipOnboarding()

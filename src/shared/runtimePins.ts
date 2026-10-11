@@ -90,7 +90,7 @@ export interface RuntimePinCompanion {
   size: number
 }
 
-const CLAUDE_CLI = '2.1.276'
+const CLAUDE_CLI = '2.1.296'
 const CLAUDE_RELEASE =
   `https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${CLAUDE_CLI}`
 
@@ -160,20 +160,19 @@ export const RUNTIME_PINS = {
     cli: CLAUDE_CLI,
     /** Exactly what `claude --version` prints for the pin. */
     versionOutput: `${CLAUDE_CLI} (Claude Code)`,
-    adapter: '0.76.0',
+    adapter: '0.89.1',
     /** `@agentclientprotocol/claude-agent-acp/dist/acp-agent.js` as published (checked against the locked npm tarball). */
-    adapterOriginalSha256: 'c1635f643ceff71c906011b85f33f1b135a4a07aeaa5546d44fb6c5fad11c96d',
-    /** The same file after `scripts/patch-claude-agent-acp.cjs` (the `_cinna/contextUsage` request). */
-    adapterPatchedSha256: '7aa55ed80d2c991b3fc6a97aa09a8b35d7e097d5445bf8e566dc94db658d48d2',
+    adapterOriginalSha256: 'f00fea811d7144360a6e70bc87e38e36d00a807d15825a8179e2458520b71784',
+    /** The same file after `scripts/patch-claude-agent-acp.cjs` (the `_cinna/contextUsage` request, and `air.client` forced off). */
+    adapterPatchedSha256: 'd9d4d9ac13623f29745c8a3e1e790dd7ce04000714794a01d820e905ce11c4aa',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
      * size}`; the executable is `<release>/<key>/<binary>`, a single file, not an archive.
      *
-     * Every row was hashed from real bytes on 2026-09-18 and then compared with
-     * the manifest's `checksum` and `size`, which agreed: darwin-x64, linux-x64
-     * and linux-arm64 were downloaded from the bucket; darwin-arm64 is the hash
-     * of the vendor installer's own `~/.local/share/claude/versions/2.1.276`.
+     * Every row was downloaded from the bucket and hashed on 2026-10-11 (`make
+     * pin-assets` with `--verify`), and agreed with the manifest's `checksum`
+     * and `size`.
      *
      * Linux rows are the glibc builds (the manifest also has `-musl` keys; see
      * `engine/binaryResolver.ts` for why libc is not detected). **Windows is
@@ -181,10 +180,10 @@ export const RUNTIME_PINS = {
      * POSIX-verified only, so a Windows user sets a Claude Path in Settings.
      */
     assets: {
-      'darwin-arm64': claudeAsset('darwin-arm64', '9de364db11a410d53cbbb0f6b1f18c66c90053efc9a63370072856d10db66329', 215643408),
-      'darwin-x64': claudeAsset('darwin-x64', 'cf0b4af7bce5d991a577d1150e86d45b7b83ef57cdb0384044ca54661ded24c6', 224441440),
-      'linux-x64': claudeAsset('linux-x64', '8a56c8a14bd3cb246e2bdb7e60aefe0f609bff78c8bbcc5ea6b1817c111c6145', 232059192),
-      'linux-arm64': claudeAsset('linux-arm64', 'e9ac3df956083645578a382ad64ec304468666e362c33bfdefd803cd6ff596b0', 231989488)
+      'darwin-arm64': claudeAsset('darwin-arm64', 'c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937', 240664432),
+      'darwin-x64': claudeAsset('darwin-x64', 'a6bf4f30be241053a923f3820ad23c5991d2f5ac2935b3a8dd64da218d9cc603', 249194752),
+      'linux-x64': claudeAsset('linux-x64', '24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de', 257068216),
+      'linux-arm64': claudeAsset('linux-arm64', 'f1f6e96e0d8342b9dbf41d7e88255397a6a52ce3d8736ad6a4c6b59c9b62fefa', 256434168)
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   codex: {

@@ -10,6 +10,7 @@ import { applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { parseClaudeAuthStatus } from '../claudeAuth'
 import { airClientMeta } from '../acpActivity'
 import { readContextCategories } from '../acpTelemetry'
+import { toInputQuestions } from '../acpQuestions'
 import { resolveOfferedModel, selectedModelOf } from '../acpMessages'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CLAUDE_CONTRACT } from './claude.contract'
@@ -131,7 +132,15 @@ const seen = {
   /** Scenario C: the user's `settings.json` names a model, the desktop re-asserts its own. */
   model: { error: null as unknown, startedOn: null as string | null, resolved: null as string | null, set: false,
     /** The conversation's models before the re-assert, and after it. */
-    before: [] as string[], after: [] as string[] }
+    before: [] as string[], after: [] as string[] },
+  /** Scenario D: native tools and activity on a folder session, as the desktop declares itself. */
+  tools: { error: null as unknown, fileAfterEdit: '' as string,
+    /** Every tool_call / tool_call_update of the Read, and of the Edit. */
+    read: [] as Json[], edit: [] as Json[],
+    /** Every permission ask of the scenario, in order. */
+    permissions: [] as AdapterMessage[],
+    /** Every `sessionUpdate` kind of the background-shell and subagent prompts, and the updates of the activity kinds. */
+    activityKinds: [] as string[], activity: [] as Json[] }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -408,6 +417,86 @@ async function modelScenario(binary: string, trap: EgressTrap): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario D */
+
+const READ_MARKER = 'CONTRACT_READ_TEXT_6f1'
+const EDIT_OLD = 'CONTRACT_EDIT_OLD_2b8'
+const EDIT_NEW = 'CONTRACT_EDIT_NEW_2b8'
+const ACTIVITY_KINDS = ['async_task_spawned', 'async_task_progress', 'async_task_state_update', 'subagent_spawned', 'subagent_state_update']
+
+/**
+ * A folder session's native tools and activity, on the capabilities the
+ * desktop declares (`initParams`): a Read, an Edit that asks first, a
+ * background shell and a subagent. These are the shapes the adapter reshapes
+ * for the JetBrains AIR UI when it takes the AIR declaration for that UI, which
+ * the adapter patch turns off. Kept out of the snapshot, like scenario C.
+ */
+async function toolsScenario(binary: string, trap: EgressTrap): Promise<void> {
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  let script: ClaudeProviderReply[] = []
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : (script.shift() ?? { kind: 'text', text: 'OK' }))
+  const scratch = makeClaudeScratch('cinna-contract-claude-tools-', { providerPort: provider.port, trapPort: trap.port })
+  try {
+    const file = join(scratch.cwd, 'notes.txt')
+    writeFileSync(file, `${READ_MARKER}\n${EDIT_OLD}\n`)
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary },
+      answer: (request) => {
+        if (request.method !== 'session/request_permission') return undefined
+        seen.tools.permissions.push(request)
+        const option = ((request.params?.options as Json[] | undefined) ?? []).find((candidateOption) => candidateOption.kind === 'allow_once')
+        return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : undefined
+      } })
+    await connection.rpc('initialize', initParams)
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+      systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {},
+      agents: { [SUBAGENT]: { description: 'A contract subagent.', prompt: 'Answer OK.' } } } } } }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { seen.tools.error = created.error ?? 'no session'; return }
+    await connection.rpc('session/set_mode', { sessionId, modeId: 'default' })
+    const run = async (reply: ClaudeProviderReply, text: string): Promise<Json[]> => {
+      const before = connection!.updates.length
+      script = [reply]
+      const answer = await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, 90_000)
+      if (answer.error) seen.tools.error ??= answer.error
+      return connection!.updates.slice(before)
+    }
+    const callsOf = (updates: Json[], toolName: string): Json[] => {
+      const id = updates.find((update) => update.sessionUpdate === 'tool_call' &&
+        ((update._meta as Json | undefined)?.claudeCode as Json | undefined)?.toolName === toolName)?.toolCallId
+      return id === undefined ? [] : updates.filter((update) => update.toolCallId === id)
+    }
+
+    seen.tools.read = callsOf(await run({ kind: 'tool', name: 'Read', input: { file_path: file } }, 'Read notes.txt.'), 'Read')
+    seen.tools.edit = callsOf(await run({ kind: 'tool', name: 'Edit', input: { file_path: file, old_string: EDIT_OLD, new_string: EDIT_NEW } }, 'Edit notes.txt.'), 'Edit')
+    seen.tools.fileAfterEdit = readFileSync(file, 'utf8')
+
+    const activityFrom = connection.updates.length
+    await run({ kind: 'tool', name: 'Bash', input: { command: 'sleep 1; echo contract-bg', description: 'Background probe', run_in_background: true } }, 'Run it in the background.')
+    await run({ kind: 'tool', name: 'Agent', input: { subagent_type: SUBAGENT, description: 'Contract probe', prompt: 'Answer OK.' } }, 'Ask the helper.')
+    // The background shell ends after its prompt returned; its terminal state follows on its own.
+    await until(() => connection!.updates.slice(activityFrom).filter((update) => update.sessionUpdate === 'async_task_state_update').length > 0 &&
+      connection!.updates.slice(activityFrom).some((update) => update.sessionUpdate === 'subagent_state_update'), 15_000)
+    const activity = connection.updates.slice(activityFrom)
+    seen.tools.activityKinds = [...new Set(activity.map((update) => String(update.sessionUpdate)))].sort()
+    seen.tools.activity = activity.filter((update) => ACTIVITY_KINDS.includes(String(update.sessionUpdate)))
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
+/** A tool call update's output as text, from `content[]` and `rawOutput` (the two places `acpMessages.toolOutputText` reads). */
+function outputText(update: Json): string {
+  const content = ((update.content as Json[] | undefined) ?? []).map((block) => {
+    const inner = (block.content as Json | undefined) ?? block
+    return typeof inner.text === 'string' ? inner.text : ''
+  })
+  const raw = update.rawOutput
+  return [...content, typeof raw === 'string' ? raw : raw === undefined ? '' : JSON.stringify(raw)].join('\n')
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 /** Shapes only: no paths, ids, ports, tokens, timestamps or prompt text, so two versions diff cleanly. */
@@ -493,6 +582,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       await folderScenario(binary, trap)
       await policyScenario(binary, trap)
       await modelScenario(binary, trap)
+      await toolsScenario(binary, trap)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
     } finally {
       seen.egress = [...trap.attempts]
@@ -540,8 +630,9 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect(result.protocolVersion).toBe(1)
     expect(result.agentInfo).toMatchObject({ name: '@agentclientprotocol/claude-agent-acp', version: RUNTIME_PINS.claude.adapter })
     expect(result.agentCapabilities).toMatchObject({ loadSession: true, mcpCapabilities: { http: true } })
-    const air = (((result._meta as Json | undefined)?.jetbrains as Json | undefined)?.air as Json | undefined)?.capabilities
-    expect(air).toEqual(expect.arrayContaining(['asyncTasks', 'nativeSubagentSessions']))
+    // Answered as to a plain client: the AIR UI's advertisement is gone with `air.client` (the adapter patch).
+    expect(result._meta).toMatchObject({ steering: { supported: true } })
+    expect(result._meta).not.toHaveProperty('jetbrains')
   })
 
   it(entry('claude.session.options-system-prompt'), () => {
@@ -625,7 +716,39 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect([...new Set(seen.contextUsageTraffic.other)]).toEqual(['POST /v1/messages/count_tokens'])
   })
 
+  it(entry('claude.session.air-activity'), () => {
+    expect(seen.tools.error, JSON.stringify(seen.tools.error)).toBeNull()
+    expect(seen.tools.activityKinds).toEqual(expect.arrayContaining(['async_task_spawned', 'async_task_state_update', 'subagent_spawned', 'subagent_state_update']))
+    expect(seen.tools.activity.find((update) => update.sessionUpdate === 'async_task_spawned')).toMatchObject({ asyncTaskId: expect.any(String) })
+    expect(seen.tools.activity.find((update) => update.sessionUpdate === 'subagent_spawned')).toMatchObject({ subagentSessionId: expect.any(String) })
+  })
+
   /* tools & MCP */
+  it(entry('claude.tools.read-result-text'), () => {
+    expect(seen.tools.error, JSON.stringify(seen.tools.error)).toBeNull()
+    const done = seen.tools.read.find((update) => update.status === 'completed')
+    expect(done, `the Read never completed: ${JSON.stringify(seen.tools.read)}`).toBeDefined()
+    expect(outputText(done!), 'the Read result reached the client without the file text').toContain(READ_MARKER)
+  })
+
+  it(entry('claude.tools.edit-raw-input'), () => {
+    expect(seen.tools.error, JSON.stringify(seen.tools.error)).toBeNull()
+    const first = seen.tools.edit[0]
+    expect(first?.sessionUpdate).toBe('tool_call')
+    // The AIR UI shape leaves `rawInput` off the first report and the edit's text out of every one.
+    expect(first).toHaveProperty('rawInput')
+    const full = (update: Json | undefined): boolean => {
+      const input = (update?.rawInput ?? {}) as Json
+      return input.old_string === EDIT_OLD && input.new_string === EDIT_NEW
+    }
+    expect(seen.tools.edit.some(full), `no Edit update carried old_string/new_string: ${JSON.stringify(seen.tools.edit)}`).toBe(true)
+    const ask = seen.tools.permissions.find((request) => (request.params?.toolCall as Json | undefined)?.toolCallId === first?.toolCallId)
+    expect(ask, 'the Edit did not ask first in default mode').toBeDefined()
+    expect(full(ask?.params?.toolCall as Json | undefined), `the ask's rawInput: ${JSON.stringify((ask?.params?.toolCall as Json | undefined)?.rawInput)}`).toBe(true)
+    // `allow_once` ran it.
+    expect(seen.tools.fileAfterEdit).toContain(EDIT_NEW)
+  })
+
   it(entry('claude.mcp.session-injection'), () => {
     expect(seen.policyOptions).toMatchObject({ strictMcpConfig: true, mcpServers: {} })
     expect(conversation(seen.policyTurns)[0]?.tools).toContain('mcp__cinna__probe')
@@ -672,6 +795,8 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect(params).toMatchObject({ mode: 'form', message: 'Deterministic?' })
     const property = ((params.requestedSchema as Json | undefined)?.properties as Json | undefined)?.question_0 as Json | undefined
     expect(((property?.oneOf as Json[] | undefined) ?? []).map((option) => option.const)).toEqual(['Yes', 'No'])
+    // One question asked is one question shown: the adapter's free-text companion is not another.
+    expect(toInputQuestions(params as never)?.fields.map((field) => field.key)).toEqual(['question_0'])
     expect(seen.question.toolResults.some((result) => /Yes/.test(result)), `tool results: ${JSON.stringify(seen.question.toolResults)}`).toBe(true)
   })
 

@@ -613,9 +613,9 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // from the settings that branch keeps enabled, and passing them as well
       // would hand the adapter every definition twice.
       const agents = native ? {} : safely(() => deps.folderAgents(ctx.folder.path), {})
-      // Default `argv` delivery (one `--plugin-dir`): `pluginDelivery:
-      // 'initialize'` exists only from SDK 0.3.261, and the adapter runs its
-      // own SDK dependency (0.3.257 under adapter 0.76.0), which ignores it.
+      // Default `argv` delivery (one `--plugin-dir`), the delivery the
+      // contract checks; `pluginDelivery: 'initialize'` (SDK 0.3.261+, the
+      // adapter runs 0.3.293 under 0.89.1) is not used.
       const pluginPath = safely(() => deps.tasksSkillPlugin?.() ?? null, null)
       // The agent's own skills, beside cinna-tasks in the same array (two
       // local plugins load together, proven on 2.1.276 / adapter 0.76.0).

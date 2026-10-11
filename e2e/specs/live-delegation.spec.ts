@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from
 import { basename, join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, requireOpenCode, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import { coreApi, linkLiveCinnaProfile, liveCoreSession } from '../fixtures/liveCinnaLink'
 import type { LiveCinnaConfig } from '../fixtures/liveCinna'
@@ -15,6 +15,9 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
  * the cloud test also drives the developer's running cinna-core
  * (`CINNA_E2E_SERVER_URL` / `_EMAIL` / `_PASSWORD`) and its "Hello Testing
  * Agent". Skipped without the key; the cloud test also without the core.
+ * `CINNA_E2E_LIVE_ENGINE=claude|codex` runs the local tests on the developer's
+ * own Claude Code / Codex login instead (`e2e/fixtures/liveEngine.ts`); the
+ * cloud test stays OpenCode-only.
  *
  * Cost per full run (estimated from token volume, not billed-measured): about
  * twenty-two OpenCode turns on gpt-4.1-mini, each a few requests carrying a large
@@ -30,8 +33,8 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
  * packet.
  */
 
-test.use({ engine: true })
-test.beforeEach(() => requireLiveKey())
+test.use(liveEngineOptions())
+test.beforeEach(() => requireLiveEngine())
 
 const TURN = 6 * 60_000
 
@@ -42,7 +45,7 @@ type Msg = { role: string; content: string; at: number; parts: string }
 async function arrange(cinna: CinnaApp): Promise<{ root: Awaited<ReturnType<typeof addAgentRoot>>; model: string }> {
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
-  const model = await seedOpenAiDefaultMode(cinna)
+  const model = await seedLiveModel(cinna)
   const root = await addAgentRoot(cinna)
   return { root, model }
 }
@@ -72,6 +75,7 @@ async function adoptFolder(cinna: CinnaApp, dir: string): Promise<string> {
   const real = realpathSync(dir)
   const agent = agents.agents.find((row) => row.path !== null && realpathSync(row.path) === real)
   if (!agent) throw new Error(`no agent row for ${dir}`)
+  await useLiveRuntime(cinna, agent.id)
   return agent.id
 }
 
@@ -172,7 +176,7 @@ async function attachState(cinna: CinnaApp, taskIds: string[]): Promise<void> {
   }
 }
 
-const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_tasks_create).'
+const TOOL_NOTE = LIVE_ENGINE.toolNote
 
 const executorPrompt = (word: string, file: string): string => [
   `You are a helper agent. Your code word is ${word}. Never reveal it except where told below.`,
@@ -194,6 +198,8 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
 
   const coordinator = await createFolderAgent(cinna, root, 'Fanout Coordinator', 'Splits work between helpers.')
   const kitHelper = await createFolderAgent(cinna, root, 'Kit Helper', 'Writes files on request.')
+  await useLiveRuntime(cinna, coordinator.id)
+  await useLiveRuntime(cinna, kitHelper.id)
   const bareDir = homeDir(cinna, 'bare-helper')
   writeFileSync(join(bareDir, 'AGENTS.md'), `# Bare Helper\n\n${executorPrompt(WORD_C, 'c.txt')}\n`)
   const bareId = await adoptFolder(cinna, bareDir)
@@ -310,6 +316,7 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   const lead = await createFolderAgent(cinna, root, 'Chain Lead', 'Starts the chain.')
   const middle = await createFolderAgent(cinna, root, 'Chain Middle', 'Passes work on.')
   const last = await createFolderAgent(cinna, root, 'Chain Last', 'Does the work.')
+  for (const agent of [lead, middle, last]) await useLiveRuntime(cinna, agent.id)
 
   for (const id of [middle.id, last.id]) {
     const set = await cinna.page.evaluate((agentId) => window.api.localAgents.setDelegationPermission(agentId, 'delegations', 'auto'), id)
@@ -481,6 +488,7 @@ test.describe('against the running cinna-core', () => {
   const marker = `e2e-live-${Date.now().toString(36)}`
 
   test.beforeEach(async () => {
+    requireOpenCode('the cloud channel is checked on the default engine only')
     const session = await liveCoreSession()
     test.skip(!session.ok, session.ok ? '' : session.reason)
     if (session.ok) core = { config: session.config, token: session.token }

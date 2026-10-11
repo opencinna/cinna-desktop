@@ -96,6 +96,26 @@ describe('toInputQuestions', () => {
     expect(form?.fields.map((field) => field.key)).toEqual(['question_0'])
   })
 
+  it('drops the “Other” box when the adapter leaves its marker off, as 0.89 does for a client that is not AIR', () => {
+    const schema = (ONE_QUESTION as unknown as { requestedSchema: { properties: Record<string, Record<string, unknown>> } }).requestedSchema
+    const { _meta: _marker, ...unmarked } = schema.properties.question_0_custom
+    const form = toInputQuestions({
+      ...ONE_QUESTION,
+      requestedSchema: { ...schema, properties: { ...schema.properties, question_0_custom: unmarked } }
+    } as unknown as CreateElicitationRequest)
+    expect(form?.fields.map((field) => field.key)).toEqual(['question_0'])
+  })
+
+  it('still asks an unmarked `_custom` field that has no `question_<n>` beside it', () => {
+    const form = toInputQuestions({
+      mode: 'form',
+      sessionId: 'ses_1',
+      message: 'Name it',
+      requestedSchema: { type: 'object', properties: { question_0_custom: { type: 'string', title: 'Name' } } }
+    } as unknown as CreateElicitationRequest)
+    expect(form?.fields.map((field) => field.key)).toEqual(['question_0_custom'])
+  })
+
   it('takes each question’s own text when there are several, and marks the multi-select', () => {
     const form = toInputQuestions(TWO_QUESTIONS)
     expect(form?.questions.map((q) => q.question)).toEqual([

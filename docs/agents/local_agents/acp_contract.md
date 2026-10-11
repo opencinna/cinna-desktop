@@ -217,8 +217,13 @@ desktop's `capabilities().input.question` is true for this launcher and false fo
 schema the adapter builds is read rather than guessed: `question_<n>` (a `oneOf` of `{const, title,
 description?}` for single-select, an `array`/`anyOf` for multi-select, where the `const` **is** the
 option's label because that is what the tool records as the answer), plus a `question_<n>_custom`
-free-text companion marked with `_meta._askUserQuestionCustomAnswer` — dropped rather than rendered,
-because the desktop's widget supplies its own Other answer and the companion would otherwise appear as a second question. Codex companions use a different marker, described below.
+free-text companion — dropped rather than rendered, because the desktop's widget supplies its own
+Other answer and the companion would otherwise appear as a second question. From adapter 0.89 the
+companion carries its `_meta._askUserQuestionCustomAnswer` marker only for a JetBrains AIR client,
+which the patched adapter never takes Cinna for, so `acpQuestions.ts` (`isCustomAnswerField`) also
+drops an **unmarked** `question_<n>_custom` that has no options of its own and sits beside its
+`question_<n>`; the marker is still honoured when present. Without that, every Claude option question
+would be followed by a stray free-text one. Codex companions use a different marker, described below.
 
 **The request names the call it came from, and that call answers twice.** `handleAskUserQuestion`
 passes the SDK's `toolUseID` to `askUserQuestionsToCreateRequest`, which sends it as the
@@ -485,7 +490,7 @@ What the desktop does with this — the observer, which traffic opens a follow-u
 
 ## Session activity over the AIR extension
 
-**The client opts in at `initialize`:** `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities: [...]}`, with `asyncTasks` and `nativeSubagentSessions` as the two names this client knows. *From the adapters' code:* each checks `version >= 1` and looks for each capability by name. Watched under the conditions above unless marked.
+**The client opts in at `initialize`:** `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities: [...]}`, with `asyncTasks` and `nativeSubagentSessions` as the two names this client knows. *From the adapters' code:* each checks `version >= 1` and looks for each capability by name. Watched under the conditions above unless marked. The Claude adapter (0.8x) also reads the bare declaration as "the client is the JetBrains AIR UI" and reshapes tool calls for it; Cinna's adapter patch turns that part off and keeps the two capabilities ([Claude engine (tech)](claude_engine_tech.md)).
 
 ### Background tasks (`asyncTasks`)
 

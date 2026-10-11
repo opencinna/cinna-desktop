@@ -113,7 +113,7 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   // A shipped Claude adapter without the reviewed patch is refused.
   copyClaudeAdapter(shippedClaude)
   writeFileSync(join(shippedClaude, 'dist/acp-agent.js'), '// pristine adapter\n')
-  assert.throws(() => afterPack(context), /Claude ACP context-usage patch is missing or changed/)
+  assert.throws(() => afterPack(context), /Claude ACP patch \(context usage, AIR client off\) is missing or changed/)
   copyClaudeAdapter(shippedClaude)
   assert.throws(() => afterPack(context), /Missing packaged Canvas payload/)
   const shipped = pkg(canvasName, { main: 'skia.darwin-x64.node' }, unpacked)

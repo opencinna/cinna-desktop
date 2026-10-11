@@ -857,7 +857,7 @@ describe('resolveEngineBinaryWith — the pinned Claude Code CLI', () => {
   it('pins four POSIX rows, each a single executable from the vendor bucket with its size', () => {
     expect(Object.keys(CLAUDE_ASSETS).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
     for (const [key, asset] of Object.entries(CLAUDE_ASSETS)) {
-      expect(asset.url, key).toBe(`https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.276/${key}/claude`)
+      expect(asset.url, key).toBe(`https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.296/${key}/claude`)
       expect(asset.format, key).toBe('executable')
       expect(asset.size, key).toBeGreaterThan(200 * 1024 * 1024)
     }

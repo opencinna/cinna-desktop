@@ -95,7 +95,10 @@ beforeEach(() => {
   clearContractCache()
   scannerService.markAllRootsDirty()
   turnLock.releaseAll()
-  workshop = mkdtempSync(join(tmpdir(), 'cinna-write-'))
+  // One level below a private parent: the overlap test picks `dirname(workshop)`,
+  // and the picker scans what it is given — never the whole system temp dir.
+  workshop = join(mkdtempSync(join(tmpdir(), 'cinna-write-')), 'workshop')
+  mkdirSync(workshop)
   // Point the agents home at the temp workshop *before* anything calls
   // `ensureHome`, which would otherwise resolve the real `~/Documents/CinnaAgents`
   // and create it. A test must never write outside its temp directory.
@@ -116,7 +119,7 @@ afterEach(() => {
   holder.current?.close()
   holder.current = null
   clearContractCache()
-  rmSync(workshop, { recursive: true, force: true })
+  rmSync(dirname(workshop), { recursive: true, force: true })
 })
 
 function currentAgent() {
@@ -1342,10 +1345,12 @@ describe('adopting an existing folder', () => {
   }
 
   beforeEach(() => {
-    outside = mkdtempSync(join(tmpdir(), 'cinna-adopt-'))
+    // Below a private parent, like `workshop`: `dirname(outside)` is picked, and scanned.
+    outside = join(mkdtempSync(join(tmpdir(), 'cinna-adopt-')), 'outside')
+    mkdirSync(outside)
   })
   afterEach(() => {
-    rmSync(outside, { recursive: true, force: true })
+    rmSync(dirname(outside), { recursive: true, force: true })
   })
 
   it('previews what is in a folder without registering anything', () => {

@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { repoRoot } from '../playwright.config'
 import { installCachedEngine } from './engine-cache'
+import { checkLiveEngine, NO_AGENT_TURN, type LiveEngineCheck } from './mainLog'
+import { beginRealLogin, endRealLogin, makeRealLoginDirs, pinRealLoginProfile, type RealLogin } from './realLogin'
 
 /**
  * One launched app per test, in a sandbox nobody else can see.
@@ -27,6 +29,12 @@ export interface Sandbox {
   home: string
   /** Where `app.getPath('userData')` points. */
   userData: string
+  /**
+   * The `HOME` the app is launched with, when it is not {@link home}: only on
+   * a real-login run (`realLogin.ts`), where it is the developer's real `HOME`
+   * and `home` is a throwaway `~/.cinna-e2e-<engine>-*` folder under it.
+   */
+  appHome?: string
 }
 
 export interface CinnaApp {
@@ -49,7 +57,9 @@ export interface CinnaApp {
   skipOnboarding(): Promise<void>
 }
 
-export function makeSandbox(): Sandbox {
+export function makeSandbox(realLogin: RealLogin | null = null): Sandbox {
+  // The real `HOME` already has its own rc files; nothing is written into them.
+  if (realLogin) return makeRealLoginDirs(realLogin)
   const root = mkdtempSync(join(tmpdir(), 'cinna-e2e-'))
   const home = join(root, 'home')
   const userData = join(root, 'userData')
@@ -71,7 +81,7 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // A spec's own variables go in *before* the sandbox ones, so no spec can
   // point the app at the developer's real `HOME` or profile by accident.
   for (const [key, value] of Object.entries(extra)) env[key] = value
-  env.HOME = sandbox.home
+  env.HOME = sandbox.appHome ?? sandbox.home
   env.CINNA_USER_DATA = sandbox.userData
   // The suite launches a real app per test, and on macOS a real app that shows
   // a window takes the foreground. Playwright drives the renderer over CDP and
@@ -188,16 +198,40 @@ export interface CinnaOptions {
    * module-level object here and fill it in.
    */
   env: Readonly<Record<string, string>>
+  /**
+   * Run on the developer's own Claude Code or Codex login: the app gets the
+   * real `HOME` (userData stays throwaway), `skipOnboarding()` makes the engine
+   * the Default runtime with `binary` as its path, and the engine's session
+   * records are cleaned afterwards — see `realLogin.ts`. Null (the default) is
+   * the ordinary sandbox. Set by `liveEngineOptions()`, never by hand.
+   */
+  realLogin: RealLogin | null
+  /**
+   * After a passing test, prove from the main process's stdout/stderr that its
+   * agent turns ran on this engine and binary (`mainLog.ts`). Set by
+   * `liveEngineOptions()`; null (the default) checks nothing.
+   */
+  liveEngineCheck: LiveEngineCheck | null
 }
 
 export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   engine: [false, { option: true }],
   launchArgs: [[], { option: true }],
   env: [{}, { option: true }],
-  cinna: async ({ engine, launchArgs, env }, use, testInfo) => {
-    const sandbox = makeSandbox()
+  realLogin: [null, { option: true }],
+  liveEngineCheck: [null, { option: true }],
+  cinna: async ({ engine, launchArgs, env, realLogin, liveEngineCheck }, use, testInfo) => {
+    const sandbox = makeSandbox(realLogin)
+    const realRun = realLogin ? beginRealLogin() : null
     if (engine) installCachedEngine(sandbox.userData)
+    // The main process's output across every launch of this test, for `liveEngineCheck`.
+    const mainLog: string[] = []
+    const capture = (app: ElectronApplication): void => {
+      app.process().stdout?.on('data', (chunk) => mainLog.push(String(chunk)))
+      app.process().stderr?.on('data', (chunk) => mainLog.push(String(chunk)))
+    }
     let current = await launch(sandbox, launchArgs, env)
+    capture(current.electronApp)
 
     const cinna: CinnaApp = {
       sandbox,
@@ -210,6 +244,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       async relaunch(extraArgs: readonly string[] = []) {
         await current.electronApp.close()
         current = await launch(sandbox, extraArgs, env)
+        capture(current.electronApp)
       },
       async stubDirectoryPicker(dir: string) {
         await current.electronApp.evaluate(({ dialog }, picked) => {
@@ -245,15 +280,35 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
          * already cached is corrected. A spec that wants the Claude engine says
          * so in the agent's own manifest, which outranks this.
          */
+        if (realLogin) {
+          // The one exception: a real-login run makes its engine the Default runtime on purpose.
+          await pinRealLoginProfile(page, sandbox.home, realLogin)
+          return
+        }
         await page.evaluate(() =>
           window.api.settings.set('localAgentsDefaultEngine', 'opencode')
         )
       }
     }
 
-    await use(cinna)
-
-    await current.electronApp.close()
+    try {
+      await use(cinna)
+    } finally {
+      await current.electronApp.close()
+      if (realLogin && realRun) {
+        // Pass or fail: nothing of the run may stay under the real `HOME`.
+        const { removed, realAgentsHomeUnchanged } = endRealLogin(realLogin, sandbox.home, realRun)
+        testInfo.annotations.push({ type: 'real-login cleanup', description: removed.join('\n') })
+        if (!realAgentsHomeUnchanged) throw new Error('~/Documents/CinnaAgents changed during a real-login run')
+      }
+      // After the cleanup, so a failed check never leaves anything under the real `HOME`.
+      if (liveEngineCheck && testInfo.status === 'passed') {
+        const expectsTurn = !testInfo.annotations.some((note) => note.type === NO_AGENT_TURN)
+        const summary = checkLiveEngine(mainLog.join(''), liveEngineCheck, expectsTurn)
+        console.log(`live engine: ${summary}`)
+        testInfo.annotations.push({ type: 'live engine', description: summary })
+      }
+    }
     if (testInfo.status === testInfo.expectedStatus) {
       rmSync(sandbox.root, { recursive: true, force: true })
     } else {

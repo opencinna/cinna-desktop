@@ -40,7 +40,7 @@ Implementation reference for [Session Telemetry](session_telemetry.md). The turn
 - `src/main/agents/drivers/index.ts` — wiring: `telemetry: sessionTelemetryService`, and `sessionTelemetryService.installContextMeasurer((chatId) => acpDriver.measureContext(chatId))`
 
 ### Adapter patches (postinstall, verified at packaging)
-- `scripts/patch-claude-agent-acp.cjs` — `patchClaudeAgentAcp`, `verifyClaudeAgentAcpPatch`: adds the `_cinna/contextUsage` request route and handler to adapter 0.76.0's `dist/acp-agent.js`
+- `scripts/patch-claude-agent-acp.cjs` — `patchClaudeAgentAcp`, `verifyClaudeAgentAcpPatch`: adds the `_cinna/contextUsage` request route and handler to adapter 0.89.1's `dist/acp-agent.js`, as the last link of `v1AgentApp`'s request chain (after the goal route, whose `;` moves to it); it asks the SDK with `{ detail: "full" }`, the breakdown by category, which costs provider `count_tokens` calls
 - `scripts/patch-codex-acp.cjs` — adds `total_token_count: sessionState.totalTokenUsage` to the prompt response's `_meta.quota`, beside the earlier MCP-merge and session-instruction changes. `earlierPatches` reverses a checkout carrying the previous reviewed patch before patching again
 
 ### Main process — persistence, services, IPC, logging
