@@ -316,7 +316,7 @@ Catalog (Runs on your computer tiles) / share badge / Sharing tab / ⋯ menu / I
       → sharingService (core: resolves every folder from an agent id)
           → gitService share verbs (execFile git, token env per child)
           → libraryService cache  ← GET /api/v1/catalog/items, every 5 min while active
-          → POST /api/v1/catalog/desktop-agents (Share with the team; PUT …/grants first only on an adopted entry)
+          → POST /api/v1/catalog/desktop-agents (Share with the team; on an adopted entry PUT …/grants, and PATCH visibility when it differs, first)
           → GET / PUT /api/v1/catalog/items/{uuid}/grants, PATCH …/items/{uuid} visibility (People)
           → GET /api/v1/users/search (the people picker)
           → DELETE /api/v1/catalog/items/{uuid} (Remove sharing, when asked)
@@ -358,17 +358,22 @@ Four live specs, `e2e/specs/live-team-sharing*.spec.ts` ([how to run them](../..
 - **`.claude/settings.local.json`** — core refuses a plain-git version carrying the file, as `.claude/settings.local.json` or `.Claude/Settings.local.json`, with its own sentence, and its team version does not move. When A edits their own copy and shares a change in the app, B's Update keeps B's copy, git does not track it, and B reads **Up to date with the team**, both as Can use and after being promoted to Can edit. A later Get has the template's file. An entry that already tracked the file from before core `d5bb0a16` can no longer be set up against core; that migration (B's copy surviving Update, never counted as a change, and the next in-app share taking it out) is covered by the `gitService` unit tests
 - **Timing seen against core** — core records a version a moment after the send lands: right after Share with the team closes, the catalog can still answer `latest: null`, and a teammate (who sees a desktop agent only once it has a version) may not find it yet; the specs wait for Version 1 before reading it. After a manifest id is changed by hand, the agent is new to the app: the open page reads "This agent is not indexed", and after a rescan main reports one unshared change while the badge kept reading **Up to date with the team** for over 30 s, until the app was relaunched
 
+`live-sharing-agents.spec.ts` (fixture `live-catalog.py`, people A–D; [how to write and run it](../../development/e2e/e2e_llm.md)) adds People against the same kind of core:
+
+- **Named people, then everyone** — Share with the team with B and C picked leaves core with A as `maintain`, B and C as `use` and visibility `users`; B and C list the agent and C's Get is recorded as a local install, while D, named nowhere, does not list it. People shows B and C at **Can use** and no Everyone row. **Share with everyone** turns the entry `public`, shows Everyone at Can use and drops the button, and D can then Get it. Removing Everyone (asked in the row) puts core back to `users` with the grants unchanged, after which D no longer lists the entry although D holds a copy. Access changes from the select are followed by core each time
+- **A second maintainer** — a teammate at Can use sees only the maintainers and who can change it. Once A makes B a **Maintainer**, B's own People is editable and B adds C through **Share with a person…**, which core records. A list that would leave no maintainer is refused with core's sentence ("This item needs at least one maintainer.") and nothing changes
+
 ### Not verified against core
 
-- **The retry that finishes an entry this folder left empty**, and the grants write before sending to it. It relies on core answering `409` and listing the entry with no `latest` and an empty `head_sha`. Unit tests only
+- **The retry that finishes an entry this folder left empty**, and the grants and visibility writes before sending to it. It relies on core answering `409` and listing the entry with no `latest` and an empty `head_sha`. Unit tests only
 - **Share with the team restarting an agent whose entry was deleted** while the folder still has its `origin`. The live re-share comes after Remove sharing, which has already dropped the link, so it takes the ordinary first-share path, not the one that replaces the old origin. Unit tests only
 - **The cleaning of unsent versions** that recorded `credentials/` or `app-data/`, before a send or an Update. Nothing was ever recorded under them in the live runs. In `gitService.test.ts` a pre-receive hook stands in for core's policy
-- **The catalog routes beyond the live runs**: Everyone as `public` visibility and its `PATCH`, an unlisted entry's missing Everyone row, local-install reports after Update and Use the team's version, and a delete refused for more than one person are unit-tested with a mocked server only
+- **The catalog routes beyond the live runs**: a first share created `public` by the Everyone checkbox, an unlisted entry's missing Everyone row, local-install reports after Update and Use the team's version, and a delete refused for more than one person are unit-tested with a mocked server only
 - **The identity-changed refusal** being said once without a combined send. In `gitService.test.ts` a hook answering core's sentence stands in for core
 - **The `.git/cinna-local-only/` backup** being put back after an interrupted Update
 - **Use the team's version keeping this machine's `.claude/settings.local.json`.** The live run checks only `.env` and attachments
 - **The AI share summary.** The specs type every note
-- **Most of People.** `live-sharing-agents.spec.ts` (A1) adds Everyone with **Share with everyone**, removes it, and changes access from the select; Share with the team's **Everyone on this server can use it** checkbox, role grants, and what a non-maintainer sees after a `403` are unit-tested only. The specs demote people through core's API directly
+- **Most of People.** `live-sharing-agents.spec.ts` (A1, A2) covers what is listed above; Share with the team's **Everyone on this server can use it** checkbox, role grants, and what a non-maintainer sees after a `403` are unit-tested only. The specs demote people through core's API directly
 - **Remove sharing's refused delete** (`403`) and an entry already gone (`404`)
 - **Get's second check**, against what actually arrived, for when the listing's manifest id is missing or stale
 - **External remotes.** No spec uses a GitHub, GitLab or SSH remote

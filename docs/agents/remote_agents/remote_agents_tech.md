@@ -90,6 +90,7 @@ Shared run:start/watch and agent test/discovery work for remote agents; the A2A 
 - `runSyncOnce(userId)` — Calls `agentService.syncRemoteAgents()`, then notifies the renderer via `agents:remote-sync-complete`. On `CinnaReauthRequired`, stops the periodic timer and notifies with `{ error: 'reauth_required' }`. On other errors, notifies with `{ error: 'sync_failed' }` but keeps the timer running.
 - `notifyRemoteSyncComplete(payload?)` — **Exported** broadcast helper (`webContents.send('agents:remote-sync-complete', payload)`). Used by `runSyncOnce` (periodic/activation) AND by the `agent:sync-remote` IPC handler (`src/main/ipc/agent.ipc.ts`) so on-demand renderer-triggered syncs notify identically. Without the IPC handler calling this, a renderer-invoked sync writes the DB but never tells the renderer to refetch `['agents']` — leaving stale agent rows (e.g. a just-applied bundle update still showing "Update available").
 - `startPeriodicSync(userId)` — Starts a 5-minute interval that calls `runSyncOnce()`. Stops any existing interval first.
+- Also called by `src/main/agents/cloudUpdateFollow.ts` when the catalog listing names a newer revision of an installed cloud agent than its synced `bundle_version` knows of, once per install and revision, so the Inbox's **Update available** card does not wait for the timer ([Bundle Updates](../bundles_catalog/bundle_updates_tech.md#inbox-card-cloudupdateitems)).
 - `stopPeriodicSync()` — Clears the periodic sync interval.
 
 ### JWT Resolution — `src/main/agents/drivers/a2aConnection.ts`

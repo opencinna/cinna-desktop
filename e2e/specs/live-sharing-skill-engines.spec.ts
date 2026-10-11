@@ -43,8 +43,9 @@ import { runCommand, type PersonApp } from '../fixtures/liveTeamSharing'
  * cinna-core (`e2e/fixtures/live-catalog.py`).
  *
  * The skill declares an `erp-api` credential slot and carries a script,
- * `scripts/skill_check.py`, that reads the slot through `core.cinna_api` and
- * prints a hash of what it found, never the value.
+ * `scripts/skill_check`, that reads the slot through `core.cinna_api` and
+ * prints a hash of what it found, never the value. No `.py` suffix: core's dev
+ * server watches its skill store and restarts on a published `.py` file.
  *
  * - T2.1 and T2.2 run no model. The OpenCode config and assembled prompt are
  *   the files the real launcher writes for a turn on the scripted fake ACP
@@ -92,13 +93,13 @@ const SKILL_BODY = [
   '',
   "Run this skill's script with python3, using the absolute path of this skill's base directory:",
   '',
-  '    python3 <base directory>/scripts/skill_check.py',
+  '    python3 <base directory>/scripts/skill_check',
   '',
   'Reply with the exact line it prints and nothing else. Do not read or run anything else.',
   ''
 ].join('\n')
 
-/** What `skill_check.py` prints once the admin's ERP API reached the agent. */
+/** What `skill_check` prints once the admin's ERP API reached the agent. */
 const skillCheckLine = (fixture: CatalogFixture): string => slotCheckLine(fixture, 'skill-check')
 
 /** The skill-tool sentence of the assembled prompt, with and without pinned catalog skills. */
@@ -115,7 +116,7 @@ async function shareFromA(a: PersonApp, fixture: CatalogFixture, skills: { name:
       description: SKILL_DESCRIPTION,
       credentials: [{ slot: 'erp-api', type: 'api_token', description: 'The ERP API token.' }],
       body: SKILL_BODY,
-      files: { 'scripts/skill_check.py': slotCheckScript('skill-check') }
+      files: { 'scripts/skill_check': slotCheckScript('skill-check') }
     })
   }
   await a.page.evaluate(() => window.api.localAgents.rescan())
@@ -205,7 +206,7 @@ test('T2.1 B adds A’s shared skill to B’s agent: linked in the plugin, in Op
     const commands = readFileSync(join(agent.path, 'docs/CLI_COMMANDS.yaml'), 'utf8')
     writeFileSync(
       join(agent.path, 'docs/CLI_COMMANDS.yaml'),
-      `${commands}  - name: skill-check\n    description: The catalog skill's own script.\n    command: python3 ${JSON.stringify(join(cached, 'scripts/skill_check.py'))}\n`
+      `${commands}  - name: skill-check\n    description: The catalog skill's own script.\n    command: uv run python ${JSON.stringify(join(cached, 'scripts/skill_check'))}\n`
     )
     await b.page.evaluate(() => window.api.localAgents.rescan())
     await runCommand(b, mine, 'skill-check')
@@ -291,8 +292,9 @@ test('T2.2 a pin B cannot see and a pin not yet downloaded reach no engine, and 
     await openSkills(b, mine)
     await skillRow(b, hidden, 'From the catalog').getByRole('button', { name: `Download ${hidden} again`, exact: true }).click()
     const hiddenRow = skillRow(b, hidden, 'From the catalog')
-    // The row's status and its one issue are the download's sentence (core answers 404 to someone with no access).
-    const why = 'This version is not available to you. If the agent is shared, update it to the team’s latest version first.'
+    // The row's status and its one issue are the download's sentence (core answers 404 to someone with no
+    // access); B's own agent is tracked by no team, so it reads as access withdrawn, not as an agent behind.
+    const why = 'This skill is no longer available to you — its publisher took away your access or removed it from the catalog.'
     await expect(hiddenRow.getByRole('img', { name: why, exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(hiddenRow.getByRole('listitem')).toHaveText([why])
     await expect(hiddenRow.getByRole('button', { name: `Download ${hidden} again`, exact: true })).toBeVisible()
