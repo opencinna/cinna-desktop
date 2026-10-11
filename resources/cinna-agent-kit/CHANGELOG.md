@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `7cdab6154be21880`.
+Your current kit is version `5ce7065fa926ef39`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -32,6 +32,13 @@ OpenCode, like `codex`.
 
 A new `assistants/antigravity.md` covers Antigravity as the assistant that builds
 agents: it reads no `AGENTS.md` by itself, so it reads that file first.
+
+### Changed
+
+- **`protocols/tasks.schema.json`'s description** now says how Antigravity
+  reaches the `cinna` tools: it offers no per-tool name, so the model calls its
+  built-in `call_mcp_tool` with `ServerName: "cinna"` and `ToolName: "<tool>"`,
+  and reads each tool's schema from a file. Tools and schemas are unchanged.
 
 ## 1.10.0 — catalog skills in a local agent
 
