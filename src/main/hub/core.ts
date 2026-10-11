@@ -29,6 +29,7 @@ import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
+import { installCloudUpdateFollow } from '../agents/cloudUpdateFollow'
 
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
   setLogValueRedactor(redactCredentialValues)
@@ -50,6 +51,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   localAgentService.configure(getSettingsScopeUserId)
   installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
+  // A listing that names a newer version of an installed cloud agent syncs the remote agents once.
+  installCloudUpdateFollow()
   // Cached catalog skill revisions no agent pins: once per start, off the boot path but in one
   // synchronous run before any profile can activate, so no turn or schedule holds a path into it.
   setImmediate(() => { catalogSkillService.collectGarbage() })

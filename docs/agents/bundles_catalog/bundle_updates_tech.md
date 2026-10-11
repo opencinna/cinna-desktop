@@ -23,6 +23,7 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 - `src/main/ipc/agent.ipc.ts` — `agent:apply-bundle-update` handler
 - `src/main/errors.ts` — `AgentErrorCode` gains `update_failed`
 - `src/main/services/inboxService.ts` — `list()` appends `cloudUpdateItems()` to the desktop agents' items in `InboxSnapshot.updates`
+- `src/main/agents/cloudUpdateFollow.ts` — `installCloudUpdateFollow()`: a listing naming a newer revision of an installed cloud agent runs the remote agents' sync once (`libraryService.onListingChanged` → `runSyncOnce`)
 
 ### Preload
 - `src/preload/index.ts` — `window.api.agents.applyBundleUpdate(installId)` typed binding (the catalog namespace has no apply-update method — the action is agents-scoped)
@@ -81,6 +82,7 @@ Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server 
 - One `UpdateAvailableInboxItem` (`target: 'cloud_agent'`, `installId`) per synced remote agent of the active profile (`agentRepo.listRemote`) whose `bundle_version.update_available` is true, whose `update_mode` is not `automatic`, and which has a `remoteTargetId`. A server that applies updates on its own needs no button, so it gets no card
 - `version` / `versionLabel` from `bundle_version.latest_revision_number` / `latest_version`, else from the cached listing's item; `changedBy` / `changedAt` from the listing's `latest.published_by` / `published_at`. The item is the one with `kind: agent`, `runs_on` not `desktop` and this install id in `my_installs` — a skill's `my_installs` can carry the id of the agent it is linked to, so matching any kind would borrow a skill's version
 - Local reads only, never a request; a failure is logged and is an empty list, never a failed Inbox. Without a cached listing the card still appears, without who and when
+- **The sync follows the listing** (`src/main/agents/cloudUpdateFollow.ts`, installed by `initializeHubCore`): `libraryService.onListingChanged` tells it of every listing that moved (the same test as `sharing:changed` / `catalog:items-changed`). When an item with `kind: agent`, `runs_on` not `desktop`, has a `where: 'cloud'` install whose `install_id` is a synced row's `remoteTargetId`, and its `latest.revision_number` is past the row's `bundle_version.latest_revision_number` (else `installed_revision_number`), it calls `runSyncOnce` for that profile, sharing the periodic runner's in-flight guard. A row with no `bundle_version` is skipped. Bounded: one follow-up sync per profile at a time (listings that land meanwhile are looked at once when it ends) and one per install and revision, so a server whose `bundle_version` lags the listing costs one sync per new revision
 - `UpdateAvailableCard`'s Update for this target calls `useApplyBundleUpdate(installId)`; success shows **Updated.**, and the next read no longer lists it once the sync has landed the new `bundle_version`. `reauth_required` reads as an expired session; anything else is the message, beside the button
 
 ## Security

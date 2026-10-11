@@ -112,6 +112,16 @@ const missingRoutesLogged = new Set<string>()
 let timer: ReturnType<typeof setInterval> | null = null
 let generation = 0
 
+/**
+ * Told when a profile's listing landed and any item the catalog shows moved
+ * (the same test as `catalog:items-changed`, or a desktop agent's move) — never
+ * on a poll that found nothing new. Installed at boot by core services that
+ * follow the listing (the cloud agents' Update card's remote sync); a
+ * listener that throws is logged and does not stop the others.
+ */
+export type ListingChangedListener = (userId: string, listing: CachedListing) => void
+const listingListeners = new Set<ListingChangedListener>()
+
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
 const strOrNull = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
@@ -344,8 +354,19 @@ export const libraryService = {
     const previous = cache.get(userId)
     cache.set(userId, listing)
     // `sharing:changed` re-reads the catalog items too, so one event at most.
-    if (sharingSignature(listing) !== sharingSignature(previous)) publishEvent(SHARING_CHANGED_CHANNEL)
-    else if (itemsSignature(listing) !== itemsSignature(previous)) publishEvent(CATALOG_ITEMS_CHANGED_CHANNEL)
+    const sharingMoved = sharingSignature(listing) !== sharingSignature(previous)
+    const itemsMoved = itemsSignature(listing) !== itemsSignature(previous)
+    if (sharingMoved) publishEvent(SHARING_CHANGED_CHANNEL)
+    else if (itemsMoved) publishEvent(CATALOG_ITEMS_CHANGED_CHANNEL)
+    if (sharingMoved || itemsMoved) {
+      for (const listener of listingListeners) {
+        try {
+          listener(userId, listing)
+        } catch (err) {
+          logger.warn('a listing listener failed', { error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+    }
     return listing
   },
 
@@ -403,6 +424,12 @@ export const libraryService = {
       }
       logger.warn('team library refresh failed', { error: err instanceof Error ? err.message : String(err) })
     }
+  },
+
+  /** Be told when a listing that moved lands ({@link ListingChangedListener}). Returns the unsubscribe. */
+  onListingChanged(listener: ListingChangedListener): () => void {
+    listingListeners.add(listener)
+    return () => listingListeners.delete(listener)
   },
 
   /** List now and every five minutes while this profile is active. */

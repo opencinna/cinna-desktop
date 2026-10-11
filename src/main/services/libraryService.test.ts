@@ -125,6 +125,25 @@ describe('libraryService.items', () => {
     expect(publishEvent.mock.calls).toEqual([['catalog:items-changed']])
   })
 
+  it('tells its listing listeners only when an item moved', async () => {
+    const heard: string[] = []
+    const off = libraryService.onListingChanged((userId, listing) => heard.push(`${userId}:${listing.items[0]?.latest?.revision_number}`))
+    try {
+      cinnaFetch.mockResolvedValue({ data: [item()] })
+      await libraryService.refresh(PROFILE)
+      await libraryService.refresh(PROFILE)
+      cinnaFetch.mockResolvedValue({ data: [item({ install_count: 7 })] })
+      await libraryService.refresh(PROFILE)
+      cinnaFetch.mockResolvedValue({
+        data: [item({ latest: { revision_number: 3, version: null, published_at: null, published_by: null, release_notes: null } })]
+      })
+      await libraryService.refresh(PROFILE)
+      expect(heard).toEqual([`${PROFILE}:2`, `${PROFILE}:3`])
+    } finally {
+      off()
+    }
+  })
+
   it('says nothing when only how many people use an item moved', async () => {
     cinnaFetch.mockResolvedValue({ data: [item(), SKILL, DESKTOP] })
     await libraryService.refresh(PROFILE)

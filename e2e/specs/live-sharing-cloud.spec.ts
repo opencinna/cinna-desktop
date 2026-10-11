@@ -20,7 +20,7 @@ import {
   uniqueName,
   type CatalogFixture
 } from '../fixtures/liveCatalog'
-import { coreCall, runCommand, type PersonApp } from '../fixtures/liveTeamSharing'
+import { coreCall, refreshLibrary, runCommand, type PersonApp } from '../fixtures/liveTeamSharing'
 
 /**
  * The cloud side of the one catalog (plan README §7, T6), against the real
@@ -106,7 +106,7 @@ test('T6 a: a skill published from a cloud agent’s workspace is listed beside 
   })
 })
 
-test('T6 b: B Gets the cloud bundle, sees Uninstall and Open in Cinna in Settings → Catalog, gets A’s Version 2 as an Inbox card, and Uninstalls', async ({ team }) => {
+test('T6 b: B Gets the cloud bundle, sees Uninstall and Open in Cinna in Settings → Catalog, gets A’s Version 2 as an Inbox card without a restart, and Uninstalls', async ({ team }) => {
   test.setTimeout(420_000)
   const { fixture } = team
   const cloud = cloudOf(fixture)
@@ -150,13 +150,13 @@ test('T6 b: B Gets the cloud bundle, sees Uninstall and Open in Cinna in Setting
     await closeSettings(b)
   })
 
-  await test.step('A publishes Version 2; after B’s next sync the Inbox card names it Runs in Cinna at Version 2', async () => {
+  await test.step('A publishes Version 2; once B’s catalog lists it the Inbox card names it Runs in Cinna at Version 2, without a restart', async () => {
     await publishCloudVersion(fixture, '2.0', 'Version 2 from live-sharing-cloud.spec')
-    // The cloud card is drawn from the remote agents' sync, which runs at start and every five minutes.
-    await b.relaunch()
+    // The listing naming a newer version of B's install runs the remote agents' sync, which the card is drawn from.
+    await refreshLibrary(b)
     await b.page.getByRole('button', { name: /^Inbox/ }).click()
     const card = b.page.getByRole('article', { name: `Update available for ${name}` })
-    await expect(card).toBeVisible({ timeout: 60_000 })
+    await expect(card).toBeVisible({ timeout: 30_000 })
     await expect(card).toContainText('Version 2')
     await expect(card).toContainText('Runs in Cinna')
     await expect(card.getByRole('button', { name: 'Update', exact: true })).toBeVisible()
