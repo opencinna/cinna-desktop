@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A chat with a local Claude or Codex agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and shows it in two places: the **mode badge's popover** under the composer (the `Local` / `Direct` / `You route` pill) — how full the context is, and behind it what the chat has spent, the prompt cache, what the next message will cost and the prices it is charged at — and, per turn, the verbose message popup.
+A chat with a local Claude, Codex or Antigravity agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and shows it in two places: the **mode badge's popover** under the composer (the `Local` / `Direct` / `You route` pill) — how full the context is, and behind it what the chat has spent, the prompt cache, what the next message will cost and the prices it is charged at — and, per turn, the verbose message popup.
 
 Without it the runtime's usage reports were thrown away on arrival. `usage_update` was read only as the end marker of a turn the agent started itself, the prompt response's `usage` was read by nothing, and a user who wanted to know what a chat cost, which model actually answered or how full the context was had to open a terminal and ask the CLI.
 
@@ -17,7 +17,7 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Main-agent request** — one model request of the session's own agent: the first raw `assistant` frame of a message id, from a frame that names no parent tool call. A subagent's frames are counted as traffic and read for nothing else
 - **Running total** — a figure the runtime reports cumulatively, not per turn: Claude's cost (`usage_update.cost.amount`, the SDK's `total_cost_usd`), its per-model cost (`result.modelUsage[m].costUSD`) and its API time (`result.duration_api_ms`), each cumulative **within one adapter query**; and Codex's token total (`_meta.quota.total_token_count`, added by the reviewed adapter patch), cumulative over the session and restored on resume. A turn's figure is always what the total grew by
 - **Fresh query** — the adapter starting a new Claude query for a session: `session/new`, a `session/load` of a session not live on the connection (a new process, the app restarted), or a load under a different cwd or MCP server set, which the adapter answers by rebuilding the session. Every Claude running total starts from 0 with it
-- **Cost source** — `runtime` when the runtime reported the cost (Claude), `estimated` when the desktop priced the tokens itself (Codex)
+- **Cost source** — `runtime` when the runtime reported the cost (Claude), `estimated` when the desktop priced the tokens itself (Codex). Antigravity has neither: no cost is reported and none is estimated
 - **Price table** — `src/shared/modelPricing.ts`: list prices per model, with the date they were checked and their sources. The only place a price lives
 - **Prompt cache clock** — when the last main-agent request went out, the cache's time-to-live, when it expires, and whether something invalidated it first. Claude only: Codex caches on its own with a TTL nobody reports
 - **Context reading** — `used` and `size` from the session's own `usage_update`s, mid-turn as well as at the end. **Size authoritative** says whether `size` is the model's real window or the adapter's guess
@@ -27,7 +27,7 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Login kind** — `subscription`, `api_key`, `gateway`, `cloud`, `none` or `unknown`, with a label and plan name. **Never the account**
 - **Reporter** — the port a driver gets (`SessionTelemetryReporter`). The driver reports changes; the one thing it reads back is a Codex session's last running token total
 - **Context row** — the last row of the chat's mode badge popover (the router badge under the composer, `RouterBadge`), below the routing or connection details and a hairline: `Context` and `46K | 15% Mid budget | 6% total` (used tokens, the share of the [AI spending level](../../llm/ai_spending_level/ai_spending_level.md)'s budget, the share of the whole window). A disclosure: collapsed by default, it opens the **session details** above itself
-- **Engine capability tables** — `CACHE_TTL_KNOWN`, `CACHE_WRITES_REPORTED` and `CONTEXT_CATEGORIES_KNOWN` (`src/shared/sessionTelemetry.ts`): per engine, whether it reports a cache TTL, whether it reports cache writes at all, and whether its context can be measured by category. Claude yes to all three, Codex no. The popover hides what an engine cannot report, and the driver refuses a measurement, from the same tables, so the two cannot drift
+- **Engine capability tables** — `CACHE_TTL_KNOWN`, `CACHE_WRITES_REPORTED` and `CONTEXT_CATEGORIES_KNOWN` (`src/shared/sessionTelemetry.ts`): per engine, whether it reports a cache TTL, whether it reports cache writes at all, and whether its context can be measured by category. Claude yes to all three, Codex and Antigravity no. The popover hides what an engine cannot report, and the driver refuses a measurement, from the same tables, so the two cannot drift
 
 ## User Stories / Flows
 
@@ -153,7 +153,7 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 
 ### Login
 - **Only the kind, a label and the plan name are kept.** Claude's `_auth/status_update` carries the account's email and organisation beside them, unasked. Anything email-shaped is scrubbed out of the label and plan, so a future adapter that puts the account in the label still does not pass it on
-- **Claude says it over ACP; Codex does not.** Claude's notification names no session and arrives right after `initialize`, so it is heard per connection and read when a turn ends. For Codex the login comes from the CLI's own `codex login status` line (ChatGPT is a subscription, an API key is one), read beside the turn and never holding it up
+- **Claude says it over ACP; Codex does not.** Claude's notification names no session and arrives right after `initialize`, so it is heard per connection and read when a turn ends. For Codex the login comes from the CLI's own `codex login status` line (ChatGPT is a subscription, an API key is one), read beside the turn and never holding it up. Antigravity does not say it either: its login is read from the user's Antigravity home (the token's presence, never the token), and a signed-in home reports a subscription labelled *Google account*
 - **The latest report wins**
 - **A login that is not the install's own subscription is also said in the transcript**, once per chat per process and login, not on every turn. See [The Claude Engine](../local_agents/claude_engine.md#a-turn-that-did-not-run-on-the-users-own-login-says-so-where-the-user-is)
 
@@ -171,6 +171,7 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Nothing changes, nothing is written or pushed.** A report that leaves the state as it was (a repeated model report) is silent
 
 ## Known limits
+- **An Antigravity chat has a context meter and nothing else.** The server answers a prompt with its stop reason alone — no `usage`, no `_meta` — so a turn carries no tokens. Its `usage_update {used, size}` after each model call is the context reading, and the size is authoritative as reported. No cost is reported and none is estimated: a Google account login has no per-token price to estimate from. There is no cache state, no cache-write row and no Measure (`antigravity.telemetry.usage-update`, [The Antigravity Engine](../local_agents/antigravity_engine.md))
 - **A Codex turn is a lower bound when its running total could not be measured**: an adapter answer without `total_token_count`, or the first turn of a restored session whose chat saved no total
 - **A follow-up turn has no tokens when no raw `result` reached it**; Codex follow-ups, never seen live, would have none
 - **Claude's cost handling rests on the readings being running totals of the adapter's query**, observed live on one pinned version. If a pinned adapter starts reporting per-result cost, or starts restoring its totals on resume, `costDelta` and `TurnTelemetry.session` are the places to change; the contract does not watch it, because the fake provider reports no cost

@@ -31,7 +31,7 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 - **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Three transports, a2a/acp/managed, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
 - **Launcher** — the engine-specific half of an ACP turn: what to spawn, what to declare, what `session/new` carries, and what must be set on the session before the first prompt. It also answers with a **refusal** in place of a plan
 - **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle. The reap waits while the agent's background work runs, for up to 30 minutes ([The Local Engine](engine.md), [Session Activity](../session_activity/session_activity.md))
-- **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered the moment it is created, so a conversation survives a restart — including one that ended a turn midway
+- **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered the moment it is created, so a conversation survives a restart — including one that ended a turn midway. The exception is an engine whose instructions travel in the first prompt (Antigravity): its new session is remembered only once the engine has taken that prompt
 - **Replay** — the `session/update` notifications `session/load` emits for the *whole* prior conversation before it answers. Dropped, never ingested
 - **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
 - **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
@@ -114,7 +114,9 @@ Enforced at both ends. The driver catches — including around the lock, which *
 
 ### Refuse before the lock, stream inside it
 
-Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no selected Claude/Codex CLI, not logged in. Only then is the lock taken.
+Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no selected Claude/Codex CLI or Antigravity server, not logged in. A prompt the engine must never be sent is refused before even that: Antigravity's `/logout` would sign out every Antigravity home on the computer. Only then is the lock taken.
+
+A login that turns out to be gone only once the engine answers is not reported as a start failure either. When `session/new` or the prompt fails with an error the launcher recognises as a lost login (Antigravity's `-32000` *Authentication required*), the turn ends with that launcher's Log in sentence, and the launcher reads its login again so readiness follows.
 
 The ordering is about what the user reads. A refusal produced *inside* the lock would first wait out (or be refused by) a desktop write into the folder before saying that this agent cannot run at all.
 
@@ -217,7 +219,7 @@ Which messages to steer, and when to hand queued ones to a turn that offers agai
 
 `session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. Codex also sets its chosen sandbox/reviewer mode after every new/load, before prompting. A turn that ran anyway would run under a policy nobody chose.
 
-The session this turn *did* create is already recorded by then — it is saved as soon as `session/new` answers — so the refusal does not orphan it: an unrecorded session is left behind engine-side, another is minted on every retry, and the chat never gets a session to continue from.
+The session this turn *did* create is already recorded by then — it is saved as soon as `session/new` answers, except on an engine with a first-prompt preamble (below) — so the refusal does not orphan it: an unrecorded session is left behind engine-side, another is minted on every retry, and the chat never gets a session to continue from.
 
 One option is exempt, and only one: OpenCode's `model` set, which the config's top-level `model` has already selected. See [The Local Engine](engine.md#a-config-per-agent-written-where-the-users-folder-is-not).
 
@@ -277,6 +279,8 @@ What the renderer receives is what it has always received for an agent turn: str
 A folder agent's session id is stored in the A2A session table's `context_id` column, and the column names stay A2A-flavoured deliberately: that column is what the existing session lookup reads to decide a chat is an agent chat, so putting the session there means every existing reader keeps working.
 
 **A new session is saved the moment `session/new` answers, not when the turn ends.** A direct chat sends no catch-up of the earlier conversation, so the session id is the only thing that carries it into the next turn — and a turn the app is quit under never reaches its exit. Saving only at the exit would make the next turn open a fresh session with no memory of the chat. A loaded session is saved at the exit, and a turn never writes the same id twice.
+
+**An engine whose instructions open the first prompt is saved later, on purpose.** Antigravity has no system-prompt channel, so the launcher's plan carries a *first-prompt preamble* that the driver puts first in the first `session/prompt` of a **new** session. A loaded session is never sent it again: its history already holds it. That makes saving early dangerous. A session saved at `session/new`, whose prompt then never arrived — Stop before it went out, a setup refusal, a prompt refused as logged out — would be loaded by every later turn of the chat, with no instructions anywhere in it. So such a session is held back and saved only when the engine shows it took the prompt: on its first turn content, or on the prompt's answer. That is still before any tool call or question the app could be quit under. A turn that ends before then reports no session for the chat, and the next turn starts a fresh one with the preamble. The cost is the one this section's first rule avoids: a session the engine created and nobody kept. It is accepted, because a chat with no instructions is worse than an unused session.
 
 There are **two stores**, answering different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one — `app-data/desktop.json` for a kit agent, a file under `<userData>` keyed on the folder's path for a [bare](bare_agents.md) one, whose folder is never written into. The driver passes the agent's kind with the path rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache, so the folder copy failing to write must not fail the turn.
 

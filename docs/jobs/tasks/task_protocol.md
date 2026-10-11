@@ -21,7 +21,7 @@ An agent that works on Cinna tasks — reporting how its work went, adding work 
 ## User Stories / Flows
 
 1. **A turn starts on a task.** The agent's message arrives behind the context block, for example `- current task: \`t-3f9a2b1c\` "Add retry" (report required: yes)` and `- tasks skill: cinna-tasks v1`. The system prompt's short Cinna tasks section has already told it the two rules and how to open the skill.
-2. **The agent opens the skill** before its first `tasks_*` call — by name on Claude and OpenCode, or by reading `SKILL.md` at the absolute path its prompt names on Codex.
+2. **The agent opens the skill** before its first `tasks_*` call — by name on Claude and OpenCode, or by reading `SKILL.md` at the absolute path its prompt names on Codex and on a native Antigravity folder. An isolated Antigravity folder has it copied into its own home's `config/skills/` and opens it by name.
 3. **It works and reports.** It may comment on the way (`tasks_comment`), and ends with `tasks_report` `done` or `failed` and a one-line summary, or `blocked` with a question. The desktop records the report on the task, and the [dispatcher](task_dispatcher.md), a job run or the [Handover Bus](handover_bus.md) reads it.
 4. **It hands work on.** It calls `tasks_targets`, passes one entry's `target` verbatim as `assignee` to `tasks_create` with an `id` and the whole brief as `description`, and ends its turn. Later its chat gets a system turn starting `Task result from …`, and it answers a question for it with `tasks_reply`.
 5. **Somebody without a tool server takes part.** A terminal session writes a brief, a report or a task file, following the same skill's file reference. The desktop treats the file exactly as it treats the tool call it corresponds to.

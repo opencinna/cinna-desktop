@@ -19,7 +19,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered a state that blocks a turn: anything but `ok`, except a folder agent's `credentials_needed` (`readinessBlocksTurn`)
 - **Warning** — the composer showing a non-`ok` answer that does not block, which today is only a folder agent's `credentials_needed`. Same panel, same **Check again**, Send left on
 - **Check again** — the composer's action on a refusal or a warning; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
-- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude or codex; a folder naming any other engine — `gemini` (a launcher id with no launcher), `custom`, or a name this build has never seen — runs on opencode, because the contract makes `runtime.engine` a preference. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
+- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude, codex or antigravity; a folder naming any other engine — `gemini` (a launcher id with no launcher), `custom`, or a name this build has never seen — runs on opencode, because the contract makes `runtime.engine` a preference. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
 - **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
 
 ## User Stories / Flows
@@ -38,8 +38,8 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 3. If either action fails, the warning adds that (*Couldn't re-authenticate — …*) and the reason stays
 
 ### A CLI engine that is not logged in
-1. A folder agent on Claude Code or Codex answers `not_logged_in`, and the answer names which engine's login fixes it
-2. The action is **Log in**, not Check again: it runs that engine's own login (`claude auth login` / `codex login`) on the binary the turns use, and the CLI opens the browser. While it runs the button reads what it is waiting on, with **Cancel** beside it. See [The Claude Engine](../local_agents/claude_engine.md#claude-code-is-there-but-not-logged-in) for why it runs in-app and what the app never sees
+1. A folder agent on Claude Code, Codex or Antigravity answers `not_logged_in`, and the answer names which engine's login fixes it
+2. The action is **Log in**, not Check again: it runs that engine's own login (`claude auth login` / `codex login`, or for Antigravity an ACP `authenticate` on its server) on the binary the turns use, and the engine opens the browser. While it runs the button reads what it is waiting on, with **Cancel** beside it. See [The Claude Engine](../local_agents/claude_engine.md#claude-code-is-there-but-not-logged-in) for why it runs in-app and what the app never sees
 3. When the login ends the readiness is asked again. A sign-in that did not finish adds *Couldn't log in — …* to the warning and offers **Copy command**, the exact terminal command for the same binary
 4. A turn that fails in the chat for this reason re-checks readiness, so the warning and its Log in appear under the error. A task or Inbox run refused the same way carries the sentence but no button
 
@@ -69,7 +69,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 2. The tags send without going through the composer, so a tag that looked live and did nothing would fail silently
 
 ### A folder agent whose manifest now names the other engine
-1. The user, or an assistant, switches a folder agent's runtime between OpenCode, Claude Code and Codex
+1. The user, or an assistant, switches a folder agent's runtime between OpenCode, Claude Code, Codex and Antigravity
 2. The next turn reads the folder, sees the other engine and runs there, whatever the row still says
 
 ## Business Rules
@@ -196,6 +196,7 @@ Renderer run.start → run:start → runExecutionService → router → AgentDri
 | OpenCode folder | acp / opencode | Resumable child session; folder/runtime credential configuration |
 | Claude folder | acp / claude | Resumable child session; existing CLI login |
 | Codex folder | acp / codex | Resumable child session through the bundled adapter; existing CLI login/configuration |
+| Antigravity folder | acp / antigravity | Resumable child session on Google's ACP server, no adapter; the user's Google login |
 | Command-line / SSH | acp / custom | Resumable child session; captured command and external CLI/SSH configuration |
 | Claude Managed | managed | Credential-bound remote session; Anthropic API key |
 
@@ -205,6 +206,7 @@ Local ACP roots conduct through `src/main/services/conductorBridge.ts`; SDK adap
 
 - [The Agent Turn](../local_agents/agent_turn.md) — what the ACP driver does inside `run`, and the parked-ask registry it answers through
 - [The Codex Engine](../local_agents/codex_engine.md) — CLI login readiness, native question bridge and sandboxed approvals
+- [The Antigravity Engine](../local_agents/antigravity_engine.md) — login read from the home, questions arriving as permission asks, unsandboxed approvals
 - [The Claude Engine](../local_agents/claude_engine.md) — the install and login probes the Claude launcher's readiness asks, and what it declares at `initialize`
 - [The Local Engine](../local_agents/engine.md) — why OpenCode readiness is the folder alone: the turn resolves the binary, and the process is the turn's own
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the folder readiness that is the first rung of the ACP driver's answer, and the scanner that writes the launcher

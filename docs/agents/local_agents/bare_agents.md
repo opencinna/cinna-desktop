@@ -175,12 +175,13 @@ Only the three keys a picker can set survive a read of the state file — creden
 
 ### The instructions file is pasted in only for the engine that would not read it
 
-The folder is adopted for any of `AGENT.md`, `AGENTS.md` or `CLAUDE.md`, but the two engines read different ones by themselves:
+The folder is adopted for any of `AGENT.md`, `AGENTS.md` or `CLAUDE.md`, but the engines read different ones by themselves:
 
 | Engine | Reads by itself | So Cinna pastes in |
 |---|---|---|
 | Claude | `CLAUDE.md` (as memory) | `AGENT.md`, `AGENTS.md` |
 | Codex | `AGENTS.md` | `AGENT.md`, `CLAUDE.md` |
+| Antigravity | none over ACP | whichever of the three it has ([why](antigravity_engine.md#instructions)) |
 
 **Claude's half is watched; Codex's is decided.** On 2026-09-17, against `claude` 2.1.274, a folder holding only a `CLAUDE.md` had its fact quoted in the first answer with no tool call, while folders holding only an `AGENTS.md` or only an `AGENT.md` did not: the model went and ran `ls`, `cat` and `grep` to find the same fact. Those two names are **not memory** to Claude Code, so leaving them out would have produced an agent that has to search its own folder for its own job. Codex reading `AGENTS.md` rests on the CLI's documented behaviour; no Codex install was available for that probe.
 

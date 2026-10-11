@@ -419,6 +419,31 @@ The Claude half has the same: the [Claude Code Interface Contract](contracts/cla
 
 The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions and login/provider variants remain separate live validation work, and the contract's provider is a fake — it establishes what the CLI sends and accepts, not what a paid model does; the original OpenCode/Claude measurements above are not claims about Codex.
 
+## Antigravity over its own ACP server
+
+The pinned server is **1.3.0** (`agy_acp_server.par`, with `localharness_external` beside it). There is no adapter: the server speaks ACP itself, so every finding below is about Google's binary directly. It answers `--version` with absl build information (`Build label: <version>`, about 2.6 s), but Cinna never asks: the pinned digest already proves the bytes, and the contract checks the label. Behaviour and rules are in [The Antigravity Engine](antigravity_engine.md).
+
+**Checked against the real binary:** the [Antigravity Interface Contract](contracts/antigravity_interface.md) lists every server interface Cinna relies on, each with one test against the pinned server. The server runs in its own `gateway` auth mode against a loopback fake Gemini endpoint, so no Google login is touched. It has run on macOS only, and no whole user flow drives it yet.
+
+**Watched by that contract, and worth knowing before changing anything near it:**
+
+- **There is no system-prompt channel.** Text in the first `session/prompt` reaches the model inside `<USER_REQUEST>`, never in the system instruction, and stays in the history after `session/load`. No instructions file (`GEMINI.md`, `AGENTS.md`, rules) was in any captured request. Hence the first-prompt preamble, and the rule that a session is saved for a chat only once its first prompt was taken
+- **`GEMINI_HOME` decides the command working directory.** With the home nested inside the session's cwd, the system instruction names the cwd as its `Command Working Directory`. With the home outside it (a native folder on `~/.gemini`), it names `<home>/antigravity-cli/skills` instead. That is why an isolated home lives under `<folder>/.cinna/`, and why a native folder's prompt names its absolute path
+- **A loaded session keeps its mode and loses its model.** The `model` option comes back as the first model offered, so setup re-asserts it after every load
+- **Replayed built-in calls carry `rawInput` as a JSON string**; an MCP call's stays an object
+- **MCP tools are reached through meta-tools.** The `cinna` descriptor is connected, but its tools are not declared one by one: the model gets `call_mcp_tool`, `list_resources` and `read_resource`, and reads a tool's schema file from the home first. A tool listed after the session started is callable next turn, so no `sessionToolsFixed` is needed
+- **An MCP call has two shapes.** When it raises an ask (`default` mode) it is titled `<server>_<tool>` with `rawInput: {arguments}` and `_meta: {mcp: {server, tool}, is_mcp_tool_call: true}`, on the `tool_call` and on the permission request alike. When it does not (`yolo`) it is `Running <tool>`, `kind: "other"`, `rawInput: {}`, with no server anywhere
+- **An MCP result is never delivered.** The completing update's `rawOutput` (and `content`, when present) is the model's own `toolSummary`. The result goes to the model only
+- **An approved edit runs under another id.** The ask has only `allow` / `deny`. Once allowed, the write runs as `<sessionId>:<n>` (`Running edit_file`), and the ask's own id later ends `failed` with *"Tool call was approved but never executed."* A command ask instead offers `allow_always` (with `_meta["agy.security.warning"]`), `allow` and `deny`, and runs under the same id
+- **`ask_question` is a permission request.** No `elicitation/create` is ever sent. The call id is `interaction_<hex>`, the title is the question, and the options are the answers (`optionId` "1", "2"…, all `allow_once`)
+- **The tool filter takes internal names.** `_meta.agy.enabledTools` / `disabledTools` take the server's `BuiltinTools` values, not the declared function names; a declared name is rejected (logged) and removes nothing. With `enabledTools: ["view_file"]` the model is offered `view_file` and the three MCP meta-tools, `view_file` can read a schema file in the home, and it is refused a file outside the workspace. What it can read is the cwd and the session's whole home
+- **Cancel works for a model request and a running command.** `session/prompt` ends `cancelled` within seconds, and a cancelled command's effect never happens
+- **Telemetry is `usage_update {used, size}` only.** A prompt answers with its stop reason alone: no `usage`, no `_meta`, no cost
+- **No requests of its own.** Every model request is `streamGenerateContent` for the conversation: no title, summary or token-count call
+- **A logged-out home answers `-32000` *Authentication required*** on `session/new`, without opening a browser, when its settings name no `auth.type`. **Per the server's source, not seen live:** with an `auth.type` but no token, `session/new` opens a browser sign-in by itself. The launcher is written on that reading — readiness reads the home and never starts the server, and a turn with no login verdict is refused
+
+**Not watched:** a real Google login, a real Gemini turn, Linux (`--uid=` is taken from the ACP registry; on macOS it is fatal), and the server's own telemetry. The contract's endpoint is a fake; it establishes what the server sends and accepts, not what a paid model does.
+
 ## The steering extension
 
 **Read from the pinned adapter sources, not watched against a live CLI.**
@@ -522,6 +547,7 @@ That is what the desktop reads. The `_meta.codex.collaboration` shape — a `spa
 |---|---|---|
 | Claude | `asyncTasks`, `nativeSubagentSessions` | Both can be routed back to the chat |
 | Codex | `asyncTasks` | Native subagent sessions would lose the spawn call with nothing to link the child |
+| Antigravity | none | No AIR extension is advertised to it, and it advertises no steering; its own subagents are switched off in an isolated folder |
 | Command-line (custom) | `asyncTasks` | Only the Claude adapter's shape of native subagent sessions is routed back |
 | OpenCode | none | `clientCapabilities: {}`, unchanged |
 

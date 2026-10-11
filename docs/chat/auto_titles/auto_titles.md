@@ -102,7 +102,7 @@ In all cases, the user-visible streaming flow is untouched.
 - **The placeholder is dropped by matching, not by position.** A title equal to a prompt recently sent to that session, or longer than 40 characters and the start of one (whitespace-normalised either way), is the echo; anything else is the real title. Were the placeholder applied, the chat would be named after the prompt itself.
 - **A short title the prompt merely starts with is a real name.** Codex often names a thread with the prompt's opening words — "Fix flaky parser test" for "Fix flaky parser test and add coverage" — and treating any start of the prompt as the echo threw those names away and left the chat on its derived fallback title. 40 characters is longer than any title Codex generates, so only a cut that long is read as the prompt truncated.
 - **A session this process never prompted names nothing.** After a restart a loaded session has no prompt to recognise its placeholder by, and was titled long ago anyway.
-- **Only Codex.** Claude reports the same update; its titles are not used.
+- **Only Codex.** Claude reports the same update; its titles are not used. Antigravity's session titles are `Session <hex>`, never a name, and are not used either, so an Antigravity chat gets Cinna's AI title like any other.
 
 ### Mid-flight rename protection
 
