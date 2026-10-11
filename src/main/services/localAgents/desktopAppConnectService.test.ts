@@ -48,11 +48,12 @@ vi.mock('../chatModeService', () => ({
     }
   }
 }))
-vi.mock('../../agents/drivers', () => ({ claudeAuthProbe: {}, codexAuthProbe: {}, engineLogins: {} }))
-vi.mock('../../engine/engineBinaryService', () => ({ claudeBinaryService: {}, codexBinaryService: {} }))
+vi.mock('../../agents/drivers', () => ({ claudeAuthProbe: {}, codexAuthProbe: {}, antigravityAuthProbe: {}, engineLogins: {} }))
+vi.mock('../../engine/engineBinaryService', () => ({ claudeBinaryService: {}, codexBinaryService: {}, antigravityBinaryService: {} }))
 vi.mock('../../managed/managedAsset', () => ({ ManagedAssetError: class extends Error {} }))
 vi.mock('../../agents/drivers/acp/acpLaunchers', () => ({ CLAUDE_NOT_INSTALLED: 'no claude' }))
 vi.mock('../../agents/drivers/acp/codexLauncher', () => ({ CODEX_NOT_INSTALLED: 'no codex' }))
+vi.mock('../../agents/drivers/acp/antigravityEnv', () => ({ ANTIGRAVITY_NOT_INSTALLED: 'no antigravity' }))
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))

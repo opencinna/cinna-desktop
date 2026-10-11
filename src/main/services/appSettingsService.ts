@@ -199,6 +199,17 @@ const VALUE_CHECKS: {
     }
   },
 
+  localAgentsAntigravityPath: (value) => {
+    const trimmed = value.trim()
+    if (trimmed === '') return
+    if (!isAbsolute(trimmed)) {
+      throw new AppSettingsError(
+        'invalid_value',
+        'The Antigravity path must be an absolute path to the agy_acp_server.par executable.'
+      )
+    }
+  },
+
   /**
    * A known tool id or empty. Known, not *installed*: the value is read back
    * against the detected list every time, so a tool that was uninstalled after

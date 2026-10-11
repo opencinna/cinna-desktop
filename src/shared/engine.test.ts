@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { effectiveEngine, resolveDefaultEngine, isAgentEngine } from './engine'
+import { antigravityModelForComplexity, effectiveEngine, resolveDefaultEngine, isAgentEngine } from './engine'
 
 /**
  * The two rules that decide **which engine an agent runs on** when its folder
@@ -101,5 +101,15 @@ describe('Codex engine selection', () => {
     expect(resolveDefaultEngine('', false, true)).toBe('codex')
     expect(resolveDefaultEngine('', true, true)).toBe('claude')
     expect(resolveDefaultEngine('opencode', false, true)).toBe('opencode')
+  })
+})
+
+describe('antigravityModelForComplexity', () => {
+  it('maps each tier to a Gemini 3.8 Flash thinking level, never Pro, and no tier to the server default', () => {
+    expect(antigravityModelForComplexity('simple')).toBe('gemini-3.8-flash-low')
+    expect(antigravityModelForComplexity('medium')).toBe('gemini-3.8-flash-medium')
+    expect(antigravityModelForComplexity('complex')).toBe('gemini-3.8-flash-high')
+    expect(antigravityModelForComplexity(null)).toBeNull()
+    for (const tier of ['simple', 'medium', 'complex'] as const) expect(antigravityModelForComplexity(tier)).not.toMatch(/pro/i)
   })
 })

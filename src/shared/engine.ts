@@ -104,6 +104,9 @@ export const CODEX_BINARY_CHANNEL = 'engine:codex-binary-state'
 /** The same, for the **managed Claude Code CLI**. */
 export const CLAUDE_BINARY_CHANNEL = 'engine:claude-binary-state'
 
+/** The same, for the **managed Antigravity ACP server**. */
+export const ANTIGRAVITY_BINARY_CHANNEL = 'engine:antigravity-binary-state'
+
 /**
  * The pinned engine version this build downloads when it must manage one.
  * Read from the pin manifest, which is the only place the number lives.
@@ -117,6 +120,13 @@ export const PINNED_CODEX_VERSION: string = RUNTIME_PINS.codex.cli
 export const PINNED_CLAUDE_VERSION: string = RUNTIME_PINS.claude.cli
 
 /**
+ * The Antigravity ACP server version every Cinna-spawned Antigravity session
+ * runs on. The server is never asked for its version, so this is never compared
+ * with what the binary says — the verified managed install *is* this version.
+ */
+export const PINNED_ANTIGRAVITY_VERSION: string = RUNTIME_PINS.antigravity.cli
+
+/**
  * What actually runs an agent's turn.
  *
  * - `opencode` — the desktop-managed `opencode serve` process. The default, and
@@ -124,15 +134,17 @@ export const PINNED_CLAUDE_VERSION: string = RUNTIME_PINS.claude.cli
  *   engine is one.
  * - `claude` and `codex` — ACP adapters driving the user's installed CLI and
  *   its own login. Neither uses a credential configured in this desktop.
+ * - `antigravity` — Google Antigravity's own ACP server, on the user's Google
+ *   login. Never chosen automatically: only a setting or a manifest names it.
  */
-export type AgentEngine = 'opencode' | 'claude' | 'codex'
+export type AgentEngine = 'opencode' | 'claude' | 'codex' | 'antigravity'
 
 /** The engine an agent that names none runs on. */
 export const DEFAULT_AGENT_ENGINE: AgentEngine = 'opencode'
 
 /** Whether a value off a manifest is an engine this build knows. */
 export function isAgentEngine(value: unknown): value is AgentEngine {
-  return value === 'opencode' || value === 'claude' || value === 'codex'
+  return value === 'opencode' || value === 'claude' || value === 'codex' || value === 'antigravity'
 }
 
 /**
@@ -269,6 +281,24 @@ export function claudeModelForComplexity(complexity: WorkComplexity | null): str
   return complexity ? CLAUDE_TIER_ALIAS[complexity] : CLAUDE_TIER_ALIAS.medium
 }
 
+/**
+ * The Antigravity model a work complexity names: Gemini 3.8 Flash at the
+ * matching thinking level — never a Pro model, which a tier must not spend
+ * on the user's behalf. `complex` is the server's own default
+ * (`gemini-3.8-flash-high`). Null (no tier) is null: the server's default
+ * then stands, unset, as Codex's does. A model named on the agent wins over
+ * this, as it does for every engine.
+ */
+export const ANTIGRAVITY_TIER_MODEL: Readonly<Record<WorkComplexity, string>> = Object.freeze({
+  simple: 'gemini-3.8-flash-low',
+  medium: 'gemini-3.8-flash-medium',
+  complex: 'gemini-3.8-flash-high'
+})
+
+export function antigravityModelForComplexity(complexity: WorkComplexity | null): string | null {
+  return complexity ? ANTIGRAVITY_TIER_MODEL[complexity] : null
+}
+
 /** Login readiness from the user's Codex CLI; no credentials cross IPC. */
 export interface CodexAuthStatus {
   state: 'logged_in' | 'logged_out' | 'unknown'
@@ -277,14 +307,24 @@ export interface CodexAuthStatus {
 }
 
 /**
+ * Login readiness of the user's Antigravity home (`~/.gemini`, or the
+ * `GEMINI_HOME` the child environment names): its `auth.type` and whether the
+ * Google token exists. Never the token itself.
+ */
+export interface AntigravityAuthStatus {
+  state: 'logged_in' | 'logged_out' | 'unknown'
+}
+
+/**
  * An engine whose vendor login Cinna can run for the user: the same binary and
  * child environment the turns use, so the login it leaves is the one every
  * turn and every `auth status` probe sees (the login follows `HOME`).
+ * Antigravity's login is an ACP `authenticate` on its own server, not a CLI.
  */
-export type EngineLoginId = 'claude' | 'codex'
+export type EngineLoginId = 'claude' | 'codex' | 'antigravity'
 
 export function isEngineLoginId(value: unknown): value is EngineLoginId {
-  return value === 'claude' || value === 'codex'
+  return value === 'claude' || value === 'codex' || value === 'antigravity'
 }
 
 /**
@@ -294,7 +334,8 @@ export function isEngineLoginId(value: unknown): value is EngineLoginId {
  * `logged_in` is decided by asking the binary afterwards, not by the exit code.
  * `command` is the absolute, shell-quoted command the user can run in a
  * terminal instead — null when the binary itself could not be resolved, in
- * which case `reason` says why.
+ * which case `reason` says why, and always null for Antigravity, whose login
+ * has no terminal form.
  */
 export interface EngineLoginResult {
   outcome: 'logged_in' | 'cancelled' | 'timeout' | 'failed'
@@ -313,7 +354,11 @@ export type EngineLoginPhase = 'preparing' | 'waiting'
 export type EngineLoginRunning = Record<EngineLoginId, EngineLoginPhase | null>
 
 /** The product name each login engine is shown under. */
-export const ENGINE_LOGIN_NAMES: Record<EngineLoginId, string> = { claude: 'Claude Code', codex: 'Codex' }
+export const ENGINE_LOGIN_NAMES: Record<EngineLoginId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  antigravity: 'Antigravity'
+}
 
 /**
  * The one sentence every surface opens a failed in-app login with — the agent

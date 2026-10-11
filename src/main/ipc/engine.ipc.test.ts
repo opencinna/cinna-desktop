@@ -9,9 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const saved = vi.hoisted(() => new Map<string, () => void>())
 const services = vi.hoisted(() => {
   const make = () => ({ refresh: vi.fn(async () => ({ state: 'unresolved' })), onChange: vi.fn(), peek: vi.fn(), state: vi.fn() })
-  return { engine: make(), codex: make(), claude: make() }
+  return { engine: make(), codex: make(), claude: make(), antigravity: make() }
 })
-const probes = vi.hoisted(() => ({ codex: { invalidate: vi.fn() }, claude: { invalidate: vi.fn() } }))
+const probes = vi.hoisted(() => ({ codex: { invalidate: vi.fn() }, claude: { invalidate: vi.fn() }, antigravity: { invalidate: vi.fn() } }))
 
 vi.mock('./_wrap', () => ({ ipcHandle: vi.fn() }))
 vi.mock('../services/appSettingsService', () => ({
@@ -25,9 +25,10 @@ vi.mock('../services/appSettingsService', () => ({
 vi.mock('../engine/engineBinaryService', () => ({
   engineBinaryService: services.engine,
   codexBinaryService: services.codex,
-  claudeBinaryService: services.claude
+  claudeBinaryService: services.claude,
+  antigravityBinaryService: services.antigravity
 }))
-vi.mock('../agents/drivers', () => ({ codexAuthProbe: probes.codex, claudeAuthProbe: probes.claude }))
+vi.mock('../agents/drivers', () => ({ codexAuthProbe: probes.codex, claudeAuthProbe: probes.claude, antigravityAuthProbe: probes.antigravity }))
 vi.mock('../index', () => ({ getMainWindow: () => null }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'user' }))
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: vi.fn() } }))
@@ -45,11 +46,22 @@ describe('saving a runtime path', () => {
   it.each([
     ['localAgentsEnginePath', 'engine'],
     ['localAgentsCodexPath', 'codex'],
-    ['localAgentsClaudePath', 'claude']
+    ['localAgentsClaudePath', 'claude'],
+    ['localAgentsAntigravityPath', 'antigravity']
   ] as const)('%s re-resolves that runtime, and only that one', (key, which) => {
     saved.get(key)!()
     for (const [name, service] of Object.entries(services)) {
       expect(service.refresh).toHaveBeenCalledTimes(name === which ? 1 : 0)
     }
+  })
+})
+
+describe('saving the Antigravity path', () => {
+  it('drops the cached Antigravity login answer, and no other', () => {
+    for (const probe of Object.values(probes)) probe.invalidate.mockClear()
+    saved.get('localAgentsAntigravityPath')!()
+    expect(probes.antigravity.invalidate).toHaveBeenCalledTimes(1)
+    expect(probes.codex.invalidate).not.toHaveBeenCalled()
+    expect(probes.claude.invalidate).not.toHaveBeenCalled()
   })
 })

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from './runtimePins'
-import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, PINNED_ENGINE_VERSION } from './engine'
+import { PINNED_ANTIGRAVITY_VERSION, PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, PINNED_ENGINE_VERSION } from './engine'
 
 /**
  * The manifest is the only place a runtime version lives — except for the two
@@ -46,11 +46,19 @@ describe('runtime pins', () => {
   })
 
   it('every asset row is a well-formed pin', () => {
-    for (const [tool, pin] of Object.entries({ claude: RUNTIME_PINS.claude, codex: RUNTIME_PINS.codex, opencode: RUNTIME_PINS.opencode, git: RUNTIME_PINS.git })) {
+    for (const [tool, pin] of Object.entries({
+      claude: RUNTIME_PINS.claude,
+      codex: RUNTIME_PINS.codex,
+      antigravity: RUNTIME_PINS.antigravity,
+      opencode: RUNTIME_PINS.opencode,
+      git: RUNTIME_PINS.git
+    })) {
       expect(Object.keys(pin.assets).length, tool).toBeGreaterThan(0)
       for (const [platform, asset] of Object.entries(pin.assets)) {
         expect(asset.sha256, `${tool} ${platform}`).toMatch(/^[0-9a-f]{64}$/)
         expect(asset.file, `${tool} ${platform}`).not.toBe('')
+        // A sibling is a plain name inside the same directory, never a path.
+        for (const sibling of asset.siblings ?? []) expect(sibling, `${tool} ${platform}`).toMatch(/^[A-Za-z0-9._-]+$/)
       }
     }
   })
@@ -118,8 +126,32 @@ describe('runtime pins', () => {
     expect(RUNTIME_PINS.git.versionOutput).toBe(`git version ${RUNTIME_PINS.git.cli}`)
   })
 
+  it('every Antigravity asset is a Google release zip holding the server and its harness, with its size', () => {
+    const os: Record<string, string> = {
+      'darwin-arm64': 'macos',
+      'darwin-x64': 'macos',
+      'linux-x64': 'linux',
+      'linux-arm64': 'linux'
+    }
+    // No Windows row: the app does not ship this engine there.
+    expect(Object.keys(RUNTIME_PINS.antigravity.assets).sort()).toEqual(Object.keys(os).sort())
+    for (const [platform, asset] of Object.entries(RUNTIME_PINS.antigravity.assets)) {
+      expect(asset.file, platform).toMatch(new RegExp(`^agy-acp-server-${RUNTIME_PINS.antigravity.cli.replace(/\./g, '\\.')}-[a-z0-9_-]+\\.zip$`))
+      expect(asset.url, platform).toBe(`https://dl.google.com/agy-extensions/releases/${os[platform]}/${asset.file}`)
+      expect(asset.executable, platform).toBe('agy_acp_server.par')
+      expect(asset.format, platform).toBeUndefined()
+      expect(asset.companions, platform).toBeUndefined()
+      // The server will not start without its harness beside it, from the same zip.
+      expect(asset.siblings, platform).toEqual(['localharness_external'])
+      // Set, and above the download guard's 200 MB default for Linux.
+      expect(asset.size, platform).toBeGreaterThan(100 * 1024 * 1024)
+    }
+    expect(new Set(Object.values(RUNTIME_PINS.antigravity.assets).map((asset) => asset.sha256)).size).toBe(4)
+  })
+
   it('the versions the renderer shows are the manifest’s', () => {
     expect(PINNED_CLAUDE_VERSION).toBe(RUNTIME_PINS.claude.cli)
     expect(PINNED_CODEX_VERSION).toBe(RUNTIME_PINS.codex.cli)
+    expect(PINNED_ANTIGRAVITY_VERSION).toBe(RUNTIME_PINS.antigravity.cli)
   })
 })

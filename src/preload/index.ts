@@ -69,6 +69,7 @@ import type {
   FilesReadPreviewPathResult
 } from '../shared/filePreview'
 import type {
+  AntigravityAuthStatus,
   ClaudeApproval,
   CodexAuthStatus,
   ClaudeAuthStatus,
@@ -79,7 +80,7 @@ import type {
   EngineLoginRunning,
   LocalAgentRuntimeInput
 } from '../shared/engine'
-import { CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
+import { ANTIGRAVITY_BINARY_CHANNEL, CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
@@ -1646,6 +1647,8 @@ const api = {
      * alone cannot say *which* login on a machine holding more than one.
      */
     codexAuth: (): Promise<CodexAuthStatus> => ipcRenderer.invoke('local-tools:codex-auth'),
+    /** Whether the user's Antigravity home is signed in — a state only, never the token. */
+    antigravityAuth: (): Promise<AntigravityAuthStatus> => ipcRenderer.invoke('local-tools:antigravity-auth'),
     claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
     /**
      * Run the engine's own login (`claude auth login` / `codex login`) on the
@@ -1929,6 +1932,11 @@ const api = {
       approval: ClaudeApproval | null
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-codex-approval', { agentId, approval }),
+    setAntigravityApproval: (
+      agentId: string,
+      approval: ClaudeApproval | null
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-antigravity-approval', { agentId, approval }),
     setDelegationPermission: (
       agentId: string,
       field: 'delegations' | 'cloudDelegations',
@@ -2151,6 +2159,21 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
       ipcRenderer.on(CLAUDE_BINARY_CHANNEL, listener)
       return () => ipcRenderer.off(CLAUDE_BINARY_CHANNEL, listener)
+    },
+    /**
+     * The **pinned Antigravity ACP server**, on the same terms: the copy Cinna
+     * downloads and verifies, or the explicit path from Settings. Its version is
+     * never probed, so a configured path reports no version. Reading it
+     * downloads nothing.
+     */
+    antigravityBinary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:antigravity-binary'),
+    /** Install or re-check it now. Resolves with the state, a failed install included. */
+    resolveAntigravity: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:antigravity-resolve'),
+    /** Fires on every transition, download progress included. Returns an unsubscribe. */
+    onAntigravityState: (handler: (state: EngineBinaryState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
+      ipcRenderer.on(ANTIGRAVITY_BINARY_CHANNEL, listener)
+      return () => ipcRenderer.off(ANTIGRAVITY_BINARY_CHANNEL, listener)
     }
   },
 

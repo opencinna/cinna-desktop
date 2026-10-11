@@ -17,14 +17,18 @@
 
 export type AuthKind = 'subscription' | 'api_key' | 'gateway' | 'cloud' | 'none' | 'unknown'
 
-export type TelemetryEngine = 'claude' | 'codex'
+/**
+ * Antigravity reports `usage_update {used, size}` and nothing else — no cost,
+ * no cache counts, no categories — so every capability below is false for it.
+ */
+export type TelemetryEngine = 'claude' | 'codex' | 'antigravity'
 
 /**
  * Whether the engine's prompt-cache TTL is known, so the cache has an expiry,
  * a warm or cold state and invalidations. Claude's writes show their TTL;
  * Codex caches on its own with a TTL nobody reports.
  */
-export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
 
 /**
  * The context window an engine's adapter streams when it knows none, or null
@@ -33,21 +37,21 @@ export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Objec
  * (`DEFAULT_CONTEXT_WINDOW` in its `acp-agent.js`, 0.76.0); Codex reports the
  * real window always.
  */
-export const GUESSED_CONTEXT_WINDOW: Readonly<Record<TelemetryEngine, number | null>> = Object.freeze({ claude: 200_000, codex: null })
+export const GUESSED_CONTEXT_WINDOW: Readonly<Record<TelemetryEngine, number | null>> = Object.freeze({ claude: 200_000, codex: null, antigravity: null })
 
 /**
  * Whether the engine reports cache writes at all. Claude's usage splits them
  * out (and prices them); Codex reports cached reads only, so its cache-write
  * count is always 0 and says nothing.
  */
-export const CACHE_WRITES_REPORTED: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+export const CACHE_WRITES_REPORTED: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
 
 /**
  * Whether the engine can measure its context by category on demand
  * (`sessionTelemetry:measureContext`): Claude, through the patched adapter's
  * `_cinna/contextUsage`. Codex answers `unsupported`.
  */
-export const CONTEXT_CATEGORIES_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+export const CONTEXT_CATEGORIES_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
 
 export interface TokenTally {
   /** Uncached input. */

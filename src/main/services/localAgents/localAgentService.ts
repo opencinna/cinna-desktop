@@ -2004,6 +2004,20 @@ export const localAgentService = {
   },
 
   setCodexApproval(userId: string, agentId: string, approval: unknown): LocalAgentDto {
+    return this.setEngineApproval(userId, agentId, 'codexApproval', approval)
+  },
+
+  /** The same choice on the Antigravity engine (`auto` → its `yolo` mode, `ask` → `default`). */
+  setAntigravityApproval(userId: string, agentId: string, approval: unknown): LocalAgentDto {
+    return this.setEngineApproval(userId, agentId, 'antigravityApproval', approval)
+  },
+
+  setEngineApproval(
+    userId: string,
+    agentId: string,
+    field: 'codexApproval' | 'antigravityApproval',
+    approval: unknown
+  ): LocalAgentDto {
     const { root, agentDir } = this.locate(userId, agentId)
     if (approval !== null && !isClaudeApproval(approval)) {
       throw new LocalAgentError('invalid_input', 'That is not an approval setting this app knows.')
@@ -2011,7 +2025,7 @@ export const localAgentService = {
     const kind = kindOf(root)
     const handle = turnLock.acquire(agentId, 'editor')
     try {
-      desktopStateService.patch(agentDir, kind, { codexApproval: approval })
+      desktopStateService.patch(agentDir, kind, { [field]: approval })
     } finally {
       handle.release()
     }

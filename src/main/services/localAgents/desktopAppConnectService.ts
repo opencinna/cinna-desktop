@@ -25,11 +25,12 @@ import { appSettingsRepo } from '../../db/appSettings'
 import { getSettingsScopeUserId } from '../../auth/scope'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
-import { claudeAuthProbe, codexAuthProbe, engineLogins } from '../../agents/drivers'
-import { claudeBinaryService, codexBinaryService } from '../../engine/engineBinaryService'
+import { antigravityAuthProbe, claudeAuthProbe, codexAuthProbe, engineLogins } from '../../agents/drivers'
+import { antigravityBinaryService, claudeBinaryService, codexBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
 import { CLAUDE_NOT_INSTALLED } from '../../agents/drivers/acp/acpLaunchers'
 import { CODEX_NOT_INSTALLED } from '../../agents/drivers/acp/codexLauncher'
+import { ANTIGRAVITY_NOT_INSTALLED } from '../../agents/drivers/acp/antigravityEnv'
 import { DESKTOP_APP_SPECS } from './desktopAppsService'
 import { loginFailureLead, type EngineLoginId, type EngineLoginResult } from '../../../shared/engine'
 import {
@@ -45,7 +46,9 @@ const logger = createLogger('desktop-app-connect')
 /** The mode a desktop app's engine gets when one has to be created. Colours as onboarding's providers. */
 const ENGINE_MODE: Record<EngineLoginId, { name: string; colorPreset: string }> = {
   claude: { name: 'Claude', colorPreset: 'amber' },
-  codex: { name: 'Codex', colorPreset: 'emerald' }
+  codex: { name: 'Codex', colorPreset: 'emerald' },
+  // No desktop app stands for it yet; here so the table stays exhaustive.
+  antigravity: { name: 'Antigravity', colorPreset: 'sky' }
 }
 
 /**
@@ -210,12 +213,14 @@ export function createDesktopAppConnect(deps: DesktopAppConnectDeps): DesktopApp
 
 const BINARY: Record<EngineLoginId, { service: typeof claudeBinaryService; notInstalled: string }> = {
   claude: { service: claudeBinaryService, notInstalled: CLAUDE_NOT_INSTALLED },
-  codex: { service: codexBinaryService, notInstalled: CODEX_NOT_INSTALLED }
+  codex: { service: codexBinaryService, notInstalled: CODEX_NOT_INSTALLED },
+  antigravity: { service: antigravityBinaryService, notInstalled: ANTIGRAVITY_NOT_INSTALLED }
 }
 
-const AUTH_PROBE: Record<EngineLoginId, typeof claudeAuthProbe | typeof codexAuthProbe> = {
+const AUTH_PROBE: Record<EngineLoginId, typeof claudeAuthProbe | typeof codexAuthProbe | typeof antigravityAuthProbe> = {
   claude: claudeAuthProbe,
-  codex: codexAuthProbe
+  codex: codexAuthProbe,
+  antigravity: antigravityAuthProbe
 }
 
 /** The production wiring: the pinned binaries, the shared probes and logins the agent panel uses. */

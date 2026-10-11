@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import {
+  ANTIGRAVITY_SPEC,
   binaryFingerprint,
   CLAUDE_ASSETS,
   CLAUDE_SPEC,
@@ -19,6 +20,7 @@ import {
   knownRuntimeBinary,
   managedBinaryPath,
   pinnedAssetBytes,
+  realAntigravityResolverDeps,
   realClaudeResolverDeps,
   realCodexResolverDeps,
   resolveEngineBinaryWith,
@@ -874,6 +876,126 @@ describe('resolveEngineBinaryWith — the pinned Claude Code CLI', () => {
       fetchSpy.mockRestore()
       if (before === undefined) delete process.env['CINNA_CLAUDE_DOWNLOAD']
       else process.env['CINNA_CLAUDE_DOWNLOAD'] = before
+    }
+  })
+})
+
+/**
+ * The same resolver under the Antigravity spec. What differs: the server is
+ * **never probed** for a version (the pinned digest proves the bytes); and its
+ * zip holds a second file, `localharness_external`, that must sit beside it —
+ * an install without it is not an install.
+ */
+describe('resolveEngineBinaryWith — the managed Antigravity server', () => {
+  const SERVER = 'agy_acp_server.par'
+  const HARNESS = 'localharness_external'
+  const installDir = (): string => join(root, 'antigravity-1.3.0')
+  const probeVersion = vi.fn(async (): Promise<string | null> => {
+    throw new Error('the Antigravity server must never be asked for --version')
+  })
+  function antigravity(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
+    return harness({
+      spec: ANTIGRAVITY_SPEC,
+      version: '1.3.0',
+      assets: {
+        'test-arch': {
+          file: 'agy.zip',
+          sha256: ARCHIVE_SHA,
+          url: 'https://example.test/agy.zip',
+          executable: SERVER,
+          size: 333_727_150,
+          siblings: [HARNESS]
+        }
+      },
+      extract: async (_archive, dest) => {
+        writeFileSync(join(dest, SERVER), '#!/bin/sh\n')
+        writeFileSync(join(dest, HARNESS), '#!/bin/sh\n')
+      },
+      probeVersion,
+      ...overrides
+    })
+  }
+  beforeEach(() => {
+    probeVersion.mockClear()
+  })
+
+  it('publishes the server and its harness together, reports the pinned version, and never probes', async () => {
+    const resolved = await resolveEngineBinaryWith(antigravity())
+    expect(resolved).toEqual({ path: join(installDir(), SERVER), source: 'managed', version: '1.3.0' })
+    expect(readdirSync(installDir()).sort()).toEqual([SERVER, HARNESS])
+    // Mode bits are set on both: Python's zipfile, the last Linux fallback, drops them.
+    expect(statSync(join(installDir(), HARNESS)).mode & 0o111).not.toBe(0)
+    expect(probeVersion).not.toHaveBeenCalled()
+  })
+
+  it('refuses an archive without the harness and publishes nothing', async () => {
+    const deps = antigravity({ extract: async (_archive, dest) => writeFileSync(join(dest, SERVER), 'x') })
+    await expect(resolveEngineBinaryWith(deps)).rejects.toMatchObject({
+      code: 'extract_failed',
+      message: expect.stringContaining(HARNESS)
+    })
+    expect(everything()).toEqual([])
+  })
+
+  it('treats a published server without its harness as not installed, and installs it again', async () => {
+    // Mutation: drop the sibling loop from `managedInstallComplete` and this
+    // directory counts as installed — the server is answered from a directory
+    // it cannot start in, and nothing is downloaded.
+    mkdirSync(installDir(), { recursive: true })
+    writeFileSync(join(installDir(), SERVER), 'half-published')
+    const deps = antigravity()
+    expect(await knownRuntimeBinary(deps)).toBeNull()
+    const resolved = await resolveEngineBinaryWith(deps)
+    expect(downloads).toHaveLength(1)
+    expect(resolved.path).toBe(join(installDir(), SERVER))
+    expect(readdirSync(installDir()).sort()).toEqual([SERVER, HARNESS])
+    expect(await knownRuntimeBinary(deps)).toEqual({ path: join(installDir(), SERVER), source: 'managed', version: null })
+  })
+
+  it('reuses a whole install without downloading', async () => {
+    await resolveEngineBinaryWith(antigravity())
+    await resolveEngineBinaryWith(antigravity())
+    expect(downloads).toHaveLength(1)
+  })
+
+  it('still sweeps a superseded version after a fresh install, though it has no version to probe', async () => {
+    mkdirSync(join(root, 'antigravity-1.2.0'))
+    idleFor(join(root, 'antigravity-1.2.0'), 8)
+    await resolveEngineBinaryWith(antigravity())
+    expect(published()).toEqual(['antigravity-1.3.0'])
+  })
+
+  it('runs a configured executable as it is, with no version, and refuses one that cannot be executed', async () => {
+    const path = join(root, 'my-agy')
+    writeFileSync(path, '#!/bin/sh\n')
+    chmodSync(path, 0o755)
+    expect(await resolveEngineBinaryWith(antigravity({ configuredPath: () => path }))).toEqual({
+      path,
+      source: 'configured',
+      version: null
+    })
+    chmodSync(path, 0o644)
+    await expect(resolveEngineBinaryWith(antigravity({ configuredPath: () => path }))).rejects.toMatchObject({
+      code: 'configured_unusable',
+      message: 'Antigravity path will not run — fix it in Local Development.'
+    })
+    expect(probeVersion).not.toHaveBeenCalled()
+    expect(downloads).toEqual([])
+  })
+
+  it('refuses with a remedy instead of reaching the network when downloads are off (the E2E sandbox)', async () => {
+    const before = process.env['CINNA_ANTIGRAVITY_DOWNLOAD']
+    process.env['CINNA_ANTIGRAVITY_DOWNLOAD'] = 'off'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      await expect(resolveEngineBinaryWith(antigravity({ download: realAntigravityResolverDeps(() => null).download })))
+        .rejects.toThrow(/Set an Antigravity path in Settings.*switched off/i)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(everything()).toEqual([])
+    } finally {
+      fetchSpy.mockRestore()
+      if (before === undefined) delete process.env['CINNA_ANTIGRAVITY_DOWNLOAD']
+      else process.env['CINNA_ANTIGRAVITY_DOWNLOAD'] = before
     }
   })
 })

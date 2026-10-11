@@ -1,6 +1,10 @@
 /**
  * The vendor's own login, run from the app — `claude auth login` or
  * `codex login` — with **the binary and child environment the turns use**.
+ * Antigravity has no login CLI: its login is an ACP `authenticate` on its own
+ * server, so that entry carries an {@link EngineLoginProtocol} that speaks to
+ * the child over stdio, and everything else here — phases, cancel, timeout,
+ * shutdown, the verdict — is the same.
  *
  * ## Why this exists
  *
@@ -47,10 +51,26 @@ export const ENGINE_LOGIN_TIMEOUT_MS = 10 * 60_000
 /** SIGTERM first; SIGKILL if the child is still there after this. */
 export const ENGINE_LOGIN_KILL_GRACE_MS = 3_000
 
+/** The engines whose login is a CLI subcommand, and so has a terminal form. */
+export type CliLoginId = Exclude<EngineLoginId, 'antigravity'>
+
 /** The subcommand each engine's CLI logs in with. Nothing the renderer sends is appended. */
-export const ENGINE_LOGIN_ARGS: Record<EngineLoginId, readonly string[]> = {
+export const ENGINE_LOGIN_ARGS: Record<CliLoginId, readonly string[]> = {
   claude: ['auth', 'login'],
   codex: ['login']
+}
+
+/**
+ * A login spoken **to** the child rather than one it runs by itself: the
+ * child is started with {@link args} and stdin open, and {@link converse}
+ * exchanges messages with it. When `converse` settles — the exchange has its
+ * answer, good or bad — the child is stopped, and the verdict is the probe's
+ * as for every login. `converse` reads stdout to find its answers and must
+ * neither keep nor log what it reads.
+ */
+export interface EngineLoginProtocol {
+  args: readonly string[]
+  converse(child: ChildProcess): Promise<'answered' | 'refused'>
 }
 
 type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
@@ -66,6 +86,8 @@ export interface EngineLoginDeps {
   env(): Promise<Record<string, string>>
   /** Drop the probe's cached answer and ask the binary again. */
   refresh(): Promise<{ state: string }>
+  /** Present for a login spoken over the child's stdio (Antigravity's ACP `authenticate`). */
+  protocol?: EngineLoginProtocol
   spawn?: SpawnLike
   timeoutMs?: number
   killGraceMs?: number
@@ -78,12 +100,17 @@ export function shellQuote(value: string, platform: NodeJS.Platform = process.pl
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** The command the user can run in a terminal instead: the absolute binary, quoted, then the fixed subcommand. */
+/**
+ * The command the user can run in a terminal instead: the absolute binary,
+ * quoted, then the fixed subcommand. Null for Antigravity, whose login is a
+ * protocol exchange with no terminal form.
+ */
 export function engineLoginCommand(
   engine: EngineLoginId,
   path: string,
   platform: NodeJS.Platform = process.platform
-): string {
+): string | null {
+  if (engine === 'antigravity') return null
   return [shellQuote(path, platform), ...ENGINE_LOGIN_ARGS[engine]].join(' ')
 }
 
@@ -219,7 +246,7 @@ export class EngineLogin {
         logger.warn('engine login could not resolve its binary', { engine })
         return { outcome: 'failed', command: null, reason: binary.error }
       }
-      const command = engineLoginCommand(engine, binary.path, this.deps.platform)
+      const command = this.deps.protocol ? null : engineLoginCommand(engine, binary.path, this.deps.platform)
       current.command = command
 
       let env: Record<string, string>
@@ -261,11 +288,18 @@ export class EngineLogin {
       }, this.deps.timeoutMs ?? ENGINE_LOGIN_TIMEOUT_MS)
       timer.unref?.()
 
+      const protocol = this.deps.protocol
+      const args = protocol ? protocol.args : engine === 'antigravity' ? null : ENGINE_LOGIN_ARGS[engine]
+      if (!args) {
+        done('spawn-error', null)
+        return
+      }
       let child: ChildProcess
       try {
-        child = (this.deps.spawn ?? nodeSpawn)(path, ENGINE_LOGIN_ARGS[engine], {
+        child = (this.deps.spawn ?? nodeSpawn)(path, args, {
           env,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          // A protocol login speaks on stdin; a CLI login is never written to.
+          stdio: [protocol ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           windowsHide: true
         })
       } catch {
@@ -276,8 +310,20 @@ export class EngineLogin {
       current.phase = 'waiting'
       logger.info('engine login started', { engine })
       // Drained, never read: see the header. `resume()` discards the bytes.
-      child.stdout?.resume()
+      // A protocol login reads stdout for its answers instead, and keeps none.
+      if (!protocol) child.stdout?.resume()
       child.stderr?.resume()
+      if (protocol) {
+        // The exchange has its answer: stop the child, and `exit` decides as
+        // for a CLI that ended on its own. Its outcome is logged, not trusted.
+        const answered = (result: 'answered' | 'refused' | 'broken'): void => {
+          if (settled) return
+          logger.info('engine login exchange ended', { engine, result })
+          try { child.stdin?.end() } catch { /* already closed */ }
+          this.kill(current)
+        }
+        protocol.converse(child).then(answered, () => answered('broken'))
+      }
       // Terminal only when the child never started (ENOENT, EACCES). After a
       // spawn, an `error` is about an operation on a live child — a kill that
       // failed — and the login is still running: `exit` decides.
@@ -299,7 +345,7 @@ export class EngineLogin {
 
   private async finish(
     reason: EndReason,
-    command: string,
+    command: string | null,
     startedAt: number,
     exitCode: number | null
   ): Promise<EngineLoginResult> {

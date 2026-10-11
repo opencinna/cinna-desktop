@@ -46,7 +46,7 @@ import { runtimeHost } from '../host/runtimeHost'
  */
 
 import { spawn } from 'node:child_process'
-import { chmod, realpath, rename, stat } from 'node:fs/promises'
+import { access, chmod, constants as fsConstants, realpath, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { appSettingsRepo } from '../db/appSettings'
 import { createLogger } from '../logger/logger'
@@ -114,6 +114,15 @@ export interface RuntimeBinarySpec {
    * is discarded before it is published. Absent means "any runnable version".
    */
   acceptsVersion?(probed: string | null, version: string): boolean
+  /**
+   * The binary is never asked for its version: Antigravity's `--version` prints
+   * absl build info rather than a version line and takes seconds on a ~280 MB
+   * par, and the pinned digest already proves the bytes. Its managed
+   * install then reports the pinned version (the digest is the proof), a
+   * configured path reports `null` and counts as runnable when it is an
+   * executable file, and a null version is not read as "did not run".
+   */
+  versionless?: boolean
   /**
    * The sentences a user reads when a source fails. The three a Path field can
    * fix are said per {@link FailureSurface}: under the field itself a redirect
@@ -210,6 +219,32 @@ export const CLAUDE_SPEC: RuntimeBinarySpec = {
   }
 }
 
+/**
+ * Google Antigravity's ACP server. Installed under its own name,
+ * `agy_acp_server.par`, with `localharness_external` from the same zip beside
+ * it (the row's `siblings`). Never on PATH: it is not a CLI anyone installs.
+ */
+export const ANTIGRAVITY_SPEC: RuntimeBinarySpec = {
+  tool: 'antigravity',
+  label: 'Antigravity',
+  binaryName: 'agy_acp_server.par',
+  searchPath: false,
+  versionless: true,
+  url: (_version, asset) => {
+    if (!asset.url) throw new EngineBinaryError('unsupported_platform', 'The Antigravity pin has no download URL for this platform.')
+    return asset.url
+  },
+  messages: {
+    unsupportedPlatform: (key, surface) =>
+      `Set an Antigravity path${pathWhere(surface)}: Cinna has no verified Antigravity build for ${key}.`,
+    configuredMissing: (surface) => `Antigravity path is not a file — ${pathRemedy(surface)}.`,
+    configuredUnusable: (surface) => `Antigravity path will not run — ${pathRemedy(surface)}.`,
+    archiveMissingBinary: 'The downloaded Antigravity archive did not contain agy_acp_server.par.',
+    // Never said: a versionless spec has no version gate.
+    versionMismatch: (version) => `The downloaded Antigravity was not version ${version}, so it was discarded. Try again.`
+  }
+}
+
 /** Ceiling on the `--version` probe. A wedged binary must not wedge a start. */
 const VERSION_TIMEOUT_MS = 10_000
 
@@ -234,6 +269,8 @@ export type EngineAsset = PinnedAsset & {
   size?: number
   /** Files installed beside the binary; see {@link installCompanions}. */
   companions?: readonly RuntimePinCompanion[]
+  /** Files the same archive puts beside the binary; see {@link managedInstallComplete}. */
+  siblings?: readonly string[]
 }
 
 /**
@@ -442,6 +479,23 @@ export function managedBinaryPath(deps: Pick<BinaryResolverDeps, 'engineRoot' | 
 }
 
 /**
+ * Whether the managed install at `<root>/<tool>-<version>/` is whole: the
+ * binary, and every sibling file its archive row names beside it. A directory
+ * holding the binary without a sibling — published half-way, or pruned since —
+ * is **not** installed, and {@link runInstall} replaces it.
+ */
+export async function managedInstallComplete(
+  deps: Pick<BinaryResolverDeps, 'engineRoot' | 'version' | 'spec' | 'assets' | 'platformKey'>
+): Promise<boolean> {
+  const binary = managedBinaryPath(deps)
+  if (!(await isFile(binary))) return false
+  for (const sibling of deps.assets[deps.platformKey()]?.siblings ?? []) {
+    if (!(await isFile(join(dirname(binary), sibling)))) return false
+  }
+  return true
+}
+
+/**
  * Re-exported: it lives beside `sweepSuperseded` in `managedAsset.ts` so the
  * managed git (`../shell/managedGit.ts`) can stamp its tree without importing
  * this module, which imports the shell layer.
@@ -540,6 +594,15 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
    * the download's own total (the server's length, or nothing).
    */
   const combinedBytes = pinnedAssetBytes(deps)
+  const siblings = asset.siblings ?? []
+
+  // A published directory that lacks a sibling is not an install, but the
+  // publishing rename cannot replace a non-empty directory: clear it first.
+  // Only when the binary is there — otherwise there is nothing published.
+  if (siblings.length > 0 && (await isFile(installed)) && !(await managedInstallComplete(deps))) {
+    logger.warn('a managed runtime is missing a file beside its binary; installing it again', { tool: spec.tool })
+    await rm(installDir, { recursive: true, force: true })
+  }
 
   try {
     ;({ installed: didInstall } = await installPinnedAsset({
@@ -570,12 +633,22 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
             return null
           }
         }
+        // The archive's own other files must be in the directory that is
+        // published; an archive without one publishes nothing.
+        for (const sibling of siblings) {
+          const path = join(dirname(target), sibling)
+          if (!(await isFile(path))) {
+            throw new EngineBinaryError('extract_failed', `The downloaded ${spec.label} archive did not contain ${sibling}.`)
+          }
+          // Not every unzip keeps the mode bits (Python's `zipfile` drops them).
+          if (process.platform !== 'win32') await chmod(path, 0o755)
+        }
         // Inside staging, before the publishing rename: the directory that
         // appears at `installDir` already holds every companion.
         await installCompanions(deps, spec, asset, root, dirname(target), asset.size ?? null)
         return target
       },
-      isInstalled: () => isFile(installed),
+      isInstalled: () => managedInstallComplete(deps),
       onDownloadProgress: (received, total) => installReports.get(spec.tool)?.(received, combinedBytes ?? total),
       // The asset's recorded size is its ceiling: exact for a pinned file, and
       // what lets a ~215 MB executable past a guard sized for archives.
@@ -621,7 +694,9 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
     }
   }
 
-  const version = await deps.probeVersion(installed)
+  // A versionless binary is never asked; its digest-verified install is the
+  // pinned version, and that answer is what lets it be stamped and swept.
+  const version = spec.versionless ? deps.version : await deps.probeVersion(installed)
   if (version !== null) {
     await markUsed(installDir)
     // Only after the new copy has answered: a fresh install that will not run
@@ -672,6 +747,13 @@ async function resolveFromSources(
     // The sentences are the spec's, in both wordings (see FailureSurface).
     if (!(await isFile(configured))) {
       throw EngineBinaryError.said('configured_missing', spec.messages.configuredMissing)
+    }
+    if (spec.versionless) {
+      // Nothing to ask it: an executable file is as runnable as can be told.
+      if (!(await isExecutable(configured))) {
+        throw EngineBinaryError.said('configured_unusable', spec.messages.configuredUnusable)
+      }
+      return { path: configured, source: 'configured', version: null }
     }
     const version = await deps.probeVersion(configured)
     if (version === null) {
@@ -757,8 +839,14 @@ export async function knownRuntimeBinary(
   const configured = deps.configuredPath()?.trim()
   if (configured) return (await isFile(configured)) ? { path: configured, source: 'configured', version: null } : null
   const managed = managedBinaryPath(deps)
-  if (await isFile(managed)) return { path: managed, source: 'managed', version: null }
+  if (await managedInstallComplete(deps)) return { path: managed, source: 'managed', version: null }
   return options.probePath && spec.reusePinnedPath ? pinnedOnPath(deps, spec) : null
+}
+
+/** Whether `path` may be executed by this process (always true on Windows, which has no mode bit). */
+async function isExecutable(path: string): Promise<boolean> {
+  if (process.platform === 'win32') return true
+  return access(path, fsConstants.X_OK).then(() => true, () => false)
 }
 
 /** `<binary> --version`, or null when the file will not run. */
@@ -960,5 +1048,46 @@ export function realClaudeResolverDeps(configuredPath: () => string | null): Bin
     assets: CLAUDE_ASSETS,
     version: RUNTIME_PINS.claude.cli,
     spec: CLAUDE_SPEC
+  }
+}
+
+/* ------------------------------------------------------------ Antigravity */
+
+/** The pinned Antigravity ACP server zips — the server and its harness, from Google's release path. */
+export const ANTIGRAVITY_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS.antigravity.assets
+
+/** The Antigravity server path a user set in Settings, or null. Unpinned, shown as unverified. */
+export function configuredAntigravityPath(): string | null {
+  const value = appSettingsRepo.get('localAgentsAntigravityPath')
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+/** `CINNA_ANTIGRAVITY_DOWNLOAD=off`, for the reason {@link codexDownload} gives — up to ~330 MB on Linux. */
+const antigravityDownload: BinaryResolverDeps['download'] = (url, dest, onProgress, expectedBytes) => {
+  if (process.env['CINNA_ANTIGRAVITY_DOWNLOAD'] === 'off') {
+    return Promise.reject(
+      new EngineBinaryError(
+        'download_failed',
+        'Set an Antigravity path in Settings: downloading Antigravity is switched off in this environment.'
+      )
+    )
+  }
+  return downloadToFile(url, dest, onProgress, expectedBytes)
+}
+
+export function realAntigravityResolverDeps(configuredPath: () => string | null): BinaryResolverDeps {
+  return {
+    configuredPath,
+    // Never consulted — `ANTIGRAVITY_SPEC.searchPath` is false.
+    which,
+    engineRoot: runtimesRootDir,
+    download: antigravityDownload,
+    extract: extractArchive,
+    // Never called — the spec is versionless; wired so the object stays whole.
+    probeVersion: probeEngineVersion,
+    platformKey: () => `${process.platform}-${process.arch}`,
+    assets: ANTIGRAVITY_ASSETS,
+    version: RUNTIME_PINS.antigravity.cli,
+    spec: ANTIGRAVITY_SPEC
   }
 }

@@ -35,6 +35,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsCodexPath: '',
   // Empty = the pinned Claude Code this app verifies (download, or an exact-version install).
   localAgentsClaudePath: '',
+  // Empty = the pinned Antigravity ACP server this app downloads and verifies.
+  localAgentsAntigravityPath: '',
   // Empty = ask which tool to open a folder with. Rewritten by the last pick.
   localAgentsDefaultTool: '',
   localAgentsDefaultCredentialId: '',

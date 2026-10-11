@@ -328,6 +328,23 @@ export function describePermissionAction(action: string): string {
       return 'fetch from the web'
     case 'codex:other':
       return 'grant additional Codex permissions'
+    // Antigravity's asks carry the ACP tool kind (`acpPermissions.ts`).
+    case 'antigravity:execute':
+      return 'run a command'
+    case 'antigravity:edit':
+      return 'edit a file'
+    case 'antigravity:delete':
+      return 'delete a file'
+    case 'antigravity:move':
+      return 'move a file'
+    case 'antigravity:read':
+      return 'read a file'
+    case 'antigravity:search':
+      return 'search files'
+    case 'antigravity:fetch':
+      return 'fetch from the web'
+    case 'antigravity:other':
+      return 'use a tool'
     case 'external_directory':
       return 'use a folder outside its own'
     // **Claude's tool names, which are a different vocabulary and stay one.**

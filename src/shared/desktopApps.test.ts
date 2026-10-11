@@ -25,7 +25,8 @@ describe('visibleDesktopApps', () => {
 describe('hasWorkingRuntime', () => {
   const none: RuntimeSetup['cli'] = {
     claude: { auth: 'unknown', installed: false },
-    codex: { auth: 'unknown', installed: false }
+    codex: { auth: 'unknown', installed: false },
+    antigravity: { auth: 'unknown', installed: false }
   }
   const setup = (patch: Partial<RuntimeSetup> = {}): RuntimeSetup => ({
     defaultEngine: 'opencode',

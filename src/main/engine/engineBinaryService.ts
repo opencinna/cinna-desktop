@@ -36,10 +36,12 @@ import {
   knownRuntimeBinary,
   markUsed,
   pinnedAssetBytes,
+  configuredAntigravityPath,
   configuredClaudePath,
   configuredCodexPath,
   configuredEnginePath,
   EngineBinaryError,
+  realAntigravityResolverDeps,
   realBinaryResolverDeps,
   realClaudeResolverDeps,
   realCodexResolverDeps,
@@ -157,6 +159,22 @@ const claudeProductionDeps: EngineBinaryDeps = {
   known: knownPinned(realClaudeResolverDeps, RUNTIME_PINS.claude.versionOutput),
   markUsed,
   assetBytes: () => pinnedAssetBytes({ assets: RUNTIME_PINS.claude.assets, platformKey })
+}
+
+/**
+ * The managed Antigravity ACP server: the same service over its resolver. Up
+ * to ~330 MB on Linux, so progress too. It is never asked for its version, so
+ * the version a managed copy reports is the pin itself (see `knownPinned`).
+ */
+const antigravityProductionDeps: EngineBinaryDeps = {
+  resolve: (configured, onProgress) =>
+    resolveEngineBinaryWith(realAntigravityResolverDeps(() => configured), onProgress),
+  configuredPath: configuredAntigravityPath,
+  exists: isFile,
+  fingerprint: binaryFingerprint,
+  known: knownPinned(realAntigravityResolverDeps, RUNTIME_PINS.antigravity.cli),
+  markUsed,
+  assetBytes: () => pinnedAssetBytes({ assets: RUNTIME_PINS.antigravity.assets, platformKey })
 }
 
 export interface EngineBinaryService {
@@ -377,3 +395,6 @@ export const codexBinaryService = createEngineBinaryService(codexProductionDeps)
 
 /** The pinned Claude Code CLI every Cinna-spawned Claude session runs on. */
 export const claudeBinaryService = createEngineBinaryService(claudeProductionDeps)
+
+/** The pinned Antigravity ACP server every Cinna-spawned Antigravity session runs on. */
+export const antigravityBinaryService = createEngineBinaryService(antigravityProductionDeps)

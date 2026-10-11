@@ -137,6 +137,8 @@ export interface DesktopState {
    */
   claudeApproval: ClaudeApproval | null
   codexApproval?: ClaudeApproval | null
+  /** The same choice for the Antigravity engine; null reads as `ask`. */
+  antigravityApproval?: ClaudeApproval | null
   /**
    * Bare agents only: whether a `brief.md` dropped into this folder's
    * `.cinna/handovers/` may run without asking (`drafts/file_handovers` §3.4).
@@ -178,6 +180,7 @@ const EMPTY_STATE: DesktopState = {
   runtime: null,
   claudeApproval: null,
   codexApproval: null,
+  antigravityApproval: null,
   handovers: null
 }
 
@@ -260,6 +263,7 @@ function coerce(raw: unknown): DesktopState {
     // never as the more permissive of the two by accident.
     claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null,
     codexApproval: isClaudeApproval(raw.codexApproval) ? raw.codexApproval : null,
+    antigravityApproval: isClaudeApproval(raw.antigravityApproval) ? raw.antigravityApproval : null,
     // The same reading, and here it matters most: anything but the literal
     // `'auto'` is no choice at all. A file another build wrote, or a hand edit,
     // must not be able to grant a standing permission to run code by writing
@@ -523,6 +527,7 @@ export const desktopStateService = {
       lastStatusAt: state.lastStatus?.at ?? null,
       claudeApproval: state.claudeApproval,
       codexApproval: state.codexApproval ?? null,
+      antigravityApproval: state.antigravityApproval ?? null,
       handovers: state.handovers ?? null,
       delegations: state.delegations ?? null,
       cloudDelegations: state.cloudDelegations ?? null

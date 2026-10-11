@@ -586,26 +586,86 @@ export async function downloadToFile(
 /**
  * Unpack an archive with the system `tar`.
  *
- * Every shape this app pins is handled by one command: `bsdtar` — macOS's
- * `/usr/bin/tar` and Windows 10 1803+'s `tar.exe` — reads zip as well as
- * tar.gz, and Linux only ever gets a tar.gz. That is worth a sentence because
- * the obvious reading of "we `tar -xf` a `.zip`" is that it cannot work.
+ * Every shape this app pins on macOS and Windows is handled by one command:
+ * `bsdtar` — macOS's `/usr/bin/tar` and Windows 10 1803+'s `tar.exe` — reads
+ * zip as well as tar.gz. That is worth a sentence because the obvious reading
+ * of "we `tar -xf` a `.zip`" is that it cannot work.
+ *
+ * **Linux is where it does not**: its `tar` is GNU tar, which reads no zip,
+ * and Antigravity ships Linux zips. So a `.zip` there is unpacked by the first
+ * of `unzip`, `bsdtar` and `python3 -m zipfile` that exists — one that is
+ * missing is skipped, one that runs and fails is the answer — and a machine
+ * with none of them gets one sentence saying what to install. Everything else
+ * is unchanged.
  *
  * The alternative was an unzip dependency, which is still not worth adding.
  */
 export function extractArchive(archive: string, dest: string): Promise<void> {
+  return extractArchiveWith(archive, dest)
+}
+
+/** Spawns one unpacker. `node:child_process`'s `spawn`, or a test's. */
+export type ExtractSpawn = (
+  command: string,
+  args: readonly string[],
+  options: { stdio: ['ignore', 'ignore', 'pipe'] }
+) => ReturnType<typeof spawn>
+
+/** {@link extractArchive} with the platform and the spawn injected, for tests. */
+export async function extractArchiveWith(
+  archive: string,
+  dest: string,
+  options: { platform?: NodeJS.Platform; spawn?: ExtractSpawn } = {}
+): Promise<void> {
+  const platform = options.platform ?? process.platform
+  const run = options.spawn ?? (spawn as ExtractSpawn)
+  const zipOnLinuxLike = archive.toLowerCase().endsWith('.zip') && platform !== 'darwin' && platform !== 'win32'
+  if (!zipOnLinuxLike) {
+    if ((await runUnpacker(run, 'tar', ['-xf', archive, '-C', dest])) === 'missing') {
+      throw new ManagedAssetError('extract_failed', 'Could not unpack the download: this computer has no tar.')
+    }
+    return
+  }
+  const unpackers: [string, string[]][] = [
+    ['unzip', ['-q', '-o', archive, '-d', dest]],
+    ['bsdtar', ['-xf', archive, '-C', dest]],
+    ['python3', ['-m', 'zipfile', '-e', archive, dest]]
+  ]
+  for (const [command, args] of unpackers) {
+    if ((await runUnpacker(run, command, args)) !== 'missing') return
+  }
+  throw new ManagedAssetError(
+    'extract_failed',
+    'Could not unpack the download: this computer has no unzip, bsdtar or python3. Install unzip and try again.'
+  )
+}
+
+/**
+ * Run one unpacker to completion. Resolves `'missing'` when its command does
+ * not exist (so the caller can try the next), rejects with `extract_failed`
+ * when it ran and failed or timed out.
+ */
+function runUnpacker(run: ExtractSpawn, command: string, args: readonly string[]): Promise<'done' | 'missing'> {
   return new Promise((resolve, reject) => {
-    const child = spawn('tar', ['-xf', archive, '-C', dest], { stdio: ['ignore', 'ignore', 'pipe'] })
-    let stderr = ''
     let settled = false
-    const finish = (err: Error | null): void => {
+    let stderr = ''
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (err: Error | null, outcome: 'done' | 'missing' = 'done'): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       if (err) reject(err)
-      else resolve()
+      else resolve(outcome)
     }
-    const timer = setTimeout(() => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = run(command, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') finish(null, 'missing')
+      else finish(new ManagedAssetError('extract_failed', `Could not unpack the download: ${(err as Error).message}`))
+      return
+    }
+    timer = setTimeout(() => {
       try {
         child.kill('SIGKILL')
       } catch {
@@ -617,16 +677,17 @@ export function extractArchive(archive: string, dest: string): Promise<void> {
     child.stderr?.on('data', (chunk: string) => {
       stderr += chunk
     })
-    child.on('error', (err) =>
-      finish(new ManagedAssetError('extract_failed', `Could not unpack the download: ${err.message}`))
-    )
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') finish(null, 'missing')
+      else finish(new ManagedAssetError('extract_failed', `Could not unpack the download: ${err.message}`))
+    })
     child.on('close', (code) =>
       finish(
         code === 0
           ? null
           : new ManagedAssetError(
               'extract_failed',
-              `Could not unpack the download: ${stderr.trim().slice(0, 200) || `tar exited ${code}`}`
+              `Could not unpack the download: ${stderr.trim().slice(0, 200) || `${command} exited ${code}`}`
             )
       )
     )

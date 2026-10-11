@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { toolDetectionService } from '../services/localAgents/toolDetectionService'
-import { claudeAuthProbe, codexAuthProbe, engineLogins } from '../agents/drivers'
+import { antigravityAuthProbe, claudeAuthProbe, codexAuthProbe, engineLogins } from '../agents/drivers'
 import { openInService } from '../services/localAgents/openInService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
@@ -100,6 +100,7 @@ export function registerLocalToolsHandlers(): void {
     // second one.
     void claudeAuthProbe.refresh().catch(() => {})
     void codexAuthProbe.refresh().catch(() => {})
+    void antigravityAuthProbe.refresh().catch(() => {})
     return tools
   })
 
@@ -107,6 +108,12 @@ export function registerLocalToolsHandlers(): void {
   ipcHandle('local-tools:codex-auth', () => {
     userActivation.requireActivated()
     return codexAuthProbe.status()
+  })
+
+  // Antigravity likewise: a state only, never the token or the account.
+  ipcHandle('local-tools:antigravity-auth', () => {
+    userActivation.requireActivated()
+    return antigravityAuthProbe.status()
   })
 
   /**
@@ -155,7 +162,11 @@ export function registerLocalToolsHandlers(): void {
   /** Which logins are running and in which phase, so a surface mounted mid-login still shows it. */
   ipcHandle('local-tools:engine-login-running', (): EngineLoginRunning => {
     userActivation.requireActivated()
-    return { claude: engineLogins.claude.running(), codex: engineLogins.codex.running() }
+    return {
+      claude: engineLogins.claude.running(),
+      codex: engineLogins.codex.running(),
+      antigravity: engineLogins.antigravity.running()
+    }
   })
 
   /**

@@ -21,10 +21,10 @@ export interface DevelopmentContext {
   setupTarget?: 'runtime' | 'local-dev'
   installTool?: 'claude' | 'codex' | null
   /** The engine whose in-app Log in clears the blocker; set only for `not_logged_in`. */
-  loginTool?: 'claude' | 'codex' | null
+  loginTool?: 'claude' | 'codex' | 'antigravity' | null
   blocker: string | null
 }
 
 export const DEVELOPMENT_RUNTIME_NAMES: Record<AgentEngine, string> = {
-  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'
+  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', antigravity: 'Antigravity'
 }

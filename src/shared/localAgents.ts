@@ -329,6 +329,11 @@ export interface LocalAgentDesktopSummary {
   claudeApproval: ClaudeApproval | null
   codexApproval?: ClaudeApproval | null
   /**
+   * The same choice on the Antigravity engine (`auto` → its `yolo` mode, `ask`
+   * → `default`). Null reads as `ask`, Codex's default.
+   */
+  antigravityApproval?: ClaudeApproval | null
+  /**
    * Bare agents only: whether a brief dropped into this folder's
    * `.cinna/handovers/` runs without asking. Null is "no choice made", read as
    * `DEFAULT_HANDOVER_SETTING`; `auto` is refused while git tracks the

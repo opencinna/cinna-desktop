@@ -8,13 +8,16 @@ import type { AddressInfo } from 'node:net'
 import {
   downloadCeilingMs,
   downloadToFile,
+  extractArchiveWith,
   findNamedFile,
   installPinnedAsset,
   isFile,
   sha256File,
   sweepStaging,
+  type ExtractSpawn,
   type InstallPinnedAssetOptions
 } from './managedAsset'
+import { EventEmitter } from 'node:events'
 
 /**
  * Installing a pinned asset.
@@ -398,5 +401,82 @@ describe('downloadToFile — time limits and progress', () => {
     const dest = join(root, 'big')
     await expect(downloadToFile(url(), dest, undefined, 10)).rejects.toMatchObject({ code: 'download_failed' })
     expect(await isFile(dest)).toBe(false)
+  })
+})
+
+/**
+ * Unpacking. GNU tar (every Linux) reads no zip, so a Linux `.zip` goes to the
+ * first of unzip / bsdtar / python3 that exists. The spawn is faked: what
+ * matters is which command is tried, in which order, and what a missing one
+ * (ENOENT) means as against one that ran and failed.
+ */
+describe('extractArchiveWith — which unpacker runs', () => {
+  /** Each command's fate: exit code, or ENOENT for "not installed". */
+  function fakeSpawn(fates: Record<string, number | 'ENOENT'>): { spawn: ExtractSpawn; calls: string[][] } {
+    const calls: string[][] = []
+    const spawn = ((command: string, args: readonly string[]) => {
+      calls.push([command, ...args])
+      const child = Object.assign(new EventEmitter(), {
+        stderr: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+        kill: () => true
+      })
+      const fate = fates[command] ?? 'ENOENT'
+      setImmediate(() => {
+        if (fate === 'ENOENT') {
+          child.emit('error', Object.assign(new Error(`spawn ${command} ENOENT`), { code: 'ENOENT' }))
+          child.emit('close', -2)
+        } else {
+          if (fate !== 0) child.stderr.emit('data', `${command} could not read it`)
+          child.emit('close', fate)
+        }
+      })
+      return child
+    }) as unknown as ExtractSpawn
+    return { spawn, calls }
+  }
+
+  it('keeps tar for a zip on macOS and Windows, and for a tarball on Linux', async () => {
+    for (const [platform, archive] of [['darwin', '/s/a.zip'], ['win32', '/s/a.zip'], ['linux', '/s/a.tar.gz']] as const) {
+      const { spawn, calls } = fakeSpawn({ tar: 0 })
+      await extractArchiveWith(archive, '/d', { platform, spawn })
+      expect(calls, platform).toEqual([['tar', '-xf', archive, '-C', '/d']])
+    }
+  })
+
+  it('unzips a Linux zip with unzip when it is there, and never asks tar', async () => {
+    const { spawn, calls } = fakeSpawn({ unzip: 0, tar: 0 })
+    await extractArchiveWith('/s/a.zip', '/d', { platform: 'linux', spawn })
+    expect(calls).toEqual([['unzip', '-q', '-o', '/s/a.zip', '-d', '/d']])
+  })
+
+  it('falls back to bsdtar, then python3, past the ones that are not installed', async () => {
+    const viaBsdtar = fakeSpawn({ bsdtar: 0 })
+    await extractArchiveWith('/s/a.zip', '/d', { platform: 'linux', spawn: viaBsdtar.spawn })
+    expect(viaBsdtar.calls.map((call) => call[0])).toEqual(['unzip', 'bsdtar'])
+
+    const viaPython = fakeSpawn({ python3: 0 })
+    await extractArchiveWith('/s/a.zip', '/d', { platform: 'linux', spawn: viaPython.spawn })
+    expect(viaPython.calls).toEqual([
+      ['unzip', '-q', '-o', '/s/a.zip', '-d', '/d'],
+      ['bsdtar', '-xf', '/s/a.zip', '-C', '/d'],
+      ['python3', '-m', 'zipfile', '-e', '/s/a.zip', '/d']
+    ])
+  })
+
+  it('says what to install when none of them exists', async () => {
+    const { spawn } = fakeSpawn({})
+    await expect(extractArchiveWith('/s/a.zip', '/d', { platform: 'linux', spawn })).rejects.toMatchObject({
+      code: 'extract_failed',
+      message: expect.stringContaining('no unzip, bsdtar or python3')
+    })
+  })
+
+  it('takes a failure from an unpacker that ran as the answer, without trying the next', async () => {
+    const { spawn, calls } = fakeSpawn({ unzip: 9, bsdtar: 0 })
+    await expect(extractArchiveWith('/s/a.zip', '/d', { platform: 'linux', spawn })).rejects.toMatchObject({
+      code: 'extract_failed',
+      message: expect.stringContaining('unzip could not read it')
+    })
+    expect(calls.map((call) => call[0])).toEqual(['unzip'])
   })
 })

@@ -2,13 +2,14 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { getRuntimeModelCatalog } from '../services/runtimeModelCatalog'
 import type { AgentEngine } from '../../shared/engine'
 import { userActivation } from '../auth/activation'
-import { claudeBinaryService, codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
+import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
 import { getMainWindow } from '../index'
-import { claudeAuthProbe, codexAuthProbe } from '../agents/drivers'
+import { antigravityAuthProbe, claudeAuthProbe, codexAuthProbe } from '../agents/drivers'
 import { appSettingsService } from '../services/appSettingsService'
 import { ipcHandle } from './_wrap'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import {
+  ANTIGRAVITY_BINARY_CHANNEL,
   CLAUDE_BINARY_CHANNEL,
   CODEX_BINARY_CHANNEL,
   ENGINE_BINARY_CHANNEL,
@@ -141,6 +142,30 @@ export function registerEngineHandlers(): void {
   ipcHandle('engine:claude-resolve', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
     return claudeBinaryService.refresh()
+  })
+
+  /**
+   * The **pinned Antigravity ACP server**: the same trio over its service. Its
+   * login is read from the user's Antigravity home, not from the binary, but a
+   * saved path still drops the cached answer so nothing describes the old one.
+   */
+  antigravityBinaryService.onChange((next) => {
+    getMainWindow()?.webContents.send(ANTIGRAVITY_BINARY_CHANNEL, next)
+  })
+
+  appSettingsService.onSaved('localAgentsAntigravityPath', () => {
+    antigravityAuthProbe.invalidate()
+    void antigravityBinaryService.refresh()
+  })
+
+  ipcHandle('engine:antigravity-binary', (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    return antigravityBinaryService.peek()
+  })
+
+  ipcHandle('engine:antigravity-resolve', (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    return antigravityBinaryService.refresh()
   })
 
   /**

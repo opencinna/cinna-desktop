@@ -79,6 +79,10 @@ describe('engineLoginCommand', () => {
     expect(engineLoginCommand('codex', '/opt/codex', 'linux')).toBe("'/opt/codex' login")
   })
 
+  it('has no terminal form for Antigravity, whose login is an ACP exchange', () => {
+    expect(engineLoginCommand('antigravity', '/opt/agy_acp_server.par', 'darwin')).toBeNull()
+  })
+
   it('survives a quote inside the path', () => {
     expect(shellQuote("/opt/o'brien/claude", 'darwin')).toBe(`'/opt/o'\\''brien/claude'`)
   })

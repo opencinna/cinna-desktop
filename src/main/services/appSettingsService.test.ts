@@ -179,6 +179,16 @@ it('persists a separate build runtime, validates it, and defaults to inheritance
   expect(appSettingsService.getAll().localDevelopmentEngine).toBe('')
 })
 
+it('accepts Antigravity as the Default runtime, and as the build runtime', () => {
+  const before = appSettingsService.getAll().localAgentsDefaultEngine
+  appSettingsService.set('localAgentsDefaultEngine', 'antigravity')
+  expect(appSettingsService.getAll().localAgentsDefaultEngine).toBe('antigravity')
+  appSettingsService.set('localDevelopmentEngine', 'antigravity')
+  expect(appSettingsService.getAll().localDevelopmentEngine).toBe('antigravity')
+  appSettingsService.set('localDevelopmentEngine', '')
+  appSettingsService.set('localAgentsDefaultEngine', before)
+})
+
 it('defaults build complexity to Complex and persists only supported tiers', () => {
   expect(appSettingsService.getAll().localDevelopmentComplexity).toBe('complex')
   appSettingsService.set('localDevelopmentComplexity', 'medium')

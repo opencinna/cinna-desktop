@@ -74,11 +74,12 @@ const logins = vi.hoisted(() => {
     cancel: vi.fn(() => true),
     running: vi.fn((): 'preparing' | 'waiting' | null => null)
   })
-  return { claude: make('claude'), codex: make('codex') }
+  return { claude: make('claude'), codex: make('codex'), antigravity: make('antigravity') }
 })
 vi.mock('../agents/drivers', () => ({
   engineLogins: logins,
   codexAuthProbe: { status: async () => ({ state: 'unknown' }), refresh: async () => ({ state: 'unknown' }) },
+  antigravityAuthProbe: { status: async () => ({ state: 'logged_out' }), refresh: async () => ({ state: 'logged_out' }) },
   claudeAuthProbe: {
     status: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null }),
     refresh: async () => {
@@ -178,7 +179,7 @@ describe('local-tools:engine-login', () => {
   }
 
   beforeEach(() => {
-    for (const login of [logins.claude, logins.codex]) {
+    for (const login of Object.values(logins)) {
       login.start.mockClear()
       login.cancel.mockClear()
       login.running.mockClear()
@@ -214,8 +215,21 @@ describe('local-tools:engine-login', () => {
 
   it('reports which logins are running, with their phase', () => {
     logins.codex.running.mockReturnValueOnce('preparing')
-    expect(call('local-tools:engine-login-running')).toEqual({ claude: null, codex: 'preparing' })
+    expect(call('local-tools:engine-login-running')).toEqual({ claude: null, codex: 'preparing', antigravity: null })
     logins.claude.running.mockReturnValueOnce('waiting')
-    expect(call('local-tools:engine-login-running')).toEqual({ claude: 'waiting', codex: null })
+    expect(call('local-tools:engine-login-running')).toEqual({ claude: 'waiting', codex: null, antigravity: null })
+    logins.antigravity.running.mockReturnValueOnce('waiting')
+    expect(call('local-tools:engine-login-running')).toEqual({ claude: null, codex: null, antigravity: 'waiting' })
+  })
+
+  it('starts the Antigravity login by its id, and only that one', async () => {
+    await call('local-tools:engine-login', 'antigravity')
+    expect(logins.antigravity.start).toHaveBeenCalledTimes(1)
+    expect(logins.claude.start).not.toHaveBeenCalled()
+    expect(logins.codex.start).not.toHaveBeenCalled()
+  })
+
+  it('answers the Antigravity login state, and nothing more', async () => {
+    await expect(call('local-tools:antigravity-auth')).resolves.toEqual({ state: 'logged_out' })
   })
 })

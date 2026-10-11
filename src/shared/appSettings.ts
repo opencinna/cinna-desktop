@@ -102,6 +102,14 @@ export interface AppSettingsSchema {
    */
   localAgentsClaudePath: string
   /**
+   * Absolute path to an Antigravity `agy_acp_server.par`, or empty. The same
+   * rule as {@link localAgentsCodexPath}: empty means every Cinna-spawned
+   * Antigravity session runs on the pinned server this app downloads and
+   * verifies; a path here overrides that and is labelled unverified. The
+   * server's version is never probed, so a configured one reports no version.
+   */
+  localAgentsAntigravityPath: string
+  /**
    * The developer tool a local agent folder opens in by default — a
    * {@link LocalToolId} of a `cli-assistant` or `editor`, or empty for "ask".
    * The agent page's Open-in button launches it in one click, and picking a

@@ -47,13 +47,14 @@ export const FOLDER_AGENT_DRIVER: AgentDriverId = 'acp'
  * run them — the driver refuses such an agent in words, which is a far better
  * failure than a value that reads as the default engine.
  */
-export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex' | 'custom'
+export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex' | 'antigravity' | 'custom'
 
 export const ACP_LAUNCHER_IDS: readonly AcpLauncherId[] = [
   'opencode',
   'claude',
   'gemini',
   'codex',
+  'antigravity',
   'custom'
 ]
 
@@ -151,7 +152,7 @@ export interface AgentReadiness {
    * composer can offer **Log in** rather than *Check again*. Absent for every
    * other state, and for a Cinna session (that is a re-authentication).
    */
-  login?: 'claude' | 'codex'
+  login?: 'claude' | 'codex' | 'antigravity'
 }
 
 /**

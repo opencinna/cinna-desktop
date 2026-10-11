@@ -723,6 +723,24 @@ export function registerLocalAgentHandlers(): void {
     }
   )
 
+  ipcHandle(
+    'local-agent:set-antigravity-approval',
+    (
+      _event,
+      input: { agentId: string; approval: ClaudeApproval | null }
+    ): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      // As Codex's: the value goes through as it arrived, and the service refuses the rest.
+      return withCode(() =>
+        localAgentService.setAntigravityApproval(
+          getSettingsScopeUserId(),
+          input?.agentId ?? '',
+          input?.approval
+        )
+      )
+    }
+  )
+
   /**
    * The git state of one registered root.
    *

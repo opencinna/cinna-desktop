@@ -1,9 +1,10 @@
 /**
  * The one place a runtime version lives.
  *
- * Cinna runs three external CLIs — OpenCode, Codex and Claude Code — and two of
- * them through an ACP adapter that is an exact `package.json` pin. A fourth,
- * git, is downloaded only for a machine that has none. A version
+ * Cinna runs four external agent runtimes — OpenCode, Codex, Claude Code and
+ * Antigravity. Codex and Claude Code run through an ACP adapter that is an
+ * exact `package.json` pin; Antigravity's server speaks ACP itself. Git is
+ * downloaded too, only for a machine that has none. A version
  * that is compared, downloaded or displayed anywhere in the app is read from
  * here, so bumping a runtime is one edit plus the checksums that prove it.
  *
@@ -63,6 +64,15 @@ export interface RuntimePinAsset {
    * `assets`.
    */
   companions?: readonly RuntimePinCompanion[]
+  /**
+   * Further files the **same archive** holds beside the executable, by name.
+   * Nothing extra is downloaded: the published directory is the one holding the
+   * executable, so they arrive with it — but an install that lacks one is not
+   * an install (a directory published half-way, or a later deletion), and the
+   * resolver installs it again. Antigravity's server needs
+   * `localharness_external` beside `agy_acp_server.par`.
+   */
+  siblings?: readonly string[]
 }
 
 /** A file that must sit beside a runtime's executable, pinned like the asset itself. */
@@ -115,6 +125,20 @@ function codexAsset(
     executable,
     size,
     companions: [codexCodeModeHost(triple, host.sha256, host.size)]
+  }
+}
+
+const ANTIGRAVITY_CLI = '1.3.0'
+
+/** One Antigravity ACP server zip: `<os>` is `macos` or `linux` in Google's release path. */
+function antigravityAsset(os: 'macos' | 'linux', file: string, sha256: string, size: number): RuntimePinAsset {
+  return {
+    file,
+    sha256,
+    url: `https://dl.google.com/agy-extensions/releases/${os}/${file}`,
+    executable: 'agy_acp_server.par',
+    size,
+    siblings: ['localharness_external']
   }
 }
 
@@ -223,6 +247,48 @@ export const RUNTIME_PINS = {
         '8b4a9c356916c515f7c93f918a01b8fa1371bcc9758addbfa723b85fbec5694b',
         94309776,
         { sha256: '0ecd8e263468b520770c6dc6c9ebafeba3052c0c9796eabc5b0c469f77d5489b', size: 24365040 }
+      )
+    } as Readonly<Record<string, RuntimePinAsset>>
+  },
+  antigravity: {
+    cli: ANTIGRAVITY_CLI,
+    /**
+     * Google's own release zips. Each holds `agy_acp_server.par` (the ACP
+     * server, installed under that name) and `localharness_external` at the
+     * archive root, so both land in one directory with nothing else to fetch.
+     * Every row was downloaded and hashed on 2026-10-11; `size` is the byte
+     * count of that download, and must stay set — the Linux zips are larger
+     * than the download guard's default ceiling.
+     *
+     * The server is never asked for `--version` (it prints absl build info,
+     * not a version line, and is slow), so nothing here records a version
+     * line: the digest is the only proof of version.
+     * **Windows is absent**: Cinna does not ship there for this engine.
+     */
+    assets: {
+      'darwin-arm64': antigravityAsset(
+        'macos',
+        `agy-acp-server-${ANTIGRAVITY_CLI}-darwin-arm64.zip`,
+        '7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88',
+        111456962
+      ),
+      'darwin-x64': antigravityAsset(
+        'macos',
+        `agy-acp-server-${ANTIGRAVITY_CLI}-darwin-x86_64.zip`,
+        'bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646',
+        117245544
+      ),
+      'linux-x64': antigravityAsset(
+        'linux',
+        `agy-acp-server-${ANTIGRAVITY_CLI}-linux-x86_64.zip`,
+        '9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96',
+        333727150
+      ),
+      'linux-arm64': antigravityAsset(
+        'linux',
+        `agy-acp-server-${ANTIGRAVITY_CLI}-linux-arm64.zip`,
+        '500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf',
+        321690363
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },
