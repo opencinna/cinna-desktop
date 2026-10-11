@@ -23,7 +23,7 @@ import {
   uniqueName,
   type CatalogFixture
 } from '../fixtures/liveCatalog'
-import { coreCall, refreshLibrary, runCommand, type PersonApp } from '../fixtures/liveTeamSharing'
+import { coreCall, refreshLibrary, runCommand, syncCredentials, type PersonApp } from '../fixtures/liveTeamSharing'
 
 /**
  * T4 — a catalog skill's credentials, against the real local cinna-core
@@ -470,5 +470,127 @@ test('T4.6 two eligible credentials for the slot: nothing is attached by itself,
     await expect.poll(() => cachedSkillDir(b, item.uuid, 1, skill), { timeout: 30_000 }).not.toBeNull()
     await addScriptCommand(b, agent.path, 'skill-check', join(cachedSkillDir(b, item.uuid, 1, skill)!, 'scripts/skill_check'))
     await expectRunLine(b, mine, 'skill-check', slotLine('skill-check', slot, second.secret))
+  })
+})
+
+/**
+ * T4.8 arrange: A provides their own credential for `slot` when sharing the
+ * skill with B; B adds it to B's agent (provision-local `shared`, attached by
+ * slot) and the skill's script reads A's. Answers what the steps after need.
+ */
+async function providedThenAdded(team: Parameters<Parameters<typeof test>[2]>[0]['team'], base: string) {
+  const { fixture } = team
+  const { a: personA, b: personB } = fixture.people
+  const skill = skillName(base)
+  const slot = slotName(fixture, base)
+  const workshopName = uniqueName(fixture, 'Skill workshop')
+  const mine = uniqueName(fixture, 'Ledger bot')
+  const a = await team.open('a')
+  const provided = await createCoreCredential(fixture, personA.token, { name: personCredentialName(fixture, 'a'), serviceUri: slot, allowSharing: true, allowLocalUse: true })
+  await buildAgent(a, fixture, { name: workshopName, skill: { name: skill, ...ledgerSkill([slot]) } })
+  await shareSkill(a, workshopName, skill, { people: [personB], provide: { [slot]: provided.name } })
+  expect(await providedBy(fixture, personA.token, skill)).toEqual([`${slot}:publisher`])
+  const item = await skillItem(fixture, personA.token, skill)
+
+  const b = await team.open('b')
+  const agent = await buildAgent(b, fixture, { name: mine })
+  await test.step('B adds it: provision-local shares A’s credential, it is attached by slot, and the skill’s script reads it', async () => {
+    await addSkillToAgent(b, skill, mine)
+    await expect.poll(() => storedAttachments(agent.path), { timeout: 30_000 }).toEqual([`account:${provided.id} auto:${slot}`])
+    await expect
+      .poll(async () => (await skillSlotDetails(b, agent.id)).map((s) => `${s.state}:${s.attached}:${s.provision}`), { timeout: 30_000 })
+      .toEqual([`connected:${provided.name}:shared`])
+    await expect.poll(() => cachedSkillDir(b, item.uuid, 1, skill), { timeout: 30_000 }).not.toBeNull()
+    await addScriptCommand(b, agent.path, 'skill-check', join(cachedSkillDir(b, item.uuid, 1, skill)!, 'scripts/skill_check'))
+    await expectRunLine(b, mine, 'skill-check', slotLine('skill-check', slot, provided.secret))
+  })
+  return { fixture, personA, personB, skill, slot, mine, provided, item, b, agent }
+}
+
+/*
+ * T4.8 — the share provision-local made of the publisher's credential ends
+ * only when the credential's owner changes that credential's own sharing:
+ * (i) turns its sharing off, or (ii) unshares it from B. Never on a skill
+ * update: B's Update to Version 2 and 3 keeps A's credential attached and
+ * read while A still shares it — T4.7 above, not repeated here.
+ *
+ * B's app learns of it at its next credential sync (`syncCredentials`, what
+ * Settings → Credentials → Sync Now and the five-minute poll run): until then
+ * a shared credential's cached value keeps reaching B's agent.
+ */
+test('T4.8 (i) A turns sharing off on the credential A provides: B’s skill no longer reads it, and Finish setup says the publisher cannot share it', async ({ team }) => {
+  test.setTimeout(600_000)
+  const { fixture, personA, personB, skill, slot, mine, provided, item, b, agent } = await providedThenAdded(team, 'ledger-off')
+
+  await test.step('A, as the credential’s owner, turns its sharing off: core counts B’s share and the skill in its impact, then revokes it', async () => {
+    const impact = await coreCall(fixture, personA.token, `/credentials/${provided.id}/deletion-impact`)
+    expect(impact.status, JSON.stringify(impact.body)).toBe(200)
+    expect(impact.body.direct_share_count).toBe(1)
+    expect(impact.body.skill_pbp_usages.map((usage: any) => usage.package_uuid)).toEqual([item.uuid])
+    const off = await coreCall(fixture, personA.token, `/credentials/${provided.id}/sharing`, { method: 'PATCH', body: { allow_sharing: false } })
+    expect(off.status, JSON.stringify(off.body)).toBe(200)
+    expect({ allow_sharing: off.body.allow_sharing, share_count: off.body.share_count }).toEqual({ allow_sharing: false, share_count: 0 })
+    expect(await provisionLocal(fixture, personB.token, item.uuid, 1)).toEqual([`${slot}:publisher:not_shareable:-`])
+  })
+
+  await test.step('B’s app syncs: the slot is missing, the Skills row asks for Finish setup, and Finish setup says why', async () => {
+    await syncCredentials(b)
+    await expect.poll(async () => (await skillSlotDetails(b, agent.id)).map((s) => `${s.state}:${s.attached}`), { timeout: 30_000 }).toEqual(['missing:null'])
+    await openSkills(b, mine)
+    const row = skillRow(b, skill, 'From the catalog')
+    await expect(row.getByRole('img', { name: `No credential for ${slot} is attached yet`, exact: true })).toBeVisible()
+    const { dialog, row: slotRow } = await openSkillFinishSetup(b, mine, skill)
+    await expect(slotRow(slot).getByText(NOT_SHAREABLE, { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(slotRow(slot).getByText('Missing', { exact: true })).toBeVisible()
+    await expect(slotRow(slot).getByRole('button', { name: 'Use this' })).toHaveCount(0)
+    expect((await skillSlotDetails(b, agent.id))[0]).toMatchObject({ state: 'missing', attached: null, provision: 'not_shareable' })
+    await dialog.getByRole('button', { name: 'Finish later', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+
+  await test.step('B runs the skill’s script again: A’s credential no longer reaches it', async () => {
+    await expectRunLine(b, mine, 'skill-check', `skill-check: ${slot}=none`)
+  })
+})
+
+test('T4.8 (ii) A unshares the credential from B only: B’s Finish setup must not share it again, and the skill no longer reads it', async ({ team }) => {
+  // Core defect: provision-local re-creates a share its owner revoked from B
+  // (credential_provisioner.py, the `_insert_share` after `existing is None`),
+  // and B's Finish setup calls it on every opening. Observed: core's share
+  // list for the credential is `[<B>:skill_local_install]` again, the row
+  // says "Connected automatically" and the script reads A's hash.
+  test.fail()
+  test.setTimeout(600_000)
+  const { fixture, personA, personB, skill, slot, mine, provided, b, agent } = await providedThenAdded(team, 'ledger-unshared')
+  const sharesOf = async () => {
+    const shares = await coreCall(fixture, personA.token, `/credentials/${provided.id}/shares`)
+    expect(shares.status, JSON.stringify(shares.body)).toBe(200)
+    return (shares.body.data as { shared_with_email: string; source: string }[]).map((share) => `${share.shared_with_email}:${share.source}`)
+  }
+
+  await test.step('A, as the credential’s owner, deletes B’s share (and only that)', async () => {
+    expect(await sharesOf()).toEqual([`${personB.email}:skill_local_install`])
+    const shares = await coreCall(fixture, personA.token, `/credentials/${provided.id}/shares`)
+    const share = shares.body.data.find((s: any) => s.shared_with_email === personB.email)
+    const removed = await coreCall(fixture, personA.token, `/credentials/${provided.id}/shares/${share.id}`, { method: 'DELETE' })
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200)
+    expect(await sharesOf()).toEqual([])
+  })
+
+  await test.step('B’s app syncs and B opens Finish setup: nothing shares it again, and the slot is missing', async () => {
+    await syncCredentials(b)
+    await expect.poll(async () => (await skillSlotDetails(b, agent.id)).map((s) => `${s.state}:${s.attached}`), { timeout: 30_000 }).toEqual(['missing:null'])
+    const { dialog, row } = await openSkillFinishSetup(b, mine, skill)
+    // What the opening runs (provision-local, then the account sync), awaited to its end.
+    expect(await b.page.evaluate((id) => window.api.serviceCredentials.setupSkills(id), agent.id)).toMatchObject({ ok: true })
+    expect(await sharesOf()).toEqual([])
+    await expect(row(slot).getByText('Missing', { exact: true })).toBeVisible()
+    await expect(row(slot).getByText('Connected automatically', { exact: true })).toHaveCount(0)
+    await dialog.getByRole('button', { name: 'Finish later', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+
+  await test.step('B runs the skill’s script again: A’s credential no longer reaches it', async () => {
+    await expectRunLine(b, mine, 'skill-check', `skill-check: ${slot}=none`)
   })
 })
