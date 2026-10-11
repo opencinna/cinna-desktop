@@ -11,11 +11,14 @@
 import type { ContractArea, ContractEntry, ContractFlow } from './codex.contract'
 
 export interface ContractDocInput {
-  /** `Codex`, `Claude Code`. */
+  /** `Codex`, `Claude Code`, `Antigravity`. */
   toolName: string
   cliVersion: string
-  adapterPackage: string
-  adapterVersion: string
+  /** Null for an engine that speaks ACP itself (Antigravity): no adapter is named. */
+  adapterPackage: string | null
+  adapterVersion: string | null
+  /** What the tool is called in the "verified against" line: `CLI` unless said otherwise. */
+  binaryNoun?: string
   /** Repo-relative, for the "generated from" line. */
   registryPath: string
   testPath: string
@@ -26,10 +29,10 @@ export interface ContractDocInput {
   flowVariants: string
   /** The Level 2 steps and what each is, `none` excluded — `FLOW_STEPS`, passed in because this module imports nothing at runtime. */
   flowSteps: readonly (readonly [string, string])[]
-  /** `codex`, `claude` — the `ENGINE=` of every make target the doc names. */
+  /** `codex`, `claude`, `antigravity` — the `ENGINE=` of every make target the doc names. */
   engine: string
-  /** `real patched adapter` for Codex, whose adapter Cinna patches; `real adapter` otherwise. */
-  adapterPhrase: string
+  /** `real patched adapter` for Codex, whose adapter Cinna patches; `real adapter` otherwise; null with no adapter. */
+  adapterPhrase: string | null
   /** Where the hand-written evidence lives: a markdown sentence fragment of links. */
   evidenceLinks: string
 }
@@ -52,14 +55,18 @@ function flowCell(flow: ContractFlow): string {
 }
 
 export function renderContractDoc(input: ContractDocInput): string {
+  const verified = input.adapterPackage
+    ? `${input.toolName} ${input.binaryNoun ?? 'CLI'} ${input.cliVersion} with \`${input.adapterPackage}\` ${input.adapterVersion ?? ''}`
+    : `${input.toolName} ${input.binaryNoun ?? 'CLI'} ${input.cliVersion}`
+  const runs = input.adapterPhrase ? `the real pinned binary and the ${input.adapterPhrase}` : 'the real pinned binary'
   const lines: string[] = [
     `# ${input.toolName} Interface Contract`,
     '',
     `<!-- GENERATED from ${input.registryPath} by scripts/generate-contract-docs.mjs — do not edit. Run \`npm run contract:docs\`. -->`,
     '',
-    `Every external interface of ${input.toolName} that Cinna relies on, one entry each: what the tool must do, which Cinna code depends on it, and what the user loses when it stops. **Verified against ${input.toolName} CLI ${input.cliVersion} with \`${input.adapterPackage}\` ${input.adapterVersion}** — the versions pinned in \`src/shared/runtimePins.ts\`.`,
+    `Every external interface of ${input.toolName} that Cinna relies on, one entry each: what the tool must do, which Cinna code depends on it, and what the user loses when it stops. **Verified against ${verified}** — the version${input.adapterPackage ? 's' : ''} pinned in \`src/shared/runtimePins.ts\`.`,
     '',
-    `Each entry has exactly one test, titled with its id, in [\`${input.testPath.split('/').pop()}\`](../../../../${input.testPath}). They run the real pinned binary and the ${input.adapterPhrase} over stdio against a loopback fake provider — no login, no provider request — with \`npm run test:contract\` (\`make contract ENGINE=${input.engine}\` installs the binary first). They are not part of \`npm test\`.`,
+    `Each entry has exactly one test, titled with its id, in [\`${input.testPath.split('/').pop()}\`](../../../../${input.testPath}). They run ${runs} over stdio against a loopback fake provider — no login, no provider request — with \`npm run test:contract\` (\`make contract ENGINE=${input.engine}\` installs the binary first). They are not part of \`npm test\`.`,
     '',
     `The raw shapes a run observes are compared with the committed [\`${input.snapshotPath.split('/').pop()}\`](../../../../${input.snapshotPath}), and a difference fails the run; \`make contract-snapshot ENGINE=${input.engine}\` rewrites it once a change is understood. To evaluate a new release, \`make contract-next ENGINE=${input.engine} VERSION=<x.y.z>\` runs the same tests against that version without changing the pin; red entries name their owners below, and the run prints the diff between the pinned snapshot and the candidate's (written to a temp path, never into the tree) — that diff is what changed.`,
     '',
@@ -143,5 +150,33 @@ export function claudeContractDocInput(
     flowVariants: 'For Claude Code only the billed variant walks them: `make live-flow ENGINE=claude` (the user’s real login, manual). The no-billing `e2e/specs/runtime-flow.spec.ts` covers Codex alone — Cinna strips `ANTHROPIC_BASE_URL` and the key variables from every Claude child by design, so an app-spawned session cannot be sent to a fake provider without a new production seam.',
     adapterPhrase: 'real adapter',
     evidenceLinks: '[The ACP Engine Contract](../acp_contract.md) and [The Claude Engine Contract](../claude_contract.md)'
+  }
+}
+
+export const ANTIGRAVITY_INTERFACE_DOC = 'docs/agents/local_agents/contracts/antigravity_interface.md'
+
+/** The Antigravity doc's parameters. No adapter: the server speaks ACP itself. */
+export function antigravityContractDocInput(
+  pins: { antigravity: { cli: string } },
+  entries: readonly ContractEntry[],
+  areas: readonly ContractArea[],
+  steps: Readonly<Record<string, string>>
+): ContractDocInput {
+  return {
+    toolName: 'Antigravity',
+    cliVersion: pins.antigravity.cli,
+    adapterPackage: null,
+    adapterVersion: null,
+    binaryNoun: 'ACP server',
+    registryPath: 'src/main/agents/drivers/acp/contracts/antigravity.contract.ts',
+    testPath: 'src/main/agents/drivers/acp/contracts/antigravity.contract.test.ts',
+    snapshotPath: `src/main/agents/drivers/acp/contracts/snapshots/antigravity-${pins.antigravity.cli}.json`,
+    areas,
+    entries,
+    flowSteps: Object.entries(steps).filter(([step]) => step !== 'none'),
+    engine: 'antigravity',
+    flowVariants: 'No Level 2 variant walks them for Antigravity yet: neither the no-billing `e2e/specs/runtime-flow.spec.ts` nor `make live-flow` runs it. The fake provider here is the server’s own `gateway` auth mode, so no Google login is involved.',
+    adapterPhrase: null,
+    evidenceLinks: '[The ACP Engine Contract](../acp_contract.md)'
   }
 }

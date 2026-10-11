@@ -2,6 +2,7 @@
 //
 //   node --experimental-strip-types scripts/install-runtime.mjs codex
 //   node --experimental-strip-types scripts/install-runtime.mjs claude
+//   node --experimental-strip-types scripts/install-runtime.mjs antigravity
 //   node --experimental-strip-types scripts/install-runtime.mjs codex --version 0.156.0 --dir /tmp/x
 //
 // The app installs its own copy into <userData>/runtimes (src/main/engine/
@@ -24,6 +25,13 @@
 // the executable, each verified against its own pin, before the install is
 // published; an existing install that lacks one gets just the missing file.
 //
+// Antigravity's ACP server is a zip holding `agy_acp_server.par` and its
+// sibling `localharness_external`; both stay in the install directory under
+// their own names (the server finds its sibling beside itself), and an install
+// lacking a sibling is not an install. It is never asked for `--version`: that
+// prints absl build info, not a version line, and is slow on a ~280 MB par, so
+// the pinned digest is the only proof of version.
+//
 // Prints the installed executable's absolute path as its last stdout line.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -45,6 +53,13 @@ const TOOLS = {
     pin: RUNTIME_PINS.claude,
     candidateUrl: (row, pin, version) => row.url.replace(`/${pin.cli}/`, `/${version}/`),
     versionOutput: (version) => `${version} (Claude Code)`
+  },
+  antigravity: {
+    pin: RUNTIME_PINS.antigravity,
+    candidateUrl: (row, pin, version) => row.url.replace(`-${pin.cli}-`, `-${version}-`),
+    // Versionless: no flag prints one.
+    versionOutput: null,
+    installName: 'agy_acp_server.par'
   }
 }
 
@@ -52,11 +67,11 @@ const args = process.argv.slice(2)
 const tool = args[0]
 const option = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
 if (!Object.hasOwn(TOOLS, tool)) {
-  console.error('usage: install-runtime.mjs <codex|claude> [--version <x.y.z>] [--dir <directory>]')
+  console.error('usage: install-runtime.mjs <codex|claude|antigravity> [--version <x.y.z>] [--dir <directory>]')
   process.exit(2)
 }
 
-const { pin, candidateUrl, versionOutput } = TOOLS[tool]
+const { pin, candidateUrl, versionOutput, installName = tool } = TOOLS[tool]
 const version = option('--version') ?? pin.cli
 const pinned = version === pin.cli
 const platform = `${process.platform}-${process.arch}`
@@ -69,7 +84,7 @@ if (!row) {
 const url = pinned ? row.url : candidateUrl(row, pin, version)
 const cache = process.env.CINNA_RUNTIME_CACHE ?? join(homedir(), '.cache', 'cinna-runtimes')
 const installDir = resolve(option('--dir') ?? join(cache, `${tool}-${version}`))
-const installed = join(installDir, tool)
+const installed = join(installDir, installName)
 const log = (line) => console.error(line)
 
 const sha256 = (path) => new Promise((done, fail) => {
@@ -77,6 +92,7 @@ const sha256 = (path) => new Promise((done, fail) => {
   createReadStream(path).on('error', fail).on('data', (chunk) => hash.update(chunk)).on('end', () => done(hash.digest('hex')))
 })
 const versionOf = (path) => {
+  if (versionOutput === null) return `${tool} (versionless; sha256-verified at install)`
   const out = spawnSync(path, ['--version'], { encoding: 'utf8', timeout: 15000 })
   return out.status === 0 ? out.stdout.trim().split('\n')[0] : null
 }
@@ -94,6 +110,23 @@ async function localPinnedBytes() {
   } catch {
     return null
   }
+}
+
+/**
+ * Unpack an archive into `dir`. GNU tar cannot read a zip, so a zip off macOS
+ * tries `unzip`, then `bsdtar`, then Python's zipfile — the app's own order.
+ */
+function unpack(archive, dir) {
+  const attempts = archive.endsWith('.zip') && process.platform !== 'darwin'
+    ? [['unzip', ['-q', '-o', archive, '-d', dir]], ['bsdtar', ['-xf', archive, '-C', dir]], ['python3', ['-m', 'zipfile', '-e', archive, dir]]]
+    : [['tar', ['-xf', archive, '-C', dir]]]
+  const errors = []
+  for (const [command, commandArgs] of attempts) {
+    const out = spawnSync(command, commandArgs, { encoding: 'utf8' })
+    if (out.status === 0) return
+    errors.push(`${command}: ${(out.error?.message ?? out.stderr ?? '').trim()}`)
+  }
+  throw new Error(`could not unpack ${archive}: ${errors.join('; ')}`)
 }
 
 /** Stream a URL to a file: a 215 MB executable is not something to hold in one Buffer. */
@@ -118,8 +151,7 @@ async function installCompanions(dir) {
         throw new Error(`checksum mismatch for the pinned ${companion.file}: expected ${companion.sha256}, got ${digest}. Nothing was installed.`)
       }
       log(pinned ? `sha256 verified: ${companion.file} ${digest}` : `UNVERIFIED candidate — sha256 ${platform} ${companion.file}: ${digest}`)
-      const tar = spawnSync('tar', ['-xf', archive, '-C', stage], { encoding: 'utf8' })
-      if (tar.status !== 0) throw new Error(`could not unpack ${companion.file}: ${tar.stderr.trim()}`)
+      unpack(archive, stage)
       const found = join(stage, companion.executable)
       if (!existsSync(found)) throw new Error(`${companion.file} did not contain ${companion.executable}`)
       chmodSync(found, 0o755)
@@ -129,6 +161,15 @@ async function installCompanions(dir) {
       rmSync(stage, { recursive: true, force: true })
     }
   }
+}
+
+/** Every sibling file the row names, present beside the executable in `dir`. */
+const siblingsIn = (dir) => (row.siblings ?? []).every((name) => existsSync(join(dir, name)))
+
+if (existsSync(installed) && !siblingsIn(installDir)) {
+  // Published half-way, or a sibling deleted since: install the whole archive again.
+  log(`${installDir} lacks ${(row.siblings ?? []).join(', ')}; installing again`)
+  rmSync(installDir, { recursive: true, force: true })
 }
 
 if (existsSync(installed)) {
@@ -161,20 +202,22 @@ try {
   log(pinned ? `sha256 verified: ${digest}` : `UNVERIFIED candidate — sha256 ${platform}: ${digest}`)
   const unpacked = join(staging, 'unpacked')
   mkdirSync(unpacked)
-  const binary = join(unpacked, tool)
+  const binary = join(unpacked, installName)
   if (row.format === 'executable') {
     // The asset is the executable: nothing to unpack, only to put in place.
     renameSync(archive, binary)
   } else {
-    const tar = spawnSync('tar', ['-xf', archive, '-C', unpacked], { encoding: 'utf8' })
-    if (tar.status !== 0) throw new Error(`could not unpack: ${tar.stderr.trim()}`)
-    const found = readdirSync(unpacked).find((name) => name === row.executable || name === tool)
-    if (!found) throw new Error(`the archive did not contain ${row.executable ?? tool}`)
-    if (found !== tool) renameSync(join(unpacked, found), binary)
+    unpack(archive, unpacked)
+    const found = readdirSync(unpacked).find((name) => name === row.executable || name === installName)
+    if (!found) throw new Error(`the archive did not contain ${row.executable ?? installName}`)
+    if (found !== installName) renameSync(join(unpacked, found), binary)
+    const missing = (row.siblings ?? []).filter((name) => !existsSync(join(unpacked, name)))
+    if (missing.length > 0) throw new Error(`the archive did not contain ${missing.join(', ')}`)
+    for (const name of row.siblings ?? []) chmodSync(join(unpacked, name), 0o755)
   }
   chmodSync(binary, 0o755)
   const reported = versionOf(binary)
-  if (reported !== versionOutput(version)) throw new Error(`expected ${versionOutput(version)}, the binary reports ${reported}`)
+  if (versionOutput !== null && reported !== versionOutput(version)) throw new Error(`expected ${versionOutput(version)}, the binary reports ${reported}`)
   await installCompanions(unpacked)
   renameSync(unpacked, installDir)
   log(`installed ${reported}`)

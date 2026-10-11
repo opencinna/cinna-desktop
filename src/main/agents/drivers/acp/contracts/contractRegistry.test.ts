@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS, type ContractArea, type ContractEntry } from './codex.contract'
 import { CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS } from './claude.contract'
-import { CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC, claudeContractDocInput, codexContractDocInput, renderContractDoc } from './contractDocs'
+import { ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS } from './antigravity.contract'
+import {
+  ANTIGRAVITY_INTERFACE_DOC, CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC,
+  antigravityContractDocInput, claudeContractDocInput, codexContractDocInput, renderContractDoc
+} from './contractDocs'
 
 /**
  * The interface-contract ratchet — the part of the contract that runs in
@@ -41,11 +45,16 @@ const repoRoot = join(here, '../../../../../..')
 
 /** One engine's contract, as the ratchet needs it. A third engine is a third row. */
 interface Ratcheted {
-  tool: 'codex' | 'claude'
+  tool: 'codex' | 'claude' | 'antigravity'
   label: string
   entries: readonly ContractEntry[]
   areas: readonly ContractArea[]
-  pin: { cli: string; versionOutput: string; adapter: string }
+  /**
+   * The pinned version's file name (`cli`), and what its committed snapshot
+   * must record: the version as the binary reports it, and the adapter (null
+   * for an engine with none).
+   */
+  pin: { cli: string; versionOutput: string; adapter: string | null }
   doc: string
   render(): string
   links: [file: string, link: string][]
@@ -61,6 +70,13 @@ const ENGINES: Ratcheted[] = [
     tool: 'claude', label: 'Claude', entries: CLAUDE_CONTRACT, areas: CLAUDE_CONTRACT_AREAS, pin: RUNTIME_PINS.claude, doc: CLAUDE_INTERFACE_DOC,
     render: () => renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS, FLOW_STEPS)),
     links: [['docs/README.md', 'agents/local_agents/contracts/claude_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/claude_interface.md']]
+  },
+  {
+    // Versionless to the app; the snapshot records the `Build label` its `--version` prints.
+    tool: 'antigravity', label: 'Antigravity', entries: ANTIGRAVITY_CONTRACT, areas: ANTIGRAVITY_CONTRACT_AREAS,
+    pin: { cli: RUNTIME_PINS.antigravity.cli, versionOutput: RUNTIME_PINS.antigravity.cli, adapter: null }, doc: ANTIGRAVITY_INTERFACE_DOC,
+    render: () => renderContractDoc(antigravityContractDocInput(RUNTIME_PINS, ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS, FLOW_STEPS)),
+    links: [['docs/README.md', 'agents/local_agents/contracts/antigravity_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/antigravity_interface.md']]
   }
 ]
 

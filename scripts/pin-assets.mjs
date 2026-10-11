@@ -3,6 +3,7 @@
 //
 //   node --experimental-strip-types scripts/pin-assets.mjs claude 2.1.277
 //   node --experimental-strip-types scripts/pin-assets.mjs codex 0.156.0
+//   node --experimental-strip-types scripts/pin-assets.mjs antigravity 1.4.0
 //
 // scripts/install-runtime.mjs prints the digest for the platform it runs on
 // only; bumping a pin needs all of them, and doing the other three by hand is
@@ -17,6 +18,8 @@
 //   number the vendor's installer itself trusts. `--verify` downloads each
 //   binary anyway and refuses a row whose bytes disagree with the manifest —
 //   use it before committing a bump. (The 2.1.276 rows were verified that way.)
+// - antigravity — every zip is DOWNLOADED from Google's release path and
+//   hashed here, as for codex: nothing is published to compare against.
 //
 // The platform list is the pinned one: a platform is added by adding its row to
 // runtimePins.ts first, deliberately.
@@ -25,8 +28,8 @@ import { RUNTIME_PINS } from '../src/shared/runtimePins.ts'
 
 const [tool, version] = process.argv.slice(2)
 const verify = process.argv.includes('--verify')
-if (!['codex', 'claude'].includes(tool) || !version || version.startsWith('--')) {
-  console.error('usage: pin-assets.mjs <codex|claude> <version> [--verify]')
+if (!['codex', 'claude', 'antigravity'].includes(tool) || !version || version.startsWith('--')) {
+  console.error('usage: pin-assets.mjs <codex|claude|antigravity> <version> [--verify]')
   process.exit(2)
 }
 const log = (line) => console.error(line)
@@ -66,6 +69,18 @@ if (tool === 'claude') {
     }
     rows.push({ platform, url, sha256: entry.checksum, size: entry.size, source,
       paste: `'${platform}': claudeAsset('${platform}', '${entry.checksum}', ${entry.size}),` })
+  }
+} else if (tool === 'antigravity') {
+  const pin = RUNTIME_PINS.antigravity
+  for (const [platform, asset] of Object.entries(pin.assets)) {
+    // The file name carries the version; the release path does not.
+    const url = asset.url.replace(`-${pin.cli}-`, `-${version}-`)
+    log(`downloading ${url}`)
+    const { sha256, size } = await hashUrl(url)
+    const os = url.includes('/releases/linux/') ? 'linux' : 'macos'
+    const file = url.split('/').pop().replace(`-${version}-`, '-${ANTIGRAVITY_CLI}-')
+    rows.push({ platform, url, sha256, size, source: 'downloaded',
+      paste: `'${platform}': antigravityAsset(\n  '${os}',\n  \`${file}\`,\n  '${sha256}',\n  ${size}\n),` })
   }
 } else {
   const pin = RUNTIME_PINS.codex

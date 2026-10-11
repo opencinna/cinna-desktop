@@ -12,13 +12,18 @@ import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../src/shared/runtimePins.ts'
 import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS } from '../src/main/agents/drivers/acp/contracts/codex.contract.ts'
 import { CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS } from '../src/main/agents/drivers/acp/contracts/claude.contract.ts'
-import { CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC, claudeContractDocInput, codexContractDocInput, renderContractDoc } from '../src/main/agents/drivers/acp/contracts/contractDocs.ts'
+import { ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS } from '../src/main/agents/drivers/acp/contracts/antigravity.contract.ts'
+import {
+  ANTIGRAVITY_INTERFACE_DOC, CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC,
+  antigravityContractDocInput, claudeContractDocInput, codexContractDocInput, renderContractDoc
+} from '../src/main/agents/drivers/acp/contracts/contractDocs.ts'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const check = process.argv.includes('--check')
 const docs = [
   [CODEX_INTERFACE_DOC, renderContractDoc(codexContractDocInput(RUNTIME_PINS, CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS))],
-  [CLAUDE_INTERFACE_DOC, renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS, FLOW_STEPS))]
+  [CLAUDE_INTERFACE_DOC, renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS, FLOW_STEPS))],
+  [ANTIGRAVITY_INTERFACE_DOC, renderContractDoc(antigravityContractDocInput(RUNTIME_PINS, ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS, FLOW_STEPS))]
 ]
 
 let stale = false
