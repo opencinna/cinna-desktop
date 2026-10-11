@@ -48,12 +48,14 @@ describe('createSessionTitles', () => {
     expect(sink).not.toHaveBeenCalled()
   })
 
-  it('names nothing for Claude, a nested turn, or a session it never prompted', () => {
+  it('names nothing for Claude, Antigravity, a nested turn, or a session it never prompted', () => {
     const sink = vi.fn()
     const titles = createSessionTitles(sink)
     const claude = { ...SCOPE, launcherId: 'claude' as const }
+    // Antigravity's session titles are `Session <hex>`, never a chat's name.
+    const antigravity = { ...SCOPE, launcherId: 'antigravity' as const }
     const nested = { ...SCOPE, profileUserId: undefined }
-    for (const scope of [claude, nested]) {
+    for (const scope of [claude, antigravity, nested]) {
       titles.prompted(scope, [{ type: 'text', text: 'hi' }])
       titles.observe(scope, info('A title'))
     }

@@ -351,7 +351,7 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
         MANIFEST_FILE
       )
     } else if (
-      ['claude', 'codex'].includes(engine.trim()) &&
+      ['claude', 'codex', 'antigravity'].includes(engine.trim()) &&
       typeof runtime.credential === 'string' &&
       runtime.credential.trim() !== ''
     ) {

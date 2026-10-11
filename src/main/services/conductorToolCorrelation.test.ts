@@ -82,3 +82,24 @@ describe('Cinna tool correlation', () => {
     } finally { vi.useRealTimers() }
   })
 })
+
+describe('a bare-named MCP call (Antigravity)', () => {
+  const call = (title: string, kind = 'other'): SessionNotification =>
+    ({ sessionId: 's', update: { sessionUpdate: 'tool_call', toolCallId: 's:6', title, kind, status: 'in_progress', rawInput: { summary: 'probe' } } }) as unknown as SessionNotification
+
+  it('is Cinna’s only when Cinna’s server served that name', () => {
+    // Mutation: match `Running <tool>` without asking the server, and a user's
+    // own MCP server's `search` is claimed as Cinna's.
+    const served = new Set(['tasks_report'])
+    const correlation = new ConductorToolCorrelation((name) => served.has(name))
+    expect(correlation.observe(call('Running search'))).toBe(false)
+    expect(correlation.observe(call('Running tasks_report'))).toBe(true)
+    expect(correlation.claim('tasks_report', 'fallback')).toBe('s:6')
+  })
+
+  it('is never a shell call titled the same, nor anything without the server’s list', () => {
+    const correlation = new ConductorToolCorrelation(() => true)
+    expect(correlation.observe(call('Running tasks_report', 'execute'))).toBe(false)
+    expect(new ConductorToolCorrelation().observe(call('Running tasks_report'))).toBe(false)
+  })
+})

@@ -18,6 +18,7 @@ import {
   readQuotaTotal,
   sessionFingerprint,
   telemetryAuthOf,
+  telemetryEngineOf,
   tokenDelta,
   TokenTotalReadings,
   TurnTelemetry
@@ -646,5 +647,29 @@ describe('the context measured by category', () => {
     expect(readContextCategories(null)).toBeNull()
     expect(readContextCategories({ ...ANSWER, totalTokens: 'many' })).toBeNull()
     expect(readContextCategories({ ...ANSWER, categories: undefined })).toBeNull()
+  })
+})
+
+describe('Antigravity telemetry', () => {
+  it('is read, as its own engine', () => {
+    expect(telemetryEngineOf('antigravity')).toBe('antigravity')
+    expect(telemetryEngineOf('opencode')).toBeNull()
+  })
+
+  it('reads no turn usage from a prompt answer that carries only its stop reason', () => {
+    // 1.3.0 answers `{stopReason}` alone; its context arrives as usage_update.
+    expect(parsePromptTelemetry({ stopReason: 'end_turn' }, 'antigravity', 'gemini-3.6-flash-low')).toBeNull()
+  })
+
+  it('settles a turn with its context from usage_update and no cost', () => {
+    const changes: SessionTelemetryChange[] = []
+    const turn = new TurnTelemetry({ chatId: 'c', engine: 'antigravity', costs: new CostReadings(), reporter: { report: (_chatId, change) => void changes.push(change) } })
+    const connection = {} as AcpConnection
+    turn.started()
+    turn.frame(connection, 's', { used: 13187, size: 1048576 })
+    turn.answered({ stopReason: 'end_turn' }, connection, 's')
+    expect(changes).toContainEqual(expect.objectContaining({ type: 'context', used: 13187, size: 1048576 }))
+    // No tokens and no cost: nothing to put on the message.
+    expect(turn.settle('s')).toBeUndefined()
   })
 })

@@ -67,7 +67,8 @@ const state = vi.hoisted(() => ({
   },
   skillsPluginAsked: [] as unknown[],
   skillsPluginFails: false,
-  promptContexts: [] as { ownSkills?: string }[]
+  promptContexts: [] as { ownSkills?: string; tasksSkill?: unknown }[],
+  agySystemPrompt: null as null | ((userId: string, agentId: string, mode: 'isolated' | 'native') => string)
 }))
 
 vi.mock('../../localdev/developmentSessionService', () => {
@@ -99,6 +100,18 @@ vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { setting
     return { error: 'refused by the codex launcher' }
   }
 } } }))
+vi.mock('./acp/antigravityLauncher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./acp/antigravityLauncher')>()
+  return { ...actual, createAntigravityLauncher: (options: { systemPrompt: (userId: string, agentId: string, mode: 'isolated' | 'native') => string; home?: (userId: string, agentId: string, path: string) => string }) => (state.agySystemPrompt = options.systemPrompt, { id: 'antigravity',
+    plan: async (context: { userId: string; agentId: string; folder: { path: string; runtimeMode: 'isolated' | 'native' } }) => {
+      if (!state.utilityPlans) return { error: 'refused by the antigravity launcher' }
+      const instructions = options.systemPrompt(context.userId, context.agentId, context.folder.runtimeMode)
+      const home = options.home?.(context.userId, context.agentId, context.folder.path) ?? actual.antigravityIsolatedHome(context.folder.path)
+      return { spec: { command: 'agy', args: [], env: { GEMINI_HOME: home }, cwd: context.folder.path, key: 'utility-key' },
+        init: { protocolVersion: 1 }, session: { mcpServers: [], meta: { agy: { disabledTools: ['schedule'] } } },
+        firstPromptPreamble: actual.antigravityPreamble(instructions), setup: {} }
+    } }) }
+})
 vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0', getPath: () => '/tmp' } }))
 vi.mock('../../engine/binaryResolver', () => ({
   configuredEnginePath: () => null,
@@ -110,6 +123,9 @@ vi.mock('../../engine/binaryResolver', () => ({
   // …and the pinned Claude Code's, on the same terms.
   configuredClaudePath: () => null,
   realClaudeResolverDeps: () => ({}),
+  // …and the Antigravity server's.
+  configuredAntigravityPath: () => null,
+  realAntigravityResolverDeps: () => ({}),
   binaryFingerprint: async () => null,
   // What the binary services' own wiring reads: the download-free look, the
   // used-stamp and the pinned asset's size.
@@ -172,8 +188,12 @@ vi.mock('../../services/localAgents/promptAssembly', () => ({
     state.promptContexts.push(context)
     return 'prompt'
   },
-  assembleBareNativePrompt: () => 'prompt',
-  resolveDesktopPromptContext: (engine?: string) => (engine === 'claude' ? { ownSkills: 'skill' } : {})
+  assembleBareNativePrompt: (_dir: string, _name: string, context: { tasksSkill?: unknown }) => {
+    state.promptContexts.push(context)
+    return 'prompt'
+  },
+  resolveDesktopPromptContext: (engine?: string) => (engine === 'claude' ? { ownSkills: 'skill' }
+    : engine === 'antigravity' ? { ownSkills: 'pointer', tasksSkill: { kind: 'pointer', path: '/kit/skills/cinna-tasks/SKILL.md' } } : {})
 }))
 vi.mock('../../services/providerService', () => ({ providerService: { listMerged: () => [] } }))
 vi.mock('../../services/a2aStreamingService', () => ({
@@ -233,7 +253,7 @@ vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-const { driverFor, prepareAiFunctionRuntime, acpProcessPool } = await import('./index')
+const { driverFor, prepareAiFunctionRuntime, acpProcessPool, acpLauncherFor } = await import('./index')
 const { TITLE_SYSTEM_PROMPT } = await import('../../services/aiFunctionPrompts')
 
 const folderRow = (launcher: string | null): AgentRow =>
@@ -272,6 +292,25 @@ beforeEach(() => {
   state.gets = 0
   state.ran = []
   state.handovers = []; state.kind = 'kit'; state.handbackPlans = []; state.runtimeModes = []
+})
+
+describe('an Antigravity chat runtime’s launch', () => {
+  it('runs its sessions in the empty process folder, its home beside it, never the chat folder', async () => {
+    // Mutation: drop the wrapper's `sessionCwd` and sessions run in the chat
+    // folder; the home's place is the layout the lead chose (beside the folder).
+    state.utilityPlans = true
+    const agent: AgentRow = { ...folderRow('antigravity'), id: 'conductor:agy', source: 'local', enabled: true,
+      driverConfig: { launcher: 'antigravity', conductorChatId: 'chat-agy', conductorEngine: 'antigravity',
+        cwd: '/owned/chat-agy', conductorPrompt: 'Chat instructions' } }
+    state.liveRows = [agent]
+    const plan = await acpLauncherFor('antigravity')!.plan({ userId: 'user-1', agentId: agent.id, folder: {
+      name: 'Chat', slug: 'chat', description: '', path: '/owned/chat-agy', kind: 'bare', runtimeMode: 'isolated' } })
+    if ('error' in plan) throw new Error(plan.error)
+    expect(plan.sessionCwd).toMatch(/\/chat-conductors\/processes\/[0-9a-f]{64}$/)
+    expect(plan.spec.cwd).toBe(plan.sessionCwd)
+    expect(plan.spec.env.GEMINI_HOME).toBe(`${plan.sessionCwd}.agyhome`)
+    expect(plan.firstPromptPreamble).toContain('Chat instructions')
+  })
 })
 
 describe('driverFor', () => {
@@ -476,6 +515,20 @@ describe('a kit agent’s own skills on Claude', () => {
   })
 })
 
+describe('the cinna-tasks skill on Antigravity', () => {
+  it('is named as a skill in an isolated folder, where it is installed, and a path in a native one', () => {
+    // Mutation: drop the override and an isolated agent is pointed at a file
+    // outside its workspace, which `view_file` refuses to read.
+    state.liveRows = [folderRow('antigravity')]
+    state.promptContexts = []
+    state.agySystemPrompt?.('user-1', 'folder:aaa', 'isolated')
+    state.agySystemPrompt?.('user-1', 'folder:aaa', 'native')
+    expect(state.promptContexts.map((context) => context.tasksSkill)).toEqual([
+      { kind: 'skill' }, { kind: 'pointer', path: '/kit/skills/cinna-tasks/SKILL.md' }
+    ])
+  })
+})
+
 describe('the login probe’s binary', () => {
   it('is the one the Runtime row found — an exact-version PATH copy included — from one shared look', async () => {
     // Before: the probe asked the disk without probing PATH, so this user's
@@ -543,6 +596,39 @@ describe('AI function runtime production prompt wiring', () => {
     expect(second.plan.session.meta).toMatchObject({ cinna: { systemPrompt: 'Review.' } })
     expect(first.plan.session.mcpServers).toEqual([])
     expect(first.plan.conductorPolicy).toBe('no-native-tools')
+  })
+
+  it('gives Antigravity functions their own instructions as the preamble, every built-in off, in a profile-owned process folder', async () => {
+    // Mutation: leave Antigravity out of the preamble override and a function
+    // reusing a chat's process runs on that chat's instructions.
+    state.utilityEngine = 'antigravity'
+    const first = await prepareAiFunctionRuntime('agy-profile', 'Summarize.', false)
+    const second = await prepareAiFunctionRuntime('agy-profile', 'Review.', false)
+    expect(first.poolKey).toBe(second.poolKey)
+    expect(first.plan.spec.cwd).toBe(second.plan.spec.cwd)
+    expect(first.plan.spec.cwd).toContain('/chat-conductors/processes/')
+    expect(first.plan.firstPromptPreamble).toContain('<instructions>\nSummarize.\n</instructions>')
+    expect(second.plan.firstPromptPreamble).toContain('<instructions>\nReview.\n</instructions>')
+    expect(first.plan.session.meta).toMatchObject({ agy: { enabledTools: ['view_file'] } })
+    expect((first.plan.session.meta?.agy as { disabledTools: string[] }).disabledTools).toContain('run_command')
+    expect(first.plan.session.mcpServers).toEqual([])
+    // The session runs in the empty process folder, its home beside it.
+    expect(first.cwd).toBe(first.plan.spec.cwd)
+    expect(first.plan.spec.env.GEMINI_HOME).toBe(`${first.cwd}.agyhome`)
+  })
+
+  it('opens a function on a warm Antigravity chat process with the function’s instructions, not the chat’s', async () => {
+    state.utilityEngine = 'antigravity'
+    state.liveRows = [{ id: 'agy-chat-root', driver: 'acp', driverConfig: {
+      conductorChatId: 'chat', conductorEngine: 'antigravity', conductorModel: 'sonnet',
+      conductorPrompt: 'Private chat instructions', cwd: '/owned/agy-chat'
+    } } as unknown as AgentRow]
+    vi.spyOn(acpProcessPool, 'status').mockImplementation(id => ({ state: id === 'agy-chat-root' ? 'running' : 'stopped' }) as ReturnType<typeof acpProcessPool.status>)
+    vi.spyOn(acpProcessPool as Required<Pick<AcpProcessPool, 'peek'>>, 'peek').mockReturnValue({} as never)
+    const title = await prepareAiFunctionRuntime('agy-warm-profile', TITLE_SYSTEM_PROMPT, true)
+    expect(title.poolKey).toMatch(/^chat-runtime:/)
+    expect(title.plan.firstPromptPreamble).toContain(TITLE_SYSTEM_PROMPT)
+    expect(title.plan.firstPromptPreamble).not.toContain('Private chat instructions')
   })
 
   it('reuses a compatible warm Codex chat process with the function instructions and no MCP tools', async () => {

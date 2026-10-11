@@ -98,6 +98,8 @@ describe('whether it is there', () => {
     expect(info).toMatchObject({ available: true, version: '1', skillFile: join(dir, 'SKILL.md'), skillsRoot: join(root, 'draft') })
     expect(tasksSkillLabel(info)).toBe('cinna-tasks v1')
     expect(tasksSkillDeliveryFor('claude', info)).toEqual({ kind: 'skill' })
+    // Antigravity loads no Cinna plugin or skill path: it is told where the file is.
+    expect(tasksSkillDeliveryFor('antigravity', info)).toEqual({ kind: 'pointer', path: join(dir, 'SKILL.md') })
     expect(tasksSkillDeliveryFor('opencode', info)).toEqual({ kind: 'skill' })
     // Codex has no skill loader: it is pointed at the file.
     expect(tasksSkillDeliveryFor('codex', info)).toEqual({ kind: 'pointer', path: join(dir, 'SKILL.md') })

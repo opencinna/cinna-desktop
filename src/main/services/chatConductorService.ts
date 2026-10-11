@@ -31,6 +31,9 @@ export interface ConductorContext {
   toolPolicy: 'none' | 'connectors'
 }
 
+/** The name a chat's runtime row carries, per engine. */
+const CONDUCTOR_NAMES: Record<AgentEngine, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode' }
+
 const PLAIN_PROMPT = 'You are a helpful conversational assistant. Answer the user in this chat. Use the connected tools when useful. You have no access to files, shell commands, or coding tools. When a specialist is waiting for an Inbox answer, stop calling it and tell the user. A later message will identify the tool call its result completes.'
 
 /** Runtime choices are captured per chat; changing the default never changes an existing session. */
@@ -88,7 +91,7 @@ export const chatConductorService = {
     mkdirSync(path, { recursive: true, mode: 0o700 })
     for (const name of ['AGENTS.md', 'CLAUDE.md']) writeFileSync(join(path, name), `${instructions}\n`, { mode: 0o600 })
     const input = {
-      name: engine === 'claude' ? 'Claude' : engine === 'codex' ? 'Codex' : 'OpenCode',
+      name: CONDUCTOR_NAMES[engine],
       description: 'Chat runtime', driver: 'acp' as const,
       config: { launcher: engine, cwd: path, conductorChatId: chat.id, conductorEngine: engine,
         conductorModel: runtime.modelId, conductorCredential: runtime.credentialId,

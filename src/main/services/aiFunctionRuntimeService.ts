@@ -70,7 +70,13 @@ export function createAiFunctionRuntime(deps: AiFunctionRuntimeDeps): (input: Ai
           catch (error) { if (!option.optional) throw error }
         }
         input.signal.throwIfAborted()
-        const answer = await conn.prompt({ sessionId, prompt: [{ type: 'text', text: input.userText }] })
+        // Every utility session is new, so an engine whose instructions open
+        // the first prompt (Antigravity) gets them on every call.
+        const prompt = [
+          ...(plan.firstPromptPreamble ? [{ type: 'text' as const, text: plan.firstPromptPreamble }] : []),
+          { type: 'text' as const, text: input.userText }
+        ]
+        const answer = await conn.prompt({ sessionId, prompt })
         if (answer.stopReason !== 'end_turn' && answer.stopReason !== 'max_tokens') throw new Error(`AI function stopped: ${answer.stopReason}`)
         return text
       }

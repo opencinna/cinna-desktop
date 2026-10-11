@@ -16,6 +16,13 @@ export class ConductorToolCorrelation {
   /** Claimed ids whose ACP `tool_call` has not arrived yet, with whoever waits for it. */
   private unseen = new Map<string, Set<() => void>>()
 
+  /**
+   * `offers`: whether Cinna's server served a bare tool name this session —
+   * what lets an engine that names MCP calls bare (Antigravity) be correlated
+   * without claiming another server's tool of the same name.
+   */
+  constructor(private readonly offers?: (name: string) => boolean) {}
+
   observe(notification: SessionNotification): boolean {
     const update = notification.update
     if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return false
@@ -24,7 +31,8 @@ export class ConductorToolCorrelation {
       return true
     }
     const meta = update._meta as {claudeCode?: {toolName?: string}} | undefined
-    const name = cinnaToolName(meta?.claudeCode?.toolName ?? update.title, update.rawInput)
+    const name = cinnaToolName(meta?.claudeCode?.toolName ?? update.title, update.rawInput,
+      this.offers ? { offers: this.offers, kind: update.kind } : undefined, update._meta)
     if (!name) return false
     const earlyId = this.early.get(name)?.shift()
     this.calls.set(update.toolCallId, { name, claimed: !!earlyId })

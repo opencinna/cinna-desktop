@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { CreateElicitationRequest } from '@agentclientprotocol/sdk'
-import { toElicitationContent, toInputQuestions } from './acpQuestions'
+import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, toInputQuestions } from './acpQuestions'
 
 /** One single-select question, as the adapter renders it. */
 const ONE_QUESTION = {
@@ -184,5 +184,27 @@ describe('toElicitationContent', () => {
     const form = toInputQuestions(TWO_QUESTIONS)!
     const content = toElicitationContent(form, [['Rewrite'], ['b.ts']])
     expect(Object.keys(content)).toEqual(['question_0', 'question_1'])
+  })
+})
+
+describe('a question asked as a permission (Antigravity’s ask_question)', () => {
+  /** The real 1.3.0 request. */
+  const ASK = {
+    toolCall: { toolCallId: 'interaction_16c0825e', status: 'pending', title: 'Do you prefer red or blue?', rawInput: {} },
+    options: [{ optionId: '1', name: 'Red', kind: 'allow_once' }, { optionId: '2', name: 'Blue', kind: 'allow_once' }]
+  }
+
+  it('is a single-choice question whose answers are the options, answered by option id', () => {
+    const question = permissionAsQuestion('antigravity', ASK)
+    expect(question?.questions).toEqual([{ question: 'Do you prefer red or blue?', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] }])
+    expect(permissionQuestionAnswer(question!, [['Blue']])).toBe('2')
+    expect(permissionQuestionAnswer(question!, [['Green']])).toBeNull()
+    expect(permissionQuestionAnswer(question!, [])).toBeNull()
+  })
+
+  it('is only Antigravity’s, and only an interaction id', () => {
+    expect(permissionAsQuestion('claude', ASK)).toBeNull()
+    expect(permissionAsQuestion('antigravity', { ...ASK, toolCall: { ...ASK.toolCall, toolCallId: '97b6fe8b' } })).toBeNull()
+    expect(permissionAsQuestion('antigravity', { ...ASK, options: [] })).toBeNull()
   })
 })

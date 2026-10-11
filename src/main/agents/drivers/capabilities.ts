@@ -91,14 +91,18 @@ function acpCapabilities(launcher: string): AgentCapabilities {
     ...folderCapabilities(),
     input: {
       permission: true,
-      // Both adapters bridge user questions over ACP form elicitation.
-      question: launcher === 'claude' || launcher === 'codex',
+      // Claude and Codex bridge user questions over ACP form elicitation;
+      // Antigravity raises its `ask_question` as a permission request whose
+      // options are the answers, which the driver asks as a question.
+      question: launcher === 'claude' || launcher === 'codex' || launcher === 'antigravity',
       auth: false,
       // The desktop renders an elicitation *as* a question — one widget, one
       // answer path — so nothing downstream needs a fourth ask kind to
       // distinguish it.
       elicitation: false
     },
+    // Claude, Codex and Antigravity run on their own vendor login; OpenCode on
+    // a credential this desktop holds.
     auth: launcher === 'opencode' ? 'none' : 'cli'
   }
 }

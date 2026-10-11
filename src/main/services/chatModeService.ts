@@ -106,8 +106,8 @@ export const chatModeService = {
    * on every other mode owned by the same user first.
    */
   upsert(userId: string, input: ChatModeUpsertInput): { id: string } {
-    if (input.engine != null && !['claude', 'codex', 'opencode'].includes(input.engine)) {
-      throw new ChatModeError('invalid_value', 'Choose Default runtime, Claude, Codex, or OpenCode.')
+    if (input.engine != null && !['claude', 'codex', 'opencode', 'antigravity'].includes(input.engine)) {
+      throw new ChatModeError('invalid_value', 'Choose Default runtime, Claude, Codex, Antigravity, or OpenCode.')
     }
     if (input.toolPolicy !== undefined && input.toolPolicy !== 'none' && input.toolPolicy !== 'connectors') {
       throw new ChatModeError('invalid_value', 'Choose No tools or Connected tools.')

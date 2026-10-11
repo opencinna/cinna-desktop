@@ -612,8 +612,12 @@ export function assembleBareAgentPrompt(
  */
 const NATIVE_INSTRUCTIONS_FILE = {
   claude: 'CLAUDE.md',
-  codex: 'AGENTS.md'
-} as const satisfies Record<string, BareInstructionsFile>
+  codex: 'AGENTS.md',
+  // Antigravity reads **no** instructions file over ACP — `GEMINI.md`,
+  // `AGENTS.md` and its rules were all absent from the captured request — so
+  // the folder's file is always pasted in.
+  antigravity: null
+} as const satisfies Record<string, BareInstructionsFile | null>
 
 /** An engine that can run a bare folder on the folder's own setup. */
 export type NativeRuntimeEngine = keyof typeof NATIVE_INSTRUCTIONS_FILE
@@ -634,7 +638,9 @@ const NATIVE_RUNTIME_SENTENCE = {
   claude:
     "this folder's settings, its hooks, its skills and its MCP servers are loaded, and so are the user's own.",
   codex:
-    "this folder's `AGENTS.md`, the user's `~/.codex/config.toml` and this project's trust decision all apply."
+    "this folder's `AGENTS.md`, the user's `~/.codex/config.toml` and this project's trust decision all apply.",
+  antigravity:
+    "the user's own Antigravity skills and MCP servers are loaded. Antigravity does not read this folder's instruction files itself, so they are given here."
 } as const satisfies Record<NativeRuntimeEngine, string>
 
 /**
@@ -665,6 +671,7 @@ function bareNativeContextSection(
     'You start in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
     '- Your working directory is this agent folder. It may be open in an editor right now, so in conversation mode prefer reading over rewriting, and say what you changed.',
+    ...(engine === 'antigravity' ? [antigravityWorkingDirectory(agentDir)] : []),
     '- Never print, echo or log a credential value, and never read a `.env` file or any other secret file to answer a question about it.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file in this folder with a short summary in your reply, not into the reply itself.',
@@ -675,6 +682,15 @@ function bareNativeContextSection(
       'your instructions were loaded when this session started, before your edits'
     )
   ].join('\n')
+}
+
+/**
+ * Antigravity's command directory can be a folder of its own home rather than
+ * this one (it sorts its workspace list, and `~/.gemini/...` sorts before most
+ * projects), so a native folder's agent is told the absolute path outright.
+ */
+function antigravityWorkingDirectory(agentDir: string): string {
+  return `- This folder is \`${agentDir}\`. Resolve every relative path against it, and run every shell command in it — start each command with \`cd ${JSON.stringify(agentDir)} &&\` — whatever directory a tool reports as current.`
 }
 
 /**
@@ -706,12 +722,14 @@ export function assembleBareNativePrompt(
   const sections: string[] = []
   const instructionsFile = resolveBareInstructionsFile(agentDir)
 
-  if (instructionsFile !== NATIVE_INSTRUCTIONS_FILE[engine]) {
+  // The file this engine reads by itself, or null when it reads none.
+  const nativeFile: BareInstructionsFile | null = NATIVE_INSTRUCTIONS_FILE[engine]
+  if (nativeFile === null || instructionsFile !== nativeFile) {
     const raw = instructionsFile === null ? null : readTextFile(join(agentDir, instructionsFile))
     const instructions = raw ? stripHtmlComments(raw) : ''
     if (instructions !== '') {
       sections.push(['## Your instructions', '', instructions].join('\n'))
-    } else if (!isFile(join(agentDir, NATIVE_INSTRUCTIONS_FILE[engine]))) {
+    } else if (nativeFile === null || !isFile(join(agentDir, nativeFile))) {
       // Nothing anywhere: say so, rather than answer as a generic assistant.
       sections.push(bareInstructionsStub(name, instructionsFile))
     }
@@ -759,7 +777,8 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
   } catch {
     /* no skill line rather than no prompt */
   }
-  // Codex has no skill loader; the other two load the agent's skills natively.
-  const ownSkills = engine === 'codex' ? 'pointer' : 'skill'
+  // Codex has no skill loader, and Antigravity's reads only its own skill
+  // folders; Claude and OpenCode load the agent's skills natively.
+  const ownSkills = engine === 'codex' || engine === 'antigravity' ? 'pointer' : 'skill'
   return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills } : {}) }
 }

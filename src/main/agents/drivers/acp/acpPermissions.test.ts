@@ -204,3 +204,31 @@ describe('mintAcpRequestId', () => {
     expect(ids.size).toBe(4)
   })
 })
+
+describe('Antigravity permission asks', () => {
+  /** Real 1.3.0 options on an execute ask; edits offer `allow` / `deny` only. */
+  const OPTIONS = [
+    { optionId: 'allow_always', name: 'Allow Always (risky)', kind: 'allow_always', _meta: { 'agy.security.warning': { severity: 'high' } } },
+    { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+    { optionId: 'deny', name: 'Deny', kind: 'reject_once' }
+  ] as PermissionOption[]
+
+  it('answers allow once and reject, never its own allow_always', () => {
+    expect(pickPermissionOption(OPTIONS, 'allow')).toBe('allow')
+    expect(pickPermissionOption(OPTIONS, 'reject')).toBe('deny')
+  })
+
+  it('scopes a command to its line and directory together, and an edit to its path', () => {
+    const exec = toAcpPermissionRequest('antigravity', {
+      sessionId: 's', options: OPTIONS,
+      toolCall: { toolCallId: 'a', kind: 'execute', status: 'pending', title: 'echo hi', rawInput: { CommandLine: 'echo hi', Cwd: '/tmp/ws', WaitMsBeforeAsync: 5000 } }
+    } as RequestPermissionRequest, undefined)
+    expect(exec).toEqual({ action: 'antigravity:execute', resources: ['{"command":"echo hi","cwd":"/tmp/ws"}'], savable: [], callId: 'a' })
+    const editAsk = toAcpPermissionRequest('antigravity', {
+      sessionId: 's', options: OPTIONS.slice(1),
+      toolCall: { toolCallId: 'b', kind: 'edit', status: 'pending', title: 'Run create_file?', locations: [{ path: '/tmp/ws/probe.txt' }],
+        rawInput: { CodeContent: 'x\n', TargetFile: '/tmp/ws/probe.txt' } }
+    } as RequestPermissionRequest, undefined)
+    expect(editAsk).toMatchObject({ action: 'antigravity:edit', resources: ['/tmp/ws/probe.txt'] })
+  })
+})

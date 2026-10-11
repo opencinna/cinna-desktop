@@ -75,7 +75,7 @@ const logger = createLogger('acp-telemetry')
 
 /** The engines whose usage reports are read. Everything else reports none. */
 export function telemetryEngineOf(launcher: AcpLauncherId): TelemetryEngine | null {
-  return launcher === 'claude' || launcher === 'codex' ? launcher : null
+  return launcher === 'claude' || launcher === 'codex' || launcher === 'antigravity' ? launcher : null
 }
 
 /* ------------------------------------------------------------------- cost */
@@ -523,6 +523,10 @@ export function parsePromptTelemetry(
       ...(lastRequest ? { lastRequest } : {})
     }
   }
+  // Antigravity answers a prompt with its stop reason alone (no `usage`, no
+  // `_meta.quota`, observed on 1.3.0): no tokens, so no turn telemetry — its
+  // context arrives through `usage_update {used, size}` instead. Read like
+  // Codex's should a later server add `usage`: the last request's.
   const tokens = engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
   if (!tokens) return null
   return {
@@ -993,6 +997,8 @@ export class TurnTelemetry {
     let costSource: MessageTelemetry['costSource'] = 'runtime'
     let byModelCost = this.costsByModel(rows)
     if (engine === 'claude' && parsed) this.calibrate(rows)
+    // Antigravity: no cost from the server and none estimated — a Google
+    // account login has no per-token price this table could stand for.
     // Codex reports no cost: the table's, unless a partner cloud paid (its
     // prices differ) or the model is not in it. A lower bound while the
     // tokens are the last request's. The long-context tier is judged by one

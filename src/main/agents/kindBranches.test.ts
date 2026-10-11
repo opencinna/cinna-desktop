@@ -218,8 +218,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'offers session-authenticated delegation tools only to adopted folder owners; synthetic conversational runtimes have no folder authority' },
   // Runtime conductor: these sites own saved runtime fields, presentation, or
   // trusted tool authority. Engine execution/policy remains in ACP drivers.
-  { file: 'src/main/services/chatConductorService.ts', category: 'engine', count: 2,
-    why: 'owns the saved runtime credential binding and its human-readable engine identity' },
+  { file: 'src/main/services/chatConductorService.ts', category: 'engine', count: 1,
+    why: 'owns the saved runtime credential binding; its human-readable engine identity is a per-engine table now' },
   { file: 'src/main/services/conductorBridge.ts', category: 'providerType', count: 1,
     why: 'accepts task-control authority only from the desktop-owned coordinator provider, never tool text' },
   { file: 'src/shared/chatRouting.ts', category: 'source', count: 1,
@@ -297,7 +297,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/main/services/localAgents/runtimeService.ts',
     category: 'engine',
-    count: 4,
+    // 3: the credential refusal names its engine from a per-engine table (Antigravity).
+    count: 3,
     why: "Codex support: this service owns CLI credential validation plus engine-specific model defaults and validation labels; execution stays in the ACP launcher. The manifest's own `runtime.engine`, read by the service that resolves it (a Claude runtime has no credential ladder) and refused by the one that validates it (an engine and a credential together)"
   },
   {

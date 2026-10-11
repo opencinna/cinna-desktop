@@ -517,6 +517,24 @@ describe('assembleBareNativePrompt', () => {
     expect(codex).toContain('CLAUDE_MARKER')
   })
 
+  it('pastes any instructions file for Antigravity, which reads none itself, and names the absolute folder', () => {
+    // Mutation: give Antigravity `AGENTS.md` as a native file and this
+    // folder's instructions never reach the model — the server reads no
+    // instructions file over ACP.
+    writeFileSync(join(dir, 'AGENTS.md'), 'UPLOADER_MARKER: keep retries bounded.\n')
+    const prompt = assembleBareNativePrompt(dir, 'Uploader', context, 'antigravity')
+    expect(prompt).toContain('## Your instructions')
+    expect(prompt).toContain('UPLOADER_MARKER')
+    expect(prompt).toContain(`This folder is \`${dir}\`. Resolve every relative path against it`)
+    expect(assembleBareNativePrompt(dir, 'Uploader', context, 'codex')).not.toContain('This folder is `')
+  })
+
+  it('gives an Antigravity folder with no instructions the stub, not silence', () => {
+    const prompt = assembleBareNativePrompt(dir, 'Empty', context, 'antigravity')
+    expect(prompt).not.toContain('## Your instructions')
+    expect(prompt).toContain('Empty')
+  })
+
   it('strips HTML comments out of the instructions it does paste', () => {
     writeFileSync(join(dir, 'AGENT.md'), 'Real text.\n<!-- note to the author -->\nMore.\n')
     const prompt = assembleBareNativePrompt(dir, 'Alpha', context, 'claude')

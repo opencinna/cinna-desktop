@@ -100,6 +100,11 @@ import {
 import type { AcpLauncherId, AcpStreamUpdate, AcpTelemetryFrame } from './types'
 import { readSdkMessage, SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
+import { BARE_MCP_TITLE, mcpCallOf } from './conductorToolPolicy'
+import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS } from './antigravityLauncher'
+
+/** What Antigravity says on an approved ask whose work ran under another id (or was cancelled). */
+export const ANTIGRAVITY_UNEXECUTED = 'Tool call was approved but never executed.'
 
 /** The message a block belongs to when no chunk has named one yet. */
 const ANON_MESSAGE_ID = 'anon:acp'
@@ -300,7 +305,7 @@ export class AcpMessageStream {
    * what the model wrote into it. Read by {@link cinnaTool}, which may settle a
    * permission ask silently, so nothing a model can steer may count here.
    */
-  private readonly toolEvidence = new Map<string, { adapterName?: string; firstTitle?: string; rawInput?: Record<string, unknown> }>()
+  private readonly toolEvidence = new Map<string, { adapterName?: string; firstTitle?: string; firstKind?: string; rawInput?: Record<string, unknown>; mcp?: { server: string; tool: string } }>()
   /** `toolCallId` → the message its call part lives in, so its result joins it. */
   private readonly toolMessage = new Map<string, string>()
   /** Which message each ask's block lives in, so its decision joins it. */
@@ -501,6 +506,15 @@ export class AcpMessageStream {
    * - **OpenCode** titles a call's first update with the tool name
    *   (`cinna_<tool>`), a registered tool the model cannot invent; its
    *   `rawInput` is the arguments, as for Claude.
+   * - **Antigravity** has two shapes (contract `antigravity.mcp.tool-call-naming`).
+   *   A call that raises an ask (mode `default`) names server and tool in
+   *   `_meta.mcp`, which the server sets: Cinna's when the server is `cinna`.
+   *   One that does not (`yolo`) is titled `Running <tool>` with the bare name
+   *   and `kind: "other"` — no server anywhere. A shell call's title is its
+   *   command line (`execute`), so only the `other` kind counts, and the
+   *   name is only a candidate: the permission gate also asks whether Cinna's
+   *   server served it this session (`offersCinnaTool`), as it does for every
+   *   engine.
    *
    * Anything else — a custom command, an engine this build does not know —
    * answers null, which leaves the ask to the user.
@@ -517,9 +531,39 @@ export class AcpMessageStream {
         return withPrefix(evidence.adapterName, 'mcp__cinna__')
       case 'opencode':
         return withPrefix(evidence.firstTitle, 'cinna_')
+      case 'antigravity': {
+        if (evidence.mcp) return evidence.mcp.server === 'cinna' ? evidence.mcp.tool : null
+        if (evidence.firstKind !== 'other') return null
+        return (evidence.firstTitle ? BARE_MCP_TITLE.exec(evidence.firstTitle)?.[1] : undefined) ?? null
+      }
       default:
         return null
     }
+  }
+
+  /**
+   * Whether an Antigravity call is an MCP call, in either shape: `_meta.mcp`
+   * (an asked call), or `Running <name>` of kind `other` where the name is no
+   * built-in's (an unasked one — `Running edit_file` is a built-in's).
+   */
+  private isAntigravityMcpCall(toolCallId: string): boolean {
+    if (this.launcher !== 'antigravity') return false
+    const evidence = this.toolEvidence.get(toolCallId)
+    if (!evidence) return false
+    if (evidence.mcp) return true
+    if (evidence.firstKind !== 'other' || !evidence.firstTitle) return false
+    const name = BARE_MCP_TITLE.exec(evidence.firstTitle)?.[1]
+    return !!name && !ANTIGRAVITY_BUILTIN_TOOLS.includes(name) && !ANTIGRAVITY_FILTER_TOOLS.includes(name)
+  }
+
+  /**
+   * A call's `rawInput`. Antigravity replays a loaded session's calls with
+   * `rawInput` as a JSON **string**; it is read as the object it encodes.
+   */
+  private rawInputOf(update: Record<string, unknown>): unknown {
+    const raw = update.rawInput
+    if (this.launcher !== 'antigravity' || typeof raw !== 'string') return raw
+    try { return JSON.parse(raw) as unknown } catch { return undefined }
   }
 
   // ── translation ───────────────────────────────────────────────────────────
@@ -615,13 +659,17 @@ export class AcpMessageStream {
       // A later update's title can be model-written (OpenCode titles a bash
       // call with its command), so a call first met as an update — a follow-up
       // stream joining mid-call — gets no title at all.
-      evidence = { firstTitle: update.sessionUpdate === 'tool_call' ? str(update.title) : undefined }
+      evidence = update.sessionUpdate === 'tool_call'
+        ? { firstTitle: str(update.title), firstKind: str(update.kind) }
+        : {}
       this.toolEvidence.set(toolCallId, evidence)
     }
     const adapterName = str(record(record(update._meta)?.claudeCode)?.toolName)
     if (adapterName && !evidence.adapterName) evidence.adapterName = adapterName
+    const mcp = mcpCallOf(update._meta)
+    if (mcp && !evidence.mcp) evidence.mcp = mcp
     // Streams in as the call is written; the last complete one stands.
-    const raw = nonEmptyRecord(update.rawInput)
+    const raw = nonEmptyRecord(this.rawInputOf(update))
     if (raw) evidence.rawInput = raw
   }
 
@@ -637,6 +685,10 @@ export class AcpMessageStream {
   private toolCall(update: Record<string, unknown>): AcpStreamUpdate {
     const toolCallId = str(update.toolCallId)
     if (!toolCallId) return {}
+    // Antigravity closes an approved ask's own id as failed while the work
+    // runs (and completes) under another id; on a cancel it says the same.
+    // The call did not fail, so no failed card is drawn for it.
+    if (this.launcher === 'antigravity' && update.status === 'failed' && update.rawOutput === ANTIGRAVITY_UNEXECUTED) return {}
 
     const fresh = !this.toolNames.has(toolCallId)
     this.recordEvidence(toolCallId, update)
@@ -659,7 +711,7 @@ export class AcpMessageStream {
     this.toolMessage.set(toolCallId, messageId)
 
     const state = this.messageState(messageId)
-    const input = nonEmptyRecord(update.rawInput)
+    const input = nonEmptyRecord(this.rawInputOf(update))
     const idx = this.slot(state, `tool:${toolCallId}`, () => ({
       kind: 'text',
       // The accumulator drops a part with empty text, so a tool call needs a
@@ -714,6 +766,11 @@ export class AcpMessageStream {
   ): boolean {
     const status = str(update.status)
     if (status !== 'completed' && status !== 'failed') return false
+    // Antigravity never sends an MCP tool's result to the client: a completed
+    // MCP call's `rawOutput` and `content` are the model's own one-line
+    // `toolSummary` (contract `antigravity.mcp.result-not-delivered`), which
+    // is not what the tool returned. Such a call completes with no output.
+    if (status === 'completed' && this.isAntigravityMcpCall(toolCallId)) return false
     const text = capToolResult(toolOutputText(update.content) || toolOutputText(update.rawOutput))
     if (!text) return false
 

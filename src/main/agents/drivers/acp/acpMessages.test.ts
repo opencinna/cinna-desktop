@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 import { AcpMessageStream, TOOL_RESULT_LIMIT, capToolResult, describeAcpToolCall, resolveOfferedModel } from './acpMessages'
+import { cinnaToolName } from './conductorToolPolicy'
 import {
   KIND_METADATA_KEY,
   PARENT_TOOL_ID_METADATA_KEY,
@@ -657,7 +658,7 @@ describe('robustness', () => {
 })
 
 describe('which Cinna tool a call is for (cinnaTool)', () => {
-  const call = (launcher: 'codex' | 'claude' | 'opencode' | 'custom', update: Record<string, unknown>): AcpMessageStream => {
+  const call = (launcher: 'codex' | 'claude' | 'opencode' | 'antigravity' | 'custom', update: Record<string, unknown>): AcpMessageStream => {
     const stream = new AcpMessageStream({ launcher })
     stream.apply({ sessionId: 's', update: { sessionUpdate: 'tool_call', toolCallId: 'c', status: 'pending', ...update } } as unknown as SessionNotification)
     return stream
@@ -680,6 +681,26 @@ describe('which Cinna tool a call is for (cinnaTool)', () => {
   it('reads Claude from the adapter’s tool name, never from the model’s input', () => {
     expect(call('claude', { title: 'probe', _meta: { claudeCode: { toolName: 'mcp__cinna__probe' } } }).cinnaTool('c')).toBe('probe')
     expect(call('claude', { title: 'mcp__cinna__probe', _meta: { claudeCode: { toolName: 'mcp__github__search' } }, rawInput: { server: 'cinna', tool: 'probe' } }).cinnaTool('c')).toBeNull()
+  })
+
+  it('reads Antigravity from the bare name its MCP call’s first title carries, on an `other` call only', () => {
+    // Real 1.3.0 shape: `Running <tool>`, kind other, no server anywhere. The
+    // name is a candidate the gate checks against what Cinna served.
+    expect(call('antigravity', { title: 'Running tasks_report', kind: 'other', status: 'in_progress', rawInput: { summary: 'probe' } }).cinnaTool('c')).toBe('tasks_report')
+    // A shell call is titled with its command line; an edit with its tool.
+    expect(call('antigravity', { title: 'Running tasks_report', kind: 'execute', rawInput: { CommandLine: 'Running tasks_report' } }).cinnaTool('c')).toBeNull()
+    expect(call('antigravity', { title: 'Running write_to_file', kind: 'edit' }).cinnaTool('c')).toBeNull()
+    expect(call('antigravity', { title: 'cinna_probe', kind: 'other' }).cinnaTool('c')).toBeNull()
+  })
+
+  it('reads Antigravity’s asked MCP call from `_meta.mcp`, which the server sets', () => {
+    // Real 1.3.0 shape under Ask approval (contract `antigravity.mcp.tool-call-naming`).
+    const meta = (server: string): Record<string, unknown> => ({ mcp: { tool: 'probe', server }, is_mcp_tool_call: true })
+    expect(call('antigravity', { title: 'cinna_probe', kind: 'other', rawInput: { arguments: {} }, _meta: meta('cinna') }).cinnaTool('c')).toBe('probe')
+    // Another server's call is not Cinna's, even titled like one.
+    expect(call('antigravity', { title: 'cinna_probe', kind: 'other', _meta: meta('cinna_x') }).cinnaTool('c')).toBeNull()
+    expect(cinnaToolName('cinna_probe', { arguments: {} }, undefined, meta('github'))).toBeNull()
+    expect(cinnaToolName('github_probe', { arguments: {} }, undefined, meta('cinna'))).toBe('probe')
   })
 
   it('reads OpenCode from the tool name its first title carries', () => {
@@ -944,5 +965,68 @@ describe('resolveOfferedModel', () => {
     expect(resolveOfferedModel(options('a', [{ group: ['a', 'haiku'] }]), 'haiku')?.value).toBe('haiku')
     expect(resolveOfferedModel([{ id: 'mode', currentValue: 'default', options: [] }], 'haiku')).toBeNull()
     expect(resolveOfferedModel(undefined, 'haiku')).toBeNull()
+  })
+})
+
+describe('Antigravity’s wire quirks', () => {
+  const SESSION = '824fc7f9-f2dd-4602-ba7e-84ed932dae0d'
+  const note = (update: Record<string, unknown>): SessionNotification =>
+    ({ sessionId: SESSION, update }) as unknown as SessionNotification
+  /** From a real 1.3.0 capture: an approved `create_file` ask, run under another id. */
+  const APPROVED_EDIT = [
+    note({ toolCallId: '97b6fe8b17d04ecfb3f60346af435cec', title: 'Run create_file?', kind: 'edit', status: 'pending', sessionUpdate: 'tool_call' }),
+    note({ toolCallId: `${SESSION}:2`, title: 'Running edit_file', kind: 'edit', status: 'completed', rawOutput: 'Create probe.txt', sessionUpdate: 'tool_call' }),
+    note({ toolCallId: '97b6fe8b17d04ecfb3f60346af435cec', status: 'failed', rawOutput: 'Tool call was approved but never executed.', sessionUpdate: 'tool_call_update' })
+  ]
+
+  it('draws no failed card for an approved ask whose work ran under another id', () => {
+    // Mutation: drop the filter and the transcript shows the approved edit
+    // failing, right beside the same edit succeeding.
+    const stream = new AcpMessageStream({ launcher: 'antigravity' })
+    const { messages } = foldAll(stream, { recording: null, note: '', notifications: APPROVED_EDIT })
+    const parts = onlyMessage(messages)
+    const results = parts.filter((part) => kindOf(part) === 'tool_result')
+    expect(results.map((part) => part.text)).toEqual(['Create probe.txt'])
+    expect(parts.some((part) => (part.text ?? '').includes('never executed'))).toBe(false)
+  })
+
+  it('keeps that update for every other engine, and keeps Antigravity’s other failures', () => {
+    const other = new AcpMessageStream({ launcher: 'codex' })
+    const { messages } = foldAll(other, { recording: null, note: '', notifications: APPROVED_EDIT })
+    expect(onlyMessage(messages).some((part) => (part.text ?? '').includes('never executed'))).toBe(true)
+    const stream = new AcpMessageStream({ launcher: 'antigravity' })
+    const denied = foldAll(stream, { recording: null, note: '', notifications: [
+      note({ toolCallId: 'call_1043524', title: 'view_file', kind: 'read', status: 'in_progress', sessionUpdate: 'tool_call' }),
+      note({ toolCallId: 'call_1043524', status: 'failed', rawOutput: 'Access to path "/etc/hosts" is denied.', sessionUpdate: 'tool_call_update' })
+    ] })
+    expect(onlyMessage(denied.messages).filter((part) => kindOf(part) === 'tool_result').map((part) => part.text))
+      .toEqual(['Access to path "/etc/hosts" is denied.'])
+  })
+
+  it('shows no output for a completed MCP call, whose rawOutput is the model’s own summary', () => {
+    // Real 1.3.0 captures (contract `antigravity.mcp.result-not-delivered`):
+    // asked (`_meta.mcp`) and unasked (`Running <tool>`). Mutation: drop the
+    // check and "Probe summary" reads as what Cinna's tool returned.
+    const stream = new AcpMessageStream({ launcher: 'antigravity' })
+    const meta = { mcp: { tool: 'probe', server: 'cinna' }, is_mcp_tool_call: true }
+    const { messages } = foldAll(stream, { recording: null, note: '', notifications: [
+      note({ toolCallId: 'd5e31e81', title: 'cinna_probe', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: meta, sessionUpdate: 'tool_call' }),
+      note({ toolCallId: 'd5e31e81', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'Probe summary' } }], rawOutput: 'Probe summary', sessionUpdate: 'tool_call_update' }),
+      note({ toolCallId: `${SESSION}:16`, title: 'Running probe', kind: 'other', status: 'in_progress', rawInput: {}, sessionUpdate: 'tool_call' }),
+      note({ toolCallId: `${SESSION}:16`, status: 'completed', rawOutput: 'Probe summary', sessionUpdate: 'tool_call_update' })
+    ] })
+    const parts = onlyMessage(messages)
+    expect(parts.filter((part) => kindOf(part) === 'tool')).toHaveLength(2)
+    expect(parts.filter((part) => kindOf(part) === 'tool_result')).toEqual([])
+  })
+
+  it('reads a replayed call’s rawInput, which arrives as a JSON string', () => {
+    const stream = new AcpMessageStream({ launcher: 'antigravity' })
+    const { messages } = foldAll(stream, { recording: null, note: '', notifications: [
+      note({ toolCallId: 'call_1000685', title: 'echo hi', kind: 'execute', status: 'completed',
+        rawInput: '{"CommandLine":"echo hi","Cwd":"/tmp/ws","WaitMsBeforeAsync":5000}', sessionUpdate: 'tool_call' })
+    ] })
+    const call = onlyMessage(messages).find((part) => kindOf(part) === 'tool')
+    expect(call?.metadata?.[TOOL_INPUT_METADATA_KEY]).toEqual({ CommandLine: 'echo hi', Cwd: '/tmp/ws', WaitMsBeforeAsync: 5000 })
   })
 })

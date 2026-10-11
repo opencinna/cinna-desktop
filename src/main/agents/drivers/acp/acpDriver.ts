@@ -64,7 +64,7 @@ import { cinnaToolName } from './conductorToolPolicy'
 import { createSessionTitles, type SessionTitleScope, type SessionTitleSink, type SessionTitles } from './acpSessionTitle'
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
-import type { RunEvent } from '../../../../shared/runEvents'
+import type { InputQuestion, RunEvent } from '../../../../shared/runEvents'
 import { describeQuestionAnswers, REQUEST_PARK_TIMEOUT_MS } from '../../../../shared/localAgentRequests'
 import type {
   LocalPermissionRequest,
@@ -96,7 +96,7 @@ import {
 import { CONTEXT_CATEGORIES_KNOWN, type ContextMeasurement, type SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
-import { toElicitationContent, toInputQuestions } from './acpQuestions'
+import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, toInputQuestions, type AcpPermissionQuestion } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
 import { createSessionActivityRegistry, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
 import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
@@ -627,6 +627,10 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         })
         return fail('This agent runs on an engine this version of Cinna does not support.')
       }
+      // A prompt this engine must never be sent (Antigravity's `/logout`
+      // signs out every home on the computer): refused in words, unsent.
+      const refusedPrompt = launcher.refusePrompt?.(input.wireContent) ?? null
+      if (refusedPrompt) return fail(refusedPrompt)
 
       // **Planned before the lock is taken.** "There is no Claude Code on this
       // machine" and "this agent's credential is unavailable" are answerable
@@ -797,6 +801,16 @@ interface TurnContext {
    */
   savedSession: string | null
   /**
+   * A new session that is not saved yet because its first prompt carries the
+   * plan's `firstPromptPreamble` (Antigravity's instructions) and the engine
+   * has not taken that prompt. A loaded session is never sent the preamble
+   * again, so saving one whose prompt was never accepted — a Stop or a setup
+   * failure before the prompt, a prompt refused as logged out — would run every
+   * later turn of the chat with no instructions. Saved by {@link primeSession}
+   * on the agent's first turn content or the prompt's answer; never by `finish`.
+   */
+  withheldSession?: string | null
+  /**
    * Where this turn's session id is read and saved instead of the runtime's
    * (chat, agent) slot: a nested lease that forced a fresh session keeps its
    * own (see `ConductorLease.session`). Absent: the runtime's slot.
@@ -830,7 +844,7 @@ interface AcpTurn {
 
 async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentTurnResult> {
   const { agent, runtime, plan, input } = ctx
-  const sessionCwd = runtime.type === 'folder' ? runtime.folder.path : runtime.config.cwd
+  const sessionCwd = plan.sessionCwd ?? (runtime.type === 'folder' ? runtime.folder.path : runtime.config.cwd)
   const chatId = input.chatId
   let conductor: import('../../../services/conductorBridge').ConductorLease | undefined
   let freshSession = false
@@ -1313,7 +1327,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           emit(update.message)
           // After the call is tracked, so a turn that starts with a tool call
           // opens its window withdrawn rather than offering and withdrawing.
-          if (TURN_CONTENT.has(frame.update.sessionUpdate)) openSteering()
+          if (TURN_CONTENT.has(frame.update.sessionUpdate)) { primeSession(ctx); openSteering() }
         }
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
@@ -1425,7 +1439,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         logger.warn('an ACP session could not be created', { agentId: agent.id, error: message })
-        return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message), message)
+        if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
+        // A login that is gone is not a start failure: say what to do about it.
+        const signedOut = plan.spec.remote ? null : launcherAuthError(deps, ctx.launcherId, err)
+        return fail(signedOut ?? (plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message)), message)
       }
       // Bound on the response, which is why the connection buffers what
       // arrived before the bind: `available_commands_update` lands in the same
@@ -1437,7 +1454,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // next turn — and a turn the app is quit under (parked on a question,
       // minutes into its tool calls) never reaches `finish`. Without this the
       // next turn opened a fresh session and the agent remembered nothing.
-      rememberSession(ctx, sessionId)
+      // A session whose first prompt carries the instructions is saved as soon
+      // as the agent starts on that prompt instead (`primeSession`), which is
+      // still before any tool call or question it could be quit under.
+      if (plan.firstPromptPreamble) ctx.withheldSession = sessionId
+      else rememberSession(ctx, sessionId)
     }
 
     if (held) {
@@ -1526,6 +1547,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }
         else prompt.unshift(...transcript)
       }
+      // A new session's instructions, for an engine whose only channel is the
+      // first prompt. Never on a loaded session: its history already holds them,
+      // because only a session that took this prompt is saved (`withheldSession`).
+      if (freshSession && plan.firstPromptPreamble) prompt.unshift({ type: 'text', text: plan.firstPromptPreamble })
       ctx.titles?.prompted(titleScope(), prompt)
       void reportLauncherAuth(deps, ctx)
       let answer = await promptWithCancelGrace(
@@ -1543,7 +1568,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           connection: on, sessionId: session, fingerprint, agentId: agent.id, launcherId: ctx.launcherId, specKey: plan.spec.key, runtime, answered: true
         })
       }
-      if (answer) answered(answer, connection, sessionId)
+      if (answer) { primeSession(ctx); answered(answer, connection, sessionId) }
       // Only a session that took its prompt — the transcript replay with it —
       // is marked current. One that failed before that must be replaced and
       // replayed again, not loaded empty on the next turn.
@@ -1646,6 +1671,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         return finish(ctx, accumulator, sessionId, ceilingMessage(stalled ? stallMs : null, retried))
       }
       logger.warn('an ACP turn failed', { agentId: agent.id, chatId, error: message })
+      const signedOut = plan.spec.remote ? null : launcherAuthError(deps, ctx.launcherId, err)
+      if (signedOut) return finish(ctx, accumulator, sessionId, signedOut, message)
       const result = finish(ctx, accumulator, sessionId, message)
       // The adapter's structured category is authoritative. Text mentioning
       // a rate limit (for example, a tool error) must not pause the whole chat.
@@ -2321,10 +2348,12 @@ interface AskWorld {
 }
 
 /** Whether an ask is for a Cinna tool, in whichever spelling the engine uses. */
-export function isCinnaToolAsk(toolName: string | undefined, params: Pick<RequestPermissionRequest, 'toolCall'>): boolean {
+export function isCinnaToolAsk(toolName: string | undefined, params: Pick<RequestPermissionRequest, 'toolCall'>, offers?: (name: string) => boolean): boolean {
   // The adapter's own name is authoritative; the title, which a model can
-  // influence, speaks only for an engine that reports no name.
-  return cinnaToolName(toolName ?? params.toolCall.title, params.toolCall.rawInput) !== null
+  // influence, speaks only for an engine that reports no name. A bare name
+  // (Antigravity) counts only when Cinna's server served it this session.
+  return cinnaToolName(toolName ?? params.toolCall.title, params.toolCall.rawInput,
+    offers ? { offers, kind: params.toolCall.kind } : undefined, params.toolCall._meta) !== null
 }
 
 /**
@@ -2364,7 +2393,10 @@ async function answerPermission(
   // of streaming text.
   // A chat-owned runtime may only ever be asked about Cinna's own tools.
   const chatOwned = typeof agent.driverConfig?.conductorChatId === 'string'
-  if (chatOwned && !isCinnaToolAsk(toolName, params)) return selected('reject')
+  if (chatOwned && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return selected('reject')
+  // A question in a permission request's clothes (Antigravity's `ask_question`).
+  const question = permissionAsQuestion(ctx.launcherId, params)
+  if (question) return answerPermissionQuestion(deps, ctx, world, params, question)
   // And a session conducting a chat is not asked about them at all: Cinna's
   // tools are the conductor's whole job, the user attached them, and an ask per
   // call is an opaque widget with nothing to decide (Codex raises one for every
@@ -2375,7 +2407,10 @@ async function answerPermission(
   // `<server>_<tool>`, so a user's own server named `cinna_x` reads as Cinna's
   // `x_y` there. Without a lease — even on a chat-owned runtime — nothing is
   // allowed here.
-  const cinnaTool = world.stream.cinnaTool(params.toolCall.toolCallId)
+  // An Antigravity ask names the call's server and tool in its own `_meta.mcp`
+  // too, which the server sets: read when the call's `tool_call` was not seen.
+  const cinnaTool = world.stream.cinnaTool(params.toolCall.toolCallId) ??
+    (ctx.launcherId === 'antigravity' ? cinnaToolName(undefined, undefined, undefined, params.toolCall._meta) : null)
   if (cinnaTool !== null && ctx.offersCinnaTool?.(cinnaTool) === true) return selected('allow')
   let granted = false
   try {
@@ -2498,6 +2533,45 @@ async function answerElicitation(
     return { action: 'decline' }
   }
 
+  // The call the question belongs to. The Claude adapter names its own
+  // `AskUserQuestion` call here; the field is optional in the schema and an MCP
+  // server's elicitation may name its tool call or nothing.
+  const callId = (params as { toolCallId?: unknown }).toolCallId
+  const answers = await askQuestions(deps, ctx, world, form.questions, typeof callId === 'string' && callId !== '' ? callId : undefined)
+  return answers ? { action: 'accept', content: toElicitationContent(form, answers) } : { action: 'decline' }
+}
+
+/**
+ * Antigravity's `ask_question`, which arrives as a permission request whose
+ * options are the answers (see {@link permissionAsQuestion}): asked as a
+ * question, answered with the chosen option's id. No answer is `cancelled` —
+ * the server reads it as the user declining, and nothing is selected for them.
+ */
+async function answerPermissionQuestion(
+  deps: AcpDriverDeps,
+  ctx: TurnContext,
+  world: AskWorld,
+  params: RequestPermissionRequest,
+  question: AcpPermissionQuestion
+): Promise<RequestPermissionResponse> {
+  const answers = await askQuestions(deps, ctx, world, question.questions, params.toolCall.toolCallId)
+  const optionId = answers ? permissionQuestionAnswer(question, answers) : null
+  return optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } }
+}
+
+/**
+ * Park a question, show it, and wait for the user: their answers (one label
+ * list per question), or null when nobody answered — expired, stopped, or the
+ * registry failed. The transcript records which.
+ */
+async function askQuestions(
+  deps: AcpDriverDeps,
+  ctx: TurnContext,
+  world: AskWorld,
+  questions: InputQuestion[],
+  callId: string | undefined
+): Promise<string[][] | null> {
+  const { agent, input } = ctx
   const requestId = mintAcpRequestId('question')
   const handle = deps.registerRequest({
     requestId,
@@ -2508,22 +2582,12 @@ async function answerElicitation(
   })
   ctx.parkedRuntimes.set(requestId, ctx.runtime)
   world.turn.parked.set(requestId, handle.cancel)
-  // The call the question belongs to. The Claude adapter names its own
-  // `AskUserQuestion` call here; the field is optional in the schema and an MCP
-  // server's elicitation may name its tool call or nothing.
-  const callId = (params as { toolCallId?: unknown }).toolCallId
-  world.emit(
-    world.stream.askQuestion(
-      requestId,
-      form.questions,
-      typeof callId === 'string' && callId !== '' ? callId : undefined
-    ).message
-  )
+  world.emit(world.stream.askQuestion(requestId, questions, callId).message)
   if (world.turn.open) {
     input.onEvent?.({
       type: 'needs_input',
       requestId,
-      request: { kind: 'question', questions: form.questions },
+      request: { kind: 'question', questions },
       resume: 'reply'
     })
   }
@@ -2535,13 +2599,8 @@ async function answerElicitation(
     if (resolution.kind === 'question') {
       // The old OpenCode runner's own sentence, now shared with the inbox,
       // which renders the same record on a row answered with this chat closed.
-      world.emit(
-        world.stream.settleQuestion(
-          requestId,
-          describeQuestionAnswers(resolution.answers)
-        ).message
-      )
-      return { action: 'accept', content: toElicitationContent(form, resolution.answers) }
+      world.emit(world.stream.settleQuestion(requestId, describeQuestionAnswers(resolution.answers)).message)
+      return resolution.answers
     }
     world.emit(
       world.stream.settleQuestion(
@@ -2549,14 +2608,14 @@ async function answerElicitation(
         world.turn.stopping ? 'Not answered — the turn was stopped.' : 'No answer — the request expired.'
       ).message
     )
-    return { action: 'decline' }
+    return null
   } catch (err) {
     logger.warn('a question failed to settle', {
       agentId: agent.id,
       error: err instanceof Error ? err.message : String(err)
     })
     world.emit(world.stream.settleQuestion(requestId, 'No decision was recorded.').message)
-    return { action: 'decline' }
+    return null
   } finally {
     world.turn.parked.delete(requestId)
     ctx.parkedRuntimes.delete(requestId)
@@ -2634,6 +2693,8 @@ function finish(
   canceled = ctx.input.signal.aborted
 ): RunAgentTurnResult {
   if (sessionId) rememberSession(ctx, sessionId)
+  // A withheld session's id is not this chat's to continue from: see `withheldSession`.
+  const contextId = sessionId && ctx.withheldSession !== sessionId ? sessionId : null
   if (ctx.conductorOutcome && !ctx.input.signal.aborted) { canceled = false; error = undefined }
   const control = ctx.conductorOutcome?.control
   if (control?.kind === 'finish' && !ctx.input.signal.aborted && !accumulator.answerText().trimEnd().endsWith(control.summary.trim())) {
@@ -2663,7 +2724,7 @@ function finish(
     parts,
     notices: accumulator.snapshotNotices(),
     ...(ctx.steers.length ? { steers: ctx.steers.slice() } : {}),
-    ...(sessionId ? { contextId: sessionId } : {}),
+    ...(contextId ? { contextId } : {}),
     ...(telemetry ? { telemetry } : {}),
     ...(error ? { error: { message: error, raw: raw ?? error } } : {})
   }
@@ -2706,7 +2767,7 @@ async function reportLauncherAuth(deps: AcpDriverDeps, ctx: TurnContext): Promis
  * while a loaded one is saved at the exit as it always was.
  */
 function rememberSession(ctx: TurnContext, sessionId: string): void {
-  if (ctx.savedSession === sessionId) return
+  if (ctx.savedSession === sessionId || ctx.withheldSession === sessionId) return
   try {
     ctx.runtime.validate(ctx.input.chatId)
     if (ctx.sessionSlot) ctx.sessionSlot.save(sessionId)
@@ -2720,6 +2781,14 @@ function rememberSession(ctx: TurnContext, sessionId: string): void {
       error: err instanceof Error ? err.message : String(err)
     })
   }
+}
+
+/** The engine took the first prompt of a session saved late (`withheldSession`): save it now. */
+function primeSession(ctx: TurnContext): void {
+  const withheld = ctx.withheldSession
+  if (!withheld) return
+  ctx.withheldSession = null
+  rememberSession(ctx, withheld)
 }
 
 /** The ceiling's sentence, or the stall watch's when it stopped the turn after `stalledAfterMs`. */
@@ -2805,8 +2874,21 @@ function stopReasonError(stopReason: string): string | undefined {
  * which is the part a user can act on.
  */
 function startFailureMessage(launcher: AcpLauncherId, detail: string): string {
-  const engine = launcher === 'claude' ? 'Claude Code' : launcher === 'codex' ? 'Codex' : 'the local engine'
-  return `${engine} could not be started for this agent: ${detail}`
+  return `${ENGINE_DISPLAY_NAMES[launcher] ?? 'the local engine'} could not be started for this agent: ${detail}`
+}
+
+/** The engine a start failure names; OpenCode, Gemini and custom commands say "the local engine". */
+const ENGINE_DISPLAY_NAMES: Partial<Record<AcpLauncherId, string>> = {
+  claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity'
+}
+
+/** The launcher's sentence for a login that is gone, or null. Never throws. */
+function launcherAuthError(deps: AcpDriverDeps, launcherId: AcpLauncherId, error: unknown): string | null {
+  try {
+    return deps.launcher(launcherId)?.authError?.(error) ?? null
+  } catch {
+    return null
+  }
 }
 
 /** The folder half of readiness, in the scanner's own words. */

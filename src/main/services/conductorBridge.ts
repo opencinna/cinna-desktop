@@ -232,7 +232,7 @@ export const conductorBridge = {
     // Re-read: the entry seen before the awaits may have been released since.
     entry = entries.get(key)
     if (!entry) {
-      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation(), nested }
+      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation((name) => entries.get(key)?.session.offers(name) === true), nested }
       entries.set(key, entry)
     } else { entry.binding = binding; entry.wake = wake }
     entry.agent = agent

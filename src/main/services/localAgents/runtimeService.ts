@@ -52,6 +52,7 @@ import { findCredentialByReference, isCredentialUsable } from '../../../shared/c
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
 import {
+  antigravityModelForComplexity,
   claudeModelForComplexity,
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
@@ -68,6 +69,9 @@ import {
 } from '../../../shared/runtimeDefaults'
 import { isWorkComplexity, type CatalogueModel, type WorkComplexity } from '../../../shared/modelFamilies'
 import { describeRuntime, type RuntimeFacts } from '../../../shared/runtimeMessages'
+
+/** The engines that run on their own vendor login, as the credential refusal names them. */
+const OWN_LOGIN_ENGINE_NAMES = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' } as const
 
 /** Longest a credential reference may be. The schema's own ceiling. */
 const MAX_CREDENTIAL_REF = 200
@@ -326,7 +330,8 @@ export const runtimeService = {
     // A `credential` alongside `engine: "claude"` is ignored here and warned
     // about by the validator; `validate` refuses to *write* one. Reading is
     // tolerant, writing is strict — the same asymmetry `complexity` has.
-    if (engine === 'claude' || engine === 'codex') {
+    // Antigravity too: it runs on the user's Google login, with no credential.
+    if (engine === 'claude' || engine === 'codex' || engine === 'antigravity') {
       return {
         // **What chose this engine, honestly.** An agent whose manifest says
         // `engine: "claude"` is on its own runtime; one that says nothing and
@@ -342,7 +347,11 @@ export const runtimeService = {
         // A declared model wins over a tier, matching `resolveRuntimeModel`'s
         // own precedence, so the two paths cannot disagree about which of the
         // pair the user meant.
-        modelId: model !== '' ? model : engine === 'claude' ? claudeModelForComplexity(complexity) : null,
+        // Antigravity's tiers are Flash thinking levels; Codex has no tier
+        // table (its effort carries the tier), so no model is its default.
+        modelId: model !== '' ? model
+          : engine === 'claude' ? claudeModelForComplexity(complexity)
+          : engine === 'antigravity' ? antigravityModelForComplexity(complexity) : null,
         modelSource: model !== '' ? 'declared' : complexity ? 'tier' : 'floor',
         replacedModelId: null,
         // Readiness — installed, logged in — is not a credential question and is
@@ -526,10 +535,10 @@ export const runtimeService = {
     // only a validator *warning* — reading stays tolerant so a folder written by
     // a newer tool keeps running — but this desktop never authors the ambiguity
     // it tolerates in others.
-    if ((resultingEngine === 'claude' || resultingEngine === 'codex') && credential !== null) {
+    if ((resultingEngine === 'claude' || resultingEngine === 'codex' || resultingEngine === 'antigravity') && credential !== null) {
       throw new LocalAgentError(
         'invalid_input',
-        `An agent on the ${resultingEngine === 'claude' ? 'Claude' : 'Codex'} engine runs on that install’s own login, so it does not use a credential configured here.`
+        `An agent on the ${OWN_LOGIN_ENGINE_NAMES[resultingEngine]} engine runs on that install’s own login, so it does not use a credential configured here.`
       )
     }
 

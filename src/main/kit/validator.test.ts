@@ -275,6 +275,15 @@ describe('validateAgentFolder — manifest errors', () => {
     expect(codes(report.warnings)).toContain('manifest.runtime.engine')
   })
 
+  it('warns when the Antigravity engine is paired with a credential: it runs on its own Google login', () => {
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'antigravity', credential: 'Gemini' }
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(report.warnings.find((f) => f.code === 'manifest.runtime.engine')?.message).toMatch(/own CLI login, so runtime.credential is ignored/)
+  })
+
   it('says nothing about an engine it knows, on its own', () => {
     patchManifest(agentDir, (m) => {
       m.runtime = { engine: 'claude' }

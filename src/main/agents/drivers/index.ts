@@ -27,7 +27,7 @@ import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
 import { engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
-import { claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
+import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
@@ -39,6 +39,10 @@ import { turnLock } from '../../services/localAgents/turnLock'
 import { runAgentTurn } from '../../services/a2aStreamingService'
 import { createLogger } from '../../logger/logger'
 import { CodexAuthProbe } from './acp/codexAuth'
+import { AntigravityAuthProbe } from './acp/antigravityAuth'
+import { ANTIGRAVITY_NOT_INSTALLED, antigravityServerArgs, buildAntigravityEnv } from './acp/antigravityEnv'
+import { antigravityIsolatedHome, antigravityPreamble, createAntigravityLauncher } from './acp/antigravityLauncher'
+import { acpAuthenticateLogin } from './acp/acpLogin'
 import { buildCodexEnv } from './acp/codexEnv'
 import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from './acp/codexLauncher'
 import { codexEffortForComplexity, isAgentEngine, type EngineLoginId } from '../../../shared/engine'
@@ -99,7 +103,7 @@ import { createManagedDriver } from './managed/managedDriver'
 import { createManagedTurnRecoverer } from './managed/managedTurnRecoverer'
 import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
-import { ensureTasksSkillPlugin } from '../../services/tasksSkillService'
+import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
 import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
@@ -302,6 +306,10 @@ function folderSystemPrompt(
     // The agent's own id, which is stable per agent — see
     // `DesktopPromptContext.agentId` for why a per-turn id could not go here.
     const context = { ...resolveDesktopPromptContext(engine), agentId }
+    // An isolated Antigravity home has cinna-tasks installed natively
+    // (`installAntigravitySkill`), so the prompt names the skill; a native
+    // folder keeps the path, since nothing is written to the user's home.
+    if (engine === 'antigravity' && mode === 'isolated' && context.tasksSkill?.kind === 'pointer') context.tasksSkill = { kind: 'skill' }
     if (mode === 'native') {
       return assembleBareNativePrompt(agent.path, agent.name, context, engine)
     }
@@ -342,6 +350,16 @@ export const codexAuthProbe = new CodexAuthProbe({
 })
 
 /**
+ * Whether the user's Antigravity home is signed in: its `auth.type` and the
+ * Google token (macOS keychain, else the home's token file) — read where the
+ * server keeps them, never by starting it, which with no token would open a
+ * browser by itself. No binary is involved, so there is always an answer.
+ */
+export const antigravityAuthProbe = new AntigravityAuthProbe({
+  env: async () => withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() }))
+})
+
+/**
  * The in-app login for each CLI engine — `claude auth login` / `codex login`,
  * run on **the binary the turns use** (downloading the pin if it is not here
  * yet, which `runningBinary` above deliberately never does) and under **the
@@ -379,16 +397,44 @@ export const engineLogins: Record<EngineLoginId, EngineLogin> = {
       codexAuthProbe.invalidate()
       return codexAuthProbe.refresh()
     }
+  }),
+  // No login CLI: the server itself, in the user home, asked over ACP to
+  // `authenticate` with a personal Google login (it opens the browser).
+  antigravity: new EngineLogin({
+    engine: 'antigravity',
+    binary: async () => {
+      try {
+        return { path: (await antigravityBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : ANTIGRAVITY_NOT_INSTALLED }
+      }
+    },
+    env: async () => withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() })),
+    refresh: () => {
+      antigravityAuthProbe.invalidate()
+      return antigravityAuthProbe.refresh()
+    },
+    protocol: acpAuthenticateLogin({ args: antigravityServerArgs(), methodId: 'oauth-personal' })
   })
 }
 
 /** App shutdown: kill any login still waiting on a browser. */
 export function shutdownEngineLogins(): Promise<void> {
-  return Promise.all([engineLogins.claude.shutdown(), engineLogins.codex.shutdown()]).then(() => undefined)
+  return Promise.all(Object.values(engineLogins).map((login) => login.shutdown())).then(() => undefined)
 }
 
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
 const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string }>()
+
+/**
+ * Whether an engine's utility and chat processes run in a profile-owned
+ * directory ({@link codexProcessCwd}) rather than a chat's: Codex, whose cwd
+ * is part of the launch identity, and Antigravity, whose home (and with it
+ * every session it can load) lives in that directory.
+ */
+function stableProcessCwd(engine: string): boolean {
+  return engine === 'codex' || engine === 'antigravity'
+}
 
 /** Process cwd is stable; acpDriver/AI Functions supply their own session cwd. */
 function codexProcessCwd(poolKey: string): string {
@@ -414,7 +460,9 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   // profile's warm chat process, without loading that chat's session/history.
   const liveAgents = agentRepo.list(userId).filter((agent) => agent.driver === 'acp' && acpProcessPool.status(agent.id).state === 'running')
   const compatibleCandidates = engine === 'claude' ? liveAgents.map((agent) => agent.id) : []
-  const chatCandidate = (engine === 'codex' || (engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT)) ? liveAgents.find((agent) => {
+  // Codex and Antigravity take their instructions per session, so a live chat
+  // conductor's process serves a utility session as it is.
+  const chatCandidate = (engine === 'codex' || engine === 'antigravity' || (engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT)) ? liveAgents.find((agent) => {
     if (!isChatConductor(agent)) return false
     const context = conductorContext(agent)
     return context.engine === engine && context.credentialId === runtime.credentialId && context.modelId === runtime.modelId
@@ -427,7 +475,8 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   for (const name of ['CLAUDE.md', 'AGENTS.md']) {
     // The patched Codex adapter accepts exact per-session developer instructions.
     // Do not duplicate function instructions into repository/user-message context.
-    if (engine === 'codex') rmSync(join(cwd, name), { force: true })
+    // Antigravity reads neither file over ACP; its instructions open the prompt.
+    if (engine === 'codex' || engine === 'antigravity') rmSync(join(cwd, name), { force: true })
     else writeFileSync(join(cwd, name), `${systemPrompt}\n`, { mode: 0o600 })
   }
   aiFunctionProfiles.set(poolKey, { userId, modelId: runtime.modelId, credentialId: runtime.credentialId, systemPrompt })
@@ -439,7 +488,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
     ? await prepareCodexConductorPolicy(proposed, join(runtimeHost.getPath('userData'), 'acp')) : proposed, engine)
   let proposed = await launcher.plan({ userId, agentId: candidateKey, folder: {
-    name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: engine === 'codex' ? codexProcessCwd(candidateKey) : chatContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
+    name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: stableProcessCwd(engine) ? codexProcessCwd(candidateKey) : chatContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
   } })
   if ('error' in proposed) throw new Error(proposed.error)
   let plan = await restrict(proposed)
@@ -455,7 +504,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
       // A credential/environment change can make a live chat process stale.
       // Drafting is allowed to start its dedicated utility process instead.
       proposed = await launcher.plan({ userId, agentId: poolKey, folder: {
-        name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: engine === 'codex' ? codexProcessCwd(poolKey) : cwd, kind: 'bare', runtimeMode: 'isolated'
+        name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: stableProcessCwd(engine) ? codexProcessCwd(poolKey) : cwd, kind: 'bare', runtimeMode: 'isolated'
       } })
       if ('error' in proposed) throw new Error(proposed.error)
       plan = await restrict(proposed)
@@ -463,6 +512,8 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   }
   plan = { ...plan, init: { ...plan.init, clientCapabilities: {} }, session: { ...plan.session, mcpServers: [] } }
   if (engine === 'codex') plan.session.meta = { ...plan.session.meta, cinna: { systemPrompt } }
+  // This function's own instructions, whichever process the plan came from.
+  if (engine === 'antigravity') plan = { ...plan, firstPromptPreamble: antigravityPreamble(systemPrompt) }
   if (engine === 'claude') {
     const meta = plan.session.meta ?? {}
     const claude = meta.claudeCode as { options?: Record<string, unknown> } | undefined
@@ -470,7 +521,9 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
     const warmKey = [poolKey, ...compatibleCandidates].find((key) => acpProcessPool.peek?.(key, plan.spec.key))
     if (warmKey) poolKey = warmKey
   }
-  return { poolKey, plan, cwd }
+  // Antigravity: the session runs in the empty process folder, its home
+  // beside it (see `AcpLaunchPlan.sessionCwd`).
+  return { poolKey, plan, cwd: engine === 'antigravity' ? plan.spec.cwd : cwd }
 }
 
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
@@ -516,6 +569,55 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         model: typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null,
         effort: codexEffortForComplexity(isWorkComplexity(agent.runtime?.complexity) ? agent.runtime.complexity : null),
         approval: desktopStateService.read(agent.path, agent.kind).codexApproval ?? 'ask'
+      }
+    }
+  }),
+  antigravity: createAntigravityLauncher({
+    binary: async () => {
+      try {
+        return { path: (await antigravityBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : ANTIGRAVITY_NOT_INSTALLED }
+      }
+    },
+    binaryKnown: (options) => codexBinaryKnownFrom({
+      state: () => antigravityBinaryService.state(),
+      refresh: () => antigravityBinaryService.refresh(),
+      known: runningBinary(antigravityBinaryService)
+    }, options),
+    // Read where the server keeps the login, never by starting it.
+    auth: (options) => options?.fresh ? antigravityAuthProbe.refresh() : antigravityAuthProbe.status(),
+    authLost: () => {
+      antigravityAuthProbe.invalidate()
+      void antigravityAuthProbe.refresh().catch(() => undefined)
+    },
+    env: async () => withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() })),
+    systemPrompt: folderSystemPrompt('antigravity'),
+    // A chat runtime or AI function has no shell, so the shell-cwd quirk the
+    // nested home fixes does not apply; its home sits beside the (empty)
+    // process folder. The server still lets `view_file` read the whole home.
+    home: (userId, agentId, folderPath) =>
+      syntheticRuntimeProfiles.get(agentId)?.userId === userId || aiFunctionProfiles.get(agentId)?.userId === userId
+        ? `${folderPath}.agyhome` : antigravityIsolatedHome(folderPath),
+    tasksSkill: () => {
+      const info = tasksSkillInfo()
+      return info.available ? { name: TASKS_SKILL_NAME, dir: info.dir } : null
+    },
+    settings: (userId, agentId) => {
+      const synthetic = syntheticRuntimeProfiles.get(agentId)
+      if (synthetic?.userId === userId) return { model: synthetic.context.modelId, approval: 'ask' }
+      const utility = aiFunctionProfiles.get(agentId)
+      if (utility?.userId === userId) return { model: utility.modelId, approval: 'ask' }
+      const conductor = agentRepo.getOwned(userId, agentId)
+      if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, approval: 'ask' }
+      const development = desktopFeatures.developmentAgentContext(userId, agentId)
+      if (development) return { model: development.runtime.modelId, approval: 'ask' }
+      const agent = localAgentService.get(userId, agentId)
+      return {
+        // The declared model, else the work complexity's Flash level, else the
+        // server's own default — `runtimeService` is the one place that decides.
+        model: runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId,
+        approval: desktopStateService.read(agent.path, agent.kind).antigravityApproval ?? 'ask'
       }
     }
   }),
@@ -718,6 +820,55 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
   }
 }
 
+/**
+ * The launcher a turn on `id` uses: the engine's own, wrapped for a chat
+ * runtime (its profile-owned pool key and process folder, the chat tool policy
+ * a verified engine needs, and — for Antigravity — sessions in that folder) and
+ * for Cinna's own build session (its managed CLI tools on PATH).
+ */
+export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
+  const launcher = acpLaunchers[id]
+  if (!launcher) return undefined
+  return { ...launcher, async plan(ctx) {
+    const agent = agentRepo.getOwned(ctx.userId, ctx.agentId)
+    if (agent && isChatConductor(agent) && ctx.folder) {
+      const context = conductorContext(agent)
+      const poolKey = syntheticRuntimePoolKey(ctx.userId, context)
+      syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
+      // Codex includes its process cwd in the launch identity. Keep that
+      // profile-owned while acpDriver supplies each chat's own session cwd.
+      const processCwd = stableProcessCwd(id) ? codexProcessCwd(poolKey) : ctx.folder.path
+      let plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, path: processCwd, slug: 'chat-runtime' } })
+      if ('error' in plan) return plan
+      if (id === 'codex') {
+        try { plan = await prepareCodexConductorPolicy(plan, join(runtimeHost.getPath('userData'), 'acp')) }
+        catch (error) {
+          return { error: error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')
+            ? error.message : 'Codex chat policy could not be verified. Check the installed runtime.' }
+        }
+      }
+      // Antigravity's sessions run in the empty process folder itself, with
+      // its home beside it: never in the chat folder. `view_file` can still
+      // read the whole home (verified, drafts p7c), conversations included.
+      if (id === 'antigravity') plan = { ...plan, sessionCwd: processCwd }
+      acpProcessPool.share?.(ctx.agentId, poolKey)
+      return plan
+    }
+    const development = desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
+    if (!development) return launcher.plan(ctx)
+    const execution = await desktopFeatures.developmentExecutionContext(development.profileId)
+    const plan = await launcher.plan(ctx)
+    desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
+    if ('error' in plan) return plan
+    // Keep runtime credential/environment policy; add only the managed CLI tools.
+    // The development PATH replaces the one the launcher shimmed, so the
+    // developer-tool shims go back in front of it (a no-op when already first).
+    const path = (await withDeveloperToolShims({ PATH: execution.env.PATH ?? plan.spec.env.PATH ?? '' })).PATH ?? ''
+    return { ...plan, spec: { ...plan.spec, env: { ...plan.spec.env, PATH: path },
+      key: createHash('sha256').update(JSON.stringify([plan.spec.key, path])).digest('hex') } }
+  } }
+}
+
 export const acpDriver = createAcpDriver({
   prepareCredentials: async (agent, plan) => {
     if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
@@ -742,44 +893,7 @@ export const acpDriver = createAcpDriver({
   },
   buildPrompt: (userId, input, connection) => import('../../services/acpAttachments').then(({ buildAcpPrompt }) => buildAcpPrompt(userId, input, connection)),
   replayTranscript: (chatId, messageId, connection, userId, agentId) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId)),
-  launcher: (id) => {
-    const launcher = acpLaunchers[id]
-    if (!launcher) return undefined
-    return { ...launcher, async plan(ctx) {
-      const agent = agentRepo.getOwned(ctx.userId, ctx.agentId)
-      if (agent && isChatConductor(agent) && ctx.folder) {
-        const context = conductorContext(agent)
-        const poolKey = syntheticRuntimePoolKey(ctx.userId, context)
-        syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
-        // Codex includes its process cwd in the launch identity. Keep that
-        // profile-owned while acpDriver supplies each chat's own session cwd.
-        const processCwd = id === 'codex' ? codexProcessCwd(poolKey) : ctx.folder.path
-        let plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, path: processCwd, slug: 'chat-runtime' } })
-        if ('error' in plan) return plan
-        if (id === 'codex') {
-          try { plan = await prepareCodexConductorPolicy(plan, join(runtimeHost.getPath('userData'), 'acp')) }
-          catch (error) {
-            return { error: error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')
-              ? error.message : 'Codex chat policy could not be verified. Check the installed runtime.' }
-          }
-        }
-        acpProcessPool.share?.(ctx.agentId, poolKey)
-        return plan
-      }
-      const development = desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
-      if (!development) return launcher.plan(ctx)
-      const execution = await desktopFeatures.developmentExecutionContext(development.profileId)
-      const plan = await launcher.plan(ctx)
-      desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
-      if ('error' in plan) return plan
-      // Keep runtime credential/environment policy; add only the managed CLI tools.
-      // The development PATH replaces the one the launcher shimmed, so the
-      // developer-tool shims go back in front of it (a no-op when already first).
-      const path = (await withDeveloperToolShims({ PATH: execution.env.PATH ?? plan.spec.env.PATH ?? '' })).PATH ?? ''
-      return { ...plan, spec: { ...plan.spec, env: { ...plan.spec.env, PATH: path },
-        key: createHash('sha256').update(JSON.stringify([plan.spec.key, path])).digest('hex') } }
-    } }
-  },
+  launcher: (id) => acpLauncherFor(id),
   readRuntime: readAcpRuntime,
   defaultEngine: () => defaultEngineService.current(),
   registerRequest: (input) => pendingRequests.register(input),
@@ -885,7 +999,7 @@ export function respondToOrphanedAsk(
 }
 
 /** The same runtime gates used by the turn, before presenting the build composer. */
-export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null; loginTool?: 'claude' | 'codex' | null }> {
+export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null; loginTool?: EngineLoginId | null }> {
   const ready = await acpLaunchers[engine]?.readiness?.({ fresh: true })
   // Only Claude is a CLI the user installs. OpenCode and Codex are fetched by
   // Cinna, so offering to install a PATH copy of either would install a tool no

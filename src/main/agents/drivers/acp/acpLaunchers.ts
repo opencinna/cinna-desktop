@@ -167,6 +167,23 @@ export interface AcpLaunchPlan {
     meta?: Record<string, unknown>
   }
   setup: AcpSessionSetup
+  /**
+   * Text the driver puts first in the **first `session/prompt` of a new
+   * session** — never a loaded or resumed one, whose history (this text
+   * included) the engine replays and keeps. For an engine with no
+   * system-prompt channel over ACP (Antigravity); an edited prompt therefore
+   * applies from the next new session. Such a session is saved for the chat
+   * only once the engine has taken that prompt, so a turn that ends before it
+   * leaves nothing to load without them.
+   */
+  firstPromptPreamble?: string
+  /**
+   * The cwd `session/new` and `session/load` name, when it must not be the
+   * folder's: an Antigravity chat runtime runs its sessions in its own empty,
+   * desktop-owned process folder (its home is beside it), never in the chat
+   * folder. The server lets `view_file` read the cwd and the whole home.
+   */
+  sessionCwd?: string
 }
 
 /** A refusal, in the sentence the user reads instead of a turn. */
@@ -221,6 +238,18 @@ export interface AcpLauncher {
    * only; never an account or a key. Must not throw.
    */
   telemetryAuth?(): Promise<import('../../../../shared/sessionTelemetry').SessionTelemetryAuth | null>
+  /**
+   * The sentence for an error from `session/new` or `session/prompt` that
+   * means the engine's login is gone, or null for any other error. A launcher
+   * that answers also re-reads its login, so readiness changes with it.
+   * Must not throw.
+   */
+  authError?(error: unknown): string | null
+  /**
+   * The sentence refusing a user prompt this engine must never be sent, or
+   * null. Antigravity's `/logout` signs every home on the computer out.
+   */
+  refusePrompt?(text: string): string | null
 }
 
 /* ------------------------------------------------------------------ OpenCode */

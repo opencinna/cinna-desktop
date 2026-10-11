@@ -163,6 +163,26 @@ export function toAcpPermissionRequest(
     }
   }
 
+  if (launcher === 'antigravity') {
+    // Antigravity's own vocabulary, prefixed so a grant never crosses engines.
+    // A command is one indivisible scope — its line and the directory it runs
+    // in — so a grant for `ls` in one folder never authorises `ls` in another.
+    const kind = params.toolCall.kind ?? 'other'
+    const resources: string[] = []
+    if (kind === 'execute' && rawInput) {
+      resources.push(JSON.stringify({ command: rawInput.CommandLine ?? rawInput.command_line ?? null, cwd: rawInput.Cwd ?? rawInput.working_dir ?? null }))
+    } else if (kind === 'edit') {
+      resources.push(...(params.toolCall.locations ?? []).map((location) => location.path))
+    } else if (rawInput && Object.keys(rawInput).length > 0) {
+      resources.push(JSON.stringify(rawInput))
+    }
+    return {
+      action: `antigravity:${kind}`,
+      resources: resources.length ? resources : [`Request ${params.toolCall.toolCallId}`],
+      savable: [], callId: params.toolCall.toolCallId
+    }
+  }
+
   const action = openCodeAction(params, toolName)
   return {
     action,

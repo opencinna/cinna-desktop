@@ -181,12 +181,14 @@ export function ensureTasksSkillPlugin(info: TasksSkillInfo = tasksSkillInfo()):
 export type TasksSkillDelivery = CinnaTasksSkillDelivery
 
 /** The engines a folder agent runs on. */
-export type TasksSkillEngine = 'claude' | 'codex' | 'opencode'
+export type TasksSkillEngine = 'claude' | 'codex' | 'opencode' | 'antigravity'
 
 export function tasksSkillDeliveryFor(
   engine: TasksSkillEngine,
   info: TasksSkillInfo = tasksSkillInfo()
 ): TasksSkillDelivery | null {
   if (!info.available) return null
-  return engine === 'codex' ? { kind: 'pointer', path: info.skillFile } : { kind: 'skill' }
+  // Codex and Antigravity load no Cinna plugin or skill path: they are told
+  // where the `SKILL.md` is.
+  return engine === 'codex' || engine === 'antigravity' ? { kind: 'pointer', path: info.skillFile } : { kind: 'skill' }
 }

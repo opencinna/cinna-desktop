@@ -136,6 +136,12 @@ interface WorldOptions {
   reapMs?: number
   /** The launcher's own login report, for session telemetry (Codex). */
   telemetryAuth?: AcpLauncher['telemetryAuth']
+  /** More launcher hooks (`authError`, `refusePrompt`). */
+  launcherExtra?: Partial<Pick<AcpLauncher, 'authError' | 'refusePrompt'>>
+  /** The plan's `firstPromptPreamble`. */
+  preamble?: string
+  /** The plan's `sessionCwd`. */
+  sessionCwd?: string
 }
 
 function makeWorld(options: WorldOptions = {}): World {
@@ -162,8 +168,11 @@ function makeWorld(options: WorldOptions = {}): World {
               clientCapabilities: { elicitation: { form: {} } }
             },
             session: { mcpServers: [] },
-            setup: options.setup ?? {}
+            setup: options.setup ?? {},
+            ...(options.preamble ? { firstPromptPreamble: options.preamble } : {}),
+            ...(options.sessionCwd ? { sessionCwd: options.sessionCwd } : {})
           },
+    ...options.launcherExtra,
     ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {}),
     ...(options.telemetryAuth ? { telemetryAuth: options.telemetryAuth } : {})
   }
@@ -2047,6 +2056,31 @@ describe('a Cinna tool ask on a conducting session', () => {
     await askedTheUser(w, () => w.driver.run(USER_ID, owned, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, onEvent: (event) => void w.events.push(event) }))
   })
 
+  /** Antigravity's asked MCP call (mode `default`, real 1.3.0 shape): `_meta.mcp` on the call and on its ask. */
+  const agyAsk = (server: string, options: { update?: boolean } = {}): FakeAcpScript => {
+    const toolCall = { toolCallId: 'd5e31e81', title: `${server}_probe`, kind: 'other', status: 'pending', rawInput: { arguments: {} },
+      _meta: { mcp: { tool: 'probe', server }, is_mcp_tool_call: true } }
+    return { prompt: { emit: [
+      ...(options.update === false ? [] : [{ kind: 'update' as const, update: { sessionUpdate: 'tool_call', ...toolCall } }]),
+      { kind: 'permission', toolCall }
+    ] } }
+  }
+
+  it('allows an Antigravity ask for a tool Cinna’s server offered, named in `_meta.mcp`', async () => {
+    // Mutation: read only the `Running <tool>` shape and every Cinna call of a
+    // conducting session under Ask approval surfaces an ask.
+    await allowedSilently(world({ launcher: 'antigravity', script: agyAsk('cinna'), deps: conducting }))
+  })
+
+  it('allows it from the ask’s own `_meta.mcp` when its tool_call was not seen', async () => {
+    await allowedSilently(world({ launcher: 'antigravity', script: agyAsk('cinna', { update: false }), deps: conducting }))
+  })
+
+  it('asks about another server’s Antigravity call, whatever its title', async () => {
+    const w = world({ launcher: 'antigravity', script: agyAsk('github'), deps: conducting })
+    await askedTheUser(w)
+  })
+
   it('leaves a session that conducts nothing asking as before', async () => {
     const w = world({ launcher: 'codex', script: codexAsk(CINNA_CALL) })
     const running = w.run()
@@ -3722,5 +3756,206 @@ describe('concurrent turns on one agent', () => {
       expect((await w.run()).error?.message).toMatch(/busy/i)
       expect(w.fake.log().some((entry) => entry.dir === 'start')).toBe(false)
     } finally { editor.release() }
+  })
+})
+
+describe('an Antigravity session', () => {
+  const SIGNED_OUT = 'Antigravity is not signed in to Google.'
+  const authError = vi.fn((error: unknown) =>
+    (error as { code?: unknown })?.code === -32000 ? SIGNED_OUT : null)
+
+  it('opens a new session’s first prompt with the instructions, and never a loaded one’s', async () => {
+    // Mutation: drop the `freshSession` guard and the second (loaded) turn
+    // repeats the instructions into a history that already holds them.
+    const w = world({ launcher: 'antigravity', script: SAYS_HELLO, preamble: 'Standing instructions: say MARKER.' })
+    await w.run()
+    await w.run()
+    expect(w.fake.received('session/new')).toHaveLength(1)
+    expect(w.fake.received('session/load')).toHaveLength(1)
+    const [first, second] = w.fake.received('session/prompt')
+    expect(first.params?.prompt).toEqual([
+      { type: 'text', text: 'Standing instructions: say MARKER.' },
+      { type: 'text', text: 'hello' }
+    ])
+    expect(second.params?.prompt).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('names the plan’s own session cwd on new and load, when it sets one', async () => {
+    // Mutation: ignore `sessionCwd` and a chat runtime's sessions run in the
+    // chat folder, outside the home its workspace is meant to be limited to.
+    const w = world({ launcher: 'antigravity', script: SAYS_HELLO, sessionCwd: '/owned/processes/abc' })
+    await w.run()
+    await w.run()
+    expect(w.fake.received('session/new')[0].params?.cwd).toBe('/owned/processes/abc')
+    expect(w.fake.received('session/load')[0].params?.cwd).toBe('/owned/processes/abc')
+  })
+
+  it('puts the instructions before a conductor’s replayed transcript', async () => {
+    const w = world({ launcher: 'antigravity', script: SAYS_HELLO, preamble: 'Rules.', deps: {
+      prepareConductor: async () => ({ close() {}, hasCalls: () => false }),
+      replayTranscript: async () => '[user] Earlier'
+    } })
+    await w.run({ runScope: { profileUserId: USER_ID, settingsUserId: USER_ID } })
+    expect(w.fake.received('session/prompt')[0].params?.prompt).toEqual([
+      { type: 'text', text: 'Rules.' }, { type: 'text', text: '[user] Earlier' }, { type: 'text', text: 'hello' }
+    ])
+  })
+
+  it('says the login is gone when session/new is refused for authentication, not that the engine would not start', async () => {
+    const w = world({ launcher: 'antigravity', launcherExtra: { authError }, script: {
+      newSession: { error: { code: -32000, message: 'Authentication required', data: { message: 'No authentication method selected.' } } }
+    } })
+    const result = await w.run()
+    expect(result.error?.message).toBe(SIGNED_OUT)
+    expect(result.error?.raw).toContain('Authentication required')
+    expect(authError).toHaveBeenCalled()
+  })
+
+  it('says the login is gone when a prompt is refused as logged out', async () => {
+    const w = world({ launcher: 'antigravity', launcherExtra: { authError }, script: {
+      prompt: { error: { code: -32000, message: 'Logged out. Sign in again.', data: { reason: 'logged_out' } } }
+    } })
+    const result = await w.run()
+    expect(result.error?.message).toBe(SIGNED_OUT)
+  })
+
+  describe('saves a session that carries the instructions only once its first prompt is taken', () => {
+    // Mutation: save the session right after `session/new` (as every other
+    // engine does) and the next turn loads a session that never received the
+    // instructions, and never sends them again.
+    const PREAMBLE = 'Standing instructions.'
+    const firstPromptOfEachSession = (w: World): unknown[] => w.fake.received('session/prompt').map((r) => r.params?.prompt)
+    const withPreamble = [{ type: 'text', text: PREAMBLE }, { type: 'text', text: 'hello' }]
+
+    it('after a Stop before the prompt', async () => {
+      const w = world({ launcher: 'antigravity', preamble: PREAMBLE, setup: { modeId: 'default' }, script: {
+        ...SAYS_HELLO, setMode: { sequence: [{ delayMs: 400 }, {}] }
+      } })
+      const controller = new AbortController()
+      const stopped = w.run({ signal: controller.signal })
+      await waitFor(() => w.fake.received('session/set_mode').length === 1, 'the setup')
+      controller.abort()
+      const result = await stopped
+      expect(result.error).toBeUndefined()
+      expect(result.contextId).toBeUndefined()
+      expect(w.saved).toEqual([])
+      expect((await w.run()).error).toBeUndefined()
+      expect(w.fake.received('session/load')).toHaveLength(0)
+      expect(w.fake.received('session/new')).toHaveLength(2)
+      expect(firstPromptOfEachSession(w)).toEqual([withPreamble])
+      expect(w.saved).toHaveLength(1)
+    })
+
+    it('after a setup failure', async () => {
+      const w = world({ launcher: 'antigravity', preamble: PREAMBLE, setup: { modeId: 'default' }, script: {
+        ...SAYS_HELLO, setMode: { sequence: [{ error: { code: -32603, message: 'no such mode' } }, {}] }
+      } })
+      expect((await w.run()).error?.message).toBe('This agent could not be set up for the turn.')
+      expect(w.saved).toEqual([])
+      expect((await w.run()).error).toBeUndefined()
+      expect(w.fake.received('session/load')).toHaveLength(0)
+      expect(firstPromptOfEachSession(w)).toEqual([withPreamble])
+    })
+
+    it('after a prompt refused as logged out', async () => {
+      const w = world({ launcher: 'antigravity', preamble: PREAMBLE, launcherExtra: { authError }, script: {
+        prompt: { sequence: [{ error: { code: -32000, message: 'Logged out. Sign in again.', data: { reason: 'logged_out' } } }, SAYS_HELLO.prompt!] }
+      } })
+      expect((await w.run()).error?.message).toBe(SIGNED_OUT)
+      expect(w.saved).toEqual([])
+      expect((await w.run()).error).toBeUndefined()
+      expect(w.fake.received('session/load')).toHaveLength(0)
+      expect(firstPromptOfEachSession(w)).toEqual([withPreamble, withPreamble])
+    })
+
+    it('as soon as the agent starts on the prompt, before it answers', async () => {
+      // Mutation: save only on the prompt's answer and a turn the app is quit
+      // under, minutes into its tool calls, is not resumable.
+      const w = world({ launcher: 'antigravity', preamble: PREAMBLE, script: {
+        prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working.' } } }, { kind: 'delay', ms: 600 }] }
+      } })
+      let ended = false
+      const running = w.run()
+      void running.then(() => { ended = true })
+      await waitFor(() => w.saved.length === 1, 'the session to be saved mid-turn')
+      expect(ended).toBe(false)
+      expect((await running).contextId).toBe(w.saved[0])
+    })
+  })
+
+  it('names Antigravity when its session cannot be created for another reason', async () => {
+    const w = world({ launcher: 'antigravity', launcherExtra: { authError }, script: {
+      newSession: { error: { code: -32603, message: 'Internal error' } }
+    } })
+    const result = await w.run()
+    expect(result.error?.message).toMatch(/^Antigravity could not be started for this agent: /)
+  })
+
+  it('refuses a prompt the launcher must never send, before anything is spawned', async () => {
+    const w = world({ launcher: 'antigravity', script: SAYS_HELLO,
+      launcherExtra: { refusePrompt: (text) => (text.trim() === 'hello' ? 'Not sent.' : null) } })
+    const result = await w.run()
+    expect(result.error?.message).toBe('Not sent.')
+    expect(w.fake.received('initialize')).toHaveLength(0)
+  })
+
+  const ASKS_QUESTION: FakeAcpScript = {
+    prompt: {
+      emit: [
+        { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'interaction_16c0825e', title: 'Do you prefer red or blue?', status: 'pending', rawInput: {} } },
+        {
+          kind: 'permission',
+          toolCall: { toolCallId: 'interaction_16c0825e', status: 'pending', title: 'Do you prefer red or blue?', rawInput: {} },
+          options: [
+            { optionId: '1', name: 'Red', kind: 'allow_once' },
+            { optionId: '2', name: 'Blue', kind: 'allow_once' }
+          ]
+        }
+      ]
+    }
+  }
+
+  it('asks its ask_question permission as a question and answers with the chosen option id', async () => {
+    // Mutation: route it as a permission and the user sees Allow/Deny, and
+    // "Allow" selects the first answer whatever they meant.
+    const w = world({ launcher: 'antigravity', script: ASKS_QUESTION })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(asked.request).toEqual({
+      kind: 'question',
+      questions: [{ question: 'Do you prefer red or blue?', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] }]
+    })
+    pendingRequests.resolve(asked.requestId, { kind: 'question', answers: [['Blue']] })
+    const result = await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: '2' } })
+    expect(result.parts.map((part) => part.text)).toContain('Answered: Blue.')
+  })
+
+  it('answers an unanswered question as cancelled, selecting nothing for the user', async () => {
+    const w = world({ launcher: 'antigravity', script: ASKS_QUESTION })
+    const running = w.run()
+    const asked = await askedFor(w)
+    pendingRequests.resolve(asked.requestId, { kind: 'rejected' })
+    await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'cancelled' } })
+  })
+
+  it('asks an ordinary tool permission as a permission, scoped to Antigravity', async () => {
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{
+      kind: 'permission',
+      toolCall: { toolCallId: 'abc123', kind: 'execute', status: 'pending', title: 'echo hi', rawInput: { CommandLine: 'echo hi', Cwd: '/tmp/agent', WaitMsBeforeAsync: 500 } },
+      options: [
+        { optionId: 'allow_always', name: 'Allow Always (risky)', kind: 'allow_always' },
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'deny', name: 'Deny', kind: 'reject_once' }
+      ]
+    }] } } })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(asked.request).toMatchObject({ kind: 'permission', action: 'antigravity:execute' })
+    pendingRequests.resolve(asked.requestId, { kind: 'permission', reply: 'always', remembered: true })
+    await running
+    // The desktop's *Always allow* is a plain allow to the engine.
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } })
   })
 })

@@ -961,6 +961,26 @@ describe('the engine survives a save that is not about it', () => {
   })
 })
 
+describe('Antigravity runtime', () => {
+  it('runs on its own login: no credential, the declared model, else the tier’s Flash level, else the server’s default', () => {
+    // Mutation: leave Antigravity out of the own-login branch and it falls into
+    // the OpenCode credential ladder, reporting a missing key it never uses.
+    expect(runtimeService.resolve({ engine: 'antigravity', complexity: 'simple' }, [])).toMatchObject({
+      launcher: 'antigravity', credentialId: null, modelId: 'gemini-3.8-flash-low', modelSource: 'tier', reason: null
+    })
+    expect(runtimeService.resolve({ engine: 'antigravity', complexity: 'medium' }, []).modelId).toBe('gemini-3.8-flash-medium')
+    expect(runtimeService.resolve({ engine: 'antigravity', complexity: 'complex' }, []).modelId).toBe('gemini-3.8-flash-high')
+    // An explicit model wins over the tier.
+    expect(runtimeService.resolve({ engine: 'antigravity', model: 'gemini-3.6-flash-low', complexity: 'complex' }, []))
+      .toMatchObject({ modelId: 'gemini-3.6-flash-low', modelSource: 'declared' })
+    expect(runtimeService.resolve({ engine: 'antigravity' }, [])).toMatchObject({ modelId: null, modelSource: 'floor' })
+  })
+  it('refuses a desktop credential, naming Antigravity', () => {
+    expect(() => runtimeService.validate({ engine: 'antigravity', credential: 'Personal', modelId: null, complexity: null }))
+      .toThrow('An agent on the Antigravity engine runs on that install’s own login')
+  })
+})
+
 describe('Codex CLI runtime', () => {
   it('uses its CLI default without consulting credentials or a provider model catalogue', () => {
     expect(runtimeService.resolve({ engine: 'codex', complexity: 'complex' }, [])).toMatchObject({

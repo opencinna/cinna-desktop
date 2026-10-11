@@ -49,6 +49,15 @@ describe('one-shot runtime sessions', () => {
     expect(s.unbind).toHaveBeenCalledTimes(2)
     expect(s.release).toHaveBeenCalledTimes(2)
   })
+  it('opens every utility prompt with the plan’s preamble, for an engine whose instructions travel there', async () => {
+    const s = subject()
+    const { plan } = await s.prepare()
+    plan.firstPromptPreamble = 'Standing instructions.'
+    await s.run(s.input)
+    expect(s.conn.prompt).toHaveBeenLastCalledWith({ sessionId: 'new-1', prompt: [
+      { type: 'text', text: 'Standing instructions.' }, { type: 'text', text: 'Input' }
+    ] })
+  })
   it('warm-only work never acquires a cold/replaced process', async () => {
     const s = subject()
     vi.mocked(s.pool.peek!).mockReturnValue(undefined)

@@ -39,6 +39,15 @@ const claude = row({
   driverConfig: { launcher: 'claude' }
 })
 
+describe('an Antigravity folder', () => {
+  it('can be asked a question (its ask_question permission) and runs on its own login', () => {
+    // Mutation: leave Antigravity out of `question` and its questions have no widget.
+    const antigravity = row({ id: 'folder:g', source: 'folder', driver: 'acp', driverConfig: { launcher: 'antigravity' } })
+    expect(capabilitiesFor(antigravity).input.question).toBe(true)
+    expect(capabilitiesFor(antigravity).auth).toBe('cli')
+  })
+})
+
 describe('capabilitiesFor', () => {
   it.each([
     ['a synced A2A row', synced],

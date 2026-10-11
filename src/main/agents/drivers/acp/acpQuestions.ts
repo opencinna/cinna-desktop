@@ -195,3 +195,45 @@ function asArray(value: unknown): unknown[] | null {
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
+
+/**
+ * A question that arrived as a **permission request** — Antigravity's
+ * `ask_question` tool. The server raises it as `session/request_permission`
+ * whose call id is `interaction_<hex>`, whose title is the question and whose
+ * options are the answers (`optionId` "1", "2"…, every one `allow_once`), and
+ * reads the selected option id back as the answer. Single choice only.
+ */
+export interface AcpPermissionQuestion {
+  questions: InputQuestion[]
+  /** Answer label → the option id that selects it, in the server's order. */
+  optionIds: Map<string, string>
+}
+
+/** The question an ask is, or null when it is an ordinary permission ask. */
+export function permissionAsQuestion(
+  launcher: string,
+  params: { toolCall: { toolCallId: string; title?: string | null }; options: readonly { optionId: string; name: string; kind: string }[] }
+): AcpPermissionQuestion | null {
+  if (launcher !== 'antigravity' || !params.toolCall.toolCallId.startsWith('interaction_')) return null
+  const optionIds = new Map<string, string>()
+  for (const option of params.options) {
+    const label = str(option.name) ?? str(option.optionId)
+    // A repeated label could not be told apart in the answer; the first wins.
+    if (label && !optionIds.has(label)) optionIds.set(label, option.optionId)
+  }
+  if (optionIds.size === 0) return null
+  return {
+    questions: [{
+      question: str(params.toolCall.title) ?? 'Choose an answer.',
+      multiSelect: false,
+      options: [...optionIds.keys()].map((label) => ({ label }))
+    }],
+    optionIds
+  }
+}
+
+/** The option id the user's answer selects, or null when they chose nothing it offered. */
+export function permissionQuestionAnswer(question: AcpPermissionQuestion, answers: readonly string[][]): string | null {
+  const label = (answers[0] ?? []).find((value) => question.optionIds.has(value))
+  return label === undefined ? null : question.optionIds.get(label) ?? null
+}
