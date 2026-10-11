@@ -94,6 +94,10 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // that needs a Claude binary therefore sets `localAgentsClaudePath` itself
   // and depends on neither.
   env.CINNA_CLAUDE_DOWNLOAD = 'off'
+  // And for Antigravity's ACP server (~110 MB on macOS, ~330 MB on Linux).
+  // Nothing on PATH is ever reused for it, so a spec that drives Antigravity
+  // sets `localAgentsAntigravityPath` itself.
+  env.CINNA_ANTIGRAVITY_DOWNLOAD = 'off'
   // And for git (~62 MB), which Cinna fetches in the background whenever the
   // machine has no usable git of its own — as a CI Mac without the command
   // line developer tools does. A spec never waits on it; it must never pull it.
