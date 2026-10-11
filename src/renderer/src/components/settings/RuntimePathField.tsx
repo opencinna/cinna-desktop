@@ -5,7 +5,11 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsInfoTip, SettingsLabel, settingsControlRowClass, settingsInputClass } from './SettingsLayout'
 
 /** The settings that name an executable a runtime is run from. */
-type RuntimePathKey = 'localAgentsEnginePath' | 'localAgentsCodexPath' | 'localAgentsClaudePath'
+type RuntimePathKey =
+  | 'localAgentsEnginePath'
+  | 'localAgentsCodexPath'
+  | 'localAgentsClaudePath'
+  | 'localAgentsAntigravityPath'
 
 /**
  * An "explicit executable path" field for one runtime.

@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
 })
 vi.mock('../../hooks/useNewChatFlow', () => ({ useNewChatFlow: () => ({ startNewChat: mocks.start }) }))
 vi.mock('../../hooks/useAppSettings', () => ({ useSetAppSetting: () => ({ mutate: vi.fn() }), useAppSettings: () => { mocks.settings(); return { data: { localAgentsDefaultEngine: 'claude' } } } }))
-vi.mock('../../hooks/useEngine', () => ({ useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }), useClaudeBinary: () => ({ data: { state: 'unresolved' } }) }))
+vi.mock('../../hooks/useEngine', () => ({ useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }), useClaudeBinary: () => ({ data: { state: 'unresolved' } }), useAntigravityBinary: () => ({ data: { state: 'unresolved' } }) }))
 /** The page's one in-app login, as `useEngineLogin` hands it over; tests set its state. */
 const engineLogin = vi.hoisted(() => ({
   start: vi.fn(),
@@ -260,6 +260,22 @@ describe('Local Development entry', () => {
       expect(row().contains(lead)).toBe(false)
       expect(screen.getByText("'/opt/codex' login")).toBeTruthy()
       expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+    })
+
+    it('puts Google’s terms behind a (?) beside an Antigravity Log in — and not for Codex', async () => {
+      sessionContext.mockResolvedValue({ ...loggedOut, blocker: 'Antigravity is not logged in.', loginTool: 'antigravity' })
+      const view = renderPage()
+      const terms = await screen.findByRole('button', { name: 'About Antigravity’s terms' })
+      const login = screen.getByRole('button', { name: 'Log in to Antigravity' })
+      // Beside the button inside the action row, not a line below it.
+      expect(login.parentElement!.contains(terms)).toBe(true)
+      expect(screen.queryByText(/Google’s software/)).toBeNull()
+      expect(engineLogin.engines).toContain('antigravity')
+      view.unmount()
+      sessionContext.mockResolvedValue(loggedOut)
+      renderPage()
+      await screen.findByRole('button', { name: 'Log in to Codex' })
+      expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
     })
   })
   it('does not send a prepared request after switching profiles', async () => {

@@ -9,10 +9,24 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
-import { useClaudeAuth, useCodexAuth, useEngineLogin, type EngineLoginControl } from '../../../hooks/useLocalTools'
-import { useClaudeBinary, useCodexBinary, useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
+import {
+  useAntigravityAuth,
+  useClaudeAuth,
+  useCodexAuth,
+  useEngineLogin,
+  type EngineLoginControl
+} from '../../../hooks/useLocalTools'
+import {
+  useAntigravityBinary,
+  useClaudeBinary,
+  useCodexBinary,
+  useDefaultRuntime,
+  useEngineBinary
+} from '../../../hooks/useEngine'
 import { claudeVersionLabel } from '../../settings/claudeStatus'
 import { codexVersionLabel } from '../../settings/codexStatus'
+import { antigravityDefaultOptionLabel, antigravityRunModelLabel, antigravityVersionLabel } from '../../settings/antigravityStatus'
+import { AntigravityTermsTip } from '../../settings/AntigravityTermsTip'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
@@ -24,6 +38,7 @@ import {
   effectiveEngine,
   isAgentEngine,
   KEEP_ENGINE,
+  PINNED_ANTIGRAVITY_VERSION,
   PINNED_CLAUDE_VERSION,
   PINNED_CODEX_VERSION,
   type AgentEngine,
@@ -133,6 +148,7 @@ import {
  */
 const CLAUDE_OPTION = 'engine:claude'
 const CODEX_OPTION = 'engine:codex'
+const ANTIGRAVITY_OPTION = 'engine:antigravity'
 /**
  * Selected, never pickable: an engine this build cannot run with no credential
  * named runs on OpenCode with the fallback credential. Selecting `''` there
@@ -190,6 +206,14 @@ function LoginLine({ text, tone, engine, login }: {
       : text
   return (
     <div className="flex h-4 min-w-0 items-center gap-2">
+      {/* Google's terms behind a (?) before Log in: one fixed icon inside the
+          line's fixed height, so it reserves no row, and ahead of the button
+          whose spinner widens it, so it never slides (ux_rules rule 1). */}
+      {engine === 'antigravity' && (
+        <span className="flex h-4 shrink-0 items-center">
+          <AntigravityTermsTip />
+        </span>
+      )}
       <button
         type="button"
         className={LINE_BUTTON}
@@ -696,9 +720,11 @@ export function RuntimePanel({
 
   const { data: claudeAuth } = useClaudeAuth()
   const { data: codexAuth } = useCodexAuth()
+  const { data: antigravityAuth } = useAntigravityAuth()
   const { data: binary } = useEngineBinary()
   const { data: codexBinary } = useCodexBinary()
   const { data: claudeBinary } = useClaudeBinary()
+  const { data: antigravityBinary } = useAntigravityBinary()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
@@ -794,9 +820,17 @@ export function RuntimePanel({
   /** Why Claude Code is not here, in every surface's words — see {@link cliFailureCopy}. */
   const claudeFailure = claudeTool ? null : cliFailureCopy('Claude Code', 'Claude', claudePathSet)
   const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
-  const onCli = onClaude || onCodex
+  const onAntigravity =
+    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'antigravity'
+  const onCli = onClaude || onCodex || onAntigravity
   /** The in-app login for this agent's CLI engine; asks main nothing on OpenCode. */
-  const loginEngine: EngineLoginId | null = onCodex ? 'codex' : onClaude ? 'claude' : null
+  const loginEngine: EngineLoginId | null = onCodex
+    ? 'codex'
+    : onClaude
+      ? 'claude'
+      : onAntigravity
+        ? 'antigravity'
+        : null
   const login = useEngineLogin(loginEngine)
   // A failed sign-in belongs to the agent and engine it was shown against.
   const resetLogin = login.reset
@@ -835,6 +869,18 @@ export function RuntimePanel({
           version: codexVersionLabel(codexBinary, codexPathSet)
         }
   const codexFailure = codexTool ? null : cliFailureCopy('Codex', 'Codex', codexPathSet)
+  /** The pinned Antigravity server, on exactly `codexTool`'s terms. */
+  const antigravityPathSet = (settings?.localAgentsAntigravityPath ?? '').trim() !== ''
+  const antigravityTool =
+    antigravityBinary?.state === 'failed'
+      ? undefined
+      : {
+          path: antigravityBinary?.state === 'ready' ? antigravityBinary.path : null,
+          version: antigravityVersionLabel(antigravityBinary, antigravityPathSet)
+        }
+  const antigravityFailure = antigravityTool
+    ? null
+    : cliFailureCopy('Antigravity', 'Antigravity', antigravityPathSet)
   const declaredComplexity = isWorkComplexity(agent.runtime?.complexity)
     ? agent.runtime.complexity
     : null
@@ -1223,6 +1269,15 @@ export function RuntimePanel({
       if (codexAuth?.state === 'logged_out') return { text: 'Codex is not logged in.', tone: DANGER, login: 'codex' }
       return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
     }
+    if (onAntigravity) {
+      // The Codex rung, on Google's login. No effort: Antigravity has none to set.
+      if (antigravityBinary === undefined) return null
+      if (antigravityFailure) return { text: antigravityFailure.line, tone: DANGER }
+      if (antigravityAuth?.state === 'logged_out') {
+        return { text: 'Antigravity is not logged in.', tone: DANGER, login: 'antigravity' }
+      }
+      return { text: `Antigravity uses your Google login, on ${antigravityRunModelLabel(declaredModel, declaredComplexity)}.`, tone: NOTE }
+    }
     if (onClaude) {
       // Silent until its own state query answers — not PATH detection, which
       // this engine no longer depends on. The slot is reserved, so saying
@@ -1534,6 +1589,10 @@ export function RuntimePanel({
       commit(null, null, declaredComplexity, { engine: 'codex', note: withDropped(declaredModel ? 'Codex will use its configured default model.' : undefined) })
       return
     }
+    if (value === ANTIGRAVITY_OPTION) {
+      commit(null, null, declaredComplexity, { engine: 'antigravity', note: withDropped(declaredModel ? `Antigravity will use ${antigravityRunModelLabel(null, declaredComplexity)}.` : undefined) })
+      return
+    }
     if (value === CLAUDE_OPTION) {
       commit(null, null, declaredComplexity, {
         engine: 'claude',
@@ -1726,14 +1785,18 @@ export function RuntimePanel({
     const credentialMissing = !!declaredCredential && !selected
     const label = engineUnknown ? 'Loading runtime…'
       : onCodex ? 'Codex'
+      : onAntigravity ? 'Antigravity'
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
     const model = engineUnknown ? null
       : onCodex ? `${declaredModel ?? 'CLI default'} · ${codexEffortForComplexity(declaredComplexity)} effort`
+      : onAntigravity ? antigravityRunModelLabel(declaredModel, declaredComplexity)
       : onClaude ? claudeModelForComplexity(declaredComplexity)
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = engineUnknown ? null
       : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : onAntigravity
+        ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
@@ -1796,7 +1859,9 @@ export function RuntimePanel({
             id="runtime-credential"
             className={FIELD}
             title={
-              onCodex ? 'Your Codex CLI login and configuration' : onClaude
+              onCodex ? 'Your Codex CLI login and configuration' : onAntigravity
+                ? 'Your Google login — this app holds no credential for it'
+                : onClaude
                 ? 'Your own Claude Code login — this app holds no credential for it'
                 : selected
                   ? selected.name
@@ -1815,7 +1880,9 @@ export function RuntimePanel({
               was impossible.
             */
             value={
-              declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'claude'
+              declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'antigravity'
+                ? ANTIGRAVITY_OPTION
+                : declaredEngine === 'claude'
                 ? CLAUDE_OPTION
                 : unsupportedEngine && !selected
                   ? UNSUPPORTED_OPTION
@@ -1838,6 +1905,7 @@ export function RuntimePanel({
             <option value="">
               {defaultRuntime ? {
                 codex: 'Default runtime (Codex)',
+                antigravity: 'Default runtime (Antigravity)',
                 claude: 'Default runtime (Claude Agent)',
                 opencode: fallbackProvider ? `Default runtime (${fallbackProvider.name})` : 'Default runtime (none set)'
               }[defaultRuntime.engine] : 'Default runtime'}
@@ -1875,6 +1943,11 @@ export function RuntimePanel({
             */}
             <optgroup label="Codex CLI">
               <option value={CODEX_OPTION}>{codexFailure ? `Codex (${codexFailure.option})` : 'Codex'}</option>
+            </optgroup>
+            <optgroup label="Google Antigravity">
+              <option value={ANTIGRAVITY_OPTION}>
+                {antigravityFailure ? `Antigravity (${antigravityFailure.option})` : 'Antigravity'}
+              </option>
             </optgroup>
             <optgroup label="On this machine">
               <option value={CLAUDE_OPTION}>
@@ -2024,7 +2097,7 @@ export function RuntimePanel({
               }
             >
               <option value="">
-                {onCodex ? 'Default (medium effort)' : onClaude
+                {onCodex ? 'Default (medium effort)' : onAntigravity ? antigravityDefaultOptionLabel() : onClaude
                   ? // The Medium floor, named: an agent that picks no tier on
                     // this engine runs on `sonnet`, and there is no catalogue
                     // that could make that "none set".
@@ -2080,6 +2153,19 @@ export function RuntimePanel({
                 codexFailure
                   ? codexFailure.hint
                   : `Cinna downloads and verifies Codex ${PINNED_CODEX_VERSION} the first time a Codex agent runs.`
+              }
+            />
+          ) : onAntigravity ? (
+            <ClaudeStatus
+              label="Antigravity"
+              tool={antigravityTool}
+              unknown={antigravityBinary === undefined}
+              auth={antigravityAuth?.state}
+              missingText={antigravityFailure?.badge ?? 'Install failed'}
+              hint={
+                antigravityFailure
+                  ? antigravityFailure.hint
+                  : `Cinna downloads and verifies Antigravity ${PINNED_ANTIGRAVITY_VERSION} the first time an Antigravity agent runs.`
               }
             />
           ) : onClaude ? (

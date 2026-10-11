@@ -68,7 +68,7 @@ export function ChatModeCard({ mode: persistedMode }: ChatModeCardProps): React.
     : null
 
   /** Why this mode cannot start a chat, or null when it can. Shared wording. */
-  const inactive = effectiveEngine === 'claude' || effectiveEngine === 'codex' ? null : chatModeInactiveReason(mode.providerId, providers)
+  const inactive = effectiveEngine === 'claude' || effectiveEngine === 'codex' || effectiveEngine === 'antigravity' ? null : chatModeInactiveReason(mode.providerId, providers)
   const preset = getPreset(mode.colorPreset)
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
 

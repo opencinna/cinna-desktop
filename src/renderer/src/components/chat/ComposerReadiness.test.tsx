@@ -130,3 +130,31 @@ describe('composer recheck feedback', () => {
     expect(screen.getByRole('button', { name: 'Check again' }).getAttribute('aria-busy')).toBe('false')
   })
 })
+
+describe('Antigravity’s first login', () => {
+  const login = (engine: string, pending = false): ComposerReadiness => ({
+    notice: { state: 'not_logged_in', reason: `${engine} is not logged in.`, login: engine } as never,
+    refusal: null,
+    blocksSend: true,
+    text: `${engine} is not logged in.`,
+    title: null,
+    action: { label: 'Log in', pendingLabel: 'Waiting for sign-in in your browser…', pending, run: vi.fn(), cancel: vi.fn() }
+  })
+
+  it('puts Google’s terms behind a (?) beside Log in, and keeps it while the sign-in runs', () => {
+    const view = render(<ComposerReadinessWarning readiness={login('antigravity')} reasonId="reason" />)
+    const tip = screen.getByRole('button', { name: 'About Antigravity’s terms' })
+    // In the action row beside the button, not a line of prose in the warning.
+    expect(tip.parentElement!.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(true)
+    // Before the button, whose label widens while the sign-in runs.
+    expect(tip.compareDocumentPosition(screen.getByRole('button', { name: 'Log in' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText(/Google’s software/)).toBeNull()
+    view.rerender(<ComposerReadinessWarning readiness={login('antigravity', true)} reasonId="reason" />)
+    expect(screen.getByRole('button', { name: 'About Antigravity’s terms' })).toBeTruthy()
+  })
+
+  it('says nothing of the kind for another engine’s login', () => {
+    render(<ComposerReadinessWarning readiness={login('codex')} reasonId="reason" />)
+    expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
+  })
+})

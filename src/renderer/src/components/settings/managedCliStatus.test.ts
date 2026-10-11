@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EngineBinaryState } from '../../../../shared/engine'
 import { RUNTIME_PINS } from '../../../../shared/runtimePins'
-import { CLAUDE_CLI, CODEX_CLI, cliStatusText, cliToolCell, cliVersionLabel } from './managedCliStatus'
+import { ANTIGRAVITY_CLI, CLAUDE_CLI, CODEX_CLI, cliStatusText, cliToolCell, cliVersionLabel } from './managedCliStatus'
 
 /**
  * The sentences the Runtime row, the picker and the Developer Tools table share.
@@ -11,6 +11,7 @@ import { CLAUDE_CLI, CODEX_CLI, cliStatusText, cliToolCell, cliVersionLabel } fr
  */
 const CLAUDE = RUNTIME_PINS.claude.cli
 const CODEX = RUNTIME_PINS.codex.cli
+const ANTIGRAVITY = RUNTIME_PINS.antigravity.cli
 const ready = (source: 'managed' | 'path-pinned' | 'configured', version: string | null): EngineBinaryState =>
   ({ state: 'ready', path: '/x', source, version })
 
@@ -54,6 +55,27 @@ describe('cliStatusText', () => {
     expect(cliStatusText(CODEX_CLI, ready('path-pinned', `codex-cli ${CODEX}`))).toBe(`Codex ${CODEX} — your own install, the tested version.`)
   })
 
+  it('Antigravity: its size from each platform’s pin, and no version it cannot report', () => {
+    // Never a constant: the macOS zip is ~111 MB and the Linux one ~333 MB, so
+    // the sentence reads this platform's `assetBytes` and nothing else.
+    const mac = RUNTIME_PINS.antigravity.assets['darwin-arm64'].size!
+    const linux = RUNTIME_PINS.antigravity.assets['linux-x64'].size!
+    expect(cliStatusText(ANTIGRAVITY_CLI, { state: 'unresolved', assetBytes: mac }))
+      .toBe(`Antigravity ${ANTIGRAVITY} installs on first use, about ${Math.floor(mac / 1_000_000)} MB.`)
+    expect(cliStatusText(ANTIGRAVITY_CLI, { state: 'unresolved', assetBytes: linux }))
+      .toBe(`Antigravity ${ANTIGRAVITY} installs on first use, about ${Math.floor(linux / 1_000_000)} MB.`)
+    expect(cliStatusText(ANTIGRAVITY_CLI, { state: 'resolving', received: 50_000_000, total: mac, assetBytes: mac }))
+      .toBe(`Downloading Antigravity ${ANTIGRAVITY} — 50 of ${Math.floor(mac / 1_000_000)} MB.`)
+    expect(cliStatusText(ANTIGRAVITY_CLI, ready('managed', null)))
+      .toBe(`Antigravity ${ANTIGRAVITY} (managed) — runs on your Google login.`)
+    // The server's version is never probed: a configured path reports none, and the
+    // sentence must not grow a stray space or a "null".
+    expect(cliStatusText(ANTIGRAVITY_CLI, ready('configured', null), true)).toBe('Unverified Antigravity — your configured path.')
+    expect(cliVersionLabel(ANTIGRAVITY_CLI, ready('configured', null), true)).toBe('unverified')
+    expect(cliVersionLabel(ANTIGRAVITY_CLI, ready('managed', null))).toBe(`${ANTIGRAVITY} managed`)
+    expect(cliStatusText(ANTIGRAVITY_CLI, { state: 'unresolved' }, true)).toBe('Your configured Antigravity path is checked on first use.')
+  })
+
   it('never promises a download over a saved path', () => {
     // A stat and a `--version`, not 215 MB (ux_rules rule 9).
     expect(cliStatusText(CLAUDE_CLI, { state: 'resolving' }, true)).toBe('Checking your configured Claude path…')
@@ -67,10 +89,11 @@ describe('cliStatusText', () => {
     const versionOutput = new Map([[CLAUDE_CLI, '2.1.300 (Claude Code)'], [CODEX_CLI, 'codex-cli 0.160.0']])
     // 60 characters of 13px text is what the longest line this row already
     // showed ("Claude Code … — your Claude login, no API key spent.") needed.
-    for (const cli of [CLAUDE_CLI, CODEX_CLI]) {
+    for (const cli of [CLAUDE_CLI, CODEX_CLI, ANTIGRAVITY_CLI]) {
       const states: [EngineBinaryState, boolean][] = [
         [{ state: 'unresolved', assetBytes: 232_400_000 }, false], [{ state: 'unresolved' }, true], [{ state: 'resolving' }, false], [{ state: 'resolving' }, true],
-        [{ state: 'resolving', received: 215_000_000, total: 215_643_408, assetBytes: 215_643_408 }, false], [ready('managed', null), false],
+        [{ state: 'resolving', received: 215_000_000, total: 215_643_408, assetBytes: 215_643_408 }, false],
+        [{ state: 'resolving', received: 333_000_000, total: 333_727_150, assetBytes: 333_727_150 }, false], [ready('managed', null), false],
         [ready('path-pinned', null), false], [ready('configured', versionOutput.get(cli) ?? null), true]
       ]
       for (const [state, configured] of states) {
@@ -94,7 +117,7 @@ describe('cliVersionLabel', () => {
     // The picker said `0.155.0 managed` directly above a red line about the
     // user's own file. Mutation: drop the `failed` branch, or ignore
     // `configured`, and these read `<pin> managed` again.
-    for (const cli of [CLAUDE_CLI, CODEX_CLI]) {
+    for (const cli of [CLAUDE_CLI, CODEX_CLI, ANTIGRAVITY_CLI]) {
       expect(cliVersionLabel(cli, { state: 'failed', error: 'that file will not run' }, true)).toBe('Unavailable')
       expect(cliVersionLabel(cli, { state: 'resolving' }, true)).toBe('unverified')
       expect(cliVersionLabel(cli, { state: 'unresolved' }, true)).toBe('unverified')

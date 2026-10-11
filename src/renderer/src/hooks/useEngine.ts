@@ -46,10 +46,14 @@ export function useEngineWatch(): void {
     const offClaude = window.api.engine.onClaudeState((state) => {
       queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
     })
+    const offAntigravity = window.api.engine.onAntigravityState((state) => {
+      queryClient.setQueryData(ANTIGRAVITY_BINARY_KEY, state)
+    })
     return () => {
       offEngine()
       offCodex()
       offClaude()
+      offAntigravity()
     }
   }, [queryClient])
 }
@@ -104,6 +108,30 @@ export function useResolveClaudeBinary() {
   return useMutation<EngineBinaryState>({
     mutationFn: () => window.api.engine.resolveClaude(),
     onSuccess: (state) => queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
+  })
+}
+
+export const ANTIGRAVITY_BINARY_KEY = ['antigravity-binary'] as const
+
+/**
+ * The pinned Antigravity ACP server, as Settings sees it — {@link useCodexBinary}'s
+ * twin. Its download is the largest of the runtimes (about 110 MB on macOS,
+ * over 300 MB on Linux), so the push matters here most of all.
+ */
+export function useAntigravityBinary({ enabled = true }: { enabled?: boolean } = {}) {
+  return useQuery<EngineBinaryState>({
+    queryKey: ANTIGRAVITY_BINARY_KEY,
+    enabled,
+    queryFn: () => window.api.engine.antigravityBinary()
+  })
+}
+
+/** Install or re-check Antigravity now. Owned by the section, for the reason {@link useResolveCodexBinary} gives. */
+export function useResolveAntigravityBinary() {
+  const queryClient = useQueryClient()
+  return useMutation<EngineBinaryState>({
+    mutationFn: () => window.api.engine.resolveAntigravity(),
+    onSuccess: (state) => queryClient.setQueryData(ANTIGRAVITY_BINARY_KEY, state)
   })
 }
 

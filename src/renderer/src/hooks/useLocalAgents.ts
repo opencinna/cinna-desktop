@@ -517,6 +517,18 @@ export function useSetCodexApproval() {
   })
 }
 
+export function useSetAntigravityApproval() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; approval: ClaudeApproval | null }>({
+    mutationFn: async ({ agentId, approval }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setAntigravityApproval(agentId, approval)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
 /** What git says about one folder's handovers directory. */
 export function handoversCheckKey(agentId: string): readonly unknown[] {
   return ['local-agent-handovers-check', agentId] as const

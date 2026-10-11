@@ -6,7 +6,7 @@ export function useRuntimeModelCatalog(engine: AgentEngine | null | undefined) {
   return useQuery({
     queryKey: ['runtime-model-catalog', engine],
     queryFn: () => window.api.engine.modelCatalog(engine!),
-    enabled: engine === 'claude' || engine === 'codex',
+    enabled: engine === 'claude' || engine === 'codex' || engine === 'antigravity',
     staleTime: 0
   })
 }

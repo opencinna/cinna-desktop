@@ -22,6 +22,8 @@ const api = vi.hoisted(() => ({
   codexAuth: vi.fn(),
   claudeBinary: vi.fn(),
   codexBinary: vi.fn(),
+  antigravityAuth: vi.fn(),
+  antigravityBinary: vi.fn(),
   tools: vi.fn()
 }))
 
@@ -33,9 +35,10 @@ const api = vi.hoisted(() => ({
     engineLoginCancel: api.engineLoginCancel,
     claudeAuth: api.claudeAuth,
     codexAuth: api.codexAuth,
+    antigravityAuth: api.antigravityAuth,
     list: api.tools
   },
-  engine: { defaultRuntime: api.defaultRuntime, claudeBinary: api.claudeBinary, codexBinary: api.codexBinary },
+  engine: { defaultRuntime: api.defaultRuntime, claudeBinary: api.claudeBinary, codexBinary: api.codexBinary, antigravityBinary: api.antigravityBinary },
   providers: { list: api.providers, onAccountConfigSynced: () => () => {} }
 }
 
@@ -58,7 +61,7 @@ const region = () => screen.queryByRole('region', { name: 'Detected apps' })
  * so "renders nothing" means the rule hid it, not that it was still loading.
  */
 async function settle(): Promise<void> {
-  for (const probe of [api.claudeAuth, api.codexAuth, api.claudeBinary, api.codexBinary, api.tools]) {
+  for (const probe of [api.claudeAuth, api.codexAuth, api.antigravityAuth, api.claudeBinary, api.codexBinary, api.antigravityBinary, api.tools]) {
     await waitFor(() => expect(probe).toHaveBeenCalled())
   }
   for (let i = 0; i < 5; i++) await act(async () => {})
@@ -78,6 +81,8 @@ beforeEach(() => {
   api.codexAuth.mockReset().mockResolvedValue({ state: 'unknown' })
   api.claudeBinary.mockReset().mockResolvedValue({ state: 'unresolved' })
   api.codexBinary.mockReset().mockResolvedValue({ state: 'unresolved' })
+  api.antigravityAuth.mockReset().mockResolvedValue({ state: 'logged_out' })
+  api.antigravityBinary.mockReset().mockResolvedValue({ state: 'unresolved' })
   api.tools.mockReset().mockResolvedValue([])
 })
 
@@ -210,6 +215,22 @@ describe('DesktopAppsBanner', () => {
     mount()
     await settle()
     expect(region()).toBeNull()
+  })
+
+  it('stays hidden when Antigravity is signed in — a working runtime with no desktop app of its own', async () => {
+    api.defaultRuntime.mockResolvedValue({ engine: 'antigravity' })
+    api.antigravityAuth.mockResolvedValue({ state: 'logged_in' })
+    api.antigravityBinary.mockResolvedValue({ state: 'ready', path: '/x/agy_acp_server.par', source: 'managed', version: null })
+    mount()
+    await settle()
+    expect(region()).toBeNull()
+  })
+
+  it('still offers when Antigravity is installed but signed out', async () => {
+    api.defaultRuntime.mockResolvedValue({ engine: 'antigravity' })
+    api.antigravityBinary.mockResolvedValue({ state: 'ready', path: '/x/agy_acp_server.par', source: 'managed', version: null })
+    mount()
+    await waitFor(() => expect(region()).not.toBeNull())
   })
 
   it('keeps a running connect on screen even once its login counts as working', async () => {

@@ -27,11 +27,31 @@ export const LOCAL_TOOLS_KEY = ['local-tools'] as const
  */
 export const CODEX_AUTH_KEY = ['codex-auth'] as const
 
+/** The Antigravity login answer (`window.api.localTools.antigravityAuth`). */
+export const ANTIGRAVITY_AUTH_KEY = ['antigravity-auth'] as const
+
 export function useCodexAuth({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: CODEX_AUTH_KEY,
     enabled,
     queryFn: () => window.api.localTools.codexAuth(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: 'always',
+    refetchInterval: (query) => query.state.data?.state === 'logged_out' ? 10_000 : false
+  })
+}
+
+/**
+ * Whether the user's Antigravity home is signed in to Google — the
+ * {@link useCodexAuth} twin. Main answers from the home's settings and the
+ * token's presence (never the token), so it is cheap, and it polls on the same
+ * terms: only while the answer is one the user is being asked to change.
+ */
+export function useAntigravityAuth({ enabled = true }: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ANTIGRAVITY_AUTH_KEY,
+    enabled,
+    queryFn: () => window.api.localTools.antigravityAuth(),
     staleTime: 30_000,
     refetchOnWindowFocus: 'always',
     refetchInterval: (query) => query.state.data?.state === 'logged_out' ? 10_000 : false
@@ -128,12 +148,18 @@ export function useEngineLoginRunning(enabled = true) {
     // Polled while any login runs — which also carries it from `preparing`
     // (a download) to `waiting` (the browser) on every surface.
     refetchInterval: (query) =>
-      query.state.data?.claude || query.state.data?.codex ? ENGINE_LOGIN_RUNNING_POLL_MS : false
+      query.state.data?.claude || query.state.data?.codex || query.state.data?.antigravity
+        ? ENGINE_LOGIN_RUNNING_POLL_MS
+        : false
   })
 }
 
 /** Each login's own auth answer — a table, not a branch on the engine id. */
-const ENGINE_AUTH_KEY: Record<EngineLoginId, readonly string[]> = { claude: CLAUDE_AUTH_KEY, codex: CODEX_AUTH_KEY }
+const ENGINE_AUTH_KEY: Record<EngineLoginId, readonly string[]> = {
+  claude: CLAUDE_AUTH_KEY,
+  codex: CODEX_AUTH_KEY,
+  antigravity: ANTIGRAVITY_AUTH_KEY
+}
 
 export interface EngineLoginControl {
   /** Start the login, or join the one main is already running for this engine. */
@@ -233,6 +259,7 @@ export function useRefreshLocalTools() {
       // answer here is stale the moment detection comes back.
       void queryClient.invalidateQueries({ queryKey: CLAUDE_AUTH_KEY })
       void queryClient.invalidateQueries({ queryKey: CODEX_AUTH_KEY })
+      void queryClient.invalidateQueries({ queryKey: ANTIGRAVITY_AUTH_KEY })
       // Detection is half of what the Default Runtime is derived from: on
       // Automatic, finding a `claude` that was not there a moment ago *is* the
       // change of runtime. Left stale, Settings would report the new install in

@@ -42,3 +42,21 @@ it('uses models advertised by the runtime instead of fallback aliases', () => {
   expect(onChange).toHaveBeenCalledWith({ modelId: 'another-model' })
   catalog.data = undefined
 })
+
+it('offers Antigravity as a chat runtime, with the models its last session advertised', () => {
+  const onChange = vi.fn()
+  const view = render(<ChatModeRuntimeFields value={{ engine: 'opencode', modelId: 'provider-model', providerId: 'credential' }} onChange={onChange} />)
+  fireEvent.change(screen.getByLabelText('Runtime'), { target: { value: 'antigravity' } })
+  expect(onChange).toHaveBeenCalledWith({ engine: 'antigravity', modelId: null, providerId: null })
+  // No catalog yet: no list to pick from (Claude's aliases are Claude's), an
+  // explicit model id field instead.
+  view.rerender(<ChatModeRuntimeFields value={{ engine: 'antigravity', modelId: null }} onChange={onChange} />)
+  expect(screen.queryByRole('option', { name: 'Opus' })).toBeNull()
+  expect((screen.getByLabelText('Model') as HTMLInputElement).placeholder).toBe('Runtime default')
+  view.unmount()
+  catalog.data = { source: 'session', models: [{ id: 'gemini-3-pro', name: 'Gemini 3 Pro' }] }
+  render(<ChatModeRuntimeFields value={{ engine: 'antigravity' }} onChange={onChange} />)
+  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gemini-3-pro' } })
+  expect(onChange).toHaveBeenCalledWith({ modelId: 'gemini-3-pro' })
+  catalog.data = undefined
+})

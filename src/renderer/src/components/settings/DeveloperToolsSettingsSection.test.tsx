@@ -4,14 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mocks = vi.hoisted(() => {
   window.api = { app: { setTheme: async () => undefined } } as unknown as typeof window.api
-  return { installed: vi.fn(), check: vi.fn(), update: vi.fn(), refresh: vi.fn(), codexBinary: { state: 'unresolved' } as Record<string, unknown> | undefined, claudeBinary: { state: 'unresolved' } as Record<string, unknown> | undefined }
+  return { installed: vi.fn(), check: vi.fn(), update: vi.fn(), refresh: vi.fn(), codexBinary: { state: 'unresolved' } as Record<string, unknown> | undefined, claudeBinary: { state: 'unresolved' } as Record<string, unknown> | undefined, antigravityBinary: { state: 'unresolved' } as Record<string, unknown> | undefined }
 })
 vi.mock('../../hooks/useLocalAgents', () => ({ useLocalAgents: () => ({ data: { roots: [] } }) }))
 vi.mock('../../hooks/useLocalTools', () => ({
   useLocalTools: () => ({ data: [{ id: 'cinna', label: 'Cinna CLI', kind: 'runtime', version: '9.0.0', available: true, source: 'path', path: '/shell/cinna' }] }),
   useRefreshLocalTools: () => ({ mutate: mocks.refresh, isPending: false })
 }))
-vi.mock('../../hooks/useEngine', () => ({ useEngineBinary: () => ({ data: { state: 'unresolved' } }), useCodexBinary: () => ({ data: mocks.codexBinary }), useClaudeBinary: () => ({ data: mocks.claudeBinary }) }))
+vi.mock('../../hooks/useEngine', () => ({ useEngineBinary: () => ({ data: { state: 'unresolved' } }), useCodexBinary: () => ({ data: mocks.codexBinary }), useClaudeBinary: () => ({ data: mocks.claudeBinary }), useAntigravityBinary: () => ({ data: mocks.antigravityBinary }) }))
 vi.mock('./OpenCodeSettingsFields', () => ({ OpenCodeSettingsFields: () => null }))
 vi.mock('./CodexSettingsFields', () => ({ CodexSettingsFields: () => null }))
 import { useAuthStore } from '../../stores/auth.store'
@@ -22,6 +22,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   mocks.codexBinary = { state: 'unresolved' }
   mocks.claudeBinary = { state: 'unresolved' }
+  mocks.antigravityBinary = { state: 'unresolved' }
   window.api.localDev = { getManagedCli: mocks.installed, checkCliUpdate: mocks.check, updateCli: mocks.update } as unknown as typeof window.api.localDev
   useAuthStore.getState().setCurrentUser({ id: 'alice', username: 'alice', displayName: 'Alice', type: 'cinna_user', hasPassword: false, cinnaServerUrl: 'https://cinna.example' })
   useLocalDevStore.setState({ state: { phase: 'ready', cliVersion: '0.3.0', protocol: 'legacy', workspacePath: '/workspace', cinnaBinPath: '/managed/cinna' }, subscribed: true })
@@ -153,6 +154,38 @@ describe('the Claude Code row', () => {
     // Once, and under the Claude Path field — not above it, where its arrival
     // moved the field being edited (ux_rules rule 1).
     const input = screen.getByLabelText('Claude Path', { exact: true })
+    expect(input.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('the Antigravity row', () => {
+  const antigravityRow = (): HTMLElement => screen.getByText('Antigravity', { selector: 'td' }).closest('tr')!
+
+  it('sits under the Claude Code row and names the managed pin, with the server path on the name', async () => {
+    mocks.antigravityBinary = { state: 'ready', path: '/data/runtimes/antigravity-1.3.0/agy_acp_server.par', source: 'managed', version: null }
+    renderTools()
+    await screen.findByRole('button', { name: 'Update' })
+    const row = antigravityRow()
+    expect(row.previousElementSibling?.querySelector('td')?.textContent).toBe('Claude Code')
+    expect(within(row).getByText(/^\S+ managed$/).className).toContain('font-mono')
+    expect(row.querySelector('td')?.title).toBe('/data/runtimes/antigravity-1.3.0/agy_acp_server.par')
+  })
+
+  it('labels a configured server unverified with no version — its version is never probed', async () => {
+    mocks.antigravityBinary = { state: 'ready', path: '/opt/agy_acp_server.par', source: 'configured', version: null }
+    renderTools()
+    await screen.findByRole('button', { name: 'Update' })
+    expect(within(antigravityRow()).getByText('unverified')).toBeTruthy()
+    expect(within(antigravityRow()).queryByText(/managed/)).toBeNull()
+  })
+
+  it('says Unavailable, with the reason under the Antigravity Path field, when it failed', async () => {
+    mocks.antigravityBinary = { state: 'failed', error: 'Antigravity could not be downloaded. Check your connection and try again.' }
+    renderTools()
+    await screen.findByRole('button', { name: 'Update' })
+    expect(within(antigravityRow()).getByText('Unavailable')).toBeTruthy()
+    const reason = screen.getByText('Antigravity could not be downloaded. Check your connection and try again.')
+    const input = screen.getByLabelText('Antigravity Path', { exact: true })
     expect(input.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

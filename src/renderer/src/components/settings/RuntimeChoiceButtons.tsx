@@ -1,8 +1,15 @@
 import { Check, Download, Loader2 } from 'lucide-react'
 import type { DetectedTool, RuntimeToolId } from '../../../../shared/localTools'
-import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, type AgentEngine, type EngineBinaryState } from '../../../../shared/engine'
+import {
+  PINNED_ANTIGRAVITY_VERSION,
+  PINNED_CLAUDE_VERSION,
+  PINNED_CODEX_VERSION,
+  type AgentEngine,
+  type EngineBinaryState
+} from '../../../../shared/engine'
 import { codexVersionLabel } from './codexStatus'
 import { claudeVersionLabel } from './claudeStatus'
+import { antigravityVersionLabel } from './antigravityStatus'
 import { SettingsBadge } from './SettingsLayout'
 
 /**
@@ -17,7 +24,7 @@ import { SettingsBadge } from './SettingsLayout'
  */
 export interface RuntimeChoice {
   /** Stable key for React and for the install dialog. */
-  id: RuntimeToolId | 'opencode'
+  id: RuntimeToolId | 'antigravity' | 'opencode'
   label: string
   /** The detected tool this button reports, or null for the built-in runner. */
   tool: RuntimeToolId | null
@@ -40,6 +47,9 @@ export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
   // just never asks for it, and never waits on PATH detection.
   { id: 'claude', label: 'Claude Agent', tool: 'claude', engine: 'claude', managedVersion: PINNED_CLAUDE_VERSION },
   { id: 'codex', label: 'Codex', tool: 'codex', engine: 'codex', managedVersion: PINNED_CODEX_VERSION },
+  // Managed the same way, and no `tool`: Google ships no CLI for it to detect or
+  // install — the ACP server Cinna downloads is the only copy there is.
+  { id: 'antigravity', label: 'Antigravity', tool: null, engine: 'antigravity', managedVersion: PINNED_ANTIGRAVITY_VERSION },
   // **Always available, and that is why it is the fallback.** Cinna downloads
   // and verifies its own `opencode` the first time an agent needs one, so this
   // is the only choice that is true on a machine with no developer tooling at
@@ -73,8 +83,10 @@ export function RuntimeChoiceButtons({
   defaultChoice,
   codexBinary,
   claudeBinary,
+  antigravityBinary,
   codexPathSet = false,
-  claudePathSet = false
+  claudePathSet = false,
+  antigravityPathSet = false
 }: {
   /** The stored pin. Nothing is selected while it is still being decided. */
   selected: AgentEngine | null
@@ -95,6 +107,8 @@ export function RuntimeChoiceButtons({
   codexBinary?: EngineBinaryState
   /** The same, for Claude Code. */
   claudeBinary?: EngineBinaryState
+  /** The same, for the Antigravity server. */
+  antigravityBinary?: EngineBinaryState
   /**
    * Whether an explicit path is saved for each CLI. With one saved the managed
    * pin is not what runs, so the sub-line must not claim it in *any* state —
@@ -102,18 +116,24 @@ export function RuntimeChoiceButtons({
    */
   codexPathSet?: boolean
   claudePathSet?: boolean
+  antigravityPathSet?: boolean
 }): React.JSX.Element {
   return (
     /*
-      Wraps rather than scrolls: at the 800px minimum the three buttons and their
-      sub-lines do not fit one row, and a horizontal scroller would hide the
-      third choice behind a gesture nobody makes on a settings screen.
+      A grid of equal columns, not a wrapping flex row: four buttons wrapped as
+      three plus one stretched across the whole second row, and five the same,
+      so one choice looked unlike its siblings (ux_rules rule 12). Two columns
+      where they do not fit one row, every button in one row once the container
+      is wide enough — a container query, since the picker's width is its
+      card's, not the window's. Wraps rather than scrolls: a horizontal scroller
+      would hide a choice behind a gesture nobody makes on a settings screen.
     */
-    <div className="flex flex-wrap gap-2">
+    <div className="@container">
+    <div className={`grid grid-cols-2 gap-2 ${defaultChoice ? '@xl:grid-cols-3 @4xl:grid-cols-5' : '@2xl:grid-cols-4'}`}>
       {defaultChoice && <button
         type="button" aria-pressed={selected === null} disabled={disabled}
         onClick={defaultChoice.onSelect}
-        className={`min-w-[8rem] flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${selected === null ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:enabled:bg-[var(--color-bg-hover)]'}`}
+        className={`min-w-0 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${selected === null ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:enabled:bg-[var(--color-bg-hover)]'}`}
       >
         <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--color-text)]"><span className="h-[14px] w-[14px] shrink-0">{selected === null && <Check size={14} className="text-[var(--color-accent)]" />}</span>Default Runtime</span>
         <span className="mt-0.5 block truncate pl-[1.375rem] text-[12px] text-[var(--color-text-muted)]" title={defaultChoice.description}>{defaultChoice.description}</span>
@@ -137,7 +157,9 @@ export function RuntimeChoiceButtons({
               ? codexVersionLabel(codexBinary, codexPathSet)
               : choice.id === 'claude'
                 ? claudeVersionLabel(claudeBinary, claudePathSet)
-                : `${choice.managedVersion} managed`)
+                : choice.id === 'antigravity'
+                  ? antigravityVersionLabel(antigravityBinary, antigravityPathSet)
+                  : `${choice.managedVersion} managed`)
           : choice.tool === null
             ? null
             : ((tools ?? []).find((tool) => tool.id === choice.tool)?.version ?? null)
@@ -175,7 +197,7 @@ export function RuntimeChoiceButtons({
                   ? `Install ${choice.label} and run agents on it`
                   : `Run agents on ${choice.label}`
             }
-            className={`${defaultChoice ? 'min-w-[8rem]' : 'min-w-[9.5rem]'} flex-1 rounded-lg border px-3 py-2 text-left transition-colors
+            className={`min-w-0 rounded-lg border px-3 py-2 text-left transition-colors
               disabled:cursor-not-allowed ${
                 isSelected
                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10'
@@ -210,6 +232,7 @@ export function RuntimeChoiceButtons({
           </button>
         )
       })}
+    </div>
     </div>
   )
 }

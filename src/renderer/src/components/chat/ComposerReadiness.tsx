@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { ComposerWarning } from './ComposerWarning'
+import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
@@ -209,7 +210,11 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
 }
 
 /** Match settings actions while retaining focus until a warning clears. */
-function ReadinessActionButton({ action }: { action: ReadinessAction }): React.JSX.Element {
+function ReadinessActionButton({ action, tip }: {
+  action: ReadinessAction
+  /** A (?) kept directly before the button, so the button's changing label never moves it. */
+  tip?: React.ReactNode
+}): React.JSX.Element {
   const [feedback, setFeedback] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current) }, [])
@@ -227,13 +232,16 @@ function ReadinessActionButton({ action }: { action: ReadinessAction }): React.J
       : pending && <Loader2 size={13} className="animate-spin" />}
     {pending ? action.pendingLabel : action.label}
   </SettingsButton>
-  if (!action.cancel) return button
+  if (!action.cancel && !tip) return button
   // Always wrapped when a cancel exists, so the button keeps its place in the
   // tree — and its focus — as Copy command and Cancel come and go after it.
   return <div className="flex items-center gap-2">
+    {/* Before the button: its label widens while the sign-in runs, and a tip
+        after it would slide sideways under the pointer (ux_rules rule 1). */}
+    {tip}
     {button}
     {!pending && action.copyCommand && <CopyCommandButton key={action.copyCommand} command={action.copyCommand} />}
-    {action.pending && <SettingsButton onClick={action.cancel}>Cancel</SettingsButton>}
+    {action.pending && action.cancel && <SettingsButton onClick={action.cancel}>Cancel</SettingsButton>}
   </div>
 }
 
@@ -254,8 +262,13 @@ export function ComposerReadinessWarning({ readiness, reasonId }: {
 }): React.JSX.Element | null {
   const { notice, text, title, action } = readiness
   if (!notice || !text || !action) return null
+  // Before the first sign-in: what the user is about to agree to run, behind a
+  // (?) beside Log in — one fixed icon in the action row, so it adds no line.
+  const tip = notice.state === 'not_logged_in' && notice.login === 'antigravity'
+    ? <AntigravityTermsTip />
+    : undefined
   return <ComposerWarning className="mb-3" tone={readinessSeverity(notice)} action={
-    <ReadinessActionButton key={reasonId + action.label} action={action} />
+    <ReadinessActionButton key={reasonId + action.label} action={action} tip={tip} />
   }>
     <p id={reasonId} title={title ?? undefined}>{text}</p>
   </ComposerWarning>

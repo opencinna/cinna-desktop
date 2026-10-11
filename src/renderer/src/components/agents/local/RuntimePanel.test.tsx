@@ -106,6 +106,7 @@ let claudeInstalled = true
 /** `undefined` is a third state: detection has not answered yet. */
 let codexInstalled = false
 let codexAuth: { state: 'logged_in' | 'logged_out' | 'unknown' } = { state: 'logged_in' }
+let antigravityAuth: { state: 'logged_in' | 'logged_out' | 'unknown' } = { state: 'logged_in' }
 let toolsLoaded = true
 /**
  * What `claude auth status` said, or `undefined` for the query still in flight.
@@ -148,7 +149,8 @@ vi.mock('../../../hooks/useLocalTools', () => ({
         : []
   }),
   useClaudeAuth: () => ({ data: claudeAuth }),
-  useCodexAuth: () => ({ data: codexAuth })
+  useCodexAuth: () => ({ data: codexAuth }),
+  useAntigravityAuth: () => ({ data: antigravityAuth })
 }))
 vi.mock('../../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({
@@ -182,10 +184,12 @@ let defaultRuntime: { engine: string } | undefined = { engine: 'opencode' }
 let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 /** Ready by default: the pinned CLI is what every Claude case here runs on; PATH detection no longer decides it. */
 let claudeBinary: Record<string, unknown> | undefined = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+let antigravityBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 vi.mock('../../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
   useCodexBinary: () => ({ data: codexBinary }),
   useClaudeBinary: () => ({ data: claudeBinary }),
+  useAntigravityBinary: () => ({ data: antigravityBinary }),
   useDefaultRuntime: () => ({ data: defaultRuntime })
 }))
 
@@ -223,6 +227,8 @@ beforeEach(() => {
   claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
   codexInstalled = false
   codexAuth = { state: 'logged_in' }
+  antigravityBinary = { state: 'unresolved' }
+  antigravityAuth = { state: 'logged_in' }
   claudeInstalled = true
   toolsLoaded = true
   claudeAuth = undefined
@@ -1595,6 +1601,95 @@ describe('Codex runtime', () => {
   })
 })
 
+describe('Antigravity runtime', () => {
+  const READY = { state: 'ready', path: '/data/runtimes/antigravity-1.3.0/agy_acp_server.par', source: 'managed', version: null }
+
+  it('is offered beside Codex, and selecting it clears the credential and model and keeps complexity', () => {
+    render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5', complexity: 'complex' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:antigravity' } })
+    expect((save.mock.calls[0][0] as { runtime: unknown }).runtime).toMatchObject({ engine: 'antigravity', credential: null, modelId: null, complexity: 'complex' })
+  })
+
+  it('names the managed pin in the Engine cell and says it runs on the Google login', () => {
+    antigravityBinary = READY
+    models = undefined
+    providers = []
+    render(<RuntimePanel agent={agent({ engine: 'antigravity', model: 'gemini-3-pro' })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:antigravity')
+    expect(screen.getByText(/^Antigravity \S+ managed$/)).toBeTruthy()
+    expect(screen.getByText('Antigravity uses your Google login, on gemini-3-pro.')).toBeTruthy()
+    expect(screen.queryByText('Advanced')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
+  })
+
+  it('leads a signed-out line with Log in and the terms (?) beside it, and logs in to Antigravity', () => {
+    antigravityBinary = READY
+    antigravityAuth = { state: 'logged_out' }
+    render(<RuntimePanel agent={agent({ engine: 'antigravity' })} />)
+    const line = screen.getByText('Antigravity is not logged in.').parentElement!
+    // Inside the reserved h-4 line, beside Log in — not a row of its own under it.
+    expect(line.className).toContain('h-4')
+    expect(line.contains(screen.getByRole('button', { name: 'About Antigravity’s terms' }))).toBe(true)
+    expect(line.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(true)
+    expect(screen.queryByText(/Google’s software/)).toBeNull()
+    // Before Log in, whose spinner widens it while the sign-in runs.
+    expect(screen.getByRole('button', { name: 'About Antigravity’s terms' }).compareDocumentPosition(screen.getByRole('button', { name: 'Log in' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+    expect(loginStart).toHaveBeenCalledTimes(1)
+    expect(loginEngines).toContain('antigravity')
+  })
+
+  it('keeps the terms (?) while the sign-in runs, so pressing Log in moves nothing', () => {
+    antigravityBinary = READY
+    antigravityAuth = { state: 'logged_out' }
+    loginPending = true
+    loginPhase = 'waiting'
+    render(<RuntimePanel agent={agent({ engine: 'antigravity' })} />)
+    expect(screen.getByText('Waiting for sign-in in your browser…')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'About Antigravity’s terms' })).toBeTruthy()
+  })
+
+  it('names the model a work complexity runs in the status line, and the server default without one', () => {
+    antigravityBinary = READY
+    antigravityAuth = { state: 'logged_in' }
+    const view = render(<RuntimePanel agent={agent({ engine: 'antigravity', complexity: 'simple' })} />)
+    expect(screen.getByText('Antigravity uses your Google login, on Gemini 3.8 Flash (low).')).toBeTruthy()
+    view.unmount()
+    render(<RuntimePanel agent={agent({ engine: 'antigravity' })} />)
+    expect(screen.getByText('Antigravity uses your Google login, on Gemini 3.8 Flash (high).')).toBeTruthy()
+    // The empty tier option names what it runs, like Codex's "Default (medium effort)".
+    expect(screen.getByRole('option', { name: 'Default (Flash high)' })).toBeTruthy()
+  })
+
+  it('names the tier’s model on the chat-page badge, and an explicit model over the tier', () => {
+    antigravityBinary = READY
+    antigravityAuth = { state: 'logged_in' }
+    const view = render(<RuntimePanel agent={agent({ engine: 'antigravity', complexity: 'medium' })} compact />)
+    expect(screen.getByText('Gemini 3.8 Flash (medium)')).toBeTruthy()
+    expect(screen.queryByText('Default model')).toBeNull()
+    view.unmount()
+    render(<RuntimePanel agent={agent({ engine: 'antigravity', model: 'gemini-3-pro', complexity: 'medium' })} compact />)
+    expect(screen.getByText('gemini-3-pro')).toBeTruthy()
+  })
+
+  it('keeps a failed install selectable, marked, with Cinna’s own retry named', () => {
+    antigravityBinary = { state: 'failed', error: 'offline' }
+    render(<RuntimePanel agent={agent({ engine: 'antigravity' })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:antigravity')
+    expect(screen.getByRole('option', { name: 'Antigravity (install failed)' })).toBeTruthy()
+    expect(screen.getByText(/Try again in Settings → Agents → Runtime: Antigravity could not be installed/)).toBeTruthy()
+    expect(screen.getByText('Install failed')).toBeTruthy()
+  })
+
+  it('names Antigravity as the machine default on an agent that names nothing', () => {
+    defaultRuntime = { engine: 'antigravity' }
+    antigravityBinary = READY
+    render(<RuntimePanel agent={agent(null)} />)
+    expect(screen.getByRole('option', { name: 'Default runtime (Antigravity)' })).toBeTruthy()
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('')
+    expect(screen.getByText('Antigravity uses your Google login, on Gemini 3.8 Flash (high).')).toBeTruthy()
+  })
+})
 
 it('names the machine default separately from a pinned Codex runtime', () => {
   codexInstalled = true

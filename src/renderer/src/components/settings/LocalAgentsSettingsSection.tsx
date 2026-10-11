@@ -11,7 +11,9 @@ import {
   useRescanLocalAgents
 } from '../../hooks/useLocalAgents'
 import {
+  useAntigravityAuth,
   useDefaultTool,
+  useEngineLogin,
   useInstallRuntimeTool,
   useLocalTools,
   useOpenIn,
@@ -23,6 +25,8 @@ import { isLocalToolId, type RuntimeToolId } from '../../../../shared/localTools
 import {
   DEFAULT_AGENT_ENGINE,
   isAgentEngine,
+  loginFailureLead,
+  loginPendingText,
   type AgentEngine,
   type EngineBinaryState
 } from '../../../../shared/engine'
@@ -32,10 +36,14 @@ import { ManageRootAgentsDialog } from './ManageRootAgentsDialog'
 import { RootRepositoryDialog } from './RootRepositoryDialog'
 import { codexStatusText } from './codexStatus'
 import { claudeStatusText } from './claudeStatus'
+import { antigravityStatusText } from './antigravityStatus'
+import { AntigravityTermsTip } from './AntigravityTermsTip'
 import {
+  useAntigravityBinary,
   useClaudeBinary,
   useCodexBinary,
   useEngineBinary,
+  useResolveAntigravityBinary,
   useResolveClaudeBinary,
   useResolveCodexBinary,
   useResolveEngineBinary
@@ -110,11 +118,13 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const resolveBinary = useResolveEngineBinary()
   const { data: codexBinary } = useCodexBinary()
   const { data: claudeBinary } = useClaudeBinary()
+  const { data: antigravityBinary } = useAntigravityBinary()
   // Owned here, not by the text action that fires it: pressing it moves the
   // state to `resolving`, which changes that action, and a mutation owned by a
   // control that re-renders away loses its callbacks (ux_rules rule 5).
   const resolveCodex = useResolveCodexBinary()
   const resolveClaude = useResolveClaudeBinary()
+  const resolveAntigravity = useResolveAntigravityBinary()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
   const { tool: defaultTool, launchable } = useDefaultTool()
@@ -185,6 +195,19 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const onOpenCode = selectedRuntime === DEFAULT_AGENT_ENGINE
   const codexPathSet = (appSettings?.localAgentsCodexPath ?? '').trim() !== ''
   const claudePathSet = (appSettings?.localAgentsClaudePath ?? '').trim() !== ''
+  const antigravityPathSet = (appSettings?.localAgentsAntigravityPath ?? '').trim() !== ''
+  const onAntigravity = selectedRuntime === 'antigravity'
+  /**
+   * Antigravity's login, asked only while it is the runtime shown. Unlike Codex
+   * and Claude Code it has no terminal login a user could run instead — its
+   * sign-in is an ACP call to the server — so with Antigravity selected and
+   * logged out, this row is where the **Log in** lives, in the action slot the
+   * install uses. Owned here, for the reason `resolveCodex` is.
+   */
+  const { data: antigravityAuth } = useAntigravityAuth({ enabled: onAntigravity })
+  const antigravityLogin = useEngineLogin(onAntigravity ? 'antigravity' : null)
+  const antigravityLoggedOut =
+    onAntigravity && antigravityBinary?.state !== 'failed' && antigravityAuth?.state === 'logged_out'
   const installingPlan =
     installing !== null
       ? ((installPlans ?? []).find((plan) => plan.id === installing) ?? null)
@@ -289,6 +312,23 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       return {
         text: codexStatusText(codexBinary, codexPathSet),
         tone: codexBinary?.state === 'failed' ? 'danger' : 'muted'
+      }
+    }
+    if (onAntigravity) {
+      /**
+       * The Codex branch's terms, with the login in front: an install that is
+       * fine but signed out is the one state here the user must act on, and the
+       * pending and failed sign-in say themselves in the same line.
+       */
+      if (antigravityLoggedOut || antigravityLogin.pending) {
+        const lead = loginFailureLead(antigravityLogin.failure)
+        return antigravityLogin.pending
+          ? { text: loginPendingText('antigravity', antigravityLogin.phase), tone: 'muted' }
+          : { text: lead ?? 'Antigravity is not logged in.', tone: 'danger' }
+      }
+      return {
+        text: antigravityStatusText(antigravityBinary, antigravityPathSet),
+        tone: antigravityBinary?.state === 'failed' ? 'danger' : 'muted'
       }
     }
     /**
@@ -611,9 +651,10 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
           <SettingsInfoTip label="About the Runtime section">
             <p>
               A folder agent runs on a <strong>runtime</strong>: a program on this machine that
-              drives the model, calls the tools and asks you for permission. Cinna knows three —
-              Claude Code, Codex and OpenCode — and runs each at the version it was tested against,
-              downloading and verifying its own copy unless yours is already exactly that version.
+              drives the model, calls the tools and asks you for permission. Cinna knows four —
+              Claude Code, Codex, Google Antigravity and OpenCode — and runs each at the version it
+              was tested against, downloading and verifying its own copy unless yours is already
+              exactly that version.
             </p>
             <p>
               An agent whose folder names a runtime always gets that one. Everything on this
@@ -661,8 +702,10 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               tools={tools}
               codexBinary={codexBinary}
               claudeBinary={claudeBinary}
+              antigravityBinary={antigravityBinary}
               codexPathSet={codexPathSet}
               claudePathSet={claudePathSet}
+              antigravityPathSet={antigravityPathSet}
               installing={install.isPending ? (install.variables ?? null) : null}
               onSelect={(engine) =>
                 setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: engine })
@@ -747,6 +790,37 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                   onResolve={() => resolveClaude.mutate()}
                 />
               )}
+              {/*
+                Antigravity's: Log in while it is signed out (and Cancel while
+                that runs), otherwise the managed install's action. Same slot,
+                same text-action shape, so nothing moves when one replaces the
+                other.
+              */}
+              {onAntigravity && (antigravityLoggedOut || antigravityLogin.pending) ? (
+                <>
+                  {antigravityLogin.pending ? (
+                    <button type="button" onClick={antigravityLogin.cancel} className={statusActionClass}>
+                      Cancel
+                    </button>
+                  ) : (
+                    <button type="button" onClick={antigravityLogin.start} className={statusActionClass}>
+                      Log in
+                    </button>
+                  )}
+                  {/* Google's terms behind a (?) last in the line: one fixed
+                      icon, so neither the press nor the sign-in moves a row. */}
+                  <span className="flex h-[1lh] shrink-0 items-center">
+                    <AntigravityTermsTip />
+                  </span>
+                </>
+              ) : onAntigravity ? (
+                <ManagedCliAction
+                  binary={antigravityBinary}
+                  pathSet={antigravityPathSet}
+                  pending={resolveAntigravity.isPending}
+                  onResolve={() => resolveAntigravity.mutate()}
+                />
+              ) : null}
             </div>
           </SettingsRow>
           <SettingsRow>

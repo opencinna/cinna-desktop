@@ -75,7 +75,7 @@ export function resolveModel(
   providers: ProviderData[] | undefined,
   allModels: ModelData[] | undefined
 ): string | null {
-  if (mode?.engine === 'claude' || mode?.engine === 'codex') return mode.modelId ?? null
+  if (mode?.engine === 'claude' || mode?.engine === 'codex' || mode?.engine === 'antigravity') return mode.modelId ?? null
   if (!providerId) return null
   const providerData = (providers ?? []).find((p) => p.id === providerId)
   const providerModels = (allModels ?? []).filter((m) => m.providerId === providerId)

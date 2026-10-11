@@ -1,4 +1,9 @@
-import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, type EngineBinaryState } from '../../../../shared/engine'
+import {
+  PINNED_ANTIGRAVITY_VERSION,
+  PINNED_CLAUDE_VERSION,
+  PINNED_CODEX_VERSION,
+  type EngineBinaryState
+} from '../../../../shared/engine'
 
 /**
  * One pinned CLI that Cinna verifies for itself, as the sentences need it.
@@ -42,6 +47,21 @@ export const CLAUDE_CLI: ManagedCli = {
   bareVersion: (version) => version.replace(/\s*\(Claude Code\)\s*$/i, '').trim(),
   login: 'Claude',
   pathNoun: 'Claude path'
+}
+
+/**
+ * The pinned **Antigravity ACP server**. Its version is never probed, so a
+ * configured path reports none and the sentences fall back to their versionless forms; the
+ * managed copy is the pin by its digest. Sizes in decimal megabytes, as Google's
+ * own download page and Finder count them.
+ */
+export const ANTIGRAVITY_CLI: ManagedCli = {
+  name: 'Antigravity',
+  pin: PINNED_ANTIGRAVITY_VERSION,
+  bytesPerMb: 1_000_000,
+  bareVersion: (version) => version.trim(),
+  login: 'Google',
+  pathNoun: 'Antigravity path'
 }
 
 /**

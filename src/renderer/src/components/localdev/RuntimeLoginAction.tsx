@@ -3,6 +3,7 @@ import { KeyRound, Loader2 } from 'lucide-react'
 import type { EngineLoginControl } from '../../hooks/useLocalTools'
 import { DEVELOPMENT_RUNTIME_NAMES } from '../../../../shared/developmentSession'
 import { loginFailureLead, loginPendingText, type EngineLoginId } from '../../../../shared/engine'
+import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
 
 const buttonClass = 'inline-flex items-center justify-center gap-2 rounded-md bg-[var(--color-accent)] px-3 py-2 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)] aria-disabled:opacity-60 transition-colors'
 const secondaryClass = 'ambient-button inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors'
@@ -24,11 +25,15 @@ const secondaryClass = 'ambient-button inline-flex items-center justify-center g
  * this page's context, so the blocker clears on its own.
  */
 export function RuntimeLoginButton({ tool, login }: { tool: EngineLoginId; login: EngineLoginControl }): React.JSX.Element {
-  return <button type="button" className={buttonClass} aria-disabled={login.pending || undefined} aria-busy={login.pending}
+  const button = <button type="button" className={buttonClass} aria-disabled={login.pending || undefined} aria-busy={login.pending}
     onClick={() => { if (!login.pending) login.start() }}>
     {login.pending ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
     Log in to {DEVELOPMENT_RUNTIME_NAMES[tool]}
   </button>
+  if (tool !== 'antigravity') return button
+  // Google's terms behind a (?) beside the button, in the same row and in every
+  // login state: one fixed icon, so nothing re-wraps and no line is added.
+  return <span className="inline-flex items-center gap-1">{button}<AntigravityTermsTip /></span>
 }
 
 /** Stops a running login. Last in the row, so its coming and going moves nothing. */

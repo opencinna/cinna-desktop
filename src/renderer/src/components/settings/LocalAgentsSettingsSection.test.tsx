@@ -35,6 +35,18 @@ let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 let resolveCodex = mutation()
 let claudeBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 let resolveClaude = mutation()
+let antigravityBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
+let resolveAntigravity = mutation()
+let antigravityAuth: Record<string, unknown> | undefined = { state: 'logged_in' }
+const antigravityLogin = {
+  start: vi.fn(),
+  cancel: vi.fn(),
+  pending: false,
+  phase: null as string | null,
+  failure: null as Record<string, unknown> | null,
+  reset: vi.fn()
+}
+const useEngineLogin = vi.fn((_engine: string | null) => antigravityLogin)
 beforeEach(() => {
   appSettings = HEALTHY_SETTINGS
   binary = READY_BINARY
@@ -42,6 +54,13 @@ beforeEach(() => {
   resolveCodex = mutation()
   claudeBinary = { state: 'unresolved' }
   resolveClaude = mutation()
+  antigravityBinary = { state: 'unresolved' }
+  resolveAntigravity = mutation()
+  antigravityAuth = { state: 'logged_in' }
+  Object.assign(antigravityLogin, { pending: false, phase: null, failure: null })
+  antigravityLogin.start.mockReset()
+  antigravityLogin.cancel.mockReset()
+  useEngineLogin.mockClear()
   providers = []
   setAppSetting.mockReset()
   useUIStore.setState({ settingsTab: 'local-agents' })
@@ -55,6 +74,8 @@ vi.mock('../../hooks/useLocalAgents', () => ({
   useRescanLocalAgents: mutation
 }))
 vi.mock('../../hooks/useLocalTools', () => ({
+  useAntigravityAuth: () => ({ data: antigravityAuth }),
+  useEngineLogin: (engine: string | null) => useEngineLogin(engine),
   useDefaultTool: () => ({ tool: null, launchable: [] }),
   useInstallRuntimeTool: mutation,
   useLocalTools: () => ({ data: [] }),
@@ -73,7 +94,9 @@ vi.mock('../../hooks/useEngine', () => ({
   useCodexBinary: () => ({ data: codexBinary }),
   useResolveCodexBinary: () => resolveCodex,
   useClaudeBinary: () => ({ data: claudeBinary }),
-  useResolveClaudeBinary: () => resolveClaude
+  useResolveClaudeBinary: () => resolveClaude,
+  useAntigravityBinary: () => ({ data: antigravityBinary }),
+  useResolveAntigravityBinary: () => resolveAntigravity
 }))
 const setAppSetting = vi.fn()
 vi.mock('../../hooks/useAppSettings', () => ({
@@ -352,5 +375,72 @@ describe('LocalAgentsSettingsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'About Open agents with' }))
     expect(screen.getByText(/Open-in button uses this tool/)).toBeTruthy()
     expect(screen.getByLabelText('Open agents with').tagName).toBe('SELECT')
+  })
+
+  describe('with Antigravity as the default runtime', () => {
+    const MAC_BYTES = 111_456_962
+    beforeEach(() => {
+      appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'antigravity' }
+    })
+
+    it('is a picker button beside Codex, and its line names the managed pin with no action', () => {
+      antigravityBinary = { state: 'ready', path: '/data/runtimes/antigravity-1.3.0/agy_acp_server.par', source: 'managed', version: null }
+      render(<LocalAgentsSettingsSection />)
+      const button = screen.getByRole('button', { name: /^Antigravity/ })
+      expect(button.getAttribute('aria-pressed')).toBe('true')
+      expect(button.textContent).toMatch(/managed$/)
+      const status = screen.getByText(/^Antigravity \S+ \(managed\) — runs on your Google login\.$/)
+      expect(status.className).toContain('text-[var(--color-text-muted)]')
+      expect(screen.queryByRole('button', { name: /Try again|Install now|Log in/ })).toBeNull()
+      expect(screen.queryByText(/Google’s software/)).toBeNull()
+      // Only asks the login of the runtime this row shows.
+      expect(useEngineLogin).toHaveBeenCalledWith('antigravity')
+    })
+
+    it('offers Install now with the size main sent for this platform, and installs on the click', () => {
+      antigravityBinary = { state: 'unresolved', assetBytes: MAC_BYTES }
+      render(<LocalAgentsSettingsSection />)
+      expect(screen.getByText(/^Antigravity \S+ installs on first use, about 111 MB\.$/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Install now' }))
+      expect(resolveAntigravity.mutate).toHaveBeenCalledTimes(1)
+    })
+
+    it('while signed out: Log in in the action slot, the terms behind a (?) in the same line, and the click starts the login', () => {
+      antigravityBinary = { state: 'ready', path: '/x/agy_acp_server.par', source: 'managed', version: null }
+      antigravityAuth = { state: 'logged_out' }
+      render(<LocalAgentsSettingsSection />)
+      const status = screen.getByText('Antigravity is not logged in.')
+      expect(status.className).toContain('text-[var(--color-danger)]')
+      // One line: the status, Log in and the (?) share the reserved row, and
+      // nothing is rendered after it (no terms line under the row).
+      const tip = screen.getByRole('button', { name: 'About Antigravity’s terms' })
+      const line = status.parentElement!
+      expect(line.contains(tip)).toBe(true)
+      expect(line.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(true)
+      expect(line.nextElementSibling).toBeNull()
+      expect(screen.queryByText(/Google’s software/)).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+      expect(antigravityLogin.start).toHaveBeenCalledTimes(1)
+    })
+
+    it('says the browser wait in the same line, with Cancel, and keeps the (?) so nothing moves', () => {
+      antigravityAuth = { state: 'logged_out' }
+      Object.assign(antigravityLogin, { pending: true, phase: 'waiting' })
+      render(<LocalAgentsSettingsSection />)
+      const status = screen.getByText('Waiting for sign-in in your browser…')
+      expect(status.parentElement!.contains(screen.getByRole('button', { name: 'About Antigravity’s terms' }))).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(antigravityLogin.cancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('a failed install outranks the login: Try again, not Log in', () => {
+      antigravityBinary = { state: 'failed', error: 'Antigravity could not be downloaded.' }
+      antigravityAuth = { state: 'logged_out' }
+      render(<LocalAgentsSettingsSection />)
+      expect(screen.getByText('Antigravity could not be downloaded.').className).toContain('text-[var(--color-danger)]')
+      expect(screen.queryByRole('button', { name: 'Log in' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+      expect(resolveAntigravity.mutate).toHaveBeenCalledTimes(1)
+    })
   })
 })

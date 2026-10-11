@@ -21,6 +21,7 @@ const grantsList = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantForget = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantsClear = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const setClaudeApproval = vi.fn<() => Promise<unknown>>()
+const setAntigravityApproval = vi.fn<(agentId: string, approval: unknown) => Promise<unknown>>()
 const setDelegationPermission = vi.fn<(agentId: string, field: string, setting: unknown) => Promise<unknown>>()
 const setHandovers = vi.fn<(agentId: string, handovers: unknown) => Promise<unknown>>()
 const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
@@ -30,6 +31,7 @@ const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
     grantForget,
     grantsClear,
     setClaudeApproval,
+    setAntigravityApproval,
     setDelegationPermission,
     setHandovers,
     handoversCheck
@@ -396,6 +398,35 @@ describe('PermissionsCard — an agent on Claude', () => {
   })
 })
 
+describe('PermissionsCard — an agent on Antigravity', () => {
+  const antigravityAgent = {
+    ...agent,
+    runtime: { engine: 'antigravity' },
+    desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null, antigravityApproval: null }
+  } as LocalAgentDto
+
+  it('offers its own Approvals, asking by default, and claims no sandbox', () => {
+    grantsList.mockResolvedValue([])
+    renderCard(antigravityAgent)
+    expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('ask')
+    expect(screen.getByText(/Antigravity runs commands and edits files/)).toBeTruthy()
+    expect(screen.queryByText(/sandbox enabled/)).toBeNull()
+    expect(screen.queryByText(/approved everything it was shown/)).toBeNull()
+  })
+
+  it('saves through its own channel, not Claude’s', async () => {
+    grantsList.mockResolvedValue([])
+    setAntigravityApproval.mockResolvedValue({
+      ok: true,
+      value: { ...antigravityAgent, desktop: { ...antigravityAgent.desktop, antigravityApproval: 'auto' } }
+    })
+    renderLiveCard(antigravityAgent)
+    fireEvent.change(await screen.findByLabelText('Approvals'), { target: { value: 'auto' } })
+    await waitFor(() => expect(setAntigravityApproval).toHaveBeenCalledWith('folder:alpha', 'auto'))
+    expect(setClaudeApproval).not.toHaveBeenCalled()
+    await waitFor(() => expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('auto'))
+  })
+})
 
 /**
  * Whether a brief left in the folder runs without asking.

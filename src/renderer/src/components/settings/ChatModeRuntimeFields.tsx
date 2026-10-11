@@ -22,17 +22,18 @@ export function ChatModeRuntimeFields({ value, onChange, section = 'all', resolv
     ? [{ id: 'haiku', name: 'Haiku' }, { id: 'sonnet', name: 'Sonnet' }, { id: 'opus', name: 'Opus' }] : []
   return <>
     {section !== 'options' && <div>
-      <SettingsLabel htmlFor={`${id}-runtime`} info="Claude and Codex use your installed CLI login; OpenCode uses AI credentials. Runtime support is checked when the chat starts.">Runtime</SettingsLabel>
+      <SettingsLabel htmlFor={`${id}-runtime`} info="Claude and Codex use your installed CLI login, Antigravity your Google login; OpenCode uses AI credentials. Runtime support is checked when the chat starts.">Runtime</SettingsLabel>
       <select id={`${id}-runtime`} value={value.engine ?? ''} className={settingsInputClass}
         onChange={(event) => { setCustomModel(false); onChange({ engine: (event.target.value || null) as AgentEngine | null, modelId: null, providerId: null }) }}>
         <option value="">Default runtime</option>
         <option value="claude">Claude</option>
         <option value="codex">Codex</option>
+        <option value="antigravity">Antigravity</option>
         <option value="opencode">OpenCode</option>
       </select>
     </div>}
     {section !== 'runtime' && <fieldset className="space-y-3">
-    {(engine === 'claude' || engine === 'codex') && <div>
+    {(engine === 'claude' || engine === 'codex' || engine === 'antigravity') && <div>
       <SettingsLabel htmlFor={`${id}-model`} info={catalog?.source === 'session'
         ? 'Models last advertised by this runtime in this profile. Runtime default follows its configuration; Other model accepts an explicit model ID.'
         : 'No session catalog yet. Claude aliases are fallback choices; an explicit model ID can be entered. Runtime default follows the CLI configuration.'}>Model</SettingsLabel>

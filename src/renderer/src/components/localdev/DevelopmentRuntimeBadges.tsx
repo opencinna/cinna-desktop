@@ -11,7 +11,7 @@ export function DevelopmentRuntimeBadges({ data }: { data?: DevelopmentContext }
     ? `${runtime.modelId ?? 'CLI default'} · ${codexEffortForComplexity(data!.complexity)} effort`
     : runtime?.modelId
   return <div role="group" aria-label="Runtime summary" className="mt-2 flex flex-wrap items-center gap-1.5">
-    {runtime?.launcher === 'claude' ? <ClaudeBadge /> : <span className={badge}>{!runtime ? 'Checking runtime…' : runtime.launcher === 'codex' ? 'Codex' : runtime.credentialName ? `OpenCode with ${runtime.credentialName}` : 'OpenCode'}</span>}
+    {runtime?.launcher === 'claude' ? <ClaudeBadge /> : <span className={badge}>{!runtime ? 'Checking runtime…' : runtime.launcher === 'codex' ? 'Codex' : runtime.launcher === 'antigravity' ? 'Antigravity' : runtime.credentialName ? `OpenCode with ${runtime.credentialName}` : 'OpenCode'}</span>}
     {model && <span className={badge} title={`Model: ${model}`}>{model}</span>}
   </div>
 }

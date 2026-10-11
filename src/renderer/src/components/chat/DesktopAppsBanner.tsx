@@ -9,8 +9,8 @@ import {
 } from '../../../../shared/desktopApps'
 import { isCredentialActive } from '../../../../shared/credentials'
 import { useDesktopAppConnect, useDesktopAppRunning, useDesktopApps } from '../../hooks/useDesktopApps'
-import { useClaudeBinary, useCodexBinary, useDefaultRuntime } from '../../hooks/useEngine'
-import { useClaudeAuth, useCodexAuth, useLocalTools } from '../../hooks/useLocalTools'
+import { useAntigravityBinary, useClaudeBinary, useCodexBinary, useDefaultRuntime } from '../../hooks/useEngine'
+import { useAntigravityAuth, useClaudeAuth, useCodexAuth, useLocalTools } from '../../hooks/useLocalTools'
 import { useProviders } from '../../hooks/useProviders'
 import { useDesktopAppsStore } from '../../stores/desktopApps.store'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -51,6 +51,10 @@ export function DesktopAppsBanner(): React.JSX.Element | null {
   const codexAuth = useCodexAuth({ enabled: needsCli })
   const claudeBinary = useClaudeBinary({ enabled: needsCli })
   const codexBinary = useCodexBinary({ enabled: needsCli })
+  // Antigravity has no desktop app of its own, but a signed-in Antigravity is a
+  // working runtime all the same, and the offer is for a Mac with none.
+  const antigravityAuth = useAntigravityAuth({ enabled: needsCli })
+  const antigravityBinary = useAntigravityBinary({ enabled: needsCli })
   // A user's own `claude`/`codex` on PATH at another version than the pin is
   // not the binary the probe asks (that stays `unresolved` until a turn fetches
   // the pin), yet its login is the one the pin would use — it follows HOME.
@@ -72,14 +76,17 @@ export function DesktopAppsBanner(): React.JSX.Element | null {
   // its login may already count as working before adopt has run.
   if (apps.length === 0 || !defaultRuntime || !providers.isSuccess) return null
   if (!busy && !failure) {
-    if (needsCli && (!claudeAuth.data || !codexAuth.data || !claudeBinary.data || !codexBinary.data || !tools.data)) return null
+    if (needsCli && (!claudeAuth.data || !codexAuth.data || !antigravityAuth.data || !claudeBinary.data ||
+      !codexBinary.data || !antigravityBinary.data || !tools.data)) return null
     const onPath = (id: 'claude' | 'codex'): boolean => tools.data?.some((tool) => tool.id === id && tool.available) ?? false
     const working = hasWorkingRuntime({
       defaultEngine: defaultRuntime.engine,
       hasActiveCredential,
       cli: {
         claude: { auth: claudeAuth.data?.state ?? 'unknown', installed: claudeBinary.data?.state === 'ready' || onPath('claude') },
-        codex: { auth: codexAuth.data?.state ?? 'unknown', installed: codexBinary.data?.state === 'ready' || onPath('codex') }
+        codex: { auth: codexAuth.data?.state ?? 'unknown', installed: codexBinary.data?.state === 'ready' || onPath('codex') },
+        // No PATH form: the server Cinna downloads is the only copy there is.
+        antigravity: { auth: antigravityAuth.data?.state ?? 'unknown', installed: antigravityBinary.data?.state === 'ready' }
       }
     })
     if (working) return null
