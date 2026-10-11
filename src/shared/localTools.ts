@@ -15,6 +15,7 @@ export const LOCAL_TOOL_IDS = [
   'opencode',
   'code',
   'cursor',
+  'antigravity-ide',
   'uv',
   'git',
   'make',

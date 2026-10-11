@@ -55,6 +55,17 @@ const TOOL_SPECS: readonly ToolSpec[] = [
     macBundles: ['/Applications/Cursor.app']
   },
   {
+    // Google's VS Code fork, not the `antigravity` engine: the agent server
+    // Cinna runs is pinned and managed apart from anything installed here.
+    // The 2.x "Antigravity.app" beside it is Google's agent manager, which
+    // takes no folder, so only the IDE bundle is looked for.
+    id: 'antigravity-ide',
+    kind: 'editor',
+    label: 'Antigravity IDE',
+    bin: 'antigravity-ide',
+    macBundles: ['/Applications/Antigravity IDE.app']
+  },
+  {
     id: 'cinna',
     // A `runtime`, not a `cli-assistant`: its presence gates local development,
     // but "open this agent folder in cinna" is not a thing anyone wants, and

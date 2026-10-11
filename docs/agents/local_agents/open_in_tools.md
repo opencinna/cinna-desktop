@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Hand a local agent's folder to the tools the user already has: run **Claude Code**, **Codex** or **OpenCode** in a terminal at the folder, open it as a project in **VS Code** or **Cursor**, reveal it in Finder / Explorer, or just open a terminal there. Only tools actually installed on the machine are offered.
+Hand a local agent's folder to the tools the user already has: run **Claude Code**, **Codex** or **OpenCode** in a terminal at the folder, open it as a project in **VS Code**, **Cursor** or **Antigravity IDE**, reveal it in Finder / Explorer, or just open a terminal there. Only tools actually installed on the machine are offered.
 
 There are two ways of handing it over, and they have different reach. The desktop can **launch** only the assistants detection finds and a launcher knows how to start. Everything else — an assistant already running in another window, one that lives in a browser, one nobody has written a launcher for — is reached by **briefing** it instead: **Copy prompt for another tool** puts a short paste-anywhere instruction on the clipboard that names the folder and the file to read first. Launching is bounded by what is installed and detectable; briefing is not, which is why the menu offers it even on a machine where nothing was detected at all.
 
@@ -10,7 +10,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 
 ## Core Concepts
 
-- **Detected Tool** — A tool the desktop knows how to look for, with a stable id (`claude`, `codex`, `opencode`, `code`, `cursor`, `uv`, `git`, `make`, `python3`), a human label, an absolute path, and whether it was found
+- **Detected Tool** — A tool the desktop knows how to look for, with a stable id (`claude`, `codex`, `opencode`, `code`, `cursor`, `antigravity-ide`, `uv`, `git`, `make`, `python3`), a human label, an absolute path, and whether it was found
 - **Tool Kind** — How a tool is offered: `cli-assistant` (launched in a terminal at the folder), `editor` (opens the folder as a project), or `runtime` (not launchable — its presence merely gates features, e.g. `uv`, `git`, `make`, `python3`)
 - **Tool Source** — Where the executable was found: `path` (on the login-shell `PATH`) or `app-bundle` (a macOS `.app`, used when the CLI shim was never installed)
 - **Open-In Action** — What the renderer asks for: `terminal-command`, `editor`, `reveal`, or `terminal`. For a tool the action follows its kind — `editor` for an editor, `terminal-command` for an assistant — and nothing else is ever sent for a tool
@@ -28,7 +28,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 4. A system terminal opens at the folder with the assistant already running: iTerm2 if it is installed, otherwise Terminal.app on macOS; Windows Terminal, else `cmd.exe`, on Windows; the first of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xterm` found on Linux
 
 ### Opening the folder in an editor
-1. User picks VS Code or Cursor from the Open-in menu (or clicks the primary, when an editor is the default); the action sent is `editor`
+1. User picks VS Code, Cursor or Antigravity IDE from the Open-in menu (or clicks the primary, when an editor is the default); the action sent is `editor`
 2. If the CLI shim is on `PATH`, it is launched with the folder as its single argument
 3. If only the macOS application bundle was found, LaunchServices is asked to open the folder with that bundle instead
 
@@ -67,6 +67,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 - **Detection answers whether a tool exists, and nothing about its state.** Whether the `claude` it found is logged in is a different question with a different lifetime — it changes while the app is open — and is asked, cached and surfaced by [The Claude Engine](claude_engine.md) over its own channel. This feature must not grow a second meaning for "detected"
 - Every binary is looked up on the **login-shell `PATH`**, not the app's own — a GUI-launched app on macOS otherwise cannot see Homebrew, mise, nvm, cargo or `~/.local/bin`
 - On macOS, editors additionally fall back to their application bundle in `/Applications` and `~/Applications`. Many people drag VS Code or Cursor across and never run "Install 'code' command in PATH", so PATH-only detection would report an editor they can see in their Dock as missing
+- **Antigravity IDE is an editor and nothing more.** It is found by its `antigravity-ide` shim, else `Antigravity IDE.app`. It has nothing to do with the [Antigravity engine](antigravity_engine.md): the server Cinna runs turns on is pinned and managed apart from anything installed here, and detecting the IDE neither installs nor configures it. The 2.x `Antigravity.app` is not looked for. It is Google's agent manager, which takes no folder, so offering it would put an entry in the menu that opens nothing
 - A detection failure never poisons the cache: every tool is reported unavailable and the next call retries
 - Only `available` tools of the right kind are ever offered in the UI
 

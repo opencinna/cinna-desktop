@@ -55,7 +55,7 @@ All four `local-tools:*` handlers call `userActivation.requireActivated()` and a
 ## Services & Key Methods
 
 ### `src/main/services/localAgents/toolDetectionService.ts`
-- `TOOL_SPECS` — the ordered table: id, kind, label, binary name, and optional `macBundles`. `code` → `/Applications/Visual Studio Code.app`, `cursor` → `/Applications/Cursor.app`; each bundle is also probed under `~/Applications`
+- `TOOL_SPECS` — the ordered table: id, kind, label, binary name, and optional `macBundles`. `code` → `/Applications/Visual Studio Code.app`, `cursor` → `/Applications/Cursor.app`, `antigravity-ide` → `/Applications/Antigravity IDE.app` (never the agent manager's `Antigravity.app`); each bundle is also probed under `~/Applications`
 - `list()` — memoised `detectAll()`. On failure the memo is cleared and a fully-unavailable list is returned, so the next call retries
 - `refresh()` — `clearToolCache()` then re-run `list()`
 - `get(id)` — a single tool, `undefined` for an unknown id (the id allowlist the IPC layer relies on)
