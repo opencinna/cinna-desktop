@@ -772,6 +772,14 @@
     outline-offset: 1px;
   }
 
+  /* A markdown link whose href resolved to a file in the agent's folder. It
+     looks like any other link (`.markdown-body a`): until resolution lands it
+     renders as plain text in a span, and the swap must not reflow the line,
+     so no padding, border or fill — colour and underline only. */
+  .markdown-body a.file-link {
+    cursor: pointer;
+  }
+
   /* Code blocks. The fill alone is not a box: it is `--color-bg`, the body's
      own colour, so on the light theme a block was white on white and read as
      indented monospace text. The border draws the box on both themes; the light

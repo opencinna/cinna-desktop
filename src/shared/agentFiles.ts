@@ -1,11 +1,13 @@
 /**
- * Smart file references: an inline code span in a folder agent's chat that
- * names a real file or folder becomes clickable and opens the preview modal.
+ * Smart file references: an inline code span or a markdown link in a folder
+ * agent's chat that names a real file or folder becomes clickable and opens
+ * the preview modal.
  *
- * Shared by both processes. The renderer uses {@link extractFileRefCandidates}
- * to pick which spans to ask about; main re-validates every candidate with
- * {@link fileRefCandidatePath} before it touches the disk, because the renderer
- * is not trusted to have applied the filter. Nothing here uses Node's `path` —
+ * Shared by both processes. The renderer uses {@link extractFileRefEntries}
+ * to pick which spans and links to ask about; main re-validates every entry
+ * with {@link fileRefCandidatePath} or {@link fileLinkCandidatePath} before it
+ * touches the disk, because the renderer is not trusted to have applied the
+ * filter. Nothing here uses Node's `path` —
  * this module is imported by the sandboxed renderer.
  */
 
@@ -13,10 +15,18 @@ import { previewKindFor, type PreviewRenderKind } from './filePreview'
 
 export type AgentFileRefKind = 'file' | 'dir'
 
-/** One inline code span that resolved to something on disk. */
+/** One inline code span or markdown link that resolved to something on disk. */
 export interface AgentFileRef {
-  /** The span text exactly as rendered — the lookup key in the transcript. */
+  /**
+   * The span text, or the link's `href`, exactly as rendered — the lookup key
+   * in the transcript.
+   */
   text: string
+  /**
+   * Whether {@link text} is an inline code span or a link `href`, so the two
+   * never share a key. Absent means a span.
+   */
+  source?: 'span' | 'link'
   /** Absolute realpath of the file or folder. */
   path: string
   /** Relative to the agent folder when inside it, else `~/…` or absolute. */
@@ -75,6 +85,30 @@ const LIST_ITEM = /^[ \t]*(?:>[ \t]*)*(?:[-*+]|\d{1,9}[.)])[ \t]+/
 /** Lines that are a block of their own: a code span never continues past one. */
 const STANDALONE_LINE = /^[ \t]*(?:>[ \t]*)*(?:#{1,6}[ \t]|\|)/
 
+/**
+ * The code span opening at `start` (a backtick): where its opening run ends,
+ * and where the closing run of the same length starts, or -1 when there is
+ * none and the run is literal text.
+ */
+function codeSpanAt(text: string, start: number): { runEnd: number; close: number } {
+  let runEnd = start
+  while (text[runEnd] === '`') runEnd += 1
+  const run = runEnd - start
+  // The closing run must be exactly as long as the opening one.
+  let k = runEnd
+  while (k < text.length) {
+    if (text[k] !== '`') {
+      k += 1
+      continue
+    }
+    let m = k
+    while (text[m] === '`') m += 1
+    if (m - k === run) return { runEnd, close: k }
+    k = m
+  }
+  return { runEnd, close: -1 }
+}
+
 /** CommonMark code spans in one paragraph, pushed in order. */
 function scanCodeSpans(text: string, out: string[]): void {
   let i = 0
@@ -89,52 +123,33 @@ function scanCodeSpans(text: string, out: string[]): void {
       i += 1
       continue
     }
-    let runEnd = i
-    while (text[runEnd] === '`') runEnd += 1
-    const run = runEnd - i
-    // The closing run must be exactly as long as the opening one.
-    let k = runEnd
-    let close = -1
-    while (k < text.length) {
-      if (text[k] !== '`') {
-        k += 1
-        continue
-      }
-      let m = k
-      while (text[m] === '`') m += 1
-      if (m - k === run) {
-        close = k
-        break
-      }
-      k = m
-    }
+    const { runEnd, close } = codeSpanAt(text, i)
     if (close < 0) {
       // Unmatched: the run is literal text.
       i = runEnd
       continue
     }
-    let content = text.slice(runEnd, close).replace(/\n/g, ' ')
-    if (content.length >= 2 && content.startsWith(' ') && content.endsWith(' ') && content.trim() !== '') {
-      content = content.slice(1, -1)
-    }
-    out.push(content)
-    i = close + run
+    out.push(codeSpanContent(text, runEnd, close))
+    i = close + (runEnd - i)
   }
 }
 
+/** A code span's text as CommonMark renders it: line endings as spaces, one padding space trimmed. */
+function codeSpanContent(text: string, runEnd: number, close: number): string {
+  let content = text.slice(runEnd, close).replace(/\n/g, ' ')
+  if (content.length >= 2 && content.startsWith(' ') && content.endsWith(' ') && content.trim() !== '') {
+    content = content.slice(1, -1)
+  }
+  return content
+}
+
 /**
- * Inline code spans in a markdown document, in order.
- *
- * A small scanner rather than the full parser the renderer draws with: fenced
- * blocks (```` ``` ```` / `~~~`) and indented code blocks are skipped, and
- * spans are matched with CommonMark's backtick-run rule within a paragraph.
- * Where it disagrees with the real parser the cost is a span that is not
- * linked, never a wrong link — the transcript only links a rendered inline
- * `code` whose text main resolved.
+ * The inline text of a markdown document, block by block: each paragraph
+ * (its lines joined by `\n`) and each line that is a block of its own, in
+ * order. Fenced blocks (```` ``` ```` / `~~~`) and indented code blocks are
+ * skipped.
  */
-export function extractInlineCodeSpans(markdown: string): string[] {
-  const out: string[] = []
-  if (typeof markdown !== 'string' || !markdown.includes('`')) return out
+function walkInlineBlocks(markdown: string, visit: (text: string) => void): void {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
   let fence: { char: string; length: number } | null = null
   let indentedCode = false
@@ -142,7 +157,7 @@ export function extractInlineCodeSpans(markdown: string): string[] {
   let inList = false
   let paragraph: string[] = []
   const flush = (): void => {
-    if (paragraph.length > 0) scanCodeSpans(paragraph.join('\n'), out)
+    if (paragraph.length > 0) visit(paragraph.join('\n'))
     paragraph = []
   }
 
@@ -187,28 +202,351 @@ export function extractInlineCodeSpans(markdown: string): string[] {
     previousBlank = false
     if (STANDALONE_LINE.test(line)) {
       flush()
-      scanCodeSpans(line, out)
+      visit(line)
       continue
     }
     paragraph.push(line)
   }
   flush()
-  return out
 }
 
 /**
- * The spans worth asking main about, across several markdown documents in
- * transcript order: shape-filtered, de-duplicated (first occurrence wins, which
- * is what the base heuristic's ordering relies on) and capped.
+ * Inline code spans in a markdown document, in order.
+ *
+ * A small scanner rather than the full parser the renderer draws with: fenced
+ * blocks (```` ``` ```` / `~~~`) and indented code blocks are skipped, and
+ * spans are matched with CommonMark's backtick-run rule within a paragraph.
+ * Where it disagrees with the real parser the cost is a span that is not
+ * linked, never a wrong link — the transcript only links a rendered inline
+ * `code` whose text main resolved.
  */
-export function extractFileRefCandidates(markdowns: readonly string[]): string[] {
-  const seen = new Set<string>()
+export function extractInlineCodeSpans(markdown: string): string[] {
   const out: string[] = []
+  if (typeof markdown !== 'string' || !markdown.includes('`')) return out
+  walkInlineBlocks(markdown, (text) => scanCodeSpans(text, out))
+  return out
+}
+
+const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' }
+
+/** A numeric character reference as micromark decodes it: invalid code points become U+FFFD. */
+function numericEntity(value: string, base: number): string {
+  const code = parseInt(value, base)
+  if (
+    !Number.isFinite(code) ||
+    code < 9 ||
+    code === 11 ||
+    (code > 13 && code < 32) ||
+    (code > 126 && code < 160) ||
+    (code > 55_295 && code < 57_344) ||
+    (code > 64_975 && code < 65_008) ||
+    (code & 65_535) === 65_535 ||
+    (code & 65_535) === 65_534 ||
+    code > 1_114_111
+  ) {
+    return '\uFFFD'
+  }
+  return String.fromCodePoint(code)
+}
+
+/**
+ * Backslash escapes and character references in a link destination, in one
+ * pass as micromark's `decodeString` does them. An unknown named entity stays
+ * as written; the real parser would decode it, so that link goes unlinked.
+ */
+function decodeDestination(raw: string): string {
+  return raw.replace(/\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi, (match, escaped, entity) => {
+    if (escaped) return escaped
+    const name = entity as string
+    if (name[0] === '#') {
+      return name[1] === 'x' || name[1] === 'X' ? numericEntity(name.slice(2), 16) : numericEntity(name.slice(1), 10)
+    }
+    return NAMED_ENTITIES[name] ?? match
+  })
+}
+
+/**
+ * The `href` react-markdown hands its `a` component for a link URL: a port of
+ * micromark's `normalizeUri`, which mdast-util-to-hast applies. Characters
+ * outside a safe ASCII set are percent-encoded (a space becomes `%20`, `é`
+ * becomes `%C3%A9`); an existing `%XX` is left alone.
+ */
+function normalizeHref(value: string): string {
+  const alnum = (code: number): boolean =>
+    (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+  const result: string[] = []
+  let start = 0
+  let skip = 0
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    let replace = ''
+    if (code === 37 && alnum(value.charCodeAt(index + 1)) && alnum(value.charCodeAt(index + 2))) {
+      skip = 2
+    } else if (code < 128) {
+      if (!/[!#$&-;=?-Z_a-z~]/.test(String.fromCharCode(code))) replace = String.fromCharCode(code)
+    } else if (code > 55_295 && code < 57_344) {
+      const next = value.charCodeAt(index + 1)
+      if (code < 56_320 && next > 56_319 && next < 57_344) {
+        replace = String.fromCharCode(code, next)
+        skip = 1
+      } else {
+        replace = '\uFFFD'
+      }
+    } else {
+      replace = String.fromCharCode(code)
+    }
+    if (replace) {
+      result.push(value.slice(start, index), encodeURIComponent(replace))
+      start = index + skip + 1
+      replace = ''
+    }
+    if (skip) {
+      index += skip
+      skip = 0
+    }
+  }
+  return result.join('') + value.slice(start)
+}
+
+const isLinkSpace = (ch: string | undefined): boolean => ch === ' ' || ch === '\t' || ch === '\n'
+
+/** Skips spaces and tabs with at most one line ending among them. */
+function skipLinkSpace(text: string, i: number): number {
+  let newlines = 0
+  while (isLinkSpace(text[i])) {
+    if (text[i] === '\n' && ++newlines > 1) break
+    i += 1
+  }
+  return i
+}
+
+/**
+ * The inline link at `open` (the `(` after a link's `]`): its raw destination
+ * and where the link ends, or null when what follows is not a link the
+ * scanner can read.
+ */
+function linkAt(text: string, open: number): { raw: string; end: number } | null {
+  let i = skipLinkSpace(text, open + 1)
+  let raw: string
+  if (text[i] === '<') {
+    let j = i + 1
+    for (;;) {
+      const ch = text[j]
+      if (ch === undefined || ch === '\n' || ch === '<') return null
+      if (ch === '\\' && text[j + 1] !== undefined && ASCII_PUNCTUATION.test(text[j + 1])) {
+        j += 2
+        continue
+      }
+      if (ch === '>') break
+      j += 1
+    }
+    raw = text.slice(i + 1, j)
+    i = j + 1
+  } else {
+    let j = i
+    let depth = 0
+    for (;;) {
+      const ch = text[j]
+      if (ch === undefined) return null
+      const code = ch.charCodeAt(0)
+      if (code <= 32 || code === 127) break
+      if (ch === '\\' && text[j + 1] !== undefined && ASCII_PUNCTUATION.test(text[j + 1])) {
+        j += 2
+        continue
+      }
+      if (ch === '(') depth += 1
+      else if (ch === ')') {
+        if (depth === 0) break
+        depth -= 1
+      }
+      j += 1
+    }
+    if (depth !== 0) return null
+    raw = text.slice(i, j)
+    i = j
+  }
+  if (raw === '') return null
+  // An optional title, separated from the destination by whitespace.
+  const afterDestination = i
+  i = skipLinkSpace(text, i)
+  const quote = text[i]
+  if (i > afterDestination && (quote === '"' || quote === "'" || quote === '(')) {
+    const closer = quote === '(' ? ')' : quote
+    let j = i + 1
+    for (;;) {
+      const ch = text[j]
+      if (ch === undefined) return null
+      if (ch === '\\') {
+        j += 2
+        continue
+      }
+      if (ch === closer) break
+      if (quote === '(' && ch === '(') return null
+      j += 1
+    }
+    i = skipLinkSpace(text, j + 1)
+  }
+  if (text[i] !== ')') return null
+  return { raw, end: i + 1 }
+}
+
+/** What a span or link in a folder agent's chat may name: its text, and which it is. */
+export interface FileRefEntry {
+  /** The span text, or the link's `href`. */
+  text: string
+  source: 'span' | 'link'
+}
+
+/**
+ * Code spans and inline link destinations (as `href`s) in one paragraph,
+ * pushed in the order they appear. A span inside a link's text comes before
+ * its link.
+ */
+function scanInline(text: string, out: FileRefEntry[]): void {
+  let openBrackets = 0
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === '`') {
+      const { runEnd, close } = codeSpanAt(text, i)
+      if (close >= 0) out.push({ text: codeSpanContent(text, runEnd, close), source: 'span' })
+      i = close < 0 ? runEnd : close + (runEnd - i)
+      continue
+    }
+    if (ch === '[') {
+      openBrackets += 1
+      i += 1
+      continue
+    }
+    if (ch !== ']') {
+      i += 1
+      continue
+    }
+    if (openBrackets === 0) {
+      i += 1
+      continue
+    }
+    openBrackets -= 1
+    if (text[i + 1] !== '(') {
+      i += 1
+      continue
+    }
+    const link = linkAt(text, i + 1)
+    if (!link) {
+      i += 1
+      continue
+    }
+    out.push({ text: normalizeHref(decodeDestination(link.raw)), source: 'link' })
+    i = link.end
+  }
+}
+
+/**
+ * Inline link destinations in a markdown document, in order, each exactly as
+ * react-markdown hands it to the `a` component as `href`: the `<…>` stripped,
+ * backslash escapes and character references decoded, then percent-encoded by
+ * the same rule mdast-util-to-hast applies.
+ *
+ * The same block walk as {@link extractInlineCodeSpans}: links inside code
+ * blocks and code spans are not collected. An image's destination may be —
+ * no `a` renders for it, so it only costs a lookup. Reference-style links are
+ * not read. Where the scanner disagrees with the real parser the cost is an
+ * unlinked link, never a wrong one: the transcript only links an `a` whose
+ * `href` main resolved.
+ */
+export function extractLinkDestinations(markdown: string): string[] {
+  if (typeof markdown !== 'string' || !markdown.includes('](')) return []
+  return extractInlineEntries(markdown)
+    .filter((entry) => entry.source === 'link')
+    .map((entry) => entry.text)
+}
+
+/** Code spans and link `href`s in a markdown document, interleaved in document order. */
+function extractInlineEntries(markdown: string): FileRefEntry[] {
+  const out: FileRefEntry[] = []
+  walkInlineBlocks(markdown, (text) => scanInline(text, out))
+  return out
+}
+
+const MAX_LINK_LENGTH = 1024
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
+/**
+ * The path a markdown link's `href` names, or null when it is not a local
+ * path: a URL with a scheme (`http:`, `mailto:`, `file:`), a protocol-relative
+ * `//host`, or an in-page `#anchor` / `?query`.
+ *
+ * Separate from {@link fileRefCandidatePath}: a link is an explicit intent, so
+ * whitespace is allowed and no extension or slash is required. A trailing
+ * `:line` / `:line:col` is stripped, and `%XX` escapes are decoded (the `href`
+ * arrives percent-encoded).
+ *
+ * A `#` is a fragment, and stripped, only when it reads as one: a line anchor
+ * (`a.ts#L12`, `#L12-L20`, `#L3C4`), or a heading anchor — no `.` or `/` in it
+ * — after a name with an extension (`README.md#install`). Otherwise it is part
+ * of the name (`notes#1.md`). The split is on the first literal `#` of the
+ * `href`, before decoding, so an encoded `%23` is always a name character; the
+ * two halves are judged decoded.
+ */
+export function fileLinkCandidatePath(text: unknown): string | null {
+  if (typeof text !== 'string') return null
+  if (text.length < 1 || text.length > MAX_LINK_LENGTH) return null
+  if (CONTROL_CHARS.test(text)) return null
+  if (text.startsWith('#') || text.startsWith('?') || text.startsWith('//')) return null
+  if (URL_SCHEME.test(text)) return null
+  let path = text
+  const hash = path.indexOf('#')
+  if (hash >= 0) {
+    const before = percentDecoded(path.slice(0, hash))
+    const fragment = percentDecoded(path.slice(hash + 1))
+    if (LINE_ANCHOR.test(fragment) || (!/[./]/.test(fragment) && EXTENSION.test(before))) {
+      path = path.slice(0, hash)
+    }
+  }
+  path = percentDecoded(path.replace(LINE_SUFFIX, ''))
+  if (path === '' || CONTROL_CHARS.test(path)) return null
+  return path
+}
+
+/** `L12`, `L12C4`, `L12-L20`, `L12-20`: an editor's line anchor. */
+const LINE_ANCHOR = /^L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/
+
+/** `%XX` escapes decoded; a malformed escape leaves the text as written. */
+function percentDecoded(text: string): string {
+  if (!/%[0-9A-Fa-f]{2}/.test(text)) return text
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
+}
+
+/**
+ * The spans and links worth asking main about, across several markdown
+ * documents, in transcript order — spans and links interleaved as they
+ * appear, because the base heuristic lets only earlier entries help later
+ * ones. Shape-filtered (spans by {@link fileRefCandidatePath}, links by
+ * {@link fileLinkCandidatePath}), de-duplicated per source and text (first
+ * occurrence wins) and capped as one list.
+ */
+export function extractFileRefEntries(markdowns: readonly string[]): FileRefEntry[] {
+  const seen = new Set<string>()
+  const out: FileRefEntry[] = []
   for (const markdown of markdowns) {
-    for (const span of extractInlineCodeSpans(markdown)) {
-      if (seen.has(span) || fileRefCandidatePath(span) === null) continue
-      seen.add(span)
-      out.push(span)
+    if (typeof markdown !== 'string' || (!markdown.includes('`') && !markdown.includes(']('))) continue
+    for (const entry of extractInlineEntries(markdown)) {
+      const key = `${entry.source}\0${entry.text}`
+      if (seen.has(key)) continue
+      const valid = entry.source === 'span' ? fileRefCandidatePath(entry.text) : fileLinkCandidatePath(entry.text)
+      if (valid === null) continue
+      seen.add(key)
+      out.push(entry)
       if (out.length >= MAX_FILE_REF_CANDIDATES) return out
     }
   }
@@ -402,8 +740,8 @@ export interface AgentFileFailure {
 
 export interface ResolveAgentFileRefsInput {
   agentId: string
-  /** Span texts in transcript order, as {@link extractFileRefCandidates} returns them. */
-  candidates: string[]
+  /** Spans and link `href`s in transcript order, as {@link extractFileRefEntries} returns them. */
+  entries: FileRefEntry[]
 }
 
 export type ResolveAgentFileRefsResult = { success: true; refs: AgentFileRef[] } | AgentFileFailure

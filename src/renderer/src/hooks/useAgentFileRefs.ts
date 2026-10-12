@@ -1,11 +1,12 @@
 import { useMemo, useRef } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import { extractFileRefCandidates, type AgentFileRef } from '../../../shared/agentFiles'
+import { extractFileRefEntries, type AgentFileRef } from '../../../shared/agentFiles'
 
-/** The resolved refs for one agent's spans, looked up by span text. */
+/** The resolved refs for one agent: spans by span text, links by `href`. */
 export interface FileRefScope {
   agentId: string
   refs: ReadonlyMap<string, AgentFileRef>
+  links: ReadonlyMap<string, AgentFileRef>
 }
 
 /** FNV-1a over the ordered candidates: a short, stable query-key part. */
@@ -41,8 +42,10 @@ export function useAgentFileRefs(
   const entries = useMemo(
     () =>
       [...sources].map(([agentId, markdowns]) => {
-        const candidates = extractFileRefCandidates(markdowns)
-        return { agentId, candidates, hash: hashCandidates(candidates) }
+        const fileRefEntries = extractFileRefEntries(markdowns)
+        // The source is part of each hashed item: a span and a link with the same text differ.
+        const hash = hashCandidates(fileRefEntries.map((entry) => `${entry.source === 'link' ? 'l' : 's'}:${entry.text}`))
+        return { agentId, entries: fileRefEntries, hash }
       }),
     [sources]
   )
@@ -51,10 +54,10 @@ export function useAgentFileRefs(
     queries: entries.map((entry) => ({
       queryKey: ['agent-file-refs', entry.agentId, entry.hash],
       queryFn: async (): Promise<AgentFileRef[]> => {
-        if (entry.candidates.length === 0) return []
+        if (entry.entries.length === 0) return []
         const result = await window.api.agentFiles.resolve({
           agentId: entry.agentId,
-          candidates: entry.candidates
+          entries: entry.entries
         })
         return result.success ? result.refs : []
       },
@@ -90,7 +93,10 @@ export function useAgentFileRefs(
     entries.forEach((entry, i) => {
       const refs = data[i]
       if (!refs || refs.length === 0) return
-      scopes.set(entry.agentId, { agentId: entry.agentId, refs: new Map(refs.map((ref) => [ref.text, ref])) })
+      const spans = new Map<string, AgentFileRef>()
+      const links = new Map<string, AgentFileRef>()
+      for (const ref of refs) (ref.source === 'link' ? links : spans).set(ref.text, ref)
+      scopes.set(entry.agentId, { agentId: entry.agentId, refs: spans, links })
     })
     previous.current = { data, ids, scopes }
   }

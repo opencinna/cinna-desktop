@@ -22,6 +22,7 @@ import {
   type AuthorizeAgentFileResult,
   type ReadAgentFilePreviewResult,
   type ReadAgentFileTextResult,
+  type FileRefEntry,
   type ResolveAgentFileRefsInput,
   type ResolveAgentFileRefsResult
 } from '../../../shared/agentFiles'
@@ -283,16 +284,23 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
   return {
     async resolve(input: unknown): Promise<ResolveAgentFileRefsResult> {
       if (!input || typeof input !== 'object') return fail('invalid_input')
-      const { agentId, candidates } = input as Partial<ResolveAgentFileRefsInput>
-      if (!Array.isArray(candidates)) return fail('invalid_input')
+      const { agentId, entries } = input as Partial<ResolveAgentFileRefsInput>
+      // From an untrusted renderer: anything but an array is no entries, and
+      // an entry that is not `{ text: string, source: 'span' | 'link' }` is dropped.
+      const list = (Array.isArray(entries) ? entries : [])
+        .slice(0, MAX_RAW_CANDIDATES)
+        .filter(
+          (entry: unknown): entry is FileRefEntry =>
+            !!entry &&
+            typeof entry === 'object' &&
+            typeof (entry as FileRefEntry).text === 'string' &&
+            ((entry as FileRefEntry).source === 'span' || (entry as FileRefEntry).source === 'link')
+        )
+        .map(({ text, source }) => ({ text, source }))
       const agentDir = locate(agentId)
       if (typeof agentDir !== 'string') return agentDir
-      const refs = await resolveFileRefs(agentDir, candidates.slice(0, MAX_RAW_CANDIDATES), {
-        home: home(),
-        isGuarded: deps.isGuardedLocation,
-        paths
-      })
-      logger.debug('resolved file refs', { candidates: candidates.length, refs: refs.length })
+      const refs = await resolveFileRefs(agentDir, list, { home: home(), isGuarded: deps.isGuardedLocation, paths })
+      logger.debug('resolved file refs', { entries: list.length, refs: refs.length })
       return { success: true, refs }
     },
 

@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { createEvent, fireEvent, render, screen } from '@testing-library/react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { extractFileRefCandidates, type AgentFileRef } from '../../../../shared/agentFiles'
+import { extractFileRefEntries, extractLinkDestinations, type AgentFileRef } from '../../../../shared/agentFiles'
 
 vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -21,11 +23,19 @@ const ref = (text: string, over: Partial<AgentFileRef> = {}): AgentFileRef => ({
 
 const csv = ref('data/omp.csv')
 const folder = ref('pulled', { kind: 'dir' })
+const csvLink = ref('data/omp.csv', { source: 'link' })
+const spacedLink = ref('/agent/app%20data/index%20file.csv', { source: 'link', path: '/agent/app data/index file.csv', displayPath: 'app data/index file.csv' })
+const folderLink = ref('pulled/', { source: 'link', kind: 'dir', displayPath: 'pulled' })
 const scope: FileRefScope = {
   agentId: 'folder:a',
   refs: new Map([
     [csv.text, csv],
     [folder.text, folder]
+  ]),
+  links: new Map([
+    [csvLink.text, csvLink],
+    [spacedLink.text, spacedLink],
+    [folderLink.text, folderLink]
   ])
 }
 
@@ -140,6 +150,139 @@ describe('the inline code override', () => {
   })
 })
 
+describe('the link override', () => {
+  it('a resolved link opens the preview from the click point and never navigates', () => {
+    renderBubble('See [the omp file](data/omp.csv).')
+    const link = screen.getByRole('button', { name: 'Preview the omp file' })
+    expect(link.tagName).toBe('A')
+    expect(link.className).toBe('file-link')
+    expect(link.getAttribute('target')).toBeNull()
+    expect(link.getAttribute('title')).toBe('data/omp.csv')
+    const event = createEvent.click(link, { detail: 1, clientX: 40, clientY: 50 })
+    fireEvent(link, event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(openAgentFile).toHaveBeenCalledWith('folder:a', csvLink, { x: 40, y: 50 })
+  })
+
+  it('looks a <…> destination with spaces up by its percent-encoded href', () => {
+    renderBubble('[Index CSV](</agent/app data/index file.csv>)')
+    const link = screen.getByRole('button', { name: 'Preview Index CSV' })
+    expect(link.getAttribute('title')).toBe('app data/index file.csv')
+  })
+
+  it('Enter (a click with no detail) and Space open it from the centre, once each', () => {
+    renderBubble('See [the omp file](data/omp.csv).')
+    const link = screen.getByRole('button', { name: 'Preview the omp file' })
+    fireEvent.keyDown(link, { key: 'Enter' })
+    fireEvent.click(link, { detail: 0 })
+    fireEvent.keyDown(link, { key: ' ' })
+    expect(openAgentFile.mock.calls).toEqual([
+      ['folder:a', csvLink, null],
+      ['folder:a', csvLink, null]
+    ])
+  })
+
+  it('ignores the second click of a double-click and a click that ends a selection, still without navigating', () => {
+    renderBubble('See [the omp file](data/omp.csv).')
+    const link = screen.getByRole('button', { name: 'Preview the omp file' })
+    const second = createEvent.click(link, { detail: 2 })
+    fireEvent(link, second)
+    expect(second.defaultPrevented).toBe(true)
+    const range = document.createRange()
+    range.selectNodeContents(link)
+    window.getSelection()!.addRange(range)
+    fireEvent.click(link, { detail: 1 })
+    window.getSelection()!.removeAllRanges()
+    expect(openAgentFile).not.toHaveBeenCalled()
+  })
+
+  it('a code span inside a resolved link is plain code: click and Space open the link once each', () => {
+    renderBubble('See [`data/omp.csv`](data/omp.csv).')
+    const buttons = screen.getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].tagName).toBe('A')
+    const code = screen.getByText('data/omp.csv')
+    expect(code.tagName).toBe('CODE')
+    expect(code.className).not.toContain('file-ref')
+    expect(code.getAttribute('tabindex')).toBeNull()
+    fireEvent.click(code, { detail: 1, clientX: 4, clientY: 5 })
+    fireEvent.keyDown(code, { key: ' ' })
+    expect(openAgentFile.mock.calls).toEqual([
+      ['folder:a', csvLink, { x: 4, y: 5 }],
+      ['folder:a', csvLink, null]
+    ])
+  })
+
+  it('a code span inside an external link is plain code; inside an unresolved link it is still a reference', () => {
+    renderBubble('[`data/omp.csv`](https://example.com/x) and [`data/omp.csv`](missing.md)')
+    const [external, unresolved] = screen.getAllByText('data/omp.csv')
+    expect(external.closest('a')?.getAttribute('target')).toBe('_blank')
+    expect(external.getAttribute('role')).toBeNull()
+    expect(unresolved.closest('span[title="missing.md"]')).not.toBeNull()
+    expect(unresolved.getAttribute('role')).toBe('button')
+    fireEvent.click(external, { detail: 1 })
+    expect(openAgentFile).not.toHaveBeenCalled()
+  })
+
+  it('names a folder link by what a click does', () => {
+    renderBubble('See [the pulled folder](pulled/).')
+    const link = screen.getByRole('button', { name: 'Show the pulled folder in its folder' })
+    expect(link.getAttribute('title')).toBe('pulled/')
+  })
+
+  it('renders an unresolved local link as text with its href as a tooltip', () => {
+    renderBubble('See [lost](missing.md) and [mail](mailto:a@b.dev).')
+    const lost = screen.getByText('lost')
+    expect(lost.tagName).toBe('SPAN')
+    expect(lost.getAttribute('title')).toBe('missing.md')
+    expect(screen.getByText('mail').tagName).toBe('SPAN')
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('renders a local link as text without a scope and while streaming', () => {
+    renderBubble('See [the omp file](data/omp.csv).', { value: null })
+    expect(screen.getByText('the omp file').tagName).toBe('SPAN')
+    renderBubble('See [streamed](data/omp.csv).', { isStreaming: true })
+    expect(screen.getByText('streamed').tagName).toBe('SPAN')
+  })
+
+  it('keeps http(s) links as external anchors, with or without a scope', () => {
+    renderBubble('[docs](https://example.com/data/omp.csv)')
+    const link = screen.getByRole('link', { name: 'docs' })
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('href')).toBe('https://example.com/data/omp.csv')
+  })
+
+  it('extracts exactly the hrefs react-markdown renders', () => {
+    // The lookup key is the href: a scanner that disagrees would leave the
+    // link unlinked, so this pins the two together over awkward destinations.
+    const md = [
+      'A [x](</Users/me/My Files/é.csv>) and [y](docs/a\\(1\\).md) and [z](a&amp;b.md "t").',
+      '- item [p](a(b)c.md) [q](%20x.md) [r](src/app.py#L12) [s](a\'b[c].md)',
+      '> quoted [t](~/notes/today.md) and [`code`](c.md)',
+      '',
+      '| col | [u](u.md) |',
+      '|-----|----------|',
+      '| v | [w](<w w.md>) |',
+      '',
+      '# Head [h](h.md)',
+      'Not `[n](n.md)` and \\[m](m.md) and [e](&#65;&#x42;.md).'
+    ].join('\n')
+    const rendered: string[] = []
+    const Probe = ({ href }: { href?: string }) => {
+      rendered.push(href ?? '')
+      return null
+    }
+    render(
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: Probe }}>
+        {md}
+      </ReactMarkdown>
+    )
+    expect(extractLinkDestinations(md)).toEqual(rendered)
+    expect(rendered).toHaveLength(13)
+  })
+})
+
 describe('collectFileRefSources', () => {
   const agents = [
     { id: 'folder:a', capabilities: { cwd: true } },
@@ -179,7 +322,7 @@ describe('collectFileRefSources', () => {
       { role: 'assistant', content: '', sourceAgentId: null, parts: [{ kind: 'text', text: nested }] }
     ]
     const markdowns = collectFileRefSources(messages, agents, 'folder:a').get('folder:a') ?? []
-    expect(extractFileRefCandidates(markdowns)).toEqual(['u.md', 'data/omp.csv'])
+    expect(extractFileRefEntries(markdowns).map((entry) => entry.text)).toEqual(['u.md', 'data/omp.csv'])
   })
 
   it('is empty when no agent runs in a folder', () => {

@@ -28,9 +28,9 @@ interface MenuState {
   x: number
   y: number
   text: string
-  /** The code block whose whole text the menu acts on; outlined while open. */
+  /** The code block whose whole text the menu acts on, or the file link right-clicked; outlined while open. */
   highlight?: HTMLElement
-  /** The file or folder reference the right-clicked inline code names. */
+  /** The file or folder reference the right-clicked inline code or file link names. */
   file?: FileRefTarget
 }
 
@@ -127,6 +127,19 @@ export function codeContextTarget(root: HTMLElement, target: Element, selection:
   return text.trim() ? { element, text } : null
 }
 
+/**
+ * Without a selection, a right-click on a resolved file link (`a.file-link`)
+ * takes the file it names, as a reference span does. A selection in the link
+ * that the click missed takes nothing.
+ */
+export function fileLinkContextTarget(root: HTMLElement, target: Element, selection: Selection | null): { element: HTMLElement; file: FileRefTarget } | null {
+  const element = target.closest<HTMLElement>('a.file-link')
+  if (!element || !root.contains(element)) return null
+  if (selection && !selection.isCollapsed && selection.rangeCount > 0 && selection.getRangeAt(0).intersectsNode(element)) return null
+  const file = fileRefTargetOf(element)
+  return file ? { element, file } : null
+}
+
 export function useMessageContextMenu(chatId: string) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const nextId = useRef(0)
@@ -141,16 +154,19 @@ export function useMessageContextMenu(chatId: string) {
     }
     const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined
     const selected = messageContextText(event.currentTarget, event.target, window.getSelection(), point)
-    const code = selected.trim() ? null : codeContextTarget(event.currentTarget, event.target, window.getSelection())
-    const file = code && code.element.tagName === 'CODE' ? fileRefTargetOf(code.element) ?? undefined : undefined
-    const text = code?.text ?? selected
+    // A file link first: code inside one (``[`out.csv`](…)``) is not a reference of its own.
+    const link = selected.trim() ? null : fileLinkContextTarget(event.currentTarget, event.target, window.getSelection())
+    const code = selected.trim() || link ? null : codeContextTarget(event.currentTarget, event.target, window.getSelection())
+    const file = link?.file ?? (code && code.element.tagName === 'CODE' ? fileRefTargetOf(code.element) ?? undefined : undefined)
+    const text = link?.file.ref.path ?? code?.text ?? selected
     if (!text.trim()) {
       setMenu(null)
       return
     }
     event.preventDefault()
     const rect = event.target.getBoundingClientRect()
-    setMenu({ id: ++nextId.current, text, highlight: code?.element, file, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
+    const highlight = link?.element ?? code?.element
+    setMenu({ id: ++nextId.current, text, highlight, file, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
   }, [])
   return {
     onContextMenu,

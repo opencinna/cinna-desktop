@@ -52,11 +52,11 @@ function renderStream(): void {
 beforeEach(() => {
   // Every `.csv` span resolves, for whichever agent is asked.
   api.resolve.mockReset()
-  api.resolve.mockImplementation(async ({ agentId, candidates }: { agentId: string; candidates: string[] }) => ({
+  api.resolve.mockImplementation(async ({ agentId, entries }: { agentId: string; entries: Array<{ text: string; source: string }> }) => ({
     success: true,
-    refs: candidates
-      .filter((c) => c.endsWith('.csv'))
-      .map((c) => ({ text: c, path: `/${agentId}/${c}`, displayPath: c, kind: 'file', inside: true }))
+    refs: entries
+      .filter((e) => e.source === 'span' && e.text.endsWith('.csv'))
+      .map(({ text: c }) => ({ text: c, source: 'span', path: `/${agentId}/${c}`, displayPath: c, kind: 'file', inside: true }))
   }))
   data.messages = [
     { id: 'u1', role: 'user', content: 'Look at `in/a.csv`', addressedAgentId: null },
@@ -77,8 +77,8 @@ describe('file references in the transcript', () => {
     for (const name of ['in/a.csv', 'out/b.csv', 'b/u.csv', 'b/c.csv']) {
       expect(await screen.findByRole('button', { name: `Preview ${name}` })).toBeTruthy()
     }
-    expect(api.resolve).toHaveBeenCalledWith({ agentId: 'folder:a', candidates: ['in/a.csv', 'out/b.csv'] })
-    expect(api.resolve).toHaveBeenCalledWith({ agentId: 'folder:b', candidates: ['b/u.csv', 'b/c.csv'] })
+    expect(api.resolve).toHaveBeenCalledWith({ agentId: 'folder:a', entries: [{ text: 'in/a.csv', source: 'span' }, { text: 'out/b.csv', source: 'span' }] })
+    expect(api.resolve).toHaveBeenCalledWith({ agentId: 'folder:b', entries: [{ text: 'b/u.csv', source: 'span' }, { text: 'b/c.csv', source: 'span' }] })
     expect(api.resolve).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('button', { name: /r2?\.csv/ })).toBeNull()
     expect(screen.getByText('r.csv').tagName).toBe('CODE')

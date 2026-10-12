@@ -1709,7 +1709,7 @@ const api = {
    * back as `{ success: false, code }`.
    */
   agentFiles: {
-    /** Which inline code spans (in transcript order) name a real file or folder. */
+    /** Which inline code spans and link `href`s (in transcript order) name a real file or folder. */
     resolve: (input: ResolveAgentFileRefsInput): Promise<ResolveAgentFileRefsResult> =>
       ipcRenderer.invoke('agent-files:resolve', input),
     /**

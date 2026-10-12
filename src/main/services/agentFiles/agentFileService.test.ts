@@ -502,20 +502,51 @@ describe('macOS data-volume spelling', () => {
 describe('resolve', () => {
   it('resolves against the located folder and refuses unknown agents', async () => {
     const service = makeService()
-    const result = await service.resolve({ agentId: 'folder:a', candidates: ['data/omp.csv', 'nope.md'] })
+    const result = await service.resolve({
+      agentId: 'folder:a',
+      entries: [
+        { text: 'data/omp.csv', source: 'span' },
+        { text: 'nope.md', source: 'span' }
+      ]
+    })
     expect(result).toMatchObject({ success: true, refs: [{ text: 'data/omp.csv', inside: true }] })
-    expect(await service.resolve({ agentId: 'folder:b', candidates: [] })).toMatchObject({ code: 'agent_not_found' })
-    expect(await service.resolve({ agentId: 'folder:a' })).toMatchObject({ code: 'invalid_input' })
+    expect(await service.resolve({ agentId: 'folder:b', entries: [] })).toMatchObject({ code: 'agent_not_found' })
+    expect(await service.resolve(null)).toMatchObject({ code: 'invalid_input' })
+    // A missing or malformed entries field is no entries.
+    expect(await service.resolve({ agentId: 'folder:a' })).toEqual({ success: true, refs: [] })
+  })
+
+  it('resolves links beside spans in order, re-validating them and dropping malformed entries', async () => {
+    const service = makeService()
+    const result = await service.resolve({
+      agentId: 'folder:a',
+      entries: [
+        { text: 'data/omp.csv#L2', source: 'link' },
+        { text: 'https://example.com/data/omp.csv', source: 'link' },
+        { text: 7, source: 'link' },
+        'data/omp.csv',
+        { text: 'data/omp.csv', source: 'bogus' },
+        { text: 'data/omp.csv', source: 'span' }
+      ]
+    })
+    expect(result).toEqual({
+      success: true,
+      refs: [
+        expect.objectContaining({ text: 'data/omp.csv#L2', source: 'link', inside: true }),
+        expect.objectContaining({ text: 'data/omp.csv', source: 'span' })
+      ]
+    })
+    expect(await service.resolve({ agentId: 'folder:a', entries: 'data/omp.csv' })).toEqual({ success: true, refs: [] })
   })
 
   it('hands the privacy guard to the resolver', async () => {
     const documents = join(home, 'Documents')
     const guarded = (path: string) => path === documents || path.startsWith(`${documents}/`)
-    const candidates = ['~/Documents/doc.md']
-    expect(await makeService({ home }).resolve({ agentId: 'folder:a', candidates })).toMatchObject({
+    const entries = [{ text: '~/Documents/doc.md', source: 'span' }]
+    expect(await makeService({ home }).resolve({ agentId: 'folder:a', entries })).toMatchObject({
       refs: [{ text: '~/Documents/doc.md' }]
     })
-    expect(await makeService({ home, isGuardedLocation: guarded }).resolve({ agentId: 'folder:a', candidates })).toEqual({
+    expect(await makeService({ home, isGuardedLocation: guarded }).resolve({ agentId: 'folder:a', entries })).toEqual({
       success: true,
       refs: []
     })

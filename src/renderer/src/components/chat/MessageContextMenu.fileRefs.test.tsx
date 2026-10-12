@@ -39,8 +39,20 @@ const refs = [
   ref('out/report.html'),
   ref('.env.html')
 ]
-const scope: FileRefScope = { agentId: 'folder:a', refs: new Map(refs.map((r) => [r.text, r])) }
-const content = refs.map((r) => `\`${r.text}\``).join(' and ') + ' and `npm test`.'
+const linkRef = ref('docs/plan.md', { source: 'link', path: '/agent/docs/plan.md' })
+const pdfLinkRef = ref('report.pdf', { source: 'link' })
+const scope: FileRefScope = {
+  agentId: 'folder:a',
+  // `site/index.html` is only rendered inside a link: it must never act as a span there.
+  refs: new Map([...refs, ref('site/index.html')].map((r) => [r.text, r])),
+  links: new Map([
+    [linkRef.text, linkRef],
+    [pdfLinkRef.text, pdfLinkRef]
+  ])
+}
+const content =
+  refs.map((r) => `\`${r.text}\``).join(' and ') +
+  ' and `npm test`. See [the plan](docs/plan.md), [the pdf](report.pdf), [a lost file](missing.md) and [`site/index.html`](docs/plan.md).'
 
 const clipboardText = vi.fn()
 const bridge = vi.fn()
@@ -154,6 +166,54 @@ describe('the items offered', () => {
     }
     fireEvent.keyDown(document.activeElement!, { key: 'End' })
     expect(document.activeElement).toBe(items[4])
+  })
+})
+
+describe('a resolved file link', () => {
+  it('offers the file menu, outlines the link, and acts on the path', async () => {
+    mount()
+    const link = screen.getByText('the plan')
+    expect(link.tagName).toBe('A')
+    openOn('the plan')
+    expect(itemNames()).toEqual(['Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'])
+    expect(link.hasAttribute('data-context-target')).toBe(true)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy full path' }))
+    await waitFor(() => expect(clipboardText).toHaveBeenCalledWith('/agent/docs/plan.md'))
+  })
+
+  it("takes the link's file for a right-click on code inside it, not the code's own reference", async () => {
+    const { container } = mount()
+    const code = container.querySelector<HTMLElement>('a.file-link code')!
+    expect(code.textContent).toBe('site/index.html')
+    fireEvent.contextMenu(code, { clientX: 50, clientY: 50 })
+    expect(itemNames()).toEqual(['Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'])
+    expect(code.closest('a')!.hasAttribute('data-context-target')).toBe(true)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy full path' }))
+    await waitFor(() => expect(clipboardText).toHaveBeenCalledWith('/agent/docs/plan.md'))
+  })
+
+  it('offers the path-only menu for a binary file link', () => {
+    mount()
+    openOn('the pdf')
+    expect(itemNames()).toEqual(['Copy full path', 'Show in the folder', 'Reference in a new chat'])
+  })
+
+  it('opens no menu over a link that did not resolve', () => {
+    mount()
+    openOn('a lost file')
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
+  })
+
+  it('offers the plain-text menu for a selection inside the link', () => {
+    mount()
+    const link = screen.getByText('the plan')
+    const range = document.createRange()
+    range.setStart(link.firstChild!, 0)
+    range.setEnd(link.firstChild!, 3)
+    window.getSelection()!.addRange(range)
+    Range.prototype.getClientRects = () => [{ left: 0, top: 0, right: 20000, bottom: 20000 }] as never
+    fireEvent.contextMenu(link, { clientX: 5, clientY: 5 })
+    expect(itemNames()).toEqual(['Copy text', 'Save to Notes'])
   })
 })
 

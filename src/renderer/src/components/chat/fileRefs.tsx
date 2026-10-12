@@ -10,12 +10,12 @@ import { repairNestedFences } from '../../utils/nestedFences'
 export type { FileRefScope }
 
 /**
- * The resolved file references for the bubble being rendered, or null where
+ * The resolved file references (spans and links) for the bubble being rendered, or null where
  * nothing may link: outside a folder agent's chat, and while streaming.
  */
 export const FileRefContext = createContext<FileRefScope | null>(null)
 
-/** The reference a rendered `code.file-ref` stands for, and whose folder it resolved in. */
+/** The reference a rendered `code.file-ref` or `a.file-link` stands for, and whose folder it resolved in. */
 export interface FileRefTarget {
   agentId: string
   ref: AgentFileRef
@@ -35,6 +35,13 @@ export function fileRefTargetOf(element: Element): FileRefTarget | null {
 
 /** True inside a fenced block: a `code` there is never a reference. */
 const InsidePreContext = createContext(false)
+
+/**
+ * True inside a rendered anchor: a `code` there is never a reference either,
+ * or a click on ``[`out.csv`](/abs/out.csv)`` would act twice — once for the
+ * span and once for the link.
+ */
+const InsideLinkContext = createContext(false)
 
 function textOf(children: ReactNode): string | null {
   if (typeof children === 'string') return children
@@ -67,9 +74,10 @@ function folderTitle(displayPath: string): string {
  */
 function MarkdownCode({ node: _node, children, className, ...props }: ComponentProps<'code'> & ExtraProps): React.JSX.Element {
   const insidePre = useContext(InsidePreContext)
+  const insideLink = useContext(InsideLinkContext)
   const scope = useContext(FileRefContext)
   const text = textOf(children)
-  const ref = !insidePre && scope && text !== null ? scope.refs.get(text) : undefined
+  const ref = !insidePre && !insideLink && scope && text !== null ? scope.refs.get(text) : undefined
   if (!scope || !ref || text === null) {
     return (
       <code className={className} {...props}>
@@ -111,9 +119,75 @@ function MarkdownCode({ node: _node, children, className, ...props }: ComponentP
   )
 }
 
+const EXTERNAL_HREF = /^https?:\/\//i
+
+/**
+ * A markdown link. `http(s)` opens in the browser, as everywhere else. A link
+ * whose `href` resolved to a file or folder in the agent's folder opens the
+ * preview, like a reference span, and never navigates. Anything else — no
+ * scope (a plain chat, or still streaming), a path that did not resolve,
+ * `mailto:` — is its text with the `href` as a tooltip, as a document link
+ * is: `setWindowOpenHandler` would drop it, so it must not look clickable.
+ *
+ * The resolved link is styled as an ordinary link (`a.file-link`), so the
+ * span → link swap when resolution lands moves nothing.
+ */
+function MarkdownLink({ node: _node, children, href, ...props }: ComponentProps<'a'> & ExtraProps): React.JSX.Element {
+  const scope = useContext(FileRefContext)
+  if (href && EXTERNAL_HREF.test(href)) {
+    return (
+      <a {...props} href={href} target="_blank" rel="noreferrer noopener">
+        <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
+      </a>
+    )
+  }
+  const ref = scope && href ? scope.links.get(href) : undefined
+  if (!scope || !ref || !href) return <span title={href || undefined}>{children}</span>
+  const label = textOf(children) ?? ref.displayPath
+  const activate = (origin: { x: number; y: number } | null): void => {
+    void useFilePreviewStore.getState().openAgentFile(scope.agentId, ref, origin)
+  }
+  return (
+    <a
+      {...props}
+      ref={(element) => {
+        if (!element) return
+        fileRefTargets.set(element, { agentId: scope.agentId, ref })
+        return () => void fileRefTargets.delete(element)
+      }}
+      href={href}
+      className="file-link"
+      role="button"
+      aria-label={ref.kind === 'dir' ? `Show ${label} in its folder` : `Preview ${label}`}
+      title={ref.kind === 'dir' ? folderTitle(ref.displayPath) : ref.displayPath}
+      onClick={(event) => {
+        // A local href must never navigate the window or reach the browser.
+        event.preventDefault()
+        // Selecting part of a link is not a request to open it.
+        if (window.getSelection()?.toString()) return
+        // The second click of a double-click: the first already opened it.
+        if (event.detail > 1) return
+        // Enter on an anchor arrives here as a click with no detail.
+        activate(event.detail > 0 ? { x: event.clientX, y: event.clientY } : null)
+      }}
+      // A middle-click would open the href in a new window.
+      onAuxClick={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        // Enter is the anchor's own click (above); Space is the button role's.
+        if (event.key !== ' ') return
+        event.preventDefault()
+        activate(null)
+      }}
+    >
+      <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
+    </a>
+  )
+}
+
 /** The chat bubble's markdown components: module-level, so their identity never changes. */
 export const chatMarkdownComponents: Components = {
   ...markdownComponents,
+  a: MarkdownLink,
   pre: MarkdownPre,
   code: MarkdownCode
 }

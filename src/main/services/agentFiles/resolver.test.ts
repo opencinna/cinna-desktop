@@ -75,6 +75,7 @@ beforeAll(() => {
   touch(join(agent, 'a/summary.md'))
   touch(join(agent, 'b/y.csv'))
   touch(join(agent, 'b/summary.md'))
+  touch(join(agent, 'app data/index file.csv'))
   touch(join(outside, 'notes.md'))
   touch(join(outside, 'other.md'))
   touch(join(outside, 'sub/deep.md'))
@@ -101,13 +102,16 @@ beforeEach(() => {
   touched.length = 0
 })
 
+/** Each string is a span entry; anything else is passed through as a malformed entry. */
+const spans = (candidates: unknown[]): unknown[] =>
+  candidates.map((text) => (typeof text === 'string' ? { text, source: 'span' } : text))
 const resolveIn = (candidates: unknown[], options = {}) =>
-  resolveFileRefs(agent, candidates, { home, isGuarded: () => false, ...options })
+  resolveFileRefs(agent, spans(candidates), { home, isGuarded: () => false, ...options })
 
 describe('direct resolution', () => {
   it('resolves a relative path against the agent folder', async () => {
     expect(await resolveIn(['README.md'])).toEqual([
-      { text: 'README.md', path: join(agent, 'README.md'), displayPath: 'README.md', kind: 'file', inside: true }
+      { text: 'README.md', source: 'span', path: join(agent, 'README.md'), displayPath: 'README.md', kind: 'file', inside: true }
     ])
   })
 
@@ -152,7 +156,7 @@ describe('direct resolution', () => {
   })
 
   it('returns nothing when the agent folder is gone', async () => {
-    expect(await resolveFileRefs(join(root, 'nope'), ['README.md'], { home, isGuarded: () => false })).toEqual([])
+    expect(await resolveFileRefs(join(root, 'nope'), spans(['README.md']), { home, isGuarded: () => false })).toEqual([])
   })
 })
 
@@ -189,6 +193,80 @@ describe('base heuristic', () => {
     const refs = await resolveIn(['../outside/sub/deep.md', 'notes.md', '../outside/other.md', 'deep.md'])
     expect(refs.map((r) => r.text)).toEqual(['../outside/sub/deep.md', '../outside/other.md', 'deep.md'])
     expect(refs[2]).toMatchObject({ path: join(outside, 'sub/deep.md'), inside: false })
+  })
+})
+
+describe('links', () => {
+  const span = (text: string) => ({ text, source: 'span' })
+  const link = (text: unknown) => ({ text, source: 'link' })
+  const resolveEntries = (entries: unknown[], options = {}) =>
+    resolveFileRefs(agent, entries, { home, isGuarded: () => false, ...options })
+
+  it('resolves a link href as a link ref, decoding %XX and dropping a fragment or line', async () => {
+    const href = encodeURI(join(agent, 'app data/index file.csv'))
+    const refs = await resolveEntries([link(href), link('README.md#L12'), link('README'), link('a/x.csv:3')])
+    expect(refs).toEqual([
+      {
+        text: href,
+        source: 'link',
+        path: join(agent, 'app data/index file.csv'),
+        displayPath: 'app data/index file.csv',
+        kind: 'file',
+        inside: true
+      },
+      expect.objectContaining({ text: 'README.md#L12', source: 'link', path: join(agent, 'README.md') }),
+      expect.objectContaining({ text: 'a/x.csv:3', source: 'link', path: join(agent, 'a/x.csv') })
+    ])
+  })
+
+  it('ignores an invalid link and a malformed entry', async () => {
+    const refs = await resolveEntries([
+      link('https://example.com/README.md'),
+      link('#README.md'),
+      link(42),
+      link('missing.md'),
+      link('file:///README.md'),
+      { text: 'README.md', source: 'other' },
+      'README.md',
+      null
+    ])
+    expect(refs).toEqual([])
+  })
+
+  it('makes two refs of a span and a link with the same text, in entry order', async () => {
+    const refs = await resolveEntries([link('README.md'), span('README.md')])
+    expect(refs.map((r) => [r.text, r.source])).toEqual([
+      ['README.md', 'link'],
+      ['README.md', 'span']
+    ])
+  })
+
+  it('accepts a link that would fail the span shape filter, and resolves it against earlier bases', async () => {
+    const refs = await resolveEntries([span('data/reforecast/2026-H2/pulled/omp.csv'), link('reseller.csv'), link('app%20data/')])
+    expect(refs.map((r) => [r.source, r.displayPath])).toEqual([
+      ['span', 'data/reforecast/2026-H2/pulled/omp.csv'],
+      ['link', 'data/reforecast/2026-H2/pulled/reseller.csv'],
+      ['link', 'app data']
+    ])
+  })
+
+  it('a later span cannot unlink an earlier link resolved through a base', async () => {
+    // `summary.md` resolves through a/ alone; a later span adding b/ as a base
+    // must not make it ambiguous.
+    const before = await resolveEntries([span('a/x.csv'), link('summary.md')])
+    const after = await resolveEntries([span('a/x.csv'), link('summary.md'), span('b/y.csv')])
+    expect(before.map((r) => r.displayPath)).toEqual(['a/x.csv', 'a/summary.md'])
+    expect(after.map((r) => r.displayPath)).toEqual(['a/x.csv', 'a/summary.md', 'b/y.csv'])
+  })
+
+  it('only earlier entries of either kind count as bases', async () => {
+    const refs = await resolveEntries([link('reseller.csv'), span('data/reforecast/2026-H2/pulled/omp.csv')])
+    expect(refs.map((r) => r.text)).toEqual(['data/reforecast/2026-H2/pulled/omp.csv'])
+  })
+
+  it('shares maxCandidates in entry order', async () => {
+    const refs = await resolveEntries([link('a/x.csv'), span('README.md'), link('b/y.csv')], { maxCandidates: 2 })
+    expect(refs.map((r) => r.text)).toEqual(['a/x.csv', 'README.md'])
   })
 })
 
@@ -239,7 +317,7 @@ describe('macOS privacy-guarded folders', () => {
   it('resolves inside the guarded folder the agent itself lives in, and nowhere else guarded', async () => {
     const refs = await resolveFileRefs(
       join(home, 'Documents/agent2'),
-      ['README.md', '../doc.md', '~/Documents/other.md', '~/Desktop/d.md'],
+      spans(['README.md', '../doc.md', '~/Documents/other.md', '~/Desktop/d.md']),
       { home, isGuarded: guarded }
     )
     expect(refs.map((r) => [r.text, r.inside])).toEqual([
@@ -268,7 +346,7 @@ describe('macOS privacy-guarded folders', () => {
     it('walks a mixed-case spelling up to its own guarded folder, not past it', async () => {
       // A root found too high (the home) would contain this agent and let the
       // Desktop probe through; a root not found at all would too.
-      const refs = await resolveFileRefs(join(home, 'Documents/agent2'), ['README.md', '~/desktop/d.md'], {
+      const refs = await resolveFileRefs(join(home, 'Documents/agent2'), spans(['README.md', '~/desktop/d.md']), {
         home,
         isGuarded: realGuard
       })
@@ -300,7 +378,7 @@ describe('macOS data-volume spelling', () => {
   })
 
   it('treats an agent folder located through the data volume as the same folder', async () => {
-    const refs = await resolveFileRefs(firm + agent, ['README.md', join(agent, 'README.md')], {
+    const refs = await resolveFileRefs(firm + agent, spans(['README.md', join(agent, 'README.md')]), {
       home,
       isGuarded: () => false,
       paths: firmlinked()

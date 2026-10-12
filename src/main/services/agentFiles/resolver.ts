@@ -5,6 +5,7 @@ import { isWithin } from '../localAgents/pathRules'
 import {
   MAX_FILE_REF_BASES,
   MAX_FILE_REF_CANDIDATES,
+  fileLinkCandidatePath,
   fileRefCandidatePath,
   type AgentFileRef,
   type AgentFileRefKind
@@ -48,7 +49,8 @@ export function displayPathFor(real: string, realAgentDir: string, realHome: str
 }
 
 /**
- * Which inline code spans name a real file or folder, for one agent.
+ * Which inline code spans and markdown link `href`s name a real file or
+ * folder, for one agent.
  *
  * Detection only stats: nothing is read, and a path outside the folder is
  * linked here and gated later, when the user acts on it.
@@ -70,10 +72,17 @@ export function displayPathFor(real: string, realAgentDir: string, realHome: str
  * a ref that lands in one anyway (through a symlink) contributes no bases.
  *
  * Every path in a ref is a canonical realpath, and `inside` is decided on those.
+ *
+ * `entries` are spans and link `href`s interleaved in transcript order, and
+ * go through the same steps in that order, so a later entry of either kind
+ * never changes how an earlier one resolved. A span is validated with
+ * {@link fileRefCandidatePath}, a link with {@link fileLinkCandidatePath} (its
+ * fragment and `%XX` escapes handled); a malformed entry is skipped. Each ref
+ * carries its `source`, so a span and a link with the same text are two refs.
  */
 export async function resolveFileRefs(
   agentDir: string,
-  candidates: readonly unknown[],
+  entries: readonly unknown[],
   options: ResolveFileRefsOptions
 ): Promise<AgentFileRef[]> {
   const home = options.home ?? homedir()
@@ -137,14 +146,17 @@ export async function resolveFileRefs(
   }
 
   const refs: AgentFileRef[] = []
-  const seen = new Set<string>()
+  const seen = { span: new Set<string>(), link: new Set<string>() }
   let considered = 0
-  for (const text of candidates) {
+  for (const entry of entries) {
     if (considered >= maxCandidates) break
-    if (typeof text !== 'string' || seen.has(text)) continue
-    const candidate = fileRefCandidatePath(text)
+    if (!entry || typeof entry !== 'object') continue
+    const { text, source } = entry as { text?: unknown; source?: unknown }
+    if (source !== 'span' && source !== 'link') continue
+    if (typeof text !== 'string' || seen[source].has(text)) continue
+    const candidate = source === 'span' ? fileRefCandidatePath(text) : fileLinkCandidatePath(text)
     if (candidate === null) continue
-    seen.add(text)
+    seen[source].add(text)
     considered += 1
 
     let hit: Hit | null
@@ -166,6 +178,7 @@ export async function resolveFileRefs(
     const inside = isWithin(realAgentDir, hit.real)
     refs.push({
       text,
+      source,
       path: hit.real,
       displayPath: displayPathFor(hit.real, realAgentDir, realHome),
       kind: hit.kind,

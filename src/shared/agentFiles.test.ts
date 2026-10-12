@@ -3,8 +3,10 @@ import {
   MAX_FILE_REF_CANDIDATES,
   agentFileContentKind,
   agentFilePreviewKindFor,
-  extractFileRefCandidates,
+  extractFileRefEntries,
   extractInlineCodeSpans,
+  extractLinkDestinations,
+  fileLinkCandidatePath,
   fileRefCandidatePath,
   isCredentialFileRef,
   isCredentialFilePath
@@ -91,17 +93,143 @@ describe('extractInlineCodeSpans', () => {
   })
 })
 
-describe('extractFileRefCandidates', () => {
-  it('filters by shape and de-duplicates across messages, first occurrence wins', () => {
-    const out = extractFileRefCandidates(['`a.csv` `run it` `b/c`', '`a.csv` `d.md:3`'])
-    expect(out).toEqual(['a.csv', 'b/c', 'd.md:3'])
+describe('extractLinkDestinations — the href react-markdown renders', () => {
+  it('reads the <…> form, spaces and all, percent-encoded as the href is', () => {
+    expect(
+      extractLinkDestinations('[Index CSV](</Users/me/Agents/invoice reader/app-data/invoice_index.csv>)')
+    ).toEqual(['/Users/me/Agents/invoice%20reader/app-data/invoice_index.csv'])
+    expect(extractLinkDestinations('[x](<café.md>)')).toEqual(['caf%C3%A9.md'])
   })
 
-  it('caps the candidates', () => {
-    const md = Array.from({ length: MAX_FILE_REF_CANDIDATES + 20 }, (_, i) => `\`f${i}.md\``).join(' ')
-    const out = extractFileRefCandidates([md])
+  it('reads the bare form, in order, with a title after it', () => {
+    expect(extractLinkDestinations('See [a](/abs/path.md) and [b](docs/b.md "Title") and [c](c.md \'t\')')).toEqual([
+      '/abs/path.md',
+      'docs/b.md',
+      'c.md'
+    ])
+  })
+
+  it('processes backslash escapes and character references, leaves %XX alone', () => {
+    expect(extractLinkDestinations('[a](docs/a\\(1\\).md)')).toEqual(['docs/a(1).md'])
+    expect(extractLinkDestinations('[a](a&amp;b.md) [b](&lt;x&gt;&quot;.md) [c](&#65;&#x42;.md)')).toEqual([
+      'a&b.md',
+      '%3Cx%3E%22.md',
+      'AB.md'
+    ])
+    expect(extractLinkDestinations('[a](%20x.md)')).toEqual(['%20x.md'])
+  })
+
+  it('keeps balanced parentheses in a bare destination', () => {
+    expect(extractLinkDestinations('[a](a(b)c.md) and [b](x(1).md)')).toEqual(['a(b)c.md', 'x(1).md'])
+    expect(extractLinkDestinations('[a](a(b.md) [b](ok.md)')).toEqual(['ok.md'])
+  })
+
+  it('keeps a fragment and a line suffix in the href', () => {
+    expect(extractLinkDestinations('[a](src/app.py#L12) [b](src/app.py:12)')).toEqual(['src/app.py#L12', 'src/app.py:12'])
+  })
+
+  it('ignores links inside code spans and code blocks', () => {
+    const md = [
+      'Real [a](a.md) and `[b](b.md)`',
+      '```',
+      '[c](c.md)',
+      '```',
+      '',
+      '    [d](d.md)',
+      '',
+      '[e](e.md)'
+    ].join('\n')
+    expect(extractLinkDestinations(md)).toEqual(['a.md', 'e.md'])
+  })
+
+  it('collects a link whose text is a code span, and none without a link text', () => {
+    expect(extractLinkDestinations('[`a.md`](docs/a.md)')).toEqual(['docs/a.md'])
+    expect(extractLinkDestinations('just ](x.md) and \\[y](y.md)')).toEqual([])
+  })
+
+  it('refuses what is not an inline link', () => {
+    expect(extractLinkDestinations('[a](<bad\nnewline>) [b]() [c](x y) [d](<x>y)')).toEqual([])
+  })
+})
+
+describe('fileLinkCandidatePath — the link filter', () => {
+  it.each([
+    ['/abs/path.md', '/abs/path.md'],
+    ['README', 'README'],
+    ['~/notes/today.md', '~/notes/today.md'],
+    ['src/app.py#L12', 'src/app.py'],
+    ['src/app.py#L12-L20', 'src/app.py'],
+    ['a.ts#L12', 'a.ts'],
+    ['a.ts#L12-L20', 'a.ts'],
+    ['a.ts#L3C4-L5C1', 'a.ts'],
+    ['README.md#install', 'README.md'],
+    ['notes#1.md', 'notes#1.md'],
+    ['notes#section', 'notes#section'],
+    ['dir/a#b/c.md', 'dir/a#b/c.md'],
+    ['my%20notes.md#L2', 'my notes.md'],
+    ['a%23b.md', 'a#b.md'],
+    ['src/app.py:12', 'src/app.py'],
+    ['src/app.py:12:4', 'src/app.py'],
+    ['/Users/me/x%20y/caf%C3%A9.csv', '/Users/me/x y/café.csv'],
+    ['a%zz%20b', 'a%zz%20b'],
+    ['a(1).md', 'a(1).md']
+  ])('accepts %s', (text, path) => {
+    expect(fileLinkCandidatePath(text)).toBe(path)
+  })
+
+  it.each([
+    ['', 'empty'],
+    ['x'.repeat(1025), 'too long'],
+    ['https://example.com/a.md', 'http'],
+    ['mailto:me@example.com', 'mailto'],
+    ['file:///Users/me/a.md', 'file URL'],
+    ['javascript:alert(1)', 'script'],
+    ['//host/a.md', 'protocol-relative'],
+    ['#section', 'in-page anchor'],
+    ['?q=1', 'query'],
+    ['a\nb.md', 'newline'],
+    ['a\u0000b.md', 'NUL'],
+    ['a%00b.md', 'encoded NUL'],
+    ['#L12', 'fragment only']
+  ])('refuses %j (%s)', (text) => {
+    expect(fileLinkCandidatePath(text)).toBeNull()
+  })
+
+  it('refuses a non-string', () => {
+    expect(fileLinkCandidatePath(42)).toBeNull()
+  })
+})
+
+describe('extractFileRefEntries', () => {
+  it('interleaves spans and links in document order, a span in link text before its link', () => {
+    const out = extractFileRefEntries(['Read [the plan](plan.md) then `a.csv`, and [`b.md`](docs/b.md).', '`c/d.py` [w](https://x.dev)'])
+    expect(out).toEqual([
+      { text: 'plan.md', source: 'link' },
+      { text: 'a.csv', source: 'span' },
+      { text: 'b.md', source: 'span' },
+      { text: 'docs/b.md', source: 'link' },
+      { text: 'c/d.py', source: 'span' }
+    ])
+  })
+
+  it('filters each source by its own rule and de-duplicates per source and text', () => {
+    const out = extractFileRefEntries(['`a.md` [a](a.md) `run it` [m](mailto:a@b) [s](</x y.md>)', '`a.md` [again](a.md) [README](README)'])
+    expect(out).toEqual([
+      { text: 'a.md', source: 'span' },
+      { text: 'a.md', source: 'link' },
+      { text: '/x%20y.md', source: 'link' },
+      { text: 'README', source: 'link' }
+    ])
+  })
+
+  it('caps spans and links as one list', () => {
+    const md = Array.from({ length: MAX_FILE_REF_CANDIDATES + 20 }, (_, i) => (i % 2 ? `[f](f${i}.md)` : `\`f${i}.md\``)).join(' ')
+    const out = extractFileRefEntries([md])
     expect(out).toHaveLength(MAX_FILE_REF_CANDIDATES)
-    expect(out[0]).toBe('f0.md')
+    expect(out.slice(0, 2)).toEqual([
+      { text: 'f0.md', source: 'span' },
+      { text: 'f1.md', source: 'link' }
+    ])
   })
 })
 
