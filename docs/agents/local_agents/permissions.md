@@ -82,7 +82,7 @@ A session with a conductor lease — Cinna's MCP server attached and answering f
 - **Codex** — `rawInput.server === "cinna"` with a non-empty `rawInput.tool`, from the call's `tool_call` / `tool_call_update` (the last complete `rawInput` stands). The title is not enough: a shell call is titled with its command, and a command can be named `mcp.cinna.x`
 - **Claude** — `_meta.claudeCode.toolName` starting `mcp__cinna__`. Its `rawInput` is the tool's input, model writing, so a `server: "cinna"` there means nothing
 - **Antigravity** — the `_meta.mcp {server, tool}` the server sets on an asking call (`default` mode), on its `tool_call` and on the ask itself; Cinna's when `server === "cinna"`. A call that does not ask (`yolo`) is titled `Running <tool>` with no server at all. That bare name counts only on a call whose opening kind is `other`, since a shell call is titled with its command line, and the offered-tool check below then decides. The ask itself is read first, so an ask whose `tool_call` was not seen is still recognised
-- **OpenCode** — the title of the call's **opening** `tool_call` only, starting `cinna_`: a registered tool name the model cannot invent. A later update's title can be model-written (OpenCode titles a bash call with its command), so a call first met as an update gets no title at all
+- **OpenCode** — the title of the call's **opening** `tool_call` only, starting `cinna_`: a registered tool name the model cannot invent. A later update's title can be model-written (OpenCode titles a bash call with its command), so a call first met as an update gets no title at all. In practice this branch no longer sees Cinna's tools: OpenCode 2 runs them inside Code Mode's `execute`, and the profile's `cinna_*` allow settles them in the engine, which never asks ([below](#an-agent-works-freely-inside-its-own-folder))
 
 **And the tool must be one Cinna's server offered this session.** The name the adapter evidence yields (prefix stripped) is checked against the names the lease's MCP server served in the last `tools/list` it answered for that session; a name it never served is not Cinna's, whatever its prefix says. The prefix alone was not enough: OpenCode spells an MCP tool `<server>_<tool>`, so a user's own server named `cinna_x` with a tool `y` arrives as `cinna_x_y` — indistinguishable by name from a Cinna tool `x_y`. Before anything has been listed, and once the session's server is disposed, nothing is offered.
 
@@ -101,6 +101,8 @@ This is a deliberate widening. The profile before it allowed writes only under `
 **Two allows reach outside the folder, both for the platform's own skill.** The `cinna-tasks` skill ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)) lives in the app's bundled kit, which OpenCode is pointed at through `skills.paths`. Opening that skill (`skill`, pattern `cinna-tasks`) is allowed while every other skill asks, and `external_directory` allows the bundle's `skills/` folder while everything else outside the agent folder still asks. Without them every turn that used the task tools would stop at least once for a click on text the app itself ships. A manifest that sets its own `external_directory` replaces that entry whole, allow included, as any override does.
 
 **A kit agent's own skills get the same two allows, scoped to them.** Its deliverable skills reach OpenCode through a links folder under `userData` ([Agent Skills](skills.md)), so each one is allowed by name in `skill` after `cinna-tasks`, and reads under that links folder are allowed in `external_directory`. `'*': 'ask'` stays first and the last matching rule wins, so a skill the agent did not author still asks. A manifest's own `skill` entry replaces the whole entry, these allows included.
+
+**Cinna's own tools are allowed in the engine, because OpenCode reaches them only through Code Mode.** OpenCode 2 puts every MCP server a session is given behind its built-in `execute` tool: the model writes code that calls `tools.cinna.<tool>(…)`, and the engine checks each inner call again as `cinna_<tool>` — in an ask that names the `execute` call and its code, not the tool, so the driver's Cinna auto-allow above cannot recognise it. There is no ACP switch to turn Code Mode off; the only one found is declaring the server in `opencode.json`, which would put Cinna's bearer token on disk and start a server per chat, and was rejected. So every profile ends with `execute`, `question` and `cinna_*` on `allow` (`CINNA_TOOL_PERMISSIONS`), and a chat runtime's replace policy is `{'*': 'deny', 'cinna_*': 'allow'}` plus those. With `execute` on deny a chat runtime would have no tools at all; on ask, every Cinna call would ask twice. Two costs, both accepted: **`fetch` inside `execute` is never permission-gated**, so an agent can reach the network without the `webfetch` ask — a folder agent's shell already could, but for a chat runtime, whose shell is denied, it is new; and a server named `cinna` or `cinna_…` (not `cinnabar`) in the user's global OpenCode config or a project `opencode.json` in the session's folder would match `cinna_*` — Cinna injects no other MCP server. The model has to be told the calling convention as well: the prompt's Cinna-tasks section names each call as `tools.cinna.tasks_report` and so on, because the engine's Code Mode catalog is cut to a token budget and does not list every tool, and a model told only the bare name went looking for it as a file.
 
 ### The catch-all has to be written down
 
@@ -126,6 +128,12 @@ A pattern is regex-escaped, then `*` becomes `.*` and `?` becomes `.`, anchored 
 `credentials/.env`, and anything matching `*.env`, `*.pem`, `*.key`, are `deny` under `read`, `edit` **and** `write`. Reads because the desktop never reads credential values and neither should the agent it runs — the kit's rule is that a value is read from inside a script and never printed, and an `ask` here would put a one-click path to pasting the user's secrets into a transcript behind a dialog nobody reads carefully. Writes because the folder is now writable: without the entry, `'*': 'allow'` would have made `credentials/.env` editable by the agent, which is a regression the widening could have shipped silently. The desktop's own `.env` editor is how a key gets written.
 
 `credentials/.env` is listed even though `*.env` already covers it, so a reader does not have to run the matcher in their head to see that it is denied.
+
+### Searching the folder never asks, and `grep` reaches what `read` denies
+
+`grep` and `glob` are `allow`. Under `'*': 'ask'` they asked, and an unattended task's agent that grepped its own output to check its work stopped the turn on a click nobody was there to give. `glob` returns names only.
+
+**`grep` is the accepted trade-off, and the secret-file rule does not hold through it.** OpenCode 2's grep runs ripgrep with hidden files included and matches its permission rule against the search **pattern**, never a path, so the `*.env` / `*.pem` / `*.key` entries that deny `read` cannot be written for it: a grep whose pattern matches a line in `credentials/.env` returns that line, value included. The shell's `grep -r` was already allowed by `bash: allow`, so the tool opens nothing the shell had not; what changed is that it no longer asks either. A search outside the project still raises `external_directory`.
 
 ### The agent's own identity files ask
 
@@ -157,7 +165,7 @@ The desktop says this on the Permissions card in the user's own words — a comm
 
 ### `always` never reaches the engine
 
-OpenCode's own *Always* writes `{projectID: "global", action, resource: "*"}` into `~/.local/share/opencode/opencode.db`: no directory, no session, no agent, shared with the user's personal OpenCode install, surviving restarts. A grant made in one agent folder was watched authorising a *different* folder agent with no prompt at all. The full observation is [the OpenCode contract](opencode_contract.md) §4, and it was re-taken over ACP — see [the ACP contract](acp_contract.md).
+OpenCode's own *Always* writes `{projectID: "global", action, resource: "*"}` into the engine's session database: no directory, no session, no agent, surviving restarts. On 1.x, where it was measured, that database was the user's own `~/.local/share/opencode/opencode.db`, shared with their personal OpenCode; Cinna's processes now run on a database of their own (`OPENCODE_DB`, [The Local Engine](engine.md#cinnas-opencode-keeps-its-own-database)), shared by every Cinna OpenCode agent. A grant made in one agent folder was watched authorising a *different* folder agent with no prompt at all. The full observation is [the OpenCode contract](opencode_contract.md) §4, and it was re-taken over ACP — see [the ACP contract](acp_contract.md).
 
 Replying `once` persists nothing there — verified the same way. So the desktop opts out of the engine's store completely: the rule is kept beside the agent, the engine is told `once`, and its saved store stays empty forever. `projectID: "global"` never gets a chance to matter.
 
@@ -193,7 +201,17 @@ The write happens on the answer path, while the user is still waiting, so a stor
 
 An auto-answered ask has no registry entry and no park timer — that is the point, there is no dialog to abandon. So nothing else will unpark the session if the reply does not land, and the turn would run to the 20-minute ceiling: twenty minutes of nothing on screen.
 
-One retry, because the engine is a local process and the realistic failure is transient; an engine that has actually stopped ends the turn through its own close path instead. If the retry fails too, a `reject` is posted — the agent is told denied, the session goes idle by the same path a deliberate Deny takes, and the user gets an answer rather than a hang.
+One retry, because the engine is a local process and the realistic failure is transient; an engine that has actually stopped ends the turn through its own close path instead. If the retry fails too, a `reject` is posted — the agent is told denied by the same path a deliberate Deny takes, and the user gets an answer rather than a hang.
+
+### A Deny is not a stop
+
+A Deny tells the agent and the turn continues, on every engine. Claude Code answers a refusal with a tool result and goes on by itself; Codex and OpenCode 2 end their prompt `cancelled` instead, so when Cinna refused an ask (a Deny, a failed registry, a non-Cinna tool on a chat-owned runtime) and did not ask for the cancel, it re-prompts the same session within the same turn, saying the refusal was not a stop — at most 3 times. A refusal sent because the user pressed Stop, a task control ended the turn, or the ceiling fired, is not followed up.
+
+**An expired ask ends the turn as before.** It comes after the hour-long park window, and a continuation would only run on into the turn ceiling and end as a misleading "stopped responding" failure.
+
+Before re-prompting, Cinna releases any other ask still waiting from the prompt the engine ended: the engine abandoned it, so its block settles as *Not answered — the agent moved on without it*, can no longer be answered, and is not reported to the agent as a refusal. The refused call the engine left open is closed as failed with the reason; other calls still open (a subagent, a background task) are left to their own updates. A stall during a continuation still gets the turn's one automatic retry.
+
+**Steering stays closed during a continuation**, as during a stall retry: a message sent then queues and is delivered after the turn ends.
 
 ### A refused answer leaves the controls where they were
 
@@ -251,7 +269,8 @@ Both grants are stored in a desktop-state `.delegations` sidecar under `userData
 
 ## What this deliberately does not do
 
-- **It does not prune OpenCode's own saved store.** If `~/.local/share/opencode/opencode.db` already carries a grant — from the user's personal OpenCode usage, or from anything else that has driven this engine on this machine — the engine allows without asking and nothing here is consulted. The desktop can only gate what it is *asked* about. Pruning mutates state the user's own install depends on, so it has to be a consented action rather than a silent one, and it is not built. See [the contract](opencode_contract.md) §4.2
+- **It does not prune OpenCode's own saved store.** If the engine's database already carries a grant, the engine allows without asking and nothing here is consulted; the desktop can only gate what it is *asked* about. Grants from the user's personal OpenCode usage no longer reach Cinna's sessions, which run on Cinna's own database — assuming 2.x keeps saved grants in that database as 1.x did, which has not been watched — and Cinna itself never answers *Always*. See [the contract](opencode_contract.md) §4.2
+- **It does not keep secret values from `grep`.** See "Searching the folder never asks, and `grep` reaches what `read` denies"
 - **It is not a sandbox, and does not claim to be.** See "The folder is a boundary for the file tools, not for the shell"
 - **It does not offer profile editing in the UI.** The profile is generated; the only per-agent override is `runtime.permissions` in the manifest, edited as a file
 - **It does not survive a publish.** A grant is machine-local by construction, like everything else about a folder agent — see [Local Agents Are Not Synced](local_only.md)

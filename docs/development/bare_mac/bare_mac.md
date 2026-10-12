@@ -48,6 +48,7 @@ The whole suite takes about 3.5 minutes on Apple silicon, plus packaging. The 15
 - **Main-process stubbing.** Playwright connects over CDP through an SSH tunnel; there is no `electronApp`. A spec can do what a user can, plus `window.api` calls from the page
 - **An engine's session start.** Without a login no engine child is spawned — the launcher downloads the pinned Claude Code, then refuses on the login check — so the session-start `git` of a real engine never runs here
 - **Local development** (`uv`, mutagen, cinna-cli) — it needs a reachable cinna-core, which the guest does not have yet
+- **OpenCode's first run.** No spec drives an OpenCode folder agent, so the managed OpenCode's first-use download — an npm platform tarball from `registry.npmjs.org`, unpacked and asked its version — and whatever that raises on a bare Mac are unchecked here. The launcher resolves the binary before it looks for a credential, so such a spec could reach the download with no credential and end at the credential refusal, as `first-agent-session` ends at Claude's login refusal
 
 ## Architecture Overview
 

@@ -1,6 +1,6 @@
 # The Agent Turn — chatting with a folder agent
 
-> **What the engines actually do over this protocol is verified against the real binaries — see [The ACP Engine Contract](acp_contract.md).** This document does not restate it. Four of its findings shape every rule below: `session/load` **replays the whole conversation** before it answers; `session/request_permission` is a *blocking request*, so the answer is the response rather than a separate call; OpenCode registers **no question tool** under ACP while the Claude adapter gains one from a declared client capability; and OpenCode's saved permission grants are **user-global**, which is why the desktop answers *Always allow* itself and never sends `allow_always` — see [Local Agent Permissions](permissions.md).
+> **What the engines actually do over this protocol is verified against the real binaries — see [The ACP Engine Contract](acp_contract.md).** This document does not restate it. Four of its findings shape every rule below: `session/load` **replays the whole conversation** before it answers; `session/request_permission` is a *blocking request*, so the answer is the response rather than a separate call; a question path is gained by declaring a client capability — `elicitation.form`, which the Claude adapter, Codex and OpenCode 2 all bridge their question tools to; and OpenCode's saved permission grants are **not scoped to a folder or an agent**, which is why the desktop answers *Always allow* itself and never sends `allow_always` — see [Local Agent Permissions](permissions.md).
 
 ## Purpose
 
@@ -48,27 +48,26 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 3. The **folder is read**: it must still exist on disk, must be switched on, and must not be in a readiness state it cannot run from. The engine comes from what the folder says now, not from the row
 4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code/Codex is logged in — all of it before the turn lock is taken, so a user reads the reason instead of waiting out a folder write to be told
 5. The per-agent turn lock is taken **shared**, the agent's process is acquired — started if this is the first turn — and a session is loaded or created. The same agent can be answering in other chats at the same moment: they share its one process, each in its own session
-6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude and Codex
+6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude and Codex. On OpenCode the first prompt of a new or freshly loaded session then waits — at most 10 s — until the engine has listed Cinna's MCP tools for that session plus a short settle, because OpenCode 2 connects a session's MCP servers only after the session call has answered, and a prompt sent at once runs without them
 7. The prompt is sent. Text, thinking, tool calls and their results stream into the transcript as `session/update` notifications arrive; the turn ends on a stop reason and the assistant message is persisted
 
 ### Continuing a conversation the next day
 1. The user reopens the chat. The session id was remembered for this (chat, agent) pair
 2. The remembered id is **verified by use, not by a probe** — there is nothing to ask. `session/load` either works or it does not
 3. If it works, the whole prior conversation replays as notifications first; the replay is **dropped**, and only what the new prompt produces reaches the transcript
-4. If it fails, a fresh session is created and the user simply carries on — no error, no explanation owed. Nothing has streamed at that point, because the replay gate was closed for exactly this window
+4. If it fails, a fresh session is created and the user simply carries on — no error, no explanation owed. This is also what a Cinna OpenCode chat from before Cinna kept its own OpenCode database does on its next turn: its session lives in the user's database, the load misses, and the model starts without the earlier turns while the transcript keeps them. Nothing has streamed at that point, because the replay gate was closed for exactly this window
 
 ### The agent asks for permission
 1. Mid-turn the agent wants to reach outside its folder, fetch a URL, edit its own manifest or prompt, or run something the profile flags, and it blocks on `session/request_permission`
 2. A permission block appears in the transcript *inside the streaming answer*, with the action and the things it wants to touch
 3. The user answers **Allow once**, **Always allow** or **Deny**. The answer is delivered by request id, out of band, and settles the blocked request
-4. The decision is recorded in the transcript beside the ask, and the agent continues or takes the denial
+4. The decision is recorded in the transcript beside the ask, and the agent continues or takes the denial. A Deny tells the agent and the turn continues on every engine: for an engine that ends its prompt on a denial (Codex, OpenCode 2) Cinna re-prompts within the same turn, at most 3 times ([Permissions](permissions.md#a-deny-is-not-a-stop))
 5. If a standing grant already covers the ask, **none of that happens**: the agent is answered `allow_once` automatically and nothing is written to the transcript at all
 
 ### The agent asks a question
-1. Claude and Codex advertise `elicitation.form`: Claude bridges `AskUserQuestion`, and Codex bridges native `requestUserInput`, into `elicitation/create`. OpenCode has no question bridge. Companion free-text fields are folded into the existing Other answer rather than shown as extra questions
+1. Claude and Codex advertise `elicitation.form`: Claude bridges `AskUserQuestion`, and Codex bridges native `requestUserInput`, into `elicitation/create`. OpenCode bridges its `question` tool the same way, and the launcher declares `elicitation.form` for it too (its form's `q<n>` / `q<n>_custom` fields are mapped in `acpQuestions.ts`). Companion free-text fields are folded into the existing Other answer rather than shown as extra questions
 2. The question block renders, the answer is delivered by request id while the turn streams on, and the turn does **not** end to ask
 3. When the elicitation names the tool call it came from, as the Claude adapter's does with its own `AskUserQuestion` call, the block is filed in that call's message, as a permission block is, and records the call as `callId`. That call later completes with a result restating the answer. The block already shows the answer, so the renderer folds both the call and that result into it ([Ask User Question](../../chat/ask_user_question/ask_user_question.md#a-local-questions-answer-is-shown-once)). The fold needs the call, the question and the result in one saved row, and they always are: a turn is saved as one row, split only where a steered message landed, and steering is withdrawn while a tool call runs, for the call's whole life. Filing beside the call only mirrors a permission ask; it changes nothing saved or rendered, because the parts of every ACP message are flattened into one list in arrival order
-4. On OpenCode nothing arrives here — its `question` tool is not registered under ACP — so a model that wants to ask asks in prose
 
 ### Cancelling
 1. The user presses Stop mid-answer
@@ -407,5 +406,5 @@ Named gaps:
 
 - **Gemini remains unimplemented.** Codex runs through the pinned adapter in real-stdio and targeted built-Electron tests with a scripted app-server peer. These prove adapter translation and startup/session arguments, not a paid model turn or native sandbox enforcement; see [Codex verification](codex_engine_tech.md#verification-and-limits)
 - **A `session/load` against a session an engine has forgotten** is covered by the fake, but the *shape* of what each real engine returns when a session id is stale has been seen only on OpenCode
-- **Whether OpenCode will ever bridge a question to `elicitation/create`** is an open question upstream; today it registers no question tool under ACP, and the desktop claims none for it
+- **OpenCode's question bridge is pinned against a fake provider only** (`opencode.question.elicitation`); no E2E drives an OpenCode question, and how often a real model picks the tool over asking in prose is unmeasured
 - **The golden suites both engines had are gone**, deliberately. All 32 cases were reduced to their final text, part kinds, tool names, asks and notices before deletion: 26 map straight across to assertions in the ACP suite, three are gone by construction (an SSE drop healed by a durable cursor, a shared server that could be cold), and three that were **missing** are now covered — a user's explicit Deny, a permission ask arriving after the agent has already replied, and the notice that says the CLI fell back from automatic approvals

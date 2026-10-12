@@ -4,6 +4,13 @@
 `darwin-arm64`. Two probe rounds: the first without a model credential (protocol and transport), the
 second with a live OpenAI credential (real turns, real tools, real permissions).
 
+> **Every measurement here is of the 1.x line, and Cinna now drives OpenCode 2 only** (pinned
+> `2.0.27`; a configured 1.x is refused). What is checked on the pinned 2.x binary, each with its own
+> test, is the generated [OpenCode Interface Contract](contracts/opencode_interface.md); a finding below
+> that no entry there pins is **unconfirmed on 2.x**, however firmly it is stated. Where 2.x is known to
+> differ the section says so: questions now arrive over ACP form elicitation, MCP tools sit behind Code
+> Mode's `execute`, and the session database is Cinna's own (`OPENCODE_DB`) rather than the user's.
+
 > **The desktop no longer speaks HTTP to this engine.** Since phase 3 of the agent runtime plan a
 > folder agent's turn spawns `opencode acp` and speaks the Agent Client Protocol to it over stdio —
 > see [The ACP Engine Contract](acp_contract.md), which is the live one. This document is kept for
@@ -208,6 +215,8 @@ direction of `allow`.**
 
 ### Questions
 
+*1.x, over its HTTP bus. On 2.x a question reaches Cinna as an ACP `elicitation/create` instead — see [the ACP contract](acp_contract.md#questions-arrive-as-form-elicitations--on-2x).*
+
 `question.v2.asked` carries `{id:"que_*", sessionID, questions:[{question, header,
 options:[{label, description}], multiple?, custom?}], tool:{messageID, callID}}`.
 
@@ -357,6 +366,12 @@ stored grant therefore carries an explicit scope (`exact` / `origin` / `action`)
 which asterisks look like wildcards.
 
 ### 4.2 The hole in that plan — pre-existing grants. Still open
+
+*Narrowed since: Cinna's OpenCode processes run on a database of their own (`OPENCODE_DB` under
+`<userData>/acp/opencode-data/`), so a grant in the user's `~/.local/share/opencode/opencode.db` no
+longer reaches them — provided 2.x keeps saved grants in the session database as 1.x did, which has not
+been watched. What stays open is the general point: a grant already in whichever database the engine
+opens is honoured without an ask. See [The Local Engine](engine.md#cinnas-opencode-keeps-its-own-database).*
 
 **Nothing in the shipped design closes this.** The desktop can only gate what it is **asked** about. If `~/.local/share/opencode/opencode.db`
 already carries a matching grant — from the user's own OpenCode usage, or from anything else that

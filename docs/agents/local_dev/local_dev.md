@@ -216,7 +216,7 @@ Everything lives under `<userData>/localdev/`:
 
 ### The engine, pre-fetched
 
-The last thing standing between a synced agent and its first turn is the [opencode engine](../local_agents/engine.md), and left alone it arrives **lazily** — at the moment somebody presses send. That is the worst time for a 46 MB download and the one time the user is certainly watching. So a reconcile makes sure a usable binary exists while it is already waiting on other things, and the checklist gets a row for it: **opencode engine**, between cinna-cli and the account workspace.
+The last thing standing between a synced agent and its first turn is the [opencode engine](../local_agents/engine.md), and left alone it arrives **lazily** — at the moment somebody presses send. That is the worst time for a ~90 MB download and the one time the user is certainly watching. So a reconcile makes sure a usable binary exists while it is already waiting on other things, and the checklist gets a row for it: **opencode engine**, between cinna-cli and the account workspace.
 
 Two rules keep that honest.
 
@@ -309,7 +309,7 @@ The three toolchain components are weighted by how long they really take rather 
 
 Those weights are an **aggregation, not a set of ranges**. Each component reports its own 0–100, and the overall figure is the weighted sum of the highest each has reported, never allowed to fall. Fixed ranges — uv 0–20, Mutagen 20–55, cinna-cli 55–100 — were the first shape, and they stopped being expressible the moment the installs stopped happening in that order: Mutagen finishing while cinna-cli is halfway through has no honest answer on a range-based bar. The numbers are unchanged for a run that *does* happen sequentially: uv alone finishing is still 20%, uv and Mutagen still 55%. A component that is already installed reports 100 straight away, so a warm run starts where the finished work leaves it instead of pretending to redo the downloads.
 
-The engine pre-fetch is the one part that cannot have a range, because it is not in the sequence — it runs beside everything else. It is a **share** instead: 15% of the bar, added to whatever the sequential part has reached. Without that the bar would sit at 97% for the length of a 46 MB download, which is the one shape a progress bar exists to avoid. 15% because it is a single download against a toolchain that is several, and because it is very often already satisfied — a developer with their own `opencode` reports 100 at once and simply starts the bar at 15.
+The engine pre-fetch is the one part that cannot have a range, because it is not in the sequence — it runs beside everything else. It is a **share** instead: 15% of the bar, added to whatever the sequential part has reached. Without that the bar would sit at 97% for the length of a ~90 MB download, which is the one shape a progress bar exists to avoid. 15% because it is a single download against a toolchain that is several, and because it is very often already satisfied — a developer with their own `opencode` reports 100 at once and simply starts the bar at 15.
 
 **The engine has to be able to move that bar by itself.** A share that is only recomputed when something *sequential* reports is frozen for exactly the stretch it was added for: a warm toolchain and a warm workspace reach the token check in seconds and then wait on a cold download, with nothing sequential left to report. So the engine re-emits the blend as its bytes arrive, and the headline step shows its download line the way every other component's does while it works.
 

@@ -21,15 +21,15 @@ These are the original OpenCode/Claude probe conditions. Their live-model measur
 | | |
 |---|---|
 | Protocol | ACP **v1** (`protocolVersion: 1`), `@agentclientprotocol/sdk` 1.4.0. v2 is a draft that removes client-side `fs/*` and `terminal/*`; this client declares neither and is forward-compatible |
-| OpenCode | `1.19.0` — the version pinned in `src/shared/runtimePins.ts` — launched as `opencode acp` (stdio). Same binary, same SHA-256 and same archive layout as the pinned download the desktop verifies |
+| OpenCode | `1.18.27`, the version then pinned, launched as `opencode acp` (stdio) — the same binary and SHA-256 as the pinned download the desktop verified. Cinna now drives OpenCode **2** only (`2.0.27` in `src/shared/runtimePins.ts`); what holds on that line is pinned by the [OpenCode Interface Contract](contracts/opencode_interface.md), and §3 says where 2.x changed what is recorded here |
 | Claude | `@agentclientprotocol/claude-agent-acp` **0.76.0**, running on this build's Node (`ELECTRON_RUN_AS_NODE=1`), driving the user's own `claude` **2.1.267** through `CLAUDE_CODE_EXECUTABLE` |
 | Platform | `darwin-arm64` |
 | Credential | OpenCode: a real key, reaching the process only as the `CINNA_ENGINE_KEY_…` variable its config names. Claude: the user's own claude.ai login, held in the login Keychain, with **no API key anywhere in the environment** |
 | Recordings | ndjson transcripts of every probe, taken in a throwaway spike repository that is **not part of this one**. What survives in-tree is `src/main/agents/drivers/acp/__fixtures__/{opencode,claude,codex}/*.json`, distilled from them and used by the translator's tests. The between-turn and activity probes have [their own conditions](#between-turn-traffic) |
 
 The spike answered seven questions and went **go** on all of the ones that gated the phase. Two came
-back partly negative and both are recorded below in full: OpenCode has no question path over ACP, and
-its agent entry's own `model` is ignored.
+back partly negative and both are recorded below in full: OpenCode 1.x had no question path over ACP
+(2.x has one, §3), and its agent entry's own `model` is ignored.
 
 ## 2. Verified — shared behavior measured on OpenCode and Claude
 
@@ -147,6 +147,8 @@ that expires retires the process.
 
 ## 3. OpenCode over `opencode acp`
 
+**Checked against the real binary:** the [OpenCode Interface Contract](contracts/opencode_interface.md) lists every `opencode acp` interface Cinna relies on, each with one test against the pinned binary, run on the config and environment the production launcher writes, against a loopback fake OpenAI-compatible provider behind the egress trap. Every entry is the 2.x line's; the subsections below that were watched on 1.x say so. macOS only.
+
 ### What a config selected by `OPENCODE_CONFIG` applies, and what it does not
 
 A config file applies **in full** over ACP — provider entry, agent entry with its inlined prompt, the
@@ -163,15 +165,45 @@ its model catalogue asynchronously after start, so a `model` set issued millisec
 same model as `configOptions.model.currentValue`. Hence exactly one optional setup call in the whole
 turn path.
 
-### There is no question path over ACP
+### Questions arrive as form elicitations — on 2.x
 
-`opencode acp` sets `OPENCODE_CLIENT=acp` itself, and the `question` tool is registered only for
-`app` / `cli` / `desktop` clients or behind `OPENCODE_ENABLE_QUESTION_TOOL`. Its ACP layer bridges no
-`question.asked` to `elicitation/create`.
+OpenCode 2 always registers its `question` tool and, to a client that declares `elicitation.form`,
+sends `elicitation/create` with one `q<n>` field per question and a `q<n>_custom` free-text companion;
+an `accept` carrying the chosen label reaches the model as the tool's result
+(`opencode.question.elicitation`). So the launcher declares the form, `capabilities().input.question`
+is true for OpenCode, and a question parks the turn — or a task — until someone answers it.
 
-Watched: with the tool forced on, the probe's question **hung for 150 s and had to be cancelled**.
-So the desktop sets neither variable and claims no question capability for this launcher. A model
-that asks in prose is a degradation; a tool that hangs the turn is a defect.
+1.x had no such path, which is why the desktop once claimed no question capability here: `opencode acp`
+set `OPENCODE_CLIENT=acp` itself, the tool was registered only for `app` / `cli` / `desktop` clients or
+behind `OPENCODE_ENABLE_QUESTION_TOOL`, and its ACP layer bridged no `question.asked`. With the tool
+forced on, the probe's question **hung for 150 s and had to be cancelled**.
+
+### What else OpenCode 2 changed on the wire
+
+Each of these has its entry in the [interface contract](contracts/opencode_interface.md); this is
+why the desktop is built the way it is.
+
+- **Every session MCP tool is behind Code Mode.** The model is offered one `execute` tool and calls
+  `tools["cinna"].<tool>()` inside it; the completed update names the tools it ran in
+  `rawOutput.metadata.toolCalls` (`opencode.mcp.session-tool`). The inner call's permission is
+  checked as `cinna_<tool>`, but an ask would arrive as the `execute` call, naming no Cinna tool —
+  hence the profile's `cinna_*` allow ([permissions](permissions.md#an-agent-works-freely-inside-its-own-folder))
+- **A session's MCP servers connect after `session/new` answers.** A prompt sent at once runs
+  without them — its `execute` gets *Unknown tool 'cinna.probe'* — so the driver waits for Cinna's
+  server to answer the session's `tools/list` and a short settle (`opencode.mcp.connect-timing`).
+  2.x first asks the server with `?codemode=false`; the server matches the path and ignores the query
+- **A refusal is an interrupt.** After `reject_once` the prompt ends `cancelled` with no further model
+  request (`opencode.permission.deny-outcome`); the driver releases whatever else was still parked and
+  re-prompts ([A Deny is not a stop](permissions.md#a-deny-is-not-a-stop))
+- **The database is wherever `OPENCODE_DB` says**, and a missing parent directory kills the engine
+  silently (`opencode.launch.database`). Several engines started together on a database that does
+  not exist yet race in its schema bootstrap, and concurrent starts on an existing one still lose
+  about one in twenty to `database is locked` (`opencode.launch.database-first-start`)
+- **`session/load` of a session the database has never seen fails promptly** and replays nothing
+  (`opencode.session.load-unknown`), which is what lets a chat from before Cinna had its own
+  database start fresh
+- **`acp` runs one child, `serve --stdio`, in a process group of its own**, and exits with its parent
+  on SIGTERM or SIGKILL, leaving nothing behind (`opencode.launch.process-tree`)
 
 ### What an idle process costs, and what a cold start costs
 
@@ -213,7 +245,7 @@ The adapter puts `AskUserQuestion` in `disallowedTools` **unless** the client ad
 rendered as a form field of an `elicitation/create` request.
 
 So the capability the in-process runner never had is gained by declaring a capability, and the
-desktop's `capabilities().input.question` is true for this launcher and false for OpenCode. The
+desktop's `capabilities().input.question` is true for this launcher (and, by the same declaration, for OpenCode 2). The
 schema the adapter builds is read rather than guessed: `question_<n>` (a `oneOf` of `{const, title,
 description?}` for single-select, an `array`/`anyOf` for multi-select, where the `const` **is** the
 option's label because that is what the tool records as the answer), plus a `question_<n>_custom`
@@ -594,8 +626,8 @@ Three corrections from this phase, all found by the real binaries after the fake
 
 - **Gemini CLI (`gemini --acp`).** No launcher exists and no question capability is claimed.
 - **Codex native execution.** The pinned adapter is tested against a scripted native app server, and the pinned CLI against a loopback fake provider. A real paid-model turn, live account login, automatic-review decisions and native sandbox enforcement are not established by either. There is no CLI-version matrix and none is needed for the managed copy, which is one version; a configured Codex Path is outside every claim here
-- **Whether OpenCode will bridge a question to `elicitation/create`** in a later version. Today it
-  does not, and the desktop's capability answer says so
+- **OpenCode questions with a real model.** The bridge is pinned against a fake provider
+  (`opencode.question.elicitation`); how often a real model chooses the tool over asking in prose is unmeasured
 - **Remote ACP transports** (Streamable HTTP, WebSocket) are an active RFD upstream, not shipped.
   `opencode acp --port` exists but is OpenCode-specific
 - **Authenticated runtime use of injected MCP tools.** Cinna now injects its session endpoint. The isolated Claude probe accepted the descriptor but made no tool-list/call request; that does not establish actual model use, live list changes or cancellation propagation. Codex may still load MCP servers from its own configuration
@@ -694,6 +726,8 @@ Exact machine-readable ledger: [runtime_conductor_probe_results.json](runtime_co
 Cinna persists only a descriptor/config digest. URL/token continuity holds across session load inside one app process; after restart a changed endpoint forces a fresh session with full saved transcript and attachments. It is not cross-restart endpoint continuity.
 
 ### OpenCode 1.18.27 with a local fake model
+
+*Watched on 1.x, before Code Mode: on 2.x the model sees only `execute`, and a Cinna call is a `tools.cinna.<tool>` inside it rather than a `cinna_<tool>` call (see §3).*
 
 The real binary, ACP transport and Cinna HTTP server ran under isolated HOME/cwd with a deterministic loopback OpenAI-compatible SSE provider. The ledger contains 10 local model HTTP requests, including engine-internal requests, and zero real-provider requests. Calls probe, probe_refresh and probe_slow reached Cinna. A list-change replaced the advertised tool schema in the same session; ACP cancel reached the running MCP AbortSignal and returned cancelled.
 

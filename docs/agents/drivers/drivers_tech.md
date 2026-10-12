@@ -53,7 +53,7 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 |---|---|---|---|---| --- | --- |
 | `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
 | `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` | `resumable` |
-| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` | `permission` | `permission`, `question` |
+| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission`, `question` | `permission`, `question` | `permission` | `permission`, `question` |
 | `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` | `reply` |
 | `attachments` | `cinna` | `none` | `none` | `none` | `none` | `none` |
 | `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) | `cli` |

@@ -29,7 +29,7 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 
 ### Local ACP questions use a live reply
 
-Claude and Codex folder agents reuse the question modal through ACP form elicitation, while the turn is parked. Their answer goes through the shared request/Inbox reply path, not a new user turn; the next-message rules below describe the remote transcript-tool variant. Codex's `_meta.codex.isOtherAnswer` companion field is folded into the existing Other choice, and selected/custom text returns under the original question ID. Live reply requests expire on run teardown or restart. OpenCode has no native question bridge over ACP. See [The Agent Turn](../../agents/local_agents/agent_turn.md) and [Codex](../../agents/local_agents/codex_engine.md).
+Claude, Codex and OpenCode folder agents reuse the question modal through ACP form elicitation, while the turn is parked. Their answer goes through the shared request/Inbox reply path, not a new user turn; the next-message rules below describe the remote transcript-tool variant. Codex's `_meta.codex.isOtherAnswer` companion field is folded into the existing Other choice, and selected/custom text returns under the original question ID. OpenCode's `q<n>_custom` companion is handled the same way: a typed answer replaces the chosen option for a single choice and is appended for a multiple one. Live reply requests expire on run teardown or restart. See [The Agent Turn](../../agents/local_agents/agent_turn.md) and [Codex](../../agents/local_agents/codex_engine.md).
 
 ### A local question's answer is shown once
 
