@@ -9,10 +9,11 @@ Rules for adding or debugging a spec under `e2e/bare-mac/specs/`. Product contex
 | `make bare-mac SPEC=<file>` | Package the working tree, then one spec. Fails early without `tart` or the base image |
 | `make bare-mac APP=dist/bare-mac/cinna-bare.zip SPEC=<file>` | Same, no rebuild. **Repackage after any `src/` change** — the guest runs the zip |
 | `CINNA_BARE_KEEP=1 make bare-mac …` | Keep a failed test's VM running for a look — a nag or a failed window poll counts as a failure |
+| `make bare-mac LIVE=1 …` | Also run the billed spec (`opencode-agent-session`); without it that spec is skipped |
 | `make bare-mac-clean` | Delete leftover `cinna-bare-run-*` VMs |
 | `npm run typecheck:e2e` | Types for the specs and fixture |
 
-Run one spec at a time while writing one; each boots its own VM. A spec takes one to two minutes (the whole suite about 3.5, plus packaging). The test timeout is 15 minutes, as headroom for a slow download; `actionTimeout` is 60 s, so a click on a control that is not there fails in a minute instead of hanging to the test timeout — keep it that way rather than passing a longer timeout to a click.
+Run one spec at a time while writing one; each boots its own VM. A spec takes one to two minutes (the whole suite about 10, plus packaging). The test timeout is 15 minutes, as headroom for a slow download; `actionTimeout` is 60 s, so a click on a control that is not there fails in a minute instead of hanging to the test timeout — keep it that way rather than passing a longer timeout to a click.
 
 ## Anatomy of a spec
 
@@ -27,7 +28,7 @@ Run one spec at a time while writing one; each boots its own VM. A spec takes on
 - **No `electronApp`** — CDP only. No stubbing a dialog or anything else in main. Arrange through `page.evaluate(() => window.api.…)` or the UI.
 - **A `window.api` write bypasses the renderer's caches.** The renderer reads the Default runtime and the agents home at startup, and a direct `window.api.settings.set` skips the invalidation the UI would do. Do every such write in one `page.evaluate`, then `page.reload()`, as a reopen would. `first-agent-session` sets `localAgentsHome` and `localAgentsDefaultEngine` and calls `window.api.localAgents.homeGrant()` (the Agents tab's "Create folder") that way, then goes through the UI only from Agents → Add an agent.
 - **Never walk into an expected system prompt.** Nothing in the guest can click it, so the test stalls and then fails on the nag. Choose the path that avoids it — `localAgentsHome` is set to `/Users/admin/CinnaAgents`, not the default under `~/Documents`, and granted by `homeGrant()` rather than the UI.
-- **No login, no engine child.** A folder-agent message ends at the login refusal (`Claude Code is not logged in`); a spec cannot reach an engine's session start, and never presses the **Log in** it offers — that opens a real browser sign-in. A new agent opens on its own page with the composer already addressed to it — there is no separate chat to start.
+- **No login, no engine child.** A Claude or Antigravity folder-agent message ends at the login refusal (`Claude Code is not logged in`, `Antigravity is not signed in to Google`), and a spec never presses the **Log in** it offers — that opens a real browser sign-in. To reach a session start, give the engine a credential that needs no browser: a dummy API-key `~/.codex/auth.json` for Codex (the turn ends at the provider's 401), the `.env` `OPENAI_API_KEY` for OpenCode (a real, billed turn, so it skips unless `CINNA_E2E_LIVE=1`, which `make bare-mac LIVE=1` sets). The per-engine specs share their steps in `fixtures/agentSession.ts`. A new agent opens on its own page with the composer already addressed to it — there is no separate chat to start.
 - No cinna-core is reachable from the guest; local development cannot be tested yet.
 - Waits on downloads poll the guest's disk with `expect.poll` and `vm.sh('test -x …')` — the managed git under `vm.userData/runtimes/git-<pin>/`, Claude Code under `vm.userData/runtimes/`.
 

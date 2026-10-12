@@ -1,4 +1,10 @@
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@playwright/test'
+import { config as loadEnv } from 'dotenv'
+
+// The OpenCode engine spec's key, as in the main suite: `.env` at the repo root, never the app.
+loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.env'), quiet: true })
 
 /**
  * The bare-Mac suite: the packaged app, installed into a fresh macOS VM with no

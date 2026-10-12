@@ -28,15 +28,18 @@ Install the packaged app on a Mac with nothing installed — no Command Line Too
 
 ### The specs
 - `first-launch` (~1.7 min) — the Welcome card, then a minute idle on it while startup work runs
-- `developer-tools` (~1 min) — Settings → Local Development → Developer Tools reads `make` and `python3` as not found, then, once the managed git has downloaded, shows its pinned version for Git. Steps 3 and 5 of [A fresh Mac, nothing installed](../shell_environment/developer_tools.md#a-fresh-mac-nothing-installed); step 2, the engine child's `git`, is out of reach (below)
+- `developer-tools` (~1 min) — Settings → Local Development → Developer Tools reads `make` and `python3` as not found, then, once the managed git has downloaded, shows its pinned version for Git. Steps 3 and 5 of [A fresh Mac, nothing installed](../shell_environment/developer_tools.md#a-fresh-mac-nothing-installed); step 2, the engine child's `git`, is reached by `codex-agent-session` and `opencode-agent-session` (below)
 - `first-agent-session` (~1 min) — create a Claude folder agent and send it a message: the app downloads its pinned Claude Code (~240 MB) and says Claude Code is not logged in. The agents home, the Claude default runtime and the home folder itself are arranged through `window.api` before the UI flow (below), so the spec clicks only through Agents → Add an agent → New agent
 - `desktop-apps-offer` (~2 min, two VMs) — stub `Claude.app` and `ChatGPT.app` planted in the real `/Applications` over SSH while the app sits on Welcome (detection is lazy and memoized, so it has not looked yet); after Skip the new-chat screen offers both with no system dialog in a 20 s idle. A second test writes a dummy API-key `~/.codex/auth.json`, presses Use ChatGPT and waits for the pinned Codex download and adoption. Use Claude is never pressed: it would open a real browser sign-in. See [Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md)
+- `codex-agent-session` (~1.6 min) — a Codex folder agent with a dummy API-key `~/.codex/auth.json`, which `codex login status` reads as logged in: the pinned Codex and its adapter are downloaded and spawned in the agent folder, start a session, and the turn ends at the provider refusing the key (OpenAI's `Incorrect API key provided`, or the adapter's `Authentication required`; the text shown is kept as the `refusal` annotation), followed by 30 s idle
+- `opencode-agent-session` (~1.5 min, **billed**, only with `make bare-mac LIVE=1`, which sets `CINNA_E2E_LIVE=1` as the main suite's live specs need) — an OpenCode folder agent on the real `OPENAI_API_KEY` from `.env` (skipped without one), on the main suite's model order: `CINNA_E2E_LIVE_MODEL`, then `gpt-5.6-luna`, then the minis: the pinned OpenCode is downloaded from npm, bootstraps its database, runs one short turn in the agent folder and answers, followed by 30 s idle
+- `antigravity-agent-session` (~1.2 min) — an Antigravity folder agent with no Google login: the login is read before any download (the keychain asked by attributes only) and the app shows readiness's sign-in sentence, so no turn fetches the server; the spec then installs the pinned agy-acp-server through `window.api.engine.resolveAntigravity()`, as Settings does, followed by 20 s idle. Sign-in is never pressed
 
-The whole suite takes about 3.5 minutes on Apple silicon, plus packaging. The 15-minute test timeout is headroom for a slow download, not an expected duration
+The per-engine specs share `fixtures/agentSession.ts` (agents home, Default runtime, New agent, first message). The whole suite takes about 10 minutes on Apple silicon, plus packaging. The 15-minute test timeout is headroom for a slow download, not an expected duration
 
 ## Business Rules
 
-- **The suite proved itself both ways.** Release 0.5.1, built before the developer-tool fix (`2c2d916`), fails `first-launch`: the "Install Command Line Developer Tools" dialog appears within seconds of `launch` (+5 s on one run, +8 s on another), with no user action, because startup tool detection executed the `/usr/bin/git` stub. Current `main` passes all three specs
+- **The suite proved itself both ways.** Release 0.5.1, built before the developer-tool fix (`2c2d916`), fails `first-launch`: the "Install Command Line Developer Tools" dialog appears within seconds of `launch` (+5 s on one run, +8 s on another), with no user action, because startup tool detection executed the `/usr/bin/git` stub. Current `main` passes every spec
 - **Always a fresh clone.** Reusing one VM after a differently signed build produced a SecurityAgent keychain prompt that looked like an app bug. A clone is instant, so there is no reason to reuse
 - **One VM at a time.** Apple's licence allows two macOS guests per host, and a boot is most of a test's cost; one worker keeps the host usable
 - **The DMG is installed as a download.** It is copied into `~/Downloads` with a Safari quarantine flag, mounted, and copied to `/Applications`; `spctl` must then assess the app as accepted (a notarized Developer ID), or the test fails. The quarantine flag is removed before launch, because the one "downloaded from the Internet" confirmation cannot be clicked over SSH — the assessment behind it is what is checked instead. The default zip carries no quarantine flag, so Gatekeeper never sees it
@@ -46,9 +49,8 @@ The whole suite takes about 3.5 minutes on Apple silicon, plus packaging. The 15
 ## What it does not cover
 
 - **Main-process stubbing.** Playwright connects over CDP through an SSH tunnel; there is no `electronApp`. A spec can do what a user can, plus `window.api` calls from the page
-- **An engine's session start.** Without a login no engine child is spawned — the launcher downloads the pinned Claude Code, then refuses on the login check — so the session-start `git` of a real engine never runs here
+- **Claude's and Antigravity's session start.** Without a login no engine child is spawned for them — the launcher refuses on the login check — so their session-start `git` never runs here. Codex and OpenCode do spawn theirs (`codex-agent-session`, `opencode-agent-session`), so their session start in the agent folder is covered
 - **Local development** (`uv`, mutagen, cinna-cli) — it needs a reachable cinna-core, which the guest does not have yet
-- **OpenCode's first run.** No spec drives an OpenCode folder agent, so the managed OpenCode's first-use download — an npm platform tarball from `registry.npmjs.org`, unpacked and asked its version — and whatever that raises on a bare Mac are unchecked here. The launcher resolves the binary before it looks for a credential, so such a spec could reach the download with no credential and end at the credential refusal, as `first-agent-session` ends at Claude's login refusal
 
 ## Architecture Overview
 
@@ -71,7 +73,8 @@ make bare-mac -> package-app.sh (or APP=) -> playwright -c e2e/bare-mac/playwrig
 - `scripts/bare-mac/windows.js` — JXA window listing (owner, pid, layer, size)
 - `e2e/bare-mac/playwright.config.ts` — one worker, no retries, 15-minute test timeout, 1-minute action timeout (a missing control fails in a minute, not at the test timeout)
 - `e2e/bare-mac/fixtures/vm.ts` — the `vm` fixture: clone, install, launch, nag watch, teardown
-- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`, `desktop-apps-offer`
+- `e2e/bare-mac/fixtures/agentSession.ts` — shared steps of the per-engine agent specs
+- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`, `desktop-apps-offer`, `codex-agent-session`, `opencode-agent-session`, `antigravity-agent-session`
 
 ## Integration Points
 

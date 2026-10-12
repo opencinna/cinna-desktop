@@ -140,12 +140,12 @@ PW_BARE := npx playwright test -c e2e/bare-mac/playwright.config.ts
 bare-mac-image: ## Build the bare-Mac base VM from Cirrus Labs' vanilla macOS (~55 GB): make bare-mac-image [FORCE=1]
 	scripts/bare-mac/build-image.sh $(if $(FORCE),--force)
 
-bare-mac: ## Install the app in a bare macOS VM and fail on any system dialog: make bare-mac [APP=<.dmg|.zip|.app>] [SPEC=<file>]
+bare-mac: ## Install the app in a bare macOS VM and fail on any system dialog: make bare-mac [APP=<.dmg|.zip|.app>] [SPEC=<file>] [LIVE=1: also the billed OpenCode turn]
 	@command -v tart >/dev/null || { echo "tart not found: docs/development/bare_mac/bare_mac.md"; exit 1; }
 	@tart get $${CINNA_BARE_IMAGE:-cinna-bare-sequoia} >/dev/null 2>&1 || { echo "no base image: run make bare-mac-image"; exit 1; }
 	@APP_PATH="$(APP)"; \
 	if [ -z "$$APP_PATH" ]; then APP_PATH=$$(scripts/bare-mac/package-app.sh) || exit 1; fi; \
-	CINNA_BARE_APP="$$APP_PATH" $(PW_BARE) $(SPEC)
+	CINNA_BARE_APP="$$APP_PATH" $(if $(LIVE),CINNA_E2E_LIVE=1) $(PW_BARE) $(SPEC)
 
 bare-mac-clean: ## Delete run VMs a killed bare-mac run left behind (keeps the base image)
 	@for vm in $$(tart list --quiet 2>/dev/null | grep '^cinna-bare-run-'); do tart stop "$$vm" --timeout 5 >/dev/null 2>&1; tart delete "$$vm" && echo "deleted $$vm"; done
