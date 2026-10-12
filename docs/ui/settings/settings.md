@@ -56,7 +56,7 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 
 ### Show audio input
 
-1. Open Features → Interface → **Show audio input**, the row right after Tasks button (on by default). It exists only where [voice input](../../chat/voice_input/voice_input.md) is supported — today, macOS with the bundled speech helper — and the speech status is fetched at app start so the row is there when the tab opens rather than arriving a beat later and pushing the rows below it down.
+1. Open Features → Interface → **Show audio input**, the row right after Tasks button (off by default). It exists only where [voice input](../../chat/voice_input/voice_input.md) is supported — today, macOS with the bundled speech helper — and the speech status is fetched at app start so the row is there when the tab opens rather than arriving a beat later and pushing the rows below it down.
 2. Off removes the composer's microphone button. The button's own right-click menu has the same switch; turning it off there shows an info toast that links back to this row.
 3. Its (?) text says what the user is agreeing to: macOS's own recognition, on this Mac, the recording sent nowhere by Cinna, and the service provided by Apple rather than by Cinna. Keep that promise true: recognition is on-device only.
 4. Like the Tasks button, it is a renderer preference (`cinna-show-voice-input` in localStorage), saved immediately, machine-wide and shared between app windows.

@@ -41,7 +41,7 @@
 
 ## Database Schema
 
-None. Both preferences are renderer localStorage: `cinna-voice-input-device` (absent means system default) and `cinna-show-voice-input` (`'0'` hides; anything else, including absent, shows). `showVoiceInput` is synced across windows through the store's `storage` listener; the device is not.
+None. Both preferences are renderer localStorage: `cinna-voice-input-device` (absent means system default) and `cinna-show-voice-input` (`'1'` shows; anything else, including absent, hides — off by default). `showVoiceInput` is synced across windows through the store's `storage` listener; the device is not.
 
 ## IPC Channels
 

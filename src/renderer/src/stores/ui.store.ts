@@ -303,7 +303,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   sidebarDocking: readSidebarDocking(),
   voiceInputDeviceId: localStorage.getItem(VOICE_INPUT_DEVICE_KEY) || null,
-  showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) !== '0',
+  showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) === '1',
   sidebarPeek: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
@@ -478,7 +478,7 @@ const syncAppearance = (event: StorageEvent): void => {
     if (show !== useUIStore.getState().showTasksButton) useUIStore.getState().setShowTasksButton(show)
   }
   if (event.key === VOICE_INPUT_SHOWN_KEY || event.key === null) {
-    useUIStore.setState({ showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) !== '0' })
+    useUIStore.setState({ showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) === '1' })
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })

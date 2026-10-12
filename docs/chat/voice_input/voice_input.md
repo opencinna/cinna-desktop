@@ -33,7 +33,7 @@ A microphone button left of Send in the chat composer turns what the user says i
 
 ### Hiding and showing it
 1. The same right-click menu ends with a **Show audio input** switch. Turning it off hides the button and shows an info toast that says where to turn it back on, with a link to Settings → Features. A recording in progress is discarded, and the toast says so.
-2. **Settings → Features → Interface → Show audio input** turns it back on. That row exists only where voice input is supported.
+2. The button is hidden by default. **Settings → Features → Interface → Show audio input** turns it on. That row exists only where voice input is supported.
 
 ### When it cannot work
 1. Speech Recognition denied or restricted: the button is still shown, dimmed; a click explains where to allow it in System Settings instead of recording. Coming back from System Settings enables it without a restart.

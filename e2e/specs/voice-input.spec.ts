@@ -18,12 +18,16 @@ import type { SpeechStatus, TranscribeResult } from '../../src/shared/speech'
 const SUPPORTED: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech' }
 const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec' }
 
-/** Replace main's speech status, then reload so the renderer's prefetch reads it. */
-async function pinSpeechStatus(cinna: CinnaApp, status: SpeechStatus): Promise<void> {
+/**
+ * Replace main's speech status, then reload so the renderer's prefetch reads it.
+ * `shown` turns Show audio input on first (it is off by default).
+ */
+async function pinSpeechStatus(cinna: CinnaApp, status: SpeechStatus, { shown = false } = {}): Promise<void> {
   await cinna.electronApp.evaluate(({ ipcMain }, pinned) => {
     ipcMain.removeHandler('speech:status')
     ipcMain.handle('speech:status', () => pinned)
   }, status)
+  if (shown) await cinna.page.evaluate(() => localStorage.setItem('cinna-show-voice-input', '1'))
   await cinna.page.reload()
   await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
 }
@@ -74,9 +78,20 @@ test.describe('voice input, speech unsupported', () => {
 })
 
 test.describe('voice input, speech supported', () => {
-  test('menu, hide from the menu, and turn back on in Settings → Features', async ({ cinna }) => {
+  test('off by default: no mic button, and the Features switch is off', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await pinSpeechStatus(cinna, SUPPORTED)
+
+    await expect(sendButton(cinna)).toBeVisible()
+    await expect(micButton(cinna)).toHaveCount(0)
+
+    await openFeatures(cinna)
+    await expect(cinna.page.getByRole('switch', { name: 'Show audio input' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  test('menu, hide from the menu, and turn back on in Settings → Features', async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await pinSpeechStatus(cinna, SUPPORTED, { shown: true })
 
     await test.step('the mic button sits immediately before Send', async () => {
       await expect(micButton(cinna)).toBeVisible()
@@ -133,7 +148,7 @@ test.describe('voice input, a recording from a fake microphone', () => {
 
   test('a failed transcription is an error toast; a good one lands in the draft', async ({ cinna }) => {
     await cinna.skipOnboarding()
-    await pinSpeechStatus(cinna, SUPPORTED)
+    await pinSpeechStatus(cinna, SUPPORTED, { shown: true })
     await scriptTranscribe(cinna, [
       { success: false, code: 'no-speech', message: 'No speech was detected.' },
       { success: true, text: 'dictated by the fake microphone' }
