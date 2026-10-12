@@ -2,19 +2,21 @@
 
 ## Purpose
 
-A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. A right-click offers what a user does with a named file next: copy its contents or save them to Notes, copy its full path, show it in its folder, or start a new chat that points at it. The user never has to go looking for a file the agent has just named.
+A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable, and so is a markdown link whose destination is one (Codex writes `[Index CSV](</abs/path/index.csv>)`). <!-- nocheck --> A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. A right-click offers what a user does with a named file next: copy its contents or save them to Notes, copy its full path, show it in its folder, or start a new chat that points at it. The user never has to go looking for a file the agent has just named.
 
 ## Core Concepts
 
-- **File Reference**: an inline code span whose text main resolved to an existing file or folder, for one agent. It carries:
-  - the span text, which is the lookup key;
+- **File Reference**: an inline code span whose text, or a markdown link whose destination, main resolved to an existing file or folder, for one agent. It carries:
+  - the span text or the link's rendered `href`, which is the lookup key;
+  - its source, `span` or `link`, so a span and a link with the same text are two references;
   - the canonical realpath;
   - a display path: relative to the agent folder when inside it, else `~/…` or absolute;
   - its kind, `file` or `dir`;
   - whether it is **inside** the agent folder.
-- **Candidate**: a span whose *shape* could be a path. Only candidates are ever looked up.
+- **File link**: a reference that came from a markdown link. It renders as an ordinary link, opens like a span, and never navigates.
+- **Candidate**: a span or link destination whose *shape* could be a path. Only candidates are ever looked up.
 - **Scope**: the agent a bubble is resolved against. An assistant row uses its `sourceAgentId` and a user row its `addressedAgentId`; either falls back to the chat's own agent. Only an agent whose capabilities include `cwd` has a scope. Today that means the folder launchers (OpenCode, Claude, Codex), for kit and bare folders alike.
-- **Base**: a folder an earlier reference lives in. A later short span may be resolved against it.
+- **Base**: a folder an earlier reference lives in. A later short span or link may be resolved against it.
 - **Outside-Folder Consent**: the native dialog main shows before Cinna previews, opens or reveals a reference outside the agent folder.
 - **Credential file**: a file whose name says it holds secrets. It is never read into the renderer.
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
@@ -32,6 +34,11 @@ A folder agent works inside its folder and names files all the time: `data/refor
    - the **⋯** menu (**Open**, **Open folder**) and Close;
    - the rendered content: markdown, JSON, a CSV table, highlighted Python, or plain text for other code and config.
 4. From the **⋯** menu, **Open** hands the file to the user's editor or its system app, and **Open folder** selects it in Finder. A failure shows in a row under the header and closes nothing.
+
+### A link the agent wrote
+1. The agent writes `[Index CSV](</Users/me/agent/app data/index.csv>)`. Once the reply is saved, the link resolves like a span and looks like any other link: link colour and underline, no box. <!-- nocheck -->
+2. Hovering shows the display path; a click opens the same preview, or shows a folder in Finder, through the same checks. The window never navigates, and a middle-click does nothing.
+3. A link that does not resolve — a missing file, `mailto:`, any non-`http(s)` destination in a chat with no folder or a bubble still streaming — is its text, with the destination as a tooltip. An `http(s)` link opens in the browser, as everywhere.
 
 ### Showing a folder
 1. The user clicks a span that names a folder. Its tooltip ends in `/`.
@@ -77,6 +84,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 7. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
 8. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 25 MB." (Copy contents) or "This file is over 4 MB." (Save to Notes), "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
 9. A selection inside a path still wins: selecting part of it and right-clicking gives the ordinary **Copy text** / **Save to Notes** of the selection.
+10. A file link gets the same menu, outlined the same way, and a right-click on code inside it takes the link's file. A link that did not resolve opens no menu, as plain prose does.
 
 ## Business Rules
 
@@ -84,11 +92,16 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Only in the chat of an agent that runs in a folder** (`capabilities.cwd`). Remote, command-line and managed agents have no folder to resolve against. Main's `locate` also refuses any id that is not a folder agent's.
 - **In message bubbles only**, user and assistant alike. Nothing links in these places:
   - a coordinator's nested agent sub-threads;
-  - thinking and tool blocks;
-  - markdown links: a `[name](path)` is left alone. <!-- nocheck -->
-- **Inline code only.** A `code` element inside a fenced or indented block never links, even when its text exactly matches a resolved span.
-- **Not while streaming.** Resolution reads the saved transcript, so a bubble still receiving tokens shows plain inline code. Its links appear once the message is saved.
-- **Keyed by span text.** Every inline occurrence of the same text in one agent's bubbles links to the same path.
+  - thinking and tool blocks.
+- **Inline code and inline links only.** A `code` element inside a fenced or indented block never links, even when its text exactly matches a resolved span. Reference-style links (`[name][id]`) are not read.
+- **Code inside a rendered link is never a reference of its own**, whether the link is a file link or `http(s)`. Otherwise a click on ``[`out.csv`](/abs/out.csv)`` would act twice, once for the span and once for the link. Inside a link that did not resolve, which renders as text, the code is an ordinary span again. <!-- nocheck -->
+- **Not while streaming.** Resolution reads the saved transcript, so a bubble still receiving tokens shows plain inline code and local links as text. Its links appear once the message is saved.
+- **Keyed by span text, and links by `href`.** Every inline occurrence of the same span text in one agent's bubbles links to the same path, and so does every link with the same `href`. The two are looked up separately.
+
+### Links that go nowhere are not links
+- **A non-`http(s)` link is a file link or plain text.** In every chat bubble, a link whose destination did not resolve — a missing path, `mailto:`, `file://`, or any local path outside a folder agent's chat or while streaming — renders as its text with the destination as a tooltip. `setWindowOpenHandler` opens `http(s)` in the browser and silently drops everything else, so such a link used to look clickable and do nothing. Folder documents already followed this rule.
+- **`http(s)` is unchanged**: it opens in the browser.
+- **A file link never navigates.** A click, Enter or Space opens the preview; the default action is always prevented, and a middle-click, which would open the `href` in a new window, does nothing.
 - **Over the text the bubble renders.** Resolution reads each message with attachment tags stripped and nested code fences repaired, which is the same string its bubble shows. Unrepaired, the outer closer of an unescaped nested block opened a new block that swallowed the prose after it, so a path named in that prose was taken for code and never looked up.
 
 ### Which spans are candidates
@@ -101,7 +114,17 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Why the rule exists:** a span that reads like a command (`rm -rf *`), a URL or prose is never looked up at all.
 - **Filtered twice.** The renderer applies the rule to choose what to ask about, and **main applies it again**, because the renderer is not trusted to have done so.
 - **A small scanner finds the spans**, not the parser that draws the bubble. When the two disagree, the cost is a span that does not link, never a wrong link: a link needs a rendered inline `code` whose exact text main resolved.
-- **De-duplicated and capped.** Candidates are kept in transcript order (the first occurrence wins) and capped at 500 per agent. Later spans in a very long chat do not link.
+- **De-duplicated and capped.** Candidates are kept in transcript order (the first occurrence of each span text or `href` wins) and capped at 500 per agent, spans and links together. Later references in a very long chat do not link.
+
+### Which links are candidates
+- **The key is the `href` exactly as the bubble renders it.** The link component only ever sees its `href`, so the scanner reproduces react-markdown's: the `<…>` stripped, backslash escapes and character references decoded, then percent-encoded the same way (a space becomes `%20`). A test renders awkward destinations through react-markdown and requires the scanner to produce the same list. As with spans, a disagreement costs an unlinked link, never a wrong one.
+- **A link is explicit intent, so its rule is looser than a span's.** Whitespace is allowed (once decoded), and neither a `/` nor an extension is required: `[notes](README)` is a candidate. <!-- nocheck -->
+- **Refused outright**: a URL with a scheme (`http:`, `mailto:`, `file:`), a protocol-relative `//host`, an in-page `#anchor` or `?query`, control characters, and anything over 1024 characters.
+- **Line suffixes are dropped from the path**: a trailing `:line` / `:line:col`, and a `#L12`, `#L12-L20` or `#L3C4` anchor.
+- **A `#` is otherwise part of the name**, except a heading anchor (no `.` or `/` in it) after a name with an extension: `README.md#install` names `README.md`, while `notes#1.md` and `notes#section` are names as written. An encoded `%23` is always a name character.
+- **`%XX` escapes are decoded** before the path is looked up, so `[Index](</a/my file.csv>)` finds `my file.csv`. A malformed escape leaves the text as written. <!-- nocheck -->
+- **Filtered twice**, like spans: the renderer chooses, and main re-applies the link rule.
+- **Known cases that do not link:** a relative `file:line` with no slash (`app.py:12` reads as a URL scheme, and react-markdown blanks its `href` too), a Windows `C:\` path, a `file://` URL, and a destination using a named character reference other than `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and `&nbsp;`.
 
 ### How a candidate resolves
 - **Directly first.**
@@ -113,12 +136,12 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - that folder's ancestors, while they are still strictly inside the agent folder;
   - for a reference outside the agent folder, only its own folder.
 - **Exactly one match, or no link.** A span resolved through bases links only when exactly one distinct file matches, so `summary.md` next to two different earlier files stays plain text. This is how the short names an agent uses after giving a full path get linked: `pulled/reseller.csv` after `data/reforecast/pulled/omp.csv`.
-- **Only earlier spans contribute.** The base list is capped at 200 and keeps its first entries, so **a link never disappears when a later message arrives**.
+- **Only earlier references contribute**, spans and links alike. Both are resolved as one list in transcript order, and the base list is capped at 200 and keeps its first entries, so **a link never disappears when a later message arrives** — and a later span cannot unlink an earlier link, or the other way round.
 - **Detection only stats.** Nothing is read. A path outside the agent folder is linked here and checked later, at the click.
 - **Inside or outside is decided on realpaths.** Every path is a canonical realpath, so a symlink out of the agent folder counts as outside.
 
 ### Links do not flicker
-- **Resolved per agent.** Each agent's candidates are resolved in one request, keyed by their ordered list. A message that adds a span re-resolves; an unchanged transcript does not.
+- **Resolved per agent.** Each agent's candidates are resolved in one request, keyed by their ordered list of source and text. A message that adds a span or link re-resolves, and so does a change of order alone; an unchanged transcript does not.
 - **The previous answer stays up.** While a new answer is on its way, the previous links stay on screen.
   - The obvious tool, TanStack's `keepPreviousData`, does nothing across a key change inside `useQueries`. Before this rule, every link in the chat went blank each time a turn added a span.
   - The remembered answer belongs to one chat, so another chat's links for the same text never show.
@@ -217,6 +240,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - Its tooltip is the display path. A folder's ends in `/`, so it does not read as a file of that name.
   - Its accessible name says what a click does, "Preview <text>" or "Show <text> in its folder" ([UX rule 10](../../development/ui_guidelines/ux_rules.md)).
 - **Clicks that do not open it:** selecting part of a path does not open it, and the second click of a double-click opens nothing more.
+- **A file link looks like a link, not like a span.** It keeps the ordinary link colour and underline and adds only a pointer cursor. Until resolution lands it is plain text in a span, so any padding, edge or fill would reflow the line at the swap. Its tooltip is the display path (a folder's ends in `/`), and its accessible name is "Preview <link text>" or "Show <link text> in its folder". The same click rules apply.
 
 ### The modal for a file reference
 - **The header** holds, in order:
@@ -234,6 +258,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
 ### The right-click menu
 - **It is the transcript's own menu**, with the same placement rule, outline, pointer and keyboard handling, one-action-at-a-time guard and in-menu errors as Copy text / Save to Notes. See [Conversation UI](../conversation_ui/conversation_ui.md#reusing-message-text). Only a rendered reference gets these items; inline code that did not resolve, or a reference in a bubble still streaming, gets the plain text menu.
+- **A file link takes precedence over code inside it.** A right-click on ``[`out.csv`](…)`` acts on the link's file, matching the click rule that code inside a link is not a reference. <!-- nocheck -->
 - **The items are decided once, when the menu opens**, from the reference as the transcript resolved it. Nothing appears or disappears while the menu is open, so the item under the pointer is the one clicked.
 - **Contents are offered unless they plainly cannot be text.** A folder, a known binary type or a credential name gets the path items only. A known text type (every previewable type, `.log`, `.out`, `.err`, rotated logs such as `app.log.1`, and conventional names such as `Makefile`, `Dockerfile`, `.gitignore`, `LICENSE`) is offered. So is an unknown type (`.gz`, an extensionless `NOTES`): main reads it and decides from the bytes.
 - **The whole file or nothing.** The read goes through the same checks as a preview — containment or approval, files only, never a credential file, the device and inode re-checked once open — and is never truncated:
@@ -249,7 +274,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
 ### Deliberately not done
 - **No approval survives a restart**, and none is written anywhere.
-- **Nothing links** for a remote or command-line agent, in a coordinator's sub-threads, in markdown links or in code blocks.
+- **Nothing links** for a remote or command-line agent, in a coordinator's sub-threads, in reference-style markdown links or in code blocks.
 - **No outside path is logged.** A path outside the agent folder is logged only as its length. A launch failure is logged by error name only, because `execFile`'s error message quotes its arguments.
 
 ## Architecture Overview
@@ -257,12 +282,13 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ```
 Resolve (saved transcript)
   MessageStream → collectFileRefSources (folder agents only, per agent, in order)
-    → FileRefResolver → useAgentFileRefs → extractFileRefCandidates
+    → FileRefResolver → useAgentFileRefs → extractFileRefEntries (spans + link hrefs, interleaved)
         → window.api.agentFiles.resolve → agent-files:resolve
            → agentFileService.resolve → localAgentService.locate (index row)
-              → resolveFileRefs: shape re-check → guarded-folder skip → stat → base heuristic
-    ← refs per agent → FileRefContext around each bubble (null while streaming)
+              → resolveFileRefs: span/link rule re-check → guarded-folder skip → stat → base heuristic
+    ← refs per agent → FileRefContext {refs, links} around each bubble (null while streaming)
        → MarkdownCode renders <code class="file-ref" role="button">
+       → MarkdownLink renders <a class="file-link" role="button"> | http(s) <a target=_blank> | <span title=href>
 
 Click
   useFilePreviewStore.openAgentFile(agentId, ref, click point)
@@ -277,7 +303,7 @@ Click
                   html page → html-preview:open → cinna-preview://<token>/… (document + assets in its folder, never asks)
 
 Right-click
-  useMessageContextMenu → fileRefTargetOf(code) → { agentId, ref } → messageMenuItems (decided once)
+  useMessageContextMenu → fileRefTargetOf(a.file-link, else code) → { agentId, ref } → messageMenuItems (decided once)
     Copy contents / Save to Notes
       → readAgentFileText: agent-files:authorize (dialog if outside) → agent-files:read-text
          (containment/consent → file → credential → binary name → dev/inode → 25 MB copy | 4 MB note → NUL / UTF-8)

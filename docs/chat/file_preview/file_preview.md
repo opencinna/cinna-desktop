@@ -12,7 +12,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - **User attachments** under a sent user message ([File Attachments](../file_attachments/file_attachments.md)), `cinna` or `local` source.
   - **Agent attachments** under an assistant reply ([Agent Attachments](../agent_attachments/agent_attachments.md)), always `cinna` source.
 
-**A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span that names a real file.
+**A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span, or a markdown link's destination, that names a real file.
 - **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
 - **Not images.** An agent file is read as text, so an image it names opens in its system app, as before.

@@ -9,7 +9,10 @@
     - Skips fenced and indented code blocks.
     - Matches CommonMark backtick runs within a paragraph.
     - Scans headings and table rows as standalone lines.
-  - `extractFileRefCandidates(markdowns)`: spans across several documents, in order. Shape-filtered, de-duplicated (the first occurrence wins) and capped at `MAX_FILE_REF_CANDIDATES`.
+  - `fileLinkCandidatePath(text)`: the link filter. Refuses a non-string, empty or over `MAX_LINK_LENGTH` (1024), control characters, a leading `#`, `?` or `//`, and any `URL_SCHEME` prefix (`^[A-Za-z][A-Za-z0-9+.-]*:`, which is what refuses `app.py:12` and `C:\`). Splits on the first literal `#`: the fragment is dropped when it matches `LINE_ANCHOR` or, with no `.`/`/` in it, follows a name matching `EXTENSION`. Then strips `LINE_SUFFIX` and percent-decodes (`percentDecoded`: a malformed escape leaves the text unchanged).
+  - `extractLinkDestinations(markdown)`: inline link `href`s in order, exactly as react-markdown passes them to `a`. Built on the same scan as `extractFileRefEntries`; used by tests to pin the scanner against react-markdown.
+  - `extractFileRefEntries(markdowns)`: `FileRefEntry[]` (`{ text, source: 'span' | 'link' }`) across several documents, spans and links interleaved in document order (a span in a link's text before its link). Each filtered by its own rule, de-duplicated per `source\0text`, and capped at `MAX_FILE_REF_CANDIDATES` as one list.
+  - Scanner internals: `walkInlineBlocks` (the block walk both extractors share: fences and indented code skipped, headings and table rows as standalone lines), `scanInline` (code spans by `codeSpanAt`/`codeSpanContent`, and a `]` directly followed by `(`, matched to an open `[` by depth; backslash-escaped characters skipped), `linkAt` (a `<…>` or bare destination with balanced parentheses, an optional title, the closing `)`), `decodeDestination` (backslash escapes, numeric references through `numericEntity` as micromark does, and only the named entities in `NAMED_ENTITIES`), and `normalizeHref`, a port of micromark's `normalizeUri`.
   - `agentFilePreviewKindFor(filename)`: `previewKindFor`, plus `AGENT_TEXT_EXTENSIONS` rendered as `text`. `py` is not in that set: `previewKindFor` already maps it to `python`, which is highlighted.
   - `isCredentialFilePath(path, agentDir)`: the credential-name rule — dotenv names, `*.pem`/`*.key`, `SSH_PRIVATE_KEY_PREFIXES` (not `*.pub`), `CREDENTIAL_FILE_NAMES`, and `CREDENTIAL_PATH_SUFFIXES` matched on the lower-cased path. Passing `agentDir` enables the `credentials/` clause.
   - `isCredentialFileRef(ref)`: that rule for a resolved reference, without the agent folder. An inside ref is judged by `/<displayPath>` against a `/` root, so the `credentials/` clause still applies; an outside ref by its realpath. Used by the preview store and the right-click menu; main refuses regardless.
@@ -18,7 +21,7 @@
   - `agentFileExtension` and `agentFileName`.
   - `BINARY_DOCUMENT_EXTENSIONS`, `TEXT_DOCUMENT_EXTENSIONS`, and `DEFAULT_APP_EXTENSIONS` (the union of the two).
   - `AgentFileConsentPurpose` (`'show' | 'read' | 'reveal' | 'browser'`), the list `AGENT_FILE_CONSENT_PURPOSES`, and `AuthorizeAgentFileInput` (`AgentFilePathInput` plus an optional `purpose`).
-  - Types: `AgentFileRef`, `AgentFileRefKind`, `AgentFileOpenStrategy`, `AgentFileErrorCode`, `AgentFileFailure`, and the IPC input and result types.
+  - Types: `AgentFileRef` (with an optional `source`, absent meaning `span`), `FileRefEntry`, `AgentFileRefKind`, `AgentFileOpenStrategy`, `AgentFileErrorCode`, `AgentFileFailure`, and the IPC input and result types.
 - `src/shared/filePreview.ts`: `decodePreviewText(bytes, truncated)`, the truncation-safe decode shared with attachment previews.
 
 ### Main process — services
@@ -58,7 +61,7 @@
   - `window.api.clipboard.writeText(text)` → `clipboard:write-text`.
 
 ### Renderer
-- `src/renderer/src/components/chat/fileRefs.tsx`: `FileRefContext`, `chatMarkdownComponents` (with `MarkdownPre` and `MarkdownCode`), `collectFileRefSources` and `FileRefResolver`.
+- `src/renderer/src/components/chat/fileRefs.tsx`: `FileRefContext`, `chatMarkdownComponents` (with `MarkdownLink`, `MarkdownPre` and `MarkdownCode`), `collectFileRefSources` and `FileRefResolver`.
 - `src/renderer/src/hooks/useAgentFileRefs.ts`: `useAgentFileRefs(sources)`, `hashCandidates` and the `FileRefScope` type.
 - `src/renderer/src/components/chat/MessageStream.tsx`: collects the sources, mounts the resolver, and provides each bubble's scope.
 - `src/renderer/src/components/chat/MessageBubble.tsx`: renders with `chatMarkdownComponents`, and provides a null scope while streaming.
@@ -68,14 +71,15 @@
 - `src/renderer/src/utils/fileNote.ts`: `fileNoteFromContents(path, text)` and `fenceLanguageFor(fileName)`.
 - `src/renderer/src/utils/startAgentChat.ts`: `startAgentChat(agentId, { draft? })` and `unavailableAgentMessage(agents, agentId, missing)`, shared with the chat-starting shortcuts.
 - `src/renderer/src/components/chat/FilePreviewModal.tsx`: the agent-file header and states. See [File Preview — Technical Details](../file_preview/file_preview_tech.md).
-- `src/renderer/src/assets/main.css`: `.markdown-body code.file-ref`, inside `@layer base`.
+- `src/renderer/src/assets/main.css`: `.markdown-body code.file-ref` and `.markdown-body a.file-link`, inside `@layer base`.
 
 ### Tests
-- `src/shared/agentFiles.test.ts`: extraction, the shape filter, credential names (SSH keys and their `.pub`, tool stores, path endings as whole segments, and resolved refs), preview kinds and content kinds.
+- `src/shared/agentFiles.test.ts`: extraction (spans, link destinations, and both interleaved with per-source de-duplication and one cap), the shape filter, the link filter (accepted and refused destinations, fragments, line suffixes, `%XX`), credential names (SSH keys and their `.pub`, tool stores, path endings as whole segments, and resolved refs), preview kinds and content kinds.
 - `src/main/services/agentFiles/resolver.test.ts`, on tmp-dir fixtures:
   - direct resolution: relative, `../`, absolute, `~/`, a symlink escape, folders;
   - the base heuristic: a single match, an ambiguous match, earlier spans only, `..`;
-  - caps;
+  - links: decoded `%XX`, a dropped fragment or line, a span and a link with the same text as two refs, a link that fails the span shape rule resolving against bases, earlier entries of either kind as the only bases, and malformed entries skipped;
+  - caps, shared by spans and links in entry order;
   - guarded folders, including the real guard with mixed-case spellings;
   - data-volume spellings.
 - `src/main/services/agentFiles/consent.test.ts`: the registry, refused folders and the dialog copy for `show`, `read`, `reveal` (per platform) and `browser`, and a folder worded the same whatever the purpose.
@@ -92,12 +96,12 @@
   - Open in browser (html only, outside only after approval, a failed launch), and the HTML frame's document and asset gate (see [File Preview — Technical Details](../file_preview/file_preview_tech.md#tests)).
 - `src/main/services/agentFiles/openInBrowser.test.ts`: the per-platform launch plan and its fallback.
 - `src/main/host/desktop/clipboard.test.ts`: the write, and refusal of a non-string, an oversized payload and a throwing write.
-- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent; Open in browser first for an HTML file, after authorizing with purpose `browser`, with main's failure in the menu and nothing opened on a decline; Show in the folder for a binary file and a folder, after authorizing with purpose `reveal`, with nothing revealed on a decline and main's failure in the open menu.
+- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a file link (outlined, acting on its path, its file taken over code inside it, path-only for a binary file, no menu when unresolved, the plain-text menu for a selection in it), a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent; Open in browser first for an HTML file, after authorizing with purpose `browser`, with main's failure in the menu and nothing opened on a decline; Show in the folder for a binary file and a folder, after authorizing with purpose `reveal`, with nothing revealed on a decline and main's failure in the open menu.
 - `src/renderer/src/utils/fileNote.test.ts`: title order (frontmatter, H1, any heading, name; headings in fences ignored), raw versus fenced bodies, fence length and `fenceLanguageFor`.
 - `src/main/services/localAgents/homeAccessService.test.ts`: guarded folders spelled in another case.
-- `src/renderer/src/components/chat/fileRefs.test.tsx`: the `code` override and `collectFileRefSources`.
+- `src/renderer/src/components/chat/fileRefs.test.tsx`: the `code` override; the `a` override (a resolved link opening without navigating, a `<…>` destination with spaces, keyboard, double-click and selection, code inside a resolved or external link as plain code and inside an unresolved one still a reference, unresolved and unscoped links as text, `http(s)` unchanged); `extractLinkDestinations` against react-markdown's real `href`s; and `collectFileRefSources`.
 - `src/renderer/src/components/chat/MessageStream.fileRefs.test.tsx`: links in the transcript, and none in a streaming bubble.
-- `src/renderer/src/hooks/useAgentFileRefs.test.tsx`: keeping the previous links, stable identity, and a failed resolve.
+- `src/renderer/src/hooks/useAgentFileRefs.test.tsx`: keeping the previous links, stable identity, a failed resolve, links scoped apart from spans, a transcript with links and no spans, and a re-key when only the order changes.
 - `src/renderer/src/stores/filePreview.store.test.ts`: agent-file opens, header actions and error copy.
 - `src/renderer/src/components/chat/FilePreviewModal.test.tsx`: entrance, focus, the press guard, and the agent-file header and errors.
 - `src/renderer/src/assets/fileRef.css.test.ts`: the link CSS, asserted as text because jsdom does not lay out.
@@ -112,7 +116,7 @@ None.
 
 | Channel | Payload | Returns |
 |---------|---------|---------|
-| `agent-files:resolve` | `{ agentId, candidates: string[] }` | `{ success: true, refs: AgentFileRef[] }` or `AgentFileFailure` |
+| `agent-files:resolve` | `{ agentId, entries: FileRefEntry[] }` (`{ text, source: 'span' \| 'link' }`, transcript order) | `{ success: true, refs: AgentFileRef[] }` or `AgentFileFailure` |
 | `agent-files:authorize` | `{ agentId, path, purpose? }` (`'show'` default, `'read'`, `'reveal'` or `'browser'`) | `{ success: true, approved: boolean }` or `AgentFileFailure`. May show the native dialog, worded by `purpose` |
 | `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated }` or `AgentFileFailure` |
 | `agent-files:read-text` | `ReadAgentFileTextInput`: `{ agentId, path, use? }` (`'note'` default, or `'copy'`) | `{ success: true, text }` (the whole file) or `AgentFileFailure`. `use` picks the cap |
@@ -126,7 +130,7 @@ None.
   - The store turns a thrown call into a message with `unwrapIpcError`.
 - **Every payload is re-validated.** The service treats each payload as `unknown`.
   - `path` must pass `isPlausiblePath`.
-  - `candidates` must be an array, and is cut to 2000 entries before the walk.
+  - `entries`: anything but an array counts as none; it is cut to 2000 entries, then every entry that is not `{ text: string, source: 'span' | 'link' }` is dropped and the rest copied to just those two fields.
 
 ### Error codes
 
@@ -161,7 +165,7 @@ None.
   It records the kind, `{dev, ino}`, `inside` (decided on realpaths) and the profile user.
 - `permitted(input)` (private): `target`, then inside or `consent.isApproved`. Otherwise returns `needs_consent` and logs the path length.
 - `isCredential(found)` (private): the credential rule, applied to the canonical realpath and to the lexical spelling of the requested path.
-- `resolve(input)`: `resolveFileRefs` over the located folder.
+- `resolve(input)`: cleans `entries` (see IPC Channels), then `resolveFileRefs` over the located folder.
 - `authorize(input, prompt)`:
   - An inside or already approved path returns `approved: true` with no dialog.
   - Otherwise there is one in-flight promise per `userId\0realpath` in the `asking` map, so an overlapping call shares the first dialog, that dialog's window and its wording. The key has no purpose in it, because an approval does not either.
@@ -189,7 +193,8 @@ None.
 - `reveal(input)`: `permitted`, then `showItemInFolder(real)`.
 
 ### `src/main/services/agentFiles/resolver.ts`
-- `resolveFileRefs(agentDir, candidates, options)`. The options are `home`, `maxCandidates`, `maxBases`, `isGuarded` (required) and `paths`. It:
+- `resolveFileRefs(agentDir, entries, options)`. The options are `home`, `maxCandidates`, `maxBases`, `isGuarded` (required) and `paths`. It:
+  - walks `entries` in order, validating a `span` with `fileRefCandidatePath` and a `link` with `fileLinkCandidatePath`, skipping malformed entries; `seen` is kept per source, and `maxCandidates` counts both. Each ref carries its `source`;
   - realpaths the agent folder (a missing folder means no refs) and the home folder;
   - uses `probe(path)`, which caches one stat per distinct path per call;
   - uses `guardedRootOf`, which walks a lexical spelling up to its outermost guarded ancestor;
@@ -244,15 +249,19 @@ None.
 ## Renderer Components
 
 ### `src/renderer/src/components/chat/fileRefs.tsx`
-- `FileRefContext`: the `FileRefScope` (`{agentId, refs: Map<text, AgentFileRef>}`) for the bubble being rendered. It is null outside a folder agent's chat and while streaming.
+- `FileRefContext`: the `FileRefScope` (`{agentId, refs: Map<span text, AgentFileRef>, links: Map<href, AgentFileRef>}`) for the bubble being rendered. It is null outside a folder agent's chat and while streaming.
 - `MarkdownPre`: provides `InsidePreContext`, because react-markdown 10 has no `inline` prop to tell a block's `code` from inline code.
-- `fileRefTargetOf(element)`: the `FileRefTarget` (`{ agentId, ref }`) a rendered reference stands for, else null. Backed by a module-level `WeakMap` that `MarkdownCode`'s ref callback fills on mount and clears on unmount; it is how the context menu, which starts from a DOM node, learns what a right-clicked span names.
+- `fileRefTargetOf(element)`: the `FileRefTarget` (`{ agentId, ref }`) a rendered reference stands for, else null. Backed by a module-level `WeakMap` that the ref callbacks of `MarkdownCode` and `MarkdownLink` fill on mount and clears on unmount; it is how the context menu, which starts from a DOM node, learns what a right-clicked span names.
 - `MarkdownCode`:
-  - **Links only when** it is not inside `pre`, a scope exists, its children are plain text, and that text is a key.
+  - **Links only when** it is not inside `pre` or a rendered anchor (`InsideLinkContext`), a scope exists, its children are plain text, and that text is a key.
   - **Adds** `file-ref`, `role="button"`, `tabIndex=0`, `aria-label` and `title`.
   - **On click**, calls `openAgentFile(agentId, ref, {x, y})`, unless text is selected or `event.detail > 1`.
   - **Keyboard**: a keyboard-generated click (`detail === 0`), Enter or Space passes a null origin.
-- `chatMarkdownComponents`: `markdownComponents` plus the two overrides. It is defined at module level, so the memoized `MarkdownContent` never sees a new identity.
+- `MarkdownLink`:
+  - an `href` matching `^https?://` renders the external anchor (`target="_blank"`), its children under `InsideLinkContext`;
+  - an `href` found in `scope.links` renders `<a class="file-link" role="button">` with the `href` kept, `title` the display path (a folder's with `/`), and `aria-label` from the children's plain text, else the display path. Its click always calls `preventDefault`, then opens unless text is selected or `event.detail > 1`; Enter arrives as a click with `detail === 0` (null origin), Space is handled in `onKeyDown`, and `onAuxClick` is prevented. Children go under `InsideLinkContext`;
+  - anything else, including no scope, renders `<span title={href}>` with no `InsideLinkContext`, so code inside it may still be a span reference.
+- `chatMarkdownComponents`: `markdownComponents` plus the three overrides (`a`, `pre`, `code`). It is defined at module level, so the memoized `MarkdownContent` never sees a new identity.
 - `collectFileRefSources(messages, agents, rootAgentId)`: returns `Map<agentId, markdown[]>` in transcript order.
   - User rows go under `addressedAgentId ?? rootAgentId`, using their content with nested code fences repaired.
   - Assistant rows go under `sourceAgentId ?? rootAgentId`, using their `text` and `notice` parts (or their content when there are no parts), with `<cinna_attach>` tags stripped and then nested code fences repaired.
@@ -264,9 +273,10 @@ None.
 
 ### `src/renderer/src/hooks/useAgentFileRefs.ts`
 - `useAgentFileRefs(sources)`: `useQueries`, with one query per agent.
-  - Key: `['agent-file-refs', agentId, hashCandidates(candidates)]`.
+  - Entries from `extractFileRefEntries`. Key: `['agent-file-refs', agentId, hashCandidates(...)]` over `s:<text>` / `l:<text>` items, so the source is part of the hash.
   - `staleTime` 30 s and `retry: false`.
-  - An empty candidate list skips IPC, and a failed call resolves to `[]`.
+  - An empty entry list skips IPC, and a failed call resolves to `[]`.
+  - Each agent's refs are split by `source` into the scope's `refs` (spans, and refs with no `source`) and `links`.
 - `lastAnswer` ref: each agent's last data, returned while its current query has none. See the business rule on flicker.
 - **Stable identity:** the returned map keeps its identity while no agent's data has changed, so the bubbles' context does not churn on every render.
 - `hashCandidates(candidates)`: FNV-1a over the ordered list, prefixed with the list's length.
@@ -302,7 +312,7 @@ None.
 - `agentFileErrorText(ref, step, code, reason)`, `actionErrorText(actionError)` and `actionErrorRepeatsBody(state)`: the body and action-row copy.
 
 ### `src/renderer/src/components/chat/MessageContextMenu.tsx` (reference half)
-- `useMessageContextMenu`: when no selection is under the pointer and the code target is a `CODE` element, `fileRefTargetOf` supplies `MenuState.file`. A block (`pre`) never has one.
+- `useMessageContextMenu`: with no selection under the pointer, `fileLinkContextTarget(root, target, selection)` is tried first: the closest `a.file-link` inside the root, unless a non-collapsed selection intersects it. A link supplies `MenuState.file`, `highlight` (the anchor) and the menu text (`ref.path`), and no code target is looked for. Otherwise, when the code target is a `CODE` element, `fileRefTargetOf` supplies `MenuState.file`. A block (`pre`) never has one.
 - `messageMenuItems(file)`: the groups, decided once per opening. No file → `[copy-text, save-text]`. A `dir`, `isCredentialFileRef`, or a `binary` `agentFileContentKind` of `ref.path` → `[copy-path, reveal, reference]` only; otherwise `[copy-contents, save-contents]` then `[copy-path, reveal, reference]`, with a `role="separator"` between groups, which the arrow keys skip. The menu widens from `w-48` to `w-56` for a file.
 - `referenceDraft(ref)`: "The file \`<path>\` " or "The folder \`<path>\` ", with a trailing space.
 - Actions all go through `run(item, action, fallback)`: the single in-flight guard (`acting` ref), `busyItem` state for the running item, and a `fail(reason)` callback; a throw becomes `unwrapIpcError(err, fallback)`. After a failure, focus returns to the item's `[data-menu-item]` button. The running item shows a `Loader2` spinner (`aria-busy`); the others dim. Items take `aria-disabled` while anything runs, not `disabled`, so focus never falls out of the menu and the arrow keys still move:
@@ -338,12 +348,14 @@ None.
   - `:hover` switches to `--file-ref-edge-hover` (`white 18%` / `black 12%`), with a 120 ms `box-shadow` transition;
   - a `:focus-visible` 2px accent outline with a 1px offset;
   - no border and no `box-decoration-break`.
+- `.markdown-body a.file-link`: `cursor: pointer` only. Colour and underline come from `.markdown-body a`, because the element is a plain `span` until resolution lands and any box would reflow the line at the swap.
 
 ## Configuration
 
-- `MAX_FILE_REF_CANDIDATES` = 500 (`src/shared/agentFiles.ts`): per agent per call, applied in the renderer and again in the resolver.
+- `MAX_FILE_REF_CANDIDATES` = 500 (`src/shared/agentFiles.ts`): per agent per call, spans and links together, applied in the renderer and again in the resolver.
+- `MAX_LINK_LENGTH` = 1024 (`src/shared/agentFiles.ts`): the longest link `href` considered.
 - `MAX_FILE_REF_BASES` = 200 (`src/shared/agentFiles.ts`).
-- `MAX_RAW_CANDIDATES` = 2000 (`agentFileService.ts`): a longer list from the renderer is cut before it is walked.
+- `MAX_RAW_CANDIDATES` = 2000 (`agentFileService.ts`): a longer entry list from the renderer is cut before it is walked.
 - Span length 2–512 characters (`MIN_SPAN_LENGTH`, `MAX_SPAN_LENGTH`).
 - `MAX_PREVIEW_BYTES` = 25 MB (`src/shared/filePreview.ts`).
 - `MAX_AGENT_FILE_COPY_BYTES` = 25 MB (`src/shared/agentFiles.ts`): the Copy contents whole-file read cap, matching `MAX_PREVIEW_BYTES`; its `too_large` message is built from it.
@@ -378,7 +390,7 @@ None.
 ## Observability
 
 - `createLogger('agent-files')` never logs a path, only its length:
-  - `resolved file refs`, at debug level: candidate and ref counts.
+  - `resolved file refs`, at debug level: entry and ref counts.
   - `refused an outside path without approval`: `pathLength`.
   - `asked about a path outside an agent folder`: `pathLength`, `approved` and `rememberDir`.
   - `an agent file changed between its check and its read`: `pathLength`.
