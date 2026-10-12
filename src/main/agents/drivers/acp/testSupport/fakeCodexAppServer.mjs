@@ -39,11 +39,12 @@ async function runTurn(params, turn) {
   if (text === 'Wait until stopped') return
   if (text === 'Report token usage') {
     // Two model requests in one turn, as the app-server reports them: `last`
-    // is the second request alone, `total` the thread's running total. The
-    // pinned adapter turns this into a `usage_update` and the prompt answer's
-    // `usage` / `_meta.quota` (with the patched `total_token_count`).
-    const last = { totalTokens: 1250, inputTokens: 1200, cachedInputTokens: 400, outputTokens: 50, reasoningOutputTokens: 0 }
-    const total = { totalTokens: 2100, inputTokens: 2000, cachedInputTokens: 600, outputTokens: 100, reasoningOutputTokens: 0 }
+    // is the second request alone, `total` the thread's running total (input
+    // including the cached part, as 0.162.1 counts it). The pinned adapter
+    // turns this into a `usage_update` and the prompt answer's `usage` /
+    // `_meta.quota`: the prompt's growth of the total, uncached input apart.
+    const last = { totalTokens: 1250, inputTokens: 1200, cachedInputTokens: 400, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0 }
+    const total = { totalTokens: 2100, inputTokens: 2000, cachedInputTokens: 600, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 0 }
     notify('thread/tokenUsage/updated', { threadId, turnId: turn.id, tokenUsage: { last, total, modelContextWindow: 272000 } })
     complete(threadId, turn, 'Usage reported: 2100 tokens.')
     return

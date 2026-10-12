@@ -36,6 +36,18 @@
  *   there are several. Which is why a lone question takes its text from
  *   `message` and the rest take theirs from their field `description`.
  *
+ * `@agentclientprotocol/codex-acp@2.2.2`'s `buildUserInputRequest` (to a
+ * client that is not the JetBrains AIR UI, which Cinna's patched adapter is
+ * not) builds one field per question, keyed by the question's id, with
+ * `_meta.codex: {isOther, isSecret}`; its **`title` is the question** and its
+ * `description` the short header, and `message` is always the generic "Codex
+ * needs your input to continue.". A question that allows another answer gets a
+ * "None of the above" option and an `<id>_note` companion marked
+ * `_meta.codex.role: 'user_note'`; both are dropped, the companion like
+ * Claude's custom field and the option because it only points at it. A typed
+ * answer is still written into the question's own field: the adapter passes a
+ * value it does not offer through as the answer.
+ *
  * A generic MCP-server elicitation arrives through the same request with an
  * arbitrary JSON-Schema `properties` map. It is mapped as best it can be — one
  * question per property, options from `enum`/`oneOf`/`anyOf` — and a property
@@ -83,7 +95,7 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
   const askable = entries.filter(([key, value]) => {
     const field = asRecord(value)
     const codex = asRecord(asRecord(field?._meta)?.codex)
-    return !isCustomAnswerField(key, field, properties) && codex?.isOtherAnswer !== true
+    return !isCustomAnswerField(key, field, properties) && codex?.isOtherAnswer !== true && codex?.role !== 'user_note'
   })
 
   for (const [key, raw] of askable) {
@@ -91,6 +103,17 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
     if (!field) continue
     const multiple = field.type === 'array'
     const options = enumOptions(field)
+    // Codex's question is its field's title, its header the description.
+    if (isCodexQuestion(field)) {
+      questions.push({
+        question: str(field.title) ?? str(field.description) ?? key,
+        ...(str(field.description) ? { header: str(field.description) as string } : {}),
+        multiSelect: multiple,
+        options: options.filter((option) => !isCodexOtherOption(field, option))
+      })
+      fields.push({ key, multiple })
+      continue
+    }
     // A single question carries its text in `message`; several carry theirs in
     // their own `description`. Falling back to the title, and then to the key,
     // keeps a question from rendering as an empty prompt.
@@ -192,6 +215,28 @@ function isCustomAnswerField(
   if (meta !== undefined && CUSTOM_ANSWER_META_KEY in meta) return true
   const companion = /^(question_\d+)_custom$/.exec(key)
   return companion !== null && companion[1] in properties && enumOptions(field ?? {}).length === 0
+}
+
+/** codex-acp's own "None of the above" option and its fixed description (`USER_INPUT_OTHER_OPTION`). */
+const CODEX_OTHER_OPTION = 'None of the above'
+const CODEX_OTHER_OPTION_DESCRIPTION = 'Provide a different answer in the note field.'
+
+/**
+ * The option codex-acp adds to a question that allows another answer. It
+ * points at the `_note` companion, which is dropped, so it would be an answer
+ * with nothing behind it; the desktop's own free-text Other writes into the
+ * question's field instead. An option the model itself named "None of the
+ * above" (the adapter then adds none) carries its own description and stays.
+ */
+function isCodexOtherOption(field: Record<string, unknown>, option: { label: string; description?: string }): boolean {
+  const codex = asRecord(asRecord(field._meta)?.codex)
+  return codex?.isOther === true && option.label === CODEX_OTHER_OPTION && option.description === CODEX_OTHER_OPTION_DESCRIPTION
+}
+
+/** A question field codex-acp built (`_meta.codex.isOther` is set on every one). */
+function isCodexQuestion(field: Record<string, unknown>): boolean {
+  const codex = asRecord(asRecord(field._meta)?.codex)
+  return typeof codex?.isOther === 'boolean'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

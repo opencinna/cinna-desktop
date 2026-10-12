@@ -2543,7 +2543,7 @@ describe('session telemetry', () => {
     expect(noticed(await w.run())).toBe(false)
   })
 
-  it('reads a Codex turn as its last request, and its login from the launcher', async () => {
+  it('reads a Codex turn as its whole prompt’s usage, and its login from the launcher', async () => {
     const { changes, telemetry } = reporter()
     const w = world({ launcher: 'codex', deps: { telemetry }, telemetryAuth: async () => ({ kind: 'subscription', label: 'ChatGPT' }), script: {
       newSession: { response: { configOptions: [{ id: 'model', category: 'model', type: 'select', currentValue: 'gpt-5.5-codex', options: [] }] } },
@@ -2555,7 +2555,7 @@ describe('session telemetry', () => {
       } }
     } })
     const result = await w.run()
-    expect(result.telemetry).toMatchObject({ model: 'gpt-5.5-codex', tokenScope: 'last_request', tokens: { input: 1_000, output: 345, cacheRead: 11_000 }, contextUsedAfter: 12_345 })
+    expect(result.telemetry).toMatchObject({ model: 'gpt-5.5-codex', tokenScope: 'turn', tokens: { input: 1_000, output: 345, cacheRead: 11_000 }, contextUsedAfter: 12_345 })
     expect(result.telemetry?.costUsd).toBeUndefined()
     await waitFor(() => changes.find((change) => change.type === 'auth'), 'the launcher’s login')
     expect(changes.find((change) => change.type === 'auth')).toEqual({ type: 'auth', engine: 'codex', auth: { kind: 'subscription', label: 'ChatGPT' } })
@@ -2686,25 +2686,21 @@ describe('session telemetry', () => {
     expect(changes).toEqual([])
   })
 
-  it('counts a Codex turn as the growth of the session’s running total, and falls back to the persisted total', async () => {
-    const CODEX_ANSWER = { stopReason: 'end_turn', usage: { inputTokens: 5, cachedReadTokens: 100, outputTokens: 2, totalTokens: 107 },
-      _meta: { quota: { token_count: q(5, 100, 0, 2), total_token_count: q(40, 900, 0, 12), model_usage: [{ model: 'gpt-5.5', token_count: q(5, 100, 0, 2) }] } } }
+  it('counts a Codex turn as the prompt’s own usage, on a restored session too, with nothing read back', async () => {
+    // codex-acp 2.2.2: `usage` and `_meta.quota` are the whole prompt's.
+    const CODEX_ANSWER = { stopReason: 'end_turn', usage: { inputTokens: 40, cachedReadTokens: 900, outputTokens: 12, totalTokens: 952 },
+      _meta: { quota: { token_count: q(40, 900, 0, 12), model_usage: [{ model: 'gpt-5.5', token_count: q(40, 900, 0, 12) }] } } }
     const w = world({ launcher: 'codex', script: { prompt: { response: CODEX_ANSWER } } })
-    const first = await w.run()
-    expect(first.telemetry).toMatchObject({ tokens: { input: 40, output: 12, cacheRead: 900, cacheWrite: 0 }, tokenScope: 'turn' })
-    // The same total again: this turn added nothing.
-    const second = await w.run()
-    expect(second.telemetry).toMatchObject({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tokenScope: 'turn' })
+    expect((await w.run()).telemetry).toMatchObject({ tokens: { input: 40, output: 12, cacheRead: 900, cacheWrite: 0 }, tokenScope: 'turn' })
+    // The same answer again is the same turn again, not nothing.
+    expect((await w.run()).telemetry).toMatchObject({ tokens: { input: 40, output: 12, cacheRead: 900, cacheWrite: 0 }, tokenScope: 'turn' })
 
-    // Another process, and a total persisted from before it.
-    const persisted = { report: () => {}, lastTokenTotal: (_chatId: string, sessionId: string) => sessionId === 'ses_fake' ? { input: 30, output: 10, cacheRead: 600, cacheWrite: 0 } : undefined }
-    const restarted = world({ launcher: 'codex', remembered: 'ses_fake', deps: { telemetry: persisted }, script: { prompt: { response: CODEX_ANSWER } } })
-    expect((await restarted.run()).telemetry).toMatchObject({ tokens: { input: 10, output: 2, cacheRead: 300, cacheWrite: 0 }, tokenScope: 'turn' })
-
-    // Another process, and nothing persisted (a chat from before the total was
-    // kept): the restored total is the whole history, so the last request stands.
-    const upgraded = world({ launcher: 'codex', remembered: 'ses_fake', deps: { telemetry: { report: () => {}, lastTokenTotal: () => undefined } }, script: { prompt: { response: CODEX_ANSWER } } })
-    expect((await upgraded.run()).telemetry).toMatchObject({ tokens: { input: 5, output: 2, cacheRead: 100, cacheWrite: 0 }, tokenScope: 'last_request' })
+    const { changes, telemetry } = reporter()
+    const restored = world({ launcher: 'codex', remembered: 'ses_fake', deps: { telemetry }, script: { prompt: { response: CODEX_ANSWER } } })
+    expect((await restored.run()).telemetry).toMatchObject({ tokens: { input: 40, output: 12, cacheRead: 900, cacheWrite: 0 }, tokenScope: 'turn' })
+    const turn = changes.find((change) => change.type === 'turn')
+    expect(turn).toBeDefined()
+    expect(turn).not.toHaveProperty('tokenTotalReading')
   })
 })
 

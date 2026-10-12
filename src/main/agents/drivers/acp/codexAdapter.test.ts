@@ -61,7 +61,7 @@ describe('pinned Codex adapter over real stdio', () => {
         expect((await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: prompt }] })).stopReason).toBe('end_turn')
         expect(JSON.stringify(updates)).toContain(answer)
       }
-      // A command's output is stored as its tool_result (rawOutput.formatted_output).
+      // A command's output is stored as its tool_result (its _meta.terminal_output_delta fragments).
       const beforeCommand = updates.length
       expect((await connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'Run a command' }] })).stopReason).toBe('end_turn')
       const stream = new AcpMessageStream({ launcher: 'codex' })
@@ -81,7 +81,7 @@ describe('pinned Codex adapter over real stdio', () => {
       await connection.dispose()
       connection = await startAcpConnection(plan.spec, plan.init)
       await connection.loadSession({ ...newSessionParams(plan, dir), sessionId: session.sessionId })
-      await connection.setSessionMode({ sessionId: session.sessionId, modeId: 'read-only' })
+      await connection.setSessionMode({ sessionId: session.sessionId, modeId: 'workspace-write' })
       const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
       const turn = requests.find((request) => request.method === 'turn/start')
       expect(turn.params).toMatchObject({ model: 'test-model', effort: 'high', approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } })

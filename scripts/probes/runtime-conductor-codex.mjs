@@ -155,8 +155,9 @@ async function runCase(spec) {
     let adapterPath = join(home, 'codex-acp.mjs')
     let adapterSource = spec.patched ? baselineAdapterSource.replace(adapterPatchAnchor, adapterPatch) : baselineAdapterSource
     if (spec.promptMeta) {
-      for (const method of ['threadStart', 'threadResume']) {
-        const anchor = `const response = await this.codexClient.${method}({`
+      // The same anchors as scripts/patch-codex-acp.cjs: thread start, and the
+      // resume helper `session/load` and `session/resume` share (codex-acp 2.x).
+      for (const anchor of ['const response = await this.codexClient.threadStart({', 'const response = await this.resumeThread({']) {
         assert(adapterSource.includes(anchor), 'Session instruction patch anchor changed')
         adapterSource = adapterSource.replaceAll(anchor, anchor + promptPatchInsertion)
       }
@@ -180,14 +181,14 @@ async function runCase(spec) {
     }
     let env = { ...baseEnv, HOME: home, CODEX_HOME: codexHome, CODEX_PATH: executable,
       ...(spec.patched && !spec.production ? { DISABLE_MCP_CONFIG_FILTERING: 'true' } : {}),
-      INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify(threadConfig) }
+      INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify(threadConfig) }
     let productionMeta, prepareProduction, productionPlan, preparedProduction
     if (spec.production) {
       // The helper reads its version and adapter digest from the pin manifest,
       // so both are transpiled side by side (see loadProductionPolicy).
       const prepareCodexConductorPolicy = loadProductionPolicy(repo, home)
       const plan = { spec: { command: process.execPath, args: [adapter], env, cwd, key: 'probe' },
-        init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'read-only' } }
+        init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'workspace-write' } }
       prepareProduction = candidate => prepareCodexConductorPolicy(candidate, join(home, 'policy-artifacts'))
       productionPlan = plan
       try {

@@ -15,12 +15,9 @@ import {
   parsePromptTelemetry,
   readAuthStatus,
   readContextCategories,
-  readQuotaTotal,
   sessionFingerprint,
   telemetryAuthOf,
   telemetryEngineOf,
-  tokenDelta,
-  TokenTotalReadings,
   TurnTelemetry
 } from './acpTelemetry'
 import type { AcpConnection } from './types'
@@ -30,7 +27,8 @@ import { clearLogEntries, getLogEntries, setDebugEnabled } from '../../../logger
 
 /**
  * The literal prompt-response shapes of the pinned adapters
- * (`claude-agent-acp` 0.76.0 `turnOutcome`; `codex-acp` `buildQuotaMeta`).
+ * (`claude-agent-acp` 0.76.0 `turnOutcome`; `codex-acp` 2.2.2
+ * `buildPromptUsage` / `buildQuotaMeta`, both the whole prompt's usage).
  */
 const q = (inputTokens: number, cachedInputTokens: number, cachedWriteTokens: number, outputTokens: number) => ({
   totalTokens: inputTokens + cachedInputTokens + cachedWriteTokens + outputTokens,
@@ -89,13 +87,23 @@ describe('the prompt response', () => {
     expect(parsed).toEqual({ tokens: { input: 10, output: 200, cacheRead: 30_000, cacheWrite: 1_500 }, byModel: {}, tokenScope: 'turn' })
   })
 
-  it('reads Codex’s usage as the last request only', () => {
+  it('reads Codex’s usage as the whole turn’s', () => {
     expect(parsePromptTelemetry(CODEX_RESPONSE, 'codex', 'gpt-5.5-codex')).toEqual({
       model: 'gpt-5.5-codex',
       tokens: { input: 1_000, output: 345, cacheRead: 11_000, cacheWrite: 0 },
       byModel: { 'gpt-5.5-codex': { input: 1_000, output: 345, cacheRead: 11_000, cacheWrite: 0 } },
-      tokenScope: 'last_request'
+      tokenScope: 'turn'
     })
+  })
+
+  it('reads the cache writes under codex-acp 2.x’s quota name too', () => {
+    const quota = { totalTokens: 10, inputTokens: 4, cachedInputTokens: 2, cacheWriteInputTokens: 3, outputTokens: 1, reasoningOutputTokens: 0 }
+    expect(parsePromptTelemetry({ stopReason: 'end_turn', usage: null, _meta: { quota: { token_count: quota, model_usage: [] } } }, 'codex')?.tokens)
+      .toEqual({ input: 4, output: 1, cacheRead: 2, cacheWrite: 3 })
+  })
+
+  it('reads Antigravity’s usage, should it send one, as the last request’s', () => {
+    expect(parsePromptTelemetry(CODEX_RESPONSE, 'antigravity')?.tokenScope).toBe('last_request')
   })
 
   it('reads Codex’s quota when usage is null, and nothing from a response with neither', () => {
@@ -201,6 +209,13 @@ describe('one turn', () => {
     expect(turn.settle('s1')).toBe(first)
     expect(changes.map((change) => change.type)).toEqual(['model', 'context', 'context', 'turn'])
     expect(changes[2]).toMatchObject({ type: 'context', used: 16_400, size: 1_000_000, costed: true })
+  })
+
+  it('sums a Claude turn’s two answers (a stall retry): the adapter tallies each prompt from zero', () => {
+    const { turn } = collect()
+    turn.answered(CLAUDE_RESPONSE)
+    turn.answered(CLAUDE_RESPONSE)
+    expect(turn.settle('s1')).toMatchObject({ model: 'claude-sonnet-5[1m]', tokens: { input: 30, output: 640, cacheRead: 76_000, cacheWrite: 4_800 }, tokenScope: 'turn' })
   })
 
   it('settles a turn with no prompt response from its cost alone (a follow-up)', () => {
@@ -447,7 +462,7 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     turn.answered(response)
     // 1,000 uncached in, 11,000 cached, 345 out at 5 / 0.50 / 30.
     const expected = (1_000 * 5 + 11_000 * 0.5 + 345 * 30) / 1_000_000
-    expect(turn.settle('s1')).toMatchObject({ model: 'gpt-5.5', costSource: 'estimated', tokenScope: 'last_request' })
+    expect(turn.settle('s1')).toMatchObject({ model: 'gpt-5.5', costSource: 'estimated', tokenScope: 'turn' })
     const turnChange = changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }>
     expect(turnChange.message.costUsd).toBeCloseTo(expected)
     expect(turnChange.byModelCost!['gpt-5.5']).toBeCloseTo(expected)
@@ -515,103 +530,74 @@ describe('one turn, with Claude’s raw SDK stream', () => {
   })
 })
 
-describe('Codex’s running token total (patched quota)', () => {
+describe('Codex’s per-prompt usage (codex-acp 2.x)', () => {
   const t = (input: number, output: number, cacheRead = 0) => ({ input, output, cacheRead, cacheWrite: 0 })
-  /** A patched `codex-acp` prompt response: the last request, and the session's running total beside it. */
-  const answer = (last: ReturnType<typeof q>, total: ReturnType<typeof q> | null | undefined) => ({
+  /** A `codex-acp` 2.2.2 prompt response: the whole prompt's usage, in `usage` and in `_meta.quota`. */
+  const answer = (prompt: ReturnType<typeof q>) => ({
     stopReason: 'end_turn',
-    usage: { totalTokens: last.totalTokens, inputTokens: last.inputTokens, cachedReadTokens: last.cachedInputTokens, outputTokens: last.outputTokens },
-    _meta: { quota: { token_count: last, ...(total !== undefined ? { total_token_count: total } : {}), model_usage: [{ model: 'gpt-5.5', token_count: last }] } }
+    usage: { totalTokens: prompt.totalTokens, inputTokens: prompt.inputTokens, cachedReadTokens: prompt.cachedInputTokens, outputTokens: prompt.outputTokens },
+    _meta: { quota: { token_count: prompt, model_usage: [{ model: 'gpt-5.5', token_count: prompt }] } }
   })
-  const collect = (options: { readings?: TokenTotalReadings; persisted?: Record<string, ReturnType<typeof t>> } = {}) => {
+  const collect = () => {
     const changes: SessionTelemetryChange[] = []
     const turn = new TurnTelemetry({
-      engine: 'codex', chatId: 'chat', costs: new CostReadings(), tokenTotals: options.readings ?? new TokenTotalReadings(),
-      ...(options.persisted ? { lastTokenTotal: (sessionId: string) => options.persisted![sessionId] } : {}),
+      engine: 'codex', chatId: 'chat', costs: new CostReadings(),
       reporter: { report: (_chatId, change) => changes.push(change) }
     })
     const settled = () => changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> | undefined
     return { turn, changes, settled }
   }
 
-  it('is the growth of the total, or the total itself with no earlier reading or after a drop', () => {
-    expect(tokenDelta(undefined, t(10, 2, 30))).toEqual(t(10, 2, 30))
-    expect(tokenDelta(t(10, 2, 30), t(15, 6, 90))).toEqual(t(5, 4, 60))
-    expect(tokenDelta(t(10, 2, 30), t(15, 1, 90))).toEqual(t(15, 1, 90))
-  })
-
-  it('reads total_token_count from the quota, and nothing without it', () => {
-    expect(readQuotaTotal(answer(q(1, 2, 0, 3), q(10, 20, 0, 30)))).toEqual({ input: 10, output: 30, cacheRead: 20, cacheWrite: 0 })
-    expect(readQuotaTotal(answer(q(1, 2, 0, 3), null))).toBeNull()
-    expect(readQuotaTotal(answer(q(1, 2, 0, 3), undefined))).toBeNull()
-  })
-
-  it('counts every request of the turn, scope turn, and prices the long-context tier by the last request', () => {
-    const connection = {} as AcpConnection
-    const readings = new TokenTotalReadings()
-    const first = collect({ readings })
-    first.turn.answered(answer(q(100, 1_000, 0, 10), q(300, 1_500, 0, 40)), connection, 's1')
-    expect(first.turn.settle('s1')).toMatchObject({ tokens: t(300, 40, 1_500), tokenScope: 'turn', model: 'gpt-5.5' })
-    expect(first.settled()).toMatchObject({ byModel: { 'gpt-5.5': t(300, 40, 1_500) }, tokenTotalReading: t(300, 40, 1_500) })
-    // Estimated on the turn's tokens, not the last request's.
-    expect(first.settled()!.message.costUsd).toBeCloseTo((300 * 5 + 1_500 * 0.5 + 40 * 30) / 1_000_000)
-
-    const second = collect({ readings })
-    second.turn.answered(answer(q(50, 2_000, 0, 5), q(400, 4_500, 0, 60)), connection, 's1')
-    expect(second.turn.settle('s1')).toMatchObject({ tokens: t(100, 20, 3_000), tokenScope: 'turn' })
-  })
-
-  it('prices a turn whose requests together pass the long-context threshold at the base rate, as no request did', () => {
+  it('is the turn’s, every request of it, scope turn, estimated on those tokens', () => {
     const { turn, settled } = collect()
-    // Four requests of ~100K context: 400K in all, 100K the last.
-    turn.answered(answer(q(1_000, 99_000, 0, 50), q(4_000, 396_000, 0, 200)), {} as AcpConnection, 's1')
+    turn.answered(answer(q(300, 1_500, 0, 40)))
+    expect(turn.settle('s1')).toMatchObject({ tokens: t(300, 40, 1_500), tokenScope: 'turn', model: 'gpt-5.5' })
+    expect(settled()).toMatchObject({ byModel: { 'gpt-5.5': t(300, 40, 1_500) } })
+    expect(settled()!.message.costUsd).toBeCloseTo((300 * 5 + 1_500 * 0.5 + 40 * 30) / 1_000_000)
+    // Nothing is kept between turns any more.
+    expect(settled()).not.toHaveProperty('tokenTotalReading')
+  })
+
+  it('prices a turn whose requests together pass the long-context threshold at the base rate, judged by the last request', () => {
+    const { turn, settled } = collect()
+    // Four requests of ~100K context: 400K in all; the last usage_update says 100K.
+    turn.frame({} as AcpConnection, 's1', { used: 100_050, size: 400_000 })
+    turn.answered(answer(q(4_000, 396_000, 0, 200)))
     turn.settle('s1')
     expect(settled()!.message.costUsd).toBeCloseTo((4_000 * 5 + 396_000 * 0.5 + 200 * 30) / 1_000_000)
   })
 
-  it('measures the first turn after a restart against the persisted total, and takes a total that started over as is', () => {
-    const restarted = collect({ persisted: { s1: t(300, 40, 1_500) } })
-    restarted.turn.answered(answer(q(50, 2_000, 0, 5), q(400, 4_500, 0, 60)), {} as AcpConnection, 's1')
-    expect(restarted.turn.settle('s1')).toMatchObject({ tokens: t(100, 20, 3_000), tokenScope: 'turn' })
-
-    const startedOver = collect({ persisted: { s1: t(300, 40, 1_500) } })
-    startedOver.turn.answered(answer(q(50, 2_000, 0, 5), q(50, 2_000, 0, 5)), {} as AcpConnection, 's1')
-    expect(startedOver.turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'turn' })
-  })
-
-  it('keeps the last request for a restored session with no total persisted (its total is the whole history), and records the reading', () => {
-    const connection = {} as AcpConnection
-    const readings = new TokenTotalReadings()
-    const upgraded = collect({ readings })
-    upgraded.turn.session('s1', false, 'fp')
-    upgraded.turn.answered(answer(q(50, 2_000, 0, 5), q(4_000, 90_000, 0, 600)), connection, 's1')
-    expect(upgraded.turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'last_request' })
-    expect(upgraded.settled()).toMatchObject({ tokenTotalReading: t(4_000, 600, 90_000) })
-    // The next turn on the connection is measured against it.
-    const next = collect({ readings })
-    next.turn.session('s1', false, 'fp')
-    next.turn.answered(answer(q(10, 100, 0, 1), q(4_010, 90_100, 0, 601)), connection, 's1')
-    expect(next.turn.settle('s1')).toMatchObject({ tokens: t(10, 1, 100), tokenScope: 'turn' })
-    // A session this connection created has no history: its first total is the turn.
-    const created = collect()
-    created.turn.session('s2', true, 'fp')
-    created.turn.answered(answer(q(50, 2_000, 0, 5), q(300, 1_500, 0, 40)), connection, 's2')
-    expect(created.turn.settle('s2')).toMatchObject({ tokens: t(300, 40, 1_500), tokenScope: 'turn' })
-  })
-
-  it('keeps the last request as a lower bound when the total is missing, and reports no reading', () => {
+  it('prices at the standard tier when no usage_update arrived: the turn’s sum says nothing about one request', () => {
     const { turn, settled } = collect()
-    turn.answered(answer(q(50, 2_000, 0, 5), undefined), {} as AcpConnection, 's1')
-    expect(turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'last_request' })
-    expect(settled()).not.toHaveProperty('tokenTotalReading')
+    turn.answered(answer(q(4_000, 396_000, 0, 200)))
+    turn.settle('s1')
+    expect(settled()!.message.costUsd).toBeCloseTo((4_000 * 5 + 396_000 * 0.5 + 200 * 30) / 1_000_000)
   })
 
-  it('leaves Claude’s turn alone even if a total were present', () => {
-    const changes: SessionTelemetryChange[] = []
-    const readings = new TokenTotalReadings()
-    const turn = new TurnTelemetry({ engine: 'claude', chatId: 'chat', costs: new CostReadings(), tokenTotals: readings, reporter: { report: (_c, change) => changes.push(change) } })
-    turn.answered({ ...CLAUDE_RESPONSE, _meta: { ...CLAUDE_RESPONSE._meta, quota: { ...CLAUDE_RESPONSE._meta.quota, total_token_count: q(1, 1, 1, 1) } } }, {} as AcpConnection, 's1')
-    expect(turn.settle('s1')?.tokens).toEqual(parsePromptTelemetry(CLAUDE_RESPONSE, 'claude')?.tokens)
+  it('judges the tier by the turn’s largest request, not its last', () => {
+    const { turn, settled } = collect()
+    turn.frame({} as AcpConnection, 's1', { used: 290_000, size: 400_000 })
+    turn.frame({} as AcpConnection, 's1', { used: 20_000, size: 400_000 })
+    turn.answered(answer(q(4_000, 396_000, 0, 200)))
+    turn.settle('s1')
+    expect(settled()!.message.costUsd).toBeCloseTo((4_000 * 10 + 396_000 * 1 + 200 * 45) / 1_000_000)
+    expect(settled()!.message.contextUsedAfter).toBe(20_000)
+  })
+
+  it('sums both answers of a turn the stall retry prompted twice', () => {
+    const { turn, settled } = collect()
+    turn.answered(answer(q(300, 1_500, 0, 40)))
+    turn.answered(answer(q(100, 2_000, 0, 10)))
+    expect(turn.settle('s1')).toMatchObject({ tokens: t(400, 50, 3_500), tokenScope: 'turn', model: 'gpt-5.5' })
+    expect(settled()).toMatchObject({ byModel: { 'gpt-5.5': t(400, 50, 3_500) } })
+    expect(settled()!.message.costUsd).toBeCloseTo((400 * 5 + 3_500 * 0.5 + 50 * 30) / 1_000_000)
+  })
+
+  it('takes a restored session’s first turn as the adapter measured it, with nothing read back', () => {
+    const { turn } = collect()
+    turn.session('s1', false, 'fp')
+    turn.answered(answer(q(50, 2_000, 0, 5)))
+    expect(turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'turn' })
   })
 })
 
@@ -667,7 +653,7 @@ describe('Antigravity telemetry', () => {
     const connection = {} as AcpConnection
     turn.started()
     turn.frame(connection, 's', { used: 13187, size: 1048576 })
-    turn.answered({ stopReason: 'end_turn' }, connection, 's')
+    turn.answered({ stopReason: 'end_turn' })
     expect(changes).toContainEqual(expect.objectContaining({ type: 'context', used: 13187, size: 1048576 }))
     // No tokens and no cost: nothing to put on the message.
     expect(turn.settle('s')).toBeUndefined()

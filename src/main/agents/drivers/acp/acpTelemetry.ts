@@ -24,15 +24,18 @@
  *   fingerprint) every running total is measured from 0
  *   ({@link TurnTelemetry.session}); nothing is read back from what the
  *   chat's telemetry persisted.
- * - **Codex (`codex-acp`).** The same response shape, but both `usage` and
- *   `_meta.quota` hold the turn's **last request** only (`tokenUsage.last`).
- *   The patched adapter (`scripts/patch-codex-acp.cjs`) adds
- *   `_meta.quota.total_token_count`, the session's running total: the turn's
- *   tokens are what it grew by ({@link tokenDelta}), `tokenScope: 'turn'`.
- *   Without it, the last request is recorded as `tokenScope: 'last_request'`
- *   — as it is on a restored session's first turn when no earlier total was
- *   persisted, since the total survives a restart ({@link TokenTotalReadings}).
- *   No cost.
+ * - **Codex (`codex-acp` 2.2.2).** The same response shape, and both `usage`
+ *   and `_meta.quota.token_count` (with one `model_usage` row for the
+ *   session's model) are the **whole prompt's** usage: the adapter measures
+ *   how far the thread's running total grew since the prompt started, every
+ *   request of the turn included, and on a session loaded into a fresh
+ *   process sums the turn's requests instead (contract
+ *   `codex.session.prompt-usage`). So a Codex turn is `tokenScope: 'turn'`,
+ *   with nothing kept between turns. A stall retry's second prompt is
+ *   answered with its own usage, so a turn sums its answers (as Claude's,
+ *   whose adapter also resets its tallies per prompt). No cost; no last
+ *   request either — the long-context tier is judged by the turn's largest
+ *   `usage_update.used`, the standard tier when none arrived.
  *
  * - **Claude's raw SDK stream** (`acpSdkTelemetry.ts`, requested by the
  *   launcher) adds what the ACP surface does not carry: the resolved model
@@ -42,7 +45,7 @@
  *   connection's earlier reading only) and request count. A follow-up turn (no prompt
  *   response) takes its tokens from the raw `result`'s `usage`.
  * - **Codex cost is estimated** from `shared/modelPricing.ts` (the runtime
- *   reports none) — a lower bound while its tokens are the last request's.
+ *   reports none).
  *
  * - **Context by category (Claude, on demand).** The patched adapter's
  *   `_cinna/contextUsage` answer is checked field by field
@@ -247,73 +250,6 @@ export function fingerprintDigest(fingerprint: string): string {
   return createHash('sha256').update(fingerprint).digest('hex').slice(0, 16)
 }
 
-/* ----------------------------------------------------------- token totals */
-
-/**
- * What one turn used, from the session's running token total and the
- * previous reading (this process's, else the one the chat's telemetry
- * persisted). No earlier reading, or a total that dropped in any field (the
- * runtime started counting over), and the reading is taken as is.
- */
-export function tokenDelta(previous: TokenTally | undefined, reading: TokenTally): TokenTally {
-  if (!previous) return { ...reading }
-  const fields = ['input', 'output', 'cacheRead', 'cacheWrite'] as const
-  if (fields.some((field) => reading[field] < previous[field])) return { ...reading }
-  return {
-    input: reading.input - previous.input,
-    output: reading.output - previous.output,
-    cacheRead: reading.cacheRead - previous.cacheRead,
-    cacheWrite: reading.cacheWrite - previous.cacheWrite
-  }
-}
-
-/**
- * The last running token total per session, per connection — the
- * {@link CostReadings} bookkeeping for Codex's `total_token_count`.
- *
- * **The total survives a restart.** Observed against the pinned CLI
- * (`codex.session.quota-total-on-resume`): a session `session/load`ed into a
- * fresh adapter process answers its first prompt with the total from before
- * the restart plus that turn. So the first reading on a new connection is
- * measured against the one the chat's telemetry persisted; and a restored
- * session with none persisted (a chat from before the total was kept) has no
- * baseline at all — its first reading is the whole history, so no turn is
- * answered and the caller keeps the last request instead.
- */
-export class TokenTotalReadings {
-  private readonly readings = new WeakMap<AcpConnection, Map<string, TokenTally>>()
-
-  /**
-   * Records `reading` and answers what it added (see {@link tokenDelta}), or
-   * `undefined` for a `restored` session with no earlier reading anywhere.
-   */
-  take(
-    connection: AcpConnection,
-    sessionId: string,
-    reading: TokenTally,
-    persisted?: (sessionId: string) => TokenTally | undefined,
-    restored = false
-  ): TokenTally | undefined {
-    let sessions = this.readings.get(connection)
-    if (!sessions) {
-      sessions = new Map()
-      this.readings.set(connection, sessions)
-    }
-    const previous = sessions.has(sessionId) ? sessions.get(sessionId) : persisted?.(sessionId)
-    sessions.set(sessionId, { ...reading })
-    if (!previous && restored) return undefined
-    return tokenDelta(previous, reading)
-  }
-}
-
-export const tokenTotalReadings = new TokenTotalReadings()
-
-/** `_meta.quota.total_token_count` of a prompt response (Codex's patched adapter), or null. */
-export function readQuotaTotal(response: unknown): TokenTally | null {
-  const quota = record(record(record(response)?._meta)?.quota)
-  return tallyOfQuota(quota?.total_token_count)
-}
-
 /* -------------------------------------------------------- context usage */
 
 function text(value: unknown): string | undefined {
@@ -402,8 +338,6 @@ export interface PromptTelemetry {
   tokens: TokenTally
   byModel: Record<string, TokenTally>
   tokenScope: TokenScope
-  /** Codex with a running total: the turn's last request, whose input is the context it priced at. */
-  lastRequest?: TokenTally
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -414,7 +348,10 @@ function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
-/** `_meta.quota`'s `token_count` shape (codex's, which the Claude adapter copies). */
+/**
+ * `_meta.quota`'s `token_count` shape (codex's, which the Claude adapter
+ * copies). codex-acp 2.x names the cache writes `cacheWriteInputTokens`.
+ */
 function tallyOfQuota(value: unknown): TokenTally | null {
   const q = record(value)
   if (!q) return null
@@ -422,7 +359,7 @@ function tallyOfQuota(value: unknown): TokenTally | null {
     input: count(q.inputTokens),
     output: count(q.outputTokens),
     cacheRead: count(q.cachedInputTokens),
-    cacheWrite: count(q.cachedWriteTokens)
+    cacheWrite: count(q.cachedWriteTokens ?? q.cacheWriteInputTokens)
   }
 }
 
@@ -485,16 +422,14 @@ export function mainModel(rows: Record<string, TokenTally>, selected?: string): 
  * Claude: the tokens are the sum of `_meta.quota.model_usage[]` (subagents and
  * compaction included), falling back to `usage` (main loop) and then
  * `quota.token_count` — on a resumed session's first turn too, whose rows
- * are that turn's only (observed 2026-09-30). Codex: `usage`,
- * falling back to `quota.token_count`; both are the last request only —
- * unless `turnTokens` (the growth of the patched adapter's running total)
- * is given, which is then the turn's, with scope `turn`.
+ * are that turn's only (observed 2026-09-30). Codex: `usage`, falling back to
+ * `quota.token_count`; both are the whole prompt's (codex-acp 2.x), scope
+ * `turn`. Antigravity: the same fields, read as the last request's.
  */
 export function parsePromptTelemetry(
   response: unknown,
   engine: TelemetryEngine,
-  selectedModel?: string,
-  options: { turnTokens?: TokenTally } = {}
+  selectedModel?: string
 ): PromptTelemetry | null {
   const r = record(response)
   if (!r) return null
@@ -512,17 +447,6 @@ export function parsePromptTelemetry(
   const usage = tallyOfUsage(r.usage)
   const total = tallyOfQuota(quota?.token_count)
   const model = mainModel(byModel, selectedModel)
-  // Codex with the running total: the turn's growth of it, every request.
-  if (engine === 'codex' && options.turnTokens) {
-    const lastRequest = usage ?? total ?? undefined
-    return {
-      ...(model ? { model } : {}),
-      tokens: { ...options.turnTokens },
-      byModel: model ? { [model]: { ...options.turnTokens } } : {},
-      tokenScope: 'turn',
-      ...(lastRequest ? { lastRequest } : {})
-    }
-  }
   // Antigravity answers a prompt with its stop reason alone (no `usage`, no
   // `_meta.quota`, observed on 1.3.0): no tokens, so no turn telemetry — its
   // context arrives through `usage_update {used, size}` instead. Read like
@@ -533,7 +457,7 @@ export function parsePromptTelemetry(
     ...(model ? { model } : {}),
     tokens,
     byModel,
-    tokenScope: engine === 'claude' ? 'turn' : 'last_request'
+    tokenScope: engine === 'antigravity' ? 'last_request' : 'turn'
   }
 }
 
@@ -657,9 +581,6 @@ export interface TurnTelemetryOptions {
   modelCosts?: ModelCostReadings
   apiDurations?: ApiDurationReadings
   calibration?: PriceCalibration
-  tokenTotals?: TokenTotalReadings
-  /** The last running token total the chat's telemetry kept for a session (see {@link TokenTotalReadings}). */
-  lastTokenTotal?: (sessionId: string) => TokenTally | undefined
 }
 
 /** The SDK's `apiKeySource` values that mean an API key paid. `none` says nothing (OAuth, a bearer token, a cloud). */
@@ -687,15 +608,13 @@ export class TurnTelemetry {
   private reportedSelected?: string
   private costUsd?: number
   private lastUsed?: number
+  /** The largest `usage_update.used` of the turn: one request's tokens, the biggest one's. */
+  private maxUsed?: number
   private startedAt?: number
   private endedAt?: number
-  private answer?: unknown
-  /** Codex's running total after the turn, and what it grew by. */
-  private tokenTotalReading?: TokenTally
-  private turnTokens?: TokenTally
+  /** Every prompt response of the turn, in order: a stall retry sends a second prompt. */
+  private readonly answers: unknown[] = []
   private settled = false
-  /** The turn runs on a session `session/load` restored (see {@link TokenTotalReadings}). */
-  private restored = false
   private result?: MessageTelemetry
   private authKind?: SessionTelemetryAuth['kind']
   // Claude's raw stream.
@@ -719,7 +638,6 @@ export class TurnTelemetry {
   private readonly costs: CostReadings
   private readonly modelCosts: ModelCostReadings
   private readonly apiDurations: ApiDurationReadings
-  private readonly tokenTotals: TokenTotalReadings
   private readonly calibration: PriceCalibration
 
   constructor(private readonly options: TurnTelemetryOptions) {
@@ -727,7 +645,6 @@ export class TurnTelemetry {
     this.costs = options.costs ?? costReadings
     this.modelCosts = options.modelCosts ?? modelCostReadings
     this.apiDurations = options.apiDurations ?? apiDurationReadings
-    this.tokenTotals = options.tokenTotals ?? tokenTotalReadings
     this.calibration = options.calibration ?? priceCalibration
   }
 
@@ -771,7 +688,6 @@ export class TurnTelemetry {
       this.modelCosts.reset(connection, sessionId)
       this.apiDurations.record(connection, sessionId, 0)
     }
-    this.restored = !fresh
     this.report({ type: 'session', engine: this.options.engine, sessionId, fresh, fingerprint: fingerprintDigest(fingerprint), at: this.now() })
   }
 
@@ -781,7 +697,10 @@ export class TurnTelemetry {
     if (frame.costUsd !== undefined) {
       this.costUsd = (this.costUsd ?? 0) + this.costs.take(connection, sessionId, frame.costUsd)
     }
-    if (frame.used !== undefined) this.lastUsed = frame.used
+    if (frame.used !== undefined) {
+      this.lastUsed = frame.used
+      this.maxUsed = Math.max(this.maxUsed ?? 0, frame.used)
+    }
     this.report({
       type: 'context',
       engine: this.options.engine,
@@ -908,19 +827,36 @@ export class TurnTelemetry {
   }
 
   /**
-   * The prompt response, cancelled ones included. With the connection and
-   * session it answered on, a Codex running total in it is measured against
-   * the session's previous one here, once, as it arrives.
+   * A prompt response, cancelled ones included. A turn can have two: the
+   * stall retry prompts again on the same turn (`acpDriver.ts`), and each
+   * answer carries its own prompt's usage only, so {@link settle} sums them.
    */
-  answered(response: unknown, connection?: AcpConnection, sessionId?: string): void {
+  answered(response: unknown): void {
     this.endedAt = this.now()
-    this.answer = response
-    if (this.options.engine !== 'codex' || !connection || !sessionId || this.tokenTotalReading) return
-    const reading = readQuotaTotal(response)
-    if (!reading) return
-    this.tokenTotalReading = reading
-    const turnTokens = this.tokenTotals.take(connection, sessionId, reading, this.options.lastTokenTotal, this.restored)
-    if (turnTokens) this.turnTokens = turnTokens
+    this.answers.push(response)
+  }
+
+  /**
+   * The turn's prompt usage over every answer. Claude's and Codex's answers
+   * are each their own prompt's (the Claude adapter resets its tallies when a
+   * prompt starts; codex-acp measures from the prompt's start), so they add
+   * up. Antigravity's is read as the last request's, so the last answer's
+   * stands alone.
+   */
+  private promptTelemetry(): PromptTelemetry | null {
+    const engine = this.options.engine
+    const answers = engine === 'antigravity' ? this.answers.slice(-1) : this.answers
+    const parsed = answers
+      .map((answer) => parsePromptTelemetry(answer, engine, this.selected))
+      .filter((p): p is PromptTelemetry => p !== null)
+    if (parsed.length <= 1) return parsed[0] ?? null
+    const byModel: Record<string, TokenTally> = {}
+    for (const p of parsed) {
+      for (const [model, tally] of Object.entries(p.byModel)) byModel[model] = byModel[model] ? addTally(byModel[model], tally) : { ...tally }
+    }
+    const tokens = parsed.slice(1).reduce((sum, p) => addTally(sum, p.tokens), { ...parsed[0].tokens })
+    const model = mainModel(byModel, this.selected) ?? parsed.find((p) => p.model)?.model
+    return { ...(model ? { model } : {}), tokens, byModel, tokenScope: parsed[parsed.length - 1].tokenScope }
   }
 
   /** Per-model cost deltas keyed like the turn's token rows where the ids name the same model. */
@@ -981,9 +917,7 @@ export class TurnTelemetry {
     this.settled = true
     this.logTraffic()
     const engine = this.options.engine
-    const parsed = this.answer !== undefined
-      ? parsePromptTelemetry(this.answer, engine, this.selected, this.turnTokens ? { turnTokens: this.turnTokens } : {})
-      : null
+    const parsed = this.promptTelemetry()
     // No prompt response (a follow-up the agent started): the raw result's
     // main-loop usage is the turn's.
     const raw = !parsed && this.rawUsage ? { tokens: this.rawUsage, model: this.rawModel } : null
@@ -1000,12 +934,15 @@ export class TurnTelemetry {
     // Antigravity: no cost from the server and none estimated — a Google
     // account login has no per-token price this table could stand for.
     // Codex reports no cost: the table's, unless a partner cloud paid (its
-    // prices differ) or the model is not in it. A lower bound while the
-    // tokens are the last request's. The long-context tier is judged by one
-    // request's context — the last one's — never by the turn's sum.
+    // prices differ) or the model is not in it. The long-context tier is
+    // judged by one request's context, never by the turn's sum: the largest
+    // `usage_update.used` of the turn — the per-request reading codex-acp
+    // offers, one request's input plus its output (it has no input-only one),
+    // so at most one response's output above that request's context. With no
+    // reading the turn's sum says nothing about any one request, so the
+    // standard tier is assumed: a lower bound for a turn that did pass it.
     if (engine === 'codex' && costUsd === undefined && parsed && model && this.authKind !== 'cloud') {
-      const priced = parsed.lastRequest ?? tokens
-      const estimated = costOf(model, tokens, { contextTokens: priced.input + priced.cacheRead + priced.cacheWrite })
+      const estimated = costOf(model, tokens, this.maxUsed !== undefined ? { contextTokens: this.maxUsed } : {})
       if (estimated !== undefined) {
         costUsd = estimated
         costSource = 'estimated'
@@ -1040,7 +977,6 @@ export class TurnTelemetry {
         message,
         ...(Object.keys(rows).length ? { byModel: rows } : {}),
         ...(Object.keys(byModelCost).length ? { byModelCost } : {}),
-        ...(this.tokenTotalReading ? { tokenTotalReading: { ...this.tokenTotalReading } } : {}),
         ...(this.contextWindow !== undefined ? { contextWindow: this.contextWindow } : {}),
         ...(this.maxOutputTokens !== undefined ? { maxOutputTokens: this.maxOutputTokens } : {}),
         ...(this.selected ? { selectedModel: this.selected } : {})

@@ -144,14 +144,4 @@ describe('measuring a chat’s context on demand', () => {
     await third
     expect(measurer).toHaveBeenCalledTimes(2)
   })
-
-  it('reads back a session’s last running token total, as a copy', () => {
-    const service = createSessionTelemetryService({ store: memoryStore() })
-    service.report('chat', { ...turn, engine: 'codex', tokenTotalReading: { input: 10, output: 2, cacheRead: 30, cacheWrite: 0 } })
-    const reading = service.lastTokenTotal('chat', 's1')!
-    expect(reading).toEqual({ input: 10, output: 2, cacheRead: 30, cacheWrite: 0 })
-    reading.input = 0
-    expect(service.lastTokenTotal('chat', 's1')?.input).toBe(10)
-    expect(service.lastTokenTotal('chat', 's2')).toBeUndefined()
-  })
 })

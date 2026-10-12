@@ -1,6 +1,6 @@
 {
   "recording": "session_activity/codex-q6-nocaps-subagent.ndjson",
-  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. Codex subagent WITHOUT any AIR capability (codex-acp 1.11.0, codex-cli 0.154.0-alpha.6.2): no subagent_spawned, no child-session frames. The root session gets tool calls for subAgentActivity items instead: \"Start subagent <name>\" and \"Complete subagent <name>\", each with _meta.codex.subagent {threadId, path, activity}. The model waited with the wait collaboration call, whose receiverThreadIds and agentsStates were empty. available_commands_update dropped.",
+  "note": "RESHAPED to codex-acp 2.2.2 — derived from the 1.11.0 recording, not re-recorded. Codex subagent WITHOUT nativeSubagentSessions, the patched adapter answering isAirClient false: no subagent_spawned, no child-session frames. The root session gets tool calls for subAgentActivity items instead: \"Start subagent <name>\" and \"Complete subagent <name>\" (SubagentActivityReporter, dist/index.js ~29838-29861), identified only by rawInput {agentThreadId, agentPath, activityKind}; the `subagent` flag is AIR meta (AcpToolCallRenderer.airMeta ~28178), so 2.2.2 sends these calls with no _meta at all. The 1.11.0 recording (codex-acp 1.11.0, codex-cli 0.154.0-alpha.6.2) carried the same rawInput plus _meta.codex.subagent {threadId, path, activity}, now removed, as are the message chunks' _meta.codex.phase (AIR-only in 2.2.2). The model waited with the wait collaboration call, whose receiverThreadIds and agentsStates were empty. promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. available_commands_update dropped.",
   "promptReturnedAtIndex": 29,
   "notifications": [
     {
@@ -25,11 +25,6 @@
         "content": {
           "type": "text",
           "text": "I"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -41,11 +36,6 @@
         "content": {
           "type": "text",
           "text": "’ll"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -57,11 +47,6 @@
         "content": {
           "type": "text",
           "text": " run"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -73,11 +58,6 @@
         "content": {
           "type": "text",
           "text": " the"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -89,11 +69,6 @@
         "content": {
           "type": "text",
           "text": " command"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -105,11 +80,6 @@
         "content": {
           "type": "text",
           "text": " in"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -121,11 +91,6 @@
         "content": {
           "type": "text",
           "text": " a"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -137,11 +102,6 @@
         "content": {
           "type": "text",
           "text": " sub"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -153,11 +113,6 @@
         "content": {
           "type": "text",
           "text": "-agent"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -169,11 +124,6 @@
         "content": {
           "type": "text",
           "text": " and"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -185,11 +135,6 @@
         "content": {
           "type": "text",
           "text": " wait"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -201,11 +146,6 @@
         "content": {
           "type": "text",
           "text": " for"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -217,11 +157,6 @@
         "content": {
           "type": "text",
           "text": " its"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -233,11 +168,6 @@
         "content": {
           "type": "text",
           "text": " result"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -249,11 +179,6 @@
         "content": {
           "type": "text",
           "text": ".\n"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "commentary"
-          }
         }
       }
     },
@@ -269,15 +194,6 @@
           "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
           "agentPath": "/root/shell_probe",
           "activityKind": "started"
-        },
-        "_meta": {
-          "codex": {
-            "subagent": {
-              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
-              "path": "/root/shell_probe",
-              "activity": "started"
-            }
-          }
         }
       }
     },
@@ -291,15 +207,6 @@
           "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
           "agentPath": "/root/shell_probe",
           "activityKind": "started"
-        },
-        "_meta": {
-          "codex": {
-            "subagent": {
-              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
-              "path": "/root/shell_probe",
-              "activity": "started"
-            }
-          }
         }
       }
     },
@@ -327,15 +234,6 @@
           "model": null,
           "reasoningEffort": null,
           "status": "inProgress"
-        },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "wait",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": []
-            }
-          }
         }
       }
     },
@@ -351,15 +249,6 @@
           "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
           "agentPath": "/root/shell_probe",
           "activityKind": "completed"
-        },
-        "_meta": {
-          "codex": {
-            "subagent": {
-              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
-              "path": "/root/shell_probe",
-              "activity": "completed"
-            }
-          }
         }
       }
     },
@@ -373,15 +262,6 @@
           "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
           "agentPath": "/root/shell_probe",
           "activityKind": "completed"
-        },
-        "_meta": {
-          "codex": {
-            "subagent": {
-              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
-              "path": "/root/shell_probe",
-              "activity": "completed"
-            }
-          }
         }
       }
     },
@@ -400,15 +280,6 @@
           "model": null,
           "reasoningEffort": null,
           "status": "completed"
-        },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "wait",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": []
-            }
-          }
         }
       }
     },
@@ -428,11 +299,6 @@
         "content": {
           "type": "text",
           "text": "sub"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "final_answer"
-          }
         }
       }
     },
@@ -444,11 +310,6 @@
         "content": {
           "type": "text",
           "text": "-ok"
-        },
-        "_meta": {
-          "codex": {
-            "phase": "final_answer"
-          }
         }
       }
     },

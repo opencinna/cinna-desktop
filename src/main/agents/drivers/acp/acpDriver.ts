@@ -883,7 +883,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     ctx.telemetry = new TurnTelemetry({
       engine: telemetryEngine,
       chatId,
-      ...(!input.nested ? telemetrySink(deps, chatId) : {})
+      ...(!input.nested ? telemetrySink(deps) : {})
     })
   }
   /**
@@ -1566,7 +1566,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         () => { ctx.telemetry?.started(); armSteering() }
       ).finally(settleSteering)
       const answered = (reply: NonNullable<typeof answer>, on: AcpConnection, session: string): void => {
-        ctx.telemetry?.answered(reply, on, session)
+        ctx.telemetry?.answered(reply)
         noteSessionLive(on, session, fingerprint)
         ctx.measurable?.set(chatId, {
           connection: on, sessionId: session, fingerprint, agentId: agent.id, launcherId: ctx.launcherId, specKey: plan.spec.key, runtime, answered: true
@@ -1860,7 +1860,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   }
   const telemetryEngine = telemetryEngineOf(world.launcherId)
   if (telemetryEngine) {
-    ctx.telemetry = new TurnTelemetry({ engine: telemetryEngine, chatId, ...telemetrySink(deps, chatId) })
+    ctx.telemetry = new TurnTelemetry({ engine: telemetryEngine, chatId, ...telemetrySink(deps) })
     ctx.telemetry.started()
   }
   const stream = new AcpMessageStream({ launcher: world.launcherId })
@@ -2740,19 +2740,10 @@ function finish(
   }
 }
 
-/**
- * Where a turn's telemetry goes: the reporter, and the chat's last persisted
- * Codex token total per session for the first reading after a restart (Codex
- * restores it on resume; Claude's running totals start over, so nothing of
- * Claude's is read back). Empty without a telemetry service.
- */
-function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastTokenTotal'> {
+/** Where a turn's telemetry goes: the reporter. Empty without a telemetry service. */
+function telemetrySink(deps: AcpDriverDeps): Pick<TurnTelemetryOptions, 'reporter'> {
   const reporter = deps.telemetry
-  if (!reporter) return {}
-  return {
-    reporter,
-    ...(reporter.lastTokenTotal ? { lastTokenTotal: (sessionId: string) => reporter.lastTokenTotal?.(chatId, sessionId) } : {})
-  }
+  return reporter ? { reporter } : {}
 }
 
 /**

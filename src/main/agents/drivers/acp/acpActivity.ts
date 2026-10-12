@@ -22,12 +22,18 @@
  *   `subagent_state_update` {subagentSessionId, state}, with the states
  *   `completed | failed | disconnected | cancelled`.
  *
- * **Codex is not told about native subagent sessions** (it would suppress the
- * spawn call and nothing would link the child to the chat). Its subagents are
- * read from the tool calls it sends on the root session instead:
- * `_meta.codex.subagent {threadId, path, activity}` (recorded:
- * `codex-q6-nocaps-subagent`) and, from the adapter's code only, the
- * `agentsStates` of a `_meta.codex.collaboration` call.
+ * **Codex is not told about native subagent sessions.** With them, codex-acp
+ * (1.11 and 2.2 alike) answers the parent's `spawnAgent` and subagent-activity
+ * calls with `subagent_spawned` and sends no tool call for them, and the
+ * child's frames carry nothing that names a parent call, so the transcript
+ * would lose the spawn. Its subagents are read from the tool calls it sends on
+ * the root session instead, by their standard `rawInput` (codex-acp 2.x sends
+ * no `_meta.codex` for them; the `subagent` flag is AIR meta only):
+ * a subagent-activity call's `{agentThreadId, agentPath, activityKind}`
+ * ("Start subagent <name>"; recorded under 1.11.0 as
+ * `codex-q6-nocaps-subagent`, the same input), and, from the adapter's code
+ * only, a collaboration call's `{senderThreadId, receiverThreadIds,
+ * agentsStates}`, titled with its tool (`spawnAgent` names the children).
  *
  * ## Claude subagents, inline
  *
@@ -246,23 +252,51 @@ export function translateActivity(
   }
 }
 
-/** Codex subagents, from the root session's tool calls (no native sessions advertised). */
+/** The collaboration call that names the agents it starts (`CollabAgentTool` in codex-acp). */
+const CODEX_SPAWN_TOOL = 'spawnAgent'
+
+/**
+ * A `subAgentActivity` call's input (`SubagentActivityReporter`):
+ * `{agentThreadId, agentPath, activityKind}`, titled "Start subagent <name>"
+ * on its start and untitled on its update.
+ */
+function codexSubagentActivity(input: Record<string, unknown>): { threadId: string; path: string; kind: string } | undefined {
+  const threadId = str(input.agentThreadId)
+  const kind = str(input.activityKind)
+  if (!threadId || !kind || typeof input.agentPath !== 'string') return undefined
+  return { threadId, path: input.agentPath, kind }
+}
+
+/**
+ * A `collabAgentToolCall`'s input (`CollabAgentReporter`): `{prompt,
+ * senderThreadId, receiverThreadIds, agentsStates, model, reasoningEffort,
+ * status}`, titled with the tool (`spawnAgent`, `wait`, …) on start and update.
+ */
+function isCodexCollaboration(input: Record<string, unknown>): boolean {
+  return typeof input.senderThreadId === 'string' && Array.isArray(input.receiverThreadIds) && record(input.agentsStates) !== undefined
+}
+
+/**
+ * Codex subagents, from the root session's tool calls (no native sessions
+ * advertised). Since codex-acp 2.x the only marker of these calls is their
+ * standard `rawInput`: the `subagent` flag reaches the wire as AIR meta alone,
+ * which a client the patch keeps out of AIR never gets.
+ */
 function codexSubagents(
   update: Record<string, unknown>,
   state: AcpActivityState,
   id: (wire: string) => string
 ): SessionActivityChange[] {
-  const codex = record(record(update._meta)?.codex)
-  if (!codex) return []
+  const input = record(update.rawInput)
+  if (!input) return []
   const changes: SessionActivityChange[] = []
 
-  const activity = record(codex.subagent)
+  const activity = codexSubagentActivity(input)
   if (activity) {
-    const threadId = str(activity.threadId)
-    const path = str(activity.path) ?? ''
-    if (!threadId || isRootAgentPath(path)) return []
+    const { threadId, path } = activity
+    if (isRootAgentPath(path)) return []
     const name = path.split('/').filter(Boolean).at(-1) ?? 'Subagent'
-    switch (activity.activity) {
+    switch (activity.kind) {
       case 'started':
       case 'interacted':
         // A message to a subagent whose run ended starts a new run.
@@ -282,23 +316,19 @@ function codexSubagents(
     return changes
   }
 
-  // Derived from codex-acp's code (`createCollabAgentToolCallUpdate`), not
-  // watched: a `spawnAgent` call names its children, and every collaboration
-  // call carries the states of the agents it touched.
-  const collaboration = record(codex.collaboration)
-  if (!collaboration) return []
-  const input = record(update.rawInput) ?? {}
-  if (collaboration.tool === 'spawnAgent' && update.status !== 'failed') {
-    const receivers = Array.isArray(collaboration.receiverThreadIds) ? collaboration.receiverThreadIds : []
-    for (const receiver of receivers) {
+  // Derived from codex-acp's code (`CollabAgentReporter`), not watched: a
+  // `spawnAgent` call names its children, and every collaboration call
+  // carries the states of the agents it touched.
+  if (!isCodexCollaboration(input)) return []
+  if (update.title === CODEX_SPAWN_TOOL && update.status !== 'failed') {
+    for (const receiver of input.receiverThreadIds as unknown[]) {
       const threadId = str(receiver)
       if (!threadId || state.subagents.has(threadId)) continue
       state.subagents.add(threadId)
       changes.push({ type: 'upsert', id: id(threadId), kind: 'subagent', title: 'Subagent', detail: str(input.prompt) ?? null })
     }
   }
-  const states = record(input.agentsStates) ?? {}
-  for (const [threadId, agent] of Object.entries(states)) {
+  for (const [threadId, agent] of Object.entries(record(input.agentsStates) ?? {})) {
     if (!state.subagents.has(threadId)) continue
     const ended = codexAgentState(str(record(agent)?.status))
     if (ended) changes.push(endSubagent(state, threadId, ended, id))

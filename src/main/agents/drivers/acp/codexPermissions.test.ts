@@ -59,6 +59,37 @@ describe('Codex permission and question translation', () => {
     expect(permissionGrantPatterns(ask)[0].scope).toBe('exact')
   })
 
+  it('reads a codex-acp 2.2.2 question: its title is the question, and neither the note companion nor its None of the above option is offered', () => {
+    // `buildUserInputRequest` to a client that is not AIR, as the pinned adapter sent it.
+    const form = toInputQuestions({ sessionId: 's', toolCallId: 'question-1', mode: 'form', message: 'Codex needs your input to continue.',
+      requestedSchema: { type: 'object', required: ['target'], properties: {
+        target: { type: 'string', title: 'Which target?', description: 'Target', _meta: { codex: { isOther: true, isSecret: false } }, oneOf: [
+          { const: 'Staging', title: 'Staging', description: 'Preview deployment' },
+          { const: 'Production', title: 'Production', description: 'Live deployment' },
+          { const: 'None of the above', title: 'None of the above', description: 'Provide a different answer in the note field.' }
+        ] },
+        target_note: { type: 'string', title: 'Additional answer or note', _meta: { codex: { questionId: 'target', role: 'user_note', isSecret: false } } }
+      } }, _meta: { codex: { autoResolutionMs: null } } } as unknown as CreateElicitationRequest)!
+    expect(form.questions).toEqual([{ question: 'Which target?', header: 'Target', multiSelect: false, options: [
+      { label: 'Staging', description: 'Preview deployment' },
+      { label: 'Production', description: 'Live deployment' }
+    ] }])
+    expect(toElicitationContent(form, [['Staging']])).toEqual({ target: 'Staging' })
+    expect(toElicitationContent(form, [['A private preview']])).toEqual({ target: 'A private preview' })
+  })
+
+  it('keeps a None of the above option the model itself offered', () => {
+    // The adapter adds its own only when no option already has that label.
+    const form = toInputQuestions({ sessionId: 's', toolCallId: 'question-2', mode: 'form', message: 'Codex needs your input to continue.',
+      requestedSchema: { type: 'object', required: ['target'], properties: {
+        target: { type: 'string', title: 'Which target?', _meta: { codex: { isOther: true, isSecret: false } }, oneOf: [
+          { const: 'Staging', title: 'Staging' },
+          { const: 'None of the above', title: 'None of the above', description: 'Skip the deployment' }
+        ] }
+      } } } as unknown as CreateElicitationRequest)!
+    expect(form.questions[0].options).toEqual([{ label: 'Staging' }, { label: 'None of the above', description: 'Skip the deployment' }])
+  })
+
   it('maps Codex choice and free-text answers back to the original field IDs', () => {
     const form = toInputQuestions({ sessionId: 's', mode: 'form', message: 'Which deployment?', requestedSchema: {
       type: 'object', properties: {

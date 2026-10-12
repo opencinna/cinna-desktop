@@ -2,8 +2,7 @@ import type {
   ContextMeasureCode,
   SessionContextMeasurer,
   SessionTelemetry,
-  SessionTelemetryChange,
-  TokenTally
+  SessionTelemetryChange
 } from '../../../shared/sessionTelemetry'
 import { sessionTelemetryRepo } from '../../db/sessionTelemetry'
 import { chatRepo } from '../../db/chats'
@@ -164,12 +163,6 @@ export function createSessionTelemetryService(options: {
     onChange(listener: SessionTelemetryListener): () => void {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
-    },
-
-    /** The session's last running token total (Codex's patched quota), or undefined. */
-    lastTokenTotal(chatId: string, sessionId: string): TokenTally | undefined {
-      const reading = load(chatId)?.totals.bySession[sessionId]?.lastTokenTotal
-      return reading ? { ...reading } : undefined
     },
 
     /** Forgets a chat (trashed or deleted): its row and what is held here. Announces nothing. */

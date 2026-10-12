@@ -114,7 +114,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'codex.launch.initial-agent-mode', area: 'launch & env', surface: 'env var', name: 'INITIAL_AGENT_MODE',
-    expectation: 'A new session starts in the mode this variable names (`read-only`).',
+    expectation: 'A new session starts in the mode this variable names (`workspace-write`).',
     owners: [`${LAUNCHER}#createCodexLauncher`],
     feature: 'A session could begin in a wider approval mode than the agent’s Approvals setting before `session/set_mode` lands.',
     flow: { steps: ['B', 'D'], note: 'the specialist’s folder-agent turn starts under it; the mode itself is not asserted' }
@@ -122,24 +122,38 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
 
   {
     id: 'codex.sandbox.write-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
-    expectation: 'A sibling-directory exec_command outside the workspace and system temp roots is denied without an ACP ask in read-only and agent modes. Explicit require_escalated in read-only raises an execute permission and allow_once writes; the isolated fake-provider automatic reviewer refuses invalid reviewer output in agent mode.',
-    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
-    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; tasks_create with an assignee supplies the main-owned alternative.',
+    expectation: 'In `workspace-write` and `agent` mode alike, an exec_command writing inside the workspace runs without an ACP ask, and one writing a sibling directory outside the workspace and system temp roots is denied without an ask. Explicit require_escalated in workspace-write raises an execute permission and allow_once writes; the isolated fake-provider automatic reviewer refuses invalid reviewer output in agent mode.',
+    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId', 'src/main/agents/drivers/acp/codexLauncher.ts#workspace-write'],
+    feature: 'Ask for approval stops meaning "ask before writing outside the folder" (were it mapped to `read-only`, a folder agent could not edit its own folder). The file-handover requester cannot assume it can write another adopted folder unattended; tasks_create with an assignee supplies the main-owned alternative.',
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
   },
   {
     id: 'codex.sandbox.read-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling read / session/request_permission',
-    expectation: 'A shell read (`cat`) of a file outside the workspace and outside the system temp roots runs without an ACP ask and returns the file’s content, in read-only and in agent mode alike: the sandbox confines writes, not reads. Measured 6 Oct 2026 on the pinned CLI with a fake provider.',
+    expectation: 'A shell read (`cat`) of a file outside the workspace and outside the system temp roots runs without an ACP ask and returns the file’s content, in workspace-write and in agent mode alike: the sandbox confines writes, not reads. Measured 6 Oct 2026, and again 11 Oct 2026 on 0.162.1 with codex-acp 2.2.2, against a fake provider.',
     owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
     feature: 'A Codex folder agent is told to read the `cinna-tasks` SKILL.md under the app’s resources before its first tasks_* call; if that read is refused or waits on an approval, it works the task verbs without the skill.',
     flow: { steps: ['none'], note: 'no step reads a file outside the working folder' }
   },
   {
-    id: 'codex.tool.command-output', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call_update rawOutput.formatted_output',
-    expectation: 'A shell command’s completing `tool_call_update` carries its whole output as `rawOutput: { formatted_output, exit_code }` and no `content`; the opening `tool_call`’s `content` is only a `{type:"terminal"}` reference, and the bytes also stream as `_meta.terminal_output_delta`. The desktop stores `formatted_output` as the call’s tool_result.',
-    owners: ['src/main/agents/drivers/acp/acpMessages.ts#formatted_output'],
-    feature: 'Every Codex command runs with no output in the chat: the transcript keeps the call and never what it printed.',
+    id: 'codex.tool.command-output', area: 'tools & MCP', surface: 'ACP field', name: '_meta.terminal_output_delta / terminal_exit',
+    expectation: 'With the launcher’s client capabilities (`_meta.jetbrains.air` declared), a shell command’s output arrives only as `_meta.terminal_output_delta: { data, terminal_id }` fragments: streamed on in-progress updates while a command shown as a terminal runs, and whole on the completing update of a read/search/list command. With the patched adapter the completing update of every command also carries `rawOutput: { exit_code, formatted_output }`, the whole output (a terminal command’s exit is in `_meta.terminal_exit` too); no `content` text. The opening `tool_call` carries `name: "exec_command"` beside the human `title`. The desktop stores `formatted_output` as the call’s tool_result, the fragments only when there is none, and names the call by its title.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#terminal_output_delta', 'src/main/agents/drivers/acp/acpMessages.ts#formatted_output', 'src/main/agents/drivers/acp/acpMessages.ts#resolveToolName', 'scripts/patch-codex-acp.cjs#airClientOff', 'scripts/patch-codex-acp.cjs#commandEndWhole'],
+    feature: 'Every Codex command runs with no output in the chat: the transcript keeps the call and never what it printed. Codex-acp sends AIR’s client no fragments at all, so this is also the first place the AIR shapes would show if the patch stopped applying.',
     flow: { steps: ['none'], note: 'the whole flow’s turns call Cinna tools, not shell commands' }
+  },
+  {
+    id: 'codex.tool.command-output-whole', area: 'tools & MCP', surface: 'adapter patch', name: 'rawOutput.formatted_output (whole output)',
+    expectation: 'A command that prints, pauses two seconds and prints again keeps its first lines: with the patched adapter its completing `tool_call_update` carries the whole output as `rawOutput.formatted_output`, though 0.162.1 streams no `terminal_output_delta` for what a command prints before its first output poll and the adapter resends nothing once a fragment streamed. The desktop stores that whole output once.',
+    owners: ['scripts/patch-codex-acp.cjs#commandEndWhole', 'src/main/agents/drivers/acp/acpMessages.ts#streamedCommandText'],
+    feature: 'A build or a test run is stored without its first lines: the transcript shows only what came after the CLI’s first poll.',
+    flow: { steps: ['none'], note: 'the whole flow runs no shell command' }
+  },
+  {
+    id: 'codex.tool.update-merge', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call / tool_call_update fields',
+    expectation: 'A terminal command’s opening `tool_call` carries `name`, `kind: "execute"`, `title`, `status: "in_progress"`, `content: [{ type: "terminal" }]` and `rawInput: { command, cwd }`; every later `tool_call_update` carries only what changed — never `title`, `kind` or `rawInput` again — and the completing one its `status` and no `content`.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#recordEvidence', 'scripts/patch-codex-acp.cjs#airClientOff'],
+    feature: 'A Codex call’s card keeps the name, input and narration of its opening update; a reader that replaced a call with each update would blank it. The AIR-UI shapes reshape these fields, so a change here is also where they would show.',
+    flow: { steps: ['none'], note: 'the whole flow runs no shell command' }
   },
   {
     id: 'codex.tool.mcp-output', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call_update rawOutput.result / error',
@@ -174,7 +188,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'codex.session.modes', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_mode',
-    expectation: 'A session offers the mode ids `read-only` and `agent`, and `session/set_mode` to either succeeds.',
+    expectation: 'A session offers the mode ids `read-only`, `workspace-write`, `agent` and `agent-full-access`, and `session/set_mode` to `workspace-write` or `agent` succeeds. `workspace-write` (edit the workspace, ask before writing outside it) is what `read-only` was before codex-acp 2.0; `read-only` is now a read-only sandbox, which Cinna does not use.',
     owners: [`${LAUNCHER}#modeId`],
     feature: 'The Approvals setting (Ask for approval / Automatic) cannot be applied; the turn is refused at setup.',
     flow: { steps: ['A', 'B', 'D'], note: 'applied at session setup; the mode is not asserted' }
@@ -194,18 +208,32 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['A'] }
   },
   {
-    id: 'codex.session.quota-running-total', area: 'session lifecycle', surface: 'adapter patch', name: '_meta.quota.total_token_count',
-    expectation: 'With the patched adapter, every prompt response’s `_meta.quota` carries `total_token_count` — the session’s running token total, in the shape of `token_count` — beside the last request’s `token_count`, and it grows from one turn to the next.',
-    owners: ['scripts/patch-codex-acp.cjs#patchCodexAcp', 'src/main/agents/drivers/acp/acpTelemetry.ts#readQuotaTotal'],
-    feature: 'A Codex turn’s tokens and estimated cost are its last request’s only: a lower bound on any turn that called a tool.',
+    id: 'codex.session.prompt-usage', area: 'session lifecycle', surface: 'ACP field', name: 'usage / _meta.quota.token_count',
+    expectation: 'Every prompt response carries the **whole prompt’s** usage — every model request of the turn summed — as `usage` (ACP names) and as `_meta.quota.token_count` (codex names, cache writes as `cacheWriteInputTokens`) with one `model_usage` row for the session’s model; never the thread’s running total, a session `session/load`ed into a fresh adapter process included.',
+    owners: ['src/main/agents/drivers/acp/acpTelemetry.ts#parsePromptTelemetry', 'src/main/agents/drivers/acp/acpTelemetry.ts#cacheWriteInputTokens'],
+    feature: 'A Codex turn’s tokens and estimated cost in the mode badge and the message popup: read as a turn, a last request would undercount every turn that called a tool, and a running total would charge the whole history to each turn.',
     flow: { steps: ['A', 'C'], note: 'every turn passes through it; no step asserts the tokens' }
   },
   {
-    id: 'codex.session.quota-total-on-resume', area: 'session lifecycle', surface: 'adapter patch', name: '_meta.quota.total_token_count after session/load',
-    expectation: 'A session `session/load`ed into a fresh adapter process answers its first prompt with `total_token_count` restored: the running total from before the restart plus that turn, not a count started over.',
-    owners: ['src/main/agents/drivers/acp/acpTelemetry.ts#TokenTotalReadings'],
-    feature: 'The first Codex turn after an app restart is measured against the persisted total; were the total started over, that turn would be undercounted (or, with no persisted total, a restored chat would count its whole history as one turn).',
-    flow: { steps: ['none'], note: 'no step restarts the app or reaps the process between turns; the contract observed the total restored on resume, so a restored chat with no persisted total records that first turn as its last request' }
+    id: 'codex.session.air-async-tasks', area: 'session lifecycle', surface: '_meta key', name: '_meta.jetbrains.air capabilities (asyncTasks)',
+    expectation: 'With the launcher’s `airClientMeta([\'asyncTasks\'])` and the patched adapter answering `isAirClient` false, a command left running when its turn ends is still reported as a background task: `async_task_spawned` (`taskType: "shell"`, `toolCallId` the command’s), and its completion arrives after the prompt returned. `initialize` answers with no `_meta.jetbrains`.',
+    owners: [`${LAUNCHER}#airClientMeta`, 'src/main/agents/drivers/acp/acpActivity.ts#async_task_spawned', 'scripts/patch-codex-acp.cjs#airClientOff'],
+    feature: 'Background commands disappear from the activity row beside the composer and cannot be stopped there. A `jetbrains` key in `initialize` means the adapter treats Cinna as the AIR UI again.',
+    flow: { steps: ['none'], note: 'the whole flow runs no shell command' }
+  },
+  {
+    id: 'codex.activity.subagent-shape', area: 'session lifecycle', surface: 'ACP field', name: 'tool_call rawInput {agentThreadId, agentPath, activityKind}',
+    expectation: 'With the launcher’s capabilities (no `nativeSubagentSessions`), a `spawn_agent` call sends neither `subagent_spawned` nor `subagent_state_update`: the root session gets a `tool_call` titled `Start subagent <name>` whose `rawInput` is `{agentThreadId, agentPath: "/root/<name>", activityKind: "started"}`, later one with the same thread and `activityKind: "completed"`, and collaboration calls (`wait`) whose `rawInput` carries `senderThreadId`, `receiverThreadIds` and `agentsStates`. None of them carries `_meta`.',
+    owners: ['src/main/agents/drivers/acp/acpActivity.ts#codexSubagentActivity', 'src/main/agents/drivers/acp/acpActivity.ts#isCodexCollaboration', `${LAUNCHER}#airClientMeta`, 'scripts/patch-codex-acp.cjs#airClientOff'],
+    feature: 'Codex subagents vanish from the activity row beside the composer: 2.x dropped the `_meta.codex.subagent` / `collaboration` keys 1.11.0 read from, and the `rawInput` is all that is left. A `subagent_spawned` here means the adapter treats Cinna as a native-subagent client, and the spawn call leaves the transcript.',
+    flow: { steps: ['none'], note: 'no step has the model spawn a subagent' }
+  },
+  {
+    id: 'codex.session.silent-updates', area: 'session lifecycle', surface: 'ACP field', name: 'notice / compaction_update',
+    expectation: 'A turn that compacts (a model change) sends neither `notice` nor `compaction_update` — the adapter sends them only to a client declaring `session.notices` / `session.compaction`, which the launcher does not. As under 1.11.0, the compaction arrives as a `tool_call` `kind: "think"`, title `Compact conversation`, completed within the turn, and the CLI’s warning as agent text `Warning: …` ahead of the answer.',
+    owners: ['src/main/agents/drivers/acp/acpMessages.ts#compaction_'],
+    feature: 'A Codex model switch shows a "Compact conversation" step and the CLI’s long-thread warning in the reply, as before the bump. Were `notice` or `compaction_update` sent unasked, the desktop would drop them silently (its default for an unknown update), and the step or the warning would vanish.',
+    flow: { steps: ['none'], note: 'no step changes the model' }
   },
   {
     id: 'codex.session.info-title', area: 'session lifecycle', surface: 'ACP field', name: 'session_info_update.title',

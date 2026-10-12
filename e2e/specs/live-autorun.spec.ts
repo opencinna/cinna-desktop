@@ -4,7 +4,7 @@ import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { LIVE_ENGINE, expectNoAgentTurn, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
+import { LIVE_ENGINE, expectNoAgentTurn, expectTaskTurnSettled, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
@@ -268,6 +268,7 @@ async function expectDone(cinna: CinnaApp, folder: string, b: Brief, taskId: str
     .toBe('completed')
   const row = await rowOf(cinna, taskId)
   expect(row).toMatchObject({ state: 'done', warning: null })
+  await expectTaskTurnSettled(cinna, taskId)
 }
 
 // ─── the Inbox and task page ────────────────────────────────────────────────

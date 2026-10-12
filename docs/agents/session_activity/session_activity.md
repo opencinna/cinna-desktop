@@ -87,7 +87,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 ## Known limits
 - **Activity is memory-only.** It is lost on restart, and a background process that outlives the app is not rediscovered
 - **A Claude background subagent's launch text is not in the transcript.** The CLI writes "launched in the background" itself, and it is not on the wire. The synthesized `Agent` call closes as completed without it
-- **The Codex collaboration path is derived from the adapter's code, not watched.** A `spawnAgent` call naming its children, and the `agentsStates` of a collaboration call, are read as `codex-acp` 1.11.0 would send them. The installed CLI sent `subAgentActivity` tool calls instead, and those are what was recorded
+- **The Codex collaboration path is derived from the adapter's code, not watched.** A `spawnAgent` call naming its children, and the `agentsStates` of a collaboration call, are read from the call's `rawInput` as `codex-acp` 2.2.2's code would send it. The pinned CLI reported a spawn as "Start subagent" activity instead, and only `wait` arrived as a collaboration call
 - **The output path is shown, not opened**
 
 ## Architecture Overview

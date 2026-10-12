@@ -1,6 +1,6 @@
 {
   "recording": null,
-  "note": "SYNTHESIZED — derived from adapter code, not recorded. codex-acp 1.11.0 createCollabAgentToolCallUpdate / createCollabAgentToolCallCompleteUpdate (dist/index.js ~23115-23157) for collabAgentToolCall items on a session without nativeSubagentSessions: a spawnAgent call naming its receiver thread, then a wait call whose agentsStates report the child completed. The installed codex-cli emitted subAgentActivity items instead (see subagent_nocaps.json).",
+  "note": "SYNTHESIZED — derived from adapter code, not recorded. codex-acp 2.2.2 CollabAgentReporter (dist/index.js ~29801-29836) rendered for a client that is not AIR (AcpToolCallRenderer.render + applyStandardFields): title = the tool, rawInput = {prompt, senderThreadId, receiverThreadIds, agentsStates, model, reasoningEffort, status}, no content and no _meta (the spawnAgent `subagent` flag is AIR meta only). A spawnAgent call naming its receiver thread, then a wait call whose agentsStates report the child completed. Under 1.11.0 the same calls also carried _meta.codex.collaboration. The installed codex-cli emitted subAgentActivity items instead (see subagent_nocaps.json).",
   "notifications": [
     {
       "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
@@ -17,15 +17,6 @@
           "model": null,
           "reasoningEffort": null,
           "status": "inProgress"
-        },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "spawnAgent",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": []
-            }
-          }
         },
         "kind": "other"
       }
@@ -52,17 +43,6 @@
           "model": null,
           "reasoningEffort": null,
           "status": "completed"
-        },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "spawnAgent",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": [
-                "01a0ac6b-c0de-7000-8000-000000000001"
-              ]
-            }
-          }
         }
       }
     },
@@ -89,17 +69,6 @@
           "reasoningEffort": null,
           "status": "inProgress"
         },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "wait",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": [
-                "01a0ac6b-c0de-7000-8000-000000000001"
-              ]
-            }
-          }
-        },
         "kind": "other"
       }
     },
@@ -125,17 +94,6 @@
           "model": null,
           "reasoningEffort": null,
           "status": "completed"
-        },
-        "_meta": {
-          "codex": {
-            "collaboration": {
-              "tool": "wait",
-              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-              "receiverThreadIds": [
-                "01a0ac6b-c0de-7000-8000-000000000001"
-              ]
-            }
-          }
         }
       }
     }

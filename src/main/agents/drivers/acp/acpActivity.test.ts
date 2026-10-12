@@ -167,11 +167,27 @@ describe('subagents', () => {
     expect(run.items.map((item) => item.state)).toEqual(['completed'])
   })
 
+  it('Codex collaboration calls are known by their input, and only spawnAgent names children', () => {
+    const state = createAcpActivityState()
+    const call = (title: string, rawInput: Record<string, unknown>, status = 'completed'): SessionNotification => ({
+      sessionId: 'r', update: { sessionUpdate: 'tool_call_update', toolCallId: `c-${title}`, title, status, rawInput }
+    }) as unknown as SessionNotification
+    const collab = { prompt: 'p', senderThreadId: 'r', receiverThreadIds: ['t'], agentsStates: {} }
+    // Another tool's input with the same title is nothing.
+    expect(translateActivity(call('spawnAgent', { prompt: 'p', receiverThreadIds: ['t'] }), state, 'r')).toEqual([])
+    // A failed spawn and a call of another tool name no child.
+    expect(translateActivity(call('spawnAgent', collab, 'failed'), state, 'r')).toEqual([])
+    expect(translateActivity(call('wait', collab), state, 'r')).toEqual([])
+    expect(translateActivity(call('spawnAgent', collab), state, 'r')).toEqual([{ type: 'upsert', id: 'r:t', kind: 'subagent', title: 'Subagent', detail: 'p' }])
+    expect(translateActivity(call('closeAgent', { ...collab, agentsStates: { t: { status: 'shutdown', message: null } } }), state, 'r'))
+      .toEqual([{ type: 'end', id: 'r:t', state: 'failed' }])
+  })
+
   it('a Codex subagent of the root path, or an unknown thread, is nothing', () => {
     const state = createAcpActivityState()
     const call = (activity: string, path: string): SessionNotification => ({
       sessionId: 'r',
-      update: { sessionUpdate: 'tool_call', toolCallId: `c-${activity}`, _meta: { codex: { subagent: { threadId: 't', path, activity } } } }
+      update: { sessionUpdate: 'tool_call', toolCallId: `c-${activity}`, rawInput: { agentThreadId: 't', agentPath: path, activityKind: activity } }
     }) as unknown as SessionNotification
     expect(translateActivity(call('started', '/root'), state, 'r')).toEqual([])
     expect(translateActivity(call('completed', '/root/x'), state, 'r')).toEqual([])
@@ -476,7 +492,7 @@ describe('a subagent that does not complete (review fix 1)', () => {
 describe('a Codex subagent that runs again (review fix 2)', () => {
   // The old item gets no change: only the new run's id is written to.
   const call = (id: string, activity: string): SessionNotification => n('r', {
-    sessionUpdate: 'tool_call', toolCallId: id, _meta: { codex: { subagent: { threadId: 't', path: '/root/helper', activity } } }
+    sessionUpdate: 'tool_call', toolCallId: id, rawInput: { agentThreadId: 't', agentPath: '/root/helper', activityKind: activity }
   })
 
   it('a message after its end starts a new item, and leaves the ended one alone', () => {

@@ -84,17 +84,13 @@ export interface SessionTelemetrySessionTotals {
   tokens: TokenTally
   costUsd?: number
   turns: number
-  /**
-   * The session's last `_meta.quota.total_token_count` (Codex's patched
-   * adapter) — the running token total of the session — so the next turn's
-   * tokens are what it grew by, across a restart too.
-   */
-  lastTokenTotal?: TokenTally
-  // No Claude cost readings are kept: Claude's running totals start at 0 with
-  // each fresh adapter query, restart included (observed 2026-09-30, claude
-  // 2.1.276, claude-agent-acp 0.76.0). Rows written before that may still
-  // carry `lastCostReading` / `modelCostReadings`; they are dropped on the
-  // session's next write and read by nothing.
+  // No running reading is kept: Claude's running totals start at 0 with each
+  // fresh adapter query, restart included (observed 2026-09-30, claude
+  // 2.1.276, claude-agent-acp 0.76.0), and codex-acp 2.x answers each prompt
+  // with that prompt's own usage. Rows written before may still carry
+  // `lastCostReading` / `modelCostReadings` (Claude) or `lastTokenTotal`
+  // (Codex's former patched running total); they are dropped on the session's
+  // next write and read by nothing.
   /**
    * A digest of the params the session was last set up under (cwd and MCP
    * servers; never the params themselves, which can hold secrets). A load
@@ -290,8 +286,6 @@ export interface SessionTelemetryTurnChange {
   byModel?: Record<string, TokenTally>
   /** The turn's cost per model: runtime deltas (Claude's raw `result`) or estimates (Codex). */
   byModelCost?: Record<string, number>
-  /** The session's latest running token total (Codex's patched quota), to keep. */
-  tokenTotalReading?: TokenTally
   /** The main model's window per the raw `result`: authoritative. */
   contextWindow?: number
   maxOutputTokens?: number
@@ -379,15 +373,9 @@ export type SessionTelemetryChange =
   | SessionTelemetrySessionChange
   | SessionTelemetryContextCategoriesChange
 
-/**
- * The port a driver receives in its deps. Drivers report; the one thing they
- * read back is a Codex session's last running token total, which the runtime
- * carries across a restart and this app must measure the next reading against.
- */
+/** The port a driver receives in its deps. Drivers report and read nothing back. */
 export interface SessionTelemetryReporter {
   report(chatId: string, change: SessionTelemetryChange): void
-  /** The last running token total recorded for the chat's ACP session, if any (Codex). */
-  lastTokenTotal?(chatId: string, sessionId: string): TokenTally | undefined
 }
 
 /**

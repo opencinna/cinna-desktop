@@ -1551,7 +1551,7 @@ describe('Codex runtime', () => {
     expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
   })
   it('shows the login remedy, and keeps an explicitly selected Codex visible when its install failed', () => {
-    codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
+    codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
     codexAuth = { state: 'logged_out' }
     const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
     expect(screen.getByText('Codex is not logged in.')).toBeTruthy()
@@ -1578,7 +1578,7 @@ describe('Codex runtime', () => {
     codexBinary = { state: 'unresolved' }
     const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
     expect(screen.queryByText(/is needed|could not be installed|Not installed/)).toBeNull()
-    expect(screen.getByText('Codex 0.155.0 managed')).toBeTruthy()
+    expect(screen.getByText('Codex 0.162.1 managed')).toBeTruthy()
     view.unmount()
     render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
     expect(screen.getByLabelText('Runs on').querySelector('option[value="engine:codex"]')).not.toBeNull()
@@ -1592,7 +1592,7 @@ describe('Codex runtime', () => {
     expect(screen.queryByText(/managed/)).toBeNull()
   })
   it('does not call a saved, unchecked Codex path "managed"', () => {
-    // Mutation: build the label inline again and this reads `0.155.0 managed`.
+    // Mutation: build the label inline again and this reads `0.162.1 managed`.
     runtimePaths = { localAgentsCodexPath: '/opt/codex' }
     codexBinary = { state: 'unresolved' }
     render(<RuntimePanel agent={agent({ engine: 'codex' })} />)

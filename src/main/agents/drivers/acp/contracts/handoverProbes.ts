@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
+import { airClientMeta } from '../acpActivity'
 import { makeScratch, spawnAdapter, startFakeProvider, writeProviderConfig, type AdapterConnection, type AdapterMessage, type ProviderReply } from './codexHarness'
 import { makeClaudeScratch, startFakeAnthropic, type ClaudeProviderReply, type EgressTrap } from './claudeHarness'
 
@@ -45,9 +46,11 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
     if (codex) writeProviderConfig((scratch as ReturnType<typeof makeScratch>).codexHome, codex.port, 'gpt-5.5')
     connection = spawnAdapter({ adapterPath, cwd: scratch.cwd, answer: allow, env: {
       ...scratch.env,
-      ...(engine === 'claude' ? { CLAUDE_CODE_EXECUTABLE: binary } : { CODEX_PATH: binary, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify({ model: 'gpt-5.5', model_provider: 'probe' }) })
+      ...(engine === 'claude' ? { CLAUDE_CODE_EXECUTABLE: binary } : { CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify({ model: 'gpt-5.5', model_provider: 'probe' }) })
     } })
-    const initialized = await connection.rpc('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'cinna-handover-probe', version: '1' } })
+    // Codex: exactly what `codexLauncher` declares, since what codex-acp sends depends on it.
+    const clientCapabilities = engine === 'codex' ? { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) } : {}
+    const initialized = await connection.rpc('initialize', { protocolVersion: 1, clientCapabilities, clientInfo: { name: 'cinna-handover-probe', version: '1' } })
     if (initialized.error) throw new Error(JSON.stringify(initialized.error))
     const sibling = join(scratch.home, 'sibling')
     mkdirSync(sibling)
@@ -55,14 +58,17 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
     const skillFile = join(scratch.home, 'resources', 'cinna-tasks', 'SKILL.md')
     mkdirSync(dirname(skillFile), { recursive: true })
     writeFileSync(skillFile, `${readMarker}\n`)
-    for (const mode of engine === 'claude' ? ['default', 'auto'] : ['read-only', 'agent']) {
+    // Codex: the two modes `codexLauncher` maps the Approvals setting to.
+    for (const mode of engine === 'claude' ? ['default', 'auto'] : ['workspace-write', 'agent']) {
       const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) }, 60_000)
       const sessionId = String(created.result?.sessionId ?? '')
       if (!sessionId) throw new Error(JSON.stringify(created.error))
       const accepted = !(await connection.rpc('session/set_mode', { sessionId, modeId: mode })).error
-      for (const escalation of engine === 'codex' ? [false, true] : [false]) {
-        const label = mode + (escalation ? ':escalated' : '')
-        const path = join(sibling, `${label}.txt`)
+      // Codex also writes inside its own folder first: Ask for approval must still edit the workspace.
+      for (const target of engine === 'codex' ? ['inside', 'sibling', 'escalated'] as const : ['sibling'] as const) {
+        const escalation = target === 'escalated'
+        const label = mode + (target === 'sibling' ? '' : `:${target}`)
+        const path = target === 'inside' ? join(scratch.cwd, `${mode}-inside.txt`) : join(sibling, `${label}.txt`)
         const before = connection.clientRequests.length
         const beforeTurns = (claude?.turns.length ?? codex!.turns.length)
         if (claude) claudeScript = [{ kind: 'tool', name: 'Write', input: { file_path: path, content: marker } }]

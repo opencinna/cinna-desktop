@@ -328,6 +328,14 @@ export class AcpMessageStream {
   private notes = 0
   /** The last plan rendered, to swallow a re-send that changed nothing. */
   private lastPlan: string | undefined
+  /**
+   * `toolCallId` → a command's output so far, from its
+   * `_meta.terminal_output_delta` fragments (codex-acp 2.x; see
+   * {@link toolOutputText}), capped as it grows ({@link appendCommandOutput}).
+   * Read once the call completes or fails, then dropped; a call that never
+   * ends goes with the stream, which lives for one turn.
+   */
+  private readonly commandOutput = new Map<string, CommandOutput>()
 
   constructor(options?: { launcher?: AcpLauncherId }) {
     this.launcher = options?.launcher
@@ -694,7 +702,7 @@ export class AcpMessageStream {
     this.recordEvidence(toolCallId, update)
     const lane = this.toolLane.get(toolCallId) ?? (fresh ? laneOf(update) : undefined)
     if (fresh) {
-      this.toolNames.set(toolCallId, resolveToolName(update))
+      this.toolNames.set(toolCallId, resolveToolName(update, this.launcher))
       // Rule 3: whatever text was streaming has ended. The next chunk opens a
       // new part instead of continuing the paragraph this call interrupted —
       // in the call's own lane: a subagent's call ends only the subagent's text.
@@ -757,6 +765,8 @@ export class AcpMessageStream {
    * `claude/s2-perms-turn.ndjson` sends the diff it is about to apply while it
    * is still waiting for permission, and reading that as output would put the
    * result of a tool into the transcript before the user had allowed it to run.
+   * A command's streamed fragments are collected on every update, though, and
+   * become its result only here.
    */
   private toolResult(
     update: Record<string, unknown>,
@@ -765,13 +775,20 @@ export class AcpMessageStream {
     lane: string | undefined
   ): boolean {
     const status = str(update.status)
+    const delta = record(record(update._meta)?.terminal_output_delta)
+    if (typeof delta?.data === 'string' && delta.data) {
+      this.commandOutput.set(toolCallId, appendCommandOutput(this.commandOutput.get(toolCallId), delta.data))
+    }
     if (status !== 'completed' && status !== 'failed') return false
+    const streamed = this.commandOutput.get(toolCallId)
+    this.commandOutput.delete(toolCallId)
     // Antigravity never sends an MCP tool's result to the client: a completed
     // MCP call's `rawOutput` and `content` are the model's own one-line
     // `toolSummary` (contract `antigravity.mcp.result-not-delivered`), which
     // is not what the tool returned. Such a call completes with no output.
     if (status === 'completed' && this.isAntigravityMcpCall(toolCallId)) return false
-    const text = capToolResult(toolOutputText(update.content) || toolOutputText(update.rawOutput))
+    const given = toolOutputText(update.content) || toolOutputText(update.rawOutput)
+    const text = given ? capToolResult(given) : streamedCommandText(streamed, update)
     if (!text) return false
 
     const idx = this.slot(state, `result:${toolCallId}`, () => ({
@@ -954,12 +971,16 @@ function withPrefix(name: string | undefined, prefix: string): string | null {
  * and only on the first update; `kind` (`edit`, `execute`, `other`) is the last
  * resort, because a transcript saying "edit" is still better than one saying
  * "Preparing file…".
+ *
+ * codex-acp 2.x sends `name` too, but it is the model's function
+ * (`exec_command` for every shell command) while its `title` says what the
+ * call does (`Read file '…'`, the command line, `mcp.cinna.<tool>`), which
+ * is what Codex calls were named by before. So for Codex the title comes first.
  */
-function resolveToolName(update: Record<string, unknown>): string {
+function resolveToolName(update: Record<string, unknown>, launcher?: AcpLauncherId): string {
   const claudeCode = record(record(update._meta)?.claudeCode)
-  return (
-    str(claudeCode?.toolName) ?? str(update.name) ?? str(update.title) ?? str(update.kind) ?? 'tool'
-  )
+  const named = launcher === 'codex' ? str(update.title) ?? str(update.name) : str(update.name) ?? str(update.title)
+  return str(claudeCode?.toolName) ?? named ?? str(update.kind) ?? 'tool'
 }
 
 /** `rawInput` when it says something. An empty object is the model still writing. */
@@ -977,14 +998,22 @@ function nonEmptyRecord(value: unknown): Record<string, unknown> | undefined {
  * fenced copy in `content[]`. A reader that knew only one of those would render
  * `[object Object]` — or nothing — for half the tools in a turn.
  *
- * codex-acp (1.11.0) sends a command's output in neither: its completing
- * `tool_call_update` carries `rawOutput: {formatted_output, exit_code}` (the
- * app-server's `aggregatedOutput`, the whole output) and no `content`; the
- * `content[]` of its opening `tool_call` is only a `{type:'terminal'}`
- * reference, and the bytes also stream as `_meta.terminal_output_delta`
- * fragments. The final `formatted_output` is read and the deltas are not: it is
- * complete, and the slot holds one cumulative text per result. A non-zero
- * `exit_code` is kept as a trailing line, since a tool_result has no field for it.
+ * codex-acp (2.2.2, to a client that is not the JetBrains AIR UI) sends a
+ * command's output in neither: only as `_meta.terminal_output_delta` fragments
+ * (`{data, terminal_id}`), streamed on in-progress updates while it runs, and
+ * whatever did not stream on the completing update. That update carries the
+ * exit code as `rawOutput: {exit_code}` for a read/search/list command and as
+ * `_meta.terminal_exit` for one shown as a terminal (whose opening `tool_call`'s
+ * `content[]` is only a `{type:'terminal'}` reference). The CLI never streams
+ * what a command prints before its first output poll, so the reviewed adapter
+ * patch also puts the whole output on the completing update as
+ * `rawOutput: {exit_code, formatted_output}` — the shape 1.11.0 sent, and
+ * Antigravity's. That whole output is what is stored. The stream still
+ * collects the fragments per call ({@link streamedCommandText}), but reads
+ * them only when nothing here had text, so the result never holds the output
+ * twice and an unpatched adapter still stores what streamed. A
+ * non-zero exit code is kept as a trailing line, since a tool_result has no
+ * field for it.
  * A Codex function-call output (`rawOutput.output`) may be a list of
  * `{type:'input_text', text}` items rather than a string, so it is flattened too,
  * and a Codex MCP call's `rawOutput: {result, error}` is read by {@link mcpOutputText}.
@@ -1001,7 +1030,7 @@ function toolOutputText(value: unknown): string {
         const inner = record(block.content) ?? block
         if (typeof inner.text === 'string') return inner.text
         // codex-acp's pointer to a terminal it never asks the client to run;
-        // the output arrives in `rawOutput.formatted_output` instead.
+        // the output arrives as `_meta.terminal_output_delta` fragments instead.
         if (block.type === 'terminal') return ''
         if (block.type === 'diff') return `[diff] ${str(block.path) ?? ''}`.trim()
         // Naming the type beats inventing a representation for it.
@@ -1014,6 +1043,50 @@ function toolOutputText(value: unknown): string {
   if (!r) return ''
   if (typeof r.formatted_output === 'string') return commandOutputText(r.formatted_output, r.exit_code)
   return toolOutputText(r.output) || str(r.error) || mcpOutputText(r.result, r.error)
+}
+
+/**
+ * A command's streamed output, held to {@link TOOL_RESULT_LIMIT} as it
+ * arrives: all of it while it fits, then its first and last half-limit
+ * characters and how many fell between them — exactly what
+ * {@link capToolResult} would keep of the whole, so a command that prints
+ * without end costs no more than one stored result.
+ */
+export interface CommandOutput {
+  head: string
+  tail: string
+  /** Characters dropped between `head` and `tail`; 0 while the whole output is `head + tail`. */
+  dropped: number
+}
+
+/** `output` with `data` appended, capped (see {@link CommandOutput}). */
+export function appendCommandOutput(output: CommandOutput | undefined, data: string): CommandOutput {
+  const half = Math.floor(TOOL_RESULT_LIMIT / 2)
+  if (!output || output.dropped === 0) {
+    const whole = (output ? output.head + output.tail : '') + data
+    if (whole.length <= TOOL_RESULT_LIMIT) return { head: whole, tail: '', dropped: 0 }
+    return { head: whole.slice(0, half), tail: whole.slice(whole.length - half), dropped: whole.length - 2 * half }
+  }
+  const tail = output.tail + data
+  return { head: output.head, tail: tail.slice(tail.length - half), dropped: output.dropped + Math.max(0, tail.length - half) }
+}
+
+/**
+ * A command's collected `_meta.terminal_output_delta` output (see
+ * {@link toolOutputText}), with its exit code from the completing update's
+ * `rawOutput.exit_code` or `_meta.terminal_exit.exit_code`, capped as
+ * {@link capToolResult} caps the whole output and its exit line.
+ */
+function streamedCommandText(streamed: CommandOutput | undefined, update: Record<string, unknown>): string {
+  const exitCode = record(update.rawOutput)?.exit_code ?? record(record(update._meta)?.terminal_exit)?.exit_code
+  if (streamed === undefined && exitCode === undefined) return ''
+  if (!streamed || streamed.dropped === 0) return capToolResult(commandOutputText(streamed ? streamed.head + streamed.tail : '', exitCode))
+  // The dropped middle is gone, so the cap is applied here: the head, the
+  // gap (the exit line's growth counted), and the tail with its exit line.
+  const half = Math.floor(TOOL_RESULT_LIMIT / 2)
+  const ending = commandOutputText(streamed.tail, exitCode)
+  const omitted = streamed.dropped + ending.length - streamed.tail.length
+  return `${streamed.head}\n… ${omitted} characters left out …\n${ending.slice(ending.length - half)}`
 }
 
 /**

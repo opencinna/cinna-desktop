@@ -118,7 +118,7 @@
 - `cinnaTool` for Antigravity: `_meta.mcp` first (Cinna's only when `server === 'cinna'`); otherwise only a first `tool_call` of kind `other` titled `Running <name>`, which the permission gate and `ConductorToolCorrelation` accept only when `offers(name)` — the names Cinna's MCP server served this session.
 - `isAntigravityMcpCall` — `_meta.mcp`, or `Running <name>` of kind `other` where the name is in neither built-in list. A completed MCP call stores no tool result: the server's `rawOutput` is the model's `toolSummary`.
 - A `tool_call_update` with `status: failed` and `rawOutput` equal to `ANTIGRAVITY_UNEXECUTED` is dropped (an approved ask whose work ran under `<sessionId>:<n>`, or a cancel).
-- Command output is the shared `rawOutput.formatted_output` reader, written for Codex.
+- Command output is the shared `rawOutput.formatted_output` reader, shared with Codex, whose patched adapter sends the same field.
 - Replayed built-in calls carry `rawInput` as a JSON string; `rawInputOf` parses it, Antigravity only.
 - `toAcpPermissionRequest`:
   - Action `antigravity:<kind>`.

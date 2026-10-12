@@ -146,7 +146,10 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
         }
         phase = 'settings'
         const settings = deps.settings(ctx.userId, ctx.agentId)
-        const modeId = settings.approval === 'auto' ? 'agent' : 'read-only'
+        // Ask for approval is `workspace-write`: edit the folder, ask before
+        // writing outside it. codex-acp 2.0 made `read-only` a real read-only
+        // sandbox; `workspace-write` is what `read-only` was before.
+        const modeId = settings.approval === 'auto' ? 'agent' : 'workspace-write'
         phase = 'instructions'
         const config = {
           // An isolated folder's whole assembled prompt; on the native branch

@@ -34,7 +34,7 @@ async function subject() {
         CODEX_PATH: join(root, "real ' $(touch injected) binary"),
         CODEX_CONFIG: JSON.stringify({ model: 'verified-model', developer_instructions: 'Keep my instructions', features: { unrelated: true }, mcp_servers: { 'local;$(touch injected)': { command: 'never-copy-me' } } }) } },
     init: { protocolVersion: 1 }, session: { mcpServers: [] },
-    setup: { modeId: 'read-only', configOptions: [{ configId: 'collaboration_mode', value: 'plan' }] }
+    setup: { modeId: 'workspace-write', configOptions: [{ configId: 'collaboration_mode', value: 'plan' }] }
   }
   const deps: CodexConductorPolicyDeps = {
     platform: 'darwin', adapterDigest: vi.fn(async () => adapterPatch.patchedSha256),

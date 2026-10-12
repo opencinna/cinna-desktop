@@ -3,7 +3,7 @@ import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
+import { LIVE_ENGINE, expectTaskTurnSettled, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
@@ -357,6 +357,7 @@ test('@live a brief written from outside the app is run by a real agent through 
     await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText(title)
     await expect(detailValue(cinna, 'Status')).toHaveText('Done')
     await expect(detailValue(cinna, 'Handover')).toHaveText('Done')
+    await expectTaskTurnSettled(cinna, taskId)
   })
 
   // Nothing but the brief, the report, and the one file asked for.

@@ -82,9 +82,11 @@ const GENERATED_TITLE_MAX = 40
 export function isPromptPlaceholder(title: string, prompts: readonly string[]): boolean {
   const wanted = normalize(title)
   if (!wanted) return true
+  // codex-acp 2.x cuts a placeholder over 256 characters to 255 and ends it with `…`.
+  const cut = wanted.endsWith('\u2026') ? wanted.slice(0, -1).trimEnd() : wanted
   return prompts.some((prompt) => {
     const sent = normalize(prompt)
-    return sent === wanted || (wanted.length > GENERATED_TITLE_MAX && sent.startsWith(wanted))
+    return sent === wanted || (cut.length > GENERATED_TITLE_MAX && sent.startsWith(cut))
   })
 }
 

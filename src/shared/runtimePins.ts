@@ -98,7 +98,7 @@ function claudeAsset(platform: string, sha256: string, size: number): RuntimePin
   return { file: 'claude', sha256, url: `${CLAUDE_RELEASE}/${platform}/claude`, format: 'executable', size }
 }
 
-const CODEX_CLI = '0.155.0'
+const CODEX_CLI = '0.162.1'
 const CODEX_RELEASE = `https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI}`
 
 /** The `codex-code-mode-host` archive of the same release and triple. POSIX tarballs only. */
@@ -190,19 +190,18 @@ export const RUNTIME_PINS = {
     cli: CODEX_CLI,
     /** Exactly what `codex --version` prints for the pin. */
     versionOutput: `codex-cli ${CODEX_CLI}`,
-    adapter: '1.11.0',
-    /** `@agentclientprotocol/codex-acp/dist/index.js` as published. */
-    adapterOriginalSha256: '3527bdaf90a219175c742576963e6d9e943e4ea5fbdbc3e04e7f57f9a9e11343',
-    /** The same file after `scripts/patch-codex-acp.cjs`. */
-    adapterPatchedSha256: '55b785713b8aa2d1a505a8b1e8b9fb46fb2c881926ea54a384c25b10bb25be3d',
+    adapter: '2.2.2',
+    /** `@agentclientprotocol/codex-acp/dist/index.js` as published (checked against the locked npm tarball). */
+    adapterOriginalSha256: '6b1bb4e7e9caaf4aeca1042ae4aec2dc2433b0b0e4b1614b38a4d41699902aaa',
+    /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, and the whole command output on the completing update). */
+    adapterPatchedSha256: 'ca1f79d5ea308f092753a24140ac182dac5af0c8f52e43132ca265f8fa5922fa',
     /**
-     * The vendor's unmodified GitHub release archives for `rust-v0.155.0`: the
+     * The vendor's unmodified GitHub release archives for `rust-v0.162.1`: the
      * `codex` archive, and beside it the `codex-code-mode-host` archive of the
-     * same triple as a companion. The `codex` archives were downloaded and
-     * hashed 2026-09-18, the host archives 2026-09-29 (both agreed with the
-     * digests GitHub publishes); each `size` is the byte count of that same
-     * download (`scripts/pin-assets.mjs` prints it), so it is exact for the
-     * digest beside it. Linux is the musl build — the only one the release ships.
+     * same triple as a companion. Every archive, main and companion, was
+     * downloaded and hashed 2026-10-11 (`make pin-assets`); each `size` is the
+     * byte count of that same download, so it is exact for the digest beside
+     * it. Linux is the musl build — the only one the release ships.
      *
      * **Why the host is needed.** From 0.155.0 the `code_mode_host` feature is
      * stable and on by default, and a bare (non-package) install looks for
@@ -222,30 +221,30 @@ export const RUNTIME_PINS = {
       'darwin-arm64': codexAsset(
         'aarch64-apple-darwin',
         'tar.gz',
-        '5a584b7cddc2a97083cada53f10f5bc4231526b7f64105f6a5bb82d01ccdba49',
-        90573064,
-        { sha256: '3d751deef91b4526f086029c9395feb872abf7a717e45752ad1b33dcb387fa6b', size: 22559336 }
+        'b293a0fcdd871900a44c0a4f40a1aa401b31e02854f790ebdb8bd5d1177fd1fe',
+        98104184,
+        { sha256: '1f464a2894adbc916e431b6bf19bef2cb485cf7e13e636d42578c581962b3727', size: 23826262 }
       ),
       'darwin-x64': codexAsset(
         'x86_64-apple-darwin',
         'tar.gz',
-        'cc84081b15284eea10c8b8d428818d1c8debdce5a7f0f4f5c04dfc7c72518174',
-        98661335,
-        { sha256: '285d1c6fdacf9b500fe041c0a98b06cf58eb7ea35549554bcb2a0c04866ef49d', size: 24302873 }
+        'd68e39d8f62639f33f7d00656554cb9c3ef7809e664a3827e62ab3ace3c21b21',
+        107055460,
+        { sha256: 'cd52af8a6884b18239aaf36d0c99bc990e7dcf75b0917155474ffde88a111d37', size: 25706483 }
       ),
       'linux-x64': codexAsset(
         'x86_64-unknown-linux-musl',
         'tar.gz',
-        'e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0',
-        101573733,
-        { sha256: '328c1bebe09fc727053794576efea353d3b18381ee8883f5283b37ae4a7854d4', size: 25736177 }
+        '86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057',
+        111350218,
+        { sha256: '458239ea45c1fc508d89695f180ab352f2834709a8a46929a4466f4f04399ada', size: 27500770 }
       ),
       'linux-arm64': codexAsset(
         'aarch64-unknown-linux-musl',
         'tar.gz',
-        '8b4a9c356916c515f7c93f918a01b8fa1371bcc9758addbfa723b85fbec5694b',
-        94309776,
-        { sha256: '0ecd8e263468b520770c6dc6c9ebafeba3052c0c9796eabc5b0c469f77d5489b', size: 24365040 }
+        'bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1',
+        103595962,
+        { sha256: '1395ce9367f8acd280674dff083edf25bf221d908b8351d5bd4f3fdde9181e9a', size: 26003900 }
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },

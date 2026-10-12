@@ -777,11 +777,14 @@ describe('a Skill call, as claude-agent-acp 0.76.0 sends it', () => {
   })
 })
 
-describe('a command, as codex-acp 1.11.0 sends it', () => {
-  // `createCommandExecutionUpdate` / `completeCommandExecutionEvent` in the
-  // pinned adapter: the call opens with a `{type:'terminal'}` content block,
-  // the output streams as `_meta.terminal_output_delta`, and the completing
-  // update carries it whole as `rawOutput.formatted_output` with no `content`.
+describe('a command, as codex-acp 2.2.2 sends it to a client that is not AIR', () => {
+  // `AcpToolCallRenderer.standardMeta` / `commandEndMeta` in the pinned
+  // adapter: a command shown as a terminal opens with a `{type:'terminal'}`
+  // content block, its output streams as `_meta.terminal_output_delta`, and the
+  // completing update carries `_meta.terminal_exit` and no `rawOutput`. A
+  // read/search/list command has no terminal: its completing update carries
+  // `rawOutput: {exit_code}` and the whole output as one delta (contract
+  // `codex.tool.command-output`).
   const ID = 'exec-0f1e'
   const opened: SessionNotification = { sessionId: 'thr', update: {
     sessionUpdate: 'tool_call', toolCallId: ID, status: 'in_progress', kind: 'execute', title: 'python3 run.py',
@@ -793,10 +796,13 @@ describe('a command, as codex-acp 1.11.0 sends it', () => {
     sessionUpdate: 'tool_call_update', toolCallId: ID,
     _meta: { terminal_output_delta: { data, terminal_id: ID } }
   } as unknown as SessionNotification['update'] })
-  const completed = (status: string, output: string, exitCode: number): SessionNotification => ({ sessionId: 'thr', update: {
+  /** The end of a terminal command, with whatever output had not streamed yet. */
+  const completed = (status: string, rest: string, exitCode: number): SessionNotification => ({ sessionId: 'thr', update: {
     sessionUpdate: 'tool_call_update', toolCallId: ID, status,
-    rawOutput: { formatted_output: output, exit_code: exitCode },
-    _meta: { terminal_exit: { exit_code: exitCode, signal: null, terminal_id: ID } }
+    _meta: {
+      ...(rest ? { terminal_output_delta: { data: rest, terminal_id: ID } } : {}),
+      terminal_exit: { exit_code: exitCode, signal: null, terminal_id: ID }
+    }
   } as unknown as SessionNotification['update'] })
 
   const store = (notifications: SessionNotification[]): ReturnType<StreamPartsAccumulator['snapshotParts']> => {
@@ -810,31 +816,78 @@ describe('a command, as codex-acp 1.11.0 sends it', () => {
     return acc.snapshotParts()
   }
 
-  it('stores the final output as the call’s tool_result, not the streamed deltas', () => {
-    const parts = store([opened, delta('slot='), delta('ok\n'), completed('completed', 'slot=ok\n', 0)])
+  it('stores the streamed output as the call’s tool_result once the command ends', () => {
+    const parts = store([opened, delta('slot='), delta('ok\n'), completed('completed', '', 0)])
     expect(parts.map((p) => p.kind)).toEqual(['tool', 'tool_result'])
     expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'slot=ok\n', toolId: ID, toolStream: 'stdout' })
+    // Nothing is a result while the command still runs.
+    expect(store([opened, delta('slot=')]).map((p) => p.kind)).toEqual(['tool'])
+  })
+
+  it('names a call by its title, not by the `name` codex-acp 2.x sends (`exec_command` for every command)', () => {
+    const parts = store([{ sessionId: 'thr', update: { sessionUpdate: 'tool_call', toolCallId: 'call_7', name: 'exec_command', kind: 'read', title: "Read file '/w/a.md'", status: 'in_progress' } as unknown as SessionNotification['update'] }])
+    expect(parts[0]).toMatchObject({ kind: 'tool', toolName: "Read file '/w/a.md'" })
+    // Another engine's `name` still wins over its title.
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const named = stream.apply({ sessionId: 'thr', update: { sessionUpdate: 'tool_call', toolCallId: 'c', name: 'Read', title: 'Read a.md' } as unknown as SessionNotification['update'] })
+    expect(named.message?.parts[0].metadata?.[TOOL_NAME_METADATA_KEY]).toBe('Read')
+  })
+
+  it('stores a read command’s output, sent whole on its completing update', () => {
+    const parts = store([
+      { sessionId: 'thr', update: { sessionUpdate: 'tool_call', toolCallId: 'call_5', name: 'exec_command', kind: 'read', title: "Read file '/w/SKILL.md'", status: 'in_progress', locations: [{ path: '/w/SKILL.md' }] } as unknown as SessionNotification['update'] },
+      { sessionId: 'thr', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_5', status: 'completed', rawOutput: { exit_code: 0 }, _meta: { terminal_output_delta: { data: 'SKILL_OK\n', terminal_id: 'call_5' } } } as unknown as SessionNotification['update'] }
+    ])
+    expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'SKILL_OK\n', toolId: 'call_5', toolStream: 'stdout' })
   })
 
   it('keeps a non-zero exit code as the last line of a failed command', () => {
-    const parts = store([opened, completed('failed', 'Traceback: boom', 2)])
+    const parts = store([opened, delta('Traceback: '), completed('failed', 'boom', 2)])
     expect(parts[1]).toMatchObject({ kind: 'tool_result', text: 'Traceback: boom\nExit code 2', toolStream: 'stderr' })
     expect(store([opened, completed('failed', '', 127)])[1]?.text).toBe('Exit code 127')
   })
 
   it('adds no exit-code line for a command the user stopped (exit -1), so it does not read as an error', () => {
     expect(store([opened, completed('failed', '', -1)]).map((p) => p.kind)).toEqual(['tool'])
-    expect(store([opened, completed('failed', 'partial\n', -1)])[1]?.text).toBe('partial\n')
+    expect(store([opened, delta('partial\n'), completed('failed', '', -1)])[1]?.text).toBe('partial\n')
   })
 
   it('keeps the head and tail of an output over the limit, naming the gap', () => {
     const big = 'a'.repeat(TOOL_RESULT_LIMIT) + 'MIDDLE' + 'z'.repeat(TOOL_RESULT_LIMIT)
-    const text = store([opened, completed('completed', big, 0)])[1]!.text
+    const text = store([opened, delta(big.slice(0, 1000)), delta(big.slice(1000)), completed('completed', '', 0)])[1]!.text
     expect(text.length).toBeLessThan(TOOL_RESULT_LIMIT + 100)
     expect(text.startsWith('aaa')).toBe(true)
     expect(text.endsWith('zzz')).toBe(true)
     expect(text).toContain(`… ${big.length - TOOL_RESULT_LIMIT} characters left out …`)
     expect(capToolResult('short')).toBe('short')
+  })
+
+  it('holds a command’s streamed output to the limit while it runs, and stores what the whole output would cap to', () => {
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    const held = (stream as unknown as { commandOutput: Map<string, { head: string; tail: string; dropped: number }> }).commandOutput
+    stream.apply(opened)
+    const chunks = Array.from({ length: 40 }, (_, i) => `${String(i).padStart(2, '0')}:${'x'.repeat(8_000)}\n`)
+    for (const chunk of chunks) {
+      stream.apply(delta(chunk))
+      const entry = held.get(ID)!
+      expect(entry.head.length + entry.tail.length).toBeLessThanOrEqual(TOOL_RESULT_LIMIT)
+    }
+    const parts = store([opened, ...chunks.map(delta), completed('failed', 'end', 3)])
+    expect(parts[1]!.text).toBe(capToolResult(`${chunks.join('')}end\nExit code 3`))
+    // Under the limit nothing is dropped.
+    expect(store([opened, delta('a'.repeat(1_000)), completed('completed', '', 0)])[1]!.text).toBe('a'.repeat(1_000))
+  })
+
+  it('drops a command’s held output once the call completes or fails', () => {
+    const stream = new AcpMessageStream({ launcher: 'codex' })
+    const held = (stream as unknown as { commandOutput: Map<string, unknown> }).commandOutput
+    for (const status of ['completed', 'failed']) {
+      stream.apply(opened)
+      stream.apply(delta('partial'))
+      expect(held.size).toBe(1)
+      stream.apply(completed(status, 'rest', 1))
+      expect(held.size).toBe(0)
+    }
   })
 
   it('stores nothing for a silent command that succeeded', () => {
@@ -845,6 +898,25 @@ describe('a command, as codex-acp 1.11.0 sends it', () => {
     // A call the adapter replays already completed still has only the reference.
     const done = { ...opened, update: { ...opened.update, status: 'completed' } } as SessionNotification
     expect(store([done]).map((p) => p.kind)).toEqual(['tool'])
+  })
+
+  it('stores the whole output the patched adapter puts on the completing update, head included, once', () => {
+    // The CLI streamed only the tail; the patch's `rawOutput.formatted_output` is the item's whole output.
+    const whole: SessionNotification = { sessionId: 'thr', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: ID, status: 'completed',
+      rawOutput: { exit_code: 0, formatted_output: 'head\ntail\n' },
+      _meta: { terminal_exit: { exit_code: 0, signal: null, terminal_id: ID } }
+    } as unknown as SessionNotification['update'] }
+    const parts = store([opened, delta('tail\n'), whole])
+    expect(parts.filter((p) => p.kind === 'tool_result').map((p) => p.text)).toEqual(['head\ntail\n'])
+  })
+
+  it('reads a whole output in rawOutput first, so an engine sending both is not counted twice', () => {
+    const both: SessionNotification = { sessionId: 'thr', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: ID, status: 'completed',
+      rawOutput: { formatted_output: 'slot=ok\n', exit_code: 0 }
+    } as unknown as SessionNotification['update'] }
+    expect(store([opened, delta('slot='), delta('ok\n'), both])[1]?.text).toBe('slot=ok\n')
   })
 
   it('stores a background command’s output from the recorded fixture', () => {
@@ -865,7 +937,7 @@ describe('a command, as codex-acp 1.11.0 sends it', () => {
   })
 })
 
-describe('an MCP call, as codex-acp 1.11.0 sends it', () => {
+describe('an MCP call, as codex-acp sends it (1.11.0 and 2.2.2 alike)', () => {
   // Watched in `make contract ENGINE=codex` (codex.tool.mcp-output): the
   // app-server item passes through as `rawOutput: { result, error }`.
   const ID = 'call_18'

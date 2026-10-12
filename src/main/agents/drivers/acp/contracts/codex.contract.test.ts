@@ -10,10 +10,10 @@ import { prepareCodexConductorPolicy } from '../codexConductorPolicy'
 import { cinnaToolName } from '../conductorToolPolicy'
 import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
-import { airClientMeta } from '../acpActivity'
-import { readQuotaTotal } from '../acpTelemetry'
+import { airClientMeta, createAcpActivityState, translateActivity } from '../acpActivity'
+import { parsePromptTelemetry } from '../acpTelemetry'
 import { AcpMessageStream } from '../acpMessages'
-import { KIND_METADATA_KEY } from '../../../streamPartsAccumulator'
+import { KIND_METADATA_KEY, TOOL_NAME_METADATA_KEY, type PartLike } from '../../../streamPartsAccumulator'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CODEX_CONTRACT } from './codex.contract'
@@ -71,7 +71,7 @@ const writeSnapshot = process.env['CINNA_CONTRACT_WRITE_SNAPSHOT'] === '1'
 
 const MODEL = 'gpt-5.5'
 const NEXT_MODEL = 'gpt-6-astra'
-/** The model 0.155.0 names threads on. Not configured by Cinna, and not the conversation's. */
+/** The model the CLI names threads on (0.155.0 and 0.162.1 alike). Not configured by Cinna, and not the conversation's. */
 const TITLE_MODEL = 'gpt-5.6-luna'
 const FIRST_PROMPT = 'Answer OK.'
 const NEXT_MODEL_PROMPT = 'Answer OK on the new model.'
@@ -80,6 +80,8 @@ const UTILITY_MARKER = 'CONTRACT_UTILITY_PROMPT_b09'
 const UTILITY_PROMPT = 'CONTRACT_UTILITY_INPUT_4d7'
 const FOLDER_MARKER = 'CONTRACT_FOLDER_INSTRUCTIONS_7c1'
 const POLICY_MARKER = 'CONTRACT_SESSION_PROMPT_e52'
+/** What the backgrounded command prints before and after it outlives its turn. */
+const STREAM_MARKERS = ['CINNA_STREAM_BEFORE_7a', 'CINNA_STREAM_AFTER_7a'] as const
 /** What a restricted session may be offered. Anything else is a native tool that came back. */
 const ALLOWED_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'request_user_input'])
 
@@ -105,13 +107,29 @@ const seen = {
   sessionNew: null as AdapterMessage | null,
   setModes: {} as Record<string, boolean>,
   firstTurn: null as ProviderTurn | null,
-  /** The folder session's first prompt answer, and the one after the model change: their `_meta.quota`. */
-  quotas: [] as Json[],
+  /** The folder session's first prompt answer, and the one after the model change. */
+  answers: [] as Json[],
+  /** Requests (title requests aside) each of those prompts made, in the same order. */
+  answerRequests: [] as number[],
   /**
    * The same session resumed on a fresh adapter process after its turns: the
-   * `_meta.quota` of the last answer before the restart and of the first after.
+   * last answer before the restart and the first after, and that prompt's requests.
    */
-  resumed: { loaded: false, before: null as Json | null, after: null as Json | null },
+  resumed: { loaded: false, before: null as Json | null, after: null as Json | null, requests: 0 },
+  /**
+   * A shell command left running when its turn ends, with the launcher's
+   * capabilities: every update from its prompt until it completed, how many
+   * of them came before the prompt answered, and the prompt's answer.
+   */
+  command: { updates: [] as Json[], beforeAnswer: 0, answer: null as Json | null, requests: 0 },
+  /**
+   * A `spawn_agent` call with the launcher's capabilities: every root-session
+   * update from the prompt until the subagent's completion arrived, the tools
+   * the first request offered, and the provider's outputs for the parent.
+   */
+  subagent: { updates: [] as Json[], offered: [] as string[], spawnOutputs: [] as string[] },
+  /** Every update of the prompt after the model change, which compacts. */
+  modelChangeUpdates: [] as Json[],
   permission: null as AdapterMessage | null,
   permissionCount: 0, mcpCalls: 0,
   toolCall: null as Json | null,
@@ -172,11 +190,14 @@ async function folderScenario(binary: string): Promise<void> {
   let connection: AdapterConnection | undefined
   try {
     let mode: 'text' | 'stall' | 'rate-limit' = 'text'
+    let script: ProviderReply[] = []
     provider = await startFakeProvider((turn): ProviderReply => {
       // The CLI's own requests (thread title, compaction) are told apart by
       // content, never by model; only the conversation is scripted, so they
       // cannot consume a scripted step.
       if (turn.kind !== 'conversation') return ownRequestReply(turn)
+      const scripted = script.shift()
+      if (scripted) return scripted
       if (mode === 'stall') return { kind: 'stall' }
       if (mode === 'rate-limit') return { kind: 'status', status: 429, body: { error: { message: 'Rate limit reached', type: 'rate_limit_exceeded', code: 'rate_limit_exceeded' } } }
       return { kind: 'text', text: 'OK' }
@@ -189,7 +210,7 @@ async function folderScenario(binary: string): Promise<void> {
     chmodSync(wrapper, 0o700)
     connection = spawnAdapter({
       adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
-      env: { ...scratch.env, CODEX_PATH: wrapper, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe',
+      env: { ...scratch.env, CODEX_PATH: wrapper, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe',
         CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe', developer_instructions: FOLDER_MARKER, model_reasoning_effort: 'high' }) }
     })
     // Exactly what `codexLauncher` advertises, AIR `asyncTasks` included: what the
@@ -200,14 +221,18 @@ async function folderScenario(binary: string): Promise<void> {
     seen.wrapperRan = existsSync(marker)
     const sessionId = String(seen.sessionNew.result?.sessionId ?? '')
     if (!sessionId) return
-    for (const modeId of ['agent', 'read-only']) {
+    for (const modeId of ['agent', 'workspace-write']) {
       seen.setModes[modeId] = !(await connection.rpc('session/set_mode', { sessionId, modeId })).error
     }
     const prompt = (text: string, timeoutMs?: number): Promise<AdapterMessage> =>
       connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, timeoutMs)
 
+    /** Requests of the session from `from` on, the CLI's thread-title requests aside. */
+    const requestsSince = (from: number): number => provider!.turns.slice(from).filter((turn) => turn.kind !== 'title').length
+    const firstAt = provider.turns.length
     const firstAnswer = await prompt(FIRST_PROMPT)
-    seen.quotas.push(((firstAnswer.result?._meta as Json | undefined)?.quota ?? {}) as Json)
+    seen.answers.push((firstAnswer.result ?? {}) as Json)
+    seen.answerRequests.push(requestsSince(firstAt))
     // The title request runs beside the turn, not inside it: give it a moment to land.
     await until(() => provider!.turns.some((turn) => turn.kind === 'title'), 5_000)
     // And the title it produced is reported after that, often after the turn.
@@ -217,6 +242,25 @@ async function folderScenario(binary: string): Promise<void> {
     await until(() => infoTitles().some((title) => title !== FIRST_PROMPT), 5_000)
     seen.infoTitles = infoTitles()
     seen.firstTurn = provider.turns.find((turn) => turn.kind === 'conversation') ?? null
+
+    // A command that streams, outlives its turn (yielded after 500 ms, the
+    // model then answers) and is reported as a background task until it ends.
+    script = [
+      { kind: 'tool', name: 'exec_command', args: JSON.stringify({ cmd: `printf '${STREAM_MARKERS[0]}\\n'; sleep 2; printf '${STREAM_MARKERS[1]}\\n'`, yield_time_ms: 500, max_output_tokens: 1000 }) },
+      { kind: 'text', text: 'started' }
+    ]
+    const commandUpdatesAt = connection.updates.length
+    const commandAt = provider.turns.length
+    const commandAnswer = await prompt('Run the command in the background.')
+    seen.command.answer = (commandAnswer.result ?? {}) as Json
+    seen.command.requests = requestsSince(commandAt)
+    seen.command.beforeAnswer = connection.updates.length - commandUpdatesAt
+    script = []
+    const commandDone = (): boolean => connection!.updates.slice(commandUpdatesAt).some((update) =>
+      update.sessionUpdate === 'tool_call_update' && (update.status === 'completed' || update.status === 'failed'))
+    await until(commandDone, 15_000)
+    await sleep(300)
+    seen.command.updates = connection.updates.slice(commandUpdatesAt)
 
     mode = 'stall'
     const stalledAt = provider.turns.length
@@ -237,9 +281,12 @@ async function folderScenario(binary: string): Promise<void> {
 
     await connection.rpc('session/set_config_option', { sessionId, configId: 'model', value: NEXT_MODEL })
     const changedAt = provider.turns.length
+    const changeUpdatesAt = connection.updates.length
     const nextAnswer = await prompt(NEXT_MODEL_PROMPT)
-    seen.quotas.push(((nextAnswer.result?._meta as Json | undefined)?.quota ?? {}) as Json)
+    seen.answers.push((nextAnswer.result ?? {}) as Json)
+    seen.answerRequests.push(requestsSince(changedAt))
     await sleep(1500)
+    seen.modelChangeUpdates = connection.updates.slice(changeUpdatesAt)
     seen.afterModelChange = provider.turns.slice(changedAt)
     seen.folderTurns = [...provider.turns]
 
@@ -253,11 +300,11 @@ async function folderScenario(binary: string): Promise<void> {
     // After everything: the process goes, and the same session is resumed on a
     // fresh one the way the driver resumes a chat after a restart.
     mode = 'text'
-    seen.resumed.before = seen.quotas[1] ?? null
+    seen.resumed.before = seen.answers[1] ?? null
     await connection.close()
     connection = spawnAdapter({
       adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
-      env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe',
+      env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe',
         CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe', developer_instructions: FOLDER_MARKER, model_reasoning_effort: 'high' }) }
     })
     await connection.rpc('initialize', { protocolVersion: 1,
@@ -266,8 +313,10 @@ async function folderScenario(binary: string): Promise<void> {
     seen.resumed.loaded = !reloaded.error
     if (seen.resumed.loaded) {
       await connection.rpc('session/set_config_option', { sessionId, configId: 'model', value: NEXT_MODEL })
+      const resumedAt = provider.turns.length
       const resumedAnswer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Answer OK after the restart.' }] })
-      seen.resumed.after = ((resumedAnswer.result?._meta as Json | undefined)?.quota ?? null) as Json | null
+      seen.resumed.after = (resumedAnswer.result ?? null) as Json | null
+      seen.resumed.requests = requestsSince(resumedAt)
     }
   } finally {
     await connection?.close()
@@ -307,9 +356,9 @@ async function policyScenario(binary: string, versionOutput: string): Promise<vo
     ].join('\n') + '\n')
     const plan = {
       spec: { command: process.execPath, args: [adapter], cwd: scratch.cwd, key: 'contract',
-        env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe',
+        env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe',
           CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe', developer_instructions: POLICY_MARKER }) } },
-      init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'read-only' }
+      init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'workspace-write' }
     } as unknown as AcpLaunchPlan
     mkdirSync(join(scratch.home, 'policy'))
     const prepared = await prepareCodexConductorPolicy(plan, join(scratch.home, 'policy'), candidate ? {
@@ -375,6 +424,67 @@ async function policyScenario(binary: string, versionOutput: string): Promise<vo
   }
 }
 
+/* -------------------------------------------------------------- scenario C */
+
+/** The subagent the fake model spawns, and the root path the CLI gives it. */
+const SUBAGENT_NAME = 'helper'
+
+/**
+ * A folder session whose model spawns a subagent, waits for it, and answers.
+ * The fake model's catalog entry names no `multi_agent_version`, so the CLI
+ * would offer it no agent tool; it is given `v2`, which every bundled real
+ * model carries. The child's own request is answered with text at once.
+ */
+async function subagentScenario(binary: string): Promise<void> {
+  const scratch = makeScratch('cinna-contract-subagent-')
+  let provider: FakeProvider | undefined
+  let connection: AdapterConnection | undefined
+  try {
+    let spawned = false
+    let waited = false
+    provider = await startFakeProvider((turn): ProviderReply => {
+      if (turn.kind !== 'conversation') return ownRequestReply(turn)
+      // The parent's first request spawns; the child's (no output yet, after the spawn) answers.
+      if (!spawned) {
+        spawned = true
+        seen.subagent.offered = turn.tools
+        return { kind: 'tool', name: 'spawn_agent', args: JSON.stringify({ task_name: SUBAGENT_NAME, message: 'Answer done.' }) }
+      }
+      if (turn.pendingOutputs === 1 && !waited) {
+        waited = true
+        seen.subagent.spawnOutputs = turn.outputs
+        return { kind: 'tool', name: 'wait_agent', args: JSON.stringify({ timeout_ms: 15_000 }) }
+      }
+      return { kind: 'text', text: turn.pendingOutputs === 0 ? 'done' : 'OK' }
+    })
+    const catalog = JSON.parse(runCli(binary, ['debug', 'models', '--bundled'], scratch.env, scratch.cwd).stdout) as { models: Json[] }
+    for (const model of catalog.models) if (model.slug === MODEL) model.multi_agent_version = 'v2'
+    const catalogPath = join(scratch.home, 'catalog.json')
+    writeFileSync(catalogPath, JSON.stringify(catalog))
+    writeProviderConfig(scratch.codexHome, provider.port, MODEL, [`model_catalog_json = ${JSON.stringify(catalogPath)}`])
+    connection = spawnAdapter({
+      adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
+      env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe',
+        CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe' }) }
+    })
+    await connection.rpc('initialize', { protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [] })
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) return
+    await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Spawn a helper, wait for it, then answer OK.' }] }, 45_000)
+    // The subagent's completion is its own item, and may follow the turn.
+    await until(() => connection!.updates.some((update) => update.sessionUpdate === 'tool_call'
+      && (update.rawInput as Json | undefined)?.activityKind === 'completed'), 15_000)
+    await sleep(300)
+    seen.subagent.updates = [...connection.updates]
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 /** Shapes only: no paths, ids, ports, tokens or timestamps, keys sorted, so two versions diff cleanly. */
@@ -403,7 +513,12 @@ function snapshot(): Json {
     },
     acp: {
       initialize: { protocolVersion: init.protocolVersion ?? null, agentCapabilities: init.agentCapabilities ?? null,
-        authMethodIds: ((init.authMethods as Json[] | undefined) ?? []).map((method) => String(method.id)).sort(), resultKeys: keys(init) },
+        authMethodIds: ((init.authMethods as Json[] | undefined) ?? []).map((method) => String(method.id)).sort(), resultKeys: keys(init), metaKeys: keys(init._meta) },
+      promptAnswer: { resultKeys: keys(seen.answers[0]), usageKeys: keys(seen.answers[0]?.usage), metaKeys: keys(seen.answers[0]?._meta),
+        quotaKeys: keys((seen.answers[0]?._meta as Json | undefined)?.quota),
+        tokenCountKeys: keys(((seen.answers[0]?._meta as Json | undefined)?.quota as Json | undefined)?.token_count) },
+      command: commandSnapshot(),
+      modelChangeUpdateKinds: [...new Set(seen.modelChangeUpdates.map((update) => String(update.sessionUpdate)))].sort(),
       sessionNew: { resultKeys: keys(created),
         modeIds: (((created.modes as Json | undefined)?.availableModes as Json[] | undefined) ?? []).map((mode) => String(mode.id)).sort(),
         currentModeId: (created.modes as Json | undefined)?.currentModeId ?? null,
@@ -440,6 +555,21 @@ function snapshot(): Json {
   }
 }
 
+/** The backgrounded command's updates, reduced to their shapes. */
+function commandSnapshot(): Json {
+  const updates = seen.command.updates
+  const calls = updates.filter((update) => update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+  const opened = calls.find((update) => update.sessionUpdate === 'tool_call')
+  const union = (pick: (update: Json) => unknown): string[] => [...new Set(calls.flatMap((update) => keys(pick(update))))].sort()
+  const spawned = updates.find((update) => update.sessionUpdate === 'async_task_spawned')
+  return {
+    updateKinds: [...new Set(updates.map((update) => String(update.sessionUpdate)))].sort(),
+    toolCallKeys: keys(opened), toolCallName: opened?.name ?? null, toolCallKind: opened?.kind ?? null,
+    updateKeys: union((update) => update), metaKeys: union((update) => update._meta), rawOutputKeys: union((update) => update.rawOutput),
+    asyncTaskSpawnedKeys: keys(spawned), asyncTaskType: spawned?.taskType ?? null
+  }
+}
+
 /** The CLI's own requests of one kind, per kind of session: how many, on which model, offered what. */
 function ownRequests(kind: ProviderTurn['kind']): Json {
   const of = (turns: ProviderTurn[]): Json => {
@@ -463,6 +593,21 @@ function failureKinds(updates: Json[]): string[] {
   for (const update of updates) walk(update, false)
   return found
 }
+
+/** The transcript parts these updates fold into, the way the driver folds them: the last state of each message. */
+function foldParts(updates: Json[], sessionId = 's'): PartLike[] {
+  const stream = new AcpMessageStream({ launcher: 'codex' })
+  const messages = new Map<string, PartLike[]>()
+  for (const update of updates) {
+    const message = stream.apply({ sessionId, update } as unknown as SessionNotification).message
+    if (message) messages.set(message.messageId, message.parts)
+  }
+  return [...messages.values()].flat()
+}
+
+const toolCalls = (updates: Json[]): Json[] => updates.filter((update) => update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+const outputDeltas = (updates: Json[]): string => toolCalls(updates)
+  .map((update) => String(((update._meta as Json | undefined)?.terminal_output_delta as Json | undefined)?.data ?? '')).join('')
 
 const threadStatusTypes = (updates: Json[]): string[] => updates
   .map((update) => (((update._meta as Json | undefined)?.codex as Json | undefined)?.threadStatus as Json | undefined)?.type)
@@ -509,6 +654,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     } finally { scratch.dispose() }
     await folderScenario(binary)
     await policyScenario(binary, seen.versionOutput)
+    await subagentScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 300_000)
 
@@ -532,7 +678,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
   })
 
   it(entry('codex.launch.initial-agent-mode'), () => {
-    expect((seen.sessionNew?.result?.modes as Json | undefined)?.currentModeId).toBe('read-only')
+    expect((seen.sessionNew?.result?.modes as Json | undefined)?.currentModeId).toBe('workspace-write')
   })
 
   it(entry('codex.auth.login-status'), () => {
@@ -550,8 +696,8 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
 
   it(entry('codex.session.modes'), () => {
     const ids = (((seen.sessionNew?.result?.modes as Json | undefined)?.availableModes as Json[] | undefined) ?? []).map((mode) => mode.id)
-    expect(ids).toEqual(expect.arrayContaining(['read-only', 'agent']))
-    expect(seen.setModes).toEqual({ agent: true, 'read-only': true })
+    expect(ids).toEqual(expect.arrayContaining(['read-only', 'workspace-write', 'agent', 'agent-full-access']))
+    expect(seen.setModes).toEqual({ agent: true, 'workspace-write': true })
   })
 
   it(entry('codex.session.load'), () => {
@@ -566,33 +712,86 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(conversation.some((turn) => turn.userText.includes(POLICY_MARKER))).toBe(false)
   })
 
-  it(entry('codex.session.quota-running-total'), () => {
-    expect(seen.quotas).toHaveLength(2)
-    // Both fields read with the owner's own reader (`token_count` has the same shape).
-    const tally = (value: unknown) => readQuotaTotal({ _meta: { quota: { total_token_count: value } } })
-    const [first, next] = seen.quotas.map((quota) => ({ last: tally(quota.token_count), total: tally(quota.total_token_count) }))
-    expect(first.total, JSON.stringify(seen.quotas[0])).not.toBeNull()
-    expect(next.total, JSON.stringify(seen.quotas[1])).not.toBeNull()
-    // The same shape as `token_count`, and never below it.
-    expect(Object.keys(seen.quotas[0].total_token_count as Json).sort()).toEqual(Object.keys(seen.quotas[0].token_count as Json).sort())
-    const sum = (t: { input: number; output: number; cacheRead: number }): number => t.input + t.output + t.cacheRead
-    expect(sum(first.total!)).toBeGreaterThanOrEqual(sum(first.last!))
-    // A running total: the later turn's is the earlier one's plus at least its own last request.
-    expect(sum(next.total!)).toBeGreaterThanOrEqual(sum(first.total!) + sum(next.last!))
+  it(entry('codex.session.prompt-usage'), () => {
+    // The fake provider answers every request with 1 input and 1 output token.
+    const expectUsage = (answer: Json | null, requests: number, label: string): void => {
+      expect(requests, label).toBeGreaterThan(0)
+      const meta = (answer?._meta ?? {}) as Json
+      const quota = (meta.quota ?? {}) as Json
+      expect(answer?.usage, label).toMatchObject({ inputTokens: requests, outputTokens: requests, totalTokens: 2 * requests })
+      expect(quota.token_count, label).toMatchObject({ inputTokens: requests, outputTokens: requests, totalTokens: 2 * requests, cacheWriteInputTokens: 0 })
+      expect(quota.model_usage, label).toEqual([{ model: expect.any(String), token_count: quota.token_count }])
+      // No running total beside it any more.
+      expect(keys(quota), label).toEqual(['model_usage', 'token_count'])
+      // Our reader: the turn's own tokens, scope turn.
+      expect(parsePromptTelemetry(answer, 'codex'), label).toMatchObject({ tokens: { input: requests, output: requests }, tokenScope: 'turn' })
+    }
+    expectUsage(seen.answers[0], seen.answerRequests[0], 'first prompt')
+    // A turn that called a tool: both of its requests, not the last one alone.
+    expect(seen.command.requests).toBeGreaterThanOrEqual(2)
+    expectUsage(seen.command.answer, seen.command.requests, 'command prompt')
+    // The model change compacts on the way: that request is the turn's too.
+    expectUsage(seen.answers[1], seen.answerRequests[1], 'model-change prompt')
+    // Resumed on a fresh process: this prompt alone, not the thread's history.
+    expect(seen.resumed.loaded).toBe(true)
+    expectUsage(seen.resumed.after, seen.resumed.requests, 'resumed prompt')
   })
 
-  it(entry('codex.session.quota-total-on-resume'), () => {
-    expect(seen.resumed.loaded).toBe(true)
-    const tally = (value: unknown) => readQuotaTotal({ _meta: { quota: { total_token_count: value } } })
-    const before = tally(seen.resumed.before?.total_token_count)
-    const after = tally(seen.resumed.after?.total_token_count)
-    const last = tally(seen.resumed.after?.token_count)
-    expect(before, JSON.stringify(seen.resumed)).not.toBeNull()
-    expect(after, JSON.stringify(seen.resumed)).not.toBeNull()
-    const sum = (t: { input: number; output: number; cacheRead: number }): number => t.input + t.output + t.cacheRead
-    // Restored, not started over: the pre-restart total plus this turn's request.
-    // (Started over, it would equal this turn's last request alone.)
-    expect(sum(after!)).toBeGreaterThanOrEqual(sum(before!) + sum(last!))
+  it(entry('codex.session.air-async-tasks'), () => {
+    expect((seen.initialize?.result?._meta as Json | undefined)?.jetbrains).toBeUndefined()
+    const updates = seen.command.updates
+    const opened = updates.find((update) => update.sessionUpdate === 'tool_call')
+    const spawned = updates.find((update) => update.sessionUpdate === 'async_task_spawned')
+    expect(spawned, JSON.stringify(updates.map((update) => update.sessionUpdate))).toMatchObject({ taskType: 'shell', toolCallId: opened?.toolCallId })
+    // Before the prompt answered; the command ended after it.
+    expect(updates.indexOf(spawned!)).toBeLessThan(seen.command.beforeAnswer)
+    const end = updates.findIndex((update) => update.sessionUpdate === 'tool_call_update' && update.status === 'completed')
+    expect(end).toBeGreaterThanOrEqual(seen.command.beforeAnswer)
+  })
+
+  it(entry('codex.activity.subagent-shape'), () => {
+    const updates = seen.subagent.updates
+    expect(seen.subagent.offered).toContain('collaboration.spawn_agent')
+    expect(seen.subagent.spawnOutputs.join('\n')).toContain(`/root/${SUBAGENT_NAME}`)
+    const kinds = updates.map((update) => String(update.sessionUpdate))
+    expect(kinds).not.toContain('subagent_spawned')
+    expect(kinds).not.toContain('subagent_state_update')
+    const calls = toolCalls(updates)
+    const activity = (kind: string): Json | undefined => calls.find((update) => update.sessionUpdate === 'tool_call'
+      && (update.rawInput as Json | undefined)?.activityKind === kind)
+    const started = activity('started')
+    expect(started, JSON.stringify(calls)).toMatchObject({ title: `Start subagent ${SUBAGENT_NAME}`,
+      rawInput: { agentPath: `/root/${SUBAGENT_NAME}`, activityKind: 'started' } })
+    const thread = String((started?.rawInput as Json | undefined)?.agentThreadId ?? '')
+    expect(thread).not.toBe('')
+    expect(activity('completed')).toMatchObject({ rawInput: { agentThreadId: thread, agentPath: `/root/${SUBAGENT_NAME}` } })
+    const collaboration = calls.find((update) => update.sessionUpdate === 'tool_call' && update.title === 'wait')
+    expect(keys(collaboration?.rawInput)).toEqual(expect.arrayContaining(['agentsStates', 'receiverThreadIds', 'senderThreadId']))
+    expect(calls.filter((update) => update._meta !== undefined)).toEqual([])
+    // Read by the owner: one subagent, running, then completed.
+    const state = createAcpActivityState()
+    const changes = updates.flatMap((update) => translateActivity({ sessionId: 'root', update } as unknown as SessionNotification, state, 'root'))
+    expect(changes).toEqual([
+      { type: 'upsert', id: `root:${thread}`, kind: 'subagent', title: SUBAGENT_NAME },
+      { type: 'end', id: `root:${thread}`, state: 'completed' }
+    ])
+  })
+
+  it(entry('codex.session.silent-updates'), () => {
+    const updates = seen.modelChangeUpdates
+    const kinds = updates.map((update) => String(update.sessionUpdate))
+    expect(seen.folderTurns.filter((turn) => turn.kind === 'compaction')).toHaveLength(1)
+    expect(kinds).not.toContain('notice')
+    expect(kinds).not.toContain('compaction_update')
+    const compaction = updates.find((update) => update.sessionUpdate === 'tool_call' && update.kind === 'think')
+    expect(compaction).toMatchObject({ title: 'Compact conversation', status: 'in_progress' })
+    expect(updates.some((update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === compaction?.toolCallId && update.status === 'completed')).toBe(true)
+    // Folded the way the driver folds them: the step, then the warning and the answer as text.
+    const parts = foldParts(updates)
+    expect(parts.filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool').map((part) => part.text)).toEqual(['Compact conversation'])
+    const text = parts.filter((part) => !['tool', 'tool_result', 'thinking'].includes(String(part.metadata?.[KIND_METADATA_KEY]))).map((part) => part.text).join('')
+    expect(text).toMatch(/^Warning: /)
+    expect(text.endsWith('OK')).toBe(true)
   })
 
   it(entry('codex.session.info-title'), () => {
@@ -716,7 +915,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
   })
 
   it(entry('codex.provider.auxiliary-request'), () => {
-    // Pinned to what 0.155.0 was observed doing (2026-09-18), in all three kinds of session.
+    // Pinned to what 0.155.0 was observed doing (2026-09-18), and 0.162.1 still does, in all three kinds of session.
     const titles = (turns: ProviderTurn[]): ProviderTurn[] => turns.filter((turn) => turn.kind === 'title')
     const chatTurns = seen.policy.turns
     for (const [turns, firstPrompt, instructions] of [
@@ -770,35 +969,88 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
 
   it(entry('codex.sandbox.read-outside-workspace'), () => {
     expect(seen.handover?.reads.map(({ outputs: _outputs, updates: _updates, sessionId: _sessionId, ...read }) => read)).toEqual([
-      { mode: 'read-only', permissionCount: 0, kinds: [], read: true, promptError: null },
+      { mode: 'workspace-write', permissionCount: 0, kinds: [], read: true, promptError: null },
       { mode: 'agent', permissionCount: 0, kinds: [], read: true, promptError: null }
     ])
   })
   it(entry('codex.sandbox.write-outside-workspace'), () => {
-    expect(seen.handover?.writes).toHaveLength(4)
-    for (const index of [0, 2]) {
+    expect(seen.handover?.writes.map((write) => write.mode)).toEqual([
+      'workspace-write:inside', 'workspace-write', 'workspace-write:escalated', 'agent:inside', 'agent', 'agent:escalated'
+    ])
+    for (const index of [0, 3]) {
+      expect(seen.handover?.writes[index]).toMatchObject({ accepted: true, permissionCount: 0, wrote: true, promptError: null })
+    }
+    for (const index of [1, 4]) {
       expect(seen.handover?.writes[index]).toMatchObject({ accepted: true, permissionCount: 0, wrote: false, promptError: null })
       expect(seen.handover?.writes[index].outputs.join(' ')).toMatch(/operation not permitted|permission denied/i)
     }
-    expect(seen.handover?.writes[1]).toMatchObject({ mode: 'read-only:escalated', permissionCount: 1, kinds: ['execute'], wrote: true })
-    expect(seen.handover?.writes[3]).toMatchObject({ mode: 'agent:escalated', permissionCount: 0, wrote: false })
-    expect(seen.handover?.writes[3].outputs.join(' ')).toContain('Automatic approval review failed')
+    expect(seen.handover?.writes[2]).toMatchObject({ mode: 'workspace-write:escalated', permissionCount: 1, kinds: ['execute'], wrote: true })
+    expect(seen.handover?.writes[5]).toMatchObject({ mode: 'agent:escalated', permissionCount: 0, wrote: false })
+    expect(seen.handover?.writes[5].outputs.join(' ')).toContain('Automatic approval review failed')
   })
 
   it(entry('codex.tool.command-output'), () => {
+    const stored = (updates: Json[], sessionId: string): string => foldParts(updates, sessionId)
+      .filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result').map((part) => part.text).join('\n')
+    const noTextElsewhere = (updates: Json[], label: string): void => {
+      for (const update of toolCalls(updates)) expect(JSON.stringify(update.content ?? []), label).not.toMatch(/CINNA_/)
+    }
+
+    // A terminal command, with the launcher's capabilities: the output streams while it runs.
+    const command = seen.command.updates
+    const opened = toolCalls(command).find((update) => update.sessionUpdate === 'tool_call')
+    expect(opened).toMatchObject({ name: 'exec_command', kind: 'execute', content: [{ type: 'terminal' }] })
+    const running = toolCalls(command).filter((update) => update.status !== 'completed' && update.status !== 'failed')
+    expect(outputDeltas(running)).toContain(STREAM_MARKERS[1])
+    const done = toolCalls(command).find((update) => update.status === 'completed')
+    expect((done?._meta as Json | undefined)?.terminal_exit).toMatchObject({ exit_code: 0 })
+    expect(done?.rawOutput).toMatchObject({ exit_code: 0, formatted_output: expect.stringContaining(STREAM_MARKERS[1]) })
+    noTextElsewhere(command, 'terminal command')
+    expect(stored(command, 'folder')).toContain(STREAM_MARKERS[1])
+    // Named by its title, not by `exec_command`.
+    const part = foldParts(command, 'folder').find((candidate) => candidate.metadata?.[KIND_METADATA_KEY] === 'tool')
+    expect(part?.metadata?.[TOOL_NAME_METADATA_KEY]).toBe(opened?.title)
+
+    // A read command: no terminal, its whole output on the completing update.
     expect(seen.handover?.reads.length).toBeGreaterThan(0)
     for (const read of seen.handover?.reads ?? []) {
-      // The wire: the completing update carries the whole output and the exit code.
-      const done = read.updates.find((update) => update.sessionUpdate === 'tool_call_update' && update.status === 'completed')
-      const rawOutput = done?.rawOutput as Record<string, unknown> | undefined
-      expect(String(rawOutput?.formatted_output ?? ''), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
-      expect(rawOutput?.exit_code, read.mode).toBe(0)
-      // Our reader: the same turn, folded as the driver folds it, stores that output.
-      const stream = new AcpMessageStream({ launcher: 'codex' })
-      const results = read.updates.flatMap((update) => stream.apply({ sessionId: read.sessionId, update } as unknown as SessionNotification).message?.parts ?? [])
-        .filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result')
-      expect(results.map((part) => part.text).join('\n'), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
+      const end = toolCalls(read.updates).find((update) => update.status === 'completed')
+      expect(end?.rawOutput, read.mode).toEqual({ exit_code: 0, formatted_output: expect.stringContaining('CINNA_SKILL_OUTSIDE_READ_OK') })
+      expect(outputDeltas(read.updates), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
+      noTextElsewhere(read.updates, read.mode)
+      expect(stored(read.updates, read.sessionId), read.mode).toContain('CINNA_SKILL_OUTSIDE_READ_OK')
     }
+  })
+
+  it(entry('codex.tool.command-output-whole'), () => {
+    const command = seen.command.updates
+    // Why the patch is needed: the first line never streams.
+    expect(outputDeltas(command)).toContain(STREAM_MARKERS[1])
+    expect(outputDeltas(command)).not.toContain(STREAM_MARKERS[0])
+    const done = toolCalls(command).find((update) => update.status === 'completed')
+    const whole = String((done?.rawOutput as Json | undefined)?.formatted_output ?? '')
+    expect(whole).toBe(`${STREAM_MARKERS[0]}\n${STREAM_MARKERS[1]}\n`)
+    // Stored whole, and once: not the fragments beside it.
+    const stored = foldParts(command, 'folder').filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result').map((part) => part.text)
+    expect(stored).toEqual([whole])
+  })
+
+  it(entry('codex.tool.update-merge'), () => {
+    const calls = toolCalls(seen.command.updates)
+    expect(calls[0]).toMatchObject({ sessionUpdate: 'tool_call', name: 'exec_command', kind: 'execute', status: 'in_progress',
+      content: [{ type: 'terminal' }], rawInput: { command: expect.any(String), cwd: expect.any(String) } })
+    expect(typeof calls[0].title).toBe('string')
+    const later = calls.slice(1)
+    expect(later.length).toBeGreaterThan(1)
+    for (const update of later) {
+      expect(update.sessionUpdate).toBe('tool_call_update')
+      expect(update.title).toBeUndefined()
+      expect(update.kind).toBeUndefined()
+      expect(update.rawInput).toBeUndefined()
+    }
+    const done = later.find((update) => update.status === 'completed')
+    expect(done).toBeDefined()
+    expect(done?.content).toBeUndefined()
   })
 
   it(entry('codex.tool.mcp-output'), () => {

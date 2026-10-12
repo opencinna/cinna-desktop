@@ -42,7 +42,7 @@ import type { RealLogin } from './realLogin'
  *   fails the turn outright), so every write in an unattended task would wait
  *   on an ask nobody answers. An override names a model alias (`haiku`).
  * - Codex: `gpt-5.6-luna`, the cheapest slug in the pinned CLI's catalog
- *   (contract snapshot `codex-0.155.0.json`), as T2.3c uses.
+ *   (contract snapshot `codex-0.162.1.json`), as T2.3c uses.
  */
 export type LiveEngineName = 'opencode' | 'claude' | 'codex'
 
@@ -63,7 +63,7 @@ export interface LiveEngine {
   toolNote: string
 }
 
-/** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.155.0.json`). */
+/** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.162.1.json`). */
 export const CODEX_LIVE_MODEL = 'gpt-5.6-luna'
 
 const RAW = (process.env.CINNA_E2E_LIVE_ENGINE ?? '').trim() || 'opencode'
@@ -94,6 +94,22 @@ export function liveEngineOptions(): Partial<CinnaOptions> {
 /** For a test that runs no agent turn at all (it stops at a gate): the engine check then only forbids other engines. */
 export function expectNoAgentTurn(): void {
   test.info().annotations.push({ type: NO_AGENT_TURN, description: 'this test stops before any agent turn' })
+}
+
+/**
+ * Wait until the task's chat has no turn running (`activeRunId` null, which
+ * also covers a task runner still working). A task is `completed` the moment
+ * the agent calls `tasks_report`, mid-turn: Codex goes on verifying the file
+ * after it, and closing the app then kills the turn (`an ACP turn failed …
+ * ACP connection closed`) before `ACP turn complete` is logged, so the engine
+ * check finds no turn. A test must not leave a real turn running at close.
+ */
+export async function expectTaskTurnSettled(cinna: CinnaApp, taskId: string): Promise<void> {
+  await expect.poll(() => cinna.page.evaluate(async (id) => {
+    const chatId = (await window.api.tasks.get(id)).chatId
+    if (!chatId) return 'no chat'
+    return (await window.api.chat.get(chatId))?.activeRunId ?? null
+  }, taskId), { message: 'the task’s turn ends', timeout: 120_000 }).toBeNull()
 }
 
 /** `test.beforeEach(() => requireLiveEngine())`: the live gate, then this engine's prerequisites. */

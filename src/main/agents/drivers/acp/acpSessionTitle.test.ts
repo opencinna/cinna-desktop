@@ -25,6 +25,15 @@ describe('isPromptPlaceholder', () => {
     expect(isPromptPlaceholder('Refactor the parser module so that every token', ['Refactor the parser module so that every token keeps its span'])).toBe(true)
     expect(isPromptPlaceholder('Parser fix', ['Fix the parser'])).toBe(false)
   })
+
+  it('matches a long prompt codex-acp 2.x cut to 256 characters with an ellipsis', () => {
+    // `normalizeSessionTitle`: the first 255 characters, trimmed, then `…` — a Cinna task context leads a folder prompt.
+    const prompt = `Cinna task context (not part of the user's message): ${'x '.repeat(200)}\n\nHello Codex`
+    const placeholder = `${prompt.replace(/\s+/g, ' ').slice(0, 255).trimEnd()}\u2026`
+    expect(isPromptPlaceholder(placeholder, [prompt])).toBe(true)
+    // A short title that happens to end with an ellipsis is still a name.
+    expect(isPromptPlaceholder('Cinna task\u2026', [prompt])).toBe(false)
+  })
 })
 
 describe('createSessionTitles', () => {

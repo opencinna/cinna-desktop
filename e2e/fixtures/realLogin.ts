@@ -113,6 +113,8 @@ export function endRealLogin(login: RealLogin, home: string, run: RealLoginRun):
     }
     for (const rollout of ours) {
       for (let dir = dirname(rollout.file); dir.startsWith(`${join(codex, 'sessions')}${sep}`); dir = dirname(dir)) {
+        // Two rollouts can share a dated folder; the first one's walk may already have removed it.
+        if (!existsSync(dir)) continue
         if (readdirSync(dir).length > 0 || statSync(dir).birthtimeMs < run.startedAt) break
         rmdirSync(dir)
       }

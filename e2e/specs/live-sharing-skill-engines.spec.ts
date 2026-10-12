@@ -581,7 +581,7 @@ test.describe('real model turns', () => {
         const agent = await buildAgent(b, fixture, { name: mine })
         expect(agent.path.startsWith(`${agentsHome}/`)).toBe(true)
         // A named model: Codex maps complexity to reasoning effort only, so without one the turn would
-        // run on `~/.codex/config.toml`'s model. Ask every time (read-only sandbox, asks answered below).
+        // run on `~/.codex/config.toml`'s model. Ask every time (`workspace-write` mode: writes outside the folder ask, answered below).
         await setAgentRuntime(b, agent.id, { engine: 'codex', credential: null, modelId: CODEX_MODEL, complexity: null })
         const approval = await b.page.evaluate((id) => window.api.localAgents.setCodexApproval(id, 'ask'), agent.id)
         expect(approval.ok).toBe(true)
@@ -659,6 +659,8 @@ test.describe('real model turns', () => {
         // The `sessions/<y>/<m>/<d>` folders the run's rollouts made, once empty; never one that was there before.
         for (const rollout of ours) {
           for (let dir = dirname(rollout.file); dir.startsWith(`${join(codexHome, 'sessions')}${sep}`); dir = dirname(dir)) {
+            // Two rollouts can share a dated folder; the first one's walk may already have removed it.
+            if (!existsSync(dir)) continue
             if (readdirSync(dir).length > 0 || statSync(dir).birthtimeMs < startedAt) break
             rmdirSync(dir)
             removed.push(`${relative(codexHome, dir)}${sep}`)

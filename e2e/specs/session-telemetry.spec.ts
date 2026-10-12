@@ -123,10 +123,12 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
     expect(rows.role).toBe('assistant')
     expect(rows).toHaveProperty('telemetry')
     const telemetry = JSON.parse(rows.telemetry) as Record<string, unknown>
-    // The thread's running total (2000 input of which 600 cached, 100 output),
-    // not the last request's 1200 / 50: the turn's scope, every request counted.
+    // The prompt's own usage as codex-acp 2.2.2 answers it (the thread total's
+    // growth: 2000 input of which 600 cached, 100 output), not the last
+    // request's 1200 / 50: the turn's scope, every request counted. The tier
+    // is judged by the last request (`usage_update.used`, 1250).
     const tokens = { input: 1400, output: 100, cacheRead: 600, cacheWrite: 0 }
-    const cost = costOf(MODEL, tokens, { contextTokens: 1200 })!
+    const cost = costOf(MODEL, tokens, { contextTokens: 1250 })!
     expect(cost).toBeGreaterThan(0)
     expect(telemetry).toEqual({
       model: MODEL,
@@ -159,15 +161,19 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
     await expect(popover).toBeVisible()
     const row = popover.getByRole('button', { name: /^Context / })
     await expect(row).toHaveAttribute('aria-expanded', 'false')
-    // Used tokens, then the fill when the window size is known: `1.2K – 1%`.
-    await expect(row).toHaveText(/^Context\s*\d+(\.\d)?K?( – (<1|\d+)%)?$/)
+    // `SessionTelemetryBlock`'s row (format of 2026-10-02): used tokens, the share
+    // of the spending level's budget, then of the whole window. Here 1,250 used
+    // (the last request, `usage_update.used`) of the 272K window, at the default
+    // Mid level; the accessible name reads the same words, `|` as a pause.
+    await expect(row).toHaveText(/^Context\s*1\.3K \| 1% Mid budget \| <1% total$/)
+    await expect(row).toHaveAccessibleName('Context 1.3K, 1% Mid budget, <1% total')
     await expect(popover.getByLabel('Session details list', { exact: true })).toHaveCount(0)
     await row.click()
     await expect(row).toHaveAttribute('aria-expanded', 'true')
     await expect(popover).toBeVisible()
     await expect(popover.locator('code').first()).toHaveText(MODEL)
     // The plain turn reported nothing, so the chat's cost is the metered turn's.
-    const cost = costOf(MODEL, { input: 1400, output: 100, cacheRead: 600, cacheWrite: 0 }, { contextTokens: 1200 })!
+    const cost = costOf(MODEL, { input: 1400, output: 100, cacheRead: 600, cacheWrite: 0 }, { contextTokens: 1250 })!
     const spent = popover.getByRole('region', { name: 'Spent in this chat', exact: true })
     await expect(spent).toContainText(formatUsd(cost))
     await expect(spent).toContainText('estimated')

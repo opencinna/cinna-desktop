@@ -374,12 +374,11 @@ describe('context categories and running totals in the session telemetry', () =>
     expect(state.context.categories).toEqual(categories(14_000))
   })
 
-  it('keeps the session’s last running token total, without adding it to the totals', () => {
-    const state = fold([
-      { ...turn({ model: 'gpt-5.5', tokens: tally(50, 5, 900) }, { tokenTotalReading: tally(150, 25, 2_900) }), engine: 'codex' },
-      { ...turn({ model: 'gpt-5.5', tokens: tally(10, 5, 1_000) }, { tokenTotalReading: tally(160, 30, 3_900) }), engine: 'codex' }
-    ])
-    expect(state.totals.bySession.s1.lastTokenTotal).toEqual(tally(160, 30, 3_900))
+  it('adds Codex turns as they come and drops a legacy row’s running token total on the session’s next write', () => {
+    const legacy = fold([{ ...turn({ model: 'gpt-5.5', tokens: tally(50, 5, 900) }), engine: 'codex' }])
+    Object.assign(legacy.totals.bySession.s1, { lastTokenTotal: tally(150, 25, 2_900) })
+    const state = applyTelemetryChange(legacy, 'chat', { ...turn({ model: 'gpt-5.5', tokens: tally(10, 5, 1_000) }), engine: 'codex' }, 200)
+    expect(state.totals.bySession.s1).not.toHaveProperty('lastTokenTotal')
     expect(state.totals.tokens).toEqual(tally(60, 10, 1_900))
     expect(state.totals.tokenScope).toBe('turn')
   })

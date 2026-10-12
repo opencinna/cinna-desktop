@@ -21,7 +21,7 @@ describe('credential path reaches pinned runtime script children', () => {
     if (codex) writeProviderConfig((scratch as ReturnType<typeof makeScratch>).codexHome, codex.port, 'gpt-5.5')
     const adapter = require.resolve(engine === 'claude' ? '@agentclientprotocol/claude-agent-acp/dist/index.js' : '@agentclientprotocol/codex-acp/dist/index.js')
     const connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CINNA_CREDENTIALS_PATH: path,
-      ...(engine === 'claude' ? { CLAUDE_CODE_EXECUTABLE: binary!.path } : { CODEX_PATH: binary!.path, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify({ model: 'gpt-5.5', model_provider: 'probe' }) }) }, answer: (request: AdapterMessage) => {
+      ...(engine === 'claude' ? { CLAUDE_CODE_EXECUTABLE: binary!.path } : { CODEX_PATH: binary!.path, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify({ model: 'gpt-5.5', model_provider: 'probe' }) }) }, answer: (request: AdapterMessage) => {
         const option = (request.params?.options as { kind: string; optionId: string }[] | undefined)?.find(o => o.kind === 'allow_once')
         return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : undefined
       } })

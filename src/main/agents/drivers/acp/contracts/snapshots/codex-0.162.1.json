@@ -3,6 +3,62 @@
     "cancel": {
       "stopReason": "cancelled"
     },
+    "command": {
+      "asyncTaskSpawnedKeys": [
+        "asyncTaskId",
+        "canStop",
+        "name",
+        "sessionUpdate",
+        "showInTranscript",
+        "taskType",
+        "toolCallId"
+      ],
+      "asyncTaskType": "shell",
+      "metaKeys": [
+        "jetbrains",
+        "terminal_exit",
+        "terminal_info",
+        "terminal_output_delta"
+      ],
+      "rawOutputKeys": [
+        "exit_code",
+        "formatted_output"
+      ],
+      "toolCallKeys": [
+        "_meta",
+        "content",
+        "kind",
+        "name",
+        "rawInput",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "toolCallKind": "execute",
+      "toolCallName": "exec_command",
+      "updateKeys": [
+        "_meta",
+        "content",
+        "kind",
+        "name",
+        "rawInput",
+        "rawOutput",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "updateKinds": [
+        "agent_message_chunk",
+        "async_task_spawned",
+        "async_task_state_update",
+        "session_info_update",
+        "tool_call",
+        "tool_call_update",
+        "usage_update"
+      ]
+    },
     "folderSessionOfferedTools": [
       "apply_patch",
       "create_goal",
@@ -48,6 +104,9 @@
         "api-key",
         "chat-gpt"
       ],
+      "metaKeys": [
+        "steering"
+      ],
       "protocolVersion": 1,
       "resultKeys": [
         "_meta",
@@ -62,6 +121,13 @@
       "after": "plan",
       "before": "plan"
     },
+    "modelChangeUpdateKinds": [
+      "agent_message_chunk",
+      "session_info_update",
+      "tool_call",
+      "tool_call_update",
+      "usage_update"
+    ],
     "permissionRequest": {
       "optionKinds": [
         "allow_always",
@@ -84,6 +150,36 @@
       ],
       "toolCallKind": "execute",
       "toolCallTitle": null
+    },
+    "promptAnswer": {
+      "metaKeys": [
+        "quota"
+      ],
+      "quotaKeys": [
+        "model_usage",
+        "token_count"
+      ],
+      "resultKeys": [
+        "_meta",
+        "stopReason",
+        "usage"
+      ],
+      "tokenCountKeys": [
+        "cacheWriteInputTokens",
+        "cachedInputTokens",
+        "inputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens"
+      ],
+      "usageKeys": [
+        "cachedReadTokens",
+        "cachedWriteTokens",
+        "inputTokens",
+        "outputTokens",
+        "thoughtTokens",
+        "totalTokens"
+      ]
     },
     "rateLimit": {
       "assistantTextNamesStatus": true,
@@ -113,11 +209,12 @@
         "model",
         "reasoning_effort"
       ],
-      "currentModeId": "read-only",
+      "currentModeId": "workspace-write",
       "modeIds": [
         "agent",
         "agent-full-access",
-        "read-only"
+        "read-only",
+        "workspace-write"
       ],
       "resultKeys": [
         "configOptions",
@@ -148,7 +245,7 @@
       ]
     }
   },
-  "adapter": "1.11.0",
+  "adapter": "2.2.2",
   "appServer": {
     "configReadKeys": [
       "agents",
@@ -166,8 +263,10 @@
       "chatgpt_base_url",
       "check_for_update_on_startup",
       "cli_auth_credentials_store",
+      "cloud",
       "compact_prompt",
       "computer_use",
+      "daybreak",
       "default_permissions",
       "desktop",
       "developer_instructions",
@@ -201,6 +300,7 @@
       "js_repl_node_path",
       "log_dir",
       "marketplaces",
+      "mcp_enterprise_managed_auth",
       "mcp_oauth_callback_port",
       "mcp_oauth_callback_url",
       "mcp_oauth_credentials_store",
@@ -213,6 +313,7 @@
       "model_catalog_json",
       "model_context_window",
       "model_instructions_file",
+      "model_post_turn_compact_threshold_percent",
       "model_provider",
       "model_providers",
       "model_reasoning_effort",
@@ -254,7 +355,7 @@
       "windows"
     ],
     "defaultModels": [
-      "gpt-6-astra"
+      "gpt-6.1-sol"
     ],
     "initializeResultKeys": [
       "codexHome",
@@ -265,6 +366,7 @@
     "modelListFields": [
       "additionalSpeedTiers",
       "availabilityNux",
+      "availableAccessPrograms",
       "defaultReasoningEffort",
       "defaultServiceTier",
       "description",
@@ -293,6 +395,7 @@
       "context_window",
       "default_reasoning_level",
       "default_reasoning_summary",
+      "default_service_tier",
       "default_verbosity",
       "description",
       "display_name",
@@ -318,6 +421,7 @@
       "supported_reasoning_levels",
       "supports_experimental_context",
       "supports_image_detail_original",
+      "supports_reasoning_effort_updates",
       "supports_search_tool",
       "tool_mode",
       "truncation_policy",
@@ -328,16 +432,21 @@
     ],
     "catalogSlugs": [
       "codex-auto-review",
-      "gpt-5.4",
       "gpt-5.5",
       "gpt-5.6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+      "gpt-6.1-sol",
       "gpt-daybreak-blue-latest",
       "gpt-daybreak-red-latest"
     ],
     "featureFlags": [
+      "agent_message_board",
+      "analytics_plan_history",
+      "api_key_cyber_access_programs",
       "api_key_model_discovery",
       "apply_patch_freeform",
       "apply_patch_preserve_line_endings",
@@ -348,16 +457,20 @@
       "auth_elicitation",
       "background_paginated_rollout_migration",
       "bedrock_setup_wizard",
+      "browser_annotation_api",
       "browser_use",
       "browser_use_external",
       "browser_use_full_cdp_access",
       "chronicle",
+      "cli_daybreak",
       "code_mode",
       "code_mode_buffered_exec",
       "code_mode_host",
       "code_mode_interrupt",
       "code_mode_only",
+      "code_mode_only_strict_3p_tools",
       "code_mode_prewarm",
+      "code_mode_tool_search",
       "codex_apps_mcp_2026_07_28",
       "codex_git_commit",
       "collaboration_modes",
@@ -368,7 +481,9 @@
       "context_management",
       "current_time_reminder",
       "cwd_relative_turn_diffs",
+      "daemon_auto_start",
       "default_mode_request_user_input",
+      "defer_mailbox_preemption",
       "deferred_executor",
       "deferred_tool_world_state",
       "elevated_windows_sandbox",
@@ -384,11 +499,14 @@
       "fast_mode",
       "goals",
       "guardian_approval",
+      "guardian_conversation_history_tools",
       "guardian_enhanced_node_repl_transcripts",
       "guardian_ext",
       "guardian_node_repl_transcript_images",
       "guardian_reuse_parent_compaction",
+      "guardian_root_handoff_context",
       "guardianv2",
+      "guardianv2_decisions_comparison",
       "hooks",
       "image_detail_original",
       "image_generation",
@@ -398,26 +516,34 @@
       "in_app_dictation",
       "in_app_local_automation",
       "in_app_updates",
+      "in_app_voice",
+      "incremental_tools",
+      "instant_interrupt",
       "item_ids",
       "js_repl",
       "js_repl_tools_only",
       "local_thread_store_compression",
       "local_thread_store_shared_compression",
+      "login_shell_package_path",
       "mcp_2026_07_28",
       "mcp_oauth_refresh_coordination",
       "memories",
       "mentions_v2",
+      "model_catalog_in_context",
       "multi_agent",
       "multi_agent_mode",
       "multi_agent_v2",
+      "multi_agent_v2_dynamic_tools",
       "network_proxy",
       "non_prefixed_mcp_tool_names",
+      "nonfatal_clock_read_errors",
       "omit_app_server_notification_media",
       "personality",
       "plugin_hooks",
       "plugin_sharing",
       "plugins",
       "powershell_shell_version",
+      "prefer_mxc",
       "prevent_idle_sleep",
       "psp",
       "realtime_conversation",
@@ -439,6 +565,7 @@
       "search_tool",
       "secret_auth_storage",
       "send_async_message",
+      "send_message_to_user_async",
       "shell_snapshot",
       "shell_snapshot_v2",
       "shell_tool",
@@ -449,9 +576,11 @@
       "skip_host_skill_discovery",
       "sleep_tool",
       "sqlite",
+      "stable_environment_tools",
       "standalone_web_search",
       "steer",
       "step_model_switching",
+      "system_proxy_fallback",
       "terminal_resize_reflow",
       "terminal_visualization_instructions",
       "token_budget",
@@ -461,6 +590,7 @@
       "tool_suggest",
       "transcript_v2",
       "tui_app_server",
+      "ultrafast_mode",
       "unavailable_dummy_tools",
       "unbounded_connection_retries",
       "undo",
@@ -471,6 +601,7 @@
       "use_agent_identity",
       "use_legacy_landlock",
       "use_linux_sandbox_bwrap",
+      "use_xaa",
       "view_image",
       "web_search_cached",
       "web_search_request",
@@ -506,7 +637,7 @@
     "reads": [
       {
         "kinds": [],
-        "mode": "read-only",
+        "mode": "workspace-write",
         "permissionCount": 0,
         "promptError": null,
         "read": true
@@ -522,9 +653,20 @@
     "writes": [
       {
         "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [],
+        "mode": "workspace-write:inside",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [],
+        "wrote": true
+      },
+      {
+        "accepted": true,
         "deniedBySandbox": true,
         "kinds": [],
-        "mode": "read-only",
+        "mode": "workspace-write",
         "permissionCount": 0,
         "promptError": null,
         "reviewUnavailable": false,
@@ -537,13 +679,24 @@
         "kinds": [
           "execute"
         ],
-        "mode": "read-only:escalated",
+        "mode": "workspace-write:escalated",
         "permissionCount": 1,
         "promptError": null,
         "reviewUnavailable": false,
         "titles": [
           "Run command"
         ],
+        "wrote": true
+      },
+      {
+        "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [],
+        "mode": "agent:inside",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [],
         "wrote": true
       },
       {
@@ -640,5 +793,5 @@
     ]
   },
   "tool": "codex",
-  "version": "codex-cli 0.155.0"
+  "version": "codex-cli 0.162.1"
 }

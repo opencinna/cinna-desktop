@@ -38,17 +38,17 @@ describe('the Codex row', () => {
   const codexRow = (): HTMLElement => screen.getByText('Codex', { selector: 'td' }).closest('tr')!
 
   it('sits under the OpenCode row and names the managed pin, with the binary path on the name', async () => {
-    mocks.codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
+    mocks.codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
     renderTools()
     await screen.findByRole('button', { name: 'Update' })
     const row = codexRow()
     expect(row.previousElementSibling?.querySelector('td')?.textContent).toBe('OpenCode')
-    expect(within(row).getByText('0.155.0 managed').className).toContain('font-mono')
-    expect(row.querySelector('td')?.title).toBe('/data/runtimes/codex-0.155.0/codex')
+    expect(within(row).getByText('0.162.1 managed').className).toContain('font-mono')
+    expect(row.querySelector('td')?.title).toBe('/data/runtimes/codex-0.162.1/codex')
   })
 
   it('labels a configured path unverified by its own version — never as the managed pin', async () => {
-    // Mutation: render the pin here and the table says `0.155.0 managed` directly
+    // Mutation: render the pin here and the table says `0.162.1 managed` directly
     // above a Codex Path field that replaced it.
     mocks.codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.160.0' }
     renderTools()

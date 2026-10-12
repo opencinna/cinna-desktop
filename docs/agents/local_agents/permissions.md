@@ -59,7 +59,7 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 
 ### Codex approvals retain the sandbox and their complete request scope
 
-Codex defaults to **Ask for approval**, with workspace writes permitted and network access disabled until escalated. **Automatic** uses Codex's reviewer inside that same workspace-write policy. Normal temporary-directory allowances remain, and reads do not all require escalation. The adapter calls the first mode `read-only`; the name must never become a claim that workspace files are read-only. `runtime.permissions` is an OpenCode profile override and is not translated for Codex.
+Codex defaults to **Ask for approval**, with workspace writes permitted and network access disabled until escalated. **Automatic** uses Codex's reviewer inside that same workspace-write policy. Normal temporary-directory allowances remain, and reads do not all require escalation. The adapter calls the first mode `workspace-write` (it was `read-only` before codex-acp 2.0, whose `read-only` is now a real read-only sandbox Cinna never selects). `runtime.permissions` is an OpenCode profile override and is not translated for Codex.
 
 The independent `codexApproval` value is stored with desktop state, never in the manifest. Both new and loaded sessions receive the selected mode before a prompt; a refusal stops startup. Grants answer only asks forwarded to Cinna.
 
