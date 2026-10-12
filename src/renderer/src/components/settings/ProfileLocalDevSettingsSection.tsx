@@ -6,6 +6,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import type { LocalDevAttentionReason } from '../../../../shared/localDevState'
 import { SettingsButton, SettingsInfoTip } from './SettingsLayout'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { ErrorText } from '../ui/ErrorText'
 
 /**
  * Settings → Profile → Local Development.
@@ -202,9 +203,7 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
                     className="mt-0.5 shrink-0 text-[var(--color-severity-warning)]"
                   />
                   <div className="min-w-0 space-y-1.5">
-                    <div className="text-[13px] text-[var(--color-text)] break-words">
-                      {state.detail}
-                    </div>
+                    <ErrorText className="text-[13px] text-[var(--color-text)] break-words" text={state.detail} />
                     <Line>{attentionHint(state.reason)}</Line>
                   </div>
                 </div>
@@ -230,9 +229,7 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
               </>
             )}
             {error && (
-              <p role="alert" className="text-[13px] text-[var(--color-danger)] leading-relaxed">
-                {error}
-              </p>
+              <ErrorText role="alert" className="text-[13px] text-[var(--color-danger)] leading-relaxed" text={error} />
             )}
           </div>
         </Card>

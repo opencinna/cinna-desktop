@@ -16,6 +16,7 @@ import { DevelopmentRecheckButton } from './DevelopmentRecheckButton'
 import { ComposerWarning } from '../chat/ComposerWarning'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { SettingsButton } from '../settings/SettingsLayout'
+import { ErrorText } from '../ui/ErrorText'
 
 const actionClass = 'ambient-button inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
 /** The one action that ends the state it is offered in, in the accent the rest of the app gives that. */
@@ -82,7 +83,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
                 {(state.phase === 'installing' || context.isFetching) && <Loader2 size={15} className="animate-spin" />}
                 {state.phase === 'installing' ? 'Preparing your build workspace' : context.isFetching ? 'Checking your workspace and runtime' : 'Let’s get ready to build'}
               </div>
-              <p className="text-sm text-[var(--color-text-secondary)]">{state.phase === 'installing' ? state.step : state.phase === 'attention' ? state.detail : blocker ?? 'Finish setup for this Cinna account. The composer will appear here when everything is ready.'}</p>
+              <ErrorText className="text-sm text-[var(--color-text-secondary)]" text={state.phase === 'installing' ? state.step : state.phase === 'attention' ? state.detail : blocker ?? 'Finish setup for this Cinna account. The composer will appear here when everything is ready.'} />
               {/* cinna-cli's own detail above ends by telling the user to open a
                   terminal, and Retry setup looks like it might do instead. Close
                   both loops here rather than letting the buttons imply it: the
@@ -121,7 +122,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
               {loginTool && <RuntimeLoginStatus tool={loginTool} login={login} />}
               {state.phase === 'installing' && <p className="text-xs text-[var(--color-text-muted)]">You can leave this page. Setup continues in the background.</p>}
             </DevelopmentSetupNotice>}
-            {error && <ComposerWarning role="alert" className="mt-4"><p>{error}</p></ComposerWarning>}
+            {error && <ComposerWarning role="alert" className="mt-4"><ErrorText text={error} /></ComposerWarning>}
             {(ready || !!blocker || state.phase === 'attention') && <DevelopmentComposer profileId={user?.id ?? ''} active={!settingsOpen && ready} busy={busy} sending={pending === 'send'} blocked={!ready} onSend={send} />}
           </div>
         </main>
