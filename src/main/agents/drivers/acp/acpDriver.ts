@@ -153,6 +153,9 @@ export const ACP_CANCEL_GRACE_MS = 3_000
 /** Shown when a folder agent's folder is gone — the runners' own sentence. */
 export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on disk.'
 
+/** Shown when the folder moved while a turn planned in it waited for the lock. */
+export const ACP_FOLDER_MOVED = 'This agent’s folder was renamed while the turn was starting. Send the message again.'
+
 export interface ConductorOutcome { control?: import('../../../services/coordinatorToolProvider').CoordinatorControl; budget?: boolean; needsInput?: boolean }
 
 export interface AcpDriverDeps {
@@ -166,6 +169,13 @@ export interface AcpDriverDeps {
   pool: AcpProcessPool
   /** The launcher for an engine, or undefined when this build has none. */
   launcher(id: AcpLauncherId): AcpLauncher | undefined
+  /**
+   * Where a folder agent's folder is **now**: the path its row names, read
+   * again under the turn lock. Undefined when the agent's folder is not one
+   * that can move (a build workspace, the chat conductor), null when the agent
+   * is gone. Absent: the planned path is trusted, as before folders could move.
+   */
+  currentFolderPath?(userId: string, agent: AgentRow): string | null | undefined
   /** Resolve and capture the actual folder or external command and its state. */
   readRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): AcpRuntimeView | null | Promise<AcpRuntimeView | null>
   /** Park an ask in the pending-request registry. */
@@ -657,6 +667,15 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       const leave = enter(input.chatId)
       try {
         return await deps.withLock(agent.id, 'turn', async () => {
+          // The plan names the folder as it was before the lock: a rename that
+          // held the lock meanwhile moved it, and the turn would spawn in a
+          // path that is gone. Refused rather than replanned — a replan is the
+          // whole plan step again, under the lock.
+          if (runtime.type === 'folder' && deps.currentFolderPath) {
+            const now = deps.currentFolderPath(userId, agent)
+            if (now === null) return fail(ACP_FOLDER_NOT_FOUND)
+            if (now !== undefined && now !== runtime.folder.path) return fail(ACP_FOLDER_MOVED)
+          }
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()
           return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })

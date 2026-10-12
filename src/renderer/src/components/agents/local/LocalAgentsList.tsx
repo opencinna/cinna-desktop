@@ -4,7 +4,10 @@ import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
   useAgentsHomeQuestion,
-  useLocalAgents
+  useDeleteLocalAgent,
+  useLocalAgents,
+  useRenameKitAgent,
+  useRenameLocalAgent
 } from '../../../hooks/useLocalAgents'
 import { useAppSettings } from '../../../hooks/useAppSettings'
 import { groupAgentsByRoot } from '../../../utils/localAgents'
@@ -20,7 +23,42 @@ import { useChosenAgentColor } from '../../../utils/agentColors'
 import { useAuthStore } from '../../../stores/auth.store'
 import { CatalogBrowserModal } from '../CatalogBrowserModal'
 import { useCatalogActions } from '../../../hooks/useCatalogActions'
-import { useShareStatuses } from '../../../hooks/useSharing'
+import { useListedShareStatus, useShareStatuses } from '../../../hooks/useSharing'
+import { AgentRowMenu } from './AgentRowMenu'
+import { DeleteAgentDialog, RenameAgentDialog, hasTeamVersion } from './AgentDialogs'
+
+/** A row's right-click: where it opened and on which agent. */
+interface RowMenuRequest {
+  x: number
+  y: number
+  anchor: HTMLElement
+  agent: LocalAgentDto
+}
+
+/** A dialog the row menu opened, by agent id — the DTO is re-read from the list. */
+interface RowDialog {
+  kind: 'rename' | 'delete'
+  agentId: string
+}
+
+/** Same rule as the ⋯ menu: only a kit folder has a team version. */
+function useSharedKit(agent: LocalAgentDto | null): boolean {
+  const listed = useListedShareStatus(agent?.id ?? null)
+  return agent !== null && hasTeamVersion(listed, agent)
+}
+
+function RowMenu({ request, onRename, onDelete, onClose }: {
+  request: RowMenuRequest
+  onRename: () => void
+  onDelete: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  const shared = useSharedKit(request.agent)
+  return (
+    <AgentRowMenu x={request.x} y={request.y} anchor={request.anchor} agent={request.agent}
+      shared={shared} onRename={onRename} onDelete={onDelete} onClose={onClose} />
+  )
+}
 
 function AgentChatShortcut({ agentId, name, available = true }: {
   agentId: string
@@ -53,9 +91,12 @@ function AgentChatShortcut({ agentId, name, available = true }: {
   )
 }
 
-function AgentRow({ agent, color }: {
+function AgentRow({ agent, color, menuOpen, onMenu }: {
   agent: LocalAgentDto
   color: string | null
+  /** This row's right-click menu is open: it keeps the hover tint. */
+  menuOpen: boolean
+  onMenu: (request: RowMenuRequest) => void
 }): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
@@ -90,10 +131,14 @@ function AgentRow({ agent, color }: {
       // `<button>` is the accessible control; its own clicks — from the
       // pointer or from Enter — bubble up here.
       onClick={openPage}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onMenu({ x: event.clientX, y: event.clientY, anchor: event.currentTarget, agent })
+      }}
       className={`group flex items-start rounded-md cursor-pointer transition-colors ${
         isActive
           ? 'app-nav-active text-[var(--color-text)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
+          : `text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] ${menuOpen ? 'bg-[var(--color-bg-hover)]' : ''}`
       }`}
     >
       <button
@@ -209,6 +254,35 @@ export function LocalAgentsList(): React.JSX.Element {
   )
   const total = data?.agents.length ?? 0
   const homeAccess = useAgentsHomeQuestion()
+  const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
+  const [rowMenu, setRowMenu] = useState<RowMenuRequest | null>(null)
+  const closeRowMenu = useCallback(() => setRowMenu(null), [])
+  const [rowDialog, setRowDialog] = useState<RowDialog | null>(null)
+  // Re-read from the list, so the dialog holds the stamp of the folder as it
+  // stands, and closes if the agent leaves the list.
+  const dialogAgent = rowDialog ? (data?.agents.find((agent) => agent.id === rowDialog.agentId) ?? null) : null
+  const dialogShared = useSharedKit(dialogAgent)
+  /**
+   * The row dialogs' mutations live here, not in the dialogs, with hook-level
+   * success handlers: TanStack drops a mutate-level callback once its caller
+   * has unmounted. This list unmounts on a sidebar tab switch — the hook-level
+   * handler still runs then; only the dialog state it clears goes with it.
+   */
+  const removeAgent = useDeleteLocalAgent({
+    onSuccess: (result) => {
+      // Only the page on the deleted agent loses its selection.
+      if (useUIStore.getState().activeLocalAgentId === result.agentId) setActiveLocalAgentId(null)
+      setRowDialog(null)
+    }
+  })
+  const onRenamed = (next: LocalAgentDto, input: { agentId: string }): void => {
+    setRowDialog(null)
+    if (next.id !== input.agentId && useUIStore.getState().activeLocalAgentId === input.agentId) {
+      setActiveLocalAgentId(next.id)
+    }
+  }
+  const renameBare = useRenameLocalAgent({ onSuccess: onRenamed })
+  const renameKit = useRenameKitAgent({ onSuccess: onRenamed })
   // Folder setup is requested only by the folder creation choice. External
   // agents have no local agents-home prerequisite.
 
@@ -235,6 +309,8 @@ export function LocalAgentsList(): React.JSX.Element {
                         key={agent.id}
                         agent={agent}
                         color={colorOf(agent.id)}
+                        menuOpen={rowMenu?.agent.id === agent.id}
+                        onMenu={setRowMenu}
                       />
                     ))}
                   </div>
@@ -320,6 +396,33 @@ export function LocalAgentsList(): React.JSX.Element {
         {managedAgents.length > 0 && renderExternalGroup('Managed', managedAgents)}
       </div>
 
+      {rowMenu && (
+        <RowMenu
+          request={rowMenu}
+          onRename={() => setRowDialog({ kind: 'rename', agentId: rowMenu.agent.id })}
+          onDelete={() => setRowDialog({ kind: 'delete', agentId: rowMenu.agent.id })}
+          onClose={closeRowMenu}
+        />
+      )}
+      {rowDialog?.kind === 'rename' && dialogAgent && (
+        <RenameAgentDialog
+          key={dialogAgent.id}
+          agent={dialogAgent}
+          shared={dialogShared}
+          renameBare={renameBare}
+          renameKit={renameKit}
+          onCancel={() => setRowDialog(null)}
+        />
+      )}
+      {rowDialog?.kind === 'delete' && dialogAgent && (
+        <DeleteAgentDialog
+          key={dialogAgent.id}
+          agent={dialogAgent}
+          remove={removeAgent}
+          shared={dialogShared}
+          onCancel={() => setRowDialog(null)}
+        />
+      )}
       {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onCatalog={isCinna ? () => { setCreating(false); openCatalog() } : undefined} onA2A={() => { setCreating(false); setAddingA2A(true) }} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onRemoteAcp={() => { setCreating(false); setRemoteAcp(true) }} onCreateFolder={() => {
         if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true

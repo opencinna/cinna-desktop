@@ -4,6 +4,7 @@ import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRootDto, LocalAgentDto } from '../../../../../shared/localAgents'
 import type { AgentShareStatus } from '../../../../../shared/agentSharing'
+import { SHARE_UI_TEXT } from '../../../utils/shareText'
 
 /**
  * The sidebar row's chat action. It is the jobs row's run-now button with a
@@ -42,7 +43,7 @@ vi.mock('../../../hooks/useAgents', () => ({
 }))
 vi.mock('../../../stores/ui.store', () => {
   const state = (): Record<string, unknown> => ({
-    activeLocalAgentId: null,
+    activeLocalAgentId,
     activeView: 'local-agent',
     setActiveLocalAgentId,
     setActiveExternalAgentId,
@@ -94,12 +95,26 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   }),
   useAgentCredentialBindings: () => ({ data: [] }),
   useAgentsHomeQuestion: () => 'ready',
-  useRaiseAgentsHomeQuestion: () => undefined
+  useRaiseAgentsHomeQuestion: () => undefined,
+  useDeleteLocalAgent: (options?: { onSuccess?: (result: { agentId: string; trashed: boolean }) => void }) => {
+    deleteOptions.current = options
+    return { mutate: vi.fn(), isPending: false }
+  },
+  useRenameKitAgent: () => ({ mutate: vi.fn(), isPending: false }),
+  useRenameLocalAgent: () => ({ mutate: vi.fn(), isPending: false }),
+  useOpenAgentUploads: () => ({ mutateAsync: openUploads })
 }))
+const deleteOptions: { current?: { onSuccess?: (result: { agentId: string; trashed: boolean }) => void } } = {}
+let activeLocalAgentId: string | null = null
+const openUploads = vi.fn(async () => undefined)
+const openIn = vi.fn(async () => undefined)
+vi.mock('../../../hooks/useLocalTools', () => ({ useOpenIn: () => ({ mutateAsync: openIn }) }))
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
 let shareStatuses: AgentShareStatus[] = []
 vi.mock('../../../hooks/useSharing', () => ({
   useShareStatuses: () => ({ data: shareStatuses }),
+  useListedShareStatus: (agentId: string | null) =>
+    agentId === null ? null : (shareStatuses.find((entry) => entry.agentId === agentId) ?? null),
   useGetFromLibrary: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useUpdateShared: () => ({ mutate: vi.fn(), isPending: false, variables: undefined })
 }))
@@ -420,5 +435,97 @@ describe('LocalAgentsList — shared rows', () => {
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeTruthy()
     expect(screen.queryAllByRole('img')).toHaveLength(0)
     shareStatuses = []
+  })
+})
+
+/**
+ * Right-click on a folder-agent row: the page's occasional actions without
+ * opening the page. Rename and Delete open their dialogs here, in the list.
+ */
+describe('LocalAgentsList — the row’s right-click menu', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    AGENTS = [{ ...AGENT, kind: 'kit', identity: 'manifest' } as LocalAgentDto]
+    externalAgents = []
+    showAgentSidebarSections = true
+    shareStatuses = []
+    useAuthStore.setState({ currentUser: null })
+  })
+
+  it('opens a menu with the six entries, without opening the page', () => {
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    const menu = screen.getByRole('menu', { name: 'Agent Alpha' })
+    expect(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent)).toEqual([
+      'Reveal folder',
+      'Open uploads folder',
+      'Open terminal here',
+      'Rename agent…',
+      'Delete agent…'
+    ])
+    expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1)
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+  })
+
+  it('reveals the folder and closes; opens the uploads folder by agent id', async () => {
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Reveal folder' }))
+    })
+    expect(openIn).toHaveBeenCalledWith({ folder: '/tmp/agents/alpha', action: 'reveal' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Open uploads folder' }))
+    })
+    expect(openUploads).toHaveBeenCalledWith('folder:alpha')
+  })
+
+  it('keeps a failed pick open with the reason', async () => {
+    openIn.mockRejectedValueOnce(new Error('No terminal found.'))
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Open terminal here' }))
+    })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe('No terminal found.')
+  })
+
+  it('opens the rename and the delete dialogs from the menu', () => {
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename agent…' }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Rename agent' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete agent…' }))
+    expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeTruthy()
+  })
+
+  it('clears the selection after a delete only when it was the deleted agent', () => {
+    renderList()
+    activeLocalAgentId = 'folder:other'
+    act(() => deleteOptions.current?.onSuccess?.({ agentId: 'folder:alpha', trashed: true }))
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+    activeLocalAgentId = 'folder:alpha'
+    act(() => deleteOptions.current?.onSuccess?.({ agentId: 'folder:alpha', trashed: true }))
+    expect(setActiveLocalAgentId).toHaveBeenCalledWith(null)
+    activeLocalAgentId = null
+  })
+
+  it('names Delete for a bare agent and for a shared one as the page’s menu does', () => {
+    AGENTS = [{ ...AGENT, kind: 'bare', identity: 'external' } as LocalAgentDto]
+    const { unmount } = renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    expect(screen.getByRole('menuitem', { name: 'Remove agent…' })).toBeTruthy()
+    unmount()
+    AGENTS = [{ ...AGENT, kind: 'kit', identity: 'manifest' } as LocalAgentDto]
+    shareStatuses = [{ agentId: 'folder:alpha' } as AgentShareStatus]
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
+    expect(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.removeFromComputerMenu })).toBeTruthy()
   })
 })

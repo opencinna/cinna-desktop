@@ -17,7 +17,7 @@ import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
 import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins } from '../agents/drivers'
-import { localAgentService } from '../services/localAgents/localAgentService'
+import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
@@ -50,6 +50,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })
   localAgentService.configure(getSettingsScopeUserId)
+  // A kit agent's folder moved: its warm process may sit in the old path, and the
+  // Claude spec key does not include the cwd. `retire` lets a running turn finish.
+  installFolderMovedListener((agentId) => acpProcessPool.retire(agentId))
   installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
   // A listing that names a newer version of an installed cloud agent syncs the remote agents once.

@@ -739,6 +739,27 @@ export interface DeleteLocalAgentInput {
   trashFolder: boolean
 }
 
+/**
+ * `local-agent:rename-kit` — rename a **kit** agent, and optionally its folder.
+ *
+ * One call so the folder and the manifest's `name` and `slug` move together:
+ * the validator requires `slug` to equal the folder name, so a folder renamed
+ * without its manifest (or the reverse) is an invalid agent. A bare agent
+ * renames through `local-agent:rename` and never moves a folder.
+ */
+export interface RenameKitAgentInput {
+  agentId: string
+  name: string
+  /**
+   * Move the folder to `<parent>/<slugifyAgentName(name)>` as well. Main
+   * refuses it for a legacy identity (the row id is the folder name), a folder
+   * with a team version, and a target that already exists.
+   */
+  renameFolder: boolean
+  /** The manifest stamp the dialog read — `agent.stamps['cinna-agent.json']`. */
+  expectedStamp: FileStamp
+}
+
 /** What `local-agent:delete` returns on success. */
 export interface DeleteLocalAgentResult {
   agentId: string

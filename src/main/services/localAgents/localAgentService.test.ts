@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -41,6 +42,29 @@ const openPath = vi.hoisted(() => vi.fn<(path: string) => Promise<string>>(async
 const reveal = vi.hoisted(() => vi.fn<(path: string) => void>())
 /** `app.getPath('userData')`, set by the tests that need one. */
 const userData = vi.hoisted(() => ({ path: '' }))
+/** Set to make the next stamped manifest write throw — the rename's rollback test. */
+const failNextManifestWrite = vi.hoisted(() => ({ on: false, occupy: null as string | null }))
+vi.mock('../../kit/manifestIo', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../kit/manifestIo')>()
+  const fs = await import('node:fs')
+  return {
+    ...actual,
+    writeIfUnchanged: (...args: Parameters<typeof actual.writeIfUnchanged>) => {
+      if (failNextManifestWrite.on) {
+        failNextManifestWrite.on = false
+        // Something takes the old folder's place, so the move back fails too.
+        const occupy = failNextManifestWrite.occupy
+        failNextManifestWrite.occupy = null
+        if (occupy) {
+          fs.mkdirSync(occupy, { recursive: true })
+          fs.writeFileSync(`${occupy}/squatter.txt`, 'here\n')
+        }
+        throw new Error('disk full')
+      }
+      return actual.writeIfUnchanged(...args)
+    }
+  }
+})
 
 vi.mock('electron', () => ({
   app: {
@@ -77,7 +101,9 @@ const { manifestPath, readManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
 const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
-const { localAgentService } = await import('./localAgentService')
+const { installFolderMovedListener, localAgentService } = await import('./localAgentService')
+const { sharingService } = await import('./sharingService')
+const { gitService } = await import('./gitService')
 const { turnLock } = await import('./turnLock')
 const { catalogLocalInstalls } = await import('../catalogLocalInstalls')
 const { isBlockedWriteError, isStaleWriteError } = await import('../../../shared/localAgents')
@@ -2033,6 +2059,18 @@ describe('removing a bare agent', () => {
     expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
   })
 
+  it('refuses the kit rename for a bare agent, whose folder it never moves', async () => {
+    await expect(
+      localAgentService.renameKitAgent(USER, {
+        agentId: bareId,
+        name: 'Invoice watcher',
+        renameFolder: true,
+        expectedStamp: { mtimeMs: 0, size: 0, hash: '' }
+      })
+    ).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(existsSync(bareDir)).toBe(true)
+  })
+
   it('renames a bare agent without writing into its folder', () => {
     const renamed = localAgentService.renameAgent(USER, bareId, 'Invoice watcher')
 
@@ -2212,5 +2250,230 @@ describe('removing a bare agent', () => {
     // The same agent, not a new one: the id is positional, so its chats and
     // sessions come back with it.
     expect(back[0].id).toBe(bareId)
+  })
+})
+
+describe('renameKitAgent', () => {
+  const GIT_ENV = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Tester',
+    GIT_AUTHOR_EMAIL: 'tester@example.test',
+    GIT_COMMITTER_NAME: 'Tester',
+    GIT_COMMITTER_EMAIL: 'tester@example.test',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_SYSTEM: '/dev/null'
+  }
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV })
+
+  const renamedDir = (): string => join(workshop, 'Local', 'invoice-watcher')
+
+  function rename(name: string, renameFolder: boolean, id = agentId) {
+    const agent = localAgentService.get(USER, id)
+    return localAgentService.renameKitAgent(USER, {
+      agentId: id,
+      name,
+      renameFolder,
+      expectedStamp: agent.stamps[MANIFEST]!
+    })
+  }
+
+  it('renames the agent and leaves the folder where it is', async () => {
+    const dto = await rename('Invoice watcher', false)
+
+    expect(dto.id).toBe(agentId)
+    expect(dto.name).toBe('Invoice watcher')
+    expect(dto.path).toBe(agentDir)
+    const manifest = readManifest(manifestPath(agentDir))
+    expect(manifest.name).toBe('Invoice watcher')
+    expect(manifest.slug).toBe('alpha')
+    expect(existsSync(renamedDir())).toBe(false)
+  })
+
+  it('moves the folder, writes name and slug, and keeps the same row', async () => {
+    const raw = JSON.parse(readFileSync(manifestPath(agentDir), 'utf8'))
+    raw.some_future_key = { kept: true }
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(raw, null, 2)}\n`)
+    const keysBefore = Object.keys(raw)
+
+    const dto = await rename('Invoice watcher', true)
+
+    expect(existsSync(agentDir)).toBe(false)
+    expect(dto.path).toBe(renamedDir())
+    expect(dto.id).toBe(agentId)
+    expect(dto.slug).toBe('invoice-watcher')
+    expect(dto.readiness).not.toBe('invalid')
+    const manifest = readManifest(manifestPath(renamedDir()))
+    expect(manifest.name).toBe('Invoice watcher')
+    expect(manifest.slug).toBe('invoice-watcher')
+    expect(manifest.some_future_key).toEqual({ kept: true })
+    expect(Object.keys(manifest)).toEqual(keysBefore)
+    const rows = agentRepo.listFolder(USER)
+    expect(rows.map((row) => row.id)).toEqual([agentId])
+    expect(rows[0].localPath).toBe(renamedDir())
+    expect(localAgentService.get(USER, agentId).path).toBe(renamedDir())
+    expect(turnLock.isLocked(agentId)).toBe(false)
+  })
+
+  it('refuses a target folder that already exists, and moves nothing', async () => {
+    mkdirSync(renamedDir())
+    writeFileSync(join(renamedDir(), 'keep.txt'), 'mine\n')
+
+    await expect(rename('Invoice watcher', true)).rejects.toMatchObject({
+      code: 'already_exists',
+      message: 'A folder named invoice-watcher already exists.'
+    })
+    expect(existsSync(manifestPath(agentDir))).toBe(true)
+    expect(readManifest(manifestPath(agentDir)).name).toBe('Alpha')
+    expect(readFileSync(join(renamedDir(), 'keep.txt'), 'utf8')).toBe('mine\n')
+  })
+
+  it('refuses to move a legacy folder, whose id is its folder name', async () => {
+    const manifest = readManifest(manifestPath(agentDir))
+    delete manifest.id
+    delete manifest.contract_version
+    manifest.schema_version = 1
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+    scannerService.markAllRootsDirty()
+    const legacyId = scannerService.scanRoot(USER, agentRootRepo.list(USER)[0]).agents[0].id
+
+    await expect(rename('Invoice watcher', true, legacyId)).rejects.toMatchObject({
+      code: 'invalid_input',
+      message: expect.stringMatching(/Stamp identity first/)
+    })
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+    // The name alone is still allowed.
+    expect((await rename('Invoice watcher', false, legacyId)).name).toBe('Invoice watcher')
+  })
+
+  it('moves a folder whose origin is the user\'s own, not a team version', async () => {
+    const own = join(workshop, '.own.git')
+    mkdirSync(own)
+    git(own, 'init', '--bare', '-q', '-b', 'main', '.')
+    git(agentDir, 'init', '-q', '-b', 'main', '.')
+    git(agentDir, 'remote', 'add', 'origin', own)
+
+    const dto = await rename('Invoice watcher', true)
+    expect(dto.path).toBe(renamedDir())
+    expect(existsSync(agentDir)).toBe(false)
+  }, 30_000)
+
+  it('refuses to move a folder whose origin is a Cinna team version', async () => {
+    git(agentDir, 'init', '-q', '-b', 'main', '.')
+    git(agentDir, 'remote', 'add', 'origin', 'https://cinna.example.test/git/r1.git')
+    const teamRemote = vi.spyOn(sharingService, 'isTeamRemote').mockReturnValue(true)
+    try {
+      await expect(rename('Invoice watcher', true)).rejects.toMatchObject({
+        code: 'invalid_input',
+        message: 'The folder name is part of the team version, so it stays.'
+      })
+      expect(teamRemote).toHaveBeenCalledWith('https://cinna.example.test/git/r1.git', null)
+    } finally {
+      teamRemote.mockRestore()
+    }
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+  }, 30_000)
+
+  it('refuses to move a folder this machine recorded as shared, even with no git', async () => {
+    desktopStateService.patch(agentDir, 'kit', {
+      shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: 'https://cinna.example.test/git/r1.git' }
+    })
+    const noGit = vi.spyOn(gitService, 'readShareRemote').mockResolvedValue({
+      ownRepo: false, originUrl: null, cinnaServer: null, refusal: 'git_missing'
+    })
+    try {
+      await expect(rename('Invoice watcher', true)).rejects.toMatchObject({
+        code: 'invalid_input',
+        message: 'The folder name is part of the team version, so it stays.'
+      })
+    } finally {
+      noGit.mockRestore()
+    }
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+  })
+
+  it('tells the runtime the folder moved while the lock is still held, and only then', async () => {
+    const told: Array<{ agentId: string; locked: boolean }> = []
+    installFolderMovedListener((id) => told.push({ agentId: id, locked: turnLock.isLocked(id) }))
+    try {
+      await rename('Beta', false)
+      expect(told).toEqual([])
+      await rename('Invoice watcher', true)
+      expect(told).toEqual([{ agentId, locked: true }])
+    } finally {
+      installFolderMovedListener(null)
+    }
+  })
+
+  it('renames a folder whose name differs only in case', async () => {
+    const upper = join(dirname(agentDir), 'ALPHA')
+    // A case-sensitive disk has no case-only rename to make.
+    if (!existsSync(upper)) return
+    const mixed = join(dirname(agentDir), 'Alpha')
+    renameSync(agentDir, mixed)
+    const manifest = readManifest(manifestPath(mixed))
+    manifest.slug = 'Alpha'
+    writeFileSync(manifestPath(mixed), `${JSON.stringify(manifest, null, 2)}\n`)
+    scannerService.markAllRootsDirty()
+    scannerService.scanRoot(USER, agentRootRepo.list(USER)[0])
+    expect(agentRepo.getOwned(USER, agentId)?.localPath).toBe(mixed)
+
+    const dto = await rename('Alpha', true)
+    expect(dto.path).toBe(agentDir)
+    expect(readdirSync(dirname(agentDir))).toContain('alpha')
+    expect(readdirSync(dirname(agentDir))).not.toContain('Alpha')
+    expect(readManifest(manifestPath(agentDir)).slug).toBe('alpha')
+  })
+
+  it('refuses a stale stamp, and moves nothing', async () => {
+    const stale = localAgentService.get(USER, agentId).stamps[MANIFEST]!
+    const manifest = readManifest(manifestPath(agentDir))
+    manifest.description = 'edited by an assistant'
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+
+    await expect(
+      localAgentService.renameKitAgent(USER, {
+        agentId,
+        name: 'Invoice watcher',
+        renameFolder: true,
+        expectedStamp: stale
+      })
+    ).rejects.toMatchObject({ code: 'manifest_modified' })
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+    expect(readManifest(manifestPath(agentDir)).description).toBe('edited by an assistant')
+  })
+
+  it('refuses while a turn holds the agent, and moves nothing', async () => {
+    const handle = turnLock.acquire(agentId, 'turn')
+    try {
+      await expect(rename('Invoice watcher', true)).rejects.toMatchObject({ code: 'turn_in_progress' })
+    } finally {
+      handle.release()
+    }
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+  })
+
+  it('moves the folder back when the manifest cannot be written', async () => {
+    failNextManifestWrite.on = true
+    await expect(rename('Invoice watcher', true)).rejects.toThrow('disk full')
+    expect(existsSync(agentDir)).toBe(true)
+    expect(existsSync(renamedDir())).toBe(false)
+    expect(readManifest(manifestPath(agentDir)).name).toBe('Alpha')
+    expect(agentRepo.getOwned(USER, agentId)?.localPath).toBe(agentDir)
+    expect(turnLock.isLocked(agentId)).toBe(false)
+  })
+
+  it('points the row at the new folder when it cannot be moved back', async () => {
+    failNextManifestWrite.on = true
+    failNextManifestWrite.occupy = agentDir
+    await expect(rename('Invoice watcher', true)).rejects.toThrow('disk full')
+    expect(existsSync(manifestPath(renamedDir()))).toBe(true)
+    expect(agentRepo.getOwned(USER, agentId)?.localPath).toBe(renamedDir())
+    expect(turnLock.isLocked(agentId)).toBe(false)
   })
 })

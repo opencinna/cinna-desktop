@@ -40,6 +40,7 @@ import type {
   LocalAgentCredentialState,
   OpenLocalAgentPathInput,
   ReadLocalAgentDocInput,
+  RenameKitAgentInput,
   RescanResult,
   UpdateLocalAgentFieldInput
 } from '../shared/localAgents'
@@ -1909,6 +1910,12 @@ const api = {
     /** Rename a bare agent. Kit agents rename through `updateField`. */
     rename: (agentId: string, name: string | null): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:rename', { agentId, name }),
+    /**
+     * Rename a kit agent, and its folder when asked. An outcome, so
+     * `manifest_modified` and `turn_in_progress` survive the crossing.
+     */
+    renameKit: (input: RenameKitAgentInput): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:rename-kit', input),
     /**
      * Save which credential and model a bare agent runs on. Kit agents save
      * their runtime through `updateField`, into the manifest and under its

@@ -28,7 +28,7 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
@@ -3785,6 +3785,33 @@ describe('a refusal', () => {
     const result = await w.run()
     expect(result.error?.message).toBe('This agent’s credential is not available to it.')
     expect(w.fake.log()).toEqual([])
+  })
+
+  it('refuses a turn whose folder was renamed while it waited for the lock, and starts no process', async () => {
+    const gate = deferred<void>()
+    let path = FOLDER.path
+    const w = world({
+      script: SAYS_HELLO,
+      deps: {
+        currentFolderPath: () => path,
+        withLock: async (_agentId, _owner, fn) => { await gate.promise; return fn() }
+      }
+    })
+    const turn = w.run()
+    await settle()
+    // The rename holds the lock and moves the folder; the turn was planned before.
+    path = '/tmp/agents/renamed-pineapple'
+    gate.resolve()
+    const result = await turn
+    expect(result.error?.message).toBe(ACP_FOLDER_MOVED)
+    expect(w.fake.log()).toEqual([])
+  })
+
+  it('runs a folder agent whose folder is where the plan found it', async () => {
+    const w = world({ script: SAYS_HELLO, deps: { currentFolderPath: () => FOLDER.path } })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe('Hello.')
   })
 
   it('names the engine when the process will not start', async () => {

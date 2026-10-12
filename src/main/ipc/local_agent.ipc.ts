@@ -35,6 +35,7 @@ import type {
   LocalAgentValidation,
   OpenLocalAgentCredentialsResult,
   OpenLocalAgentPathInput,
+  RenameKitAgentInput,
   RescanResult,
   UpdateLocalAgentFieldInput
 } from '../../shared/localAgents'
@@ -603,6 +604,21 @@ export function registerLocalAgentHandlers(): void {
       // key, so this agent's process is replaced on its next turn. Nothing to
       // push from here; see the comment on `update-field` above.
       return outcome
+    }
+  )
+
+  /**
+   * Rename a kit agent, and its folder when asked. Coded, like `:update-field`:
+   * `manifest_modified` and `turn_in_progress` are refusals the dialog explains.
+   */
+  ipcHandle(
+    'local-agent:rename-kit',
+    async (_event, input: RenameKitAgentInput): Promise<LocalAgentOutcome<LocalAgentDto>> => {
+      userActivation.requireActivated()
+      const userId = getSettingsScopeUserId()
+      // A moved folder's warm process is retired by the service itself, under
+      // the move's lock (see `installFolderMovedListener` in `hub/core.ts`).
+      return withCodeAsync(() => localAgentService.renameKitAgent(userId, input))
     }
   )
 

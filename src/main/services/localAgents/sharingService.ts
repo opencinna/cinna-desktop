@@ -1012,6 +1012,15 @@ async function createAndSend(
 }
 
 export const sharingService = {
+  /**
+   * Whether `origin` is a team version on a Cinna instance this machine knows,
+   * as the share status reads it — not merely any remote. A personal GitHub
+   * origin is not one.
+   */
+  isTeamRemote(originUrl: string, recordedServer: string | null): boolean {
+    return remoteOf(originUrl, recordedServer).kind === 'cinna'
+  },
+
   /** Every shared agent on this machine, without reaching the network. */
   async statuses(userId: string): Promise<AgentShareStatus[]> {
     const out: AgentShareStatus[] = []

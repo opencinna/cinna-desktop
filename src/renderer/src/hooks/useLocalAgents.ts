@@ -24,6 +24,7 @@ import type {
   LocalAgentDto,
   LocalAgentDocKind,
   LocalAgentFieldUpdate,
+  RenameKitAgentInput,
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../../shared/engine'
@@ -1025,15 +1026,44 @@ export function useAddAgentFolder() {
 }
 
 /** Rename a bare agent. Kit agents rename through `useUpdateLocalAgentField`. */
-export function useRenameLocalAgent() {
+export function useRenameLocalAgent(options?: {
+  /** Runs at hook level, so it survives the unmount of the dialog that called `mutate`. */
+  onSuccess?: (agent: LocalAgentDto, input: { agentId: string; name: string | null }) => void
+}) {
   const queryClient = useQueryClient()
   return useMutation<LocalAgentDto, Error, { agentId: string; name: string | null }>({
     mutationFn: async ({ agentId, name }) =>
       unwrapLocalAgentOutcome(await window.api.localAgents.rename(agentId, name)),
-    onSuccess: (agent) => {
+    onSuccess: (agent, input) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      options?.onSuccess?.(agent, input)
+    }
+  })
+}
+
+/**
+ * Rename a **kit** agent, and its folder when asked — one call, so the folder
+ * and the manifest's `name` and `slug` move together. Guarded by the manifest
+ * stamp the dialog read. The id does not change (main refuses the folder move
+ * for a legacy identity), but `onSuccess` hands back the agent so a caller can
+ * follow it anyway.
+ */
+export function useRenameKitAgent(options?: {
+  /** Runs at hook level, so it survives the unmount of the dialog that called `mutate`. */
+  onSuccess?: (agent: LocalAgentDto, input: RenameKitAgentInput) => void
+}) {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, RenameKitAgentInput>({
+    mutationFn: async (input) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.renameKit(input)),
+    onSuccess: (agent, input) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      // The pickers and `@`-mentions read the name from the agents list.
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      options?.onSuccess?.(agent, input)
     }
   })
 }

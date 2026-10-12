@@ -28,6 +28,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -52,9 +53,9 @@ import {
 } from '../../kit/manifestIo'
 import { sha256Hex } from '../../kit/hash'
 import { isIgnoredPath, validateAgentFolder } from '../../kit/validator'
-import { LocalAgentError } from '../../errors'
+import { KitError, LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
-import { MANIFEST_FILE } from '../../../shared/kit/manifest'
+import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import { AGENT_INIT_ENTRY_FILES, buildAgentInitPrompt } from '../../../shared/agentInitPrompt'
 import {
   describedAs,
@@ -86,7 +87,9 @@ import {
   type LocalAgentValidation,
   type OpenLocalAgentCredentialsResult,
   type OpenLocalAgentPathInput,
+  type RenameKitAgentInput,
   type RescanResult,
+  slugifyAgentName,
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
@@ -229,6 +232,19 @@ function optionalString(value: unknown, label: string, max: number): string | nu
 }
 
 let started = false
+
+/**
+ * Told an agent's folder moved, while the move's lock is still held. The
+ * composition root (`hub/core.ts`) installs the runtime's answer: retire the
+ * agent's warm process, which may still sit in the old folder. Absent — unit
+ * tests — nothing is told.
+ */
+let folderMovedListener: ((agentId: string) => void) | null = null
+
+/** Install the listener {@link localAgentService.renameKitAgent} calls after moving a folder. */
+export function installFolderMovedListener(listener: ((agentId: string) => void) | null): void {
+  folderMovedListener = listener
+}
 
 /**
  * Rebuild the synced dependency manifest of every job attached to a folder
@@ -1866,6 +1882,201 @@ export const localAgentService = {
       },
       root.id
     )
+    return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  /**
+   * Rename a **kit** agent, and — when asked — its folder.
+   *
+   * The name alone is the ordinary stamped manifest write, through
+   * {@link updateField} itself, so it is validated and written exactly as the
+   * Name card's save is. Moving the folder is the part with rules of its own,
+   * all enforced here rather than trusted from the dialog:
+   *
+   * * **Manifest identity only.** A legacy folder's row id *is* its folder
+   *   name, so moving it would hand its chats to an agent that no longer
+   *   exists. With a manifest `id` the row keeps its id and only its
+   *   `local_path` moves, which {@link reindexAgent} already does in place.
+   * * **Not a shared folder.** A folder with a team version — a `shared_remote`
+   *   link in `app-data/desktop.json`, or an `origin` that is a Cinna instance
+   *   — keeps its folder name, which the team version carries. A personal
+   *   origin does not count.
+   * * **The new folder name is the scaffolder's slug** of the new name, and a
+   *   folder already there is refused rather than merged into.
+   *
+   * The move and the manifest's `name` and `slug` happen under one turn lock
+   * and are undone together: the validator requires `slug` to equal the folder
+   * name, so a moved folder whose manifest could not follow is renamed back.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`, `already_exists`,
+   *   `turn_in_progress`, `write_failed`; KitError `manifest_modified`
+   */
+  async renameKitAgent(userId: string, input: RenameKitAgentInput): Promise<LocalAgentDto> {
+    const agentId = input?.agentId ?? ''
+    const expected = input?.expectedStamp
+    if (
+      !expected ||
+      typeof expected.mtimeMs !== 'number' ||
+      typeof expected.size !== 'number' ||
+      typeof expected.hash !== 'string'
+    ) {
+      throw new LocalAgentError(
+        'invalid_input',
+        'This editor is out of date. Reload the agent and try again.'
+      )
+    }
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (root.kind === 'external') {
+      throw new LocalAgentError(
+        'invalid_input',
+        'This is your own folder; Cinna keeps its name without touching it.'
+      )
+    }
+    const name = requireString(input?.name, 'The name', 255)
+    const renameName = (): LocalAgentDto =>
+      this.updateField(userId, { agentId, update: { field: 'name', value: name }, expectedStamp: expected })
+    if (input?.renameFolder !== true) return renameName()
+
+    const current = this.scanFolder(root, agentDir)
+    if (current.identity !== 'manifest') {
+      throw new LocalAgentError(
+        'invalid_input',
+        "This agent is identified by its folder's name. Stamp identity first, or its chats would lose it."
+      )
+    }
+    const slug = slugifyAgentName(name)
+    if (!SLUG_PATTERN.test(slug)) {
+      throw new LocalAgentError(
+        'invalid_input',
+        'That name gives no folder name. Use Latin letters or digits, or keep the folder as it is.'
+      )
+    }
+    const newDir = join(dirname(agentDir), slug)
+    if (newDir === agentDir) return renameName()
+
+    // A team version is known two ways: the `shared_remote` link this machine
+    // wrote when it shared or installed the folder — readable with no git on
+    // the machine — and an `origin` naming a Cinna instance. Any other origin
+    // (a personal GitHub repository) is the user's own and does not pin the name.
+    const teamVersion = (): never => {
+      throw new LocalAgentError(
+        'invalid_input',
+        'The folder name is part of the team version, so it stays.'
+      )
+    }
+    let sharedLink: unknown = null
+    try {
+      sharedLink = desktopStateService.read(agentDir, 'kit').shared_remote ?? null
+    } catch {
+      sharedLink = null
+    }
+    if (sharedLink) teamVersion()
+    // Read before the lock: it is two git child processes, and the lock is
+    // only ever held across synchronous work here.
+    const repo = await gitService.readShareRemote(agentDir)
+    if (repo.ownRepo && repo.originUrl !== null) {
+      // Imported here because that service imports this one.
+      const { sharingService } = await import('./sharingService')
+      if (sharingService.isTeamRemote(repo.originUrl, repo.cinnaServer)) teamVersion()
+    }
+    /**
+     * True when `newDir` is a different folder — not this one under another
+     * case. `.native`, because only the OS's realpath returns the name as it
+     * is stored: the JS one keeps the caller's case, so a case-only rename on a
+     * case-insensitive disk would read as somebody else's folder.
+     */
+    const taken = (): boolean => {
+      if (!existsSync(newDir)) return false
+      try {
+        return realpathSync.native(newDir) !== realpathSync.native(agentDir)
+      } catch {
+        return true
+      }
+    }
+    if (taken()) {
+      throw new LocalAgentError('already_exists', `A folder named ${slug} already exists.`)
+    }
+
+    /** Where the folder is when the lock is released. */
+    let settledAt = agentDir
+    const handle = turnLock.acquire(agentId, 'editor')
+    try {
+      const oldManifest = manifestPath(agentDir)
+      // Checked before anything moves, so a stale dialog leaves the folder
+      // where it was; `writeIfUnchanged` checks it again after the move.
+      if (!stampsMatch(readStamp(oldManifest), expected)) {
+        throw new KitError(
+          'manifest_modified',
+          `${MANIFEST_FILE} changed on disk since it was read. Reload before saving.`,
+          oldManifest
+        )
+      }
+      const { manifest } = readWithStamp(oldManifest)
+      if (taken()) {
+        throw new LocalAgentError('already_exists', `A folder named ${slug} already exists.`)
+      }
+      try {
+        renameSync(agentDir, newDir)
+      } catch (err) {
+        throw new LocalAgentError(
+          'write_failed',
+          'The folder could not be renamed.',
+          err instanceof Error ? err.message : String(err)
+        )
+      }
+      settledAt = newDir
+      try {
+        // Spread, so unknown keys and the key order stay as they were.
+        writeIfUnchanged(manifestPath(newDir), { ...manifest, name, slug }, expected)
+      } catch (err) {
+        try {
+          renameSync(newDir, agentDir)
+          settledAt = agentDir
+        } catch (back) {
+          logger.error('a renamed agent folder could not be moved back', {
+            agentId,
+            error: back instanceof Error ? back.message : String(back)
+          })
+          // The folder stays at the new path: the row follows it there, or
+          // `locate()` would name a folder that is gone.
+          scannerService.markRootDirty(root.id)
+          try {
+            this.reindexAgent(userId, root, newDir)
+          } catch (reindex) {
+            logger.error('a folder left at its new name could not be re-indexed', {
+              agentId,
+              error: reindex instanceof Error ? reindex.message : String(reindex)
+            })
+          }
+        }
+        throw err
+      }
+    } finally {
+      // Before the lock goes: a turn queued behind it must not be handed a
+      // warm process still sitting in the old folder.
+      if (settledAt !== agentDir) {
+        try {
+          folderMovedListener?.(agentId)
+        } catch (err) {
+          logger.warn('a moved folder could not be announced', {
+            agentId,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      }
+      handle.release()
+    }
+
+    // Same id, new path: `reindexAgent` moves `local_path` on the existing row.
+    scannerService.markRootDirty(root.id)
+    const dto = this.reindexAgent(userId, root, newDir) ?? scannerService.scanAgentFolder(newDir, root)
+    watcherService.refreshRoot(root.id)
+    // A folder that is its own repository was hidden from an enclosing one by
+    // path; hide it under its new path too. The old line is left: it names a
+    // folder that is gone, and removing lines from the user's exclude file is
+    // more than a rename should do.
+    if (repo.ownRepo) await gitService.excludeFromEnclosingRepo(newDir)
+    logger.info('kit agent renamed with its folder', { agentId, slug })
     return this.overlayEnabled(userId, [dto])[0]
   },
 

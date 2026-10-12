@@ -909,6 +909,17 @@ export const acpDriver = createAcpDriver({
   replayTranscript: (chatId, messageId, connection, userId, agentId, turn) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId, attachmentUploadsDir(turn))),
   launcher: (id) => acpLauncherFor(id),
   readRuntime: readAcpRuntime,
+  // Read again under the turn lock: a kit agent's folder can be renamed while
+  // a turn planned in it waits behind the rename.
+  currentFolderPath: (userId, agent) => {
+    if (isChatConductor(agent) || isDevelopmentAgent(agent)) return undefined
+    if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return undefined
+    try {
+      return localAgentService.locate(userId, agent.id).agentDir
+    } catch {
+      return null
+    }
+  },
   defaultEngine: () => defaultEngineService.current(),
   registerRequest: (input) => pendingRequests.register(input),
   resolveRequest,

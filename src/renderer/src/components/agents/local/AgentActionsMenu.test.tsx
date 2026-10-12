@@ -34,6 +34,8 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
     return { mutate: remove, isPending: removePending }
   },
   useOpenAgentUploads: () => ({ mutate: openUploads }),
+  useRenameKitAgent: () => ({ mutate: vi.fn(), isPending: false }),
+  useRenameLocalAgent: () => ({ mutate: vi.fn(), isPending: false }),
   useRescanLocalAgents: () => ({ mutate: vi.fn(), isPending: false }),
   useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false })
 }))
@@ -449,5 +451,20 @@ describe('AgentActionsMenu — removing a bare agent', () => {
     expect(screen.getByRole('button', { name: 'Move to Trash' })).toBeTruthy()
     // And a kit agent keeps the word it has always used.
     expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeTruthy()
+  })
+})
+
+describe('AgentActionsMenu — rename', () => {
+  it('sits after the separator, before Delete, and opens the rename dialog', () => {
+    openMenu()
+    const menu = screen.getByRole('menu')
+    const items = within(menu).getAllByRole('menuitem').map((el) => el.textContent)
+    expect(items.slice(-2)).toEqual(['Rename agent…', 'Delete agent…'])
+    // The separator comes right before Rename.
+    const rename = within(menu).getByRole('menuitem', { name: 'Rename agent…' })
+    expect(rename.previousElementSibling?.tagName).toBe('DIV')
+    expect(rename.previousElementSibling?.getAttribute('role')).not.toBe('menuitem')
+    fireEvent.click(rename)
+    expect(screen.getByRole('dialog', { name: 'Rename agent' })).toBeTruthy()
   })
 })
