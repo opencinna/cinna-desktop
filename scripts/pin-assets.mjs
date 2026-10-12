@@ -4,6 +4,7 @@
 //   node --experimental-strip-types scripts/pin-assets.mjs claude 2.1.277
 //   node --experimental-strip-types scripts/pin-assets.mjs codex 0.156.0
 //   node --experimental-strip-types scripts/pin-assets.mjs antigravity 1.4.0
+//   node --experimental-strip-types scripts/pin-assets.mjs opencode 1.19.1
 //
 // scripts/install-runtime.mjs prints the digest for the platform it runs on
 // only; bumping a pin needs all of them, and doing the other three by hand is
@@ -20,6 +21,11 @@
 //   use it before committing a bump. (The 2.1.296 rows were verified that way.)
 // - antigravity — every zip is DOWNLOADED from Google's release path and
 //   hashed here, as for codex: nothing is published to compare against.
+// - opencode — every archive is DOWNLOADED from the GitHub release and hashed
+//   here, then compared with the `sha256:` digest GitHub publishes per release
+//   asset; a row whose bytes disagree is refused. A release the API does not
+//   answer for (rate limit, no network to api.github.com) still prints, and
+//   says so on its row. Rows carry no size: the app derives none for opencode.
 //
 // The platform list is the pinned one: a platform is added by adding its row to
 // runtimePins.ts first, deliberately.
@@ -28,8 +34,8 @@ import { RUNTIME_PINS } from '../src/shared/runtimePins.ts'
 
 const [tool, version] = process.argv.slice(2)
 const verify = process.argv.includes('--verify')
-if (!['codex', 'claude', 'antigravity'].includes(tool) || !version || version.startsWith('--')) {
-  console.error('usage: pin-assets.mjs <codex|claude|antigravity> <version> [--verify]')
+if (!['codex', 'claude', 'antigravity', 'opencode'].includes(tool) || !version || version.startsWith('--')) {
+  console.error('usage: pin-assets.mjs <codex|claude|antigravity|opencode> <version> [--verify]')
   process.exit(2)
 }
 const log = (line) => console.error(line)
@@ -82,6 +88,34 @@ if (tool === 'claude') {
     rows.push({ platform, url, sha256, size, source: 'downloaded',
       paste: `'${platform}': antigravityAsset(\n  '${os}',\n  \`${file}\`,\n  '${sha256}',\n  ${size}\n),` })
   }
+} else if (tool === 'opencode') {
+  const release = `https://github.com/anomalyco/opencode/releases/download/v${version}`
+  const api = `https://api.github.com/repos/anomalyco/opencode/releases/tags/v${version}`
+  /** GitHub's `sha256:` digest per asset name, or the reason there is none. */
+  let published
+  try {
+    log(`reading ${api}`)
+    const response = await fetch(api, { headers: { accept: 'application/vnd.github+json' } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = await response.json()
+    published = new Map((body.assets ?? []).map((asset) => [asset.name, String(asset.digest ?? '').replace(/^sha256:/, '')]))
+  } catch (err) {
+    published = err instanceof Error ? err.message : String(err)
+  }
+  for (const [platform, asset] of Object.entries(RUNTIME_PINS.opencode.assets)) {
+    // Same file names every release; the tag carries the version (binaryResolver's `assetUrl`).
+    const url = `${release}/${asset.file}`
+    log(`downloading ${url}`)
+    const { sha256, size } = await hashUrl(url)
+    let source = `downloaded; GitHub digest unavailable (${typeof published === 'string' ? published : 'not listed'})`
+    const digest = typeof published === 'string' ? undefined : published.get(asset.file)
+    if (digest) {
+      if (digest !== sha256) throw new Error(`${platform}: the bytes (${sha256}) disagree with GitHub's digest (${digest})`)
+      source = 'downloaded, matches GitHub digest'
+    }
+    rows.push({ platform, url, sha256, size, source,
+      paste: `'${platform}': {\n  file: '${asset.file}',\n  sha256: '${sha256}'\n},` })
+  }
 } else {
   const pin = RUNTIME_PINS.codex
   for (const [platform, asset] of Object.entries(pin.assets)) {
@@ -105,5 +139,5 @@ if (tool === 'claude') {
 }
 
 for (const row of rows) log(`${row.platform}  ${row.sha256}  ${row.size} bytes  (${row.source})\n  ${row.url}`)
-log(`\n--- paste into RUNTIME_PINS.${tool}.assets, and set the version constant to '${version}':`)
+log(`\n--- paste into RUNTIME_PINS.${tool}.assets, and set ${tool === 'opencode' ? 'RUNTIME_PINS.opencode.cli' : 'the version constant'} to '${version}':`)
 console.log(rows.filter((row) => row.paste).map((row) => row.paste).join('\n'))

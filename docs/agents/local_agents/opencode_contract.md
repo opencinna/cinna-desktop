@@ -34,7 +34,7 @@ Reproduce with these exact conditions or the results do not transfer.
 
 | | |
 |---|---|
-| Version | `1.18.27` (`opencode --version`), the value pinned in `src/shared/runtimePins.ts` (`RUNTIME_PINS.opencode.cli`), which `src/shared/engine.ts` re-exports as `PINNED_ENGINE_VERSION` |
+| Version | `1.18.27` (`opencode --version`), the value then pinned in `src/shared/runtimePins.ts` (`RUNTIME_PINS.opencode.cli`), which `src/shared/engine.ts` re-exports as `PINNED_ENGINE_VERSION` |
 | Platform | `darwin-arm64` |
 | Asset | `opencode-darwin-arm64.zip` from `https://github.com/anomalyco/opencode/releases/download/v1.18.27/…` |
 | SHA-256 | `149b0c6d272d0059b8b5ffcd18c84b24f1d6cbf585942b10e60c601211992eb1` — matched byte for byte, twice, on separate downloads. This is the digest recorded in `src/shared/runtimePins.ts`, which `src/main/engine/binaryResolver.ts` reads as `ENGINE_ASSETS` |

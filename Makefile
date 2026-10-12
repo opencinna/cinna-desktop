@@ -79,8 +79,8 @@ contract-snapshot: ## Rewrite the committed snapshot from the pinned CLI, once a
 	CINNA_CONTRACT_WRITE_SNAPSHOT=1 npm run test:contract -- $(CONTRACT_FILE)
 
 pin-assets: ## url + sha256 (+ size) for EVERY platform of a version, ready to paste into runtimePins.ts: make pin-assets ENGINE=claude VERSION=2.1.277
-	$(call check-engine, VERSION=<x.y.z>)
-	@test -n "$(VERSION)" || (echo "usage: make pin-assets ENGINE=<codex|claude|antigravity> VERSION=<x.y.z>"; exit 2)
+	@case " $(ENGINES) opencode " in *" $(ENGINE) "*) ;; *) echo "usage: make pin-assets ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2;; esac
+	@test -n "$(VERSION)" || (echo "usage: make pin-assets ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2)
 	$(STRIP) scripts/pin-assets.mjs $(ENGINE) $(VERSION)
 
 demo-localdev: ## Drive one-click onboarding by hand in a throwaway profile: make demo-localdev SERVER=http://localhost:8000

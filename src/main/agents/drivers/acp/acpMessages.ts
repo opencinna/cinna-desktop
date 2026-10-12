@@ -29,6 +29,10 @@
  * tool_call_update     status:completed      content[] + rawOutput.output
  * agent_thought_chunk  {messageId: NEW}      the reply after the call
  * agent_message_chunk  {messageId: same}
+ *
+ * From 1.18.31 a thought chunk's `messageId` is its reasoning *part* id
+ * (`prt_…`, one per summary), never the reply's `msg_…`. Nothing persisted
+ * depends on it: the turn's parts keep arrival order and only key on it.
  * usage_update                               telemetry only, never the transcript
  * ```
  *

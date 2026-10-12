@@ -291,7 +291,7 @@ export const RUNTIME_PINS = {
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   opencode: {
-    cli: '1.18.27',
+    cli: '1.19.0',
     /**
      * Release assets of `anomalyco/opencode` for the pinned version. Linux uses
      * the glibc builds; see `engine/binaryResolver.ts` for the musl gap.
@@ -299,27 +299,27 @@ export const RUNTIME_PINS = {
     assets: {
       'darwin-arm64': {
         file: 'opencode-darwin-arm64.zip',
-        sha256: '149b0c6d272d0059b8b5ffcd18c84b24f1d6cbf585942b10e60c601211992eb1'
+        sha256: '0d5f511948d6fbfedf9bb16753c0ac42613dcc8de75d9deb7e8d0cf584c8fba6'
       },
       'darwin-x64': {
         file: 'opencode-darwin-x64.zip',
-        sha256: 'e182eab3a6bf095ff773d303bbc7938d3551a636eab00625b599ad6383fabd88'
+        sha256: '515380b03f3410f2178c8c1c7ba6d1e9556a3bdee2a01d114e7b1681952131a0'
       },
       'linux-x64': {
         file: 'opencode-linux-x64.tar.gz',
-        sha256: '4af5494f9433f59db8c1e344198f0ee72a50c06ec009fb4a8aeab4c2d4abd702'
+        sha256: '7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec'
       },
       'linux-arm64': {
         file: 'opencode-linux-arm64.tar.gz',
-        sha256: '8cbc134eb5e100baf61ee7196150f503e352056e703276e2d8637c38bafd2c39'
+        sha256: 'e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b'
       },
       'win32-x64': {
         file: 'opencode-windows-x64.zip',
-        sha256: 'ac26bb6f0309e9a6de279b64dc7bec5e69ab9b79c1a4e2d947d68d213b7eb575'
+        sha256: '17108e9448c4fdad48eb8714c4ed6f5dfc9cf86c2eb8f2ce5d02043fef806eb5'
       },
       'win32-arm64': {
         file: 'opencode-windows-arm64.zip',
-        sha256: '59174ffeb6ce327bd2c534bf5147d0005e8db3b5889414de10490d00e640c908'
+        sha256: 'cfb6f1d40c4596613d2d40e34c48500da7b873f98f7458d3d4ea11136bf174f6'
       }
     } as Readonly<Record<string, RuntimePinAsset>>
   },

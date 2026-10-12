@@ -21,7 +21,7 @@ These are the original OpenCode/Claude probe conditions. Their live-model measur
 | | |
 |---|---|
 | Protocol | ACP **v1** (`protocolVersion: 1`), `@agentclientprotocol/sdk` 1.4.0. v2 is a draft that removes client-side `fs/*` and `terminal/*`; this client declares neither and is forward-compatible |
-| OpenCode | `1.18.27` — the version pinned in `src/shared/runtimePins.ts` — launched as `opencode acp` (stdio). Same binary, same SHA-256 and same archive layout as the pinned download the desktop verifies |
+| OpenCode | `1.19.0` — the version pinned in `src/shared/runtimePins.ts` — launched as `opencode acp` (stdio). Same binary, same SHA-256 and same archive layout as the pinned download the desktop verifies |
 | Claude | `@agentclientprotocol/claude-agent-acp` **0.76.0**, running on this build's Node (`ELECTRON_RUN_AS_NODE=1`), driving the user's own `claude` **2.1.267** through `CLAUDE_CODE_EXECUTABLE` |
 | Platform | `darwin-arm64` |
 | Credential | OpenCode: a real key, reaching the process only as the `CINNA_ENGINE_KEY_…` variable its config names. Claude: the user's own claude.ai login, held in the login Keychain, with **no API key anywhere in the environment** |
