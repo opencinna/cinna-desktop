@@ -44,8 +44,15 @@ import type { RealLogin } from './realLogin'
  *   on an ask nobody answers. An override names a model alias (`haiku`).
  * - Codex: `gpt-5.6-luna`, the cheapest slug in the pinned CLI's catalog
  *   (contract snapshot `codex-0.162.1.json`), as T2.3c uses.
+ * - Antigravity: `gemini-3.6-flash-low` (`ANTIGRAVITY_LIVE_MODEL`), as
+ *   `live-antigravity.spec.ts` uses. Its server is the pinned copy the
+ *   developer already has (`CINNA_E2E_ANTIGRAVITY_PATH`, else the installed
+ *   app's `runtimes/antigravity-<pin>/agy_acp_server.par`, else
+ *   `~/.cache/cinna-runtimes/antigravity-<pin>/`), its login the keychain item
+ *   plus `~/.gemini/antigravity-acp/settings.json`. Its default approval is
+ *   *Ask*, so a spec that runs on it must answer asks or expect none.
  */
-export type LiveEngineName = 'opencode' | 'claude' | 'codex'
+export type LiveEngineName = 'opencode' | 'claude' | 'codex' | 'antigravity'
 
 export interface LiveEngine {
   name: LiveEngineName
@@ -67,9 +74,12 @@ export interface LiveEngine {
 /** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.162.1.json`). */
 export const CODEX_LIVE_MODEL = 'gpt-5.6-luna'
 
+/** Gemini Flash, as `live-antigravity.spec.ts` names it. */
+export const ANTIGRAVITY_LIVE_MODEL = 'gemini-3.6-flash-low'
+
 const RAW = (process.env.CINNA_E2E_LIVE_ENGINE ?? '').trim() || 'opencode'
-if (RAW !== 'opencode' && RAW !== 'claude' && RAW !== 'codex') {
-  throw new Error(`CINNA_E2E_LIVE_ENGINE must be opencode, claude or codex, not "${RAW}"`)
+if (RAW !== 'opencode' && RAW !== 'claude' && RAW !== 'codex' && RAW !== 'antigravity') {
+  throw new Error(`CINNA_E2E_LIVE_ENGINE must be opencode, claude, codex or antigravity, not "${RAW}"`)
 }
 const MODEL_OVERRIDE = (process.env.CINNA_E2E_LIVE_MODEL ?? '').trim()
 
@@ -183,6 +193,20 @@ function resolve(name: LiveEngineName): LiveEngine {
       toolNote: 'The Cinna tools come from the "cinna" MCP server; in your tool list they are named with an mcp__cinna__ prefix (for example mcp__cinna__tasks_create).'
     }
   }
+  if (name === 'antigravity') {
+    const binary = antigravityServer()
+    const model = MODEL_OVERRIDE || ANTIGRAVITY_LIVE_MODEL
+    return {
+      name,
+      label: `antigravity ${model}`,
+      realLogin: binary ? { engine: 'antigravity', binary, pathSetting: 'localAgentsAntigravityPath' } : null,
+      runtime: { engine: 'antigravity', credential: null, modelId: model, complexity: null },
+      skipReason: binary === null
+        ? `CINNA_E2E_LIVE_ENGINE=antigravity: no pinned Antigravity ${RUNTIME_PINS.antigravity.cli} server (set CINNA_E2E_ANTIGRAVITY_PATH, or fill ~/.cache/cinna-runtimes with scripts/install-runtime.mjs)`
+        : antigravityLoginProblem(),
+      toolNote: 'The Cinna tools come from the "cinna" MCP server; in your tool list they may carry the server name as a prefix.'
+    }
+  }
   const binary = codexBinary()
   const model = MODEL_OVERRIDE || CODEX_LIVE_MODEL
   return {
@@ -219,6 +243,28 @@ function codexBinary(): string | null {
     join(homedir(), 'Library', 'Application Support', 'cinna-desktop', 'runtimes', folder, 'codex'),
     join(process.env.CINNA_RUNTIME_CACHE ?? join(homedir(), '.cache', 'cinna-runtimes'), folder, 'codex')
   ])
+}
+
+/** The pinned `agy_acp_server.par` beside its `localharness_external`; never downloaded. */
+function antigravityServer(): string | null {
+  const folder = `antigravity-${RUNTIME_PINS.antigravity.cli}`
+  const explicit = (process.env.CINNA_E2E_ANTIGRAVITY_PATH ?? '').trim()
+  const candidates = [
+    explicit,
+    join(homedir(), 'Library', 'Application Support', 'cinna-desktop', 'runtimes', folder, 'agy_acp_server.par'),
+    join(process.env.CINNA_RUNTIME_CACHE ?? join(homedir(), '.cache', 'cinna-runtimes'), folder, 'agy_acp_server.par')
+  ].filter((path) => path !== '' && existsSync(path) && existsSync(join(path, '..', 'localharness_external')))
+  return firstExisting(candidates)
+}
+
+/** The keychain item's attributes only (never `-w`) and the settings file: no turn, nothing billed. */
+function antigravityLoginProblem(): string | null {
+  const settings = existsSync(join(homedir(), '.gemini', 'antigravity-acp', 'settings.json'))
+  const token = process.platform === 'darwin'
+    ? spawnSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity-acp'], { stdio: 'ignore' }).status === 0
+    : existsSync(join(homedir(), '.gemini', 'antigravity-acp', 'acp_token.json'))
+  if (settings && token) return null
+  return 'CINNA_E2E_LIVE_ENGINE=antigravity: Antigravity is not logged in on this machine (no ~/.gemini/antigravity-acp/settings.json or no keychain token)'
 }
 
 /** `claude auth status` — runs no turn and bills nothing; JSON with a boolean `loggedIn`. */

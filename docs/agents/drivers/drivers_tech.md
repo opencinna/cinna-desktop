@@ -55,11 +55,13 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 | `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` | `resumable` |
 | `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission`, `question` | `permission`, `question` | `permission` | `permission`, `question` |
 | `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` | `reply` |
-| `attachments` | `cinna` | `none` | `none` | `none` | `none` | `none` |
+| `attachments` | `cinna` | `none` | `local` | `local` | `none` | `local` (`none` over WebSocket) |
 | `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) | `cli` |
 | `commands` | `card` | `card` | `catalog` | `catalog` | `none` | `none` |
 | `mcpInjection` | no | no | no | no | no | no |
 | `cwd` | no | no | yes | yes | no | no |
+
+`local` means the file is ingested into the desktop's own store and the ACP turn hands it over itself: copied into the agent's uploads folder and listed by path, or inlined as text for the chat runtime and a remote engine. `attachmentUploadsDir` in `drivers/index.ts` decides which, per turn ([File Attachments](../../chat/file_attachments/file_attachments.md#runtime-conversation-transport)). A remote (WebSocket) ACP agent is offered no attach; files in a history replayed to it are inlined, since it cannot see this disk.
 
 
 ### ACP execution

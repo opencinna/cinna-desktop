@@ -208,8 +208,21 @@ New-chat — pick or drag-drop:
        → files:ingest-paths                     [swaps pending for real]
     → startRun with real attachments
 
+Send → local ACP engine (acpDriver runTurn, and the fresh-session replayTranscript):
+  attachmentUploadsDir(turn)                     [drivers/index.ts]
+    ├─ remote ACP or chat runtime → null
+    ├─ kit folder agent           → <folder>/app-data/uploads/
+    └─ bare folder, development
+       or custom stdio agent      → <userData>/agent-uploads/<agentId>/
+  buildAcpPrompt(userId, input, connection, uploadsDir)
+    ├─ uploadsDir: resolveFileStore().read → placeUpload [temp file, hard link, reuse equal bytes, _1/_2]
+    │    → text "Uploaded files:\n- <path>…\n---\n\n<message>"
+    │    + image blocks when promptCapabilities.image
+    └─ null: attachmentToMediaPart (≤ 20 MB)
+         → "[Attachment: <name>]\n<extracted text>" | "[Attachment: <name>]" + image block
+         | "[Attachment <name> could not be read by this runtime.]"
+
 Send → LLM stream loop:
-  ACP buildAcpPrompt: negotiated prompt capabilities → image/resource/text blocks
     → adapter.modelCapability(modelId)
     → for each user message:
         attachmentToMediaPart(att, { capability, userId })
@@ -271,4 +284,29 @@ Cinna-scoped attachments reach the agent environment only when the Cinna backend
 
 ## Runtime conversation transport
 
-Local ACP answerers ingest into the local store even when the router is coordinator. `promptCapabilities.image` permits native image blocks; embeddedContext permits embedded resources. Unsupported native formats use the existing extracted-text path (including PDFs where extraction is available), and unreadable media contributes an explicit attachment-unavailable marker. The runtime owns its format limits; an API adapter's model capability is no longer the conversational authority. Fresh-session recovery replays historical attachments through the same conversion, not just their file names. Remote Cinna agents retain their upload/file-ID path.
+Local ACP answerers ingest into the local store even when the router is coordinator. What the engine is then handed depends on whether it can open a file itself. The runtime owns its format limits; an API adapter's model capability is no longer the conversational authority. Remote Cinna agents retain their upload/file-ID path.
+
+**An engine with file tools gets a copy and its path, the way cinna-core hands files to its agents.** Each file is copied into an uploads folder and the prompt's first text block opens with the same header core prepends:
+
+```
+Uploaded files:
+- /abs/path/to/report.pdf
+---
+
+<the user's message>
+```
+
+The engine reads the file with its own tools, so a PDF, a spreadsheet or an archive reaches it in whatever form that engine can handle, and the desktop does not have to guess. An image is also sent as a native image block when the engine negotiated `promptCapabilities.image` (at most 20 MB), because looking at it should not cost a tool call. Where the copy goes is decided per turn by `attachmentUploadsDir`:
+
+- **A kit folder agent** — `<folder>/app-data/uploads/`, the folder the kit scaffolds and the one core uses for the same agent. `app-data/` is never watched and never travels with [team sharing](../../agents/local_agents/team_sharing.md), so an upload neither rescans the agent nor leaves the machine.
+- **A bare folder, a development agent, a custom command-line agent** — `<userData>/agent-uploads/<agentId>/`. A bare folder is the user's own tree, which adoption promised never to write into ([Bare Agents](../../agents/local_agents/bare_agents.md)), and a build workspace's or a custom agent's cwd is not the desktop's either.
+
+The copy keeps the name recognisable and never overwrites. Names follow core's `sanitize_filename` — no separators, reserved or control characters, whitespace to `_`, no leading dot — except that non-ASCII letters are kept, so a Cyrillic or CJK name stays readable. A file already there with **the same bytes is reused**, so a resend or a fresh-session replay of an old message points at the same path; a different file with the same name becomes `name_1.ext`, `name_2.ext`. The bytes are written to a temporary file and hard-linked into place, so two turns attaching the same name at once never see each other's half-written file; on a volume without hard links (exFAT, some network shares) it falls back to an exclusive copy, which can tear but still never overwrites. A file that cannot be read or placed is listed as `- <name> (could not be read by this runtime)` rather than dropped, so the model can say it did not get it.
+
+**An engine without file tools gets the content in the prompt.** That is the chat runtime behind a plain chat, whose native file tools are removed, and a remote ACP engine, which cannot see this disk. Nothing is copied. Each file follows its own text block: `[Attachment: <name>]\n<extracted text>`, or `[Attachment: <name>]` followed by a native image block when `image` was negotiated, or `[Attachment <name> could not be read by this runtime.]` past the 20 MB cap or when nothing can be extracted.
+
+**Never an embedded `resource`.** Both the Claude and Codex adapters advertise `embeddedContext`, which is why non-image files used to go as a `resource` with a base64 `blob`. Neither model ever saw them: the Claude adapter drops a blob resource without a word (`promptToClaude`, "Ignore blob resources"), and the Codex adapter pastes the base64 into the prompt as text (`buildPromptItems`). The negotiated capability is therefore not evidence that a file arrives ([ACP contract](../../agents/local_agents/acp_contract.md#embeddedcontext-is-advertised-and-a-blob-resource-still-never-reaches-the-model)).
+
+Fresh-session recovery replays historical attachments through the same routing, not just their file names: the replayed transcript lists the same upload paths (the earlier copy reused while it is still there) or inlines the same text.
+
+Known limits: a bare, development or custom agent's uploads sit outside its cwd, so Claude may ask permission to read them; and `<userData>/agent-uploads/<agentId>/` is not removed when the agent is deleted.

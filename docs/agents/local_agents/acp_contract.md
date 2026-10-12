@@ -145,6 +145,28 @@ migration of user-approved rules is not something a transport change gets to do.
 desktop answers its parked asks **before** it cancels, and why the wait is bounded (3 s) and a grace
 that expires retires the process.
 
+### `embeddedContext` is advertised, and a blob resource still never reaches the model
+
+Both the Claude adapter and the Codex adapter answer `initialize` with
+`promptCapabilities.embeddedContext`, and the schema lets a `resource` block carry a base64 `blob`.
+Neither adapter delivers one. Read from the pinned source (Claude adapter 0.89.1, Codex adapter 2.2.2):
+
+- **Claude** — `promptToClaude` turns a text resource into a `<context>` block and skips a blob
+  resource with the comment "Ignore blob resources (unsupported)". No error, no notice: the turn runs
+  as if nothing was attached.
+- **Codex** — `buildPromptItems` turns a blob resource into an image when its MIME type is
+  `image/*`, and otherwise into a text item holding the base64 itself inside
+  `<context … encoding="base64">`. The model is handed the encoding of a PDF, not the PDF.
+
+This is how attachments to local engines went missing: non-image files were sent as blob resources
+because the capability said they could be, and no model ever saw one. The desktop now copies a file
+to disk and sends its path, or inlines extracted text where the engine has no file tools ([File
+Attachments](../../chat/file_attachments/file_attachments.md#runtime-conversation-transport)), and
+sends no `resource` block at all. There is no contract entry for this, so an adapter that starts
+honouring blobs would not be noticed; nor has the OpenCode or Antigravity handling of a blob been
+looked at. **The general lesson is the one §5 states:** a negotiated capability says the block is
+accepted, not that its content reaches the model.
+
 ## 3. OpenCode over `opencode acp`
 
 **Checked against the real binary:** the [OpenCode Interface Contract](contracts/opencode_interface.md) lists every `opencode acp` interface Cinna relies on, each with one test against the pinned binary, run on the config and environment the production launcher writes, against a loopback fake OpenAI-compatible provider behind the egress trap. Every entry is the 2.x line's; the subsections below that were watched on 1.x say so. macOS only.

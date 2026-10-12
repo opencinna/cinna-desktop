@@ -6,8 +6,8 @@
 # Details: docs/development/e2e/e2e.md — writing tests: docs/development/e2e/e2e_llm.md
 
 PW := npx playwright test -c e2e/playwright.config.ts
-# LIVE_ENGINE=opencode|claude|codex picks the engine the live task specs run on
-# (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex use your own login.
+# LIVE_ENGINE=opencode|claude|codex|antigravity picks the engine the live task specs run on
+# (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
 .PHONY: help test test-hub typecheck build speech-helper kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
@@ -97,8 +97,8 @@ e2e: ## Build, then run every E2E spec (billed live specs skip; run them with e2
 e2e-only: ## Run every E2E spec against the existing out/ build
 	$(PW)
 
-e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GREP="C5" [LIVE_ENGINE=claude|codex]
-	@test -n "$(SPEC)" || (echo "usage: make e2e-one SPEC=<spec name> [GREP=<test title fragment>] [LIVE_ENGINE=opencode|claude|codex]"; exit 2)
+e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GREP="C5" [LIVE_ENGINE=claude|codex|antigravity]
+	@test -n "$(SPEC)" || (echo "usage: make e2e-one SPEC=<spec name> [GREP=<test title fragment>] [LIVE_ENGINE=opencode|claude|codex|antigravity]"; exit 2)
 	$(if $(findstring live,$(SPEC)),CINNA_E2E_LIVE=1 )$(LIVE_ENV)$(PW) $(SPEC) $(if $(GREP),-g "$(GREP)")
 
 e2e-live: ## Specs whose file name contains "live": the billed live-* specs plus task-live-attach (needs OPENAI_API_KEY in .env, unless LIVE_ENGINE=claude|codex)

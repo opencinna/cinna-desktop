@@ -160,8 +160,8 @@ export interface AcpDriverDeps {
   prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
   /** A between-turn follow-up was dropped: conductor tool calls waiting for it must fail, not hang. */
   conductorAbandoned?(chatId: string, agentId: string, reason: string): void
-  replayTranscript?(chatId: string, messageId: string | undefined, connection: AcpConnection, userId: string, agentId: string): Promise<string | ContentBlock[]>
-  buildPrompt?(userId: string, input: RunInput, connection: AcpConnection): Promise<ContentBlock[]>
+  replayTranscript?(chatId: string, messageId: string | undefined, connection: AcpConnection, userId: string, agentId: string, turn: AcpPromptTurn): Promise<string | ContentBlock[]>
+  buildPrompt?(userId: string, input: RunInput, connection: AcpConnection, turn: AcpPromptTurn): Promise<ContentBlock[]>
   recordModelCatalog?(userId: string, launcher: AcpLauncherId, metadata: unknown): void
   pool: AcpProcessPool
   /** The launcher for an engine, or undefined when this build has none. */
@@ -772,6 +772,15 @@ function refusalReason(err: unknown): unknown {
 }
 
 /* --------------------------------------------------------------------- turn */
+
+/** What a prompt builder needs to know about the turn: where it runs and for whom. */
+export interface AcpPromptTurn {
+  agent: AgentRow
+  runtime: AcpRuntimeView
+  plan: AcpLaunchPlan
+  /** The cwd the session was opened in. */
+  cwd: string
+}
 
 interface TurnContext {
   conductorOutcome?: ConductorOutcome
@@ -1682,9 +1691,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     try {
       runtime.validate(chatId)
       startingSession = false
-      const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection) : [{ type: 'text' as const, text: input.wireContent }]
+      const promptTurn: AcpPromptTurn = { agent, runtime, plan, cwd: sessionCwd }
+      const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection, promptTurn) : [{ type: 'text' as const, text: input.wireContent }]
       if (freshSession && !input.nested && input.runScope && deps.replayTranscript) {
-        const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId, agent.id)
+        const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId, agent.id, promptTurn)
         if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }
         else prompt.unshift(...transcript)
       }

@@ -31,12 +31,18 @@ import type { Page } from '@playwright/test'
  *
  * What is **not** restored: Claude's `~/.claude.json` bookkeeping for the temp
  * cwd, Codex's shared SQLite rows and caches (`models_cache.json` etc.).
+ *
+ * Antigravity (its login is the keychain item `gemini` / `antigravity-acp`
+ * plus `~/.gemini/antigravity-acp/settings.json`) needs no record removed: a
+ * kit folder runs isolated, so its server home is `<agent>/.cinna/antigravity`
+ * and goes with the throwaway folder. Never log it out — `/logout` clears the
+ * one token every Antigravity home shares.
  */
 export interface RealLogin {
-  engine: 'claude' | 'codex'
+  engine: 'claude' | 'codex' | 'antigravity'
   /** The engine binary, set as {@link RealLogin.pathSetting} once the profile is active. */
   binary: string
-  pathSetting: 'localAgentsClaudePath' | 'localAgentsCodexPath'
+  pathSetting: 'localAgentsClaudePath' | 'localAgentsCodexPath' | 'localAgentsAntigravityPath'
 }
 
 /** The real-login part of a sandbox: what to compare and clean after the test. */
@@ -100,7 +106,7 @@ export function endRealLogin(login: RealLogin, home: string, run: RealLoginRun):
         removed.push(join(projects, name))
       }
     }
-  } else {
+  } else if (login.engine === 'codex') {
     const codex = codexHome()
     const ours = codexRollouts(codex, run.codexBefore, home)
     const ids = ours.map((rollout) => rollout.id).filter((id) => id.length >= 8)

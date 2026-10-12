@@ -72,7 +72,7 @@ import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
 import type { AcpLauncherId, AgentDriverId } from '../../../shared/agentDrivers'
 import { createA2aDriver } from './a2aDriver'
 import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
-import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
+import { createAcpDriver, respondToAcpAsk, type AcpFolderView, type AcpPromptTurn } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 import { sessionActivityHub } from '../../services/sessionActivityHub'
 import { sessionTelemetryService } from '../telemetry/sessionTelemetryService'
@@ -871,6 +871,20 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
   } }
 }
 
+/**
+ * Where a turn's attachments are copied for the engine to open with its own
+ * tools, or null to inline them as text. A remote engine cannot see this disk,
+ * and a chat runtime runs with its file tools removed, so both get text. A kit
+ * folder keeps them in its own `app-data/uploads/`, as on cinna-core. A bare
+ * folder is somebody's working tree and a build workspace or custom agent's
+ * cwd is not ours either, so theirs go in a desktop-owned folder per agent.
+ */
+function attachmentUploadsDir({ agent, runtime, plan }: AcpPromptTurn): string | null {
+  if (plan.spec.remote || isChatConductor(agent)) return null
+  if (runtime.type === 'folder' && runtime.folder.kind === 'kit' && !isDevelopmentAgent(agent)) return join(runtime.folder.path, 'app-data', 'uploads')
+  return join(runtimeHost.getPath('userData'), 'agent-uploads', agent.id)
+}
+
 export const acpDriver = createAcpDriver({
   prepareCredentials: async (agent, plan) => {
     if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
@@ -893,8 +907,8 @@ export const acpDriver = createAcpDriver({
     void import('../../services/conductorBridge').then(({ conductorBridge }) => conductorBridge.abandonWaiters(chatId, agentId, reason))
       .catch((error) => logger.warn('Could not release conductor calls after an abandoned follow-up', { agentId, error: String(error) }))
   },
-  buildPrompt: (userId, input, connection) => import('../../services/acpAttachments').then(({ buildAcpPrompt }) => buildAcpPrompt(userId, input, connection)),
-  replayTranscript: (chatId, messageId, connection, userId, agentId) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId)),
+  buildPrompt: (userId, input, connection, turn) => import('../../services/acpAttachments').then(({ buildAcpPrompt }) => buildAcpPrompt(userId, input, connection, attachmentUploadsDir(turn))),
+  replayTranscript: (chatId, messageId, connection, userId, agentId, turn) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId, attachmentUploadsDir(turn))),
   launcher: (id) => acpLauncherFor(id),
   readRuntime: readAcpRuntime,
   defaultEngine: () => defaultEngineService.current(),

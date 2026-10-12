@@ -36,7 +36,9 @@
 - `src/main/services/pathGuard.ts` — TTL-based allowlist (default 1h). `record(path) / recordMany(paths) / isAllowed(path) / filterAllowed(paths)`; lazy expiry on lookup; warn-logs rejected counts + extensions (never full paths)
 - `src/main/services/cinnaFileService.ts` — Cinna backend I/O (unchanged from the v1 feature). `uploadFromPath / uploadMany / downloadToPath / downloadTaskAttachmentToPath / deleteFile`
 - `src/main/services/messageRoutingService.ts` — `prepareAgentSend({ ..., attachments })` and `prepareLlmSend({ ..., attachments })` both persist attachments on the user row
-- `src/main/services/acpAttachments.ts` — buildAcpPrompt maps owned files using negotiated ACP image/embeddedContext capabilities, with extracted text or explicit unavailable markers.
+- `src/main/services/acpAttachments.ts` — `buildAcpPrompt(userId, input, connection, uploadsDir)`: with an `uploadsDir`, copies each file there and opens the prompt with core's `Uploaded files:` header (plus native image blocks when `image` was negotiated); with `null`, inlines extracted text and images. Never sends an embedded `resource`. `uploadName(filename)` is core's sanitizer with non-ASCII letters kept
+- `src/main/agents/drivers/index.ts` — `attachmentUploadsDir(turn)`: `null` for a remote ACP engine or the chat runtime, `<folder>/app-data/uploads` for a kit folder agent, else `<userData>/agent-uploads/<agentId>`; passed to both `buildPrompt` and `replayTranscript`
+- `src/main/services/conductorTranscript.ts` — `replayTranscript(…, uploadsDir)` rebuilds each saved message through `buildAcpPrompt` with the same folder
 - `src/main/services/a2aStreamingService.ts` — `streamToAgent({ ..., fileIds })` injects `metadata: { cinna_file_ids: fileIds }` into `buildSendParams`
 - `src/main/services/providerService.ts` — `getModelCapability(providerId, modelId)` wraps `getAdapter(...).modelCapability(...)`; returns `NO_FILE_SUPPORT` if the provider isn't registered
 
@@ -170,7 +172,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - `src/main/services/pathGuard.ts:filterAllowed()` — partitions into `allowed` / `rejected`; warns on rejected count + ext sample only
 - `src/main/services/pastedFiles.ts:resolvePastedFiles()` — references before image; regular files only; image written under `tmp/pasted`
 - `src/main/services/providerService.ts:getModelCapability()` — pure pass-through to the adapter
-- `src/main/services/acpAttachments.ts` — buildAcpPrompt maps owned files using negotiated ACP image/embeddedContext capabilities, with extracted text or explicit unavailable markers.
+- `src/main/services/acpAttachments.ts:buildAcpPrompt()` — reads through `resolveFileStore(attachment).read`, scoped to `runScope.profileUserId` when there is one. `placeUpload` writes `.<uuid>.partial` in the uploads folder and `link`s it to the sanitized name, falling back to `copyFile(…, COPYFILE_EXCL)` on `EPERM` / `ENOTSUP` / `ENOSYS`; on `EEXIST` an existing file with identical bytes is returned as is, otherwise `_1` … `_100` are tried. The temp file is always unlinked. A read or placement failure is logged (`acp-attachments`) and listed as `(could not be read by this runtime)`. The inline path goes through `attachmentToMediaPart` with a 20 MB cap and only images as native types
 
 ## Renderer State
 
@@ -206,6 +208,9 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 
 ## Tests
 
+- `src/main/services/acpAttachments.test.ts` — a PDF copied and listed (never a `resource` block), equal bytes reused and a different file suffixed, a native image alongside the path, an unreadable file named, a hostile name kept inside the folder and a Cyrillic one readable; inline: extracted text with nothing copied, a native image and the unreadable marker
+- `src/main/services/conductorTranscript.test.ts` — a replayed historical PDF is copied into the uploads folder and listed by path, a historical image is still sent natively
+- `e2e/specs/live-attachments.spec.ts` — model-free: a kit agent's PDF lands in `app-data/uploads/` and the engine's first text block opens with its path; a plain chat's PDF reaches the chat runtime as extracted text with nothing copied. `@live`: a real engine answers from the PDF ([E2E notes](../../development/e2e/e2e_llm.md))
 - `src/main/services/pastedFiles.test.ts` — URL and plist parsing, plist before `public.file-url`, the dated name and its counter, references before the image, mixed copies, a copied folder refused, no overwrite, the clear at start
 - `src/main/host/desktop/clipboard.test.ts` — per-platform formats read, throwing reads as absent, the PNG read
 - `src/renderer/src/utils/composerPaste.test.ts` — `pasteIntent`'s three cases

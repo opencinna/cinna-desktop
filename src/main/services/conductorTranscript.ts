@@ -5,7 +5,7 @@ import type { AcpConnection } from '../agents/drivers/acp/types'
 import { buildAcpPrompt } from './acpAttachments'
 
 /** A replacement session needs the transcript, including its own answers, not the 4K catch-up gap. */
-export async function replayTranscript(chatId: string, currentMessageId: string | undefined, connection: AcpConnection, userId: string, agentId: string): Promise<ContentBlock[]> {
+export async function replayTranscript(chatId: string, currentMessageId: string | undefined, connection: AcpConnection, userId: string, agentId: string, uploadsDir: string | null): Promise<ContentBlock[]> {
   // Only the chat's answerer owns the whole conversation. A participant the
   // user addresses gets the catch-up packet, not every past turn on top of it.
   if (visibleChat(userId, chatId)?.agentId !== agentId) return []
@@ -16,7 +16,7 @@ export async function replayTranscript(chatId: string, currentMessageId: string 
   for (const message of history.filter((message) => message.role !== 'error' && message.role !== 'agent_transition')) {
     const attribution = message.sourceAgentId ? ` agent=${message.sourceAgentId}` : ''
     const tool = message.toolCallId ? ` tool_call=${message.toolCallId} tool=${message.toolName}` : ''
-    blocks.push(...await buildAcpPrompt(userId, { wireContent: `[${message.role}${attribution}${tool}]\n${message.content}`, attachments: message.attachments ?? [] }, connection))
+    blocks.push(...await buildAcpPrompt(userId, { wireContent: `[${message.role}${attribution}${tool}]\n${message.content}`, attachments: message.attachments ?? [] }, connection, uploadsDir))
   }
   return blocks.length ? [{ type: 'text', text: '<prior_chat_transcript>' }, ...blocks, { type: 'text', text: '</prior_chat_transcript>\nContinue this chat from the transcript above. The current message follows.' }] : []
 }
