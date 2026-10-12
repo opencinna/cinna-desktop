@@ -119,6 +119,8 @@ A login that turns out to be gone only once the engine answers is not reported a
 
 The ordering is about what the user reads. A refusal produced *inside* the lock would first wait out (or be refused by) a desktop write into the folder before saying that this agent cannot run at all.
 
+One check has to run inside the lock, because it is about what the lock was protecting. A kit agent's folder can be renamed ([Agents Tab — Renaming an agent](agents_tab.md#renaming-an-agent)), and the rename holds the same lock exclusively; a turn planned before it, and queued behind it, would otherwise spawn its engine in a folder that is gone. So once the lock is held, a folder agent's path is read again from its row: moved, the turn ends with "This agent's folder was renamed while the turn was starting. Send the message again."; gone, with the folder-not-found sentence. It is refused rather than re-planned, because a re-plan is the whole planning step again, now under the lock. A build workspace, the chat conductor and a custom command agent are not checked — their folders do not move this way.
+
 The lock covers the streaming half: acquire the process, load or create the session, apply the setup, prompt, stream, settle. It is the same per-agent lock the page editors and the folder watcher respect — see [Invariant 3](#invariant-3--no-desktop-writes-while-a-turn-streams). A turn holds it shared, so it never waits for another turn.
 
 ### The load replay is dropped, not appended
