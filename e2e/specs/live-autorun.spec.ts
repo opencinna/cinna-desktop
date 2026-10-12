@@ -42,7 +42,7 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
  *
  * ## Cost
  *
- * Model: the first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini normally;
+ * Model: the first of `PREFERRED_MODELS` the key lists (gpt-5.6-luna normally;
  * logged). About nine OpenCode turns in total — one each in tests 1, 3, 7, two
  * in 4, and four in 5 (coordinator, two executors, coordinator wake) — each
  * 2–6 requests over a ~10–15k-token system prompt: roughly **$0.10–0.20 per

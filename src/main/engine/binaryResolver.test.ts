@@ -28,6 +28,7 @@ import {
   type BinaryResolverDeps,
   type EngineAsset
 } from './binaryResolver'
+import { opencodeMajorVersion } from '../../shared/engine'
 
 /**
  * Resolving an engine binary.
@@ -64,7 +65,7 @@ let downloads: string[]
 
 function harness(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
   const assets: Record<string, EngineAsset> = {
-    'test-arch': { file: 'engine.zip', sha256: ARCHIVE_SHA }
+    'test-arch': { file: 'engine.zip', sha256: ARCHIVE_SHA, url: 'https://example.invalid/engine.zip' }
   }
   return {
     configuredPath: () => null,
@@ -76,9 +77,9 @@ function harness(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDep
     },
     // The real `tar -xf` equivalent: drop an `opencode` file into `dest`.
     extract: async (_archive, dest) => {
-      writeFileSync(join(dest, 'opencode'), '#!/bin/sh\necho 1.2.3\n')
+      writeFileSync(join(dest, 'opencode'), '#!/bin/sh\necho opencode v9.9.9\n')
     },
-    probeVersion: async () => '1.2.3',
+    probeVersion: async () => 'opencode v9.9.9',
     platformKey: () => 'test-arch',
     assets,
     version: '9.9.9',
@@ -137,7 +138,7 @@ describe('resolveEngineBinaryWith — source precedence', () => {
     const resolved = await resolveEngineBinaryWith(
       harness({ configuredPath: () => configured, which: onPath })
     )
-    expect(resolved).toMatchObject({ path: configured, source: 'configured', version: '1.2.3' })
+    expect(resolved).toMatchObject({ path: configured, source: 'configured', version: 'opencode v9.9.9' })
     expect(onPath).not.toHaveBeenCalled()
     expect(downloads).toEqual([])
   })
@@ -195,11 +196,122 @@ describe('resolveEngineBinaryWith — source precedence', () => {
       harness({
         which: async () => '/usr/local/bin/opencode',
         // First probe is the PATH candidate, second is the installed copy.
-        probeVersion: async () => (++probes === 1 ? null : '1.2.3')
+        probeVersion: async () => (++probes === 1 ? null : 'opencode v9.9.9')
       })
     )
     expect(resolved.source).toBe('managed')
     expect(downloads).toHaveLength(1)
+  })
+})
+
+/**
+ * Cinna drives OpenCode 2 only. 1.x printed the bare `1.19.0` for `--version`;
+ * 2.x prints `opencode v2.0.27`. Mutation: drop `usableVersion` from
+ * `OPENCODE_SPEC` and the configured 1.x runs and the PATH 1.x is chosen.
+ */
+describe('resolveEngineBinaryWith — OpenCode 1.x is not an engine', () => {
+  const said = (deps: BinaryResolverDeps) =>
+    resolveEngineBinaryWith(deps).then(
+      () => null,
+      (err: EngineBinaryError) => [err.code, err.message, err.pathFieldMessage]
+    )
+
+  it('refuses a configured path that reports 1.x, in both wordings, and downloads nothing', async () => {
+    const old = join(root, 'opencode-old')
+    writeFileSync(old, '#!/bin/sh\n')
+    chmodSync(old, 0o755)
+    const onPath = vi.fn(async () => '/usr/local/bin/opencode')
+    expect(await said(harness({ configuredPath: () => old, which: onPath, probeVersion: async () => '1.19.0' }))).toEqual([
+      'configured_unsupported',
+      'OpenCode path is older than OpenCode 2 — update it or clear it in Local Development.',
+      'OpenCode path is older than OpenCode 2 — update or clear it.'
+    ])
+    expect(onPath).not.toHaveBeenCalled()
+    expect(downloads).toEqual([])
+  })
+
+  it('says “older than OpenCode 2” for a 0.x build too, never “1.x”', async () => {
+    const old = join(root, 'opencode-ancient')
+    writeFileSync(old, '#!/bin/sh\n')
+    chmodSync(old, 0o755)
+    const result = await said(harness({ configuredPath: () => old, probeVersion: async () => '0.9.4' }))
+    expect(result?.[0]).toBe('configured_unsupported')
+    expect(result?.[1]).toBe('OpenCode path is older than OpenCode 2 — update it or clear it in Local Development.')
+    expect(String(result?.[2])).not.toMatch(/1\.x/)
+  })
+
+  it('runs a configured 2.x, or a line that names no major, as before', async () => {
+    const mine = join(root, 'opencode-mine')
+    writeFileSync(mine, '#!/bin/sh\n')
+    chmodSync(mine, 0o755)
+    for (const version of ['opencode v2.1.0', 'opencode v3.0.0', 'local build']) {
+      expect(await resolveEngineBinaryWith(harness({ configuredPath: () => mine, probeVersion: async () => version })))
+        .toMatchObject({ path: mine, source: 'configured', version })
+    }
+    expect(downloads).toEqual([])
+  })
+
+  it('skips a 1.x on PATH, says so in the log, and installs the managed copy', async () => {
+    const resolved = await resolveEngineBinaryWith(
+      harness({
+        which: async () => '/usr/local/bin/opencode',
+        probeVersion: async (path) => (path === '/usr/local/bin/opencode' ? '1.19.0' : 'opencode v9.9.9')
+      })
+    )
+    expect(resolved).toMatchObject({ source: 'managed', version: 'opencode v9.9.9' })
+    expect(downloads).toHaveLength(1)
+    expect(logInfo).toHaveBeenCalledWith(
+      'a runtime on PATH is a version Cinna cannot drive; using the managed copy',
+      { tool: 'opencode', version: '1.19.0', path: '/usr/local/bin/opencode' }
+    )
+  })
+
+  it('uses a 2.x on PATH at any version', async () => {
+    const resolved = await resolveEngineBinaryWith(
+      harness({ which: async () => '/usr/local/bin/opencode', probeVersion: async () => 'opencode v2.0.1' })
+    )
+    expect(resolved).toMatchObject({ path: '/usr/local/bin/opencode', source: 'path', version: 'opencode v2.0.1' })
+    expect(downloads).toEqual([])
+  })
+
+  it('discards a verified download that does not report exactly the pinned version', async () => {
+    // The managed copy is gated like Codex's: the digest proves the bytes, this
+    // proves the bytes are the version the manifest says.
+    for (const version of ['1.19.0', 'opencode v9.9.8']) {
+      await expect(resolveEngineBinaryWith(harness({ probeVersion: async () => version }))).rejects.toMatchObject({
+        code: 'version_mismatch',
+        message: 'The downloaded engine was not opencode 9.9.9, so it was discarded.'
+      })
+      expect(published()).toEqual([])
+    }
+  })
+
+  it('reads the major from both line shapes, and none from anything else', () => {
+    expect(opencodeMajorVersion('opencode v2.0.27')).toBe(2)
+    expect(opencodeMajorVersion('v3.0.0')).toBe(3)
+    expect(opencodeMajorVersion('1.19.0')).toBe(1)
+    expect(opencodeMajorVersion('opencode v1.19.0')).toBe(1)
+    expect(opencodeMajorVersion(null)).toBeNull()
+    expect(opencodeMajorVersion('garbage')).toBeNull()
+  })
+
+  it('downloads from the URL the pin row names', async () => {
+    const urls: string[] = []
+    await resolveEngineBinaryWith(harness({ download: async (url, dest) => { urls.push(url); writeFileSync(dest, ARCHIVE_BYTES) } }))
+    expect(urls).toEqual(['https://example.invalid/engine.zip'])
+  })
+
+  it('finds the binary at package/bin/opencode, where the npm tarball puts it', async () => {
+    const resolved = await resolveEngineBinaryWith(
+      harness({
+        extract: async (_archive, dest) => {
+          mkdirSync(join(dest, 'package', 'bin'), { recursive: true })
+          writeFileSync(join(dest, 'package', 'package.json'), '{}')
+          writeFileSync(join(dest, 'package', 'bin', 'opencode'), '#!/bin/sh\n')
+        }
+      })
+    )
+    expect(resolved.path).toBe(join(root, 'opencode-9.9.9', 'opencode'))
   })
 })
 
@@ -209,7 +321,7 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     expect(resolved).toMatchObject({
       path: join(root, 'opencode-9.9.9', 'opencode'),
       source: 'managed',
-      version: '1.2.3'
+      version: 'opencode v9.9.9'
     })
     // Only the published directory survives; the staging scratch is gone.
     expect(everything()).toEqual(['opencode-9.9.9'])
@@ -290,11 +402,11 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     expect(downloads).toHaveLength(1)
   })
 
-  it('does not sweep when the fresh install will not answer --version: the old version may be the one that works', async () => {
+  it('publishes nothing and sweeps nothing when the fresh install will not answer --version: the old version may be the one that works', async () => {
     mkdirSync(join(root, 'opencode-1.0.0'))
     idleFor(join(root, 'opencode-1.0.0'), 8)
-    await resolveEngineBinaryWith(harness({ probeVersion: async () => null }))
-    expect(published()).toEqual(['opencode-1.0.0', 'opencode-9.9.9'])
+    await expect(resolveEngineBinaryWith(harness({ probeVersion: async () => null }))).rejects.toMatchObject({ code: 'version_mismatch' })
+    expect(published()).toEqual(['opencode-1.0.0'])
   })
 
   it('sweeps nothing when the install is already there, or when the install fails', async () => {
@@ -815,7 +927,7 @@ describe('resolveEngineBinaryWith — the pinned Claude Code CLI', () => {
     // …and OpenCode's PATH copy, the one source only it has.
     logInfo.mockClear()
     await resolveEngineBinaryWith(harness({ which: async () => '/usr/local/bin/opencode' }))
-    expect(chosen()).toEqual([{ tool: 'opencode', source: 'path', version: '1.2.3', path: '/usr/local/bin/opencode' }])
+    expect(chosen()).toEqual([{ tool: 'opencode', source: 'path', version: 'opencode v9.9.9', path: '/usr/local/bin/opencode' }])
   })
 
   it('says how big this platform’s pinned asset is, and null where no size is recorded', () => {

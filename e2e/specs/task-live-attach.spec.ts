@@ -20,6 +20,11 @@ const REMOTE_ID = 'live-attachment-report'
 const A2A_TASK_ID = 'live-report-protocol-task'
 const TOKEN = 'live-attach-fixture-token'
 
+// The model tool-loop chat runs on the chat runtime (OpenCode). Without the
+// cached engine its first send downloads ~85 MB and, on a fresh OPENCODE_DB,
+// starts one bootstrap engine first — together past the 10 s round poll.
+test.use({ engine: true })
+
 interface Rpc { id: string | number; method: string; params?: { id?: string; message?: { parts?: { kind: string; text?: string }[] } } }
 
 async function serve(withRemoteTask = false): Promise<{
@@ -240,6 +245,19 @@ interface ModelRequest {
   messages?: { role: string; content?: unknown; tool_call_id?: string }[]
 }
 
+/**
+ * The analyst's call path from the request's Code Mode catalog (e.g.
+ * `tools.cinna.attachment_analyst` — the slug comes from `a2aAsMcpProvider`),
+ * picked by the entry that describes the analyst rather than guessed.
+ */
+function analystToolPath(body: ModelRequest): string | undefined {
+  const system = body.messages?.find((message) => message.role === 'system')?.content
+  if (typeof system !== 'string') return undefined
+  const entries = system.split(/\n\s*- (?=tools[.[])/).slice(1)
+  const entry = entries.find((text) => text.includes(`"${TOOL_AGENT}" agent`))
+  return entry?.match(/^tools(?:\.[\w$]+|\["[^"]+"\])+(?=\()/)?.[0]
+}
+
 async function serveModelTool(): Promise<{
   host: string; server: Server; rounds: ModelRequest[]; toolCalls: Rpc[]; finish: () => void
 }> {
@@ -286,14 +304,20 @@ async function serveModelTool(): Promise<{
           created: 1, model: MODEL, choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`)
       }
       if (rounds.length === 1) {
-        const tool = body.tools?.[0]
-        if (!tool || body.tools?.length !== 1) { res.end('data: [DONE]\n\n'); return }
+        // OpenCode 2 Code Mode: MCP tools are reachable only from JavaScript
+        // passed to `execute`; the system prompt's catalog names each one.
+        const path = analystToolPath(body)
+        if (!path || !body.tools?.some((tool) => tool.function.name === 'execute')) {
+          chunk({ content: 'The fixture found no Code Mode path to the analyst.' }, 'stop')
+          res.end('data: [DONE]\n\n'); return
+        }
         chunk({ role: 'assistant', content: ROUND_ONE })
-        chunk({ tool_calls: [{ index: 0, id: 'call_attachment_analyst', type: 'function',
-          function: { name: tool.function.name, arguments: JSON.stringify({ message: TOOL_PROMPT }) } }] })
+        chunk({ tool_calls: [{ index: 0, id: 'call_attachment_analyst', type: 'function', function: { name: 'execute',
+          arguments: JSON.stringify({ code: `return await ${path}(${JSON.stringify({ message: TOOL_PROMPT })})` }) } }] })
         chunk({}, 'tool_calls')
         res.end('data: [DONE]\n\n')
-      } else if (rounds.length === 2 && body.messages?.some((message) => message.role === 'tool' && message.content === TOOL_RESULT)) {
+      } else if (rounds.length === 2 && body.messages?.some((message) => message.role === 'tool' &&
+        (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).includes(TOOL_RESULT))) {
         chunk({ role: 'assistant', content: ROUND_TWO })
         finish = (): void => { chunk({ content: ROUND_END }); chunk({}, 'stop'); res.end('data: [DONE]\n\n') }
       } else {

@@ -98,3 +98,34 @@ export function cinnaToolName(label: string | null | undefined, rawInput?: unkno
   if (running && bare && (bare.kind === undefined || bare.kind === 'other') && bare.offers(running[1])) return running[1]
   return null
 }
+
+/**
+ * OpenCode 2's Code Mode call (probed on 2.0.27): every MCP server a session
+ * is given is reached only through one built-in `execute` tool, whose
+ * model-written code calls `tools["cinna"].<tool>(…)`. Its `tool_call` is
+ * `{name: "execute", title: "execute", kind: "other"}`, `rawInput: {code}`
+ * follows, and nothing names the inner calls until the completed update's
+ * `rawOutput.metadata.toolCalls` (see {@link codeModeCinnaTools}).
+ */
+export function isCodeModeCall(update: { name?: unknown; title?: unknown; kind?: unknown }): boolean {
+  return (update.name === 'execute' || update.title === 'execute') && update.kind === 'other'
+}
+
+/**
+ * The Cinna tools a finished Code Mode call ran, in order — its
+ * `rawOutput.metadata.toolCalls` entries are `{tool: "cinna.<tool>", status}`
+ * — or null when it ran none, or ran anything that was not Cinna's. Set by the
+ * engine from the calls it made, not by the model's code.
+ */
+export function codeModeCinnaTools(rawOutput: unknown): string[] | null {
+  const metadata = rawOutput && typeof rawOutput === 'object' ? (rawOutput as { metadata?: unknown }).metadata : undefined
+  const calls = metadata && typeof metadata === 'object' ? (metadata as { toolCalls?: unknown }).toolCalls : undefined
+  if (!Array.isArray(calls) || calls.length === 0) return null
+  const tools: string[] = []
+  for (const call of calls) {
+    const tool = call && typeof call === 'object' ? (call as { tool?: unknown }).tool : undefined
+    if (typeof tool !== 'string' || !tool.startsWith('cinna.') || tool.length === 'cinna.'.length) return null
+    tools.push(tool.slice('cinna.'.length))
+  }
+  return tools
+}

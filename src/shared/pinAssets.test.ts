@@ -3,9 +3,10 @@
  * `fetch` replaced by a preload, so no byte leaves the machine.
  *
  * What it pins: every pinned platform gets a row hashed from the downloaded
- * bytes at the release URL the app itself derives (`binaryResolver.assetUrl`),
- * and a row whose bytes disagree with GitHub's published `sha256:` digest is
- * refused rather than printed.
+ * bytes of its npm platform tarball (`@opencode/cli-<target>`, Windows named
+ * `windows-*`), and a row whose bytes disagree with the package's
+ * `dist.integrity` — or a package with no sha512 integrity — is refused rather
+ * than printed.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -17,8 +18,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { RUNTIME_PINS } from './runtimePins'
 
 const VERSION = '9.9.9'
-const bytesOf = (file: string): string => `archive bytes of ${file}`
-const sha = (text: string): string => createHash('sha256').update(text).digest('hex')
+const targetOf = (platform: string): string => platform.replace(/^win32-/, 'windows-')
+const tarballOf = (target: string): string =>
+  `https://registry.npmjs.org/@opencode/cli-${target}/-/cli-${target}-${VERSION}.tgz`
+const bytesOf = (target: string): string => `tarball bytes of ${target}`
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+const sha512 = (text: string): string => `sha512-${createHash('sha512').update(text).digest('base64')}`
 
 let dir: string | undefined
 afterEach(() => {
@@ -26,21 +31,23 @@ afterEach(() => {
   dir = undefined
 })
 
-/** Run the script with a fake `fetch`; `digests` is what the release API lists. */
-function run(digests: Record<string, string> | 'down'): { status: number; stdout: string; stderr: string } {
+/** Run the script with a fake `fetch`; `integrity` is what npm lists per target (null: none). */
+function run(integrity: Record<string, string | null>): { status: number; stdout: string; stderr: string } {
   dir = mkdtempSync(join(tmpdir(), 'cinna-pin-assets-'))
   const preload = join(dir, 'fetch.mjs')
   writeFileSync(preload, `
-const digests = ${JSON.stringify(digests)}
+const integrity = ${JSON.stringify(integrity)}
+const version = ${JSON.stringify(VERSION)}
+const registry = 'https://registry.npmjs.org/@opencode/cli-'
 globalThis.fetch = async (url) => {
   url = String(url)
-  if (url === 'https://api.github.com/repos/anomalyco/opencode/releases/tags/v${VERSION}') {
-    if (digests === 'down') return new Response('rate limited', { status: 403 })
-    return Response.json({ assets: Object.entries(digests).map(([name, digest]) => ({ name, digest: 'sha256:' + digest })) })
-  }
-  const prefix = 'https://github.com/anomalyco/opencode/releases/download/v${VERSION}/'
-  if (!url.startsWith(prefix)) return new Response('not found', { status: 404 })
-  return new Response('archive bytes of ' + url.slice(prefix.length))
+  if (!url.startsWith(registry)) return new Response('not found', { status: 404 })
+  const [target, ...rest] = url.slice(registry.length).split('/')
+  if (!(target in integrity)) return new Response('not found', { status: 404 })
+  const tarball = registry + target + '/-/cli-' + target + '-' + version + '.tgz'
+  if (url === tarball) return new Response('tarball bytes of ' + target)
+  if (rest.join('/') !== version) return new Response('not found', { status: 404 })
+  return Response.json({ dist: { tarball, ...(integrity[target] ? { integrity: integrity[target] } : {}) } })
 }
 `)
   const out = spawnSync(
@@ -51,31 +58,35 @@ globalThis.fetch = async (url) => {
   return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr }
 }
 
-const assets = Object.entries(RUNTIME_PINS.opencode.assets)
-const published = Object.fromEntries(assets.map(([, asset]) => [asset.file, sha(bytesOf(asset.file))]))
+const platforms = Object.keys(RUNTIME_PINS.opencode.assets)
+const published = Object.fromEntries(platforms.map((platform) => [targetOf(platform), sha512(bytesOf(targetOf(platform)))]))
 
 describe('pin-assets opencode', () => {
-  it('prints one row per pinned platform, hashed from the release bytes, checked against GitHub', () => {
+  it('prints one row per pinned platform, hashed from the npm tarball, checked against its integrity', () => {
     const out = run(published)
     expect(out.status).toBe(0)
-    for (const [platform, asset] of assets) {
-      expect(out.stdout).toContain(`'${platform}': {\n  file: '${asset.file}',\n  sha256: '${sha(bytesOf(asset.file))}'\n},`)
+    for (const platform of platforms) {
+      const target = targetOf(platform)
+      expect(out.stdout).toContain(`'${platform}': opencodeAsset('${target}', '${sha256(bytesOf(target))}', ${bytesOf(target).length}),`)
+      expect(out.stderr).toContain(tarballOf(target))
     }
-    expect(out.stdout.match(/file: /g)).toHaveLength(assets.length)
+    expect(out.stdout.match(/opencodeAsset\(/g)).toHaveLength(platforms.length)
+    expect(out.stderr.match(/matches npm integrity/g)).toHaveLength(platforms.length)
   }, 30_000)
 
-  it('refuses a row whose bytes disagree with the published digest', () => {
-    const [, first] = assets[0]
-    const out = run({ ...published, [first.file]: sha('other bytes') })
+  it('refuses a row whose bytes disagree with npm’s integrity', () => {
+    const first = targetOf(platforms[0]!)
+    const out = run({ ...published, [first]: sha512('other bytes') })
     expect(out.status).not.toBe(0)
-    expect(out.stderr).toContain('disagree with GitHub')
-    expect(out.stdout).not.toContain('sha256:')
+    expect(out.stderr).toContain('disagree with npm')
+    expect(out.stdout).not.toContain('opencodeAsset(')
   }, 30_000)
 
-  it('still prints when the release API does not answer, and says so on every row', () => {
-    const out = run('down')
-    expect(out.status).toBe(0)
-    expect(out.stdout.match(/file: /g)).toHaveLength(assets.length)
-    expect(out.stderr.match(/GitHub digest unavailable \(HTTP 403\)/g)).toHaveLength(assets.length)
+  it('refuses a package that publishes no sha512 integrity', () => {
+    const first = targetOf(platforms[0]!)
+    const out = run({ ...published, [first]: null })
+    expect(out.status).not.toBe(0)
+    expect(out.stderr).toContain('no sha512 integrity')
+    expect(out.stdout).not.toContain('opencodeAsset(')
   }, 30_000)
 })

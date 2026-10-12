@@ -159,6 +159,30 @@ export interface AcpConnectionOptions {
   preBindLimit?: number
   /** Overrides {@link KILL_GRACE_MS}. */
   killGraceMs?: number
+  /** Overrides the jittered {@link EARLY_EXIT_RETRY_MIN_MS}–{@link EARLY_EXIT_RETRY_MAX_MS} retry wait. */
+  retryDelayMs?: number
+}
+
+/**
+ * The jittered wait before an {@link AcpLaunchSpec.earlyExitRetry} respawn.
+ * Jitter, because the processes that collided were started together and would
+ * otherwise collide again on the same beat.
+ */
+const EARLY_EXIT_RETRY_MIN_MS = 150
+const EARLY_EXIT_RETRY_MAX_MS = 500
+
+/** Below this much start budget left, a retry is not attempted. */
+const EARLY_EXIT_RETRY_MIN_BUDGET_MS = 1_000
+
+/**
+ * The process exited (it was started, it did not fail to spawn) before it
+ * answered `initialize` — the one failure {@link AcpLaunchSpec.earlyExitRetry}
+ * may retry. The message is the same as any other start failure's.
+ */
+class AcpEarlyExitError extends Error {
+  constructor(message: string, readonly stderrTail: string) {
+    super(message)
+  }
 }
 
 /** `null` after `ms`, without keeping the process awake. */
@@ -205,7 +229,10 @@ function killTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
  * Spawn one agent and complete `initialize`.
  *
  * Rejects — after killing whatever was spawned — when the process cannot start,
- * dies before answering, or takes longer than {@link ACP_START_TIMEOUT_MS}. The
+ * dies before answering, or takes longer than {@link ACP_START_TIMEOUT_MS}. A
+ * spec with {@link AcpLaunchSpec.earlyExitRetry} respawns a process that died
+ * before answering with a matching stderr tail, within the same start timeout;
+ * a timeout, a spawn error or any other exit is never retried. The
  * message carries the stderr tail because the two failures that actually happen
  * are a command that is not there and an adapter that refuses to boot, and both
  * of them explain themselves on stderr and nowhere else.
@@ -218,6 +245,59 @@ export async function startAcpConnection(
   if (spec.remote) return startAcpWebSocketConnection(spec.remote, init, options)
   if (options.signal?.aborted) throw new Error('The command test was canceled.')
   const startTimeoutMs = options.startTimeoutMs ?? ACP_START_TIMEOUT_MS
+  const retry = spec.earlyExitRetry
+  const attempts = Math.max(1, retry?.attempts ?? 1)
+  // The start timeout bounds the whole sequence, retries and their delays
+  // included: each attempt gets what is left of it, so a caller's wait never
+  // multiplies by the attempt count.
+  const deadline = Date.now() + startTimeoutMs
+  for (let attempt = 1; ; attempt++) {
+    const remaining = attempt === 1 ? startTimeoutMs : Math.max(1, deadline - Date.now())
+    try {
+      return await startAcpProcess(spec, init, options, remaining)
+    } catch (err) {
+      if (
+        !(err instanceof AcpEarlyExitError) ||
+        !retry ||
+        attempt >= attempts ||
+        options.signal?.aborted ||
+        !retry.stderr.test(err.stderrTail)
+      ) throw err
+      const delayMs = options.retryDelayMs ??
+        (EARLY_EXIT_RETRY_MIN_MS + Math.floor(Math.random() * (EARLY_EXIT_RETRY_MAX_MS - EARLY_EXIT_RETRY_MIN_MS)))
+      // Not worth a spawn that could not even reach `initialize` in time.
+      if (deadline - Date.now() - delayMs < EARLY_EXIT_RETRY_MIN_BUDGET_MS) throw err
+      logger.info('ACP process exited before initialize on a known transient error; retrying', {
+        command: spec.command,
+        attempt,
+        of: attempts,
+        delayMs
+      })
+      if (await abortableDelay(delayMs, options.signal)) throw err
+    }
+  }
+}
+
+/**
+ * Wait `ms`, or less when `signal` aborts first. Resolves `true` when it was
+ * aborted, so the caller stops retrying.
+ */
+function abortableDelay(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(true)
+    const onAbort = (): void => { clearTimeout(timer); resolve(true) }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(false) }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** One spawn and its `initialize`; {@link startAcpConnection} owns retries. */
+async function startAcpProcess(
+  spec: AcpLaunchSpec,
+  init: InitializeRequest,
+  options: AcpConnectionOptions,
+  startTimeoutMs: number
+): Promise<AcpConnection> {
   const preBindWindowMs = options.preBindWindowMs ?? PRE_BIND_WINDOW_MS
   const preBindLimit = options.preBindLimit ?? PRE_BIND_LIMIT
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS
@@ -346,13 +426,12 @@ export async function startAcpConnection(
 
   // ---- initialize ----------------------------------------------------------
 
-  const failure = async (reason: string): Promise<never> => {
+  const failure = async (reason: string, earlyExit = false): Promise<never> => {
     await dispose()
     await Promise.race([stderrClosed, afterGrace(EXIT_REPORT_GRACE_MS)])
     const tail = stderrTail()
-    throw new Error(
-      `${spec.command} ${reason}${tail ? `\n--- stderr ---\n${tail}` : ''}`.trim()
-    )
+    const message = `${spec.command} ${reason}${tail ? `\n--- stderr ---\n${tail}` : ''}`.trim()
+    throw earlyExit ? new AcpEarlyExitError(message, tail) : new Error(message)
   }
 
   const died = (exit: AcpExit): string =>
@@ -383,7 +462,8 @@ export async function startAcpConnection(
     // dying, and the exit says far more than "connection closed" does.
     const exit = await Promise.race([exited, afterGrace(EXIT_REPORT_GRACE_MS)])
     return await failure(
-      exit ? died(exit) : `failed initialize: ${err instanceof Error ? err.message : String(err)}`
+      exit ? died(exit) : `failed initialize: ${err instanceof Error ? err.message : String(err)}`,
+      exit !== null && !spawnError
     )
   } finally {
     clearTimeout(timer)
@@ -395,7 +475,7 @@ export async function startAcpConnection(
     return await failure(`did not answer initialize within ${startTimeoutMs} ms`)
   }
   if ('exit' in outcome) {
-    return await failure(died(outcome.exit))
+    return await failure(died(outcome.exit), !spawnError)
   }
   const initialized: InitializeResponse = outcome.response
 

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildEngineConfig,
+  chatRuntimePermissions,
+  CINNA_TOOL_PERMISSIONS,
   CONVERSATION_PERMISSIONS,
   credentialEnvName,
   engineAgentKey,
@@ -821,5 +823,56 @@ describe('a kit agent’s own skills', () => {
     const base = input()
     base.agents[0] = { ...base.agents[0], skills: ['pdf-tools'], permissions: { skill: 'deny' } }
     expect(agentOf(buildEngineConfig(base)).permission.skill).toBe('deny')
+  })
+})
+
+describe('Code Mode: Cinna’s tools through `execute`', () => {
+  const agentOf = (built: ReturnType<typeof buildEngineConfig>) =>
+    Object.values(built.config.agent as Record<string, { permission: Record<string, unknown> }>)[0]
+  const CODE_MODE_KEYS = ['execute', 'question', 'cinna_*']
+
+  it('allows `execute`, `question` and the inner `cinna_<tool>` checks, after the `*` ask', () => {
+    // Probed on 2.0.27: every session MCP tool is reached only through
+    // `execute`, each inner call is checked as `cinna_<tool>`, and the inner
+    // ask names the `execute` call, so the driver cannot allow it. Mutation:
+    // drop any entry and that call asks (or, under a deny-all, the model has
+    // no tools at all).
+    for (const extra of [{}, { skillPaths: ['/app/kit/skills'] }]) {
+      const permission = agentOf(buildEngineConfig(input(extra))).permission
+      expect(permission.execute).toBe('allow')
+      expect(permission.question).toBe('allow')
+      expect(permission['cinna_*']).toBe('allow')
+      // Last match wins, so the wildcard has to stay first.
+      expect(Object.keys(permission)[0]).toBe('*')
+    }
+  })
+
+  it('is the conversation profile followed by Code Mode’s entries, in that order', () => {
+    const permission = agentOf(buildEngineConfig(input())).permission
+    expect(permission).toEqual({ ...CONVERSATION_PERMISSIONS, ...CINNA_TOOL_PERMISSIONS })
+    expect(Object.keys(permission)).toEqual(['*', 'read', 'edit', 'write', 'bash', 'grep', 'glob', 'webfetch', 'external_directory', 'skill', ...CODE_MODE_KEYS])
+    // Searching never asks: a task turn parked on a grep nobody answered.
+    expect([permission.grep, permission.glob]).toEqual(['allow', 'allow'])
+    for (const key of CODE_MODE_KEYS) expect(CONVERSATION_PERMISSIONS).not.toHaveProperty(key)
+  })
+
+  it('keeps them for an agent with its own skills, and lets a manifest override one', () => {
+    const own = input()
+    own.agents[0] = { ...own.agents[0], skillPaths: ['/data/links/skills'], skills: ['pdf-tools'], permissions: { execute: 'deny' } }
+    const permission = agentOf(buildEngineConfig(own)).permission
+    expect(permission.execute).toBe('deny')
+    expect(permission['cinna_*']).toBe('allow')
+  })
+
+  it('gives a chat runtime’s replace policy Cinna’s tools after its deny-all, and nothing without them', () => {
+    const chat = (permissions: Record<string, unknown>) => {
+      const built = input()
+      built.agents[0] = { ...built.agents[0], permissionMode: 'replace', permissions }
+      return Object.entries(agentOf(buildEngineConfig(built)).permission)
+    }
+    expect(chat(chatRuntimePermissions(true))).toEqual([
+      ['*', 'deny'], ['cinna_*', 'allow'], ['execute', 'allow'], ['question', 'allow']
+    ])
+    expect(chat(chatRuntimePermissions(false))).toEqual([['*', 'deny']])
   })
 })

@@ -12,10 +12,9 @@
  * So declaring the capability is what gains the capability, and this module is
  * what makes the declaration honest.
  *
- * OpenCode goes the other way for now: its `question` tool is not registered
- * under `OPENCODE_CLIENT=acp` at all, and its ACP layer bridges no question to
- * `elicitation/create` — so nothing here fires for that launcher. See the Q3
- * verdict in the phase 3 plan.
+ * OpenCode always registers its `question` tool and bridges it to
+ * `elicitation/create` for a client that declares `elicitation.form`
+ * (captured from 2.0.27, below).
  *
  * ## The schema shape is the adapter's, and it is read rather than guessed
  *
@@ -48,6 +47,17 @@
  * answer is still written into the question's own field: the adapter passes a
  * value it does not offer through as the answer.
  *
+ * OpenCode 2.0.27's question tool builds one field per question at index `n`:
+ * `q<n>` — `title` the short header, `description` the question, `oneOf` for a
+ * single-select or `items.anyOf` for a multi-select, `const` the label — and,
+ * for a question that takes a typed answer, `q<n>_custom`, a free-text string
+ * with no options. `message` is always the generic "Questions". The companion
+ * is not asked as a question of its own; a typed answer the desktop sends for
+ * `q<n>` (a label it did not offer) is written into `q<n>_custom` instead.
+ * The engine (`cli/src/acp/elicitation.ts`) then appends it to a
+ * multi-select's chosen labels ("X, Y, also Z") and, for a single-select,
+ * answers with it in place of any chosen option.
+ *
  * A generic MCP-server elicitation arrives through the same request with an
  * arbitrary JSON-Schema `properties` map. It is mapped as best it can be — one
  * question per property, options from `enum`/`oneOf`/`anyOf` — and a property
@@ -73,8 +83,11 @@ export interface AcpElicitationForm {
    * the schema at answer time is how a form whose fields were reordered
    * silently files an answer under the wrong question.
    */
-  fields: { key: string; multiple: boolean }[]
+  fields: { key: string; multiple: boolean; custom?: string }[]
 }
+
+/** OpenCode 2's per-question field key, `q<n>`; its free-text companion is `q<n>_custom`. */
+const OPENCODE_QUESTION_KEY = /^q\d+$/
 
 /**
  * The questions a form-mode elicitation is asking, or null when it is not one
@@ -90,7 +103,7 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
   if (!properties) return null
 
   const questions: InputQuestion[] = []
-  const fields: { key: string; multiple: boolean }[] = []
+  const fields: AcpElicitationForm['fields'] = []
   const entries = Object.entries(properties)
   const askable = entries.filter(([key, value]) => {
     const field = asRecord(value)
@@ -112,6 +125,19 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
         options: options.filter((option) => !isCodexOtherOption(field, option))
       })
       fields.push({ key, multiple })
+      continue
+    }
+    // OpenCode's question is its field's description, its header the title;
+    // `message` is a generic lead-in even for a lone question.
+    if (OPENCODE_QUESTION_KEY.test(key)) {
+      const custom = `${key}_custom`
+      questions.push({
+        question: str(field.description) ?? str(field.title) ?? str(request.message) ?? key,
+        ...(str(field.title) ? { header: str(field.title) as string } : {}),
+        multiSelect: multiple,
+        options
+      })
+      fields.push(custom in properties && isCustomAnswerField(custom, asRecord(properties[custom]), properties) ? { key, multiple, custom } : { key, multiple })
       continue
     }
     // A single question carries its text in `message`; several carry theirs in
@@ -155,7 +181,15 @@ export function toElicitationContent(
 ): Record<string, string | string[]> {
   const content: Record<string, string | string[]> = {}
   form.fields.forEach((field, index) => {
-    const chosen = (answers[index] ?? []).filter((label) => label !== '')
+    let chosen = (answers[index] ?? []).filter((label) => label !== '')
+    if (field.custom) {
+      // A label the question did not offer is the user's typed answer, and it
+      // belongs in the free-text companion, not among the options.
+      const offered = new Set((form.questions[index]?.options ?? []).map((option) => option.label))
+      const typed = chosen.filter((label) => !offered.has(label))
+      if (typed.length > 0) content[field.custom] = typed.join(', ')
+      chosen = chosen.filter((label) => offered.has(label))
+    }
     if (chosen.length === 0) return
     content[field.key] = field.multiple ? chosen : chosen[0]
   })
@@ -204,7 +238,8 @@ function enumOptions(field: Record<string, unknown>): { label: string; descripti
  * The free-text companion of an option question. The Claude adapter marks it in
  * `_meta`, but from 0.89 only for a JetBrains AIR client, which Cinna's patched
  * adapter does not claim to be. So an unmarked `question_<n>_custom` with no
- * options of its own, beside its `question_<n>`, is the companion too.
+ * options of its own, beside its `question_<n>`, is the companion too — and so
+ * is OpenCode 2's `q<n>_custom` beside its `q<n>`, which carries no marker.
  */
 function isCustomAnswerField(
   key: string,
@@ -213,7 +248,7 @@ function isCustomAnswerField(
 ): boolean {
   const meta = asRecord(field?._meta)
   if (meta !== undefined && CUSTOM_ANSWER_META_KEY in meta) return true
-  const companion = /^(question_\d+)_custom$/.exec(key)
+  const companion = /^(question_\d+|q\d+)_custom$/.exec(key)
   return companion !== null && companion[1] in properties && enumOptions(field ?? {}).length === 0
 }
 

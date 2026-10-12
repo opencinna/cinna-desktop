@@ -505,6 +505,20 @@ describe('the words the protocol is taught in', () => {
     expect(none).not.toContain('skill before')
   })
 
+  it('tells a Code Mode engine to call the tools inside execute, and no other engine', () => {
+    // OpenCode 2 declares no `tasks_*` tool, and its catalog drops
+    // `tasks_create`. Mutation: drop the `calls` argument and the first two fail.
+    const code = cinnaTasksSection('folder:itan', { kind: 'skill' }, 'codeMode')
+    expect(code).toContain('inside your `execute` tool as `await tools.cinna.tasks_report(')
+    expect(code).toContain('`tools.cinna.tasks_create(...)`')
+    // The rules name the callable path too, not only the line above them.
+    expect(code).toContain('call `tools.cinna.tasks_report` with `done` or `failed`')
+    expect(code).toContain('Do not poll `tools.cinna.tasks_list` or `tools.cinna.tasks_get`')
+    expect(code.split('\n').length).toBeLessThanOrEqual(10)
+    expect(cinnaTasksSection('folder:itan', { kind: 'skill' })).not.toContain('execute')
+    expect(cinnaTasksSection('folder:itan', { kind: 'skill' }, 'direct')).not.toContain('tools.cinna')
+  })
+
   it('sends a Cinna-run executor to the brief, in one short paragraph', () => {
     /*
       The Description a UX review read was this paragraph: ~250 words of the

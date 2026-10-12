@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { createRequire } from 'node:module'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { findContractCodex, makeScratch, spawnAdapter, startFakeProvider, writeProviderConfig, type ProviderReply, type AdapterMessage } from './codexHarness'
 import { findContractClaude, makeClaudeScratch, startEgressTrap, startFakeAnthropic, type ClaudeProviderReply } from './claudeHarness'
+import { findContractOpencode } from './opencodeHarness'
 const require = createRequire(import.meta.url)
 describe('credential path reaches pinned runtime script children', () => {
   it.each(['claude', 'codex'] as const)('%s reads a credential outside cwd using the injected path', async engine => {
@@ -46,7 +46,9 @@ describe('OpenCode credential path contract', () => {
     let replies: ClaudeProviderReply[] = []
     const provider = await startFakeAnthropic(turn => !turn.tools.length ? { kind: 'text', text: 'Credential probe' } : replies.shift() ?? { kind: 'text', text: 'OK' })
     const scratch = makeScratch('cinna-credential-opencode-')
-    const binary = join(homedir(), '.cache/cinna-e2e/engine', `opencode-${RUNTIME_PINS.opencode.cli}`, 'opencode')
+    // The pinned binary `scripts/install-runtime.mjs opencode` installs, as the OpenCode contract finds it.
+    const binary = findContractOpencode(RUNTIME_PINS.opencode.cli)?.path
+    expect(binary, 'Install pinned opencode before probing').toBeDefined()
     const path = join(scratch.home, 'credentials.json')
     writeFileSync(path, JSON.stringify([{ marker: 'OPENCODE_CREDENTIAL_SCRIPT_OK' }]), { mode: 0o600 })
     const config = join(scratch.cwd, 'opencode.json')
@@ -61,7 +63,7 @@ describe('OpenCode credential path contract', () => {
       await connection.rpc('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'credentials-probe', version: '1' } })
       const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [] }, 60_000)
       expect(created.error).toBeUndefined()
-      replies = [{ kind: 'tool', name: 'bash', input: { command: `sh -c 'cat "$CINNA_CREDENTIALS_PATH"'`, description: 'Read a dummy credential fixture' } }]
+      replies = [{ kind: 'tool', name: 'shell', input: { command: `sh -c 'cat "$CINNA_CREDENTIALS_PATH"'`, description: 'Read a dummy credential fixture' } }]
       const result = await connection.rpc('session/prompt', { sessionId: created.result?.sessionId, prompt: [{ type: 'text', text: 'Run the fixture script.' }] }, 60_000)
       expect(result.error).toBeUndefined()
       expect(provider.turns.flatMap(t => t.toolResults).join('\n'), JSON.stringify({ turns: provider.turns.map(t => ({ model: t.model, tools: t.tools, results: t.toolResults })), stderr: connection.stderr() })).toContain('OPENCODE_CREDENTIAL_SCRIPT_OK')

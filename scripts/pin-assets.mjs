@@ -4,7 +4,7 @@
 //   node --experimental-strip-types scripts/pin-assets.mjs claude 2.1.277
 //   node --experimental-strip-types scripts/pin-assets.mjs codex 0.156.0
 //   node --experimental-strip-types scripts/pin-assets.mjs antigravity 1.4.0
-//   node --experimental-strip-types scripts/pin-assets.mjs opencode 1.19.1
+//   node --experimental-strip-types scripts/pin-assets.mjs opencode 2.0.28
 //
 // scripts/install-runtime.mjs prints the digest for the platform it runs on
 // only; bumping a pin needs all of them, and doing the other three by hand is
@@ -21,11 +21,11 @@
 //   use it before committing a bump. (The 2.1.296 rows were verified that way.)
 // - antigravity — every zip is DOWNLOADED from Google's release path and
 //   hashed here, as for codex: nothing is published to compare against.
-// - opencode — every archive is DOWNLOADED from the GitHub release and hashed
-//   here, then compared with the `sha256:` digest GitHub publishes per release
-//   asset; a row whose bytes disagree is refused. A release the API does not
-//   answer for (rate limit, no network to api.github.com) still prints, and
-//   says so on its row. Rows carry no size: the app derives none for opencode.
+// - opencode — every platform tarball is DOWNLOADED from the npm registry
+//   (`@opencode/cli-<target>`; 2.x has no GitHub release) and hashed here, and
+//   its sha512 is compared with the package's `dist.integrity`; a row whose
+//   bytes disagree, or a package that publishes no sha512 integrity, is
+//   refused. The sha256 printed is ours, from the same bytes.
 //
 // The platform list is the pinned one: a platform is added by adding its row to
 // runtimePins.ts first, deliberately.
@@ -45,9 +45,11 @@ async function hashUrl(url) {
   const response = await fetch(url, { redirect: 'follow' })
   if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} for ${url}`)
   const hash = createHash('sha256')
+  // npm publishes a sha512 per tarball; computed alongside so it costs no second download.
+  const sha512 = createHash('sha512')
   let size = 0
-  for await (const chunk of response.body) { hash.update(chunk); size += chunk.byteLength }
-  return { sha256: hash.digest('hex'), size }
+  for await (const chunk of response.body) { hash.update(chunk); sha512.update(chunk); size += chunk.byteLength }
+  return { sha256: hash.digest('hex'), sha512: sha512.digest('base64'), size }
 }
 
 const rows = []
@@ -89,32 +91,24 @@ if (tool === 'claude') {
       paste: `'${platform}': antigravityAsset(\n  '${os}',\n  \`${file}\`,\n  '${sha256}',\n  ${size}\n),` })
   }
 } else if (tool === 'opencode') {
-  const release = `https://github.com/anomalyco/opencode/releases/download/v${version}`
-  const api = `https://api.github.com/repos/anomalyco/opencode/releases/tags/v${version}`
-  /** GitHub's `sha256:` digest per asset name, or the reason there is none. */
-  let published
-  try {
-    log(`reading ${api}`)
-    const response = await fetch(api, { headers: { accept: 'application/vnd.github+json' } })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const body = await response.json()
-    published = new Map((body.assets ?? []).map((asset) => [asset.name, String(asset.digest ?? '').replace(/^sha256:/, '')]))
-  } catch (err) {
-    published = err instanceof Error ? err.message : String(err)
-  }
-  for (const [platform, asset] of Object.entries(RUNTIME_PINS.opencode.assets)) {
-    // Same file names every release; the tag carries the version (binaryResolver's `assetUrl`).
-    const url = `${release}/${asset.file}`
+  for (const platform of Object.keys(RUNTIME_PINS.opencode.assets)) {
+    // npm names the Windows packages `windows-*`; the pin keys are `process.platform`'s `win32-*`.
+    const target = platform.replace(/^win32-/, 'windows-')
+    const pkg = `@opencode/cli-${target}`
+    const url = `https://registry.npmjs.org/${pkg}/-/cli-${target}-${version}.tgz`
+    const metaUrl = `https://registry.npmjs.org/${pkg}/${version}`
+    log(`reading ${metaUrl}`)
+    const meta = await fetch(metaUrl, { headers: { accept: 'application/json' } })
+    if (!meta.ok) throw new Error(`no ${pkg}@${version} on npm: HTTP ${meta.status}`)
+    const dist = (await meta.json()).dist ?? {}
+    if (dist.tarball !== url) throw new Error(`${platform}: npm's tarball is ${dist.tarball}, not ${url}`)
+    const integrity = /^sha512-(\S+)$/.exec(String(dist.integrity ?? ''))?.[1]
+    if (!integrity) throw new Error(`${platform}: npm publishes no sha512 integrity for ${pkg}@${version}`)
     log(`downloading ${url}`)
-    const { sha256, size } = await hashUrl(url)
-    let source = `downloaded; GitHub digest unavailable (${typeof published === 'string' ? published : 'not listed'})`
-    const digest = typeof published === 'string' ? undefined : published.get(asset.file)
-    if (digest) {
-      if (digest !== sha256) throw new Error(`${platform}: the bytes (${sha256}) disagree with GitHub's digest (${digest})`)
-      source = 'downloaded, matches GitHub digest'
-    }
-    rows.push({ platform, url, sha256, size, source,
-      paste: `'${platform}': {\n  file: '${asset.file}',\n  sha256: '${sha256}'\n},` })
+    const { sha256, sha512, size } = await hashUrl(url)
+    if (sha512 !== integrity) throw new Error(`${platform}: the bytes (sha512-${sha512}) disagree with npm's integrity (sha512-${integrity})`)
+    rows.push({ platform, url, sha256, size, source: 'downloaded, matches npm integrity',
+      paste: `'${platform}': opencodeAsset('${target}', '${sha256}', ${size}),` })
   }
 } else {
   const pin = RUNTIME_PINS.codex
@@ -139,5 +133,5 @@ if (tool === 'claude') {
 }
 
 for (const row of rows) log(`${row.platform}  ${row.sha256}  ${row.size} bytes  (${row.source})\n  ${row.url}`)
-log(`\n--- paste into RUNTIME_PINS.${tool}.assets, and set ${tool === 'opencode' ? 'RUNTIME_PINS.opencode.cli' : 'the version constant'} to '${version}':`)
+log(`\n--- paste into RUNTIME_PINS.${tool}.assets, and set the version constant to '${version}':`)
 console.log(rows.filter((row) => row.paste).map((row) => row.paste).join('\n'))

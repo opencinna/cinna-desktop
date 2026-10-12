@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { antigravityModelForComplexity, effectiveEngine, resolveDefaultEngine, isAgentEngine } from './engine'
+import { antigravityModelForComplexity, effectiveEngine, resolveDefaultEngine, isAgentEngine, opencodeVersionLabel } from './engine'
 
 /**
  * The two rules that decide **which engine an agent runs on** when its folder
@@ -111,5 +111,17 @@ describe('antigravityModelForComplexity', () => {
     expect(antigravityModelForComplexity('complex')).toBe('gemini-3.8-flash-high')
     expect(antigravityModelForComplexity(null)).toBeNull()
     for (const tier of ['simple', 'medium', 'complex'] as const) expect(antigravityModelForComplexity(tier)).not.toMatch(/pro/i)
+  })
+})
+
+describe('opencodeVersionLabel', () => {
+  it('drops the `opencode ` 2.x prints, so a label saying opencode does not say it twice', () => {
+    expect(opencodeVersionLabel('opencode v2.0.27')).toBe('v2.0.27')
+    expect(opencodeVersionLabel('  OpenCode v2.1.0\n')).toBe('v2.1.0')
+  })
+
+  it('keeps any other line as it is', () => {
+    expect(opencodeVersionLabel('1.19.0')).toBe('1.19.0')
+    expect(opencodeVersionLabel('local build')).toBe('local build')
   })
 })

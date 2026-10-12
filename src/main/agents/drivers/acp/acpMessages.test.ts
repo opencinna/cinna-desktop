@@ -204,6 +204,74 @@ describe('OpenCode', () => {
     expect(after?.[1].text).toBe('PINEAPPLE')
   })
 
+  describe('an OpenCode 2 `execute` (Code Mode, captured from 2.0.27)', () => {
+    const code = 'return await tools["cinna"].tasks_report({ outcome: "done" })'
+    const updates = (toolCalls: unknown[]): SessionNotification[] => [
+      { sessionUpdate: 'tool_call', toolCallId: 'c1', name: 'execute', title: 'execute', kind: 'other', status: 'pending', locations: [], rawInput: {} },
+      { sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'in_progress', kind: 'other', title: 'execute', locations: [], rawInput: { code } },
+      { sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed', locations: [], content: [{ type: 'content', content: { type: 'text', text: 'Reported.' } }], rawOutput: { metadata: { toolCalls, truncated: false } } }
+    ].map((update) => ({ sessionId: 'ses_1', update }) as unknown as SessionNotification)
+
+    it('draws the card while it runs, with its code, and keeps it `execute` with its result once finished', () => {
+      // A folder agent's long `execute` (its MCP connectors run through it on
+      // 2.x), an ask raised inside one, or one the engine never finished all
+      // need a card. Mutation: return early while it is not finished and the
+      // first two updates draw nothing.
+      const stream = new AcpMessageStream({ launcher: 'opencode' })
+      const [open, running, done] = updates([{ tool: 'cinna.tasks_report', status: 'completed' }])
+      const opened = stream.apply(open).message!.parts
+      expect(opened.map(kindOf)).toEqual(['tool'])
+      expect(toolNameOf(opened[0])).toBe('execute')
+      expect(stream.apply(running).message!.parts[0].metadata?.[TOOL_INPUT_METADATA_KEY]).toEqual({ code })
+      const parts = stream.apply(done).message!.parts
+      expect(parts.map(kindOf)).toEqual(['tool', 'tool_result'])
+      // Drawn already: a drawn part's name cannot change downstream.
+      expect(toolNameOf(parts[0])).toBe('execute')
+      expect(parts[1].text).toBe('Reported.')
+    })
+
+    it('for a chat runtime, draws nothing while it runs, then names one that ran a single Cinna tool like the direct call', () => {
+      // 1.x made the direct call `cinna_tasks_report`; the chat's conductor
+      // hides it behind its own block. Mutation: ignore `deferCodeModeCalls`
+      // and the running card is drawn before anyone knows it ran Cinna's tools alone.
+      const stream = new AcpMessageStream({ launcher: 'opencode' })
+      stream.deferCodeModeCalls()
+      const [open, running, done] = updates([{ tool: 'cinna.tasks_report', status: 'completed' }])
+      expect(stream.apply(open).message).toBeUndefined()
+      expect(stream.apply(running).message).toBeUndefined()
+      const parts = stream.apply(done).message!.parts
+      expect(parts.map(kindOf)).toEqual(['tool', 'tool_result'])
+      expect(toolNameOf(parts[0])).toBe('cinna_tasks_report')
+      expect(parts[0].metadata?.[TOOL_INPUT_METADATA_KEY]).toEqual({ code })
+      expect(parts[1].text).toBe('Reported.')
+    })
+
+    it('names a call first seen finished after the one Cinna tool it ran, undeferred too', () => {
+      const stream = new AcpMessageStream({ launcher: 'opencode' })
+      const [, , done] = updates([{ tool: 'cinna.tasks_report', status: 'completed' }])
+      const first = { ...done, update: { ...done.update, sessionUpdate: 'tool_call', name: 'execute', title: 'execute', kind: 'other', rawInput: { code } } } as unknown as SessionNotification
+      expect(toolNameOf(stream.apply(first).message!.parts[0])).toBe('cinna_tasks_report')
+    })
+
+    it('stays `execute`, with its code and result, when it ran anything else or several tools', () => {
+      for (const toolCalls of [[{ tool: 'cinna.a' }, { tool: 'cinna.b' }], [{ tool: 'cinna.a' }, { tool: 'other.x' }], []]) {
+        for (const defer of [false, true]) {
+          const stream = new AcpMessageStream({ launcher: 'opencode' })
+          if (defer) stream.deferCodeModeCalls()
+          let last: AcpStreamUpdate = {}
+          for (const notification of updates(toolCalls)) last = stream.apply(notification)
+          expect(toolNameOf(last.message!.parts[0])).toBe('execute')
+          expect(last.message!.parts[0].metadata?.[TOOL_INPUT_METADATA_KEY]).toEqual({ code })
+        }
+      }
+    })
+
+    it('leaves another engine’s `execute` alone', () => {
+      const stream = new AcpMessageStream({ launcher: 'claude' })
+      expect(stream.apply(updates([])[0]).message).toBeDefined()
+    })
+  })
+
   it('files a permission ask beside the call that raised it, and its decision beside the ask', () => {
     const fixture = load('opencode', 'permission_bash')
     const stream = new AcpMessageStream({ launcher: 'opencode' })

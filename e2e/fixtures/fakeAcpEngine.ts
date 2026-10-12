@@ -79,7 +79,7 @@ export async function installFakeAcpEngine(
     shim,
     [
       '#!/bin/sh',
-      'if [ "$1" = "--version" ]; then echo "1.18.27-e2e-fake"; exit 0; fi',
+      'if [ "$1" = "--version" ]; then echo "opencode v2.0.27-e2e-fake"; exit 0; fi',
       `FAKE_ACP_SCRIPT='${scriptPath}'`,
       `FAKE_ACP_LOG='${logPath}'`,
       'export FAKE_ACP_SCRIPT FAKE_ACP_LOG',

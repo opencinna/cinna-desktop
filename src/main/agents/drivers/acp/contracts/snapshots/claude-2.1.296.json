@@ -222,6 +222,14 @@
       "verdict": "logged_out"
     }
   },
+  "deny": {
+    "asks": 1,
+    "commandRan": false,
+    "conversationRequests": 2,
+    "sentKind": "reject_once",
+    "stopReason": "end_turn",
+    "toolResultAfterDeny": "User refused permission to run tool"
+  },
   "folderHandovers": {
     "mcp": {
       "calls": [

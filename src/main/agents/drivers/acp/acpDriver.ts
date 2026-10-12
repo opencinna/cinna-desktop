@@ -55,6 +55,7 @@ import type {
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
+  McpServer,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification
@@ -230,6 +231,8 @@ export interface AcpDriverDeps {
   followUpQuietMs?: number
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
+  /** Override how long a new session waits for Cinna's MCP tools ({@link CINNA_TOOLS_WAIT_MS}). Tests only. */
+  cinnaToolsWaitMs?: number
   /**
    * Override how long an input-less open tool call may stay silent, for an
    * engine whose launcher sets the watch (`AcpLauncher.toolStallMs`); it never
@@ -840,6 +843,81 @@ interface AcpTurn {
    * user deliberately stopped.
    */
   stopping: boolean
+  /**
+   * The asks Cinna refused while the turn was running and not stopping, since
+   * the current `session/prompt` went out: what {@link DENIAL_CONTINUE_PROMPT}
+   * tells the agent when an engine ends its prompt on a refusal. A refusal sent
+   * because the turn is stopping or ending is not one. Read only by a prompted
+   * turn; a follow-up records into it and never reads it. An ask that
+   * expired is not recorded: an hour has passed, and a continuation would only
+   * run on into the turn's ceiling.
+   */
+  denials: AcpDenial[]
+  /**
+   * Parks a prompted turn released because the engine ended its prompt and the
+   * turn goes on ({@link DENIAL_CONTINUE_PROMPT}): the engine abandoned those
+   * requests. Each settles as not answered, is not recorded as a refusal, and
+   * is removed from here as it settles.
+   */
+  released: Set<string>
+}
+
+/** One ask Cinna refused, for the continuation prompt. */
+export interface AcpDenial {
+  /** What was asked, in the engine's own words (the call's title), shortened. */
+  what: string
+  /** The tool call it was about, when the engine named one. */
+  callId?: string
+  reason: 'denied' | 'failed' | 'not_allowed'
+}
+
+/**
+ * How many times one Cinna turn re-prompts after an engine ended its prompt on
+ * a refused permission (see {@link DENIAL_CONTINUE_PROMPT}). Past this the turn
+ * ends as a cancelled prompt always has.
+ */
+export const DENIAL_CONTINUE_LIMIT = 3
+
+/**
+ * The prompt sent on the same session, inside the same Cinna turn, when an
+ * engine answered Cinna's refusal by ending its prompt `cancelled` — Codex
+ * (whose only reject option is "No, and tell Codex what to do differently") and
+ * OpenCode 2 (which turns any decline into an interrupt). Claude Code answers a
+ * refusal with a tool result and keeps going; this makes every engine do that.
+ * It says plainly that nothing was stopped: Codex otherwise tells the model on
+ * its next prompt that "the user interrupted the previous turn on purpose".
+ */
+export function DENIAL_CONTINUE_PROMPT(denials: readonly AcpDenial[]): string {
+  const lines = denials.map((denial) => {
+    const what = `“${denial.what}”`
+    switch (denial.reason) {
+      case 'denied': return `- The user denied ${what}.`
+      case 'not_allowed': return `- ${what} is not allowed in this chat, so it was refused.`
+      default: return `- ${what} could not be answered, so it was refused.`
+    }
+  })
+  return [
+    `Your request${denials.length === 1 ? ' was' : 's were'} refused:`,
+    ...lines,
+    'This was not a request to stop: do not retry that action; continue the task without it, or explain what you need from the user.'
+  ].join('\n')
+}
+
+/** A refused call's result, written in when the engine left the call open. */
+const DENIAL_TOOL_RESULT: Record<AcpDenial['reason'], string> = {
+  denied: 'Denied by the user.',
+  not_allowed: 'Not allowed in this chat.',
+  failed: 'No decision was recorded.'
+}
+
+/** The settled note of an ask whose prompt the engine ended while it waited (`AcpTurn.released`). */
+const ABANDONED_ASK_NOTE = 'Not answered — the agent moved on without it.'
+
+/** The ask's description for {@link AcpDenial.what}: the call's title, else its tool, else the action. */
+function denialSubject(params: RequestPermissionRequest, toolName: string | undefined, action: string): string {
+  const title = typeof params.toolCall.title === 'string' ? params.toolCall.title.trim() : ''
+  const text = (title || toolName || action).replace(/\s+/g, ' ')
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text
 }
 
 async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentTurnResult> {
@@ -868,7 +946,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     }) }, deltaPort)
   }
 
-  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
+  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false, denials: [], released: new Set() }
   let connection: AcpConnection | undefined
   let sessionId: string | null = null
   let hitCeiling = false
@@ -1191,6 +1269,46 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   /** A fresh watch for the retry's prompt: a watch that fired never fires again. */
   let stallWatch = watchStalls()
   /**
+   * Close, as failed, the refused tool calls a prompt that ended `cancelled`
+   * left open (Codex leaves its refused `apply_patch` `in_progress`): that
+   * prompt will never report them, and the turn goes on. **Only those**: any
+   * other call still open — a subagent, a Codex async task, an OpenCode child
+   * session, a Cinna tool the conductor runs — may still be running, and its
+   * own update closes it.
+   */
+  const closeRefusedTools = (denied: readonly AcpDenial[]): void => {
+    for (const denial of denied) {
+      const toolCallId = denial.callId
+      if (!toolCallId || !toolsInFlight.has(toolCallId)) continue
+      const frame = {
+        sessionId: sessionId ?? '',
+        update: {
+          sessionUpdate: 'tool_call_update' as const, toolCallId, status: 'failed' as const,
+          rawOutput: DENIAL_TOOL_RESULT[denial.reason]
+        }
+      }
+      trackToolCall(frame)
+      emit(stream.apply(frame).message)
+    }
+  }
+  /**
+   * Release the asks still parked when the engine ended its prompt and the
+   * turn goes on: the engine abandoned those requests, so they must not stay
+   * answerable (an answer would land in the next prompt's refusals) or keep
+   * the stall watch waiting. Released as {@link askAgentToStop} releases them,
+   * and marked `released` so each settles as not answered rather than as a
+   * refusal or an expiry.
+   */
+  const releaseAbandonedAsks = (): void => {
+    turn.open = false
+    for (const [requestId, cancel] of turn.parked) {
+      turn.released.add(requestId)
+      cancel()
+    }
+    turn.parked.clear()
+    turn.open = true
+  }
+  /**
    * The error of a turn the stall watch or the ceiling stopped, or none. **The
    * user's Stop wins**: one pressed after either fired, while the agent still
    * had its grace to answer the cancel, ends the turn canceled as any Stop does.
@@ -1269,6 +1387,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       setTimeout(() => { if (turn.open) askAgentToStop() }, 0)
     }, () => ctx.observers.wake(chatId, agent.id))
     ctx.offersCinnaTool = conductor?.offers ? (toolName) => conductor?.offers?.(toolName) === true : undefined
+    // A chat runtime's conductor hides a Code Mode call that ran its tools alone.
+    if (conductor?.ownsCodeModeCalls) stream.deferCodeModeCalls()
     if (conductor?.session) ctx.sessionSlot = conductor.session
     /**
      * **A listener added to an already-aborted signal never fires**, and
@@ -1354,6 +1474,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     // Marked live once this connection holds the session's query under these params (see `isSessionLive`).
     const fingerprint = sessionFingerprint(sessionParams)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
+    // Taken before `session/load` or `session/new` can make the engine list:
+    // only a list after this mark is this session's (`awaitCinnaTools`).
+    const cinnaUrl = cinnaDescriptorUrl(plan.session.mcpServers)
+    // A remote agent cannot reach the loopback server, so it is never waited on.
+    const toolsMark = cinnaUrl !== null && plan.awaitMcpTools && !plan.spec.remote && conductor?.toolsListings ? conductor.toolsListings() : null
     // Before anything that can produce traffic for it: from here the session's
     // traffic is this turn's (the load replay included), and the pen only
     // keeps it for the bind while nobody observes the session.
@@ -1527,6 +1652,18 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       )
     }
 
+    if (toolsMark !== null && cinnaUrl !== null && conductor) {
+      try {
+        await duringStart(awaitCinnaTools(connection, cinnaUrl, conductor, toolsMark, {
+          waitMs: deps.cinnaToolsWaitMs ?? CINNA_TOOLS_WAIT_MS, settleMs: plan.awaitMcpTools?.settleMs ?? 0, agentId: agent.id, chatId
+        }))
+      } catch {
+        // Stopped, or the ceiling, while waiting: the same as during the setup.
+        unbind?.()
+        return finish(ctx, accumulator, sessionId, stopError())
+      }
+    }
+
     // **Checked again here.** Everything since the first check awaited — a
     // spawn, `session/new`, the setup calls — and that is one to two seconds in
     // which a Stop lands with `sessionId` still null, so `askAgentToStop` had
@@ -1578,38 +1715,76 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // replayed again, not loaded empty on the next turn.
       if (answer) conductor?.sessionReady?.()
       /**
-       * **One automatic retry after a stall** (see `acpToolStall.ts`), only when
-       * the session ended its prompt inside the grace — so the session and its
-       * process are still good; `end_turn` after our cancel counts as the same
-       * acknowledgement as `cancelled` — and nothing else ended the
-       * turn: not the user's Stop, not the real ceiling (whose clock keeps
-       * running from the turn's start), not a trusted task control.
+       * **After every prompt, at most one of two follow-ups** on the same
+       * session, inside the same Cinna turn: its events keep streaming into
+       * this turn's message, and the last prompt's outcome is the turn's. One
+       * loop, so a prompt either sends — the first or any follow-up — gets the
+       * same checks; the stall retry is looked at first, and a prompt that
+       * stalled is never also continued (a stall sets `hitCeiling`).
        *
-       * The same Cinna turn, on the same session: its events keep streaming into
-       * this turn's message, and the retry's outcome is the turn's. What a
-       * stopped prompt changed is put back for the second one — the turn is open
+       * **One automatic retry after a stall** (see `acpToolStall.ts`), once per
+       * turn, only when the session ended its prompt inside the grace — so the
+       * session and its process are still good; `end_turn` after our cancel
+       * counts as the same acknowledgement as `cancelled` — and nothing else
+       * ended the turn: not the user's Stop, not the real ceiling (whose clock
+       * keeps running from the turn's start), not a trusted task control. What
+       * a stopped prompt changed is put back for the retry — the turn is open
        * again for asks, the cancel and its grace are armed afresh, and a new
-       * stall watch runs (a watch that fired never fires again). **Steering is
-       * not reopened**: its window closed with the first prompt, `onSent` is not
-       * called again, and a message sent during the retry queues and drains
-       * after the turn, as one sent while a call is in flight does. The retry's
+       * stall watch runs (a watch that fired never fires again). The retry's
        * prompt is only the retry sentence; nothing queued goes into it.
+       *
+       * **A refusal is not a stop.** Codex and OpenCode 2 end their prompt
+       * `cancelled` when Cinna refuses an ask, where Claude Code tells the model
+       * and keeps going; read as it stands, one Deny would end the turn as if
+       * the user had pressed Stop. So a prompt that came back `cancelled` when
+       * Cinna asked for no cancel — no Stop, no ceiling or stall (`hitCeiling`),
+       * no trusted task control — and during which Cinna refused at least one
+       * ask (`AcpTurn.denials`; an expiry is not one) is followed by
+       * {@link DENIAL_CONTINUE_PROMPT}, at most {@link DENIAL_CONTINUE_LIMIT}
+       * times; past that the turn ends as a cancelled prompt does. Asks the
+       * engine left parked are released first (it abandoned them), and the
+       * refused calls it left open are closed as failed, so they do not run on
+       * in the transcript. Nothing was cancelled, so the turn is still open and
+       * its cancel unarmed; the cancel and stall watch are re-armed anyway.
+       *
+       * **Steering is not reopened** for either: its window closed with the
+       * first prompt, `onSent` is not called again, and a message sent during a
+       * follow-up queues and drains after the turn, as one sent while a call is
+       * in flight does.
        */
-      if (answer && stalled && !retried && (answer.stopReason === 'cancelled' || answer.stopReason === 'end_turn') && !ceilingReached &&
-        !input.signal.aborted && !ctx.conductorOutcome) {
-        retried = true
-        logger.info('stalled tool call, retrying once', { agentId: agent.id, chatId, sessionId, toolCallId: stalledCall })
-        emit(stream.note(TOOL_STALL_RETRY_NOTICE).message)
-        stalled = false
-        hitCeiling = false
-        turn.open = true
-        turn.stopping = false
+      let continued = 0
+      for (;;) {
+        if (!answer) break
+        let followUp: string
+        if (stalled && !retried && (answer.stopReason === 'cancelled' || answer.stopReason === 'end_turn') && !ceilingReached &&
+          !input.signal.aborted && !ctx.conductorOutcome) {
+          retried = true
+          logger.info('stalled tool call, retrying once', { agentId: agent.id, chatId, sessionId, toolCallId: stalledCall })
+          emit(stream.note(TOOL_STALL_RETRY_NOTICE).message)
+          stalled = false
+          hitCeiling = false
+          turn.open = true
+          turn.stopping = false
+          followUp = TOOL_STALL_RETRY_PROMPT
+        } else if (answer.stopReason === 'cancelled' && turn.denials.length > 0 && continued < DENIAL_CONTINUE_LIMIT &&
+          !turn.stopping && !hitCeiling && !ceilingReached && !input.signal.aborted && !ctx.conductorOutcome) {
+          continued++
+          const denied = turn.denials
+          logger.info('an ACP prompt ended on a refused ask; continuing the turn', {
+            agentId: agent.id, chatId, sessionId, denials: denied.length, continuation: continued
+          })
+          releaseAbandonedAsks()
+          closeRefusedTools(denied)
+          followUp = DENIAL_CONTINUE_PROMPT(denied)
+        } else break
+        turn.denials = []
         cancelRequested = new Promise<void>((resolve) => { requestCancel = resolve })
+        stallWatch.stop()
         stallWatch = watchStalls()
         answer = await promptWithCancelGrace(
           deps,
           connection,
-          { sessionId, prompt: [{ type: 'text', text: TOOL_STALL_RETRY_PROMPT }] },
+          { sessionId, prompt: [{ type: 'text', text: followUp }] },
           cancelRequested,
           agent.id
         )
@@ -1879,7 +2054,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
       return typeof id === 'string' && conductor?.owns?.(id) ? { kind: 'text' as const, text: '' } : part
     }) }, deltaPort)
   }
-  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
+  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false, denials: [], released: new Set() }
   const askWorld: AskWorld = { stream, emit, turn }
   const toolsOpen = new Set<string>()
   const toolsDone = new Set<string>()
@@ -2036,6 +2211,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   try {
     conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { if (ctx.conductorOutcome) return; ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
     ctx.offersCinnaTool = conductor?.offers ? (toolName) => conductor?.offers?.(toolName) === true : undefined
+    if (conductor?.ownsCodeModeCalls) stream.deferCodeModeCalls()
     if (!connection.alive) {
       end('exited')
     } else if (!gate.pending) {
@@ -2346,6 +2522,59 @@ async function assertModel(
   }
 }
 
+/* ------------------------------------------------------------- Cinna's tools */
+
+/** How long a session waits for its engine to list Cinna's MCP tools before prompting anyway. */
+export const CINNA_TOOLS_WAIT_MS = 10_000
+
+/**
+ * The connections whose engine has already listed a Cinna endpoint (by URL): a
+ * session there, loaded or new, prompts with no wait. Probed on OpenCode
+ * 2.0.27: a `session/load` on a warm process lists nothing, since
+ * the engine keeps its client; a load in a fresh process lists again.
+ */
+const cinnaToolsHeld = new WeakMap<AcpConnection, Set<string>>()
+
+/** The URL of the Cinna MCP descriptor a session is given, or null. */
+function cinnaDescriptorUrl(servers: readonly McpServer[]): string | null {
+  const cinna = servers.find((server) => server.name === 'cinna')
+  return cinna && 'url' in cinna && typeof cinna.url === 'string' ? cinna.url : null
+}
+
+/**
+ * **No first prompt before the engine holds Cinna's tools**, for a launcher
+ * that says its engine needs it ({@link AcpLaunchPlan.awaitMcpTools}). OpenCode
+ * 2 connects a session's MCP servers after `session/new` has answered, so a
+ * prompt sent at once ran without them (probed on 2.0.27: the model's
+ * `execute` got "Unknown tool 'cinna.probe'"). So until Cinna's server has answered a `tools/list` since the
+ * session was asked for, and the plan's `settleMs` since, the prompt waits.
+ * Bounded: after {@link CINNA_TOOLS_WAIT_MS} the turn goes on and says so in
+ * the log. No wait when this connection has listed the endpoint before.
+ */
+async function awaitCinnaTools(
+  connection: AcpConnection,
+  url: string,
+  lease: Pick<import('../../../services/conductorBridge').ConductorLease, 'toolsListed'>,
+  mark: number,
+  options: { waitMs: number; settleMs: number; agentId: string; chatId: string }
+): Promise<void> {
+  const held = cinnaToolsHeld.get(connection) ?? new Set<string>()
+  cinnaToolsHeld.set(connection, held)
+  if (held.has(url) || !lease.toolsListed) return
+  const listedAt = await lease.toolsListed(mark, options.waitMs)
+  // Remembered either way: an engine that did not list in time will not on
+  // this connection's next turn either, and must not cost that turn the wait.
+  held.add(url)
+  if (listedAt === null) {
+    logger.warn('the engine had not listed Cinna’s tools; prompting without waiting longer', {
+      agentId: options.agentId, chatId: options.chatId, waitedMs: options.waitMs
+    })
+    return
+  }
+  const remaining = listedAt + options.settleMs - Date.now()
+  if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining))
+}
+
 /* ---------------------------------------------------------------------- asks */
 
 /** Hand one folded message to the accumulator, or nothing when the fold changed none. */
@@ -2396,6 +2625,20 @@ async function answerPermission(
       ? { outcome: { outcome: 'selected', optionId } }
       : { outcome: { outcome: 'cancelled' } }
   }
+  /**
+   * A refusal the agent has to be told is not a stop (`AcpTurn.denials`): only
+   * while the turn runs and no stop is under way. A park the Stop or the
+   * ceiling released was refused because the turn is ending.
+   */
+  const refused = (reason: AcpDenial['reason']): RequestPermissionResponse => {
+    if (world.turn.open && !world.turn.stopping) {
+      world.turn.denials.push({
+        what: denialSubject(params, toolName, request.action), reason,
+        ...(params.toolCall.toolCallId ? { callId: params.toolCall.toolCallId } : {})
+      })
+    }
+    return selected('reject')
+  }
 
   // **Answered before anything is written.** A standing grant settles the ask
   // silently: no block, no wait. A block that appeared and answered itself
@@ -2403,7 +2646,7 @@ async function answerPermission(
   // of streaming text.
   // A chat-owned runtime may only ever be asked about Cinna's own tools.
   const chatOwned = typeof agent.driverConfig?.conductorChatId === 'string'
-  if (chatOwned && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return selected('reject')
+  if (chatOwned && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return refused('not_allowed')
   // A question in a permission request's clothes (Antigravity's `ask_question`).
   const question = permissionAsQuestion(ctx.launcherId, params)
   if (question) return answerPermissionQuestion(deps, ctx, world, params, question)
@@ -2416,7 +2659,9 @@ async function answerPermission(
   // tool Cinna's server offered this session**: OpenCode spells an MCP tool
   // `<server>_<tool>`, so a user's own server named `cinna_x` reads as Cinna's
   // `x_y` there. Without a lease — even on a chat-owned runtime — nothing is
-  // allowed here.
+  // allowed here. On OpenCode a Cinna call runs inside Code Mode's `execute`
+  // and its inner ask is settled by the engine's own `cinna_*` allow
+  // (`CINNA_TOOL_PERMISSIONS`), so it never comes here.
   // An Antigravity ask names the call's server and tool in its own `_meta.mcp`
   // too, which the server sets: read when the call's `tool_call` was not seen.
   const cinnaTool = world.stream.cinnaTool(params.toolCall.toolCallId) ??
@@ -2472,16 +2717,23 @@ async function answerPermission(
 
   try {
     const resolution = await handle.answered
+    // Read once, before the kind: an answer that settled the park a microtask
+    // before the turn released it still reaches an engine that abandoned the
+    // request, so it is neither a refusal to report nor an allow to record.
+    const abandoned = world.turn.released.delete(requestId)
     ctx.runtime.validate(input.chatId)
     // Before the decision line, so the renderer stops offering the block before
     // it reads what was decided.
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
+    if (abandoned) return settle(ABANDONED_ASK_NOTE, selected('reject'))
 
     // **`rejected` is not a user saying no.** The registry settles with it when
     // the park times out or the turn ends underneath, and it *resolves* rather
     // than rejecting — so this is the expiry path, not the `catch` below.
     // Denying is the only safe answer either way, but the transcript must not
-    // record "Denied" for a decision nobody made.
+    // record "Denied" for a decision nobody made. Nor is it a refusal the
+    // agent is re-prompted about (`AcpTurn.denials`): an expiry comes an hour
+    // in, and a park the turn released was abandoned by the engine.
     if (resolution.kind === 'rejected') {
       return settle(
         world.turn.stopping ? 'Not answered — the turn was stopped.' : 'No answer — the request expired.',
@@ -2497,7 +2749,7 @@ async function answerPermission(
         selected('allow')
       )
     }
-    return settle('Denied.', selected('reject'))
+    return settle('Denied.', refused('denied'))
   } catch (err) {
     // Not the timeout — that resolves, above. This is the registry itself
     // failing, which has never been seen. Denying is the only safe answer:
@@ -2506,9 +2758,10 @@ async function answerPermission(
       agentId: agent.id,
       error: err instanceof Error ? err.message : String(err)
     })
-    return settle('No decision was recorded.', selected('reject'))
+    return settle('No decision was recorded.', refused('failed'))
   } finally {
     world.turn.parked.delete(requestId)
+    world.turn.released.delete(requestId)
     ctx.parkedRuntimes.delete(requestId)
   }
 }
@@ -2518,9 +2771,9 @@ async function answerPermission(
  *
  * This is the one capability the transport *adds*: the in-process Claude runner
  * had no question path at all, and the adapter enables its `AskUserQuestion`
- * tool because the launcher declares `elicitation.form`. OpenCode's own
- * question tool is not registered under ACP, so for that launcher nothing
- * arrives here — see the Q3 verdict in the phase 3 plan.
+ * tool because the launcher declares `elicitation.form`. OpenCode bridges its
+ * `question` tool here for the same declaration. A declined question ends an
+ * OpenCode prompt `cancelled`, and it is not a denial the turn continues past.
  */
 async function answerElicitation(
   deps: AcpDriverDeps,
@@ -2604,8 +2857,14 @@ async function askQuestions(
 
   try {
     const resolution = await handle.answered
+    // As for a permission: read once, before the kind (`AcpTurn.released`).
+    const abandoned = world.turn.released.delete(requestId)
     ctx.runtime.validate(input.chatId)
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
+    if (abandoned) {
+      world.emit(world.stream.settleQuestion(requestId, ABANDONED_ASK_NOTE).message)
+      return null
+    }
     if (resolution.kind === 'question') {
       // The old OpenCode runner's own sentence, now shared with the inbox,
       // which renders the same record on a row answered with this chat closed.
@@ -2628,6 +2887,7 @@ async function askQuestions(
     return null
   } finally {
     world.turn.parked.delete(requestId)
+    world.turn.released.delete(requestId)
     ctx.parkedRuntimes.delete(requestId)
   }
 }

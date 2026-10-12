@@ -19,8 +19,24 @@ export function requireLiveKey(): void {
   test.skip(OPENAI_API_KEY === '', 'OPENAI_API_KEY is not set in .env')
 }
 
-/** Fast chat models with dependable tool calling, best first. */
-export const PREFERRED_MODELS: readonly string[] = ['gpt-4.1-mini', 'gpt-4o-mini', 'gpt-5-mini']
+/**
+ * The OpenCode live model: `gpt-5.6-luna`, cheap and ahead of the minis at
+ * OpenCode 2's Code Mode, where gpt-4.1-mini wrote files with `require('fs')`
+ * inside `execute` and skipped steps it was told would fail.
+ */
+export const OPENCODE_LIVE_MODEL = 'gpt-5.6-luna'
+
+/**
+ * Chat models with dependable tool calling, best first:
+ * `CINNA_E2E_LIVE_MODEL` when set, then {@link OPENCODE_LIVE_MODEL}, then the
+ * minis for a key that does not list it.
+ */
+export const PREFERRED_MODELS: readonly string[] = [
+  ...[(process.env.CINNA_E2E_LIVE_MODEL ?? '').trim()].filter(Boolean),
+  OPENCODE_LIVE_MODEL,
+  'gpt-5-mini',
+  'gpt-4.1-mini'
+]
 
 /**
  * A provider with the real key and a default chat mode on one of the models

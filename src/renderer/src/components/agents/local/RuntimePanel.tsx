@@ -45,7 +45,8 @@ import {
   type ClaudeAuthState,
   type EngineLoginId,
   loginFailureLead,
-  loginPendingText
+  loginPendingText,
+  opencodeVersionLabel
 } from '../../../../../shared/engine'
 import { FIELD, LABEL, SUMMARY_BADGE } from './fieldClasses'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
@@ -340,7 +341,8 @@ function EngineStatus(): React.JSX.Element {
   // reserved line below and in `title`.
   const text =
     state === 'ready'
-      ? `opencode${binary?.state === 'ready' && binary.version ? ` ${binary.version}` : ''}`
+      // 2.x's `--version` line already says `opencode v2.0.27`.
+      ? `opencode${binary?.state === 'ready' && binary.version ? ` ${opencodeVersionLabel(binary.version)}` : ''}`
       : state === 'resolving'
         ? 'Downloading…'
         : state === 'failed'

@@ -35,7 +35,8 @@ import type { RealLogin } from './realLogin'
  * A missing binary or a logged-out CLI is a skip with the reason, found with
  * the free status commands (`claude auth status`, `codex login status`).
  *
- * Models (`CINNA_E2E_LIVE_MODEL` overrides either):
+ * Models (`CINNA_E2E_LIVE_MODEL` overrides each):
+ * - OpenCode: `gpt-5.6-luna` (`OPENCODE_LIVE_MODEL`), through the key's listed models.
  * - Claude: the **Medium** tier (`sonnet`), not `haiku`. On `haiku` the CLI has
  *   no auto-mode reviewer and runs *Ask every time* instead of Automatic
  *   (`claude_engine.md`, "Approval fallback"; on some CLIs `set_mode auto`
@@ -163,7 +164,8 @@ function resolve(name: LiveEngineName): LiveEngine {
       realLogin: null,
       runtime: null,
       skipReason: null,
-      toolNote: 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_tasks_create).'
+      // OpenCode reaches MCP tools only inside Code Mode's `execute`.
+      toolNote: 'The Cinna tools come from the "cinna" MCP server. Call them inside your `execute` tool (for example `await tools.cinna.tasks_create({...})`).'
     }
   }
   if (name === 'claude') {

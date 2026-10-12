@@ -11,7 +11,7 @@
  * client sets a mode before the first prompt.
  */
 
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,6 +40,9 @@ const FOLDER = {
 const CTX: AcpLaunchContext = { userId: 'user-1', agentId: AGENT_ID, folder: FOLDER }
 
 const API_KEY = 'sk-secret-do-not-write-me'
+
+/** No engine is started to create the database: these plans are never spawned. */
+const noBootstrap = async (): Promise<void> => {}
 
 function configInput(overrides: Partial<EngineConfigInput> = {}): EngineConfigInput {
   return {
@@ -87,10 +90,11 @@ describe('the OpenCode launcher', () => {
 
   const launcher = (input = configInput()) =>
     createOpencodeLauncher({
-      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: 'opencode v2.0.27' }),
       configInput: async () => input,
       configRoot: () => root,
-      childEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' })
+      childEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' }),
+      bootstrapDatabase: noBootstrap
     })
 
   it('does not claim a cost-bearing end marker, so its follow-ups end on a quiet spell', () => {
@@ -114,9 +118,10 @@ describe('the OpenCode launcher', () => {
     input.agents[0].permissions = { '*': 'deny', 'cinna_*': 'allow' }
     input.agents.push({ ...input.agents[0], agentId: utilityId, slug: 'ai-function', prompt: 'Return only utility output.', permissionMode: 'replace', permissions: { '*': 'deny' } })
     const shared = createOpencodeLauncher({
-      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: 'opencode v2.0.27' }),
       configInput: async () => input, configRoot: () => root,
       childEnv: async () => ({ PATH: '/usr/bin', HOME: '/throwaway' }),
+      bootstrapDatabase: noBootstrap,
       companionAgentIds: () => [utilityId]
     })
     const first = plan(await shared.plan(CTX))
@@ -211,13 +216,145 @@ describe('the OpenCode launcher', () => {
     expect(p.spec.env.OPENCODE_CONFIG).toBe(join(p.spec.env.OPENCODE_CONFIG_DIR, 'opencode.json'))
   })
 
-  it('leaves the question tool alone: neither variable that would enable it is set', async () => {
-    // Enabled, its answer has nowhere to go over ACP: the probe's question hung
-    // for 150 s and had to be cancelled.
+  it('declares form elicitation for the question tool, and sets no question variable', async () => {
+    // 2.0.27 bridges `question` to `elicitation/create` only for a client that
+    // declares the form capability.
     const p = plan(await launcher().plan(CTX))
+    expect(p.init.clientCapabilities?.elicitation).toEqual({ form: {} })
     expect(p.spec.env.OPENCODE_CLIENT).toBeUndefined()
     expect(p.spec.env.OPENCODE_ENABLE_QUESTION_TOOL).toBeUndefined()
-    expect(p.init.clientCapabilities?.elicitation ?? null).toBeNull()
+  })
+
+  it('keeps the user’s personal skills out with the compatibility plugin off, and never moves the engine’s home', async () => {
+    // Mutation: drop the `plugins` entry and `~/.claude/skills` and
+    // `~/.agents/skills` reach every session (`opencode.launch.personal-skills`).
+    const p = plan(await launcher().plan(CTX))
+    const config = JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8'))
+    expect(config.plugins).toEqual(['-opencode.config.compatibility'])
+    // The 1.x switches; 2.x does not know them.
+    expect(p.spec.env.OPENCODE_DISABLE_CLAUDE_CODE).toBeUndefined()
+    expect(p.spec.env.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBeUndefined()
+    // It would also move `~/…` tool paths and the cloud credential lookups.
+    expect(p.spec.env.OPENCODE_TEST_HOME).toBeUndefined()
+    expect(p.spec.env.XDG_DATA_HOME).toBeUndefined()
+    expect(p.spec.env.HOME).toBe('/Users/x')
+  })
+
+  it('gives the engine Cinna’s own database, its directory made before anything is spawned', async () => {
+    // Mutation: drop the `mkdirSync` and 2.x dies silently at start while the
+    // client waits for ever; drop `OPENCODE_DB` and Cinna writes into, and
+    // migrates, the user's own `~/.local/share/opencode/opencode.db`.
+    const p = plan(await launcher().plan(CTX))
+    expect(p.spec.env.OPENCODE_DB).toBe(join(root, 'opencode-data', 'opencode.db'))
+    expect(statSync(join(root, 'opencode-data')).isDirectory()).toBe(true)
+    // Every agent of this desktop shares it, as the user's own agents share theirs.
+    const other = configInput()
+    other.agents[0] = { ...other.agents[0], agentId: 'folder:other', slug: 'other' }
+    expect(plan(await launcher(other).plan({ ...CTX, agentId: 'folder:other' })).spec.env.OPENCODE_DB).toBe(p.spec.env.OPENCODE_DB)
+  })
+
+  it('respawns a start that died on `database is locked`, up to three spawns, and nothing else', async () => {
+    // Mutation: drop `earlyExitRetry` and about one concurrent 2.0.27 start in
+    // twenty is lost at open (`opencode.launch.database-first-start`).
+    const retry = plan(await launcher().plan(CTX)).spec.earlyExitRetry
+    expect(retry?.attempts).toBe(3)
+    // The lock itself never reaches stderr; the readiness line is all there is.
+    expect(retry?.stderr.test('Error: Standalone server exited before reporting readiness')).toBe(true)
+    expect(retry?.stderr.test('error: unknown command "acp"')).toBe(false)
+  })
+
+  describe('a missing database', () => {
+    const withBootstrap = (bootstrapDatabase: (spec: AcpLaunchPlan['spec'], init: AcpLaunchPlan['init']) => Promise<void>, input = configInput()) =>
+      createOpencodeLauncher({
+        binary: async () => ({ path: '/usr/local/bin/opencode', version: 'opencode v2.0.27' }),
+        configInput: async () => input,
+        configRoot: () => root,
+        childEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' }),
+        bootstrapDatabase
+      })
+
+    it('is created by one engine while every concurrent start waits for it', async () => {
+      // Mutation: drop the in-flight map (or the await in `plan`) and three
+      // engines create the schema together — on 2.0.27 the losers exit with
+      // "Standalone server exited before reporting readiness".
+      let finish!: () => void
+      const bootstrap = vi.fn((_spec: AcpLaunchPlan['spec'], _init: AcpLaunchPlan['init']) => new Promise<void>((resolve) => { finish = resolve }))
+      const other = configInput()
+      other.agents[0] = { ...other.agents[0], agentId: 'folder:other', slug: 'other' }
+      let planned = 0
+      const plans = [
+        withBootstrap(bootstrap).plan(CTX),
+        withBootstrap(bootstrap).plan(CTX),
+        withBootstrap(bootstrap, other).plan({ ...CTX, agentId: 'folder:other' })
+      ].map((pending) => pending.then((result) => { planned += 1; return result }))
+      await vi.waitFor(() => expect(bootstrap).toHaveBeenCalledTimes(1))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(planned, 'a plan was handed out before the database existed').toBe(0)
+      finish()
+      const results = (await Promise.all(plans)).map(plan)
+      expect(bootstrap).toHaveBeenCalledTimes(1)
+      // The bootstrap runs the turn's own engine and environment, in the
+      // database's folder rather than the user's, and declares what a turn does.
+      const [spec, init] = bootstrap.mock.calls[0]
+      expect(spec.command).toBe('/usr/local/bin/opencode')
+      expect(spec.args).toEqual(['acp'])
+      expect(spec.env).toEqual(results[0].spec.env)
+      expect(spec.cwd).toBe(join(root, 'opencode-data'))
+      expect(init).toEqual(results[0].init)
+      // …and the same respawn on `database is locked` (see the test below).
+      expect(spec.earlyExitRetry).toEqual(results[0].spec.earlyExitRetry)
+      // Remembered once done, so an engine that writes no database (a fake) is
+      // not started twice per turn.
+      plan(await withBootstrap(bootstrap).plan(CTX))
+      expect(bootstrap).toHaveBeenCalledTimes(1)
+    })
+
+    it('is not created again once the file exists', async () => {
+      mkdirSync(join(root, 'opencode-data'), { recursive: true })
+      writeFileSync(join(root, 'opencode-data', 'opencode.db'), '')
+      const bootstrap = vi.fn(async () => {})
+      plan(await withBootstrap(bootstrap).plan(CTX))
+      expect(bootstrap).not.toHaveBeenCalled()
+    })
+
+    it('is not created by a warm-only plan, which starts nothing', async () => {
+      // Mutation: bootstrap regardless of `warmOnly` and a background AI
+      // function's warm check on a fresh profile starts an engine.
+      const bootstrap = vi.fn(async () => {})
+      plan(await withBootstrap(bootstrap).plan({ ...CTX, warmOnly: true }))
+      expect(bootstrap).not.toHaveBeenCalled()
+      plan(await withBootstrap(bootstrap).plan(CTX))
+      expect(bootstrap).toHaveBeenCalledTimes(1)
+    })
+
+    it('forgets a failed creation: the plan still stands, and the next start tries again', async () => {
+      // Mutation: cache the rejected promise and every later turn skips the
+      // bootstrap — or, awaited, refuses for ever over one failed start.
+      const bootstrap = vi.fn()
+        .mockRejectedValueOnce(new Error('could not start opencode: ENOENT'))
+        .mockResolvedValueOnce(undefined)
+      const first = await withBootstrap(bootstrap).plan(CTX)
+      // Not a refusal: the turn's own spawn reports the launch error as every
+      // other launch failure is reported.
+      expect(isRefusal(first)).toBe(false)
+      expect(bootstrap).toHaveBeenCalledTimes(1)
+      plan(await withBootstrap(bootstrap).plan(CTX))
+      expect(bootstrap).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('waits for Cinna’s tools before the first prompt: the engine connects session MCP after answering', async () => {
+    expect(plan(await launcher().plan(CTX)).awaitMcpTools).toEqual({ settleMs: 300 })
+  })
+
+  it('emits Code Mode’s permissions for every agent, after the profile’s `*` ask', async () => {
+    // Mutation: drop `CINNA_TOOL_PERMISSIONS` from the profile and every Cinna
+    // call asks twice — the `execute` and the inner `cinna_<tool>`.
+    const p = plan(await launcher().plan(CTX))
+    const permission = (Object.values(JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8')).agent)[0] as { permission: Record<string, unknown> }).permission
+    expect(permission).toMatchObject({ execute: 'allow', question: 'allow', 'cinna_*': 'allow' })
+    const order = Object.keys(permission)
+    expect(order.indexOf('*')).toBeLessThan(order.indexOf('execute'))
   })
 
   it('declares no fs and no terminal capability', async () => {
@@ -242,10 +379,11 @@ describe('the OpenCode launcher', () => {
   it('moves the key when the inherited PATH changes, so installing the developer tools drops the shims', async () => {
     const first = plan(await launcher().plan(CTX))
     const shimmed = plan(await createOpencodeLauncher({
-      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: 'opencode v2.0.27' }),
       configInput: async () => configInput(),
       configRoot: () => root,
-      childEnv: async () => ({ PATH: '/data/tool-shims:/usr/bin', HOME: '/Users/x' })
+      childEnv: async () => ({ PATH: '/data/tool-shims:/usr/bin', HOME: '/Users/x' }),
+      bootstrapDatabase: noBootstrap
     }).plan(CTX))
     expect(shimmed.spec.env.PATH).toBe('/data/tool-shims:/usr/bin')
     expect(shimmed.spec.key).not.toBe(first.spec.key)
@@ -289,7 +427,7 @@ describe('the OpenCode launcher', () => {
 
   it('refuses rather than throwing when the config inputs cannot be read', async () => {
     const result = await createOpencodeLauncher({
-      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: 'opencode v2.0.27' }),
       configInput: async () => {
         throw new Error('the database is locked')
       },

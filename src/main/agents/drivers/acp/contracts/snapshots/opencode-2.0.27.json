@@ -1,0 +1,257 @@
+{
+  "acp": {
+    "cinnaPrompt": {
+      "asks": 0,
+      "codeModeCinnaTools": [
+        [
+          "probe"
+        ]
+      ],
+      "mcpCalls": 1,
+      "stopReason": "end_turn",
+      "toolCalls": [
+        {
+          "codeMode": true,
+          "kind": "other",
+          "title": "execute"
+        }
+      ]
+    },
+    "configPlugins": [
+      "-opencode.config.compatibility"
+    ],
+    "database": {
+      "atOpencodeDb": true,
+      "underXdgData": []
+    },
+    "firstStart": {
+      "processes": 3,
+      "rounds": 4
+    },
+    "initialize": {
+      "agentCapabilities": {
+        "_meta": {
+          "opencode/child-session-updates": true
+        },
+        "loadSession": true,
+        "mcpCapabilities": {
+          "http": true,
+          "sse": false
+        },
+        "promptCapabilities": {
+          "embeddedContext": true,
+          "image": true
+        },
+        "sessionCapabilities": {
+          "additionalDirectories": {},
+          "close": {},
+          "delete": {},
+          "fork": {},
+          "list": {},
+          "resume": {}
+        }
+      },
+      "authMethodIds": [
+        "opencode-login"
+      ],
+      "protocolVersion": 1,
+      "resultKeys": [
+        "agentCapabilities",
+        "agentInfo",
+        "authMethods",
+        "protocolVersion"
+      ]
+    },
+    "kills": {
+      "SIGKILL": {
+        "descendants": 1,
+        "exited": true,
+        "orphans": 0,
+        "sameGroup": false
+      },
+      "SIGTERM": {
+        "descendants": 1,
+        "exited": true,
+        "orphans": 0,
+        "sameGroup": false
+      }
+    },
+    "load": {
+      "historyCarried": true,
+      "ok": true,
+      "replayKinds": [
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "available_commands_update",
+        "tool_call",
+        "tool_call_update",
+        "user_message_chunk"
+      ],
+      "resumedStopReason": "end_turn",
+      "unknownSessionErrors": true,
+      "unknownSessionReplayKinds": []
+    },
+    "mcpTiming": {
+      "eagerPromptReachedProbe": false,
+      "eagerToolResult": "Unknown tool 'cinna.probe'. Use search to find available tools.",
+      "listedAfter": true
+    },
+    "question": {
+      "answerReachedModel": true,
+      "elicitationFields": [
+        "q0",
+        "q0_custom"
+      ],
+      "elicitationParamKeys": [
+        "message",
+        "mode",
+        "requestedSchema",
+        "sessionId",
+        "toolCallId"
+      ],
+      "offered": true,
+      "stopReason": "end_turn"
+    },
+    "readPrompt": {
+      "asks": 0,
+      "readOffered": true,
+      "readParams": [
+        "limit",
+        "offset",
+        "path"
+      ],
+      "stopReason": "end_turn",
+      "toolStatuses": [
+        "in_progress",
+        "failed"
+      ]
+    },
+    "sessionNew": {
+      "configOptions": [
+        {
+          "category": "model",
+          "id": "model",
+          "type": "select"
+        },
+        {
+          "category": "thought_level",
+          "id": "effort",
+          "type": "select"
+        },
+        {
+          "category": "mode",
+          "id": "mode",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "configOptions",
+        "sessionId"
+      ]
+    },
+    "setConfigOption": [
+      {
+        "configId": "mode",
+        "ok": true,
+        "resultKeys": [
+          "configOptions"
+        ]
+      },
+      {
+        "configId": "model",
+        "ok": true,
+        "resultKeys": [
+          "configOptions"
+        ]
+      }
+    ],
+    "shellPrompt": {
+      "askOptions": [
+        {
+          "kind": "allow_once",
+          "optionId": "once"
+        },
+        {
+          "kind": "allow_always",
+          "optionId": "always"
+        },
+        {
+          "kind": "reject_once",
+          "optionId": "reject"
+        }
+      ],
+      "askParamKeys": [
+        "options",
+        "sessionId",
+        "toolCall"
+      ],
+      "askToolCallKeys": [
+        "kind",
+        "locations",
+        "name",
+        "rawInput",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "askedCommands": [
+        "cat .env"
+      ],
+      "conversationRequests": 2,
+      "refusalInNextPrompt": false,
+      "stopReason": "cancelled",
+      "updateKinds": [
+        "tool_call",
+        "tool_call_update",
+        "usage_update"
+      ]
+    },
+    "thought": {
+      "chunks": 1,
+      "messageIdShapes": [
+        "msg"
+      ],
+      "replyMessageIdShapes": [
+        "msg"
+      ]
+    }
+  },
+  "adapter": null,
+  "model": {
+    "kitSkill": true,
+    "offeredTools": [
+      "edit",
+      "execute",
+      "glob",
+      "grep",
+      "question",
+      "read",
+      "shell",
+      "skill",
+      "subagent",
+      "webfetch",
+      "websearch",
+      "write"
+    ],
+    "personal": {
+      "agentsSkill": false,
+      "claudeMd": false,
+      "claudeSkill": false
+    },
+    "personalWithoutPluginEntry": {
+      "agentsSkill": true,
+      "claudeMd": false,
+      "claudeSkill": true
+    },
+    "systemPromptArrives": true
+  },
+  "providerTraffic": {
+    "auxiliaryRequests": true,
+    "egress": [
+      "models.opencode.ai:443"
+    ],
+    "otherRequests": []
+  },
+  "tool": "opencode",
+  "version": "opencode v2.0.27"
+}

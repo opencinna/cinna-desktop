@@ -149,6 +149,28 @@ describe('runtime pins', () => {
     expect(new Set(Object.values(RUNTIME_PINS.antigravity.assets).map((asset) => asset.sha256)).size).toBe(4)
   })
 
+  it('every OpenCode asset is an npm platform tarball of the pinned version, naming its executable, with its size', () => {
+    const targets: Record<string, string> = {
+      'darwin-arm64': 'darwin-arm64',
+      'darwin-x64': 'darwin-x64',
+      'linux-x64': 'linux-x64',
+      'linux-arm64': 'linux-arm64',
+      'win32-x64': 'windows-x64',
+      'win32-arm64': 'windows-arm64'
+    }
+    expect(Object.keys(RUNTIME_PINS.opencode.assets).sort()).toEqual(Object.keys(targets).sort())
+    for (const [platform, asset] of Object.entries(RUNTIME_PINS.opencode.assets)) {
+      const target = targets[platform]
+      expect(asset.file, platform).toBe(`cli-${target}-${RUNTIME_PINS.opencode.cli}.tgz`)
+      expect(asset.url, platform).toBe(`https://registry.npmjs.org/@opencode/cli-${target}/-/${asset.file}`)
+      expect(asset.executable, platform).toBe(platform.startsWith('win32-') ? 'opencode.exe' : 'opencode')
+      expect(asset.format, platform).toBeUndefined()
+      expect(asset.size, platform).toBeGreaterThan(50 * 1024 * 1024)
+    }
+    expect(new Set(Object.values(RUNTIME_PINS.opencode.assets).map((asset) => asset.sha256)).size).toBe(6)
+    expect(RUNTIME_PINS.opencode.versionOutput).toBe(`opencode v${RUNTIME_PINS.opencode.cli}`)
+  })
+
   it('the versions the renderer shows are the manifest’s', () => {
     expect(PINNED_CLAUDE_VERSION).toBe(RUNTIME_PINS.claude.cli)
     expect(PINNED_CODEX_VERSION).toBe(RUNTIME_PINS.codex.cli)

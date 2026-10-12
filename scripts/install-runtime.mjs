@@ -3,6 +3,7 @@
 //   node --experimental-strip-types scripts/install-runtime.mjs codex
 //   node --experimental-strip-types scripts/install-runtime.mjs claude
 //   node --experimental-strip-types scripts/install-runtime.mjs antigravity
+//   node --experimental-strip-types scripts/install-runtime.mjs opencode
 //   node --experimental-strip-types scripts/install-runtime.mjs codex --version 0.156.0 --dir /tmp/x
 //
 // The app installs its own copy into <userData>/runtimes (src/main/engine/
@@ -32,6 +33,11 @@
 // prints absl build info, not a version line, and is slow on a ~280 MB par, so
 // the pinned digest is the only proof of version.
 //
+// OpenCode 2 ships as npm platform tarballs (`@opencode/cli-<target>`, no
+// GitHub release); the executable sits at `package/bin/opencode`, so it is
+// looked for a couple of levels down, as the app's own `findNamedFile` does.
+// A candidate is the same package at another version.
+//
 // Prints the installed executable's absolute path as its last stdout line.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -60,6 +66,11 @@ const TOOLS = {
     // Versionless: no flag prints one.
     versionOutput: null,
     installName: 'agy_acp_server.par'
+  },
+  opencode: {
+    pin: RUNTIME_PINS.opencode,
+    candidateUrl: (row, pin, version) => row.url.replace(`-${pin.cli}.tgz`, `-${version}.tgz`),
+    versionOutput: (version) => `opencode v${version}`
   }
 }
 
@@ -67,7 +78,7 @@ const args = process.argv.slice(2)
 const tool = args[0]
 const option = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
 if (!Object.hasOwn(TOOLS, tool)) {
-  console.error('usage: install-runtime.mjs <codex|claude|antigravity> [--version <x.y.z>] [--dir <directory>]')
+  console.error('usage: install-runtime.mjs <codex|claude|antigravity|opencode> [--version <x.y.z>] [--dir <directory>]')
   process.exit(2)
 }
 
@@ -127,6 +138,18 @@ function unpack(archive, dir) {
     errors.push(`${command}: ${(out.error?.message ?? out.stderr ?? '').trim()}`)
   }
   throw new Error(`could not unpack ${archive}: ${errors.join('; ')}`)
+}
+
+/** The first file named one of `names` in `dir` or up to `depth` levels below it, or null. */
+function findNamed(dir, names, depth = 2) {
+  const entries = readdirSync(dir, { withFileTypes: true })
+  for (const entry of entries) if (entry.isFile() && names.includes(entry.name)) return join(dir, entry.name)
+  if (depth <= 0) return null
+  for (const entry of entries) {
+    const found = entry.isDirectory() ? findNamed(join(dir, entry.name), names, depth - 1) : null
+    if (found) return found
+  }
+  return null
 }
 
 /** Stream a URL to a file: a 215 MB executable is not something to hold in one Buffer. */
@@ -208,9 +231,9 @@ try {
     renameSync(archive, binary)
   } else {
     unpack(archive, unpacked)
-    const found = readdirSync(unpacked).find((name) => name === row.executable || name === installName)
+    const found = findNamed(unpacked, [row.executable, installName].filter(Boolean))
     if (!found) throw new Error(`the archive did not contain ${row.executable ?? installName}`)
-    if (found !== installName) renameSync(join(unpacked, found), binary)
+    if (found !== binary) renameSync(found, binary)
     const missing = (row.siblings ?? []).filter((name) => !existsSync(join(unpacked, name)))
     if (missing.length > 0) throw new Error(`the archive did not contain ${missing.join(', ')}`)
     for (const name of row.siblings ?? []) chmodSync(join(unpacked, name), 0o755)

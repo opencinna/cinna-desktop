@@ -163,3 +163,36 @@ describe('runtime tool integration', () => {
     turn.lease.close()
   })
 })
+
+describe('OpenCode 2 Code Mode across turns', () => {
+  const prepare = (chatId: string) => conductorBridge.prepare('owner', { id: 'root', driver: 'acp' } as AgentRow,
+    { chatId, wireContent: 'Task', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } },
+    { spec: { remote: false }, session: { mcpServers: [] } } as unknown as AcpLaunchPlan, vi.fn(), () => true)
+  const settled = async (promise: Promise<unknown> | void): Promise<boolean> => {
+    let done = false
+    void Promise.resolve(promise).then(() => { done = true }, () => { done = true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    return done
+  }
+
+  it('forgets an `execute` left running when its turn ends, so the next turn’s calls wait for their notice again', async () => {
+    // Mutation: drop `endTurn()` from the lease's close and the second call
+    // below is released at once, ahead of the text the engine streamed before it.
+    const chatId = `code-mode-${++counter}`
+    const first = (await prepare(chatId))!
+    expect(first.ownsCodeModeCalls).toBe(false)
+    first.observe!({ sessionId: 's', update: { sessionUpdate: 'tool_call', toolCallId: 'exec-1', title: 'execute', kind: 'other', status: 'pending', rawInput: {} } })
+    // Inside a running `execute` there is no notice to wait for.
+    expect(await settled(state.options!.beforeCall!({ toolCallId: 'call-a', requestId: 'r1', name: 'tool', signal: new AbortController().signal }))).toBe(true)
+    // The engine never finished it (killed, or closed by the driver after a refusal).
+    first.close()
+
+    const second = (await prepare(chatId))!
+    const abort = new AbortController()
+    const waiting = state.options!.beforeCall!({ toolCallId: 'call-b', requestId: 'r2', name: 'tool', signal: abort.signal })
+    expect(await settled(waiting)).toBe(false)
+    abort.abort()
+    await waiting
+    second.close()
+  })
+})

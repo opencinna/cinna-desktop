@@ -28,7 +28,7 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { ACP_FOLLOW_UP_EXITED, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
@@ -271,6 +271,109 @@ describe('conductor session integration', () => {
     expect(w.fake.received('session/prompt')[1].params?.prompt).toEqual([{type:'text',text:'hello'}])
     expect(replayTranscript).toHaveBeenCalledTimes(1)
     expect(close).toHaveBeenCalledTimes(2)
+  })
+
+  it('draws a folder agent’s running OpenCode 2 `execute`, and defers it only for a lease that owns Code Mode calls', async () => {
+    // An `execute` the engine never finished: a folder agent's must still
+    // have its card. A chat runtime's conductor owns (and hides) one that ran
+    // its tools alone, so its card waits for the end. Mutation: drop the
+    // driver's `deferCodeModeCalls` call and the second run draws it too.
+    const script: FakeAcpScript = { prompt: { emit: [
+      { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'exec_1', title: 'execute', kind: 'other', status: 'pending', rawInput: {} } },
+      { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'exec_1', status: 'in_progress', rawInput: { code: 'return 1' } } },
+      { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } }
+    ] } }
+    const executeCards = async (ownsCodeModeCalls: boolean) => {
+      const w = world({ script, deps: { prepareConductor: async () => ({ close() {}, hasCalls: () => false, ownsCodeModeCalls }) } })
+      const result = await w.run({ runScope: { profileUserId: USER_ID, settingsUserId: USER_ID } })
+      return result.parts.filter((part) => part.kind === 'tool' && part.toolName === 'execute')
+    }
+    const drawn = await executeCards(false)
+    expect(drawn).toHaveLength(1)
+    expect(drawn[0].toolInput).toEqual({ code: 'return 1' })
+    expect(await executeCards(true)).toEqual([])
+  })
+
+  it('holds the first prompt until Cinna’s server has listed its tools, then not again on that process', async () => {
+    // OpenCode 2 connects a session's MCP servers after `session/new` answers:
+    // a prompt sent at once ran without Cinna's tools. Mutation: drop the wait
+    // and the prompt is received before the list is released.
+    const descriptor = { type: 'http' as const, name: 'cinna', url: 'http://127.0.0.1:12345/mcp/wait', headers: [{ name: 'Authorization', value: 'Bearer test' }] }
+    let release: ((at: number | null) => void) | undefined
+    const toolsListed = vi.fn((_after: number, _ms: number) => new Promise<number | null>((resolve) => { release = resolve }))
+    const w = world({ script: SAYS_HELLO, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.session.mcpServers = [descriptor]
+        plan.awaitMcpTools = { settleMs: 0 }
+        return { close() {}, hasCalls: () => false, toolsListings: () => 3, toolsListed }
+      }
+    } })
+    const running = w.run()
+    await waitFor(() => release !== undefined, 'the wait')
+    expect(toolsListed).toHaveBeenCalledWith(3, 10_000)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(w.fake.received('session/prompt')).toHaveLength(0)
+    release!(Date.now())
+    expect((await running).error).toBeUndefined()
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+    // The next turn loads the session on the same process, which lists
+    // nothing (the engine keeps its client): it must not wait at all.
+    expect((await w.run()).error).toBeUndefined()
+    expect(toolsListed).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits the launcher’s settle after the list, and prompts anyway once the bounded wait runs out', async () => {
+    const descriptor = { type: 'http' as const, name: 'cinna', url: 'http://127.0.0.1:12345/mcp/settle', headers: [{ name: 'Authorization', value: 'Bearer test' }] }
+    let listedAt = 0
+    const settled = world({ script: SAYS_HELLO, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.session.mcpServers = [descriptor]
+        plan.awaitMcpTools = { settleMs: 200 }
+        return { close() {}, hasCalls: () => false, toolsListings: () => 0, toolsListed: async () => (listedAt = Date.now()) }
+      }
+    } })
+    const started = Date.now()
+    expect((await settled.run()).error).toBeUndefined()
+    expect(listedAt).toBeGreaterThanOrEqual(started)
+    // The list was answered after `session/new`, so the prompt trails the new
+    // session by at least the settle (both read off the fake's own clock).
+    const created = settled.fake.received('session/new')[0].t
+    expect(settled.fake.received('session/prompt')[0].t - created).toBeGreaterThanOrEqual(190)
+
+    const never = vi.fn((_after: number, ms: number) => new Promise<number | null>((resolve) => setTimeout(() => resolve(null), ms)))
+    const timedOut = world({ script: SAYS_HELLO, deps: {
+      cinnaToolsWaitMs: 30,
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.session.mcpServers = [{ ...descriptor, url: 'http://127.0.0.1:12345/mcp/never' }]
+        plan.awaitMcpTools = { settleMs: 0 }
+        return { close() {}, hasCalls: () => false, toolsListings: () => 0, toolsListed: never }
+      }
+    } })
+    expect((await timedOut.run()).error).toBeUndefined()
+    expect(never).toHaveBeenCalledWith(0, 30)
+    expect(timedOut.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('never waits for a session given no Cinna server, or on an engine that connects before answering', async () => {
+    const toolsListed = vi.fn(async () => null)
+    const none = world({ script: SAYS_HELLO, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.awaitMcpTools = { settleMs: 0 }
+        return { close() {}, hasCalls: () => false, toolsListings: () => 0, toolsListed }
+      }
+    } })
+    expect((await none.run()).error).toBeUndefined()
+    // A launcher that does not ask for the wait (1.19, Claude, Codex, …): an
+    // engine that lists lazily at its first prompt would otherwise cost the
+    // whole bounded wait.
+    const eager = world({ script: SAYS_HELLO, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.session.mcpServers = [{ type: 'http' as const, name: 'cinna', url: 'http://127.0.0.1:12345/mcp/eager', headers: [] }]
+        return { close() {}, hasCalls: () => false, toolsListings: () => 0, toolsListed }
+      }
+    } })
+    expect((await eager.run()).error).toBeUndefined()
+    expect(toolsListed).not.toHaveBeenCalled()
   })
 
   it('marks a conductor session current only once it has taken its prompt', async () => {
@@ -1352,6 +1455,29 @@ describe('MCP and ACP follow-up ownership', () => {
 })
 
 describe('a turn the agent starts on its own', () => {
+  it('defers a Code Mode call for a lease that owns them in a turn the agent starts too', async () => {
+    // Mutation: drop the follow-up path's `deferCodeModeCalls` call and the
+    // owned `execute` is drawn while it runs — a card its conductor then
+    // cannot take back.
+    const exec = (update: Record<string, unknown>): FakeAcpStep => ({ kind: 'update', sessionId: 'ses_fake', update: { toolCallId: 'exec_1', ...update } })
+    const steps = [
+      exec({ sessionUpdate: 'tool_call', title: 'execute', kind: 'other', status: 'pending', rawInput: {} }),
+      exec({ sessionUpdate: 'tool_call_update', status: 'in_progress', rawInput: { code: 'return await tools["cinna"].probe()' } }),
+      exec({ sessionUpdate: 'tool_call_update', status: 'completed', rawOutput: { metadata: { toolCalls: [{ tool: 'cinna.probe', status: 'completed' }] } } }),
+      say('Background', 'background')
+    ]
+    let owned = false
+    const w = followUpWorld({ script: thenOnItsOwn(steps), deps: { followUpQuietMs: 50, prepareConductor: async () => ({
+      close() {}, hasCalls: () => false, ownsCodeModeCalls: true, owns: (id: string) => owned && id === 'exec_1',
+      observe: (notification) => { if ((notification.update as { status?: string }).status === 'completed') owned = true; return false }
+    }) } })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(textOf(result)).toContain('Background')
+    expect(result.parts.filter((part) => part.toolId === 'exec_1')).toEqual([])
+  })
+
   it('is asked for in the chat’s scope and driven to the usage update that carries a cost', async () => {
     const w = followUpWorld({ script: thenOnItsOwn(FOLLOW_UP_STEPS), launcher: 'claude' })
     const first = await w.run({ runScope: RUN_SCOPE })
@@ -1973,6 +2099,241 @@ describe('a permission ask', () => {
     })
     // An expiry, not a stop, and the two read differently.
     expect(result.parts.map((part) => part.text)).toContain('No answer — the request expired.')
+  })
+})
+
+describe('a refusal the engine answers by ending its prompt', () => {
+  // Codex (its only reject option is "No, and tell Codex what to do
+  // differently") and OpenCode 2 end the prompt `cancelled` on a refusal, and
+  // Codex leaves the refused call `in_progress`. Claude Code answers with a
+  // tool result and goes on (`end_turn`). One Deny must not read as a Stop.
+  const patchCall: FakeAcpStep = {
+    kind: 'update',
+    update: { sessionUpdate: 'tool_call', toolCallId: 'call_p', title: 'Edit notes.txt', kind: 'edit', status: 'in_progress' }
+  }
+  const askPatch: FakeAcpStep = {
+    kind: 'permission',
+    toolCall: { toolCallId: 'call_p', title: 'Edit notes.txt', kind: 'edit', status: 'pending', rawInput: { path: 'notes.txt' } }
+  }
+  const chunk = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+  /** The Codex shape: ask, and end the prompt `cancelled` once answered. */
+  const endsOnRefusal: FakeAcpHandlerScript = { emit: [patchCall, askPatch], response: { stopReason: 'cancelled' } }
+  const promptText = (w: World, index: number): string =>
+    JSON.stringify(w.fake.received('session/prompt')[index]?.params?.prompt ?? null)
+  const deny = async (w: World, nth = 0): Promise<void> => {
+    const asked = await waitFor(
+      () => w.events.filter((event): event is Extract<RunEvent, { type: 'needs_input' }> => event.type === 'needs_input')[nth],
+      `ask ${nth + 1}`
+    )
+    expect(w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'reject' }
+    )).toEqual({ delivered: true })
+  }
+
+  it('re-prompts the same session once, saying it was not a stop, and the turn completes with that answer', async () => {
+    // Mutation: drop the continuation → one prompt, and the turn ends canceled.
+    const w = world({
+      launcher: 'codex',
+      script: { prompt: { sequence: [endsOnRefusal, { emit: [chunk('Done without the edit.')] }] } }
+    })
+    const running = w.run()
+    await deny(w)
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(result.taskState).not.toBe('canceled')
+    expect(result.text).toContain('Done without the edit.')
+    const prompts = w.fake.received('session/prompt')
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1].params?.sessionId).toBe(prompts[0].params?.sessionId)
+    expect(promptText(w, 1)).toContain('The user denied “Edit notes.txt”.')
+    expect(promptText(w, 1)).toContain('This was not a request to stop')
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+    // The refused call the engine left open is closed, with why.
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: 'call_p', text: 'Denied by the user.' }))
+  })
+
+  it('sends nothing more when the engine answers the refusal and finishes (Claude)', async () => {
+    const w = world({
+      launcher: 'claude',
+      script: { prompt: { emit: [patchCall, askPatch, chunk('I will not edit it.')] } }
+    })
+    const running = w.run()
+    await deny(w)
+    const result = await running
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('does not continue a turn the user stopped while the ask was parked', async () => {
+    const w = world({ launcher: 'codex', script: { prompt: { sequence: [endsOnRefusal, { emit: [chunk('unwanted')] }] } } })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await askedFor(w)
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it(`continues at most ${DENIAL_CONTINUE_LIMIT} times, then ends the turn as a cancelled prompt`, async () => {
+    const w = world({ launcher: 'codex', script: { prompt: { sequence: [endsOnRefusal] } } })
+    const running = w.run()
+    for (let nth = 0; nth <= DENIAL_CONTINUE_LIMIT; nth++) await deny(w, nth)
+    const result = await running
+    expect(w.fake.received('session/prompt')).toHaveLength(1 + DENIAL_CONTINUE_LIMIT)
+    expect(result.taskState).toBe('canceled')
+  })
+
+  it('does not continue on an ask that expired: the turn ends as a cancelled prompt', async () => {
+    // Mutation: record an expiry as a refusal → a second prompt, and the turn completes.
+    const w = world({
+      launcher: 'codex',
+      script: { prompt: { sequence: [endsOnRefusal, { emit: [chunk('Moving on.')] }] } }
+    })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(pendingRequests.resolve(asked.requestId, { kind: 'rejected' })).not.toBeNull()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.text).not.toContain('Moving on.')
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: asked.requestId, text: 'No answer — the request expired.' }))
+  })
+
+  it('does not continue a turn the user stopped during the continuation prompt', async () => {
+    // Mutation: drop the Stop guards from the loop → a third prompt goes out on a stopped turn.
+    const askAgain: FakeAcpStep = {
+      kind: 'permission',
+      toolCall: { toolCallId: 'call_r', title: 'Edit other.txt', kind: 'edit', status: 'pending', rawInput: { path: 'other.txt' } }
+    }
+    const w = world({
+      launcher: 'codex',
+      script: { prompt: { sequence: [
+        endsOnRefusal,
+        { emit: [chunk('Working.'), askAgain, { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } },
+        { emit: [chunk('unwanted')] }
+      ] } }
+    })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await deny(w, 0)
+    // Denied during the continuation, then stopped before the engine ended it.
+    await deny(w, 1)
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(result.text).not.toContain('unwanted')
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+  })
+
+  it('releases an ask the engine abandoned, and continues naming only the one refused', async () => {
+    // Mutation: continue without releasing the parks → the other block stays
+    // answerable, and answering it lands in the continuation's refusals.
+    const otherCall: FakeAcpStep = {
+      kind: 'update',
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call_q', title: 'Run the tests', kind: 'execute', status: 'in_progress', rawInput: { command: 'npm test' } }
+    }
+    const otherAsk: FakeAcpStep = {
+      kind: 'permission', noWait: true,
+      toolCall: { toolCallId: 'call_q', title: 'Run the tests', kind: 'execute', status: 'pending', rawInput: { command: 'npm test' } }
+    }
+    const w = world({
+      launcher: 'codex',
+      script: { prompt: { sequence: [
+        { emit: [patchCall, otherCall, otherAsk, askPatch], response: { stopReason: 'cancelled' } },
+        { emit: [{ kind: 'delay', ms: 150 }, chunk('Done without the edit.')] }
+      ] } }
+    })
+    const running = w.run()
+    const other = await askedFor(w)
+    await deny(w, 1)
+    await waitFor(() => w.fake.received('session/prompt').length === 2, 'the continuation')
+    // Not answerable any more: the engine abandoned it.
+    expect(w.driver.respond(
+      { requestId: other.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'reject' }
+    )).not.toEqual({ delivered: true })
+    const result = await running
+    expect(result.taskState).not.toBe('canceled')
+    expect(result.text).toContain('Done without the edit.')
+    const prompts = w.fake.received('session/prompt')
+    expect(prompts).toHaveLength(2)
+    expect(promptText(w, 1)).toContain('The user denied “Edit notes.txt”.')
+    expect(promptText(w, 1)).not.toContain('Run the tests')
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: other.requestId, text: 'Not answered — the agent moved on without it.' }))
+    expect(w.events).toContainEqual(expect.objectContaining({ type: 'input_resolved', requestId: other.requestId }))
+    // The other call is not closed for the engine: it may still be running.
+    expect(result.parts).not.toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: 'call_q' }))
+  })
+
+  it('tells a chat-owned runtime a tool is not allowed in this chat, and stays bounded', async () => {
+    // Mutation: drop not_allowed from the refusals → one prompt, nothing said.
+    const w = world({ launcher: 'codex', script: { prompt: { sequence: [endsOnRefusal] } } })
+    const owned = { ...ROW, driverConfig: { ...ROW.driverConfig, conductorChatId: CHAT_ID } }
+    const result = await w.driver.run(USER_ID, owned, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, onEvent: (event) => void w.events.push(event) })
+    expect(w.events.some((event) => event.type === 'needs_input')).toBe(false)
+    expect(w.fake.received('session/prompt')).toHaveLength(1 + DENIAL_CONTINUE_LIMIT)
+    expect(promptText(w, 1)).toContain('“Edit notes.txt” is not allowed in this chat, so it was refused.')
+    expect(result.taskState).toBe('canceled')
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: 'call_p', text: 'Not allowed in this chat.' }))
+  })
+
+  it('gives a stall during a continuation prompt its one retry', async () => {
+    // Mutation: run the stall retry only before the continuations → the turn fails on the stall.
+    const bareCall: FakeAcpStep = {
+      kind: 'update',
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call_w', title: 'write', kind: 'edit', status: 'pending', rawInput: {} }
+    }
+    const w = world({
+      launcher: 'opencode',
+      script: { prompt: { sequence: [
+        endsOnRefusal,
+        { emit: [bareCall, { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } },
+        { emit: [chunk('Report written.')] }
+      ] } },
+      deps: { toolStallMs: 300, turnCeilingMs: 60_000 }
+    })
+    const running = w.run()
+    await deny(w)
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(result.text).toContain('Report written.')
+    const prompts = w.fake.received('session/prompt')
+    expect(prompts).toHaveLength(3)
+    expect(prompts[2].params?.prompt).toEqual([{ type: 'text', text: TOOL_STALL_RETRY_PROMPT }])
+  })
+
+  it('does not continue a turn a trusted task control ended', async () => {
+    let settle!: Parameters<NonNullable<AcpDriverDeps['prepareConductor']>>[4]
+    const w = world({
+      launcher: 'codex',
+      script: { prompt: { sequence: [
+        { emit: [patchCall, askPatch, { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } },
+        { emit: [chunk('unwanted')] }
+      ] } },
+      deps: { prepareConductor: async (_user, _agent, _input, _plan, report) => { settle = report; return { close() {}, hasCalls: () => false } } }
+    })
+    const running = w.run()
+    await deny(w)
+    settle({ control: { kind: 'finish', summary: 'Verified' } })
+    const result = await running
+    expect(result.taskState).toBe('completed')
+    expect(result.control).toEqual({ kind: 'finish', summary: 'Verified' })
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('does not continue a cancelled prompt during which nothing was refused', async () => {
+    const w = world({ launcher: 'codex', script: { prompt: { sequence: [{ emit: [chunk('…')], response: { stopReason: 'cancelled' } }, { emit: [chunk('again')] }] } } })
+    const result = await w.run()
+    expect(result.taskState).toBe('canceled')
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
   })
 })
 
@@ -3559,11 +3920,11 @@ describe('readiness', () => {
 })
 
 describe('capabilities', () => {
-  it('says an OpenCode agent has no question path, because its tool is not registered over ACP', () => {
+  it('says an OpenCode agent can ask a question, because the launcher declares form elicitation', () => {
     const w = world()
     expect(w.driver.capabilities(ROW).input).toEqual({
       permission: true,
-      question: false,
+      question: true,
       auth: false,
       elicitation: false
     })

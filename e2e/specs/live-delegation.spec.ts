@@ -11,7 +11,7 @@ import { encodeTaskTarget } from '../../src/shared/taskTargets'
 /**
  * @live — delegation between REAL agents. Folder agents run on the real pinned
  * OpenCode engine (`engine: true`) against OpenAI with the key from `.env`
- * (the first of `PREFERRED_MODELS` the app lists, normally `gpt-4.1-mini`);
+ * (the first of `PREFERRED_MODELS` the app lists, normally `gpt-5.6-luna`);
  * the cloud test also drives the developer's running cinna-core
  * (`CINNA_E2E_SERVER_URL` / `_EMAIL` / `_PASSWORD`) and its "Hello Testing
  * Agent". Skipped without the key; the cloud test also without the core.

@@ -64,15 +64,13 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
  * One driver, and still two answers — because a capability is about what the
  * *engine* behind the protocol can do, not about the protocol.
  *
- * The two differences are both measured, and both move in the opposite
- * direction to what a transport change would suggest:
+ * The difference is measured:
  *
  * - **Questions.** Claude *gains* them: the ACP adapter enables its
  *   `AskUserQuestion` tool when the client declares `elicitation.form`, which
- *   the launcher does. OpenCode *loses* them: its `question` tool is not
- *   registered under `OPENCODE_CLIENT=acp`, and its ACP layer bridges no
- *   question to `elicitation/create` at all — so the model asks in prose. See
- *   the Q3 verdict in the phase 3 plan.
+ *   the launcher does. OpenCode bridges its `question` tool to
+ *   `elicitation/create` the same way (probed on 2.0.27), and its launcher
+ *   declares the form too.
  * - **Auth.** Claude's turn is paid for by the user's own CLI login, so the
  *   desktop holds no credential for it; OpenCode's is paid for by a credential
  *   in Settings, which is not an auth state a user is ever asked about here.
@@ -91,10 +89,10 @@ function acpCapabilities(launcher: string): AgentCapabilities {
     ...folderCapabilities(),
     input: {
       permission: true,
-      // Claude and Codex bridge user questions over ACP form elicitation;
-      // Antigravity raises its `ask_question` as a permission request whose
-      // options are the answers, which the driver asks as a question.
-      question: launcher === 'claude' || launcher === 'codex' || launcher === 'antigravity',
+      // Claude, Codex and OpenCode bridge user questions over ACP form
+      // elicitation; Antigravity raises its `ask_question` as a permission
+      // request whose options are the answers, which the driver asks as a question.
+      question: launcher === 'claude' || launcher === 'codex' || launcher === 'opencode' || launcher === 'antigravity',
       auth: false,
       // The desktop renders an elicitation *as* a question — one widget, one
       // answer path — so nothing downstream needs a fourth ask kind to

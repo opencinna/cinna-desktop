@@ -115,6 +115,16 @@ export interface ConductorLease {
    * server happens to spell with a `cinna` prefix was never offered.
    */
   offers?(toolName: string): boolean
+  /**
+   * A finished OpenCode 2 Code Mode call that ran Cinna's tools alone is this
+   * lease's, hidden behind its blocks — a chat runtime's only. The driver then
+   * defers drawing any such call until it ends (`AcpMessageStream.deferCodeModeCalls`).
+   */
+  ownsCodeModeCalls?: boolean
+  /** {@link ConductorMcpSession.toolsListings} of this lease's session. */
+  toolsListings?(): number
+  /** {@link ConductorMcpSession.toolsListed} of this lease's session. */
+  toolsListed?(after: number, timeoutMs: number, signal?: AbortSignal): Promise<number | null>
   close(): void
   hasCalls(): boolean
 }
@@ -232,7 +242,7 @@ export const conductorBridge = {
     // Re-read: the entry seen before the awaits may have been released since.
     entry = entries.get(key)
     if (!entry) {
-      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation((name) => entries.get(key)?.session.offers(name) === true), nested }
+      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation((name) => entries.get(key)?.session.offers(name) === true, { ownsCodeMode: !nested && isChatConductor(agent) }), nested }
       entries.set(key, entry)
     } else { entry.binding = binding; entry.wake = wake }
     entry.agent = agent
@@ -258,13 +268,20 @@ export const conductorBridge = {
       sessionLost: () => { if (nested) forgetNested(key); else conductorSessionRepo.save(input.chatId, agent.id, '') },
       observe: (notification) => entry!.correlation.observe(notification),
       owns: (id) => entry!.correlation.owns(id),
+      ownsCodeModeCalls: !nested && isChatConductor(agent),
       offers: (toolName) => entry!.session.offers(toolName),
+      toolsListings: () => entry!.session.toolsListings(),
+      toolsListed: (after, timeoutMs, signal) => entry!.session.toolsListed(after, timeoutMs, signal),
       hasCalls: () => binding.pending > 0,
       close: () => {
         input.signal.removeEventListener('abort', abort)
         // The engine ending/crashing cannot leave a child parked indefinitely.
         if (binding.pending > 0) abort()
-        if (entry!.binding === binding) entry!.binding = null
+        if (entry!.binding === binding) {
+          // Whatever Code Mode call this turn left running will not finish in it.
+          entry!.correlation.endTurn()
+          entry!.binding = null
+        }
         // Released during this turn: nothing else can bind it, so it goes now.
         if (entry!.retiring && !entry!.binding) {
           retiring.delete(entry!)

@@ -23,6 +23,8 @@
 import { appendFileSync, readFileSync, writeSync } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
 import { RequestError, agent, ndJsonStream } from '@agentclientprotocol/sdk'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 /**
  * Every stderr line goes out with `writeSync`.
@@ -44,6 +46,32 @@ if (!scriptPath || !logPath) {
 /** @type {Record<string, any>} */
 const script = JSON.parse(readFileSync(scriptPath, 'utf8'))
 
+
+/**
+ * What OpenCode does after it answers `session/new` or `session/load`: connect
+ * the session's MCP servers and list their tools. The driver waits for Cinna's
+ * server to see that listing before the first prompt (`awaitCinnaTools`), so a
+ * fake that listed only inside a prompt would cost every session that wait's
+ * ceiling. Fire and forget; a server that is gone is the driver's problem.
+ */
+function listCinnaTools(servers) {
+  const descriptor = (servers ?? []).find((server) => server.name === 'cinna' && server.type === 'http')
+  if (!descriptor?.url?.startsWith('http://127.0.0.1:')) return
+  setImmediate(async () => {
+    const client = new Client({ name: 'fake-acp-list', version: '1' })
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(descriptor.url), {
+        requestInit: { headers: Object.fromEntries((descriptor.headers ?? []).map(({ name, value }) => [name, value])) }
+      }))
+      await client.listTools()
+    } catch {
+      /* the session's server is gone or refused: nothing to list */
+    } finally {
+      await client.close().catch(() => undefined)
+    }
+  })
+}
+
 const started = Date.now()
 function log(entry) {
   appendFileSync(logPath, `${JSON.stringify({ t: Date.now() - started, ...entry })}\n`)
@@ -52,6 +80,11 @@ function log(entry) {
 log({ dir: 'start', pid: process.pid, cwd: process.cwd(), argv: process.argv, env: process.env })
 
 for (const line of script.stderr ?? []) err(line)
+// Written only by a start that `exitOnStart` will stop, so a respawn that
+// serves is told apart in the stderr tail.
+if (script.exitOnStart?.stderr && (script.exitOnStart.firstStarts === undefined || startCount() <= script.exitOnStart.firstStarts)) {
+  for (const line of script.exitOnStart.stderr) err(line)
+}
 
 if (script.stderrOnTermination) {
   process.on('SIGTERM', () => { err(script.stderrOnTermination); process.exit(0) })
@@ -60,7 +93,15 @@ if (script.stderrOnTermination) {
   process.on('SIGTERM', () => log({ dir: 'signal', signal: 'SIGTERM' }))
 }
 
-if (script.exitOnStart) {
+/**
+ * How many times this script has been started, this start included — counted
+ * from the shared log, so a respawn of the same spec sees the earlier starts.
+ */
+function startCount() {
+  return readFileSync(logPath, 'utf8').split('\n').filter((line) => line.includes('"dir":"start"')).length
+}
+
+if (script.exitOnStart && (script.exitOnStart.firstStarts === undefined || startCount() <= script.exitOnStart.firstStarts)) {
   const { code = 1, afterMs = 0 } = script.exitOnStart
   // Synchronously when no delay is asked for: a `setTimeout(0)` would still
   // lose the race against a client that is already writing `initialize`, and
@@ -162,16 +203,17 @@ async function emit(client, steps, sessionId) {
                   ...(step.params ?? {})
                 }
               : (step.params ?? {})
-        try {
-          const result = await client.request(method, params)
-          log({ dir: 'answer', method, result })
-        } catch (err) {
-          log({
+        const sent = client.request(method, params).then(
+          (result) => log({ dir: 'answer', method, result }),
+          (err) => log({
             dir: 'answer',
             method,
             error: { code: err?.code ?? null, message: String(err?.message ?? err) }
           })
-        }
+        )
+        // `noWait`: the request stays outstanding while the script goes on —
+        // two asks at once, or one the agent abandons by ending its prompt.
+        if (!step.noWait) await sent
         break
       }
       case 'delay':
@@ -254,7 +296,8 @@ const app = agent({ name: 'fake-acp' })
   .onRequest('authenticate', handler('authenticate', 'authenticate', () => ({})))
   .onRequest(
     'session/new',
-    handler('newSession', 'session/new', () => {
+    handler('newSession', 'session/new', (ctx) => {
+      listCinnaTools(ctx.params?.mcpServers)
       lastSessionId = script.newSession?.uniqueIds
         ? `ses_fake_${++sessionsCreated}`
         : script.newSession?.sessionId ?? lastSessionId
@@ -264,6 +307,7 @@ const app = agent({ name: 'fake-acp' })
   .onRequest(
     'session/load',
     handler('loadSession', 'session/load', (ctx) => {
+      listCinnaTools(ctx.params?.mcpServers)
       lastSessionId = ctx.params?.sessionId ?? lastSessionId
       return {}
     })

@@ -41,7 +41,7 @@ const state = vi.hoisted(() => ({
   utilityEngine: 'opencode',
   codexPolicy: vi.fn(),
   liveRows: [] as AgentRow[],
-  configInput: null as null | ((userId: string) => Promise<{ agents: { agentId: string; prompt: string }[] }>),
+  configInput: null as null | ((userId: string) => Promise<{ agents: { agentId: string; prompt: string; permissions?: Record<string, unknown> | null }[] }>),
   development: false,
   restore: vi.fn(),
   developmentEngine: 'claude',
@@ -68,7 +68,9 @@ const state = vi.hoisted(() => ({
   skillsPluginAsked: [] as unknown[],
   skillsPluginFails: false,
   promptContexts: [] as { ownSkills?: string; tasksSkill?: unknown }[],
-  agySystemPrompt: null as null | ((userId: string, agentId: string, mode: 'isolated' | 'native') => string)
+  agySystemPrompt: null as null | ((userId: string, agentId: string, mode: 'isolated' | 'native') => string),
+  /** Each launcher `plan` call's `warmOnly`, in order. */
+  warmOnlyPlans: [] as boolean[]
 }))
 
 vi.mock('../../localdev/developmentSessionService', () => {
@@ -221,7 +223,8 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
     if (id === 'claude') state.claudeOptions = options as unknown as typeof state.claudeOptions
     return ({
     id,
-    plan: async (context: { folder: { coordinatorHandback?: boolean; path: string; runtimeMode?: unknown } }) => {
+    plan: async (context: { warmOnly?: boolean; folder: { coordinatorHandback?: boolean; path: string; runtimeMode?: unknown } }) => {
+      state.warmOnlyPlans.push(context.warmOnly === true)
       if (state.utilityPlans) return { spec: { command: id, args: [], env: {}, cwd: context.folder.path, key: 'utility-key' }, init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { configOptions: [{ configId: 'mode', value: 'utility' }] } }
       state.developmentPaths.push(context.folder.path)
       state.handbackPlans.push(context.folder.coordinatorHandback === true)
@@ -282,7 +285,7 @@ async function ranFor(agent: AgentRow): Promise<string[]> {
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  state.utilityPlans = false; state.utilityEngine = 'opencode'; state.liveRows = []
+  state.utilityPlans = false; state.utilityEngine = 'opencode'; state.liveRows = []; state.warmOnlyPlans = []
   state.restore.mockClear()
   state.codexPolicy.mockClear()
   state.development = false; state.developmentComplexity = 'complex'; state.developmentPaths = []
@@ -567,11 +570,18 @@ describe('AI function runtime production prompt wiring', () => {
     vi.spyOn(acpProcessPool as Required<Pick<AcpProcessPool, 'peek'>>, 'peek').mockReturnValue({} as never)
     const title = await prepareAiFunctionRuntime('warm-profile', TITLE_SYSTEM_PROMPT, true)
     expect(title.poolKey).toMatch(/^chat-runtime:/)
+    // Mutation: drop `warmOnly` from the plan and a background title on a
+    // fresh profile starts OpenCode's database bootstrap engine.
+    expect(state.warmOnlyPlans).toEqual([true])
     const config = await state.configInput!('warm-profile')
     expect(config.agents.find(agent => agent.agentId === `${title.poolKey}:utility`)?.prompt).toBe(TITLE_SYSTEM_PROMPT)
+    // The chat runtime's replace policy reaches Cinna's tools through Code Mode's `execute`.
+    expect(config.agents.find(agent => agent.agentId === 'chat-root')?.permissions)
+      .toEqual({ '*': 'deny', 'cinna_*': 'allow', execute: 'allow', question: 'allow' })
     await expect(prepareAiFunctionRuntime('warm-profile', 'Draft new instructions.', true)).rejects.toThrow('deferred')
     const draft = await prepareAiFunctionRuntime('warm-profile', 'Draft new instructions.', false)
     expect(draft.poolKey).toMatch(/^ai-function:/)
+    expect(state.warmOnlyPlans).toEqual([true, false])
   })
 
   it('Claude keeps the function prompt in its per-session system prompt', async () => {

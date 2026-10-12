@@ -311,6 +311,50 @@ const IDENTITY_FILES: Record<string, string> = {
   'CLAUDE.md': 'ask'
 }
 
+/**
+ * **How Cinna's own tools reach an OpenCode model, allowed outright.**
+ *
+ * OpenCode 2 (probed on 2.0.27) puts every MCP server a session is given over
+ * ACP behind Code Mode: the model sees one built-in `execute` tool and calls
+ * `await tools["cinna"].<tool>(args)` inside it, and each inner call is checked
+ * again as `cinna_<tool>`. There is no ACP switch to turn that off. So:
+ *
+ * - **`execute` is `allow`.** Resolved to deny, the model gets no tools at all
+ *   (a chat runtime's `'*': 'deny'`); resolved to ask, every Cinna call asks
+ *   twice. The cost, accepted by the user: `fetch` inside `execute` is never
+ *   permission-gated, so an agent can reach the network without the
+ *   `webfetch` ask. A folder agent's shell command could already (the `bash`
+ *   note above); for a chat runtime, whose shell is denied, it is new.
+ * - **`cinna_*` is `allow`.** The inner call's ask names the `execute` call,
+ *   not the Cinna tool, so the driver's own Cinna auto-allow cannot recognise
+ *   it. Cinna's server serves a dynamic tool set (the chat's MCP providers,
+ *   handovers, agent tools), so the names cannot be listed here. Cinna injects
+ *   no other MCP server into an OpenCode session or config, but the engine
+ *   merges the user's global OpenCode config and a project `opencode.json` in
+ *   the session's folder: a server either names `cinna`, or one whose name
+ *   starts `cinna_`, meets this rule too (`cinnabar` does not: `cinnabar_x`
+ *   has no `_` after `cinna`).
+ * - **`question` is `allow`.** 2.x always registers the tool and, with the
+ *   client's `elicitation.form`, asks it through `elicitation/create`; under
+ *   `'*': 'ask'` the user would first be asked whether the agent may ask.
+ */
+export const CINNA_TOOL_PERMISSIONS: Readonly<Record<string, string>> = {
+  execute: 'allow',
+  question: 'allow',
+  'cinna_*': 'allow'
+}
+
+/**
+ * The replace policy of a chat runtime (`EngineAgentInput.permissionMode:
+ * 'replace'`): deny everything, then Cinna's tools when it has any, reached
+ * through `execute` ({@link CINNA_TOOL_PERMISSIONS}). Under `'*': 'deny'` the
+ * driver is never asked, so these entries are what lets Cinna's tools run at all.
+ */
+export function chatRuntimePermissions(cinnaTools: boolean): Record<string, string> {
+  if (!cinnaTools) return { '*': 'deny' }
+  return { '*': 'deny', 'cinna_*': 'allow', ...CINNA_TOOL_PERMISSIONS }
+}
+
 export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
   '*': 'ask',
   read: { '*': 'allow', ...SECRET_FILES },
@@ -349,6 +393,19 @@ export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
     'rm -rf *': 'ask',
     'rm -fr *': 'ask'
   },
+  // **Searching the folder never asks.** Under `'*': 'ask'` a task's agent
+  // that greps its own output to check it stopped the turn on a click nobody
+  // was there to give (live-autorun on 2.0.27); an unattended task must not
+  // park on its own verification grep. `glob` returns names only. `grep` is
+  // the accepted trade-off: 2.x's grep runs ripgrep with `--hidden` and
+  // matches this rule against the search *pattern*, never a path, so the
+  // values in `.env` and key files that `read` denies are reachable through
+  // it, and the secret-file globs cannot be applied here. The shell's
+  // `grep -r` was already allowed by the `bash` map's `'*': 'allow'`, so the
+  // tool opens nothing the shell did not. A path outside the project still
+  // asks `external_directory`.
+  grep: 'allow',
+  glob: 'allow',
   webfetch: 'ask',
   external_directory: 'ask',
   // The skill tool asks `skill` with the skill's name as its pattern; under
@@ -867,9 +924,11 @@ function profileWithOwnSkills(
   return { ...profile, skill, external_directory: external }
 }
 
+/** The conversation profile, ending with Code Mode's entries ({@link CINNA_TOOL_PERMISSIONS}), plus the skill folders' reads. */
 function profileWithSkillReads(skillPaths: readonly string[]): Record<string, unknown> {
-  if (skillPaths.length === 0) return CONVERSATION_PERMISSIONS
+  const base = { ...CONVERSATION_PERMISSIONS, ...CINNA_TOOL_PERMISSIONS }
+  if (skillPaths.length === 0) return base
   const external: Record<string, string> = { '*': 'ask' }
   for (const path of skillPaths) external[`${path.replaceAll('\\', '/').replace(/\/+$/, '')}/*`] = 'allow'
-  return { ...CONVERSATION_PERMISSIONS, external_directory: external }
+  return { ...base, external_directory: external }
 }

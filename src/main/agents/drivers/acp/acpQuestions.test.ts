@@ -228,3 +228,56 @@ describe('a question asked as a permission (Antigravity’s ask_question)', () =
     expect(permissionAsQuestion('antigravity', { ...ASK, options: [] })).toBeNull()
   })
 })
+
+describe('OpenCode 2’s question tool (`elicitation/create`, captured from 2.0.27)', () => {
+  /** The request 2.0.27 sent for a two-question `question` call, verbatim. */
+  const OPENCODE_QUESTIONS = {
+    mode: 'form', sessionId: 'ses_oc', toolCallId: 'call_t', message: 'Questions',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        q0: { type: 'string', title: 'Pick', description: 'Pick one?', oneOf: [{ const: 'A', title: 'A', description: 'a' }, { const: 'B', title: 'B', description: 'b' }] },
+        q0_custom: { type: 'string', title: 'Pick (other)', description: 'Type your own answer' },
+        q1: { type: 'array', title: 'Extras', description: 'Which extras?', items: { anyOf: [{ const: 'X', title: 'X', description: 'x' }, { const: 'Y', title: 'Y', description: 'y' }] } },
+        q1_custom: { type: 'string', title: 'Extras (other)', description: 'Add your own answer' }
+      },
+      required: []
+    }
+  } as unknown as CreateElicitationRequest
+
+  it('asks each `q<n>` with its description as the question and its title as the header, and not the `_custom` boxes', () => {
+    const form = toInputQuestions(OPENCODE_QUESTIONS)
+    expect(form?.questions).toEqual([
+      { question: 'Pick one?', header: 'Pick', multiSelect: false, options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }] },
+      { question: 'Which extras?', header: 'Extras', multiSelect: true, options: [{ label: 'X', description: 'x' }, { label: 'Y', description: 'y' }] }
+    ])
+    expect(form?.fields).toEqual([
+      { key: 'q0', multiple: false, custom: 'q0_custom' },
+      { key: 'q1', multiple: true, custom: 'q1_custom' }
+    ])
+  })
+
+  it('takes a lone question’s text from its description, not the generic “Questions”', () => {
+    const schema = (OPENCODE_QUESTIONS as unknown as { requestedSchema: { properties: Record<string, unknown> } }).requestedSchema
+    const { q0, q0_custom } = schema.properties
+    const form = toInputQuestions({ ...OPENCODE_QUESTIONS, requestedSchema: { type: 'object', properties: { q0, q0_custom } } } as unknown as CreateElicitationRequest)
+    expect(form?.questions.map((q) => q.question)).toEqual(['Pick one?'])
+  })
+
+  it('answers chosen labels in their fields and a typed answer in the `_custom` companion, as 2.0.27 accepted it', () => {
+    const form = toInputQuestions(OPENCODE_QUESTIONS)!
+    expect(toElicitationContent(form, [['B'], ['X', 'Y', 'also Z']])).toEqual({ q0: 'B', q1: ['X', 'Y'], q1_custom: 'also Z' })
+  })
+
+  it('writes a typed single answer only into the companion', () => {
+    const form = toInputQuestions(OPENCODE_QUESTIONS)!
+    expect(toElicitationContent(form, [['my own'], []])).toEqual({ q0_custom: 'my own' })
+  })
+
+  it('keeps a typed answer in the question’s own field when it has no companion', () => {
+    const schema = (OPENCODE_QUESTIONS as unknown as { requestedSchema: { properties: Record<string, unknown> } }).requestedSchema
+    const form = toInputQuestions({ ...OPENCODE_QUESTIONS, requestedSchema: { type: 'object', properties: { q0: schema.properties.q0 } } } as unknown as CreateElicitationRequest)!
+    expect(form.fields).toEqual([{ key: 'q0', multiple: false }])
+    expect(toElicitationContent(form, [['my own']])).toEqual({ q0: 'my own' })
+  })
+})

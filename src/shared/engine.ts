@@ -113,6 +113,25 @@ export const ANTIGRAVITY_BINARY_CHANNEL = 'engine:antigravity-binary-state'
  */
 export const PINNED_ENGINE_VERSION: string = RUNTIME_PINS.opencode.cli
 
+/**
+ * The major version an `opencode --version` line names, or null when the line
+ * names none. 2.x prints `opencode v2.0.27`; 1.x printed the bare `1.19.0`.
+ * The one place that reads the line's shape.
+ */
+export function opencodeMajorVersion(probed: string | null): number | null {
+  const major = probed ? /^(?:opencode\s+)?v?(\d+)\./i.exec(probed.trim())?.[1] : undefined
+  return major === undefined ? null : Number(major)
+}
+
+/**
+ * The version an `opencode --version` line names, for a label that already
+ * says "opencode": `opencode v2.0.27` → `v2.0.27`. Any other line is kept as
+ * it is (trimmed).
+ */
+export function opencodeVersionLabel(probed: string): string {
+  return probed.trim().replace(/^opencode\s+/i, '')
+}
+
 /** The Codex CLI version every Cinna-spawned Codex session runs on. */
 export const PINNED_CODEX_VERSION: string = RUNTIME_PINS.codex.cli
 

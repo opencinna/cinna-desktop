@@ -282,6 +282,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['B', 'D'] }
   },
   {
+    id: 'codex.permission.deny-ends-prompt', area: 'permissions & questions', surface: 'ACP method', name: 'reject_once (cancel) → session/prompt stopReason',
+    expectation: 'In `workspace-write`, an escalated `exec_command` and an `apply_patch` outside the workspace each ask with `allow_once`, an `allow_always` and `cancel` as the only `reject_once`, with no `decline` option. Cinna’s Deny sends `cancel`: nothing is written, the prompt ends `stopReason: "cancelled"`, and no further model request is made in it.',
+    owners: [`${DRIVER}#DENIAL_CONTINUE_PROMPT`, 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption'],
+    feature: 'One Deny would end the turn as if the user had pressed Stop; the driver tells a refusal-caused `cancelled` from a stop and continues the turn with the refusal. If Codex starts continuing on its own, that continuation would tell the model twice.',
+    flow: { steps: ['none'], note: 'no step refuses an ask' }
+  },
+  {
     id: 'codex.question.unavailable-in-default-mode', area: 'permissions & questions', surface: 'ACP field', name: 'request_user_input',
     expectation: 'In Default collaboration mode a `request_user_input` call is answered "unavailable in Default mode" and no client request is made.',
     owners: [`${POLICY}#default_mode_request_user_input`, 'src/main/agents/drivers/acp/acpQuestions.ts#toInputQuestions'],

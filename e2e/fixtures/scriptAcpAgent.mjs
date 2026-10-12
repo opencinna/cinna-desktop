@@ -10,6 +10,31 @@ if (!host || !host.startsWith('http://127.0.0.1:')) throw new Error('A loopback 
 const pending = new Map()
 const sessions = new Map()
 
+/**
+ * What OpenCode does after it answers `session/new` or `session/load`: connect
+ * the session's MCP servers and list their tools. The driver waits for Cinna's
+ * server to see that listing before the first prompt (`awaitCinnaTools`), so a
+ * fake that listed only inside a prompt would cost every session that wait's
+ * ceiling. Fire and forget; a server that is gone is the driver's problem.
+ */
+function listCinnaTools(servers) {
+  const descriptor = (servers ?? []).find((server) => server.name === 'cinna' && server.type === 'http')
+  if (!descriptor?.url?.startsWith('http://127.0.0.1:')) return
+  setImmediate(async () => {
+    const client = new Client({ name: 'script-e2e-list', version: '1' })
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(descriptor.url), {
+        requestInit: { headers: Object.fromEntries((descriptor.headers ?? []).map(({ name, value }) => [name, value])) }
+      }))
+      await client.listTools()
+    } catch {
+      /* the session's server is gone or refused: nothing to list */
+    } finally {
+      await client.close().catch(() => undefined)
+    }
+  })
+}
+
 /** POST to the controller and read its JSON answer; the controller may hold it. */
 async function ask(path, body, signal) {
   const response = await fetch(`${host}${path}`, { method: 'POST', signal,
@@ -39,9 +64,10 @@ const app = agent({ name: 'script-e2e-acp' })
   .onRequest('session/new', (ctx) => {
     const sessionId = `script-${randomUUID()}`
     sessions.set(sessionId, ctx.params.mcpServers ?? [])
+    listCinnaTools(ctx.params.mcpServers)
     return { sessionId }
   })
-  .onRequest('session/load', (ctx) => { sessions.set(ctx.params.sessionId, ctx.params.mcpServers ?? []); return {} })
+  .onRequest('session/load', (ctx) => { sessions.set(ctx.params.sessionId, ctx.params.mcpServers ?? []); listCinnaTools(ctx.params.mcpServers); return {} })
   .onRequest('session/set_mode', () => ({}))
   .onRequest('session/set_config_option', () => ({ configOptions: [] }))
   .onRequest('session/prompt', async (ctx) => {

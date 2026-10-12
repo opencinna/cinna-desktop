@@ -17,6 +17,8 @@
  * {
  *   "stderr": ["cannot find adapter"],   // written to stderr before serving
  *   "exitOnStart": { "code": 3, "afterMs": 5 },  // die instead of serving
+ *   // …only the first two starts, each saying why first (a respawn serves):
+ *   // "exitOnStart": { "code": 1, "firstStarts": 2, "stderr": ["database is locked"] },
  *   "ignoreSigterm": true,               // only SIGKILL will stop it
  *   "exitOnClose": 0,                    // exit code when the client hangs up
  *
@@ -52,6 +54,7 @@
  * { "kind": "notify", "method": "_auth/status_update", "params": {} }
  * { "kind": "request", "method": "fs/write_text_file", "params": {} }
  * { "kind": "permission", "toolCall": {}, "options": [] }
+ * { "kind": "permission", "noWait": true }  // any request: send it and go on without waiting for the answer
  * { "kind": "elicitation", "params": {} }
  * { "kind": "delay", "ms": 20 }
  * { "kind": "stderr", "text": "…" }
@@ -73,7 +76,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 export interface FakeAcpScript {
   stderr?: string[]
   stderrOnTermination?: string
-  exitOnStart?: { code?: number; afterMs?: number }
+  /**
+   * Die instead of serving. `firstStarts`: only the first that many starts of
+   * this script die (counted in the shared log), so a respawn serves; `stderr`
+   * is written only by a start that dies.
+   */
+  exitOnStart?: { code?: number; afterMs?: number; firstStarts?: number; stderr?: string[] }
   ignoreSigterm?: boolean
   exitOnClose?: number
   initialize?: FakeAcpHandlerScript
@@ -129,6 +137,8 @@ export type FakeAcpStep =
       toolCall?: Record<string, unknown>
       options?: Record<string, unknown>[]
       params?: Record<string, unknown>
+      /** Go on without waiting for the answer, which is still logged when it comes. */
+      noWait?: boolean
     }
   | { kind: 'elicitation'; sessionId?: string; params?: Record<string, unknown> }
   | { kind: 'delay'; ms: number }

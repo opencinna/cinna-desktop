@@ -29,6 +29,7 @@ import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
+import { shutdownOpencodeBootstraps } from '../agents/drivers/acp/acpLaunchers'
 import { installCloudUpdateFollow } from '../agents/cloudUpdateFollow'
 
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
@@ -84,7 +85,9 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   const conductor = conductorBridge.shutdown()
   // A login waiting on a browser sign-in holds a loopback port; it ends with the app.
   const logins = shutdownEngineLogins()
+  // Cinna's OpenCode database is created by an engine outside the pool; it ends with the app too.
+  const bootstraps = shutdownOpencodeBootstraps()
   toolInstallService.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, conductor, logins, mcpManager.disconnectAll()])
+  await Promise.all([processes, conductor, logins, bootstraps, mcpManager.disconnectAll()])
 }

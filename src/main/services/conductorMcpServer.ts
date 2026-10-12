@@ -47,6 +47,18 @@ export interface ConductorMcpSession {
    * it while the agent waits.
    */
   offers(name: string): boolean
+  /**
+   * How many `tools/list` requests this session has answered, on any of its
+   * connections. A mark taken before `session/new` or `session/load`, for
+   * {@link ConductorMcpSession.toolsListed}.
+   */
+  toolsListings(): number
+  /**
+   * Resolves with the time (`Date.now()`) of the first `tools/list` answered
+   * after `after` listings, or null when `timeoutMs` passed, the signal
+   * aborted or the session was disposed first. Never rejects.
+   */
+  toolsListed(after: number, timeoutMs: number, signal?: AbortSignal): Promise<number | null>
   abortCalls(reason?: string): void
   dispose(): Promise<void>
 }
@@ -64,6 +76,11 @@ interface SessionState {
   calls: Set<AbortController>
   /** The names the last `tools/list` served, on any of the session's connections. */
   offered: ReadonlySet<string>
+  /** `tools/list` requests answered so far, and when the last one was. */
+  listings: number
+  listedAt: number
+  /** Told after each answered `tools/list`; see `toolsListed`. */
+  listeners: Set<() => void>
   disposed: boolean
   handle: ConductorMcpSession
 }
@@ -119,7 +136,7 @@ export class ConductorMcpServer {
     const authorization = `Bearer ${randomBytes(32).toString('base64url')}`
     const state: SessionState = {
       path, authorization: Buffer.from(authorization), options,
-      connections: new Map(), calls: new Set(), offered: new Set(), disposed: false,
+      connections: new Map(), calls: new Set(), offered: new Set(), listings: 0, listedAt: 0, listeners: new Set(), disposed: false,
       handle: {
         descriptor: { type: 'http', name: 'cinna', url: `${this.origin}${path}`, headers: [{ name: 'Authorization', value: authorization }] },
         updateOptions: (next) => {
@@ -133,6 +150,26 @@ export class ConductorMcpServer {
           await Promise.allSettled([...state.connections.values()].map(({ server }) => server.sendToolListChanged()))
         },
         offers: (name) => !state.disposed && state.offered.has(name),
+        toolsListings: () => state.listings,
+        toolsListed: (after, timeoutMs, signal) => new Promise<number | null>((resolve) => {
+          if (state.listings > after) { resolve(state.listedAt); return }
+          if (state.disposed || signal?.aborted) { resolve(null); return }
+          const done = (value: number | null): void => {
+            clearTimeout(timer)
+            state.listeners.delete(check)
+            signal?.removeEventListener('abort', aborted)
+            resolve(value)
+          }
+          const check = (): void => {
+            if (state.disposed) done(null)
+            else if (state.listings > after) done(state.listedAt)
+          }
+          const aborted = (): void => done(null)
+          const timer = setTimeout(() => done(null), timeoutMs)
+          timer.unref?.()
+          state.listeners.add(check)
+          signal?.addEventListener('abort', aborted, { once: true })
+        }),
         abortCalls: (reason = 'Conductor stopped') => {
           for (const controller of state.calls) controller.abort(new Error(reason))
         },
@@ -142,6 +179,7 @@ export class ConductorMcpServer {
           this.sessions.delete(key)
           this.paths.delete(path)
           state.handle.abortCalls('Conductor session closed')
+          for (const listener of [...state.listeners]) listener()
           const connections = [...state.connections.values()]
           state.connections.clear()
           await Promise.allSettled(connections.map(({ server }) => server.close()))
@@ -206,7 +244,10 @@ export class ConductorMcpServer {
       reply(response, 403, 'Forbidden origin or host')
       return
     }
-    const state = this.paths.get(request.url ?? '')
+    // On the path alone: OpenCode 2 first connects with `?codemode=false`
+    // appended (its signal to a server that offers its own code mode) and
+    // falls back to the bare URL only after a 404. The bearer still decides.
+    const state = this.paths.get((request.url ?? '').split('?')[0])
     if (!state || state.disposed) {
       reply(response, 404, 'Unknown conductor session')
       return
@@ -262,6 +303,11 @@ export class ConductorMcpServer {
         const tool = provider.getTools().find((entry) => entry.name === name)!
         return { name, description: tool.description, inputSchema: { ...tool.inputSchema, type: 'object' as const } }
       })
+      // Counted when answered, not when asked: the client has the tools from
+      // here, and only an engine that holds them can offer them to the model.
+      state.listings++
+      state.listedAt = Date.now()
+      for (const listener of [...state.listeners]) listener()
       return { tools }
     })
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {

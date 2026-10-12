@@ -239,6 +239,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['B', 'D'] }
   },
   {
+    id: 'claude.permission.deny-continues', area: 'permissions & questions', surface: 'ACP method', name: 'reject_once → tool_result',
+    expectation: 'Answering a native tool’s ask (`Bash`, default mode) with its `reject_once` option leaves the command unrun, sends the model a tool_result "User refused permission to run tool", and the same `session/prompt` continues with another model request and ends `end_turn`.',
+    owners: ['src/main/agents/drivers/acp/acpDriver.ts#DENIAL_CONTINUE_PROMPT', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption'],
+    feature: 'The model the user refused is told so and carries on; the driver’s continuation after a refusal (for engines that end the prompt `cancelled`) must never fire on Claude, where it would send a second refusal notice.',
+    flow: { steps: ['none'], note: 'no step refuses an ask' }
+  },
+  {
     id: 'claude.question.elicitation-form', area: 'permissions & questions', surface: 'ACP method', name: 'elicitation/create (form)',
     expectation: 'With `elicitation.form` advertised, `AskUserQuestion` is offered to the model and a call to it arrives as `elicitation/create` in `form` mode, one `question_<n>` property per question with its options as `oneOf`, and its free-text `question_<n>_custom` companion (unmarked from adapter 0.89 for a client that is not AIR) read as no extra question; the accepted answer goes back to the model as the tool result.',
     owners: ['src/main/agents/drivers/acp/acpQuestions.ts#requestedSchema', 'src/main/agents/drivers/acp/acpQuestions.ts#isCustomAnswerField', `${LAUNCHERS}#elicitation`],

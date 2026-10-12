@@ -771,6 +771,20 @@ export const HANDOVER_HOW_TO_REPORT = [
 export type CinnaTasksSkillDelivery = { kind: 'skill' } | { kind: 'pointer'; path: string }
 
 /**
+ * How the model reaches a `tasks_*` tool. `direct` where the engine declares
+ * each one (Claude, Codex); `codeMode` on OpenCode, which
+ * declares MCP tools only as `tools.cinna.<tool>` inside its `execute` tool, in
+ * a catalog cut to a token budget — the eight task tools do not fit, and the
+ * largest, `tasks_create`, is left for the model to `search` for (2.0.27).
+ * Told nothing, a cheap model looked for `tasks_report` as a file and never
+ * reported (live-tasks on gpt-4.1-mini).
+ */
+export type CinnaToolCalls = 'direct' | 'codeMode'
+
+const CODE_MODE_CALLS =
+  ' Here they are not separate tools: call them inside your `execute` tool as `await tools.cinna.tasks_report({ ... })`, `tools.cinna.tasks_create(...)` and so on. The names are exact even where the Code Mode catalog does not list one; they are never files.'
+
+/**
  * What every folder agent's system prompt says about Cinna tasks — the stub
  * of the Cinna Task Protocol (`cinna-tasks` skill, §2.4).
  *
@@ -785,19 +799,27 @@ export type CinnaTasksSkillDelivery = { kind: 'skill' } | { kind: 'pointer'; pat
  * the prompt bytes; the per-turn facts travel in the wire-only turn header
  * (`threadContextService.buildTurnHeader`).
  */
-export function cinnaTasksSection(agentId: string, delivery: CinnaTasksSkillDelivery | null = null): string {
+export function cinnaTasksSection(
+  agentId: string,
+  delivery: CinnaTasksSkillDelivery | null = null,
+  calls: CinnaToolCalls = 'direct'
+): string {
   const open = delivery === null
     ? []
     : delivery.kind === 'skill'
       ? ['Open the `cinna-tasks` skill before your first `tasks_*` call.']
       : [`Read \`${delivery.path}\` before your first \`tasks_*\` call.`]
+  // Under Code Mode the rules name the callable path, not the bare name: told
+  // to "call `tasks_report`", gpt-4.1-mini grepped the folder for it 150 times
+  // with the line above two lines away.
+  const tool = (name: string): string => (calls === 'codeMode' ? `\`tools.cinna.${name}\`` : `\`${name}\``)
   return [
     '## Cinna tasks',
     '',
-    'Cinna tasks are shared work items on the `cinna` tool server; every tool starts with `tasks_`.',
+    `Cinna tasks are shared work items on the \`cinna\` tool server; every tool starts with \`tasks_\`.${calls === 'codeMode' ? CODE_MODE_CALLS : ''}`,
     '',
-    '1. **Report before ending a turn on an assigned task.** When the turn context shows a current task with `report required: yes`, call `tasks_report` with `done` or `failed` and a one-line `summary` before stopping, or `blocked` with a `question` when you cannot continue. Without it the task is left Waiting with "Ended without reporting" and the queue behind it pauses.',
-    '2. **Never wait inside a turn.** After `tasks_create` with an `assignee`, end the turn. The result arrives later in this conversation as a message beginning `Task result from <agent> on <ref>:`. Do not poll `tasks_list` or `tasks_get` for it.',
+    `1. **Report before ending a turn on an assigned task.** When the turn context shows a current task with \`report required: yes\`, call ${tool('tasks_report')} with \`done\` or \`failed\` and a one-line \`summary\` before stopping, or \`blocked\` with a \`question\` when you cannot continue. Without it the task is left Waiting with "Ended without reporting" and the queue behind it pauses.`,
+    `2. **Never wait inside a turn.** After ${tool('tasks_create')} with an \`assignee\`, end the turn. The result arrives later in this conversation as a message beginning \`Task result from <agent> on <ref>:\`. Do not poll ${tool('tasks_list')} or ${tool('tasks_get')} for it.`,
     '',
     `Your Cinna agent id is \`${agentId}\` — the \`origin.agent\` of any task or brief you create.`,
     ...open

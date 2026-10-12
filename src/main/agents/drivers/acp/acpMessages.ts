@@ -104,7 +104,7 @@ import {
 import type { AcpLauncherId, AcpStreamUpdate, AcpTelemetryFrame } from './types'
 import { readSdkMessage, SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
-import { BARE_MCP_TITLE, mcpCallOf } from './conductorToolPolicy'
+import { BARE_MCP_TITLE, codeModeCinnaTools, isCodeModeCall, mcpCallOf } from './conductorToolPolicy'
 import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS } from './antigravityLauncher'
 
 /** What Antigravity says on an approved ask whose work ran under another id (or was cancelled). */
@@ -310,6 +310,10 @@ export class AcpMessageStream {
    * permission ask silently, so nothing a model can steer may count here.
    */
   private readonly toolEvidence = new Map<string, { adapterName?: string; firstTitle?: string; firstKind?: string; rawInput?: Record<string, unknown>; mcp?: { server: string; tool: string } }>()
+  /** OpenCode 2 Code Mode calls (see {@link toolCall}). */
+  private readonly codeMode = new Set<string>()
+  /** Set by {@link deferCodeModeCalls}. */
+  private deferCodeMode = false
   /** `toolCallId` → the message its call part lives in, so its result joins it. */
   private readonly toolMessage = new Map<string, string>()
   /** Which message each ask's block lives in, so its decision joins it. */
@@ -343,6 +347,17 @@ export class AcpMessageStream {
 
   constructor(options?: { launcher?: AcpLauncherId }) {
     this.launcher = options?.launcher
+  }
+
+  /**
+   * Draw an OpenCode 2 `execute` only once it has finished — for a chat
+   * runtime whose conductor hides one that ran Cinna's tools alone behind its
+   * own blocks (`ConductorLease.ownsCodeModeCalls`). Which tools it ran is
+   * known only at the end, and a part once drawn cannot be taken back. Every
+   * other session draws the call while it runs.
+   */
+  deferCodeModeCalls(): void {
+    this.deferCodeMode = true
   }
 
   /**
@@ -717,13 +732,35 @@ export class AcpMessageStream {
         this.generation += 1
       }
     }
-    const name = this.toolNames.get(toolCallId) ?? 'tool'
+    let name = this.toolNames.get(toolCallId) ?? 'tool'
+    // **An OpenCode 2 `execute` (Code Mode) is drawn as it runs, like any
+    // tool**: its code as the input, so a long call, an ask raised inside it
+    // and a call the engine never finished all have a card. Only when it has
+    // finished does it say which tools its code ran; one first drawn then that
+    // ran a single Cinna tool is named for that tool (`cinna_<tool>`) — a card already drawn keeps `execute`, since a drawn
+    // part's name cannot change. A chat runtime defers the card to the end
+    // (`deferCodeModeCalls`), where its conductor hides one that ran Cinna's
+    // tools alone behind its own blocks, as it hid the direct call.
+    if (this.launcher === 'opencode' && name === 'execute' && (this.codeMode.has(toolCallId) || (fresh && isCodeModeCall(update)))) {
+      this.codeMode.add(toolCallId)
+      const status = str(update.status)
+      const finished = status === 'completed' || status === 'failed'
+      if (!this.toolMessage.has(toolCallId)) {
+        if (!finished && this.deferCodeMode) return {}
+        if (finished) {
+          const cinna = codeModeCinnaTools(update.rawOutput)
+          const distinct = cinna ? [...new Set(cinna)] : []
+          if (distinct.length === 1) name = `cinna_${distinct[0]}`
+        }
+      }
+    }
     const messageId =
       this.toolMessage.get(toolCallId) ?? (lane ? this.messageOfLane(lane) : this.owner())
     this.toolMessage.set(toolCallId, messageId)
 
     const state = this.messageState(messageId)
-    const input = nonEmptyRecord(this.rawInputOf(update))
+    const input = nonEmptyRecord(this.rawInputOf(update)) ??
+      (this.codeMode.has(toolCallId) ? this.toolEvidence.get(toolCallId)?.rawInput : undefined)
     const idx = this.slot(state, `tool:${toolCallId}`, () => ({
       kind: 'text',
       // The accumulator drops a part with empty text, so a tool call needs a

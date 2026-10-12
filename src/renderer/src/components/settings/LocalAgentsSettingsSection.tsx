@@ -27,6 +27,7 @@ import {
   isAgentEngine,
   loginFailureLead,
   loginPendingText,
+  opencodeVersionLabel,
   type AgentEngine,
   type EngineBinaryState
 } from '../../../../shared/engine'
@@ -286,7 +287,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         // from when nothing is configured is the OpenCode path tip's to say.
         text:
           binary?.state === 'ready'
-            ? `Ready — opencode ${binary.version ?? 'installed'}${
+            ? `Ready — opencode ${binary.version ? opencodeVersionLabel(binary.version) : 'installed'}${
                 binary.source === 'path'
                   ? ', your own installation'
                   : binary.source === 'configured'

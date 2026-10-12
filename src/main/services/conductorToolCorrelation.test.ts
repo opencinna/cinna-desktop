@@ -102,4 +102,63 @@ describe('a bare-named MCP call (Antigravity)', () => {
     expect(correlation.observe(call('Running tasks_report', 'execute'))).toBe(false)
     expect(new ConductorToolCorrelation().observe(call('Running tasks_report'))).toBe(false)
   })
+  describe('OpenCode 2 Code Mode (`execute`, probed on 2.0.27)', () => {
+    const exec = (status: string, rawOutput?: unknown): SessionNotification => ({ sessionId: 's', update: status === 'pending'
+      ? { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'execute', kind: 'other', status: 'pending', rawInput: {} }
+      : { sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: status as 'completed', ...(rawOutput ? { rawOutput } : {}) } } as SessionNotification)
+
+    it('does not hold a Cinna call made inside a running `execute`, which announces no call of its own', async () => {
+      // Mutation: drop the Code Mode check in `claim` and every inner call waits the full cap.
+      const tracker = new ConductorToolCorrelation()
+      expect(tracker.observe(exec('pending'))).toBe(false)
+      expect(tracker.claim('probe', 'cinna-1')).toBe('cinna-1')
+      let released = false
+      await Promise.race([tracker.sighted('cinna-1', 60_000).then(() => { released = true }), new Promise((resolve) => setTimeout(resolve, 20))])
+      expect(released).toBe(true)
+      expect(tracker.owns('c1')).toBe(false)
+    })
+
+    const chatRuntime = (): ConductorToolCorrelation => new ConductorToolCorrelation(undefined, { ownsCodeMode: true })
+
+    it('owns a chat runtime’s `execute` that ran Cinna’s tools alone once it completes, and not one that ran anything else', () => {
+      const cinnaOnly = chatRuntime()
+      cinnaOnly.observe(exec('pending'))
+      expect(cinnaOnly.observe(exec('completed', { metadata: { toolCalls: [{ tool: 'cinna.probe', status: 'completed' }, { tool: 'cinna.tasks_report', status: 'completed' }] } }))).toBe(true)
+      expect(cinnaOnly.owns('c1')).toBe(true)
+      // Finished: a later call is matched by name again.
+      expect(cinnaOnly.claim('probe', 'later')).toBe('later')
+
+      const mixed = chatRuntime()
+      mixed.observe(exec('pending'))
+      mixed.observe(exec('completed', { metadata: { toolCalls: [{ tool: 'cinna.probe' }, { tool: 'other.x' }] } }))
+      expect(mixed.owns('c1')).toBe(false)
+      const none = chatRuntime()
+      none.observe(exec('pending'))
+      none.observe(exec('completed', { metadata: { toolCalls: [] } }))
+      expect(none.owns('c1')).toBe(false)
+    })
+
+    it('never owns a folder agent’s `execute`: its card was drawn while it ran and must keep its result', () => {
+      // Mutation: drop the `ownsCodeMode` check and the folder agent's
+      // finished card loses its result part (an owned id's parts are blanked).
+      const folder = new ConductorToolCorrelation()
+      folder.observe(exec('pending'))
+      expect(folder.observe(exec('completed', { metadata: { toolCalls: [{ tool: 'cinna.probe', status: 'completed' }] } }))).toBe(false)
+      expect(folder.owns('c1')).toBe(false)
+    })
+
+    it('forgets the running calls at the turn’s end, so a later call waits for its notice again', async () => {
+      // Mutation: make `endTurn` a no-op and `claim` keeps skipping the wait.
+      const tracker = new ConductorToolCorrelation()
+      tracker.observe(exec('pending'))
+      tracker.endTurn()
+      tracker.claim('probe', 'cinna-2')
+      let released = false
+      await Promise.race([tracker.sighted('cinna-2', 60_000).then(() => { released = true }), new Promise((resolve) => setTimeout(resolve, 20))])
+      expect(released).toBe(false)
+      tracker.observe(frame('late', 'probe'))
+      await Promise.resolve()
+      expect(released).toBe(true)
+    })
+  })
 })

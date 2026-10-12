@@ -137,6 +137,41 @@ describe('conductor MCP loopback server', () => {
     expect(session.offers('x_y')).toBe(false)
   })
 
+  it('accepts the endpoint with a query string, as OpenCode 2 first connects with `?codemode=false`', async () => {
+    // Exact-matched, that first POST was a 404 ("Unknown conductor session")
+    // and the engine retried on the bare URL. The bearer still decides.
+    const { session } = await subject({ getProviders: () => [provider('probe')] })
+    const authorization = session.descriptor.headers[0].value
+    const queried = { ...session, descriptor: { ...session.descriptor, url: `${session.descriptor.url}?codemode=false` } }
+    expect(await status(queried, { Authorization: 'Bearer invalid' })).toBe(401)
+    const { client } = await connect(queried)
+    expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(['probe'])
+    expect(await status({ ...session, descriptor: { ...session.descriptor, url: `${session.descriptor.url}x?codemode=false` } }, { Authorization: authorization })).toBe(404)
+  })
+
+  it('counts answered tools/list requests and wakes a waiter on the next one, bounded and cancellable', async () => {
+    const { session } = await subject({ getProviders: () => [provider('probe')] })
+    expect(session.toolsListings()).toBe(0)
+    // Nothing listed yet: the wait times out to null rather than hanging.
+    expect(await session.toolsListed(0, 20)).toBeNull()
+    const aborted = new AbortController()
+    const cancelled = session.toolsListed(0, 10_000, aborted.signal)
+    aborted.abort()
+    expect(await cancelled).toBeNull()
+    const waiting = session.toolsListed(0, 10_000)
+    const { client } = await connect(session)
+    await client.listTools()
+    expect(typeof await waiting).toBe('number')
+    const mark = session.toolsListings()
+    expect(mark).toBeGreaterThan(0)
+    // Already past the mark: answered at once.
+    expect(await session.toolsListed(mark - 1, 10_000)).toBeGreaterThan(0)
+    // A waiter past the current count is released by a dispose, not the timeout.
+    const released = session.toolsListed(mark, 10_000)
+    await session.dispose()
+    expect(await released).toBeNull()
+  })
+
   it('creates a between-turn run before resolving providers and forwards Claude correlation and rich MCP content', async () => {
     const tool = provider('specialist')
     let currentProviders: ToolProvider[] = []

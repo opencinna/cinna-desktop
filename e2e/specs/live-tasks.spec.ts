@@ -28,11 +28,11 @@ import {
  *
  * ## Cost
  *
- * The model is the first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini on
+ * The model is the first of `PREFERRED_MODELS` the key lists (gpt-5.6-luna on
  * a normal key; logged per test). OpenCode sends ~10–15k tokens of system
  * prompt and tools per model request, and a file-writing turn is 2–6 requests,
  * so the whole file is roughly 300–500k input tokens and a few thousand output
- * tokens: **about $0.15–0.25 per run** on gpt-4.1-mini. Chat auto-titles are
+ * tokens: **about $0.15–0.25 per run** on gpt-4.1-mini (luna is priced lower). Chat auto-titles are
  * switched off so nothing else calls the model.
  *
  * ## What it does not prove

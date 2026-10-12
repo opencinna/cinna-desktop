@@ -313,6 +313,8 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       rmSync(sandbox.root, { recursive: true, force: true })
     } else {
       testInfo.annotations.push({ type: 'sandbox', description: sandbox.root })
+      // The main process's own account of the failure, beside the trace.
+      writeFileSync(testInfo.outputPath('main.log'), mainLog.join('').replace(/\x1b\[[0-9;]*m/g, ''))
     }
   }
 })

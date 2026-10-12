@@ -25,7 +25,7 @@ import { prepareCodexConductorPolicy } from './acp/codexConductorPolicy'
 import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
 import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
-import { engineAgentKey } from '../../engine/configGenerator'
+import { chatRuntimePermissions, engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
 import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
@@ -487,7 +487,9 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   if (chatContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: chatContext })
   const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
     ? await prepareCodexConductorPolicy(proposed, join(runtimeHost.getPath('userData'), 'acp')) : proposed, engine)
-  let proposed = await launcher.plan({ userId, agentId: candidateKey, folder: {
+  // A warm-only plan is only matched against a running process: it must not
+  // start one-time engine work (OpenCode's database bootstrap) on its own.
+  let proposed = await launcher.plan({ userId, agentId: candidateKey, warmOnly, folder: {
     name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: stableProcessCwd(engine) ? codexProcessCwd(candidateKey) : chatContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
   } })
   if ('error' in proposed) throw new Error(proposed.error)
@@ -639,7 +641,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       for (const [agentId, synthetic] of syntheticRuntimeProfiles) {
         if (synthetic.userId !== userId) continue
         const context = synthetic.context
-        input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: context.toolPolicy === 'none' ? { '*': 'deny' } : { '*': 'deny', 'cinna_*': 'allow' } })
+        input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy !== 'none') })
         input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'Chat title', prompt: TITLE_SYSTEM_PROMPT, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const [agentId, utility] of aiFunctionProfiles) {
@@ -647,7 +649,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       }
       for (const row of agentRepo.list(userId).filter(isChatConductor)) {
         const context = conductorContext(row)
-        input.agents.push({ agentId: row.id, slug: `chat-${row.id}`, description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: context.toolPolicy === 'none' ? { '*': 'deny' } : { '*': 'deny', 'cinna_*': 'allow' } })
+        input.agents.push({ agentId: row.id, slug: `chat-${row.id}`, description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy !== 'none') })
       }
       for (const row of agentRepo.list(userId).filter(isDevelopmentAgent)) {
         try {

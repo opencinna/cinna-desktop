@@ -180,3 +180,30 @@ export function antigravityContractDocInput(
     evidenceLinks: '[The ACP Engine Contract](../acp_contract.md)'
   }
 }
+
+export const OPENCODE_INTERFACE_DOC = 'docs/agents/local_agents/contracts/opencode_interface.md'
+
+/** The OpenCode doc's parameters. No adapter: `opencode acp` speaks ACP itself. */
+export function opencodeContractDocInput(
+  pins: { opencode: { cli: string } },
+  entries: readonly ContractEntry[],
+  areas: readonly ContractArea[],
+  steps: Readonly<Record<string, string>>
+): ContractDocInput {
+  return {
+    toolName: 'OpenCode',
+    cliVersion: pins.opencode.cli,
+    adapterPackage: null,
+    adapterVersion: null,
+    registryPath: 'src/main/agents/drivers/acp/contracts/opencode.contract.ts',
+    testPath: 'src/main/agents/drivers/acp/contracts/opencode.contract.test.ts',
+    snapshotPath: `src/main/agents/drivers/acp/contracts/snapshots/opencode-${pins.opencode.cli}.json`,
+    areas,
+    entries,
+    flowSteps: Object.entries(steps).filter(([step]) => step !== 'none'),
+    engine: 'opencode',
+    flowVariants: 'No Level 2 variant walks them for OpenCode: neither the no-billing `e2e/specs/runtime-flow.spec.ts` nor `make live-flow` runs it; the billed live specs are its end-to-end check. The config and environment are the production launcher’s, so the fake provider is an ordinary `openai_compatible` credential. A binary of your own runs the same tests with `CINNA_CONTRACT_OPENCODE=<binary> npm run test:contract -- src/main/agents/drivers/acp/contracts/opencode.contract.test.ts`.',
+    adapterPhrase: null,
+    evidenceLinks: '[The ACP Engine Contract](../acp_contract.md) and [The OpenCode Engine Contract](../opencode_contract.md)'
+  }
+}

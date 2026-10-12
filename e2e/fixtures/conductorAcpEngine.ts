@@ -9,7 +9,7 @@ export async function installConductorAcpEngine(cinna: CinnaApp, host: string, f
   const shim = join(cinna.sandbox.root, 'conductor-fake-opencode')
   writeFileSync(shim, [
     '#!/bin/sh',
-    'if [ "$1" = "--version" ]; then echo "1.18.27-e2e-fake"; exit 0; fi',
+    'if [ "$1" = "--version" ]; then echo "opencode v2.0.27-e2e-fake"; exit 0; fi',
     // Synthetic conductors own bare instruction folders; a scaffolded kit's
     // manifest remains the product's distinguishing feature on disk.
     ...(folderShim ? [`if [ -f cinna-agent.json ]; then exec ${quote(folderShim)} "$@"; fi`] : []),

@@ -12,7 +12,7 @@
  * 2. **What the client declares** at `initialize` — which is not the same for
  *    both engines, and the difference is load-bearing: Claude disables its
  *    `AskUserQuestion` tool unless the client advertises `elicitation.form`,
- *    while OpenCode has no question path over ACP at all.
+ *    and OpenCode bridges its `question` tool to it too.
  * 3. **What `session/new` carries** — the `_meta` the Claude adapter reads as
  *    SDK options, and the MCP servers.
  * 4. **What must be set on the session** before the first prompt.
@@ -69,9 +69,9 @@
  * desktop's choice wins over the folder's `defaultMode` on both branches.
  */
 
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { InitializeRequest, McpServer, NewSessionRequest } from '@agentclientprotocol/sdk'
 import type { CustomAgentConfig } from '../../../../shared/customAgents'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
@@ -92,6 +92,7 @@ import { airClientMeta } from './acpActivity'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
 import { ACP_TOOL_STALL_MS } from './acpToolStall'
+import { startAcpConnection } from './acpConnection'
 
 const logger = createLogger('acp-launcher')
 
@@ -109,7 +110,19 @@ export interface AcpAgentFolder {
   runtimeMode: AcpRuntimeMode
 }
 
-export type AcpLaunchContext = { userId: string; agentId: string; binding?: string; accessToken?: string } & (
+export type AcpLaunchContext = {
+  userId: string
+  agentId: string
+  binding?: string
+  accessToken?: string
+  /**
+   * The plan is only compared with a process that is already warm and is
+   * never started from (a `warmOnly` AI function). A launcher skips the
+   * one-time work a start would need — OpenCode's database bootstrap — so a
+   * background check never spawns an engine.
+   */
+  warmOnly?: boolean
+} & (
   | { folder: AcpAgentFolder; custom?: never }
   | { folder?: never; custom: CustomAgentConfig; accessToken?: string }
 )
@@ -159,6 +172,18 @@ export interface AcpLaunchPlan {
    * replayed, when its tool list changes.
    */
   sessionToolsFixed?: boolean
+  /**
+   * The engine connects a session's MCP servers only after `session/new` (or
+   * `session/load`) has answered, so a first prompt must wait for Cinna's
+   * server to have answered the session's `tools/list` — and then `settleMs`
+   * more, the time the engine still needs before the model is offered those
+   * tools. Set by OpenCode (probed on 2.0.27: a prompt 80 ms after the list
+   * ran with no Cinna tool, one 110 ms after it had them). Absent: no wait,
+   * the only safe answer for an engine never measured: one that connects
+   * lazily, at its first prompt, would otherwise cost every new session the
+   * whole bounded wait. See the driver's `awaitCinnaTools`.
+   */
+  awaitMcpTools?: { settleMs: number }
   spec: AcpLaunchSpec
   init: InitializeRequest
   /** Merged into `session/new` and `session/load` — `_meta`, `mcpServers`. */
@@ -265,10 +290,16 @@ export interface OpencodeLauncherDeps {
   binary(): Promise<{ path: string; version: string | null }>
   /** Every credential and folder agent this desktop has, as `configGenerator` wants them. */
   configInput(userId: string): Promise<EngineConfigInput>
-  /** Where per-agent configs are written — `<userData>/acp`. */
+  /** Where per-agent configs, and Cinna's own OpenCode database, are written — `<userData>/acp`. */
   configRoot(): string
   /** The child environment before this launcher adds to it (the Child Inherit Set). */
   childEnv(): Promise<Record<string, string>>
+  /**
+   * Creates a missing `OPENCODE_DB`: one engine started with `spec` until it
+   * has answered `init`, then stopped. Defaults to {@link bootstrapOpencodeAcp};
+   * a test seam. See {@link ensureOpencodeDatabase} for why it exists.
+   */
+  bootstrapDatabase?(spec: AcpLaunchSpec, init: InitializeRequest): Promise<void>
 }
 
 /**
@@ -362,11 +393,25 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       // agent entry's `model` is ignored over ACP (spike Q1), so without a
       // top-level `model` a session starts on whatever the engine picks first
       // — and picks it silently.
-      const config = { ...built.config, model: modelRef }
+      //
+      // **The user's own Claude and agent skills stay out.** OpenCode's
+      // built-in `opencode.config.compatibility` plugin reads
+      // `~/.claude/skills` and `~/.agents/skills` (and a project's `.claude` /
+      // `.agents` skills) into every session; the `-` entry turns that plugin
+      // off. Probed on 2.0.27: both personal folders gone, the kit's skill
+      // (`skills.paths`) still listed, no warning. The project folders go too,
+      // which is accepted. 2.x has no narrower switch, and `OPENCODE_TEST_HOME`
+      // would also move `~/…` for read/edit and the shell, and the cloud
+      // credential lookups.
+      const config = { ...built.config, model: modelRef, plugins: [OPENCODE_NO_COMPATIBILITY_PLUGIN] }
       const dir = join(deps.configRoot(), 'opencode', configDirName(ctx.agentId))
       const configPath = join(dir, 'opencode.json')
+      const database = opencodeDatabasePath(deps.configRoot())
       try {
         mkdirSync(dir, { recursive: true })
+        // Before spawn, always: 2.x given an `OPENCODE_DB` whose directory is
+        // missing dies without a word, and the client then waits for ever.
+        mkdirSync(dirname(database), { recursive: true })
         // **Written to a temp file and renamed**, as the shared server's own
         // writer did: the engine reads this file at start, and a process that
         // died halfway through a plain write would leave a truncated config for
@@ -398,45 +443,70 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
         // We pin and verify the binary; an engine that replaces itself
         // underneath that pin is what the checksum exists to prevent.
         OPENCODE_DISABLE_AUTOUPDATE: '1',
+        // **Cinna's sessions in Cinna's own database**, not the user's shared
+        // `~/.local/share/opencode/opencode.db`, which 2.x would otherwise
+        // migrate and write in place. A chat whose session id lives in that
+        // shared database misses on `session/load` and starts a fresh engine
+        // session (its transcript stays). Only the database moves: logs and
+        // shell output captures still go to XDG data, which is accepted —
+        // `XDG_DATA_HOME` would leak into every shell command the agent runs.
+        OPENCODE_DB: database,
         ...built.env
       }
-      // **Neither `OPENCODE_CLIENT` nor `OPENCODE_ENABLE_QUESTION_TOOL` is
-      // set, and that is a decision rather than an omission.** `opencode acp`
-      // sets `OPENCODE_CLIENT=acp` itself, and the `question` tool is
-      // registered only for `app`/`cli`/`desktop` clients or behind that flag.
-      // Turning it on would hand the model a tool whose answer has no channel
-      // over ACP: the probe's question hung for 150 s and had to be cancelled,
-      // because the adapter bridges no `question.asked` and never calls
-      // `elicitation/create` (spike Q3). A model that asks in prose is a
-      // degradation; a tool that hangs the turn is a defect.
+      // **Questions: `elicitation.form` is declared.** OpenCode always
+      // registers its `question` tool and bridges it to `elicitation/create`
+      // for a client that declares form elicitation (probed on 2.0.27; the
+      // form is mapped in `acpQuestions.ts`), as Claude's and Codex's adapters do.
+      const init: InitializeRequest = {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        // No `fs`, no `terminal` — both are removed in the draft v2, and a
+        // client that never declared them is forward-compatible. Form
+        // elicitation: see the question note above.
+        clientCapabilities: { elicitation: { form: {} } },
+        clientInfo: CLIENT_INFO
+      }
+      const spec: AcpLaunchSpec = {
+        command: binary.path,
+        args: ['acp'],
+        env,
+        cwd: ctx.folder.path,
+        key: specKey([
+          binary.path,
+          binary.version ?? '',
+          'acp',
+          digest.config,
+          digest.env,
+          configPath,
+          database,
+          // The inherited PATH decides which `git` the engine runs — the
+          // developer-tool shims come and go with Apple's command line tools.
+          env.PATH ?? ''
+        ]),
+        // See {@link OPENCODE_EARLY_EXIT_RETRY}; the bootstrap below inherits it.
+        earlyExitRetry: OPENCODE_EARLY_EXIT_RETRY
+      }
+
+      // **A missing database is created by one engine first** — see
+      // {@link ensureOpencodeDatabase}. A failed bootstrap is logged and the
+      // plan still returned, so the turn's own spawn reports whatever went
+      // wrong in the words every other launch failure uses. A warm-only plan
+      // starts nothing, so it creates nothing either.
+      if (!ctx.warmOnly) {
+        await ensureOpencodeDatabase(database, () =>
+          (deps.bootstrapDatabase ?? bootstrapOpencodeAcp)({ ...spec, cwd: dirname(database) }, init)
+        ).catch((err: unknown) => {
+          logger.warn('could not create Cinna’s OpenCode database before the first start', {
+            agentId: ctx.agentId,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        })
+      }
 
       return {
-        spec: {
-          command: binary.path,
-          args: ['acp'],
-          env,
-          cwd: ctx.folder.path,
-          key: specKey([
-            binary.path,
-            binary.version ?? '',
-            'acp',
-            digest.config,
-            digest.env,
-            configPath,
-            // The inherited PATH decides which `git` the engine runs — the
-            // developer-tool shims come and go with Apple's command line tools.
-            env.PATH ?? ''
-          ])
-        },
-        init: {
-          protocolVersion: ACP_PROTOCOL_VERSION,
-          // No `fs`, no `terminal` — both are removed in the draft v2, and a
-          // client that never declared them is forward-compatible. No
-          // `elicitation` either: see the question note above.
-          clientCapabilities: {},
-          clientInfo: CLIENT_INFO
-        },
+        spec,
+        init,
         session: { mcpServers: [] },
+        awaitMcpTools: { settleMs: OPENCODE_MCP_SETTLE_MS },
         setup: {
           configOptions: [
             // The agent definition first: it carries the prompt and the
@@ -454,6 +524,141 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       }
     }
   }
+}
+
+/** {@link AcpLaunchPlan.awaitMcpTools} `settleMs` for OpenCode: the ~100 ms measured, with margin. */
+export const OPENCODE_MCP_SETTLE_MS = 300
+
+/**
+ * **A start that dies on `database is locked` is started again.** Concurrent
+ * OpenCode 2.0.27 processes on the shared `OPENCODE_DB` lose about one start
+ * in twenty at open — `SQLiteError: database is locked`, then *"Standalone
+ * server exited before reporting readiness"* — even with
+ * {@link ensureOpencodeDatabase} and with starts serialised (likely: 2.x sets
+ * WAL before its busy_timeout). A respawn a few hundred milliseconds later
+ * opens cleanly (`opencode.launch.database-first-start`). Three spawns in all.
+ *
+ * **Matched on the readiness line, not the SQLite error.** The lock reaches
+ * only the engine's `log/opencode.log`; stderr carries the readiness line and
+ * a stack, nothing more (4/4 lost starts captured). So any server that dies
+ * before readiness is retried, a non-transient one too — two extra spawns,
+ * inside the one start timeout, before the same error surfaces.
+ */
+export const OPENCODE_EARLY_EXIT_RETRY = {
+  stderr: /Standalone server exited before reporting readiness/,
+  attempts: 3
+} as const
+
+/** The `plugins` entry that turns off OpenCode's Claude/agents-folder compatibility plugin. */
+export const OPENCODE_NO_COMPATIBILITY_PLUGIN = '-opencode.config.compatibility'
+
+/**
+ * In-flight and finished creations of a missing `OPENCODE_DB`, by path. A
+ * failed one is removed, so the next start tries again.
+ */
+const opencodeBootstraps = new Map<string, Promise<void>>()
+
+/**
+ * **One engine creates a missing database; the others wait for it.** OpenCode
+ * 2.0.27 bootstraps its schema with a check outside its transaction followed by
+ * plain `CREATE TABLE`s, so several `opencode acp` started together on a
+ * database that does not exist yet race: the losers' server dies on
+ * `database is locked` or `table … already exists`, and `acp` exits with
+ * *"Standalone server exited before reporting readiness"* (probed: 2 of 3
+ * concurrent starts died in most trials). Every user upgrading to Cinna's own
+ * database starts on an empty one, so the first autorun or delegation burst
+ * would lose turns at spawn (`opencode.launch.database-first-start`).
+ *
+ * Answering `initialize` is enough: `acp` awaits its standalone server's
+ * readiness — the database opened and migrated — before it reads a request
+ * (the losers fail inside that wait), and every table was there at the answer
+ * (probed: 42 of 42 concurrent starts reached `session/new` after an
+ * initialize-only bootstrap). No session is created for it.
+ *
+ * **Not the whole story.** Concurrent starts on an existing database still
+ * lose a process now and then on `database is locked` in the contract's
+ * rounds — with this bootstrap, and also with every start serialised until the
+ * one before had answered `initialize` — so a start that overlaps another
+ * OpenCode process's database work can die at open on 2.0.27 regardless.
+ * {@link OPENCODE_EARLY_EXIT_RETRY} starts such a process again.
+ *
+ * A finished creation is remembered for the process's life, so an engine that
+ * never writes a database (the E2E fakes) is not bootstrapped on every turn.
+ */
+export async function ensureOpencodeDatabase(database: string, create: () => Promise<void>): Promise<void> {
+  const pending = opencodeBootstraps.get(database)
+  if (pending) return pending
+  if (existsSync(database)) return
+  const created = create()
+  opencodeBootstraps.set(database, created)
+  created.catch(() => {
+    if (opencodeBootstraps.get(database) === created) opencodeBootstraps.delete(database)
+  })
+  return created
+}
+
+/**
+ * The bootstrap's own start timeout, shorter than the turn's
+ * (`ACP_START_TIMEOUT_MS`): a turn waits for the bootstrap and then for its
+ * own start, so a hung bootstrap would otherwise double the wait before the
+ * turn's error. {@link OPENCODE_EARLY_EXIT_RETRY}'s respawns share it. A
+ * bootstrap that runs out is logged and the turn starts anyway.
+ */
+export const OPENCODE_BOOTSTRAP_START_TIMEOUT_MS = 10_000
+
+/**
+ * Bootstraps in flight, by the controller that stops them. They run outside
+ * `acpProcessPool`, so app shutdown stops them here
+ * ({@link shutdownOpencodeBootstraps}).
+ */
+const bootstrapsInFlight = new Map<AbortController, Promise<void>>()
+/** Set at shutdown: a plan made after it starts no bootstrap engine. */
+let bootstrapsClosed = false
+
+/**
+ * The default {@link OpencodeLauncherDeps.bootstrapDatabase}: start the engine,
+ * complete `initialize`, stop it. `startAcpConnection` bounds the wait
+ * ({@link OPENCODE_BOOTSTRAP_START_TIMEOUT_MS}) and kills the process tree on
+ * every path, an abort from {@link shutdownOpencodeBootstraps} included.
+ */
+export async function bootstrapOpencodeAcp(spec: AcpLaunchSpec, init: InitializeRequest): Promise<void> {
+  if (bootstrapsClosed) throw new Error('The app is closing; Cinna’s OpenCode database was not created.')
+  const abort = new AbortController()
+  const run = (async () => {
+    const connection = await startAcpConnection(spec, init, {
+      startTimeoutMs: OPENCODE_BOOTSTRAP_START_TIMEOUT_MS,
+      signal: abort.signal
+    })
+    await connection.dispose()
+  })()
+  bootstrapsInFlight.set(abort, run.catch(() => undefined))
+  try {
+    await run
+  } finally {
+    bootstrapsInFlight.delete(abort)
+  }
+}
+
+/**
+ * App shutdown: stop every database bootstrap still starting, and refuse new
+ * ones. The abort reaches the engine's start synchronously, so its process
+ * tree is signalled before the first await, as `shutdownHubCore` requires;
+ * the promise settles once each is gone.
+ */
+export function shutdownOpencodeBootstraps(): Promise<void> {
+  bootstrapsClosed = true
+  const pending = [...bootstrapsInFlight.entries()]
+  for (const [abort] of pending) abort.abort()
+  return Promise.all(pending.map(([, settled]) => settled)).then(() => undefined)
+}
+
+/**
+ * `OPENCODE_DB` for every Cinna OpenCode process: one database beside the
+ * per-agent configs, `<configRoot>/opencode-data/opencode.db`. Shared by the
+ * agents as the user's own database is shared by theirs.
+ */
+export function opencodeDatabasePath(configRoot: string): string {
+  return join(configRoot, 'opencode-data', 'opencode.db')
 }
 
 /* -------------------------------------------------------------------- Claude */

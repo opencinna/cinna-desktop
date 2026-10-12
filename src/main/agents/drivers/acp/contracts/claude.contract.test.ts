@@ -11,6 +11,8 @@ import { parseClaudeAuthStatus } from '../claudeAuth'
 import { airClientMeta } from '../acpActivity'
 import { readContextCategories } from '../acpTelemetry'
 import { toInputQuestions } from '../acpQuestions'
+import { pickPermissionOption } from '../acpPermissions'
+import type { PermissionOption } from '@agentclientprotocol/sdk'
 import { resolveOfferedModel, selectedModelOf } from '../acpMessages'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CLAUDE_CONTRACT } from './claude.contract'
@@ -140,7 +142,10 @@ const seen = {
     /** Every permission ask of the scenario, in order. */
     permissions: [] as AdapterMessage[],
     /** Every `sessionUpdate` kind of the background-shell and subagent prompts, and the updates of the activity kinds. */
-    activityKinds: [] as string[], activity: [] as Json[] }
+    activityKinds: [] as string[], activity: [] as Json[] },
+  /** Scenario E: a native Bash ask answered with Cinna's Deny (`pickPermissionOption(…, 'reject')`). */
+  deny: { asks: [] as AdapterMessage[], sent: [] as (string | null)[], answer: null as AdapterMessage | null,
+    turns: [] as ClaudeProviderTurn[], ran: false }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -487,6 +492,43 @@ async function toolsScenario(binary: string, trap: EgressTrap): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario E */
+
+/** A native Bash call in `default` mode, its ask refused the way Cinna's Deny answers it. */
+async function denyScenario(binary: string, trap: EgressTrap): Promise<void> {
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  let script: ClaudeProviderReply[] = []
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : (script.shift() ?? { kind: 'text', text: 'OK' }))
+  const scratch = makeClaudeScratch('cinna-contract-claude-deny-', { providerPort: provider.port, trapPort: trap.port })
+  try {
+    const made = join(scratch.cwd, 'made.txt')
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary },
+      answer: (request) => {
+        if (request.method !== 'session/request_permission') return undefined
+        seen.deny.asks.push(request)
+        const optionId = pickPermissionOption((request.params?.options ?? []) as PermissionOption[], 'reject')
+        seen.deny.sent.push(optionId)
+        return optionId ? { outcome: { outcome: 'selected', optionId } } : undefined
+      } })
+    await connection.rpc('initialize', initParams)
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+      systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {} } } } }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) return
+    await connection.rpc('session/set_mode', { sessionId, modeId: 'default' })
+    script = [{ kind: 'tool', name: 'Bash', input: { command: `touch '${made}'`, description: 'Create a file' } }, { kind: 'text', text: 'AFTER_DENY' }]
+    const from = provider.turns.length
+    seen.deny.answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Create made.txt.' }] }, 90_000)
+    seen.deny.turns = conversation(provider.turns.slice(from))
+    seen.deny.ran = existsSync(made)
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /** A tool call update's output as text, from `content[]` and `rawOutput` (the two places `acpMessages.toolOutputText` reads). */
 function outputText(update: Json): string {
   const content = ((update.content as Json[] | undefined) ?? []).map((block) => {
@@ -552,6 +594,9 @@ function snapshot(): Json {
       title: { folderSession: titles(seen.folderTurns), restrictedChat: titles(seen.policyTurns) },
       refusedEgressHosts: [...new Set(seen.egress)].sort()
     },
+    deny: { stopReason: seen.deny.answer?.result?.stopReason ?? null, asks: seen.deny.asks.length,
+      sentKind: ((seen.deny.asks[0]?.params?.options as Json[] | undefined) ?? []).find((option) => option.optionId === seen.deny.sent[0])?.kind ?? null,
+      conversationRequests: seen.deny.turns.length, toolResultAfterDeny: seen.deny.turns[1]?.toolResults.at(-1) ?? null, commandRan: seen.deny.ran },
     restrictedPolicy: { options: seen.policyOptions ? { ...seen.policyOptions, systemPrompt: '<marker>' } : null,
       offeredTools: [...new Set(conversation(seen.policyTurns).flatMap((turn) => turn.tools))].sort() }
   }
@@ -583,6 +628,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       await policyScenario(binary, trap)
       await modelScenario(binary, trap)
       await toolsScenario(binary, trap)
+      await denyScenario(binary, trap)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
     } finally {
       seen.egress = [...trap.attempts]
@@ -787,6 +833,18 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect(((params.options as Json[] | undefined) ?? []).map((option) => option.kind).sort()).toEqual(['allow_always', 'allow_once', 'reject_once'])
     // `allow_once` ran the call, and the model got its result.
     expect(seen.policyTurns.flatMap((turn) => turn.toolResults)).toContain('OK')
+  })
+
+  it(entry('claude.permission.deny-continues'), () => {
+    expect(seen.deny.asks.length, 'the Bash call raised no ask').toBe(1)
+    const sent = ((seen.deny.asks[0].params?.options as Json[] | undefined) ?? []).find((option) => option.optionId === seen.deny.sent[0])
+    expect(sent?.kind).toBe('reject_once')
+    expect(seen.deny.ran, 'the refused command ran').toBe(false)
+    // The same prompt went on: a second request carrying the refusal, then the end.
+    expect(seen.deny.turns.length).toBe(2)
+    expect(seen.deny.turns[1].toolResults.at(-1)).toContain('User refused permission to run tool')
+    expect(seen.deny.answer?.error).toBeUndefined()
+    expect(seen.deny.answer?.result?.stopReason).toBe('end_turn')
   })
 
   it(entry('claude.question.elicitation-form'), () => {

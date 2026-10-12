@@ -221,7 +221,9 @@ async function listLocalModels(): Promise<CachedModel[]> {
  * cannot run instead of the agent merely being absent from the engine.
  */
 export function collectEngineAgents(userId: string): EngineAgentInput[] {
-  const context = resolveDesktopPromptContext('opencode')
+  // OpenCode reaches the `tasks_*` tools only through `execute`, and the
+  // prompt has to say so (`CinnaToolCalls`).
+  const context = { ...resolveDesktopPromptContext('opencode'), cinnaCalls: 'codeMode' as const }
   const providers = providerService.listMerged()
   const out: EngineAgentInput[] = []
 

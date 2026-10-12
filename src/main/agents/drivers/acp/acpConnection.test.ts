@@ -146,6 +146,78 @@ describe('startAcpConnection', () => {
   })
 })
 
+describe('early-exit retry', () => {
+  const LOCKED = /database is locked/
+  const starts = (fake: FakeAcp): number => fake.log().filter((e) => e.dir === 'start').length
+
+  function retryingAgent(script: FakeAcpScript, attempts = 3): FakeAcp {
+    const fake = fakeAgent(script)
+    fake.spec.earlyExitRetry = { stderr: LOCKED, attempts }
+    return fake
+  }
+
+  it('respawns a process that died on a matching stderr line, and returns the one that answered', async () => {
+    const fake = retryingAgent({
+      exitOnStart: { code: 1, firstStarts: 2, stderr: ['SQLiteError: database is locked'] }
+    })
+
+    const connection = await start(fake, { retryDelayMs: 10 })
+
+    expect(connection.initialized.protocolVersion).toBe(1)
+    expect(starts(fake)).toBe(3)
+  })
+
+  it('does not respawn on an exit whose stderr does not match', async () => {
+    const fake = retryingAgent({
+      exitOnStart: { code: 3, firstStarts: 1, stderr: ['fake-acp: no adapter installed'] }
+    })
+
+    await expect(start(fake, { retryDelayMs: 10 })).rejects.toThrow(/exited \(code 3\)[\s\S]*no adapter installed/)
+    expect(starts(fake)).toBe(1)
+  })
+
+  it('throws the last attempt’s error, with its stderr tail, once the attempts run out', async () => {
+    const fake = retryingAgent({ exitOnStart: { code: 1, stderr: ['SQLiteError: database is locked'] } }, 2)
+
+    await expect(start(fake, { retryDelayMs: 10 })).rejects.toThrow(
+      /exited \(code 1\) before answering initialize[\s\S]*database is locked/
+    )
+    expect(starts(fake)).toBe(2)
+  })
+
+  it('stops retrying once the signal is aborted', async () => {
+    const fake = retryingAgent({ exitOnStart: { code: 1, stderr: ['SQLiteError: database is locked'] } }, 5)
+    const controller = new AbortController()
+
+    const starting = start(fake, { retryDelayMs: 2_000, signal: controller.signal })
+    const rejected = expect(starting).rejects.toThrow(/database is locked/)
+    await waitFor(() => starts(fake) === 1, 'the first start')
+    await settle(400)
+    controller.abort()
+    await rejected
+    await settle(100)
+    expect(starts(fake)).toBe(1)
+  })
+
+  it('does not respawn once the start timeout has too little left for another attempt', async () => {
+    // The start timeout bounds the whole sequence, delays included.
+    const fake = retryingAgent({ exitOnStart: { code: 1, stderr: ['SQLiteError: database is locked'] } }, 3)
+
+    await expect(start(fake, { startTimeoutMs: 1_200, retryDelayMs: 500 })).rejects.toThrow(/database is locked/)
+    expect(starts(fake)).toBe(1)
+  })
+
+  it('never retries a spawn error', async () => {
+    const fake = retryingAgent({}, 3)
+    await expect(
+      startAcpConnection({ ...fake.spec, command: '/nope/not-an-agent', earlyExitRetry: { stderr: /ENOENT/, attempts: 3 } }, INIT, {
+        startTimeoutMs: 5_000,
+        retryDelayMs: 10
+      })
+    ).rejects.toThrow(/could not be started/)
+  })
+})
+
 describe('session routing', () => {
   it('delivers a bound session’s updates in order', async () => {
     const fake = fakeAgent({

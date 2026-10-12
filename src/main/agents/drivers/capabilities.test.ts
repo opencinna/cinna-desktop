@@ -91,11 +91,10 @@ describe('capabilitiesFor', () => {
       streaming: true,
       cancel: true,
       sessions: 'resumable',
-      // **No question path since phase 3**, and it is the engine's doing rather
-      // than the driver's: OpenCode's `question` tool is not registered under
-      // `OPENCODE_CLIENT=acp`, and its ACP layer bridges no question to
-      // `elicitation/create`, so the model asks in prose instead.
-      input: { permission: true, question: false, auth: false, elicitation: false },
+      // OpenCode 2 bridges its `question` tool to `elicitation/create`, which
+      // the launcher declares. Mutation: leave OpenCode out of `question` and
+      // its questions have no widget.
+      input: { permission: true, question: true, auth: false, elicitation: false },
       inputResume: 'reply',
       attachments: 'local',
       auth: 'none',

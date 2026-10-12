@@ -41,26 +41,27 @@ kit-sync: ## Re-bundle the agent kit from cinna-core: make kit-sync [CORE=<path>
 # against the REAL pinned binary with a loopback fake provider. No login, no
 # provider request. Not part of `make test`. Registry, tests and snapshots:
 # src/main/agents/drivers/acp/contracts/ — generated docs:
-# docs/agents/local_agents/contracts/{codex,claude,antigravity}_interface.md
+# docs/agents/local_agents/contracts/{codex,claude,antigravity,opencode}_interface.md
 STRIP := node --experimental-strip-types
 SNAPSHOTS := src/main/agents/drivers/acp/contracts/snapshots
-ENGINES := codex claude antigravity
+ENGINES := codex claude antigravity opencode
 # `npm run test:contract` alone runs every engine; a make target runs the one it
 # installed. The override variable is how a candidate binary is named.
 CONTRACT_FILE = src/main/agents/drivers/acp/contracts/$(ENGINE).contract.test.ts
 CONTRACT_OVERRIDE_codex := CINNA_CONTRACT_CODEX
 CONTRACT_OVERRIDE_claude := CINNA_CONTRACT_CLAUDE
 CONTRACT_OVERRIDE_antigravity := CINNA_CONTRACT_ANTIGRAVITY
-check-engine = @case " $(ENGINES) " in *" $(ENGINE) "*) ;; *) echo "usage: make $@ ENGINE=<codex|claude|antigravity>$(1)"; exit 2;; esac
+CONTRACT_OVERRIDE_opencode := CINNA_CONTRACT_OPENCODE
+check-engine = @case " $(ENGINES) " in *" $(ENGINE) "*) ;; *) echo "usage: make $@ ENGINE=<codex|claude|antigravity|opencode>$(1)"; exit 2;; esac
 
-contract: ## Level 1 contract against the pinned CLI (installs it, checksum-verified, on first use): make contract ENGINE=codex|claude|antigravity
+contract: ## Level 1 contract against the pinned CLI (installs it, checksum-verified, on first use): make contract ENGINE=codex|claude|antigravity|opencode
 	$(call check-engine,)
 	$(STRIP) scripts/install-runtime.mjs $(ENGINE)
 	npm run test:contract -- $(CONTRACT_FILE)
 
 contract-next: ## Same contract against a CANDIDATE version, pin untouched: make contract-next ENGINE=codex VERSION=0.156.0
 	$(call check-engine, VERSION=<x.y.z>)
-	@test -n "$(VERSION)" || (echo "usage: make contract-next ENGINE=<codex|claude|antigravity> VERSION=<x.y.z>"; exit 2)
+	@test -n "$(VERSION)" || (echo "usage: make contract-next ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2)
 	@DIR=$$(mktemp -d "$${TMPDIR:-/tmp}/cinna-contract-next.XXXXXX"); \
 	BIN=$$($(STRIP) scripts/install-runtime.mjs $(ENGINE) --version $(VERSION) --dir "$$DIR/$(ENGINE)-$(VERSION)" | tail -1); \
 	test -x "$$BIN" || { echo "could not install $(ENGINE) $(VERSION)"; rm -rf "$$DIR"; exit 1; }; \
@@ -73,13 +74,13 @@ contract-next: ## Same contract against a CANDIDATE version, pin untouched: make
 # candidate could not be installed at all, which prints "could not install".
 # (make itself reports any failed recipe as 2.)
 
-contract-snapshot: ## Rewrite the committed snapshot from the pinned CLI, once a change is understood: make contract-snapshot ENGINE=codex|claude|antigravity
+contract-snapshot: ## Rewrite the committed snapshot from the pinned CLI, once a change is understood: make contract-snapshot ENGINE=codex|claude|antigravity|opencode
 	$(call check-engine,)
 	$(STRIP) scripts/install-runtime.mjs $(ENGINE)
 	CINNA_CONTRACT_WRITE_SNAPSHOT=1 npm run test:contract -- $(CONTRACT_FILE)
 
 pin-assets: ## url + sha256 (+ size) for EVERY platform of a version, ready to paste into runtimePins.ts: make pin-assets ENGINE=claude VERSION=2.1.277
-	@case " $(ENGINES) opencode " in *" $(ENGINE) "*) ;; *) echo "usage: make pin-assets ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2;; esac
+	@case " $(ENGINES) " in *" $(ENGINE) "*) ;; *) echo "usage: make pin-assets ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2;; esac
 	@test -n "$(VERSION)" || (echo "usage: make pin-assets ENGINE=<codex|claude|antigravity|opencode> VERSION=<x.y.z>"; exit 2)
 	$(STRIP) scripts/pin-assets.mjs $(ENGINE) $(VERSION)
 

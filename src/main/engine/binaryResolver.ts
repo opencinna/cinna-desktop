@@ -6,12 +6,15 @@ import { runtimeHost } from '../host/runtimeHost'
  *
  * 1. **A path the user configured** in Settings → Local Agents. An explicit
  *    override always wins; no version pin is applied to it, because the whole
- *    point is "run the one I told you to".
+ *    point is "run the one I told you to" — only a major line Cinna no longer
+ *    speaks to (an OpenCode older than 2) is refused, with a sentence
+ *    ({@link RuntimeBinarySpec.usableVersion}).
  * 2. **A user-installed `opencode` on the login-shell PATH.** Preferred over
  *    downloading, because a developer who already has one keeps their own
  *    install, their own auth and their own update cadence — and because the
- *    download is 46 MB the app then owns forever. The lookup is Phase 4's
- *    {@link which}; there is deliberately no second PATH walker in this repo.
+ *    download is ~90 MB the app then owns forever. A 1.x copy is skipped. The
+ *    lookup is Phase 4's {@link which}; there is deliberately no second PATH
+ *    walker in this repo.
  * 3. **The pinned version this app downloads** into
  *    `runtimeHost.getPath('userData')/engine/`, verified against a SHA-256 recorded in
  *    {@link ENGINE_ASSETS} before anything is unpacked.
@@ -66,7 +69,7 @@ import {
   withVerifiedFile
 } from '../managed/managedAsset'
 import { which } from '../shell/env'
-import { PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
+import { opencodeMajorVersion, PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
 import { RUNTIME_PINS, type RuntimePinCompanion } from '../../shared/runtimePins'
 
 const logger = createLogger('engine-binary')
@@ -115,6 +118,15 @@ export interface RuntimeBinarySpec {
    */
   acceptsVersion?(probed: string | null, version: string): boolean
   /**
+   * Whether a **configured or PATH** copy that answered `--version` with
+   * `probed` is a version Cinna can drive at all. Not {@link acceptsVersion}:
+   * any version passes except a line the app no longer speaks to. A configured
+   * path that fails is refused with `messages.configuredUnsupported`; a PATH
+   * copy that fails is skipped, as a PATH copy that will not run is. Absent
+   * means every version is usable.
+   */
+  usableVersion?(probed: string): boolean
+  /**
    * The binary is never asked for its version: Antigravity's `--version` prints
    * absl build info rather than a version line and takes seconds on a ~280 MB
    * par, and the pinned digest already proves the bytes. Its managed
@@ -132,6 +144,8 @@ export interface RuntimeBinarySpec {
     unsupportedPlatform(key: string, surface: FailureSurface): string
     configuredMissing(surface: FailureSurface): string
     configuredUnusable(surface: FailureSurface): string
+    /** A configured path that runs but fails {@link RuntimeBinarySpec.usableVersion}. */
+    configuredUnsupported?(surface: FailureSurface): string
     archiveMissingBinary: string
     versionMismatch(version: string): string
   }
@@ -158,7 +172,15 @@ export const OPENCODE_SPEC: RuntimeBinarySpec = {
   label: 'engine',
   binaryName: `opencode${EXE}`,
   searchPath: true,
-  url: (version, asset) => asset.url ?? assetUrl(version, asset.file),
+  url: (_version, asset) => {
+    if (!asset.url) throw new EngineBinaryError('unsupported_platform', 'The OpenCode pin has no download URL for this platform.')
+    return asset.url
+  },
+  acceptsVersion: (probed, version) => probed === `opencode v${version}`,
+  // Cinna drives OpenCode 2 only (Code Mode, elicitation, the session MCP
+  // timing). A line that names no major is let through: it ran, and the user
+  // chose it.
+  usableVersion: (probed) => (opencodeMajorVersion(probed) ?? 2) >= 2,
   messages: {
     // Remedy first, and short: this is the longest of the three and measured
     // 1039px problem-first, which clips at every window width.
@@ -170,6 +192,10 @@ export const OPENCODE_SPEC: RuntimeBinarySpec = {
     // reserved line (414px at the 800px minimum) with the remedy still in it.
     configuredMissing: (surface) => `OpenCode path is not a file — ${pathRemedy(surface)}.`,
     configuredUnusable: (surface) => `OpenCode path will not run — ${pathRemedy(surface)}.`,
+    configuredUnsupported: (surface) =>
+      // By the line Cinna needs, not the one found: `usableVersion` refuses a
+      // 0.x build as well as 1.x.
+      `OpenCode path is older than OpenCode 2 — ${surface === 'pathField' ? 'update or clear it' : 'update it or clear it in Local Development'}.`,
     archiveMissingBinary: 'The downloaded engine archive did not contain an opencode executable.',
     versionMismatch: (version) => `The downloaded engine was not opencode ${version}, so it was discarded.`
   }
@@ -282,7 +308,7 @@ export type EngineAsset = PinnedAsset & {
  * Inventing a digest for a platform nobody verified would not be.
  *
  * Linux uses the glibc builds. A musl-only distribution (Alpine) is the known
- * gap: the release has `-musl` variants, but detecting libc reliably from Node
+ * gap: npm has `-musl` variants, but detecting libc reliably from Node
  * is its own small project, and Alpine is not a target this desktop app builds
  * for today. Such a user installs `opencode` themselves and source 2 finds it.
  */
@@ -293,11 +319,6 @@ export const ENGINE_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS
  * `shared/runtimePins.ts` for why the Windows release is not listed.
  */
 export const CODEX_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS.codex.assets
-
-/** Release download root for the pinned version. */
-export function assetUrl(version: string, file: string): string {
-  return `https://github.com/anomalyco/opencode/releases/download/v${version}/${file}`
-}
 
 export interface ResolvedEngineBinary {
   path: string
@@ -384,6 +405,7 @@ export type EngineBinaryErrorCode =
   | ManagedAssetErrorCode
   | 'configured_missing'
   | 'configured_unusable'
+  | 'configured_unsupported'
   | 'version_mismatch'
 
 /**
@@ -759,9 +781,13 @@ async function resolveFromSources(
     if (version === null) {
       throw EngineBinaryError.said('configured_unusable', spec.messages.configuredUnusable)
     }
-    // No version gate on a configured path, for either tool: "run the one I
-    // told you to" is the whole point of the override, and the UI labels it
-    // unverified rather than refusing it.
+    // No version pin on a configured path: "run the one I told you to" is the
+    // whole point of the override, and the UI labels it unverified rather than
+    // refusing it. Only a line the app cannot drive at all is refused.
+    if (spec.usableVersion && !spec.usableVersion(version)) {
+      const say = spec.messages.configuredUnsupported ?? spec.messages.configuredUnusable
+      throw EngineBinaryError.said('configured_unsupported', say)
+    }
     return { path: configured, source: 'configured', version }
   }
 
@@ -771,8 +797,14 @@ async function resolveFromSources(
       const version = await deps.probeVersion(onPath)
       // A `which` hit that will not run is not fatal — fall through to the
       // managed copy rather than stranding the user on a broken install.
-      if (version !== null) return { path: onPath, source: 'path', version }
-      logger.warn('a runtime on PATH would not run; falling back to the managed copy', { tool: spec.tool })
+      if (version !== null && (!spec.usableVersion || spec.usableVersion(version))) {
+        return { path: onPath, source: 'path', version }
+      }
+      if (version === null) {
+        logger.warn('a runtime on PATH would not run; falling back to the managed copy', { tool: spec.tool })
+      } else {
+        logger.info('a runtime on PATH is a version Cinna cannot drive; using the managed copy', { tool: spec.tool, version, path: onPath })
+      }
     }
   }
 
@@ -812,7 +844,7 @@ async function pinnedOnPath(deps: BinaryResolverDeps, spec: RuntimeBinarySpec): 
 /**
  * The byte length of this platform's pinned asset plus its companions, when its
  * pin row records one — what "installs on first use, about N MB" is said from.
- * Null for a platform with no row, or a row with no size (OpenCode's).
+ * Null for a platform with no row, or a row with no size.
  */
 export function pinnedAssetBytes(deps: Pick<BinaryResolverDeps, 'assets' | 'platformKey'>): number | null {
   const asset = deps.assets[deps.platformKey()]

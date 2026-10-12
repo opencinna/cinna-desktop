@@ -22,7 +22,8 @@
  * ## How the checksums were produced
  *
  * Each `sha256` was computed by downloading the asset from the vendor's own
- * release and hashing the bytes — never copied from a listing. They pin *these
+ * release (for OpenCode, its npm registry packages) and hashing the bytes —
+ * never copied from a listing. They pin *these
  * exact bytes*; they are not a signature (see `managed/managedAsset.ts`).
  * Bumping a version means recomputing every row for it.
  */
@@ -139,6 +140,24 @@ function antigravityAsset(os: 'macos' | 'linux', file: string, sha256: string, s
     executable: 'agy_acp_server.par',
     size,
     siblings: ['localharness_external']
+  }
+}
+
+const OPENCODE_CLI = '2.0.27'
+
+/**
+ * One `@opencode/cli-<target>` platform tarball from the npm registry. npm
+ * names the Windows packages `windows-*`; the executable sits at
+ * `package/bin/opencode` (`opencode.exe` on Windows).
+ */
+function opencodeAsset(target: string, sha256: string, size: number): RuntimePinAsset {
+  const file = `cli-${target}-${OPENCODE_CLI}.tgz`
+  return {
+    file,
+    sha256,
+    url: `https://registry.npmjs.org/@opencode/cli-${target}/-/${file}`,
+    executable: target.startsWith('windows-') ? 'opencode.exe' : 'opencode',
+    size
   }
 }
 
@@ -291,36 +310,27 @@ export const RUNTIME_PINS = {
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   opencode: {
-    cli: '1.19.0',
+    cli: OPENCODE_CLI,
+    /** Exactly what `opencode --version` prints for the pin (1.x printed the bare version). */
+    versionOutput: `opencode v${OPENCODE_CLI}`,
     /**
-     * Release assets of `anomalyco/opencode` for the pinned version. Linux uses
-     * the glibc builds; see `engine/binaryResolver.ts` for the musl gap.
+     * The npm platform packages of `@opencode/cli` — OpenCode 2 publishes no
+     * GitHub release, so the registry is the vendor's own channel. Every
+     * tarball was downloaded and hashed on 2026-10-12 (`make pin-assets`):
+     * the `sha256` is ours, from those bytes, and the same bytes' sha512
+     * matched the package's `dist.integrity`. `size` is the byte count of
+     * that download.
+     *
+     * Linux rows are the glibc builds (npm also has `-musl` and `-baseline`
+     * packages; see `engine/binaryResolver.ts` for why libc is not detected).
      */
     assets: {
-      'darwin-arm64': {
-        file: 'opencode-darwin-arm64.zip',
-        sha256: '0d5f511948d6fbfedf9bb16753c0ac42613dcc8de75d9deb7e8d0cf584c8fba6'
-      },
-      'darwin-x64': {
-        file: 'opencode-darwin-x64.zip',
-        sha256: '515380b03f3410f2178c8c1c7ba6d1e9556a3bdee2a01d114e7b1681952131a0'
-      },
-      'linux-x64': {
-        file: 'opencode-linux-x64.tar.gz',
-        sha256: '7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec'
-      },
-      'linux-arm64': {
-        file: 'opencode-linux-arm64.tar.gz',
-        sha256: 'e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b'
-      },
-      'win32-x64': {
-        file: 'opencode-windows-x64.zip',
-        sha256: '17108e9448c4fdad48eb8714c4ed6f5dfc9cf86c2eb8f2ce5d02043fef806eb5'
-      },
-      'win32-arm64': {
-        file: 'opencode-windows-arm64.zip',
-        sha256: 'cfb6f1d40c4596613d2d40e34c48500da7b873f98f7458d3d4ea11136bf174f6'
-      }
+      'darwin-arm64': opencodeAsset('darwin-arm64', '3800a8d4b7c19a26a8d9441bc9c25d03368e661f6dbad54d1d80ecd77034916b', 84933121),
+      'darwin-x64': opencodeAsset('darwin-x64', 'ad0cd88b6c432fb672725cc7d555a06171d151b6e502f5056346f14048a7167b', 89943815),
+      'linux-x64': opencodeAsset('linux-x64', '763514227a7bb2428af1d5f592c01d727a866f7bff3208fd5e9efd85429d8139', 97714874),
+      'linux-arm64': opencodeAsset('linux-arm64', '5b20242cf83fce3d57fe6bf8776f1cc0519c61f1fcd22d23c54250cc30c9c15d', 96500248),
+      'win32-x64': opencodeAsset('windows-x64', 'ed891f09c17d0952a75a3cce2f450d03b5433b643fcbb6ec9b5025f862e1ae6e', 99863676),
+      'win32-arm64': opencodeAsset('windows-arm64', 'aee359d67de979b933510e48f34dbd105b83e3f62d94440a4a7b1072bee0f805', 95328606)
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   git: {

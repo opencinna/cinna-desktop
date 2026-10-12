@@ -6,9 +6,10 @@ import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS, type ContractArea, type ContractEntry } from './codex.contract'
 import { CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS } from './claude.contract'
 import { ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS } from './antigravity.contract'
+import { OPENCODE_CONTRACT, OPENCODE_CONTRACT_AREAS } from './opencode.contract'
 import {
-  ANTIGRAVITY_INTERFACE_DOC, CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC,
-  antigravityContractDocInput, claudeContractDocInput, codexContractDocInput, renderContractDoc
+  ANTIGRAVITY_INTERFACE_DOC, CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC, OPENCODE_INTERFACE_DOC,
+  antigravityContractDocInput, claudeContractDocInput, codexContractDocInput, opencodeContractDocInput, renderContractDoc
 } from './contractDocs'
 
 /**
@@ -45,7 +46,7 @@ const repoRoot = join(here, '../../../../../..')
 
 /** One engine's contract, as the ratchet needs it. A third engine is a third row. */
 interface Ratcheted {
-  tool: 'codex' | 'claude' | 'antigravity'
+  tool: 'codex' | 'claude' | 'antigravity' | 'opencode'
   label: string
   entries: readonly ContractEntry[]
   areas: readonly ContractArea[]
@@ -77,6 +78,13 @@ const ENGINES: Ratcheted[] = [
     pin: { cli: RUNTIME_PINS.antigravity.cli, versionOutput: RUNTIME_PINS.antigravity.cli, adapter: null }, doc: ANTIGRAVITY_INTERFACE_DOC,
     render: () => renderContractDoc(antigravityContractDocInput(RUNTIME_PINS, ANTIGRAVITY_CONTRACT, ANTIGRAVITY_CONTRACT_AREAS, FLOW_STEPS)),
     links: [['docs/README.md', 'agents/local_agents/contracts/antigravity_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/antigravity_interface.md']]
+  },
+  {
+    // No adapter: OpenCode speaks ACP itself.
+    tool: 'opencode', label: 'OpenCode', entries: OPENCODE_CONTRACT, areas: OPENCODE_CONTRACT_AREAS,
+    pin: { cli: RUNTIME_PINS.opencode.cli, versionOutput: RUNTIME_PINS.opencode.versionOutput, adapter: null }, doc: OPENCODE_INTERFACE_DOC,
+    render: () => renderContractDoc(opencodeContractDocInput(RUNTIME_PINS, OPENCODE_CONTRACT, OPENCODE_CONTRACT_AREAS, FLOW_STEPS)),
+    links: [['docs/README.md', 'agents/local_agents/contracts/opencode_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/opencode_interface.md']]
   }
 ]
 

@@ -107,6 +107,12 @@ vi.mock('../../hooks/useAppSettings', () => ({
 const { LocalAgentsSettingsSection } = await import('./LocalAgentsSettingsSection')
 
 describe('LocalAgentsSettingsSection', () => {
+  it('says opencode once for a 2.x version line, which names it already', () => {
+    binary = { ...READY_BINARY, version: 'opencode v2.0.27' }
+    render(<LocalAgentsSettingsSection />)
+    expect(screen.getByText('Ready — opencode v2.0.27, your own installation.')).toBeTruthy()
+  })
+
   it('reports the ready binary on one line and renders no credential or path message when healthy', () => {
     render(<LocalAgentsSettingsSection />)
 

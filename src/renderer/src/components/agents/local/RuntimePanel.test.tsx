@@ -1282,6 +1282,13 @@ describe('RuntimePanel', () => {
       expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
     })
 
+    it('says opencode once for a 2.x version line, which names it already', () => {
+      binary = { state: 'ready', version: 'opencode v2.0.27', path: '/data/runtimes/opencode-2.0.27/opencode' }
+      render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
+      expect(screen.getByText('opencode v2.0.27')).toBeTruthy()
+      expect(screen.queryByText(/opencode opencode/)).toBeNull()
+    })
+
     it('says what will happen rather than nothing, before anything has looked', () => {
       binary = { state: 'unresolved' }
       render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)

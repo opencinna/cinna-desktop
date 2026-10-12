@@ -53,6 +53,14 @@ describe('the ACP process pool at quit', () => {
     expect(shutdown.indexOf('acpProcessPool.shutdown()')).toBeLessThan(shutdown.indexOf('await'))
   })
 
+  it('also stops an OpenCode database bootstrap, which runs outside the pool', () => {
+    // Mutation: drop the call and an `opencode acp` started to create the
+    // database on a fresh profile outlives a quit in its own process group.
+    const call = shutdown.indexOf('shutdownOpencodeBootstraps()')
+    expect(call, 'shutdownOpencodeBootstraps() inside shared shutdown').toBeGreaterThan(0)
+    expect(call).toBeLessThan(shutdown.indexOf('await'))
+  })
+
   it('is killed only after the turns it runs have saved what they streamed', () => {
     // A direct chat writes its rows when the turn returns, and a turn whose
     // process is killed never does. The flush has to be in the same handler

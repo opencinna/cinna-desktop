@@ -616,6 +616,34 @@
       "verdict": "logged_out"
     }
   },
+  "deny": [
+    {
+      "asks": 1,
+      "conversationRequests": 1,
+      "name": "exec_command",
+      "options": [
+        "allow_once:allow_once",
+        "allow_always:accept_execpolicy_amendment",
+        "reject_once:cancel"
+      ],
+      "stopReason": "cancelled",
+      "toolCallKind": "execute",
+      "written": false
+    },
+    {
+      "asks": 1,
+      "conversationRequests": 1,
+      "name": "apply_patch",
+      "options": [
+        "allow_once:allow_once",
+        "allow_always:allow_for_session",
+        "reject_once:cancel"
+      ],
+      "stopReason": "cancelled",
+      "toolCallKind": "edit",
+      "written": false
+    }
+  ],
   "folderHandovers": {
     "mcp": {
       "calls": [

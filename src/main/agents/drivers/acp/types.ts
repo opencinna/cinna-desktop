@@ -106,6 +106,15 @@ export interface AcpLaunchSpec {
    * Never contains a secret: a digest, not the values.
    */
   key: string
+  /**
+   * Respawn a process that exited before answering `initialize` when its
+   * stderr tail matches `stderr`, up to `attempts` spawns in all (the first
+   * included), within the one start timeout. For an engine with a known
+   * transient start failure only — OpenCode 2.x's `database is locked` on a
+   * shared `OPENCODE_DB`. A timeout, a spawn error or a non-matching exit is
+   * never retried. Not part of `key`.
+   */
+  earlyExitRetry?: { stderr: RegExp; attempts: number }
 }
 
 /** What one process exit looked like. */

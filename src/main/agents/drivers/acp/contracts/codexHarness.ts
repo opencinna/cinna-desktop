@@ -134,6 +134,8 @@ export type ProviderReply =
   | { kind: 'text'; text: string }
   /** Call a tool by its bare name; the namespace is looked up in the offered catalog. */
   | { kind: 'tool'; name: string; args?: string }
+  /** A freeform (custom) tool call — Codex's `apply_patch` takes its patch as raw `input`, not JSON arguments. */
+  | { kind: 'custom'; name: string; input: string }
   /** Native deferred MCP discovery uses a Responses tool_search_call, not function_call. */
   | { kind: 'tool-search'; args: Record<string, unknown> }
   | { kind: 'status'; status: number; body: Json }
@@ -170,12 +172,12 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
         model: typeof body.model === 'string' ? body.model : null,
         reasoningEffort: typeof (body.reasoning as Json | undefined)?.effort === 'string' ? String((body.reasoning as Json).effort) : null,
         tools: toolNames([...(Array.isArray(body.tools) ? body.tools : []), ...input.filter((item) => item.type === 'tool_search_output').flatMap((item) => Array.isArray(item.tools) ? item.tools : [])]),
-        outputs: input.filter((item) => item.type === 'function_call_output').map((item) => textOf(item.output) || JSON.stringify(item.output)),
+        outputs: input.filter((item) => item.type === 'function_call_output' || item.type === 'custom_tool_call_output').map((item) => textOf(item.output) || JSON.stringify(item.output)),
         systemText: [typeof body.instructions === 'string' ? body.instructions : '',
           ...input.filter((item) => item.role === 'developer' || item.role === 'system').map((item) => textOf(item.content))].join('\n'),
         userText: input.filter((item) => item.role === 'user').map((item) => textOf(item.content)).join('\n'),
         lastUserText: lastUserAt < 0 ? '' : textOf(input[lastUserAt].content),
-        pendingOutputs: input.slice(lastUserAt + 1).filter((item) => item.type === 'function_call_output').length
+        pendingOutputs: input.slice(lastUserAt + 1).filter((item) => item.type === 'function_call_output' || item.type === 'custom_tool_call_output').length
       }
       turns.push(turn)
       const reply = decide(turn)
@@ -183,6 +185,20 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
       if (reply.kind === 'status') {
         res.writeHead(reply.status, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(reply.body))
+        return
+      }
+      if (reply.kind === 'custom') {
+        const custom: Json = { type: 'custom_tool_call', id: `ctc_${turn.index}`, call_id: `call_${turn.index}`, name: reply.name, input: reply.input, status: 'completed' }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+        const send = (type: string, data: Json): void => { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`) }
+        send('response.created', { response: { id: 'resp', object: 'response', created_at: 1, status: 'in_progress', output: [] } })
+        send('response.output_item.added', { output_index: 0, item: { ...custom, status: 'in_progress', input: '' } })
+        send('response.custom_tool_call_input.delta', { item_id: custom.id, output_index: 0, delta: reply.input })
+        send('response.custom_tool_call_input.done', { item_id: custom.id, output_index: 0, input: reply.input })
+        send('response.output_item.done', { output_index: 0, item: custom })
+        send('response.completed', { response: { id: 'resp', object: 'response', created_at: 1, status: 'completed',
+          output: [custom], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })
+        res.end()
         return
       }
       const offered = [...(Array.isArray(body.tools) ? body.tools : []), ...input.filter((item) => item.type === 'tool_search_output').flatMap((item) => Array.isArray(item.tools) ? item.tools : [])] as Json[]

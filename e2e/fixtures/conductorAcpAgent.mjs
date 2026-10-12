@@ -8,6 +8,31 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const host = process.env.CONDUCTOR_ACP_CONTROLLER
 if (!host?.startsWith('http://127.0.0.1:')) throw new Error('A loopback controller is required')
 const sessions = new Map()
+
+/**
+ * What OpenCode does after it answers `session/new` or `session/load`: connect
+ * the session's MCP servers and list their tools. The driver waits for Cinna's
+ * server to see that listing before the first prompt (`awaitCinnaTools`), so a
+ * fake that listed only inside a prompt would cost every session that wait's
+ * ceiling. Fire and forget; a server that is gone is the driver's problem.
+ */
+function listCinnaTools(servers) {
+  const descriptor = (servers ?? []).find((server) => server.name === 'cinna' && server.type === 'http')
+  if (!descriptor?.url?.startsWith('http://127.0.0.1:')) return
+  setImmediate(async () => {
+    const client = new Client({ name: 'conductor-e2e-list', version: '1' })
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(descriptor.url), {
+        requestInit: { headers: Object.fromEntries((descriptor.headers ?? []).map(({ name, value }) => [name, value])) }
+      }))
+      await client.listTools()
+    } catch {
+      /* the session's server is gone or refused: nothing to list */
+    } finally {
+      await client.close().catch(() => undefined)
+    }
+  })
+}
 const pending = new Map()
 const app = agent({ name: 'conductor-e2e-acp' })
   .onRequest('initialize', () => ({ protocolVersion: 1,
@@ -15,11 +40,13 @@ const app = agent({ name: 'conductor-e2e-acp' })
   .onRequest('session/new', (ctx) => {
     const sessionId = `conductor-${randomUUID()}`
     sessions.set(sessionId, { servers: ctx.params.mcpServers, history: [] })
+    listCinnaTools(ctx.params.mcpServers)
     return { sessionId }
   })
   .onRequest('session/load', (ctx) => {
     const previous = sessions.get(ctx.params.sessionId)
     sessions.set(ctx.params.sessionId, { servers: ctx.params.mcpServers, history: previous?.history ?? [] })
+    listCinnaTools(ctx.params.mcpServers)
     return {}
   })
   .onRequest('session/set_mode', () => ({}))

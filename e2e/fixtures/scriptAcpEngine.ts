@@ -100,7 +100,7 @@ export async function scriptAcpEngine() {
     async install(cinna: CinnaApp): Promise<void> {
       const shim = join(cinna.sandbox.root, 'script-fake-opencode')
       const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
-      writeFileSync(shim, ['#!/bin/sh', 'if [ "$1" = "--version" ]; then echo "1.18.27-e2e-fake"; exit 0; fi',
+      writeFileSync(shim, ['#!/bin/sh', 'if [ "$1" = "--version" ]; then echo "opencode v2.0.27-e2e-fake"; exit 0; fi',
         `export SCRIPT_ACP_CONTROLLER=${quote(host)}`,
         `exec ${quote(process.execPath)} ${quote(join(repoRoot, 'e2e/fixtures/scriptAcpAgent.mjs'))} "$@"`, ''].join('\n'))
       chmodSync(shim, 0o755)

@@ -13,8 +13,9 @@ import { parseCodexAuthStatus } from '../codexAuth'
 import { airClientMeta, createAcpActivityState, translateActivity } from '../acpActivity'
 import { parsePromptTelemetry } from '../acpTelemetry'
 import { AcpMessageStream } from '../acpMessages'
+import { pickPermissionOption } from '../acpPermissions'
 import { KIND_METADATA_KEY, TOOL_NAME_METADATA_KEY, type PartLike } from '../../../streamPartsAccumulator'
-import type { SessionNotification } from '@agentclientprotocol/sdk'
+import type { PermissionOption, SessionNotification } from '@agentclientprotocol/sdk'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CODEX_CONTRACT } from './codex.contract'
 import { lineDiff, sorted } from './snapshotTools'
@@ -130,6 +131,13 @@ const seen = {
   subagent: { updates: [] as Json[], offered: [] as string[], spawnOutputs: [] as string[] },
   /** Every update of the prompt after the model change, which compacts. */
   modelChangeUpdates: [] as Json[],
+  /**
+   * Cinna's Deny (`pickPermissionOption(…, 'reject')`) on an escalated command
+   * and on an `apply_patch` outside the workspace, one fresh session each: the
+   * ask, the option sent, the prompt's answer, the conversation requests the
+   * prompt made, and whether the target file was written.
+   */
+  deny: [] as { name: string; asks: AdapterMessage[]; sent: (string | null)[]; answer: Json | null; requests: number; written: boolean }[],
   permission: null as AdapterMessage | null,
   permissionCount: 0, mcpCalls: 0,
   toolCall: null as Json | null,
@@ -485,6 +493,63 @@ async function subagentScenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario D */
+
+/** Cinna's Deny on Codex's two approval kinds, in `workspace-write`. */
+async function denyScenario(binary: string): Promise<void> {
+  const scratch = makeScratch('cinna-contract-deny-')
+  let provider: FakeProvider | undefined
+  let connection: AdapterConnection | undefined
+  try {
+    let script: ProviderReply[] = []
+    provider = await startFakeProvider((turn): ProviderReply =>
+      turn.kind !== 'conversation' ? ownRequestReply(turn) : (script.shift() ?? { kind: 'text', text: 'AFTER_DENY' }))
+    writeProviderConfig(scratch.codexHome, provider.port, MODEL)
+    let asks: AdapterMessage[] = [], sent: (string | null)[] = []
+    connection = spawnAdapter({
+      adapterPath: adapter, cwd: scratch.cwd,
+      answer: (request) => {
+        if (request.method !== 'session/request_permission') return undefined
+        asks.push(request)
+        const optionId = pickPermissionOption((request.params?.options ?? []) as PermissionOption[], 'reject')
+        sent.push(optionId)
+        return optionId ? { outcome: { outcome: 'selected', optionId } } : undefined
+      },
+      env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe',
+        CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe' }) }
+    })
+    await connection.rpc('initialize', { protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+    const sibling = join(scratch.home, 'sibling')
+    mkdirSync(sibling)
+    const cases: { name: string; target: string; reply: ProviderReply }[] = [
+      { name: 'exec_command', target: join(sibling, 'exec.txt'), reply: { kind: 'tool', name: 'exec_command', args: JSON.stringify({
+        cmd: `printf X > '${join(sibling, 'exec.txt')}'`, yield_time_ms: 1000, max_output_tokens: 1000,
+        sandbox_permissions: 'require_escalated', justification: 'Write the sibling file.' }) } },
+      { name: 'apply_patch', target: join(sibling, 'patch.txt'), reply: { kind: 'custom', name: 'apply_patch',
+        input: `*** Begin Patch\n*** Add File: ${join(sibling, 'patch.txt')}\n+X\n*** End Patch\n` } }
+    ]
+    for (const testCase of cases) {
+      const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [] }, 60_000)
+      const sessionId = String(created.result?.sessionId ?? '')
+      if (!sessionId) continue
+      await connection.rpc('session/set_mode', { sessionId, modeId: 'workspace-write' })
+      asks = []
+      sent = []
+      script = [testCase.reply]
+      const from = provider.turns.length
+      const answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: `Write the sibling file with ${testCase.name}.` }] }, 90_000)
+      await sleep(1000)
+      seen.deny.push({ name: testCase.name, asks, sent, answer: (answer.result ?? answer.error ?? null) as Json | null,
+        requests: provider.turns.slice(from).filter((turn) => turn.kind === 'conversation').length, written: existsSync(testCase.target) })
+    }
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 /** Shapes only: no paths, ids, ports, tokens or timestamps, keys sorted, so two versions diff cleanly. */
@@ -545,6 +610,10 @@ function snapshot(): Json {
       title: ownRequests('title'),
       compaction: ownRequests('compaction')
     },
+    deny: seen.deny.map((observed) => ({ name: observed.name, asks: observed.asks.length,
+      toolCallKind: ((observed.asks[0]?.params?.toolCall ?? {}) as Json).kind ?? null,
+      options: ((observed.asks[0]?.params?.options as Json[] | undefined) ?? []).map((option) => `${String(option.kind)}:${String(option.optionId)}`),
+      stopReason: observed.answer?.stopReason ?? null, conversationRequests: observed.requests, written: observed.written })),
     restrictedPolicy: {
       marker: seen.policy.marker,
       offeredTools: [...new Set(seen.policy.turns.flatMap((turn) => turn.tools))].sort(),
@@ -655,6 +724,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     await folderScenario(binary)
     await policyScenario(binary, seen.versionOutput)
     await subagentScenario(binary)
+    await denyScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 300_000)
 
@@ -824,6 +894,22 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     const offered = seen.policy.turns.flatMap((turn) => turn.tools)
     expect(offered).toContain('mcp__cinna.probe')
     expect(offered.filter((name) => name.includes('unwanted'))).toEqual([])
+  })
+
+  it(entry('codex.permission.deny-ends-prompt'), () => {
+    expect(seen.deny.map((observed) => observed.name)).toEqual(['exec_command', 'apply_patch'])
+    for (const observed of seen.deny) {
+      expect(observed.asks.length, `${observed.name}: no approval was asked`).toBe(1)
+      const options = (observed.asks[0].params?.options as Json[] | undefined) ?? []
+      // The only reject_once Codex offers on a command or file approval is `cancel`.
+      expect(options.filter((option) => option.kind === 'reject_once').map((option) => option.optionId), observed.name).toEqual(['cancel'])
+      expect(options.map((option) => option.optionId), observed.name).not.toContain('decline')
+      expect(observed.sent, observed.name).toEqual(['cancel'])
+      expect(observed.answer?.stopReason, observed.name).toBe('cancelled')
+      // The refusal ends the prompt: no request after the one that made the call.
+      expect(observed.requests, observed.name).toBe(1)
+      expect(observed.written, `${observed.name}: the refused write happened`).toBe(false)
+    }
   })
 
   it(entry('codex.permission.mcp-call-asks'), () => {

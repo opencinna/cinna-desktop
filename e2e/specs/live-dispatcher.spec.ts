@@ -28,7 +28,7 @@ import { adoptFolder, openTasksTab } from '../fixtures/dispatcher'
  * ## Cost
  *
  * Two OpenCode turns of 2–4 requests each over a ~10k-token system prompt on
- * the first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini normally): about
+ * the first of `PREFERRED_MODELS` the key lists (gpt-5.6-luna normally): about
  * **$0.02–0.06 a run**. Run deliberately: `make e2e-one SPEC=live-dispatcher`.
  * With `CINNA_E2E_LIVE_ENGINE=claude|codex` the agent runs on the developer's
  * own Claude Code / Codex login instead (`e2e/fixtures/liveEngine.ts`).

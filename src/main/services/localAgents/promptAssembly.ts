@@ -1,5 +1,5 @@
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
-import { cinnaTasksSection, type CinnaTasksSkillDelivery } from '../../../shared/handovers'
+import { cinnaTasksSection, type CinnaTasksSkillDelivery, type CinnaToolCalls } from '../../../shared/handovers'
 /**
  * The system prompt a folder agent runs on.
  *
@@ -98,6 +98,12 @@ export interface DesktopPromptContext {
    * — the listing is true on every engine.
    */
   ownSkills?: 'skill' | 'pointer'
+  /**
+   * How the model calls the `tasks_*` tools; absent reads as `direct`. Only
+   * the OpenCode config source sets `codeMode`. Stable per engine, so it may
+   * live in the prompt.
+   */
+  cinnaCalls?: CinnaToolCalls
 }
 
 /** True when `path` is a regular file. */
@@ -271,7 +277,7 @@ function agentIdBullets(context: DesktopPromptContext): string[] {
  * itself is in the `cinna-tasks` skill; the section says how to open it.
  */
 function handoverSections(context: DesktopPromptContext): string[] {
-  return context.agentId ? [cinnaTasksSection(context.agentId, context.tasksSkill ?? null)] : []
+  return context.agentId ? [cinnaTasksSection(context.agentId, context.tasksSkill ?? null, context.cinnaCalls)] : []
 }
 
 /**

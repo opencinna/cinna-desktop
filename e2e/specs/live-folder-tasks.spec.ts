@@ -28,7 +28,7 @@ import { filterTasksByAgent } from '../fixtures/tasksView'
  * ## Cost
  *
  * One OpenCode turn of 2–4 requests over a ~10k-token system prompt on the
- * first of `PREFERRED_MODELS` the key lists (gpt-4.1-mini normally): about
+ * first of `PREFERRED_MODELS` the key lists (gpt-5.6-luna normally): about
  * **$0.01–0.03 a run**. Chat auto-titles are off. Run deliberately:
  * `make e2e-one SPEC=live-folder-tasks`.
  * With `CINNA_E2E_LIVE_ENGINE=claude|codex` the agent runs on the developer's
