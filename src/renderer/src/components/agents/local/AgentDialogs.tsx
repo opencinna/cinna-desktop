@@ -415,24 +415,27 @@ export function RenameAgentDialog({
             >
               Rename folder too
             </span>
-            <span className="block text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-              {blocked ?? RENAME_FOLDER_WARNING}
-            </span>
-            {/* Two lines reserved and never more, so ticking the box or typing
-                a longer name never moves the buttons (UX rule 1). */}
+            {/* The reason a disabled box is disabled always shows; the warning
+                only once the box is ticked. */}
+            {(blocked !== null || moving) && (
+              <span className="block text-[10px] leading-relaxed text-[var(--color-text-muted)]">
+                {blocked ?? RENAME_FOLDER_WARNING}
+              </span>
+            )}
             <span
               data-testid="rename-folder-path"
               title={pathLine}
-              className="mt-1 line-clamp-2 block min-h-7 break-all text-[10px] leading-snug text-[var(--color-text-secondary)]"
+              className="mt-1 line-clamp-2 block break-all text-[10px] leading-snug text-[var(--color-text-secondary)]"
             >
               {pathLine}
             </span>
           </span>
         </label>
-        {/* Reserved, so a refusal does not push the buttons down (UX rule 1). */}
-        <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
-          {error}
-        </div>
+        {error && (
+          <div role="alert" className="text-[10px] text-[var(--color-danger)]">
+            {error}
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <button
             type="button"

@@ -52,14 +52,17 @@ afterEach(() => {
 })
 
 describe('RenameAgentDialog', () => {
-  it('opens prefilled, focused, with the folder box unticked and the warning shown', () => {
+  it('opens prefilled, focused, with the folder box unticked and the warning hidden until ticked', () => {
     open()
     expect(screen.getByRole('dialog', { name: 'Rename agent' })).toBeTruthy()
     expect(nameInput().value).toBe('Alpha')
     expect(document.activeElement).toBe(nameInput())
     expect(box().checked).toBe(false)
     expect(box().disabled).toBe(false)
+    expect(screen.queryByText(RENAME_FOLDER_WARNING)).toBeNull()
+    fireEvent.click(box())
     expect(screen.getByText(RENAME_FOLDER_WARNING)).toBeTruthy()
+    fireEvent.click(box())
     expect(RENAME_FOLDER_WARNING).toContain("the agent's previous sessions could lose their context")
     // Unchanged name, box unticked: nothing to save.
     expect(save().disabled).toBe(true)
