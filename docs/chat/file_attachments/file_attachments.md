@@ -10,9 +10,9 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 - **Source / Backing Store** — Where the bytes live. `cinna` (Cinna backend), `local` (`userData/files/<userId>/<chatId>/`), or `pending` (composer-only, paths on disk awaiting destination decision).
 - **Pending Attachment** — New-chat composer state. Files the user picked, dropped or pasted but hasn't ingested yet because the chat row doesn't exist and the destination scope isn't known. Swapped for a real `cinna` / `local` attachment at send time.
 - **Composer Attachment** — Union of `MessageAttachment` (already ingested) and `PendingAttachment` (deferred). Only the composer's pending list holds the union; everything downstream is narrowed to `MessageAttachment`.
-- **Model Capability** — Per-model declaration of accepted MIME types, size envelope, and which of those are passed through natively (image bytes for all vision models, PDF for Anthropic + Gemini). Everything else routes through the text extractor.
-- **Media Part** — Resolver output for the LLM stream loop. Three variants: `image` (raster bytes), `document` (native non-image bytes like PDF), `text` (UTF-8 string from extraction). Adapters translate to provider-native blocks.
-- **Text Extractor** — Service that converts office docs (DOCX/XLSX/PPTX/ODT/…), PDFs (when the model has no native PDF support), and code/CSV/JSON files into UTF-8 text the LLM can read. Backed by `officeparser` for binary office formats.
+- **Model Capability** — Per-model declaration of accepted MIME types, size envelope, and which of those are passed through natively, kept on each API adapter. Today it only decides whether a plain chat offers **Attach files**; it no longer decides how a file is delivered (see [Capability-driven adapter routing](#capability-driven-adapter-routing)).
+- **Media Part** — Output of `attachmentToMediaPart`. Three variants: `image` (raster bytes), `document` (native non-image bytes like PDF), `text` (UTF-8 string from extraction). Its one caller is the ACP inline path, which asks for images natively and everything else as `text`.
+- **Text Extractor** — Service that converts office docs (DOCX/XLSX/PPTX/ODT/…), PDFs, and code/CSV/JSON files into UTF-8 text, for an engine that cannot open the file itself (a plain chat's runtime, a remote ACP agent). Backed by `officeparser` for binary office formats.
 - **Path Guard** — Allowlist of OS paths the renderer is permitted to reference. Populated by file dialogs, the `webUtils.getPathForFile` preload wrapper, and main's own clipboard read on a paste. Defense-in-depth against a compromised renderer.
 - **Pasted Image** — An image on the clipboard with no file behind it (a screenshot, an image copied in a browser). Main writes it as `Pasted image <date> at <time>.png` under `<userData>/tmp/pasted/`, and from there it is an ordinary picked file. The folder is emptied at every start.
 - **Thumbnail** — A fixed 64×64 px square standing in for an image attachment, in the composer, under a sent message and under an agent's reply. Thumbnails come before badges in the same row.
@@ -27,8 +27,7 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 2. The `[+]` menu's **Attach files** item appears if the selected model declares any accepted MIME types.
 3. User picks files via the menu or drags them onto the composer.
 4. Bytes are copied into the per-user local store (`chat_files` table + `userData/files/...`). Badges appear in the composer.
-5. User sends. The stream loop reads the persisted attachments, runs each through the text extractor or passes native bytes, and hands the adapter resolved `MediaPart[]`.
-6. Adapter emits provider-native content blocks (image, document) or inlines extracted text as a `<file name="…" type="…">…</file>` prefix on the user message.
+5. User sends. A plain chat is answered by its chat runtime, a local ACP engine with its file tools removed, so the file goes inline: images as native image blocks, everything else as `[Attachment: <name>]` followed by its extracted text ([Runtime conversation transport](#runtime-conversation-transport)).
 
 ### Attaching a file in a chat bound to a Cinna remote agent
 
@@ -97,12 +96,9 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Capability-driven adapter routing
 
-- Each adapter declares `acceptedMimeTypes`, `nativeMimeTypes`, `maxFileSizeBytes`, `maxFilesPerMessage` per model.
-- `acceptedMimeTypes` is the union the model can take after upstream transformation; `nativeMimeTypes` is the subset whose bytes pass through unchanged.
-- Resolver branches on MIME: image → `image` part; native non-image → `document` part; everything else extractable → `text` part. Anything else: dropped with a warning log.
-- Anthropic Claude 3+: images + PDF native; everything else text-extracted. Legacy Claude 2 / Instant: text-only.
-- OpenAI vision models (`gpt-4*`, `o*`, `chatgpt-4*`): images native; PDF + office text-extracted. Non-vision: text-only.
-- Gemini 1.5+ / 2.x: images + PDF native; everything else text-extracted. Legacy Gemini Pro: text-only.
+**Only the gate is left.** Each API adapter still declares `acceptedMimeTypes`, `nativeMimeTypes`, `maxFileSizeBytes` and `maxFilesPerMessage` per model, and the composer reads `acceptedMimeTypes` (`useModelCapability`) to decide whether a plain chat offers **Attach files**. Delivery no longer goes through the adapters: since chat coordination moved onto local ACP runtimes the direct stream loop is gone, nothing sets `ChatMessage.media`, and the adapters' media translation (`buildMediaBlocks`, `buildInlineDataParts`, `buildImageParts`, `renderTextPartsPrefix`) is unreachable code. What an engine receives is decided per turn by the [runtime conversation transport](#runtime-conversation-transport), not by the model's declared native types.
+
+- `attachmentToMediaPart` still branches on MIME: image → `image` part; a MIME the caller lists as native → `document` part; anything extractable → `text` part; anything else is dropped with a warning log. The ACP inline path lists only images as native, so it never produces a `document`.
 
 ### Local store
 
@@ -222,18 +218,6 @@ Send → local ACP engine (acpDriver runTurn, and the fresh-session replayTransc
          → "[Attachment: <name>]\n<extracted text>" | "[Attachment: <name>]" + image block
          | "[Attachment <name> could not be read by this runtime.]"
 
-Send → LLM stream loop:
-    → adapter.modelCapability(modelId)
-    → for each user message:
-        attachmentToMediaPart(att, { capability, userId })
-          ├─ image MIME            → MediaPart.image
-          ├─ native non-image MIME → MediaPart.document
-          ├─ text/office/code     → textExtractor.extractText → MediaPart.text
-          └─ otherwise              → drop
-    → adapter.stream({ messages, … })
-       → renderTextPartsPrefix(media) for `text` parts
-       → provider-native blocks for `image` / `document` parts
-
 Send → A2A:
   messageRoutingService.prepareAgentSend({ attachments })
     → messageRepo.saveUser({ attachments })
@@ -269,10 +253,10 @@ Download:
 
 - [Conversation UI](../conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft) — profile/surface draft retention, end-caret restoration and conditional consumption after dispatch.
 
-- [Messaging](../messaging/messaging.md) — Attachments piggy-back on user-message persistence. `messageRoutingService.prepareAgentSend` and `prepareLlmSend` are the persistence chokepoints.
+- [Messaging](../messaging/messaging.md) — Attachments piggy-back on user-message persistence. `messageRoutingService.prepareAgentSend` is the persistence chokepoint.
 - [File Preview](../file_preview/file_preview.md) — Clicking a sent attachment's thumbnail or badge previews images and text types in place (png/jpg/gif/webp/bmp/svg, txt/csv/md/json/yaml/py, XML and its dialects, and HTML rendered in a sandboxed frame) instead of always downloading, and the badge is then named "Preview *name*"; reuses the same `cinna`/`local` source routing. Composer files preview too, by path before a new chat exists, with no Download.
-- [LLM Adapters](../../llm/adapters/adapters.md) — Each adapter declares `modelCapability(modelId)` + translates `MediaPart[]` to provider-native content blocks.
-- [Provider Integration](../../llm/adapters/provider_integration.md) — Per-provider MIME and capability matrix (native PDF support, image MIMEs, size envelopes).
+- [LLM Adapters](../../llm/adapters/adapters.md) — Each adapter declares `modelCapability(modelId)`, which gates **Attach files** in a plain chat; their `MediaPart` translation has no caller since chats run on ACP runtimes.
+- [Provider Integration](../../llm/adapters/provider_integration.md) — Per-provider MIME and capability matrix, which now only feeds the attach gate.
 - [Agents](../../agents/agents/agents.md) — A2A streaming + endpoint resolution for Cinna-scoped attachments.
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — `buildSendParams` forwards `cinna_file_ids` as message metadata.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Cinna uploads use the user's auto-refreshed access token.

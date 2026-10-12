@@ -15,7 +15,7 @@ The same convention as the rest of this folder:
 | `src/...`, `docs/...` | A file in **this repository** |
 | `AGENT.md`, `AGENTS.md`, `CLAUDE.md`, `README.md` | Inside a **bare agent folder** (a kit folder carries its own `AGENTS.md` and `CLAUDE.md` too; which folder a sentence means is always stated) |
 | `Local/<slug>/...`, `cinna-agent.json`, `app-data/desktop.json` | Inside a **kit** agent folder |
-| `<userData>/external-agents/...` | Inside the app's own data directory |
+| `<userData>/external-agents/...`, `<userData>/agent-uploads/...` | Inside the app's own data directory |
 
 ## Core Concepts
 
@@ -102,6 +102,8 @@ A directory holding an `AGENT.md`, `AGENTS.md` or `CLAUDE.md` is an agent, and t
 
 No templates, no `.cinna-kit/`, no `Local/`, no `app-data/`. `addExternalRoot` is `addRoot` with exactly those three installs removed, and the state a bare agent needs is kept under `<userData>` instead.
 
+**Files the user attaches follow the same rule.** A kit agent gets them copied into its own `app-data/uploads/`; a bare agent's go to `<userData>/agent-uploads/<agentId>/`, and the prompt names their absolute path ([File Attachments](../../chat/file_attachments/file_attachments.md#runtime-conversation-transport)). That folder is outside the agent's cwd, so an engine that asks before reading outside its folder may ask about it.
+
 This is the promise the whole shape rests on, and it is not a UI promise: every screen in the adopt flow looks identical whether or not a file was dropped into the user's repository. The E2E specs snapshot the folder tree before and after and compare, because that is the only witness ([E2E Testing](../../development/e2e/e2e.md)).
 
 **It is "installs nothing", not "read only", and the difference is one file.** The agent page's Instructions card is a live editor over the agent's instructions file, so a folder the user edits there *is* written to — by them, deliberately, in the one place the page says so. The Settings badge therefore says "Cinna installs nothing here. The only file it writes is an agent's instructions file (AGENT.md, AGENTS.md or CLAUDE.md), and only when you edit it on the agent's page", and the root's sub-line reads `· not a kit folder` rather than `· read only`. A "read only" promise would leave a user with a modified working tree in a repository they share — and, because a dirty tree refuses a fast-forward, a blocked **Update** two rows below, with neither surface admitting the two are connected. <!-- nocheck -->
@@ -141,6 +143,8 @@ Why outside the folder: a bare folder is very often a git working tree shared wi
 Every caller already knows: the scanner and the service hold `root.kind`, the turn runner holds the agent's DTO.
 
 `DesktopState` therefore gained three fields that only a bare agent uses — `displayName` (the user's own name for it, because no file states one), `hidden`, and `runtime` (the rule below) — and `forgetAt(path)`, which deletes the state file when a bare folder is trashed. Without it the sessions, the token and the permission grants of a deleted agent would sit under `<userData>` forever and be inherited by whatever the user next creates at that path, since the path is the key. A kit agent needs no equivalent: its state was inside the folder and went to the Trash with it.
+
+**Not yet cleaned up: attachment copies.** `<userData>/agent-uploads/<agentId>/` is not removed when a bare agent is removed or trashed, nor for a development or custom agent, which use the same folder. Keyed by agent id rather than path, it is never inherited by a new agent at the same path, only left behind; the copies are the user's own files and stay on disk until deleted by hand.
 
 **`forgetAt` takes the path, not the folder, and the caller resolves it before anything moves.** The key is `realpathSync(agentDir)`; once the folder is in the Trash that call throws and the key falls back to the raw path — a *different* digest wherever any component is a symlink, which on macOS includes everything under `tmpdir()` (`/var` → `/private/var`), an explicitly permitted root location. The unlink then raised `ENOENT` on a file that was never there and left the real one behind, which is precisely the leak the function exists to prevent.
 

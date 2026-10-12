@@ -49,17 +49,19 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 
 ### Capabilities per driver
 
-| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launchers `claude` / `codex` | `managed` | `acp`, launcher `custom` |
+| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launchers `claude` / `codex` / `antigravity` | `managed` | `acp`, launcher `custom` |
 |---|---|---|---|---| --- | --- |
 | `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
 | `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` | `resumable` |
 | `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission`, `question` | `permission`, `question` | `permission` | `permission`, `question` |
 | `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` | `reply` |
 | `attachments` | `cinna` | `none` | `local` | `local` | `none` | `local` (`none` over WebSocket) |
-| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) | `cli` |
+| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) | `cli` (`token` or `none` over WebSocket) |
 | `commands` | `card` | `card` | `catalog` | `catalog` | `none` | `none` |
-| `mcpInjection` | no | no | no | no | no | no |
+| `mcpInjection` | no | no | yes | yes | no | yes (no over WebSocket) |
 | `cwd` | no | no | yes | yes | no | no |
+
+Antigravity raises its `ask_question` as a permission request whose options are the answers; the driver asks it as a question, so it reads `question` like the other two. `mcpInjection` is the session's `mcpServers`: every stdio ACP launcher takes them, while a WebSocket agent's remote side cannot reach this machine's servers. The source is `capabilities.ts`; a launcher this build has no implementation for answers `cli` with no question path.
 
 `local` means the file is ingested into the desktop's own store and the ACP turn hands it over itself: copied into the agent's uploads folder and listed by path, or inlined as text for the chat runtime and a remote engine. `attachmentUploadsDir` in `drivers/index.ts` decides which, per turn ([File Attachments](../../chat/file_attachments/file_attachments.md#runtime-conversation-transport)). A remote (WebSocket) ACP agent is offered no attach; files in a history replayed to it are inlined, since it cannot see this disk.
 

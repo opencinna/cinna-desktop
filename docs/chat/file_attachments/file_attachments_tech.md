@@ -24,7 +24,7 @@
   - `remove({ userId, attachmentId, source })` — dispatches on source; idempotent
   - `downloadToPath({ userId, attachmentId, source, destPath })` — local = `pipeline(createReadStream, createWriteStream)`; cinna = `cinnaFileService.downloadToPath`
   - `assertFileScope(value)` — type-narrows renderer-supplied `'cinna' | 'local'` strings; throws `FileError('invalid_scope')`
-- `src/main/services/fileStore.ts` — `FileStore` interface; `LocalFileStore` (`ingest / read / remove` over `userData/files/<userId>/<chatId>/<uuid><ext>` + `chatFileRepo`); `attachmentToMediaPart(att, { userId, capability })` — MIME-routed branching that returns `MediaPart | null` for the stream loop; `guessLocalMime(filename)` reused by `fileService.resolvePaths`
+- `src/main/services/fileStore.ts` — `FileStore` interface; `LocalFileStore` (`ingest / read / remove` over `userData/files/<userId>/<chatId>/<uuid><ext>` + `chatFileRepo`); `attachmentToMediaPart(att, { userId, acceptedMimeTypes, nativeMimeTypes, maxFileSizeBytes })` — MIME-routed branching that returns `MediaPart | null`, called only by the ACP inline path (`acpAttachments.ts`); `guessLocalMime(filename)` reused by `fileService.resolvePaths`
 - `src/main/services/textExtractor.ts` — `extractText(bytes, mime, filename)` — UTF-8 decode for `text/*` + structured data + code formats; `parseOffice(bytes).toText()` for binary office and PDF; soft 256KB cap with inline truncation marker; logs `durationMs / bytesIn / charsOut` on office success
 - `src/main/services/pastedFiles.ts` — what a paste attaches, without Electron:
   - `ClipboardFileSources` — the raw formats the desktop read (`fileUrl`, `filenamesPlist`, `uriList`, `fileNameW`)
@@ -35,16 +35,16 @@
 - `src/main/services/fileService.ts` — `readThumbnail(input)` for the inline thumbnails, and `pathPreview` for composer files read by path; both documented with [File Preview — Technical Details](../file_preview/file_preview_tech.md)
 - `src/main/services/pathGuard.ts` — TTL-based allowlist (default 1h). `record(path) / recordMany(paths) / isAllowed(path) / filterAllowed(paths)`; lazy expiry on lookup; warn-logs rejected counts + extensions (never full paths)
 - `src/main/services/cinnaFileService.ts` — Cinna backend I/O (unchanged from the v1 feature). `uploadFromPath / uploadMany / downloadToPath / downloadTaskAttachmentToPath / deleteFile`
-- `src/main/services/messageRoutingService.ts` — `prepareAgentSend({ ..., attachments })` and `prepareLlmSend({ ..., attachments })` both persist attachments on the user row
+- `src/main/services/messageRoutingService.ts` — `prepareAgentSend({ ..., attachments })` persists attachments on the user row (the only send path; a plain chat is answered by its chat runtime agent)
 - `src/main/services/acpAttachments.ts` — `buildAcpPrompt(userId, input, connection, uploadsDir)`: with an `uploadsDir`, copies each file there and opens the prompt with core's `Uploaded files:` header (plus native image blocks when `image` was negotiated); with `null`, inlines extracted text and images. Never sends an embedded `resource`. `uploadName(filename)` is core's sanitizer with non-ASCII letters kept
 - `src/main/agents/drivers/index.ts` — `attachmentUploadsDir(turn)`: `null` for a remote ACP engine or the chat runtime, `<folder>/app-data/uploads` for a kit folder agent, else `<userData>/agent-uploads/<agentId>`; passed to both `buildPrompt` and `replayTranscript`
 - `src/main/services/conductorTranscript.ts` — `replayTranscript(…, uploadsDir)` rebuilds each saved message through `buildAcpPrompt` with the same folder
 - `src/main/services/a2aStreamingService.ts` — `streamToAgent({ ..., fileIds })` injects `metadata: { cinna_file_ids: fileIds }` into `buildSendParams`
-- `src/main/services/providerService.ts` — `getModelCapability(providerId, modelId)` wraps `getAdapter(...).modelCapability(...)`; returns `NO_FILE_SUPPORT` if the provider isn't registered
+- `src/main/services/providerService.ts` — `getModelCapability(providerId, modelId)` wraps `getAdapter(...).modelCapability(...)`; returns `NO_FILE_SUPPORT` if the provider isn't registered. Feeds only the composer's attach gate
 
 ### Main process — LLM adapters
 
-- `src/main/llm/types.ts` — `MediaPart` discriminated union (`image | document | text`); `ModelCapability` (`acceptedMimeTypes`, `nativeMimeTypes`, `maxFileSizeBytes`, `maxFilesPerMessage`); `NO_FILE_SUPPORT` constant; `renderTextPartsPrefix(media)` shared `<file>` block renderer
+- `src/main/llm/types.ts` — `MediaPart` discriminated union (`image | document | text`); `ModelCapability` (`acceptedMimeTypes`, `nativeMimeTypes`, `maxFileSizeBytes`, `maxFilesPerMessage`); `NO_FILE_SUPPORT` constant; `renderTextPartsPrefix(media)` shared `<file>` block renderer (no caller sets `ChatMessage.media` any more, so the adapters' media paths are unreachable)
 - `src/main/llm/capabilityMimes.ts` — `TEXT_EXTRACTABLE_MIMES` — universal list reused by all three adapters
 - `src/main/llm/anthropic.ts` — Claude 3+: images (PNG/JPEG/GIF/WebP) + PDF native; legacy Claude 2 / Instant: text-only. `buildMediaBlocks` emits `image` and `document` content blocks
 - `src/main/llm/openai.ts` — Vision models (`gpt-4*`, `o*`, `chatgpt-4*`): images native via `image_url` data URLs; PDF + office text-extracted. Non-vision: text-only
@@ -166,7 +166,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - `src/main/services/fileService.ts:ingest()` — ownership-checked dispatch + uniform `MessageAttachment[]` return; logs per-scope ingest counts
 - `src/main/services/fileService.ts:resolvePaths()` — `stat()` + `guessLocalMime`; returns `PendingAttachment[]`; logs `{ in, out }` per call
 - `src/main/services/fileService.ts:downloadToPath()` — disk-to-disk for local, HTTP-streamed for Cinna
-- `src/main/services/fileStore.ts:attachmentToMediaPart()` — capability-aware MIME router; returns `null` to drop with a warn log on failure; never throws
+- `src/main/services/fileStore.ts:attachmentToMediaPart()` — MIME router driven by the caller's accepted/native lists; returns `null` to drop with a warn log on failure; never throws
 - `src/main/services/fileStore.ts` — `LocalFileStore.ingest`: `mkdir -p` + `writeFile` + `chatFileRepo.insert`
 - `src/main/services/textExtractor.ts:extractText()` — branch on `isUtf8DecodableMime / isOfficeExtractableMime`; soft cap via `capText` with truncation marker
 - `src/main/services/pathGuard.ts:filterAllowed()` — partitions into `allowed` / `rejected`; warns on rejected count + ext sample only
