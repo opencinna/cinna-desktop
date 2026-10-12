@@ -9,7 +9,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - **Baseline MCPs** — The chat-mode-driven MCP set tracked in `chat_mcp_providers`. Available for every send unless the chat mode is changed.
 - **On-Demand MCP** — An MCP server the user `@-mentions` inside the chat composer. Attached to the chat in a separate table (`chat_on_demand_mcps`) so the user's per-chat engagements don't tangle with the chat mode's baseline.
 - **Engagement** — Picking an MCP from the `@` popup. Persists for the rest of the chat session until the user removes it via the chip.
-- **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement. **Only a turn the local model answers consumes it** — see the rule below.
+- **Pending Announce** — Per-engagement flag, set on every add, that once marked an MCP as "user just engaged this — tell the LLM once" for the LLM stream loop's silent system note. That loop is gone and nothing reads the flag now (`peekPending` / `clearPending` have no caller); it is kept as compatibility state — see the rule below.
 - **MCP Chip** — A pill rendered with the other capability chips below the composer, one per MCP active in the chat. On-demand engagements are removable (`×` detaches them); baseline servers (from the chat mode) are shown **locked** (no `×`) so the strip reflects everything the runtime actually gets, not just the user's own picks. The strip is the only place a chat's baseline can be seen; it is changed on the chat mode. A folder agent's own [addons](../../agents/local_agents/addons.md) are drawn the same way, locked, after the baseline: in a chat bound to that agent, and on the new-chat screen while it is selected. Their tooltip says they come with the agent and are changed on its page
 - **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it for the chat (an agent row instead attaches an on-demand agent).
 - **`[+]` Capability Picker** — The mouse-driven equivalent of the `@` popup: the left-side `[+]` composer menu → **Add agents / MCP** opens a searchable card modal (`AgentPickerModal` in `activeFirst` multi-select mode). Selecting/deselecting a card runs the exact same engage/detach calls (`addOnDemandMcp` / `removeOnDemandMcp`, or the pending-buffer toggle on the new-chat screen) — so the `@` popup and the `[+]` picker are interchangeable entry points. Selected cards float to the top when the modal opens and hold position while toggling. In active chats it shows on-demand engagements + the bound root agent as "selected" (the root stays non-removable, mirroring `@`).
@@ -22,7 +22,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry alongside any agents.
 3. User selects the entry. The `@gith` token disappears and a "GitHub" chip (connector/`Plug` icon, fixed accent color) appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
 4. User types their first message and presses Enter.
-5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add` (which sets `pendingAnnounce = true`), then kicks off the stream as usual. The LLM sees the silent announce prefix on this very first send.
+5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add`, then starts the run as usual. The chat's runtime is offered the MCP's tools on this very first turn.
 6. A confirmed first-send dispatch consumes the submitted buffer only if its selection is unchanged. Navigating away before sending keeps the dashboard or agent-page draft; preparation failure retains it for retry. New picks made during preparation remain in that source draft.
 
 ### Engaging an MCP mid-chat
@@ -31,8 +31,8 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry.
 3. User selects the entry with Enter / click. The `@gith` token disappears from the composer; a "GitHub" chip appears in the composer's capability-chip strip.
 4. User types `list my pull requests` and presses Enter.
-5. The LLM stream loop attaches the GitHub MCP tools to this send AND silently prepends `[System note: For this message the user specifically enabled the MCP server "GitHub"...]` to the user content so the model understands why the new tools are present.
-6. The LLM uses the new tools to answer. The GitHub chip stays in place for follow-up turns — the announce prefix is *not* re-sent.
+5. Adding the chip makes `conductorBridge` re-list the chat's tools: the GitHub MCP's tools join the ones Cinna's MCP endpoint offers the chat's runtime session, and the session hears `tools/list_changed`. Nothing is added to the user's message — the old one-shot `[System note: … specifically enabled the MCP server …]` prefix went with the LLM stream loop.
+6. The runtime uses the new tools to answer. The GitHub chip stays in place, and the tools with it, for follow-up turns.
 
 ### Detaching an MCP
 
@@ -43,7 +43,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 ### Re-engaging after detach
 
 1. User detaches GitHub, then later decides they need it again.
-2. User `@-mentions` GitHub from the popup. The chip reappears with `pendingAnnounce = true`, so the next send re-fires the silent announcement.
+2. User `@-mentions` GitHub from the popup. The chip reappears (the row is re-inserted with `pendingAnnounce = true`, which nothing reads) and its tools are offered again from the next turn.
 
 ### Engaging an MCP that's also in the chat mode baseline
 

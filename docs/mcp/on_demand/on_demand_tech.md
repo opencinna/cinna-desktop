@@ -11,7 +11,7 @@
 - `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 - `src/main/ipc/chat.ipc.ts` — IPC handlers for the three on-demand channels
 - `src/main/db/chatMcp.ts` — baseline (chat-mode) MCP attachments; referenced by the union builder
-- `src/main/db/mcpProviders.ts` — provider lookup used to resolve names for the announce prefix
+- `src/main/db/mcpProviders.ts` — provider lookup (`getOwned`) that verifies an engaged MCP exists in settings scope
 - `src/main/mcp/manager.ts` — `mcpManager.getToolsForProviders()` consumes the unioned id list
 
 ### Preload
