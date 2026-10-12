@@ -36,10 +36,11 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 
 ### Adding a skill from the catalog
 
-1. The **Catalog** dialog's skill tiles and details carry **Add to agent…**, a menu of this computer's kit agents ([Bundles Catalog](../bundles_catalog/bundles_catalog.md#browsing-the-catalog)). An agent that already pins the package reads **Added**, one shared with the user to use only reads **Can use only**, and while sharing status is still being read each reads **Checking access…**; those rows are disabled
-2. A pick reads **Adding…** on its row. Main pins the package's **latest** version: it downloads and checks the revision first, then writes the pin to `cinna-agent.json`. The menu closes on success; a refusal stays under that agent's row in main's sentence
-3. The tile then says **In N agents**. The new row in the agent's Skills section is already on this computer, so — unless the cached copy breaks a skill rule — the agent's next session has it
-4. In the background main reports the install to core (with the agent's manifest id) and fills the skill's credential slots where exactly one of the account's credentials fits
+1. Two doors lead to the same add. From the skill's side, the **Catalog** dialog's skill tiles and details carry **Add to agent…**, a menu of this computer's kit agents ([Bundles Catalog](../bundles_catalog/bundles_catalog.md#browsing-the-catalog)). An agent that already pins the package reads **Added**, one shared with the user to use only reads **Can use only**, and while sharing status is still being read each reads **Checking access…**; those rows are disabled
+2. From the agent's side, the **Skills** section's header has **Add**, as **MCP Connectors** has **Attach**. It opens **Add skill from the catalog**: a search field over a grid of every skill the active Cinna account's catalog lists (read again on open), each skill drawn with the catalog's own tile and **Add** as its action; a tile opens the catalog's detail over the grid, with **Add** beside its title, and Escape steps back to the grid before it closes the dialog. A failed refresh over a cached grid is one line in the dialog's header, as in the catalog. Signed out, the header **Add** is disabled with the catalog's signed-out sentence as its title. **Add** is also disabled, titled "Its skills come with the team’s version", on a team agent shared to use only, and titled **Checking access…** until sharing status is read — the same rule that hides Update and Remove, because a pin added there would be overwritten by the team's next version
+3. A pick reads **Adding…**. Main pins the package's **latest** version: it downloads and checks the revision first, then writes the pin to `cinna-agent.json`. The menu closes on success; a refusal stays under that agent's row in main's sentence. In **Add skill from the catalog** the dialog stays open and the card turns into a disabled **Added**, so several skills can be added in one visit, as the connector picker does; a refusal stays under that card. Both doors share the add's state, keyed by package, so closing either surface mid-add loses neither the progress nor the refusal
+4. The tile then says **In N agents**. The new row in the agent's Skills section is already on this computer, so — unless the cached copy breaks a skill rule — the agent's next session has it
+5. In the background main reports the install to core (with the agent's manifest id) and fills the skill's credential slots where exactly one of the account's credentials fits
 
 ### Updating, re-fetching and removing a catalog skill
 
@@ -168,7 +169,7 @@ ensureKitAgentSkillsPlugin ──► <userData>/cinna-plugins/agents/<key>/skill
      ├─ OpenCode: skills.paths: [bundle skills/, links folder] + skill allows + cache read allow
      └─ prompt:   "## Your skills" — skill-tool line, or listing with paths (Codex, or plugin not written)
 
-Catalog dialog Add to agent… / row Update · Try again · Remove / Inbox Update / sharing verbs
+Catalog dialog Add to agent… / Skills section Add / row Update · Try again · Remove / Inbox Update / sharing verbs
   → catalog-skills:* IPC → catalogSkillService
       → GET /api/v1/skills/packages/{uuid}/revisions/{n}/download → two digests → safe reader
       → <userData>/catalog-skills/<instance>/<uuid>/<n>/<name>/  → pin written through the manifest guard
@@ -190,7 +191,7 @@ Engine / kit command / scheduled run of a kit agent
 ## Integration Points
 
 - [Agent Addons](addons.md): the tab that hosts the Skills section and the badge that counts skills beside connectors
-- [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the Catalog dialog's **Add to agent…** menu and **In N agents** on a skill
+- [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the Catalog dialog's **Add to agent…** menu and **In N agents** on a skill; **Add skill from the catalog** reuses its listing and list body
 - [Service Credentials](../service_credentials/README.md#skill-credential-slots): skill credential slots, attaching without asking after `provision-local`, Finish setting up's Skills group and the `core.cinna_api` shim
 - [The Inbox](../../jobs/tasks/inbox.md): **Update available for *skill* in *agent***
 - [Team Sharing](team_sharing.md): Get, Update and Use the team's version fetch the pins in the background; the link and the listing's access decide whether an agent is changeable

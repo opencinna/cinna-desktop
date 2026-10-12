@@ -2,7 +2,7 @@
 
 ## Purpose
 
-An agent page's **Addons** tab gives a folder agent — kit or bare — MCP connectors of its own. A connector attached there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat. A kit agent's tab also lists its skills — its own and the catalog skills it pins — in a **Skills** section documented in [Agent Skills](skills.md), where a catalog skill is updated, re-fetched or removed and an own skill shared; this doc covers the connectors.
+An agent page's **Addons** tab gives a folder agent — kit or bare — MCP connectors of its own. A connector attached there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat. A kit agent's tab also lists its skills — its own and the catalog skills it pins — in a **Skills** section documented in [Agent Skills](skills.md), where a catalog skill is added, updated, re-fetched or removed and an own skill shared; this doc covers the connectors.
 
 ## Core Concepts
 

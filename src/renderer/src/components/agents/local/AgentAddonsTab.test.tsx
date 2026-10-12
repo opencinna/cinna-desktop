@@ -39,6 +39,7 @@ window.api = {
 } as never
 
 const { AgentAddonsTab, useAddonsBadge } = await import('./AgentAddonsTab')
+const { useAuthStore } = await import('../../../stores/auth.store')
 
 function renderTab(extra: Partial<LocalAgentDto> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -52,6 +53,7 @@ beforeEach(() => {
   shareStatuses = []
   statusesPending = null
   vi.clearAllMocks()
+  useAuthStore.setState({ currentUser: null })
 })
 
 describe('AgentAddonsTab', () => {
@@ -529,5 +531,31 @@ describe('the Skills section — a catalog skill’s actions', () => {
     expect(api.sharing.itemPeople).toHaveBeenCalledWith('pkg-1')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('offers Add on the Skills section, disabled when signed out and on a team agent shared to use only', async () => {
+    renderTab()
+    const signedOut = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
+    await waitFor(() => expect(signedOut.title).toBe('The catalog is available when signed in to a Cinna account.'))
+    expect(signedOut.disabled).toBe(true)
+
+    document.body.innerHTML = ''
+    useAuthStore.setState({ currentUser: { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false } as never })
+    renderTab()
+    const button = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
+    await waitFor(() => expect(button.disabled).toBe(false))
+
+    document.body.innerHTML = ''
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    renderTab()
+    const readOnly = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
+    await waitFor(() => expect(readOnly.title).toBe('Its skills come with the team’s version'))
+    expect(readOnly.disabled).toBe(true)
+  })
+
+  it('offers no Add on a bare agent, which cannot hold skills', async () => {
+    renderTab({ skills: undefined, kind: 'bare' } as never)
+    await screen.findByText('No connectors attached.')
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
   })
 })

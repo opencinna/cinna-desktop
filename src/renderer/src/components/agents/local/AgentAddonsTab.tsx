@@ -11,7 +11,8 @@ import {
   useUpdateCatalogSkill
 } from '../../../hooks/useCatalogSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { CATALOG_SKILL_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
+import { useAuthStore } from '../../../stores/auth.store'
 import { usePublishSkill } from '../../../hooks/useSkillPublish'
 import type { SkillPublishInput } from '../../../../../shared/skillPublish'
 import { ShareSkillDialog } from './ShareSkillDialog'
@@ -22,6 +23,7 @@ import { CredentialStatusGlyph } from '../../settings/CredentialRow'
 import type { CredentialHealth } from '../../settings/credentialPresentation'
 import { SettingsBadge, SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
 import { McpAttachModal } from './McpAttachModal'
+import { SkillAddModal } from './SkillAddModal'
 import { mcpProblem } from '../../settings/mcpPresentation'
 
 /**
@@ -435,6 +437,7 @@ export function AgentAddonsTab({
   const detach = useDetachAgentMcp()
   const openPath = useOpenAgentPath()
   const [picking, setPicking] = useState(false)
+  const [addingSkill, setAddingSkill] = useState(false)
   const [error, setError] = useState('')
   // A failed reveal is shown in the card of the skill it was for (rule 6).
   const [revealError, setRevealError] = useState<{ skill: string; message: string } | null>(null)
@@ -476,6 +479,8 @@ export function AgentAddonsTab({
       shareStatus.remote.access !== 'edit' &&
       shareStatus.remote.access !== 'maintain')
   const sharedEditable = !readOnly && shareStatus != null
+  // The catalog Add reads is the active Cinna account's.
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
 
   const runSkillVerb = (
     name: string,
@@ -589,8 +594,27 @@ export function AgentAddonsTab({
               <p>A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for.</p>
               <p className="mt-2">Every session of this agent can use the skills listed here as working. Claude and OpenCode load them as skills; Codex is told where each one’s SKILL.md is.</p>
               <p className="mt-2">A skill with an error is left out of every session until its SKILL.md is fixed.</p>
-              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one from the catalog.</p>
+              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one with Add.</p>
             </SettingsInfoTip>
+          }
+          action={
+            // A team agent shared to use only takes its skills with the team's version.
+            <SettingsButton
+              disabled={readOnly || !isCinnaUser}
+              title={
+                !isCinnaUser
+                  ? CATALOG_TEXT.signedOut
+                  : shareStatus === undefined
+                  ? CATALOG_SKILL_TEXT.checkingAccess
+                  : readOnly
+                    ? CATALOG_SKILL_TEXT.canUseOnlyTitle
+                    : 'Add a skill from the catalog'
+              }
+              onClick={() => setAddingSkill(true)}
+            >
+              <Plus size={14} />
+              Add
+            </SettingsButton>
           }
         >
           {agent.skills.length === 0 ? (
@@ -660,6 +684,7 @@ export function AgentAddonsTab({
           onClose={() => setPeopleOf(null)}
         />
       )}
+      {agent.skills && <SkillAddModal open={addingSkill} agentId={agent.id} onClose={() => setAddingSkill(false)} />}
       <McpAttachModal
         open={picking}
         attachedIds={ids ?? []}

@@ -64,6 +64,7 @@ Implementation reference for [Agent Skills](skills.md).
 - `src/renderer/src/components/agents/local/sharing/WhoCanUseSkillDialog.tsx`: **Who can use *name*** — `PeopleSection` (`sharing/PeopleSection.tsx`, shared with the agent's Sharing tab) over `useItemPeople` / `useSetItemPeople` (`useSharing.ts`)
 - `src/renderer/src/components/agents/local/sharing/ShareDialogs.tsx`: `PeopleSearch`, `ChosenPeopleList`, `personLabel`, `ChosenPerson`, now exported for the Share dialog
 - `src/renderer/src/components/agents/CatalogSkillAddMenu.tsx`: **Add to agent…** (see [Bundles Catalog — Technical Details](../bundles_catalog/bundles_catalog_tech.md))
+- `src/renderer/src/components/agents/local/SkillAddModal.tsx`: **Add skill from the catalog**, opened by the Skills section's **Add** — `useCatalogEntries({ refresh: true })` filtered to skills, `CatalogListBody`, `CatalogRefreshFailure` and `useCatalogReauth` from `CatalogBrowserParts`, each skill as `CatalogItemTile` / `CatalogItemDetailView` with Add in the action slot, and per skill the same `useAddCatalogSkill` / `useCatalogSkillAdds` as the menu, so an add's state outlives either surface
 - `src/renderer/src/components/agents/local/LocalAgentPage.tsx`: `addonsBadgeTitle(count, skills, problems)` and the badge
 - `src/renderer/src/hooks/useCatalogSkills.ts`: `useAddCatalogSkill`, `addCatalogSkillKey`, `useCatalogSkillAdds`, `useUpdateCatalogSkill`, `useRemoveCatalogSkill`, `useEnsureCatalogSkills`, `catalogSkillOutcomeMessage`
 - `src/renderer/src/hooks/useSkillPublish.ts`: `usePublishSkill`
@@ -256,7 +257,7 @@ None user-facing. The skill limits are core's constants above; changing one is a
 - `promptAssembly.test.ts`, `src/main/agents/drivers/index.test.ts`: the section per engine with catalog skills, its position, and the pointer fallback
 - `sharingService.test.ts`: the background fetch after Get and after an Update, and none after a refused Update
 - `validator.test.ts`, `conformance.test.ts`, `scannerService.test.ts`: skill and pin findings, and readiness left alone
-- `AgentAddonsTab.test.tsx`, `LocalAgentPage.test.tsx`, `ShareSkillDialog.test.tsx`, `CatalogBrowserModal.test.tsx`, `InboxView.updates.test.tsx`: rows and actions, read-only agents, the confirm, errors, the badge (an unattached deliverable slot counts, an attached or unjudged one does not), slot glyphs and the row's Finish setup; the Share dialog's states; the Add to agent menu; the skill Update card
+- `AgentAddonsTab.test.tsx`, `SkillAddModal.test.tsx`, `LocalAgentPage.test.tsx`, `ShareSkillDialog.test.tsx`, `CatalogBrowserModal.test.tsx`, `InboxView.updates.test.tsx`: rows and actions, read-only agents, the confirm, errors, the badge (an unattached deliverable slot counts, an attached or unjudged one does not), slot glyphs and the row's Finish setup; the Share dialog's states; the Add to agent menu; the skill Update card
 - `ReadinessStrip.test.tsx`: Finish setup added to a readiness line for a skill slot, and no strip for a skill-only gap
 - `useCatalog.itemsWatch.test.tsx`: both watches re-read the local-agent list and pages
 - `claude.contract.test.ts`: `claude.session.options-plugins-agent-skills` against the real pinned CLI (`make contract ENGINE=claude`)
