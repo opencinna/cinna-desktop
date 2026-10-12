@@ -23,6 +23,7 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 // theme at import time.
 const openPath = vi.fn(async () => undefined)
 const openCredentials = vi.fn(async () => ({ created: false, revealed: false }))
+const openUploads = vi.fn(async (_agentId: string) => ({ success: true as const }))
 ;(
   window as unknown as {
     api: {
@@ -30,12 +31,13 @@ const openCredentials = vi.fn(async () => ({ created: false, revealed: false }))
       localAgents: {
         openPath: () => Promise<void>
         openCredentials: () => Promise<{ created: boolean; revealed: boolean }>
+        openUploads: (agentId: string) => Promise<{ success: true }>
       }
     }
   }
 ).api = {
   app: { setTheme: async () => undefined },
-  localAgents: { openPath, openCredentials }
+  localAgents: { openPath, openCredentials, openUploads }
 }
 
 const { FolderTab } = await import('./FolderTab')
@@ -153,6 +155,19 @@ describe('FolderTab — a kit agent keeps every card', () => {
     expect(screen.queryByText('Credentials')).toBeNull()
     expect(screen.getByText('Kit')).toBeTruthy()
     expect(screen.getAllByText(/contract 1\.1\.0/).length).toBeGreaterThan(0)
+  })
+})
+
+describe('FolderTab — the uploads folder', () => {
+  it('opens it from the Files card, and says in place why it could not', async () => {
+    renderTab(agent())
+    fireEvent.click(screen.getByRole('button', { name: 'Open uploads folder' }))
+    await waitFor(() => expect(openUploads).toHaveBeenCalledWith('folder:external:r1:alpha'))
+    expect(screen.queryByRole('status')).toBeNull()
+
+    openUploads.mockRejectedValueOnce(new Error("Error invoking remote method 'local-agent:open-uploads': LocalAgentError: No files have been attached to this agent yet."))
+    fireEvent.click(screen.getByRole('button', { name: 'Open uploads folder' }))
+    expect((await screen.findByRole('status')).textContent).toBe('No files have been attached to this agent yet.')
   })
 })
 

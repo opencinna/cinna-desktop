@@ -81,7 +81,7 @@ describe('new-chat chip click', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Beta — Coordinator' }), { clientX: 10, clientY: 10, detail: 1 })
     const menu = screen.getByRole('menu', { name: 'Agent Beta' })
     // The conductor has no action item: no separator above Go to Agent.
-    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Go to Agent', 'Open Agent Folder'])
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Go to Agent', 'Open Agent Folder', 'Open Uploads'])
     expect(within(menu).queryByRole('separator')).toBeNull()
   })
 })
@@ -112,7 +112,7 @@ describe('new-chat chip menu', () => {
 
     fireEvent.contextMenu(chip('Gamma'), { clientX: 10, clientY: 10 })
     menu = screen.getByRole('menu', { name: 'Agent Gamma' })
-    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Set as Coordinator', 'Go to Agent', 'Open Agent Folder'])
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Set as Coordinator', 'Go to Agent', 'Open Agent Folder', 'Open Uploads'])
     // Nothing to address before the chat exists.
     expect(within(menu).getAllByRole('separator')).toHaveLength(1)
     expect(within(menu).getByRole('separator').previousElementSibling).toBe(within(menu).getByRole('menuitem', { name: 'Set as Coordinator' }))

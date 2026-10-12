@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync
 } from 'node:fs'
@@ -38,12 +39,16 @@ const trash = vi.hoisted(() => vi.fn<(path: string) => Promise<void>>())
 const openPath = vi.hoisted(() => vi.fn<(path: string) => Promise<string>>(async () => ''))
 /** `shell.showItemInFolder` — the fallback the credentials click must not need. */
 const reveal = vi.hoisted(() => vi.fn<(path: string) => void>())
+/** `app.getPath('userData')`, set by the tests that need one. */
+const userData = vi.hoisted(() => ({ path: '' }))
 
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
     getAppPath: () => repoRoot,
     getVersion: () => '0.0.0-test',
+    // Unset, it throws as the mock without it did: a relative '' would land files in the repo.
+    getPath: () => { if (!userData.path) throw new Error('no userData in this test'); return userData.path },
     on: () => undefined
   },
   shell: { showItemInFolder: reveal, trashItem: trash, openPath },
@@ -875,6 +880,66 @@ describe('openPath', () => {
 
   it('accepts an agent-relative path', () => {
     expect(() => localAgentService.openPath(USER, { agentId, relPath: WORKFLOW })).not.toThrow()
+  })
+})
+
+describe('openUploads', () => {
+  beforeEach(() => {
+    openPath.mockClear()
+    openPath.mockImplementation(async () => '')
+  })
+
+  it('opens a kit agent\'s app-data/uploads, and says so when it is gone', async () => {
+    // The scaffold lays the folder down.
+    await localAgentService.openUploads(USER, agentId)
+    expect(openPath).toHaveBeenCalledWith(join(agentDir, 'app-data', 'uploads'))
+
+    // Nothing is created by a click: without the folder the user is told so.
+    openPath.mockClear()
+    rmSync(join(agentDir, 'app-data', 'uploads'), { recursive: true })
+    await expect(localAgentService.openUploads(USER, agentId)).rejects.toThrow(/No files have been attached/)
+    expect(existsSync(join(agentDir, 'app-data', 'uploads'))).toBe(false)
+    expect(openPath).not.toHaveBeenCalled()
+  })
+
+  it('refuses a kit uploads folder symlinked out of the agent', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cinna-uploads-out-'))
+    try {
+      rmSync(join(agentDir, 'app-data', 'uploads'), { recursive: true, force: true })
+      symlinkSync(elsewhere, join(agentDir, 'app-data', 'uploads'))
+      await expect(localAgentService.openUploads(USER, agentId)).rejects.toThrow(/not inside/i)
+      expect(openPath).not.toHaveBeenCalled()
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it('opens a bare agent\'s desktop-owned folder, never one inside the user\'s tree', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'cinna-bare-uploads-'))
+    userData.path = mkdtempSync(join(tmpdir(), 'cinna-userdata-'))
+    try {
+      mkdirSync(join(outside, 'support'))
+      writeFileSync(join(outside, 'support', 'CLAUDE.md'), '# Support\n')
+      localAgentService.pickedAgentFolder(USER, outside)
+      const { root } = localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['support'] })
+      const bareId = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)[0].id
+      // A bare folder with its own app-data/uploads is still not where attachments go.
+      mkdirSync(join(outside, 'support', 'app-data', 'uploads'), { recursive: true })
+      await expect(localAgentService.openUploads(USER, bareId)).rejects.toThrow(/No files have been attached/)
+
+      mkdirSync(join(userData.path, 'agent-uploads', bareId), { recursive: true })
+      await localAgentService.openUploads(USER, bareId)
+      expect(openPath).toHaveBeenCalledWith(join(userData.path, 'agent-uploads', bareId))
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+      rmSync(userData.path, { recursive: true, force: true })
+      userData.path = ''
+    }
+  })
+
+  it('passes on what the OS said when nothing could open the folder', async () => {
+    openPath.mockImplementation(async () => 'Failed to open path')
+    await expect(localAgentService.openUploads(USER, agentId)).rejects.toThrow('Could not open the uploads folder: Failed to open path')
   })
 })
 

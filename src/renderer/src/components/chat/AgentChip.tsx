@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
-import { AtSign, Bot, FolderOpen, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
+import { AtSign, Bot, FolderOpen, Paperclip, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, ContextMenu, useContextMenuAction } from '../ui/ContextMenu'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
-import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
+import { useLocalAgents, useOpenAgentPath, useOpenAgentUploads } from '../../hooks/useLocalAgents'
 
 /**
  * The width range of a chip under the composer (agent and MCP chips alike).
@@ -223,6 +223,7 @@ function AgentChipContextMenu({
   const { busy, error, run } = useContextMenuAction(onClose)
   const openAgentPage = useOpenAgentPage()
   const openAgentPath = useOpenAgentPath()
+  const openAgentUploads = useOpenAgentUploads()
   // A folder agent is one the folder scan lists — membership, as the Chats
   // list's Open Folder asks it, rather than another branch on the id's kind.
   const { data: folders } = useLocalAgents()
@@ -270,6 +271,12 @@ function AgentChipContextMenu({
         <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
           onClick={() => void run(() => openAgentPath.mutateAsync({ agentId: agent.id }), 'Could not open the agent folder.')}>
           <FolderOpen size={12} aria-hidden="true" />Open Agent Folder
+        </button>
+      )}
+      {isFolder && (
+        <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
+          onClick={() => void run(() => openAgentUploads.mutateAsync(agent.id), 'Could not open the uploads folder.')}>
+          <Paperclip size={12} aria-hidden="true" />Open Uploads
         </button>
       )}
     </ContextMenu>

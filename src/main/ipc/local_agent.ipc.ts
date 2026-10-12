@@ -339,6 +339,13 @@ export function registerLocalAgentHandlers(): void {
     return { success: true as const }
   })
 
+  /** Open the folder the agent's chat attachments are copied to; the path is fixed in main. */
+  ipcHandle('local-agent:open-uploads', async (_event, agentId: string) => {
+    userActivation.requireActivated()
+    await localAgentService.openUploads(getSettingsScopeUserId(), agentId)
+    return { success: true as const }
+  })
+
   /**
    * Open the agent's `credentials/.env` for editing, creating it when it is not
    * there yet. Separate from `open-path` because it writes: the path is fixed

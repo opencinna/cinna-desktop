@@ -23,6 +23,7 @@ let removePending = false
 /** The hook-level `onSuccess` the menu registers — the one that survives unmounts. */
 let hookOptions: { onSuccess?: () => void } | undefined
 const setActiveLocalAgentId = vi.fn()
+const openUploads = vi.fn()
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({ setActiveLocalAgentId })
@@ -32,6 +33,7 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
     hookOptions = options
     return { mutate: remove, isPending: removePending }
   },
+  useOpenAgentUploads: () => ({ mutate: openUploads }),
   useRescanLocalAgents: () => ({ mutate: vi.fn(), isPending: false }),
   useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false })
 }))
@@ -116,6 +118,22 @@ function sharedStatus(): AgentShareStatus {
 }
 
 const LIBRARY: LibraryListingDto = { host: 'https://core.test', agents: [], fetchedAt: '2026-10-09T00:00:00Z' }
+
+describe('AgentActionsMenu — the uploads folder', () => {
+  it('opens it after Reveal folder, and hands a refusal to the page\'s error slot', () => {
+    const onError = vi.fn()
+    render(createElement(AgentActionsMenu, { agent: agent({ kind: 'bare' }), onError }))
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    const items = screen.getAllByRole('menuitem').map((el) => el.textContent)
+    expect(items.indexOf('Open uploads folder')).toBe(items.indexOf('Reveal folder') + 1)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open uploads folder' }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    const [agentId, options] = openUploads.mock.calls[0] as [string, { onError: (err: Error) => void }]
+    expect(agentId).toBe('folder:alpha')
+    act(() => options.onError(new Error('No files have been attached to this agent yet.')))
+    expect(onError).toHaveBeenLastCalledWith('No files have been attached to this agent yet.')
+  })
+})
 
 /**
  * A shared agent's folder is a copy of the team's version: removing it trashes

@@ -679,6 +679,13 @@ export function useOpenAgentPath() {
   })
 }
 
+/** Open the folder the agent's chat attachments are copied to. */
+export function useOpenAgentUploads() {
+  return useMutation({
+    mutationFn: (agentId: string) => window.api.localAgents.openUploads(agentId)
+  })
+}
+
 /**
  * Open the agent's `credentials/.env` for editing, created on the spot when it
  * is not there yet. The "Add them in credentials/.env" affordance leads here

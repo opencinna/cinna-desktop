@@ -1,5 +1,6 @@
-import { CheckCircle2, FileText } from 'lucide-react'
-import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
+import { CheckCircle2, FileText, Paperclip } from 'lucide-react'
+import { useOpenAgentPath, useOpenAgentUploads } from '../../../hooks/useLocalAgents'
+import { unwrapIpcError } from '../../../utils/ipcError'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import {
   BARE_AGENT_README_FILE,
@@ -196,6 +197,7 @@ function FilesCard({
   env: OpenCredentialsFile
 }): React.JSX.Element {
   const openPath = useOpenAgentPath()
+  const uploads = useOpenAgentUploads()
   return (
     <AgentCard
       title="Files"
@@ -232,6 +234,32 @@ function FilesCard({
           </li>
         ))}
       </ul>
+      {/*
+        Not a file the page reads, so not a row above: where the files attached
+        in chats are copied for the engine. A kit keeps them in its own
+        app-data/uploads; a bare folder's are in a desktop-owned folder that
+        nothing else on the page names.
+      */}
+      <div className="mt-2 flex items-center gap-2 border-t border-[var(--color-border)] pt-2 text-xs">
+        <button
+          type="button"
+          disabled={uploads.isPending}
+          onClick={() => uploads.mutate(agent.id)}
+          className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--color-text)]
+            transition-colors hover:text-[var(--color-accent)] disabled:cursor-wait disabled:opacity-50"
+        >
+          <Paperclip size={11} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden="true" />
+          Open uploads folder
+        </button>
+        <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--color-text-muted)]">
+          files attached in chats with this agent
+        </span>
+      </div>
+      {uploads.error && (
+        <div role="status" className="mt-1 text-[10px] text-[var(--color-text-secondary)]">
+          {unwrapIpcError(uploads.error, 'Could not open the uploads folder.')}
+        </div>
+      )}
       {env.outcome('files')}
     </AgentCard>
   )

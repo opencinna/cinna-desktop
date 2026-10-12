@@ -108,6 +108,7 @@ import { withCatalogSkillUpdates } from '../catalogSkillUpdates'
 import { withSkillPublications } from '../skillPublications'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
+import { agentUploadsDir } from '../agentUploads'
 import { runtimeService } from './runtimeService'
 import { permissionGrantService, type StoredPermissionGrant } from './permissionGrantService'
 
@@ -1134,6 +1135,25 @@ export const localAgentService = {
       agentId: input.agentId,
       relPath: input?.relPath ?? MANIFEST_FILE
     })
+  },
+
+  /**
+   * Open the folder this agent's chat attachments are copied to
+   * ({@link agentUploadsDir}) in the OS file manager. Nothing creates it here:
+   * before the first attachment there is no folder, and the caller is told so.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_path`
+   */
+  async openUploads(userId: string, agentId: string): Promise<void> {
+    const { root, agentDir } = this.locate(userId, agentId)
+    const kit = this.scanFolder(root, agentDir).kind === 'kit'
+    const dir = agentUploadsDir(agentId, kit ? agentDir : null)
+    if (!existsSync(dir)) throw new LocalAgentError('not_found', 'No files have been attached to this agent yet.')
+    // A kit's uploads are inside its folder: a symlink out of it is refused.
+    const target = kit ? resolveWithinRoot(agentDir, 'app-data/uploads') : dir
+    const failure = await runtimeHost.shell.openPath(target)
+    if (failure) throw new LocalAgentError('not_found', `Could not open the uploads folder: ${failure}`)
+    logger.info('opened an agent uploads folder', { agentId, kit })
   },
 
   /**

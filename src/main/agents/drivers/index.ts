@@ -75,6 +75,7 @@ import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView, type AcpPromptTurn } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 import { sessionActivityHub } from '../../services/sessionActivityHub'
+import { agentUploadsDir } from '../../services/agentUploads'
 import { sessionTelemetryService } from '../telemetry/sessionTelemetryService'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
 import { installSessionActivityStopper } from '../../services/sessionActivityStop'
@@ -873,16 +874,13 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
 
 /**
  * Where a turn's attachments are copied for the engine to open with its own
- * tools, or null to inline them as text. A remote engine cannot see this disk,
- * and a chat runtime runs with its file tools removed, so both get text. A kit
- * folder keeps them in its own `app-data/uploads/`, as on cinna-core. A bare
- * folder is somebody's working tree and a build workspace or custom agent's
- * cwd is not ours either, so theirs go in a desktop-owned folder per agent.
+ * tools ({@link agentUploadsDir}), or null to inline them as text. A remote
+ * engine cannot see this disk, and a chat runtime runs with its file tools
+ * removed, so both get text.
  */
 function attachmentUploadsDir({ agent, runtime, plan }: AcpPromptTurn): string | null {
   if (plan.spec.remote || isChatConductor(agent)) return null
-  if (runtime.type === 'folder' && runtime.folder.kind === 'kit' && !isDevelopmentAgent(agent)) return join(runtime.folder.path, 'app-data', 'uploads')
-  return join(runtimeHost.getPath('userData'), 'agent-uploads', agent.id)
+  return agentUploadsDir(agent.id, runtime.type === 'folder' && runtime.folder.kind === 'kit' && !isDevelopmentAgent(agent) ? runtime.folder.path : null)
 }
 
 export const acpDriver = createAcpDriver({

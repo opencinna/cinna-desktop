@@ -22,7 +22,8 @@ const spies = vi.hoisted(() => ({
   get: vi.fn(async () => chatDetail.current),
   onDemandAgentList: vi.fn(async () => onDemandAgents.current),
   setCoordinator: vi.fn(async (_chatId: string, _agentId: string) => ({ success: true })),
-  openPath: vi.fn(async (_input: { agentId: string }) => ({ success: true as const }))
+  openPath: vi.fn(async (_input: { agentId: string }) => ({ success: true as const })),
+  openUploads: vi.fn(async (_agentId: string) => ({ success: true as const }))
 }))
 
 function namespace(methods: Record<string, unknown>): unknown {
@@ -54,7 +55,7 @@ function namespace(methods: Record<string, unknown>): unknown {
           setCoordinator: spies.setCoordinator
         })
       }
-      if (ns === 'localAgents') return namespace({ openPath: spies.openPath, list: async () => FOLDERS })
+      if (ns === 'localAgents') return namespace({ openPath: spies.openPath, openUploads: spies.openUploads, list: async () => FOLDERS })
       if (ns === 'sessionActivity') return namespace({ get: async () => [] })
       return namespace({})
     }
@@ -164,7 +165,7 @@ describe('the agent chip menu', () => {
     await mount({ router: 'human', attached: [FOLDER, REMOTE] })
     const menu = openMenuOn('Planner')
     expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
-      'Set as Coordinator', 'Go to Agent', 'Open Agent Folder'
+      'Set as Coordinator', 'Go to Agent', 'Open Agent Folder', 'Open Uploads'
     ])
     expect(item(menu, 'Set as Coordinator').disabled).toBe(false)
   })
@@ -176,6 +177,7 @@ describe('the agent chip menu', () => {
     expect(set.disabled).toBe(true)
     expect(set.getAttribute('aria-describedby')).toBe(within(menu).getByText('Only a local agent can coordinate').id)
     expect(within(menu).queryByRole('menuitem', { name: 'Open Agent Folder' })).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: 'Open Uploads' })).toBeNull()
     expect(item(menu, 'Go to Agent')).toBeTruthy()
   })
 
@@ -282,6 +284,18 @@ describe('the agent chip menu', () => {
     expect(screen.getByRole('menu', { name: 'Agent Coder' })).toBeTruthy()
   })
 
+  it('opens the uploads folder, and shows main\'s reason in place when there is none yet', async () => {
+    await mount({ router: 'human', attached: [FOLDER, FOLDER_2] })
+    fireEvent.click(item(openMenuOn('Coder'), 'Open Uploads'))
+    await waitFor(() => expect(spies.openUploads).toHaveBeenCalledWith(FOLDER_2))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    spies.openUploads.mockRejectedValueOnce(new Error('No files have been attached to this agent yet.'))
+    fireEvent.click(item(openMenuOn('Coder'), 'Open Uploads'))
+    expect((await screen.findByRole('alert')).textContent).toBe('No files have been attached to this agent yet.')
+    expect(screen.getByRole('menu', { name: 'Agent Coder' })).toBeTruthy()
+  })
+
   it('opens from the keyboard on a focused chip and hands focus back on Escape', async () => {
     await mount({ router: 'human', attached: [FOLDER, FOLDER_2] })
     const button = within(chipOf('Coder')).getByRole('button', { name: 'Agent "Coder" attached as a participant' })
@@ -331,7 +345,7 @@ describe('the agent chip menu', () => {
     // At the pointer, as a right-click would open it.
     expect(menu.style.left).toBe('140px')
     expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
-      'Address Next Message', 'Set as Coordinator', 'Go to Agent', 'Open Agent Folder'
+      'Address Next Message', 'Set as Coordinator', 'Go to Agent', 'Open Agent Folder', 'Open Uploads'
     ])
     fireEvent.keyDown(document, { key: 'Escape' })
     fireEvent.click(screen.getByRole('button', { name: 'Remove agent Coder' }), { clientX: 40, clientY: 40, detail: 1 })

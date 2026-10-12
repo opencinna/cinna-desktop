@@ -5,6 +5,7 @@ import {
   Fingerprint,
   FolderOpen,
   MoreHorizontal,
+  Paperclip,
   RefreshCw,
   TerminalSquare,
   Trash2,
@@ -14,6 +15,7 @@ import { usePopover } from '../../ui/usePopover'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useDeleteLocalAgent,
+  useOpenAgentUploads,
   useRescanLocalAgents,
   useStampAgentIdentity
 } from '../../../hooks/useLocalAgents'
@@ -268,6 +270,7 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
   const menu = usePopover<HTMLButtonElement>('below-right')
   const rescan = useRescanLocalAgents()
   const openIn = useOpenIn()
+  const uploads = useOpenAgentUploads()
   const stamp = useStampAgentIdentity()
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const [confirming, setConfirming] = useState(false)
@@ -372,6 +375,21 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
             >
               <FolderOpen size={12} />
               Reveal folder
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={MENU_ITEM}
+              onClick={() =>
+                run(() =>
+                  uploads.mutate(agent.id, {
+                    onError: (err) => report(err, 'Could not open the uploads folder.')
+                  })
+                )
+              }
+            >
+              <Paperclip size={12} />
+              Open uploads folder
             </button>
             <button
               type="button"

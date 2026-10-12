@@ -1842,6 +1842,9 @@ const api = {
     /** Reveal a file inside the agent folder in Finder / Explorer. */
     openPath: (input: OpenLocalAgentPathInput): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-agent:open-path', input),
+    /** Open the folder the agent's chat attachments are copied to, once there is one. */
+    openUploads: (agentId: string): Promise<{ success: true }> =>
+      ipcRenderer.invoke('local-agent:open-uploads', agentId),
     /**
      * Open the agent's `credentials/.env` for editing, creating it from the
      * declared variable names when it does not exist yet. Says whether it had
