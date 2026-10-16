@@ -42,7 +42,7 @@
 - `src/renderer/src/components/settings/AntigravitySettingsFields.tsx` — the Antigravity Path over `RuntimePathField.tsx`.
 - `src/renderer/src/components/settings/AntigravityTermsTip.tsx` — the (?) with Google's terms link, placed before or beside every Log in.
 - `src/renderer/src/components/settings/RuntimeChoiceButtons.tsx` — the always-available Antigravity choice (`managedVersion`, `tool: null`); the picker is a container-query grid so four or five choices stay equal.
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the Runtime status line; with Antigravity selected and logged out, **Log in** / **Cancel** take the install action's slot.
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the Runtime status line. Install, Retry and Log in are the selected card's overlay (`useRuntimeCardSetup`, runtime setup in main); the line carries a login's **Cancel**, and `AntigravityTermsLine` (in `AntigravityTermsTip.tsx`) — the terms sentence with its link, which never truncates — while Antigravity is selected and not ready and nothing more pressing holds the line, otherwise `AntigravityTermsTip` at its end.
 - `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — the Antigravity row (the server Cinna runs).
 - `src/renderer/src/components/agents/local/RuntimePanel.tsx` — Runs on option, tier select (`Default (Flash high)`), status line and badge (*Sign-in required*). `PermissionsCard.tsx` — `AntigravityApprovals`.
 - `src/renderer/src/components/chat/ComposerReadiness.tsx` — the terms tip before Log in. `DesktopAppsBanner.tsx` — a signed-in, installed Antigravity counts as a working runtime.

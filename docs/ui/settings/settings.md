@@ -163,7 +163,7 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 - [Hints](../hints/hints.md) — The Features tab's "Interface" group hosts the `showHints` toggle and the "Reset hints" button that clears the localStorage retirement counters
 - [Agents](../../agents/agents/agents.md) — Add an agent in the Agents sidebar creates direct A2A connections; each agent page exposes its own Settings action
 - [Local Agents](../../agents/local_agents/agents_tab.md) — Agents section (Default group): the registered agent folders, the local engine and its binary path, and the detected developer tools, in three titled sections
-- [The Codex Engine](../../agents/local_agents/codex_engine.md) — the managed Codex CLI behind the Runtime row's Codex status line (*Install now* / *Try again* / *Fix path*), the Developer Tools Codex row and the Codex Path
+- [The Codex Engine](../../agents/local_agents/codex_engine.md) — the managed Codex CLI behind the Runtime row's Codex status line (the selected card's *Install* / *Retry* / *Log in*, and *Fix path* on the line), the Developer Tools Codex row and the Codex Path
 - [The Claude Engine](../../agents/local_agents/claude_engine.md) — the pinned Claude Code behind the same three surfaces for Claude Agent, and the Claude Path
 - [The Antigravity Engine](../../agents/local_agents/antigravity_engine.md) — the pinned Antigravity server behind the same three surfaces, the Runtime row's Log in, and the Antigravity Path
 - [Local Development](../../agents/local_dev/local_dev.md) — Local Development section: the managed uv / cinna-cli / Mutagen toolchain, its consent and repair actions
