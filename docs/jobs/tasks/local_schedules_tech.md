@@ -64,7 +64,7 @@ The manifest's `enabled` field is the author's portable intent; device opt-in li
 
 A generated Job belongs to one reviewed revision. `save` and `enable` reuse `binding.jobId` only when `prior.revision` equals the revision being saved or reviewed, and the Job's fingerprint still matches. Otherwise an enabling prompt schedule creates a fresh Job. A disabled save carries no Job forward (`jobId: ''`), so a later `enable` generates one for the definition it reviews. `jobIds` keeps every earlier Job for history and overlap.
 
-Fresh validation checks kit identity, effective agent enablement, runnable readiness, unique schedule name, execution type, literal prompt or command, cron, timezone, and resolved catalog entry. Readiness `credentials_needed` warns as it does for ordinary work; `invalid` and `contract_too_new` refuse. A `/run:<name>` revision includes the resolved/localized command, so catalog edits invalidate consent. Script file contents are not whole-folder hashed.
+Fresh validation checks kit identity, effective agent enablement, runnable readiness, unique schedule name, execution type, literal prompt or command, cron, timezone, and resolved catalog entry. Readiness `credentials_needed` warns as it does for ordinary work, and so does an `invalid` that is only validation findings; `folderCanRun` is `!folderReadinessBlocksTurn(agent)`, so only `contract_too_new`, an unparseable manifest or a duplicate id refuses. A `/run:<name>` revision includes the resolved/localized command, so catalog edits invalidate consent. Script file contents are not whole-folder hashed.
 
 ## Durable state and migration
 

@@ -91,8 +91,8 @@ function addonsBadgeTitle(count: number, skills: number, problems: number): stri
  * be eleven stacked cards, each a viewer over one file, which was faithful to
  * the folder and useless as a control surface: the runtime picker was the
  * seventh card down. Everything that is information rather than a control now
- * lives under four tabs, and the readiness banner appears only when something
- * needs attention.
+ * lives under four tabs; what is wrong with the folder (findings, missing
+ * credentials, the AI credential) is said by the composer's notice panel.
  *
  * Still a viewer over the folder on disk: every card names the file it reads,
  * the editable ones write straight back through the stamp guard, and there is
@@ -397,7 +397,6 @@ export function LocalAgentPage(): React.JSX.Element {
           drafting={drafting}
           draftNote={draftNote}
           onShowDetails={() => { setMode('settings'); setTab('folder') }}
-          onFinishSetup={finishSetup.open}
           onStampIdentity={
             manifestStamp
               ? () =>

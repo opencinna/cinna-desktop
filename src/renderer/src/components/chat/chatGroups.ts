@@ -1,6 +1,9 @@
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
 import type { ChatRunResult } from '../../../../shared/chatRunResult'
 import { unreadResultIndicator } from '../ui/runResultIndicators'
+import { folderReadinessBlocksTurn } from '../../../../shared/localAgents'
+
+type FolderRow = Parameters<typeof folderReadinessBlocksTurn>[0] & { id: string }
 
 /**
  * How the Chats list groups its rows: by who each chat is with, by the day of
@@ -289,20 +292,22 @@ export function rankBetween(above: number | undefined, below: number | undefined
 /**
  * Whether a group's start-chat button may show: the rule of the Agents list's
  * chat shortcut. The agent must be listed (a folder listed but never indexed
- * is not in `agents` at all) and enabled, and a folder agent's manifest must
- * not be invalid. A folder row is always enabled, and only folder agents are
+ * is not in `agents` at all) and enabled, and a folder agent must not be
+ * refused a turn (`folderReadinessBlocksTurn`) — validation findings alone do
+ * not refuse one. A folder row is always enabled, and only folder agents are
  * in `folderAgents`, so neither test needs to ask the agent's `source` — which
  * the kind-branch ratchet forbids. A chat mode or a plain chat can always start.
  */
 export function canStartChat(
   who: ChatListSummary['with'],
   agents: readonly { id: string; enabled: boolean; conductor?: boolean }[] | undefined,
-  folderAgents: readonly { id: string; readiness: string }[] | undefined
+  folderAgents: readonly FolderRow[] | undefined
 ): boolean {
   if (who.kind !== 'agent') return true
   const agent = agents?.find((a) => a.id === who.agentId && !a.conductor)
   if (!agent) return false
-  return agent.enabled && folderAgents?.find((a) => a.id === agent.id)?.readiness !== 'invalid'
+  const folder = folderAgents?.find((a) => a.id === agent.id)
+  return agent.enabled && !(folder && folderReadinessBlocksTurn(folder))
 }
 
 /**

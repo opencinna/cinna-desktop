@@ -34,6 +34,7 @@ import { SKILLS_DIR } from '../kit/skills'
 import { ensureKitAgentSkillsPlugin, type KitAgentSkillsPlugin } from '../services/agentSkillsPlugin'
 import { join } from 'node:path'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
+import { folderReadinessBlocksTurn } from '../../shared/localAgents'
 
 const logger = createLogger('engine-config-source')
 
@@ -228,9 +229,10 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
   const out: EngineAgentInput[] = []
 
   for (const agent of localAgentService.list(userId).agents) {
-    // A folder that does not validate has no business being handed to a model:
-    // its prompt files may be half-written and its manifest may say anything.
-    if (agent.readiness === 'invalid' || agent.readiness === 'contract_too_new') continue
+    // A folder that cannot be read as an agent, or whose contract this build
+    // does not understand, is not handed to a model. One that merely fails
+    // validation is: chat with it still works, and its findings are shown.
+    if (folderReadinessBlocksTurn(agent)) continue
     // The cached catalogue, not a fresh fetch: a Work Complexity tier is
     // resolved against what the credential actually lists, and `refreshModelCache`
     // has already run for this build (or deliberately not, on a reconcile —

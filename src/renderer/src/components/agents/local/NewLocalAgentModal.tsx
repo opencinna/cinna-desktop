@@ -115,8 +115,8 @@ interface PickedFolder {
  * agent's page in chat mode. There is no "open it in a tool" step — the page
  * header already has the Open-in button, and the in-app runtime runs the
  * agent's turns directly, so the next thing to do is talk to it. A runtime that
- * is not ready is the page's to explain (the readiness strip and Runs with
- * panel), not this dialog's.
+ * is not ready is the page's to explain (the composer's notice panel and Runs
+ * with panel), not this dialog's.
  */
 export function NewLocalAgentModal({
   onClose,

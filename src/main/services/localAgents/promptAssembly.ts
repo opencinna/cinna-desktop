@@ -372,10 +372,10 @@ function desktopContextSection(agentDir: string, context: DesktopPromptContext):
       undefined,
       kitDesktopNotesPath(agentDir)
     ),
-    // The scanner marks a folder whose manifest or command catalog fails
-    // validation `invalid`, and the driver refuses every turn after that — so a
-    // broken edit is one the person cannot ask this agent to repair.
-    '- Keep `cinna-agent.json` and `docs/CLI_COMMANDS.yaml` valid. If either stops validating, Cinna Desktop will not run your next turn, and the person cannot ask you to fix it.'
+    // A folder whose manifest or command catalog fails validation still runs
+    // (`folderReadinessBlocksTurn`); its findings are shown beside the person's
+    // message box. A manifest that does not parse at all is the exception.
+    '- Keep `cinna-agent.json` and `docs/CLI_COMMANDS.yaml` valid. A validation failure is shown to the person next to their message box until it is fixed; a `cinna-agent.json` that is not valid JSON stops your next turn, and the person cannot ask you to fix it.'
   ].join('\n')
 }
 

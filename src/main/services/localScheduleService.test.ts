@@ -218,11 +218,16 @@ describe('local schedule admission and persistence', () => {
     expect(driverRun).toHaveBeenCalledTimes(1)
   })
 
-  it('enables and runs a schedule on an agent whose credentials are missing, but not on an invalid one', async () => {
+  it('enables and runs a schedule on an agent whose credentials are missing or whose folder only has findings, but not on one that cannot run', async () => {
     const healthy = state.get.getMockImplementation()!
-    const withReadiness = (readiness: string) => () => ({ ...(healthy() as object), readiness, readinessReason: `Folder is ${readiness}.` })
-    state.get.mockImplementation(withReadiness('invalid'))
+    const withReadiness = (readiness: string, over: object = {}) => () => ({ ...(healthy() as object), readiness, readinessReason: `Folder is ${readiness}.`, ...over })
+    const findings = (code: string) => ({ validation: { errors: [{ code, message: code, path: null }], warnings: [], infos: [] } })
+    state.get.mockImplementation(withReadiness('invalid', findings('manifest.id.duplicate')))
     expect(localScheduleService.list(scope, AGENT)[0].problem).toBe('Folder is invalid.')
+    state.get.mockImplementation(withReadiness('contract_too_new'))
+    expect(localScheduleService.list(scope, AGENT)[0].problem).toBe('Folder is contract_too_new.')
+    state.get.mockImplementation(withReadiness('invalid', findings('manifest.slug.mismatch')))
+    expect(localScheduleService.list(scope, AGENT)[0].problem).toBeNull()
     state.get.mockImplementation(withReadiness('credentials_needed'))
     expect(localScheduleService.list(scope, AGENT)[0].problem).toBeNull()
     const binding = enable()

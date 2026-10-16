@@ -1,9 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
-import { ComposerWarning } from './ComposerWarning'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { AlertTriangle, Download, FileWarning, FolderOpen, KeyRound, Loader2, RefreshCw, WifiOff } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { FindingText, NoticeButton } from './ComposerNoticePanel'
+import type { ComposerNotice } from './ComposerNoticePanel'
 import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
-import { SettingsButton } from '../settings/SettingsLayout'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
+import { useProviders } from '../../hooks/useProviders'
+import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
+import { isSkillFinding } from '../../../../shared/kit/findings'
+import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto } from '../../../../shared/localAgents'
+import { useFinishSetup } from '../agents/local/FinishSetupDialog'
+import { useAgentAiCredentialIssue, type AiCredentialIssue } from '../../hooks/useAgentAiCredential'
+import { useUIStore } from '../../stores/ui.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -19,8 +27,10 @@ export type ReadinessSeverity = 'warning' | 'danger'
 /**
  * How loudly a readiness state is shown. Something the user fixes on this
  * machine or in their account — a credential, a login, an install — is a
- * warning; an agent that cannot be reached or whose folder does not validate is
- * an error.
+ * warning; an agent that cannot be reached or whose folder cannot be run (an
+ * unparseable manifest, a duplicate id, a newer contract) is an error. A folder
+ * that only fails validation is not `invalid` here: its findings are a notice
+ * row of their own (`useFolderFindingsNotice`).
  */
 const SEVERITY: Record<Exclude<AgentReadinessState, 'ok'>, ReadinessSeverity> = {
   credentials_needed: 'warning',
@@ -220,7 +230,7 @@ function ReadinessActionButton({ action, tip }: {
   useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current) }, [])
   const pending = action.pending || feedback
   const isCheck = action.label === 'Check again'
-  const button = <SettingsButton aria-disabled={pending || undefined} aria-busy={pending}
+  const button = <NoticeButton aria-disabled={pending || undefined} aria-busy={pending}
     onClick={() => {
       if (action.pending || timer.current !== null) return
       // Keep an unchanged, immediate answer visibly checking, without delaying recovery.
@@ -228,10 +238,10 @@ function ReadinessActionButton({ action, tip }: {
       timer.current = setTimeout(() => { timer.current = null; setFeedback(false) }, 600)
       action.run()
     }}>
-    {isCheck ? <RefreshCw size={13} className={pending ? 'animate-spin' : undefined} />
-      : pending && <Loader2 size={13} className="animate-spin" />}
+    {isCheck ? <RefreshCw size={12} className={pending ? 'animate-spin' : undefined} />
+      : pending && <Loader2 size={12} className="animate-spin" />}
     {pending ? action.pendingLabel : action.label}
-  </SettingsButton>
+  </NoticeButton>
   if (!action.cancel && !tip) return button
   // Always wrapped when a cancel exists, so the button keeps its place in the
   // tree — and its focus — as Copy command and Cancel come and go after it.
@@ -241,37 +251,192 @@ function ReadinessActionButton({ action, tip }: {
     {tip}
     {button}
     {!pending && action.copyCommand && <CopyCommandButton key={action.copyCommand} command={action.copyCommand} />}
-    {action.pending && action.cancel && <SettingsButton onClick={action.cancel}>Cancel</SettingsButton>}
+    {action.pending && action.cancel && <NoticeButton onClick={action.cancel}>Cancel</NoticeButton>}
   </div>
 }
 
 /** Copies the terminal fallback through main's clipboard; `navigator.clipboard` rejects without document focus. */
 function CopyCommandButton({ command }: { command: string }): React.JSX.Element {
   const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
-  return <SettingsButton title={command} onClick={() => {
+  return <NoticeButton title={command} onClick={() => {
     void window.api.clipboard.writeText(command)
       .then((result) => setCopied(result.success ? 'yes' : 'failed'))
       .catch(() => setCopied('failed'))
-  }}>{copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</SettingsButton>
+  }}>{copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</NoticeButton>
 }
 
-/** A complete, actionable warning above the input, hidden when ready. */
-export function ComposerReadinessWarning({ readiness, reasonId }: {
-  readiness: ComposerReadiness
-  reasonId: string
-}): React.JSX.Element | null {
+const ICON: Record<Exclude<AgentReadinessState, 'ok'>, LucideIcon> = {
+  credentials_needed: KeyRound,
+  not_logged_in: KeyRound,
+  not_installed: Download,
+  unreachable: WifiOff,
+  invalid: AlertTriangle,
+  contract_too_new: AlertTriangle
+}
+
+/** The readiness answer as a row of the composer's notice panel, or null when ready. */
+export function readinessNoticeItem(readiness: ComposerReadiness, reasonId: string): ComposerNotice | null {
   const { notice, text, title, action } = readiness
-  if (!notice || !text || !action) return null
+  if (!notice || !text || !action || notice.state === 'ok') return null
   // Before the first sign-in: what the user is about to agree to run, behind a
   // (?) beside Log in — one fixed icon in the action row, so it adds no line.
   const tip = notice.state === 'not_logged_in' && notice.login === 'antigravity'
     ? <AntigravityTermsTip />
     : undefined
-  return <ComposerWarning className="mb-3" tone={readinessSeverity(notice)} action={
-    <ReadinessActionButton key={reasonId + action.label} action={action} tip={tip} />
-  }>
-    <p id={reasonId} title={title ?? undefined}>{text}</p>
-  </ComposerWarning>
+  return {
+    key: 'readiness',
+    tone: readinessSeverity(notice),
+    icon: ICON[notice.state],
+    text,
+    textId: reasonId,
+    title: title ?? undefined,
+    action: <ReadinessActionButton key={reasonId + action.label} action={action} tip={tip} />
+  }
+}
+
+/** The folder agent behind a composer target, from the list the sidebar already holds; null for any other target. */
+export function useComposerFolder(target: AgentData | null): LocalAgentDto | null {
+  const { data } = useLocalAgents()
+  return (target ? data?.agents.find((a) => a.id === target.id) : undefined) ?? null
+}
+
+/**
+ * What the folder's own check found, for a folder agent whose findings do not
+ * stop it: the agent still takes the message, and the user still learns the
+ * folder is not what its manifest promises. Skill findings are left to the
+ * Addons tab, as they are left out of readiness. Null for every other target.
+ */
+export function useFolderFindingsNotice(folder: LocalAgentDto | null): ComposerNotice | null {
+  const openPath = useOpenAgentPath()
+  if (!folder || folder.readiness !== 'invalid' || folderReadinessBlocksTurn(folder)) return null
+  const errors = folder.validation.errors.filter((finding) => !isSkillFinding(finding))
+  if (errors.length === 0) return null
+  const [first, ...rest] = errors
+  return {
+    key: 'folder-findings',
+    tone: 'warning',
+    icon: FileWarning,
+    text: <><span className="text-[var(--color-text-muted)]">{first.path || 'Agent folder'}:</span> <FindingText text={first.message} /></>,
+    title: `${first.message} The agent still runs; fix the folder so it behaves as declared.`,
+    detailsLabel: rest.length > 0 ? `${rest.length} more` : undefined,
+    details: rest.length > 0
+      ? <ul className="space-y-1 text-[11px] leading-snug text-[var(--color-text-secondary)]">
+          {rest.map((finding, i) => <li key={`${finding.code}-${i}`}>
+            {finding.path && <span className="text-[var(--color-text-muted)]">{finding.path}: </span>}
+            <FindingText text={finding.message} />
+          </li>)}
+        </ul>
+      : undefined,
+    action: <NoticeButton title={`Show ${first.path || 'the folder'} in Finder`}
+      onClick={() => openPath.mutate({ agentId: folder.id, relPath: first.path || undefined })}>
+      <FolderOpen size={12} aria-hidden="true" />Reveal
+    </NoticeButton>
+  }
+}
+
+/**
+ * The folder's required credential slots that nothing fills, as a row whose
+ * one action is Finish setup. Read from the slots themselves rather than from
+ * readiness: a folder that is `invalid` *and* missing a credential says
+ * `invalid`, which would hide this row behind the findings one.
+ */
+export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSetup: () => void): ComposerNotice | null {
+  const missing = folder?.credentials.filter((slot) => !slot.satisfied) ?? []
+  if (!folder || missing.length === 0) return null
+  const text = folder.readiness === 'credentials_needed' && folder.readinessReason
+    ? folder.readinessReason
+    : missingCredentialsReason(missing)
+  return {
+    key: 'folder-credentials',
+    tone: 'warning',
+    icon: KeyRound,
+    text,
+    title: text,
+    action: <NoticeButton onClick={onFinishSetup}>Finish setup</NoticeButton>
+  }
+}
+
+const AI_CREDENTIAL_TEXT: Record<Exclude<AiCredentialIssue, null>, string> = {
+  missing: 'No AI credential is set for this agent.',
+  inactive: 'This agent’s AI credential is switched off.'
+}
+
+/** The agent page in Settings mode, where Runs with — the runtime and its credential — is the first section. */
+export function openAgentRuntimeSettings(agentId: string): void {
+  const ui = useUIStore.getState()
+  ui.setActiveLocalAgentId(agentId)
+  ui.setAgentPageMode('settings')
+  ui.setSidebarTab('agents')
+  ui.setActiveView('local-agent')
+}
+
+/** Settings → AI Credentials, where a first credential is added. */
+function openAiCredentialsSettings(): void {
+  const ui = useUIStore.getState()
+  ui.setSettingsMenu('llm')
+  ui.setActiveView('settings')
+}
+
+/**
+ * An OpenCode agent with no AI credential it can spend, as a row; it does not
+ * block Send. With none on this machine at all there is nothing to choose on
+ * the agent's runtime, so the button goes where one is added instead.
+ */
+export function aiCredentialNotice(folder: LocalAgentDto | null, issue: AiCredentialIssue, noCredentials = false): ComposerNotice | null {
+  if (!folder || !issue) return null
+  return {
+    key: 'ai-credential',
+    tone: 'warning',
+    icon: KeyRound,
+    text: AI_CREDENTIAL_TEXT[issue],
+    action: noCredentials
+      ? <NoticeButton onClick={openAiCredentialsSettings}>Add credential</NoticeButton>
+      : <NoticeButton onClick={() => openAgentRuntimeSettings(folder.id)}>Choose credential</NoticeButton>
+  }
+}
+
+export interface ComposerNotices {
+  notices: ComposerNotice[]
+  /** Finish setup, opened from the credentials row; rendered by the composer (it portals). */
+  dialog: ReactNode
+}
+
+/**
+ * Every row of the composer's notice panel, in one order: the driver's
+ * readiness answer, the folder's missing credentials, its AI credential, its
+ * findings. A row the folder states itself replaces the readiness row that
+ * says the same thing (`credentials_needed` by the credentials row, a
+ * non-blocking `invalid` by the findings row), and takes over its id so Send's
+ * `aria-describedby` still names a line on screen.
+ *
+ * Finish setup is owned here, so by the composer (which outlives the click),
+ * and opens only when clicked: the agent page answers team library requests.
+ */
+export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string): ComposerNotices {
+  const folder = useComposerFolder(target)
+  const findings = useFolderFindingsNotice(folder)
+  const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false })
+  const aiIssue = useAgentAiCredentialIssue(folder)
+  const { data: providers } = useProviders()
+  const credentials = folderCredentialsNotice(folder, finishSetup.open)
+  const readinessItem = readinessNoticeItem(readiness, reasonId)
+  const state = readiness.notice?.state
+  const replacedBy = credentials && state === 'credentials_needed' ? credentials
+    // Only when the driver's `invalid` *is* the folder's check: an `invalid`
+    // for another cause (folder not found, unsupported engine) is a refusal
+    // the findings row does not describe, and keeps its own row.
+    : findings && state === 'invalid' && readiness.notice?.reason === folder?.readinessReason ? findings
+    : null
+  const rows = [
+    replacedBy ? null : readinessItem,
+    credentials,
+    aiCredentialNotice(folder, aiIssue, providers?.length === 0),
+    findings
+  ].filter((row): row is ComposerNotice => row !== null)
+  return {
+    notices: rows.map((row) => (row === replacedBy ? { ...row, textId: reasonId } : row)),
+    dialog: finishSetup.dialog
+  }
 }
 
 interface RefusableExamplePromptsProps {

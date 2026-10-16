@@ -25,9 +25,10 @@ An AI credential's on/off switch is a statement about **spending**, not about ca
 ### Finding out later why something stopped
 
 1. **Agent chat landing page** — the compact runtime summary shows `Setup needed`; its tooltip carries the runtime problem. Sidebar rows show names and type icons, so open the agent to inspect its setup.
-2. **Agent page → Settings, "Runs on"** — the status line reads "This credential is switched off. Turn it back on in Settings → AI Credentials."
-3. **Settings → Chats** — the chat mode's card shows an `Inactive` badge and a short cause (`credential switched off`); expanding it repeats the whole sentence under the credential select
-4. **Settings → Default → Agents** — a pinned agent default that has been switched off says so, and a switched-off credential is no longer offered in that picker
+2. **The composer**, for an OpenCode folder agent the message goes straight to — a row of the notice panel: "This agent’s AI credential is switched off." with **Choose credential**, which opens the agent page in Settings. It does not block Send. The judgement is `useAgentAiCredentialIssue` (`src/renderer/src/hooks/useAgentAiCredential.ts`), the same one behind the Runs with panel's "AI credential needed" badge — see [Conversation UI](../../chat/conversation_ui/conversation_ui.md#the-composer-notice-panel)
+3. **Agent page → Settings, "Runs on"** — the status line reads "This credential is switched off. Turn it back on in Settings → AI Credentials."
+4. **Settings → Chats** — the chat mode's card shows an `Inactive` badge and a short cause (`credential switched off`); expanding it repeats the whole sentence under the credential select
+5. **Settings → Default → Agents** — a pinned agent default that has been switched off says so, and a switched-off credential is no longer offered in that picker
 
 ### Switching it back on
 

@@ -58,6 +58,7 @@ import {
   externalFolderAgentId,
   folderAgentId,
   legacyFolderAgentId,
+  missingCredentialsReason,
   type FileStamp,
   type LocalAgentIdentity,
   type LocalAgentCommand,
@@ -368,11 +369,7 @@ function readiness(
   }
   const missing = credentials.filter((c) => !c.satisfied)
   if (missing.length > 0) {
-    const names = missing.map((c) => c.name).join(', ')
-    return {
-      readiness: 'credentials_needed',
-      reason: `Add the credentials for ${names} by attaching them or configuring credentials/.env.`
-    }
+    return { readiness: 'credentials_needed', reason: missingCredentialsReason(missing) }
   }
   return { readiness: 'ok', reason: null }
 }

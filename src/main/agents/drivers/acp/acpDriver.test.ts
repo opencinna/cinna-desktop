@@ -28,7 +28,7 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, folderReadiness, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
@@ -3844,11 +3844,23 @@ describe('a refusal', () => {
     expect(result.error?.message).toContain('Pineapple')
   })
 
-  it('refuses an unreadable folder in the scanner’s own words', async () => {
-    const result = await world({
-      folder: { ...FOLDER, readiness: 'invalid', readinessReason: 'Its manifest is not valid.' }
-    }).run()
-    expect(result.error?.message).toBe('Its manifest is not valid.')
+  it('refuses a folder that cannot take a turn in the scanner’s own words', async () => {
+    // `blocksTurn` is `folderReadinessBlocksTurn` of the DTO: an unparseable
+    // manifest, a duplicate id, or a contract this build does not know.
+    for (const readiness of ['invalid', 'contract_too_new']) {
+      const result = await world({
+        folder: { ...FOLDER, readiness, readinessReason: 'Its manifest is not valid.', blocksTurn: true }
+      }).run()
+      expect(result.error?.message, readiness).toBe('Its manifest is not valid.')
+    }
+  })
+
+  it('runs a folder whose only problem is validation findings', async () => {
+    const folder = { ...FOLDER, readiness: 'invalid', readinessReason: '`slug` must equal the folder name.', blocksTurn: false }
+    const result = await world({ script: SAYS_HELLO, launcher: 'opencode', folder }).run()
+    expect(result.error).toBeUndefined()
+    expect(folderReadiness(folder)).toEqual({ state: 'ok', reason: null })
+    expect(folderReadiness({ ...folder, blocksTurn: true })).toEqual({ state: 'invalid', reason: '`slug` must equal the folder name.' })
   })
 
   it('runs an engine a folder cannot use on OpenCode instead of refusing it', async () => {

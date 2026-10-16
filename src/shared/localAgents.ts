@@ -234,6 +234,37 @@ export function externalFolderAgentId(rootId: string, relPath: string): string {
  */
 export type LocalAgentReadiness = 'ok' | 'credentials_needed' | 'invalid' | 'contract_too_new'
 
+/**
+ * Whether a folder's readiness stops it from taking a turn.
+ *
+ * Validation findings do not: a folder an assistant is still editing routinely
+ * fails a check for a while, and the engine runs in it all the same. The
+ * findings are shown beside the composer instead. What does stop a turn is a
+ * folder that cannot be read as an agent at all — an unparseable manifest
+ * (`unresolved`) or a second folder claiming the same id, which is never
+ * indexed — and a contract this build does not understand.
+ */
+export function folderReadinessBlocksTurn(agent: {
+  readiness: string
+  identity?: LocalAgentIdentity
+  validation?: { errors: { code: string }[] }
+}): boolean {
+  if (agent.readiness === 'contract_too_new') return true
+  if (agent.readiness !== 'invalid') return false
+  return agent.identity === 'unresolved' ||
+    (agent.validation?.errors.some((finding) => finding.code === 'manifest.id.duplicate') ?? false)
+}
+
+/**
+ * What a folder whose required credential slots are not all filled is told:
+ * the scanner's `credentials_needed` reason, and the composer's credentials
+ * row, which reads the slots itself so it still shows on an `invalid` folder.
+ */
+export function missingCredentialsReason(missing: readonly { name: string }[]): string {
+  const names = missing.map((c) => c.name).join(', ')
+  return `Add the credentials for ${names} by attaching them or configuring credentials/.env.`
+}
+
 /** A validator finding, flattened for the renderer. */
 export interface LocalAgentFinding {
   /** Stable dotted identifier — key messages off this, not the text. */

@@ -52,7 +52,8 @@ import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
-import { ComposerReadinessWarning, useComposerReadiness } from './ComposerReadiness'
+import { useComposerNotices, useComposerReadiness } from './ComposerReadiness'
+import { ComposerNoticePanel } from './ComposerNoticePanel'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
@@ -917,6 +918,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const blocksSendRef = useRef(blocksSend)
   blocksSendRef.current = blocksSend
   const readinessReasonId = useId()
+  // The readiness answer, and what the folder agent's own state adds to it —
+  // findings, missing credentials, its AI credential — with Finish setup
+  // owned here, so a dialog opened from the panel outlives nothing it needs.
+  const { notices, dialog: finishSetupDialog } = useComposerNotices(directTarget, readiness, readinessReasonId)
   // Check again removes itself when its check clears the warning, and the focus
   // it held falls to the page body; hand it to the message box, where the user
   // goes next. Only from the body: a warning cleared in the background never
@@ -1774,12 +1779,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
-      <ComposerReadinessWarning readiness={readiness} reasonId={readinessReasonId} />
+      <ComposerNoticePanel notices={notices} />
+      {finishSetupDialog}
 
       <div
         // Takes its turn in the secondary buttons' border glow (useAmbientButtons).
         data-ambient-card
-        className="ambient-grid-surface ambient-button relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        className="ambient-grid-surface ambient-button relative z-[1] rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}

@@ -14,7 +14,14 @@ import type { ComposerReadiness } from './ComposerReadiness'
 
 afterEach(() => vi.useRealTimers())
 
-const { isCatalogCommand, RefusableExamplePrompts, ComposerReadinessWarning } = await import('./ComposerReadiness')
+const { isCatalogCommand, RefusableExamplePrompts, readinessNoticeItem } = await import('./ComposerReadiness')
+const { ComposerNoticePanel } = await import('./ComposerNoticePanel')
+
+/** The readiness answer as the panel draws it: its one row. */
+function ReadinessRow({ readiness }: { readiness: ComposerReadiness }): React.JSX.Element {
+  const item = readinessNoticeItem(readiness, 'reason')
+  return <ComposerNoticePanel notices={item ? [item] : []} />
+}
 
 const folder = { capabilities: { commands: 'catalog' } } as never
 const remote = { capabilities: { commands: 'card' } } as never
@@ -114,7 +121,7 @@ describe('composer recheck feedback', () => {
       title: null,
       action: { label: 'Check again', pendingLabel: 'Checking…', pending: false, run }
     }
-    render(<ComposerReadinessWarning readiness={readiness} reasonId="reason" />)
+    render(<ReadinessRow readiness={readiness} />)
     const button = screen.getByRole('button', { name: 'Check again' })
     expect(button.querySelector('svg')?.classList.contains('lucide-refresh-cw')).toBe(true)
     button.focus()
@@ -142,19 +149,19 @@ describe('Antigravity’s first login', () => {
   })
 
   it('puts Google’s terms behind a (?) beside Log in, and keeps it while the sign-in runs', () => {
-    const view = render(<ComposerReadinessWarning readiness={login('antigravity')} reasonId="reason" />)
+    const view = render(<ReadinessRow readiness={login('antigravity')} />)
     const tip = screen.getByRole('button', { name: 'About Antigravity’s terms' })
     // In the action row beside the button, not a line of prose in the warning.
     expect(tip.parentElement!.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(true)
     // Before the button, whose label widens while the sign-in runs.
     expect(tip.compareDocumentPosition(screen.getByRole('button', { name: 'Log in' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByText(/Google’s software/)).toBeNull()
-    view.rerender(<ComposerReadinessWarning readiness={login('antigravity', true)} reasonId="reason" />)
+    view.rerender(<ReadinessRow readiness={login('antigravity', true)} />)
     expect(screen.getByRole('button', { name: 'About Antigravity’s terms' })).toBeTruthy()
   })
 
   it('says nothing of the kind for another engine’s login', () => {
-    render(<ComposerReadinessWarning readiness={login('codex')} reasonId="reason" />)
+    render(<ReadinessRow readiness={login('codex')} />)
     expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
   })
 })

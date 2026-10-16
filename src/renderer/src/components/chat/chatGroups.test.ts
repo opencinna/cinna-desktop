@@ -237,17 +237,24 @@ describe('canStartChat', () => {
   const agents = [
     { id: 'folder:ok', source: 'folder', enabled: true },
     { id: 'folder:broken', source: 'folder', enabled: true },
+    { id: 'folder:findings', source: 'folder', enabled: true },
     { id: 'folder:unscanned', source: 'folder', enabled: true },
     { id: 'a-off', source: 'local', enabled: false },
     { id: 'a-on', source: 'remote', enabled: true },
     { id: 'a-conductor', source: 'local', enabled: true, conductor: true }
   ]
-  const folders = [{ id: 'folder:ok', readiness: 'credentials_needed' }, { id: 'folder:broken', readiness: 'invalid' }]
+  const folders = [
+    { id: 'folder:ok', readiness: 'credentials_needed' },
+    { id: 'folder:broken', readiness: 'invalid', identity: 'unresolved' as const },
+    { id: 'folder:findings', readiness: 'invalid', identity: 'manifest' as const, validation: { errors: [{ code: 'manifest.slug.mismatch' }] } }
+  ]
   const can = (id: string): boolean => canStartChat(agent(id, id), agents, folders)
 
-  it('follows the Agents list: folder agents unless invalid, others when enabled, never one not listed', () => {
+  it('follows the Agents list: folder agents unless refused a turn, others when enabled, never one not listed', () => {
     expect(can('folder:ok')).toBe(true)
     expect(can('folder:broken')).toBe(false)
+    // Validation findings alone do not refuse a turn.
+    expect(can('folder:findings')).toBe(true)
     // Until the local list has it, a folder agent is judged by its row.
     expect(can('folder:unscanned')).toBe(true)
     expect(can('a-off')).toBe(false)

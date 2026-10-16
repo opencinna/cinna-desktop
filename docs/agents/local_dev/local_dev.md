@@ -61,7 +61,7 @@ Every phase also carries `tasks` — the per-step checklist the build setup page
 1. Click the Local Development footer icon to open the build page. A healthy workspace proceeds to a focused input; unfinished setup or runtime prerequisites are explained on the same page.
 2. Check the compact instance/account/runtime header, describe the agent, and press **Start building** below the input. Opening the page or choosing a suggestion sends nothing; the first message prepares an account-bound builder and starts an ordinary direct chat.
 3. **Build guide** opens the actual session briefing and available workspace Markdown in a modal. **Settings** selects an inherited or separate build runtime and work complexity, defaulting to Complex (Claude Opus / Codex high effort).
-4. A previous conversation waits for startup restoration before readiness is decided. Real problems use the shared warning above the input; a changed account/workspace/engine requires a new compatible build session.
+4. A previous conversation waits for startup restoration before readiness is decided. Real problems are rows of the composer's notice panel; a changed account/workspace/engine requires a new compatible build session.
 
 See [Account Build Sessions](build_sessions.md) for complete flows, runtime rules, draft lifetime and cancellation limits.
 

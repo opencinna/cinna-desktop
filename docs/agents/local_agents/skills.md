@@ -135,7 +135,7 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 ### Credentials a skill declares
 
 - **Shown on the row, judged in the scan, never blocking.** The scanner judges each declared slot against the agent's attachments — filled only by a ready attachment of the slot's type whose Service URI is exactly the slot, no name fallback — and records it on the row's credential (`filled`). Each **Needs** chip wears the shared status glyph for that judgement: ✓ where it is filled, as a credential row says *connected*, and a warning triangle where it is not (its tooltip says whether nothing is attached or the attachment is not ready). A slot the scan did not judge has no glyph. Never an error tone: an unfilled skill slot is a warning. The gaps are listed in **Finish setting up**'s **Skills** group ([Service Credentials](../service_credentials/README.md#skill-credential-slots)). A missing slot never changes readiness and never opens that dialog by itself, as in core: the script fails at call time instead
-- **Announced by the badge and the row, never by a banner.** A deliverable skill's unfilled slot counts toward the Addons badge and puts **Finish setup** at the end of that row's **Needs** line. The readiness strip adds its **Finish setup** button to a readiness line it is already showing, but never raises a line of its own for a skill-only gap: the agent is ready, and a banner is for something that needs attention before it runs ([UX rules](../../development/ui_guidelines/ux_rules.md), rule 2)
+- **Announced by the badge and the row, never by a banner.** A deliverable skill's unfilled slot counts toward the Addons badge and puts **Finish setup** at the end of that row's **Needs** line. Neither the agent page's strip nor the composer's notice panel raises a line for it: the agent is ready, and a banner is for something that needs attention before it runs ([UX rules](../../development/ui_guidelines/ux_rules.md), rule 2)
 - **Only deliverable skills' slots count.** A skill no engine is given needs no credential
 - **The skill runtime is a copy.** The `core.cinna_api` shim ships inside the app and is copied once to `<userData>/skill-runtime/<content hash>/`, rebuilt only when the shipped tree changes; that copy goes first on `PYTHONPATH`. Python writes `__pycache__` beside a module it imports, and the shipped folder sits inside the signed app bundle, which must never change. An agent's own `PYTHONPATH` entries are kept after it, so a `core` package of its own is shadowed by the shim. A copy that cannot be made is logged and the engine runs without it rather than with the bundle on its path
 
@@ -151,7 +151,7 @@ A kit agent has skills from two places: folders under `skills/` in the agent fol
 
 ### What is not built
 
-- **A readiness line for skill slots.** An agent whose only gap is a skill slot shows nothing in the readiness strip (above); the way into its Skills group is the row's **Finish setup**
+- **A readiness line for skill slots.** An agent whose only gap is a skill slot shows nothing on the agent page's strip or in the composer's notice panel (above); the way into its Skills group is the row's **Finish setup**
 - **Any fetch of missing pins** when the page opens or a session starts
 - **Pinning a specific older version** or choosing a version on Add; **deleting a shared skill** from the catalog. Access after the first share is changed through **Who can use** (above), not in the Share dialog
 

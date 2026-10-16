@@ -99,8 +99,8 @@ const IGNORED_SEGMENT = 'app-data'
  *
  * * `docs/` holds the three prompt documents the page edits.
  * * `credentials/` holds `.env`, whose contents flip an agent between
- *   `credentials_needed` and `ok` — the transition the readiness strip exists
- *   to show. Only key *names* are ever read from it (Invariant 4); the watcher
+ *   `credentials_needed` and `ok` — the transition the composer's notice panel
+ *   exists to show. Only key *names* are ever read from it (Invariant 4); the watcher
  *   reacts to the file changing, never to what is in it.
  * * `skills/` holds the agent's own skills, which the Addons tab lists. A
  *   skill is a folder, so `skills/` itself sees one appear or go, and each

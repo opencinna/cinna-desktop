@@ -371,7 +371,7 @@ The grant key gains no engine segment. A grant is already scoped to a folder, an
 
 - **`runtime.engine` is a preference, and an engine this build cannot run runs on OpenCode.** It is not refused, it does not fail validation and it does not brick the folder, because a folder written by a newer tool must keep running. It does not fall to the host default either, which could spend a Claude or Codex subscription the folder never asked for. The value stays in the file across saves that are not an engine pick (see [the engine rules](engine.md#the-machine-default-is-selected-once-and-explicit-agents-keep-their-choice)). The schema deliberately does not close the value set with an enum: engines are expected to grow
 - **`engine: "claude"` with a `credential` is refused on write** and, on read, is a warning with the credential ignored. They are not meaningful together: a manifest naming one would make the panel report a key that pays for nothing
-- The validator **warns rather than errors** on both cases, because an error there marks the folder invalid and drops it from the engine entirely — which is the exact brick the additive promise exists to prevent
+- The validator **warns rather than errors** on both cases, because an error there marks the folder invalid, which reports it as broken on every chat with it — the noise the additive promise exists to prevent
 
 The tolerant read is applied again at the last place it could be forgotten: dispatch. `launcherOfFolder` asks `effectiveEngine`, so an engine value this build does not know sends the turn to OpenCode.
 

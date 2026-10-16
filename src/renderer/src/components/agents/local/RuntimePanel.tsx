@@ -29,8 +29,9 @@ import { antigravityDefaultOptionLabel, antigravityRunModelLabel, antigravityVer
 import { AntigravityTermsTip } from '../../settings/AntigravityTermsTip'
 import { useRuntimeSetup } from '../../../hooks/useRuntimeSetup'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
+import { useAgentCredentialResolution } from '../../../hooks/useAgentAiCredential'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
-import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
+import { isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import {
   claudeModelForComplexity,
@@ -976,14 +977,6 @@ export function RuntimePanel({
    * while the engine ran the other. So the resolution moved to
    * `shared/credentials`, and neither side has a copy any more.
    */
-  const selected = useMemo(
-    () =>
-      declaredCredential
-        ? findCredentialByReference(providers ?? [], declaredCredential)
-        : null,
-    [declaredCredential, providers]
-  )
-
   /**
    * The Default runtime's credential, looked up across *all* providers rather
    * than the usable ones — `runtimeService.resolveDefault` does the same, and a
@@ -1003,21 +996,18 @@ export function RuntimePanel({
    *
    * A pin naming a credential this machine no longer has falls through to the
    * chat mode, again matching main.
+   *
+   * All three, and whether the agent's credential is missing, come from
+   * `useAgentCredentialResolution`, which the composer's notice row reads too.
    */
-  const pinnedProvider = useMemo(() => {
-    const pinned = settings?.localAgentsDefaultCredentialId ?? ''
-    return pinned === ''
-      ? null
-      : ((providers ?? []).find((provider) => provider.id === pinned) ?? null)
-  }, [providers, settings?.localAgentsDefaultCredentialId])
-  const fallbackProvider = useMemo(
-    () =>
-      pinnedProvider ??
-      (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ??
-      null,
-    [pinnedProvider, providers, defaultMode?.providerId]
-  )
-  const effectiveProvider = selected ?? fallbackProvider
+  const {
+    selected,
+    pinnedProvider,
+    fallbackProvider,
+    effectiveProvider,
+    credentialMissing,
+    issue: credentialIssue
+  } = useAgentCredentialResolution(declaredCredential)
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
@@ -1816,7 +1806,6 @@ export function RuntimePanel({
     // Use the same resolved engine, credential and model as the settings controls.
     const subscription = claudeAuth?.state === 'logged_in' &&
       (claudeAuth.authMethod === 'claude.ai' || !!claudeAuth.subscriptionType)
-    const credentialMissing = !!declaredCredential && !selected
     const label = engineUnknown ? 'Loading runtime…'
       : onCodex ? 'Codex'
       : onAntigravity ? 'Antigravity'
@@ -1832,7 +1821,7 @@ export function RuntimePanel({
       : onAntigravity
         ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
-      : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
+      : credentialIssue === 'missing' ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
     const badge = SUMMARY_BADGE
     return <div role="group" aria-label="Runtime summary" className="mt-2 flex flex-wrap items-center gap-1.5">

@@ -441,17 +441,21 @@ describe('collectEngineAgents', () => {
     })
   })
 
-  it('does not hand a model a folder that failed validation', () => {
-    // An invalid folder's prompt files may be half-written and its manifest may
-    // say anything; a folder built against a newer kit may mean something this
-    // app does not understand yet.
+  it('does not hand a model a folder that cannot be read as an agent, but does one that only fails validation', () => {
+    // An unparseable manifest or a duplicate id is not an agent at all, and a
+    // folder built against a newer kit may mean something this app does not
+    // understand yet. Validation findings alone still run: they are shown.
+    const findings = (...codes: string[]) => ({ errors: codes.map((code) => ({ code, message: code, path: null })), warnings: [], infos: [] })
     state.agents = [
-      agent({ id: 'folder:bad', readiness: 'invalid' }),
+      agent({ id: 'folder:unparseable', readiness: 'invalid', identity: 'unresolved', validation: findings('manifest.unparseable') }),
+      agent({ id: 'folder:dupe', readiness: 'invalid', identity: 'manifest', validation: findings('manifest.id.duplicate') }),
       agent({ id: 'folder:new', readiness: 'contract_too_new' }),
+      agent({ id: 'folder:findings', readiness: 'invalid', identity: 'manifest', validation: findings('manifest.slug.mismatch') }),
       agent({ id: 'folder:warn', readiness: 'credentials_needed' }),
       agent({ id: 'folder:ok' })
     ]
     expect(collectEngineAgents('user-1').map((entry) => entry.agentId)).toEqual([
+      'folder:findings',
       // `credentials_needed` is a warning about the *agent's* own `.env`, not
       // about the folder's validity, so it still runs and says so at the turn.
       'folder:warn',

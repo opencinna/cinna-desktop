@@ -100,9 +100,9 @@ export function agentSubline(agent: LocalAgentDto, credentialInactive = false): 
   // For an `invalid` folder the *reason* is the whole content: "manifest
   // invalid" names a state the user already sees and gives them nothing to act
   // on. It matters most for a duplicate manifest id, where the reason names the
-  // other folder — and the row cannot be opened, so the agent page, where the
-  // readiness strip would normally explain this, is out of reach. The one line
-  // in the sidebar is the only place that explanation can land.
+  // other folder — and the row cannot be opened, so the agent page and its
+  // composer, where readiness is otherwise explained, are out of reach. The one
+  // line in the sidebar is the only place that explanation can land.
   if (agent.readiness === 'invalid') {
     // The validator's own words, minus its markdown: a sidebar line is not
     // rendered, so "`id` is required." would show its backticks.
@@ -119,8 +119,11 @@ export function agentSubline(agent: LocalAgentDto, credentialInactive = false): 
     screens away. Two different meanings of one word is exactly the collision to
     resolve in favour of the one that made the dot red.
 
-    Still below the `invalid` reason above: a folder that does not validate is
-    never handed to the engine at all, so its credential is not yet the problem.
+    Still below the `invalid` reason above: a folder that does not validate
+    still runs (only an unparseable manifest, a duplicate id or a newer
+    contract is refused a turn — `folderReadinessBlocksTurn`), but its
+    findings are what the user has to fix in the folder itself, and they say
+    so first.
   */
   if (credentialInactive) return 'AI credential switched off'
   const issue = readinessLabel(agent.readiness)

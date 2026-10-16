@@ -17,6 +17,8 @@ export interface AcpFolderView {
   enabled: boolean
   readiness: string
   readinessReason: string | null
+  /** `folderReadinessBlocksTurn` of the folder; absent is false. An `invalid` folder whose findings are only findings still runs. */
+  blocksTurn?: boolean
   runtime: { engine?: unknown } | null
 }
 

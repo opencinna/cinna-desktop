@@ -310,6 +310,44 @@
     0%, 100% { opacity: 0; }
     20%, 75% { opacity: 0.48; }
   }
+
+  /* The composer's notice panel: a frosted tab tucked behind the top edge of
+     the message box (which overlaps its bottom), tinted by its worst notice,
+     with a slow light travelling its border. Nothing glows outside the block. */
+  .composer-notice-panel {
+    --notice-tone: var(--color-warning);
+    background: color-mix(in srgb, var(--color-bg-secondary) 90%, var(--notice-tone) 10%);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border: 1px solid color-mix(in srgb, var(--notice-tone) 28%, var(--color-border));
+    border-bottom: none;
+    animation: composer-notice-rise 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .composer-notice-panel[data-tone="danger"] {
+    --notice-tone: var(--color-danger);
+  }
+  .composer-notice-border {
+    position: absolute;
+    inset: -1px -1px 0 -1px;
+    padding: 1px 1px 0 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: conic-gradient(from var(--ambient-border-angle),
+      transparent 0deg, var(--notice-tone) 40deg, transparent 100deg,
+      transparent 180deg, color-mix(in srgb, var(--notice-tone) 55%, transparent) 225deg, transparent 280deg);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    opacity: 0.75;
+    animation: composer-notice-orbit 9s linear infinite;
+  }
+  @keyframes composer-notice-orbit {
+    from { --ambient-border-angle: 0deg; }
+    to { --ambient-border-angle: 360deg; }
+  }
+  @keyframes composer-notice-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
   .ambient-header-button {
     position: relative;
     isolation: isolate;
@@ -344,6 +382,7 @@
     .ambient-grid-burst, .ambient-grid-edge { animation: none; }
     .ambient-button[data-ambient-glow]::after { display: none; }
     [data-header-wave] > .ambient-header-button::before { display: none; }
+    .composer-notice-panel, .composer-notice-border { animation: none; }
   }
 
   /* Frosted-glass surface for modals/popovers (profile dropdown, register

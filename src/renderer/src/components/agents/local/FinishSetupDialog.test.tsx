@@ -41,13 +41,13 @@ window.api = {
   localAgents: { setEnvValues, openCredentials }
 } as never
 
-function Harness(): React.JSX.Element {
-  const finish = useFinishSetup(AGENT, 'Acme Reporter')
+function Harness({ followRequests }: { followRequests?: boolean }): React.JSX.Element {
+  const finish = useFinishSetup(AGENT, 'Acme Reporter', followRequests === undefined ? undefined : { followRequests })
   return createElement('div', null, createElement('button', { onClick: finish.open }, 'open'), finish.dialog)
 }
-function renderHarness(strict = false) {
+function renderHarness(strict = false, followRequests?: boolean) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const tree = createElement(QueryClientProvider, { client }, createElement(Harness))
+  const tree = createElement(QueryClientProvider, { client }, createElement(Harness, { followRequests }))
   return render(strict ? createElement(StrictMode, null, tree) : tree)
 }
 const dialog = () => screen.getByRole('dialog', { name: 'Finish setting up Acme Reporter' })
@@ -101,6 +101,18 @@ describe('Finish setup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(useFinishSetupStore.getState().pending).toEqual(['folder:other'])
+  })
+
+  it('with followRequests off, opens only when clicked and leaves the request for the page', async () => {
+    // The composer's instance: the agent page answers the request, so this one must not open a second dialog.
+    renderHarness(false, false)
+    act(() => useFinishSetupStore.getState().record(AGENT, { done: true, setupNeeded: true, autoAttached: [] }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByText('open'))
+    await screen.findByTestId('finish-setup-slot-acme')
+    fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(useFinishSetupStore.getState().pending).toEqual([AGENT])
   })
 
   it('stays closed when nothing is missing, and opens on demand with plain Connected', async () => {

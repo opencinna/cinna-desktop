@@ -14,7 +14,7 @@ import { scriptRuntimeService } from './scriptRuntimeService'
 import { taskRunnersByChat } from './taskRunnerState'
 import { parseScheduleCron, scheduleMinute, scheduleTimezone, nextScheduleOccurrence } from '../tasks/scheduleCron'
 import type { RunScope } from './runExecutionService'
-import type { LocalAgentDto } from '../../shared/localAgents'
+import { folderReadinessBlocksTurn, type LocalAgentDto } from '../../shared/localAgents'
 import type { LocalAgentScheduleDefinition as LocalScheduleDefinition, LocalScheduleItem, LocalScheduleOccurrence, LocalScheduleReview } from '../../shared/localSchedules'
 import { interruptScheduledOrdinaryJob } from './jobExecution/scheduled'
 import { commandService } from './localAgents/commandService'
@@ -36,7 +36,7 @@ function agentBindings(userId: string, enabled = false): AgentScheduleBinding[] 
   return (enabled ? localScheduleRepo.enabled(userId) : localScheduleRepo.list(userId))
     .filter((row): row is AgentScheduleBinding => row.definition.executionType !== 'job')
 }
-const folderCanRun = (agent: LocalAgentDto) => agent.readiness === 'ok' || agent.readiness === 'credentials_needed'
+const folderCanRun = (agent: LocalAgentDto) => !folderReadinessBlocksTurn(agent)
 
 function definitionFor(scope: RunScope, agent: LocalAgentDto, raw: unknown, fallbackZone?: string): LocalScheduleDefinition {
   if (agent.kind !== 'kit' || typeof agent.manifest.id !== 'string' || agent.id !== `folder:${agent.manifest.id}`) throw new Error('Local schedules require a kit agent with a stable manifest identity.')

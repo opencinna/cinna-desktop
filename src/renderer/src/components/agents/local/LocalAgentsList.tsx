@@ -11,7 +11,7 @@ import {
 } from '../../../hooks/useLocalAgents'
 import { useAppSettings } from '../../../hooks/useAppSettings'
 import { groupAgentsByRoot } from '../../../utils/localAgents'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { folderReadinessBlocksTurn, type LocalAgentDto } from '../../../../../shared/localAgents'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 import { ManagedAgentModal } from '../ManagedAgentModal'
 import { CustomAgentModal } from '../CustomAgentModal'
@@ -107,9 +107,10 @@ function AgentRow({ agent, color, menuOpen, onMenu }: {
   // No chat button on a row the chat could not attach to. A duplicate-id
   // folder is listed but never indexed, so the new-chat screen would look the
   // agent up, find nothing and show nothing — the click would fail silently.
-  // An invalid manifest cannot run either. The jobs row withholds run-now for
-  // the same reason; the agent page explains its readiness.
-  const canChat = agent.readiness !== 'invalid'
+  // An unparseable manifest or a contract this build does not know cannot run
+  // either; validation findings alone do not stop a chat. The agent page
+  // explains its readiness.
+  const canChat = !folderReadinessBlocksTurn(agent)
 
   const openPage = (): void => {
     setAgentPageMode('chat')

@@ -215,7 +215,7 @@ The kit assembler reaches into `scripts/`, `credentials/` and `knowledge/` becau
 | `bare.readme.missing` | info | No `README.md`, so an assistant opening the folder is briefed from the instructions file instead — or, with no instructions file either, has nothing to be briefed from. Overview shows no `Readme` card, this finding being where the absence is stated |
 | `bare.no_manifest` | info | Always present: this folder runs without commands or credential slots, and the credential picked for it is kept in Cinna rather than in the folder |
 
-**Empty is a warning and not an error**, matching the kit path exactly. An error makes the folder `invalid`, and an invalid folder is dropped from the engine's config with nothing on screen explaining it — the user would be left with an agent that silently cannot run because a file they can see is blank.
+**Empty is a warning and not an error**, matching the kit path exactly. An error makes the folder `invalid`, which puts a finding in front of the user on every chat with the agent — for a file they can see is blank and may be filling in. The agent would still run; it would just be reported as broken while it is being written.
 
 `contractStatus` is `ok`, deliberately not `unknown`: that value means "a manifest states a version we could not parse" and the page offers a re-stamp for it. A bare folder makes no claim about the contract at all.
 

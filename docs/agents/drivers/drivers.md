@@ -10,14 +10,14 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Driver id** — `agents.driver`, stored on every row. **`source` still says who owns a row** (`local` / `remote` / `folder`: whether sync may touch it, which settings tab lists it, whether it can be deleted). **`driver` says how the agent runs.** One column used to carry both, and they are separate concerns
 - **Capabilities** — what a driver can do for a given row: stream, cancel, keep a session, which asks it raises and how they are answered, whether a file can be attached, who authenticates the turn, where `/` commands come from, whether it runs in a folder. Answered from the row alone
 - **Agent readiness** — whether an agent can take a turn now. The answer is `ok`, or one of:
-  - `credentials_needed`, `invalid`, `contract_too_new` — the folder's own states
+  - `credentials_needed`, `invalid`, `contract_too_new` — the folder's own states. A folder agent answers `invalid` only when the folder cannot be run: its manifest does not parse, or another folder claims the same id. A folder that merely fails validation answers `ok`, and its findings are the composer's to show
   - `not_installed`, `not_logged_in` — a CLI's
   - `unreachable` — an agent behind a URL
 
   It carries a short `reason` and, where the driver kept one, the raw `detail`. It is not the same as the scan-time folder **Readiness** in [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md), which is only the first rung of a folder driver's answer
 - **Not known** — a readiness of `null`: never checked, or a check that could not tell. **It never refuses anything**
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered a state that blocks a turn: anything but `ok`, except a folder agent's `credentials_needed` (`readinessBlocksTurn`)
-- **Warning** — the composer showing a non-`ok` answer that does not block, which today is only a folder agent's `credentials_needed`. Same panel, same **Check again**, Send left on
+- **Warning** — the composer showing a problem that does not block, with Send left on: a folder agent's `credentials_needed`, shown as a row of the [composer notice panel](../../chat/conversation_ui/conversation_ui.md#the-composer-notice-panel) whose action is **Finish setup**. The same panel carries the folder's own non-blocking rows: its validation findings and an OpenCode agent's AI credential
 - **Check again** — the composer's action on a refusal or a warning; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
 - **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude, codex or antigravity; a folder naming any other engine — `gemini` (a launcher id with no launcher), `custom`, or a name this build has never seen — runs on opencode, because the contract makes `runtime.engine` a preference. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
 - **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
@@ -28,7 +28,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 1. The user opens a direct chat with one agent, or a human-routed chat addressed to that agent
 2. The agent list answers at once with whatever readiness is already known: `null` for an agent not checked yet. It also starts a background check for every enabled agent whose answer is missing or old
 3. The check comes back, say, `unreachable`. The answer changed, so main pushes it and the renderer re-reads the list
-4. A warning panel above the input shows the full reason in the state's tone, with **Check again** below it. Healthy composers show no panel or empty reserved slot. Send is disabled and described by the reason; its tooltip retains the raw detail where the driver kept one. While a turn runs in the chat the button stays Stop instead, so the panel alone carries the reason
+4. A row of the composer's notice panel, tucked behind the top of the message box, shows the reason in the state's tone, with **Check again** at its end. Healthy composers show no panel or empty reserved slot. Send is disabled and described by the reason; its tooltip retains the raw detail where the driver kept one. While a turn runs in the chat the button stays Stop instead, so the panel alone carries the reason
 5. Enter does nothing more. Nothing is cleared, so the message is still in the box when the agent comes back
 6. The user fixes the agent and presses **Check again**. The check runs fresh and the list is re-read when it finishes. The reason goes away, Send is enabled, and focus lands in the message box
 
@@ -45,12 +45,17 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 
 ### An agent whose credentials are not filled in yet
 1. A folder agent's `credentials/.env` lacks a variable its manifest requires, so its readiness is `credentials_needed`
-2. The warning panel shows the reason with **Check again**, in the warning tone. Send and Enter still work, and on the new-chat screen its example prompts stay live
+2. The notice panel shows the scanner's sentence naming the missing credentials, with **Finish setup**, in the warning tone. That row stands in for the readiness row rather than repeating it. Send and Enter still work, and on the new-chat screen its example prompts stay live
 3. The turn runs. Only the scripts that read the missing variable can fail; the engine does not need it
 4. The agent can be picked to start a task too, for the same reason
 
+### A folder that fails its own check
+1. An assistant editing a kit agent leaves its manifest or command catalog failing validation. The scanner marks the folder `invalid` and lists the findings
+2. The manifest still parses and its id is the folder's own, so the driver answers `ok`. Send stays live and the turn runs
+3. The notice panel shows the first finding with **Reveal**, and any others under **N more**. When the folder validates again, the row goes away by itself
+
 ### A catalog command to a refused folder agent
-1. A folder agent is refused — its folder does not validate (`invalid`), say
+1. A folder agent is refused — its manifest does not parse (`invalid`), say
 2. The user types exactly `/run:<name>`. Send is enabled and the notice stays where it is
 3. The command runs as a script in the folder, exactly as it would for a ready agent. `/run:check please` is still refused, because it is text for the engine, not a command
 
@@ -101,7 +106,7 @@ Inbox and transcript share the durable answer path. ACP still writes its local g
 
 ### The folder decides its launcher; external configuration owns its binding
 
-A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing or invalid folder refuses rather than guessing. An engine the folder names but this build cannot run is not a refusal: it runs on OpenCode (`effectiveEngine`), the one fallback the contract defines. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
+A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing folder, or one that cannot be read as an agent, refuses rather than guessing. An engine the folder names but this build cannot run is not a refusal: it runs on OpenCode (`effectiveEngine`), the one fallback the contract defines. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
 
 Custom commands instead capture their locally owned configuration and state authority. Managed sessions capture profile, agent and credential identity. Neither invents a folder or silently substitutes a new binding into existing work.
 
@@ -144,7 +149,7 @@ Every driver answers `readiness()` without throwing, and **null means "could not
 - **Custom ACP** returns cached binding readiness on ordinary reads; explicit Test/Check again performs initialize only. A failed explicit check remains failed until a fresh success.
 - **Managed** checks local credential/configuration availability; discovery/save and the turn verify remote access.
 
-A failure reason is a sentence that leads with what helps: the status, and where to fix it. It wraps in the warning panel above the input instead of being cut to the space left beside Send. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
+A failure reason is a sentence that leads with what helps: the status, and where to fix it. It gets a row of the composer's notice panel, two lines before it is cut, instead of the space left beside Send. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
 
 **For a synced agent, checking has side effects.** Its token comes from the Cinna session, and a check refreshes that session when it is near expiry — and clears it if the refresh is refused — exactly as a turn does. Skipping the refresh would be worse: an access token that had merely expired would read as `not_logged_in`, and the composer would refuse an agent that works.
 
@@ -166,12 +171,13 @@ Each agent in the list carries whatever readiness is already known. Listing star
 - **It refuses only the agent the message goes straight to.** That is the direct chat’s bound agent or the human router’s addressed agent. An agent attached as a tool of the local model is not refused: its failure comes back as a tool result the model can read and work around
 - **It refuses rather than just warning.** Sending to an agent the driver says cannot take a turn produces a failed turn the user then has to read, and the reason was already known
 - **Missing credentials warn; they do not refuse.** While an agent is being developed a half-filled `credentials/.env` is normal, and a missing variable breaks only the scripts that use it, not the engine. Refusing on it stopped every turn of an agent that would have run. The rule is `readinessBlocksTurn` in `src/shared/agentDrivers.ts`, shared by the composer, the new-chat example prompts, the task page's agent picker and `taskExecutionService.start`, so no surface refuses what another lets through. The exemption holds only for agents that run in a folder (`capabilities.cwd`). A hand-added A2A agent whose token is rejected and a Managed agent with no credential answer `credentials_needed` too, and are refused: with no folder, the missing credential is the one the turn itself needs. Every other non-`ok` state still refuses
+- **Validation findings do not refuse either.** An assistant editing a folder routinely leaves it failing a check for a while, and the engine runs in it all the same. Refusing on every `invalid` stopped turns that would have run, including the one the person needed to ask the agent to repair its own folder. The rule is `folderReadinessBlocksTurn` in `src/shared/localAgents.ts`: a folder refuses a turn only for `contract_too_new`, a manifest that does not parse (identity `unresolved`), or a duplicate manifest id, which is never indexed. The ACP driver's refusal and readiness, the OpenCode engine config, local schedules, the Agents list's chat button and the Chats list's start-chat button all ask it, so no surface refuses what another lets through. The findings appear as a row of the composer's notice panel instead
 - **A bare `/run:<name>` to an agent whose commands come from a folder catalog always runs,** refused or not. It is a script run in the folder on this machine, not a turn on the agent's engine, so the agent's readiness says nothing about whether it can run. The composer matches the same grammar main uses; a looser one would enable Send for text that main then passes to the engine
 - **`null` never refuses.** A check that has not run yet, or could not tell, never stops a working agent
 - **Warning visibility never depends on what is typed**, so nothing appears or moves while the user types ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1). What is typed only decides whether Send is blocked
-- **The reason and remedy share a warning panel above the input.** Full text remains readable at narrow widths, and Check again/Re-authenticate does not compete with the agent chips. Healthy state renders no warning. The same panel is used by [account build sessions](../local_dev/build_sessions.md), so setup failures have one representation across new and existing conversations.
+- **The reason and remedy share a row of the composer's notice panel.** The row shows two lines at most and the tooltip carries the whole reason, so Check again, Log in and Re-authenticate do not compete with the agent chips. Healthy state renders no panel. The rows, their order and when one stands in for another are in [Conversation UI](../../chat/conversation_ui/conversation_ui.md#the-composer-notice-panel). The [account build session](../local_dev/build_sessions.md) start page keeps its own full-width warning for setup failures.
 - **When *Check again* clears the warning, focus goes to the message box.** The button removes itself, and its focus would otherwise fall to the page body. It happens only from the page body: a warning that clears in the background never takes focus from wherever the user is
-- **Check again uses the same button sizing, background and border as the Local Development settings action.** Its refresh icon is visible at rest and spins beside **Checking…** while pending. An immediate unchanged answer keeps feedback visible for 600 ms, because a check with no visible response looks like a missed click; a longer check keeps spinning until it settles. A resolved refusal can remove the warning immediately — feedback must not delay recovery.
+- **Check again is drawn at the size of the composer's badges**, like every action in the notice panel. Its refresh icon is visible at rest and spins beside **Checking…** while pending. An immediate unchanged answer keeps feedback visible for 600 ms, because a check with no visible response looks like a missed click; a longer check keeps spinning until it settles. A resolved refusal can remove the warning immediately — feedback must not delay recovery.
 - **While the action runs it is `aria-disabled`, never `disabled`.** It keeps keyboard focus and suppresses duplicate clicks through the operation and its short feedback interval. A button that disables itself while it has focus sends focus to the page body in the middle of the check
 - **The refusal is not checked again when the new chat is created.** An example prompt is refused where it is clicked, and the composer has already decided for a typed message. A guard at chat creation once silently dropped a `/run:` the composer had already allowed
 - **Every tooltip is the raw error where the driver kept one**, falling back to the reason. That holds for the composer line, Send, the example prompts and the Settings card

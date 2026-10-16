@@ -336,8 +336,8 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
     }
   }
   // `runtime.engine` (contract 1.5.0): warnings for the same reason `complexity` warns: an error
-  // here makes `scannerService` mark the folder `invalid` and drops it from the
-  // engine entirely, which is exactly the brick the "minor bumps are additive"
+  // here makes `scannerService` mark the folder `invalid`, which shows a finding
+  // on every chat with it — the noise the "minor bumps are additive"
   // promise is against. Both cases have defined behaviour instead of a refusal:
   // an unrecognised engine runs on OpenCode (`effectiveEngine` in
   // `shared/engine`), and `engine: "claude"` with a credential ignores the
@@ -364,10 +364,12 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
   }
   // `runtime.complexity` (contract 1.5.0), and warnings rather than errors on purpose.
   //
-  // An error here is not a message: `scannerService` turns one into readiness
-  // `invalid`, and `collectEngineAgents` drops an invalid folder from the engine
-  // entirely. So erroring on a `complexity` this build does not recognise would
-  // brick a folder written by a *newer 1.x tool* — precisely what the contract's
+  // An error here is not a quiet message: `scannerService` turns one into
+  // readiness `invalid`, which the composer, the agent page and the sidebar all
+  // report as a problem with the folder (it still runs — only an unparseable
+  // manifest, a duplicate id or a newer contract stops a turn). So erroring on
+  // a `complexity` this build does not recognise would flag a folder written by
+  // a *newer 1.x tool* — precisely what the contract's
   // "minor bumps are additive and safe to ignore" promises against, and what
   // `checkContractCompatibility` returning `ok` for every same-major folder
   // says will not happen.

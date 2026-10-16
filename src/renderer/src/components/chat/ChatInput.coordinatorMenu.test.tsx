@@ -74,7 +74,7 @@ const FOLDER = 'folder:planner'
 const FOLDER_2 = 'folder:coder'
 const REMOTE = 'remote-1'
 /** The folder scan: what makes a chip's agent one with a folder to open. */
-const FOLDERS = { roots: [], agents: [{ id: FOLDER }, { id: FOLDER_2 }], homeAccess: null }
+const FOLDERS = { roots: [], agents: [{ id: FOLDER, credentials: [] }, { id: FOLDER_2, credentials: [] }], homeAccess: null }
 
 function agent(id: string, name: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {

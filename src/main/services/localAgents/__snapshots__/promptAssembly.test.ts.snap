@@ -65,7 +65,7 @@ When the person asks you to change how you work — correct an answer for next t
 - Say in one line that you are switching to building mode, then keep your definition coherent: \`docs/WORKFLOW_PROMPT.md\` is what you do, \`scripts/README.md\` catalogues every script, and \`cinna-agent.json\` describes you truthfully.
 - In building mode you may edit whatever in this folder the change needs — \`docs/\`, \`scripts/\`, \`knowledge/\`, \`config/\`, \`cinna-agent.json\`, the \`Makefile\`, \`pyproject.toml\` — but never \`app-data/desktop.json\`, which belongs to Cinna Desktop. Say which files you changed.
 - Stay in building mode for the rest of this conversation: the person may keep refining you and trying the result. When they ask for your actual job, do it the way your edited files now say — the instructions above were read before your edits.
-- Keep \`cinna-agent.json\` and \`docs/CLI_COMMANDS.yaml\` valid. If either stops validating, Cinna Desktop will not run your next turn, and the person cannot ask you to fix it.
+- Keep \`cinna-agent.json\` and \`docs/CLI_COMMANDS.yaml\` valid. A validation failure is shown to the person next to their message box until it is fixed; a \`cinna-agent.json\` that is not valid JSON stops your next turn, and the person cannot ask you to fix it.
 "
 `;
 

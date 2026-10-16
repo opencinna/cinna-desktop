@@ -116,7 +116,7 @@ export const chatConductorService = {
     return {
       type: 'folder',
       folder: { name: agent.name, slug: `chat-${agent.id}`, description: 'Chat runtime', path: context.path,
-        kind: 'bare', runtimeMode: 'isolated', enabled: agent.enabled, readiness: 'ok', readinessReason: null,
+        kind: 'bare', runtimeMode: 'isolated', enabled: agent.enabled, readiness: 'ok', readinessReason: null, blocksTurn: false,
         runtime: { engine: context.engine } },
       validate,
       readSession: (chatId) => agentSessionRepo.getByChatAndAgent(chatId, agent.id)?.contextId ?? null,

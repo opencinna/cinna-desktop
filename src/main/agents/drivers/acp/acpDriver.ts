@@ -28,8 +28,10 @@ import { readHandbackNote } from './handback'
  *
  * - **The folder is the truth, the row is a cache** (Invariant 1). The stored
  *   launcher is what the scanner last read; the folder is re-read per turn.
- * - **`enabled`, `invalid` and `contract_too_new` are refusals**, in the
- *   runners' own sentences, before any process is touched.
+ * - **`enabled` and a folder that `folderReadinessBlocksTurn` (unparseable
+ *   manifest, duplicate id, `contract_too_new`) are refusals**, in the runners'
+ *   own sentences, before any process is touched. Validation findings alone
+ *   are not.
  * - **The turn lock is held for the streaming half only**, and a lock refusal
  *   is a `result.error` rather than a throw — `ipcMain.handle` drops the code
  *   off a rejection, and the renderer would stream forever.
@@ -625,7 +627,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       const name = folder?.name ?? (runtime.type === 'external' ? runtime.name : agent.name)
       const enabled = folder?.enabled ?? (runtime.type === 'external' && runtime.enabled)
       if (!enabled) return fail(`“${name}” is switched off. Turn it back on to chat with it.`)
-      if (folder && (folder.readiness === 'invalid' || folder.readiness === 'contract_too_new')) {
+      // Validation findings alone never refuse (`folderReadinessBlocksTurn`).
+      if (folder?.blocksTurn) {
         return fail(folder.readinessReason ?? 'This agent’s folder is not in a state it can be run from.')
       }
       const launcherId =
@@ -3187,8 +3190,16 @@ export function folderReadiness(folder: AcpFolderView | null): AgentReadiness {
   switch (folder.readiness) {
     case 'ok':
       return { state: 'ok', reason: null }
-    case 'credentials_needed':
     case 'invalid':
+      // A folder that only fails validation still runs: its findings are the
+      // composer's to show, from the folder itself, not a refusal of the turn.
+      if (!folder.blocksTurn) return { state: 'ok', reason: null }
+      return {
+        state: 'invalid',
+        reason:
+          folder.readinessReason ?? 'This agent’s folder is not in a state it can be run from.'
+      }
+    case 'credentials_needed':
     case 'contract_too_new':
       return {
         state: folder.readiness,

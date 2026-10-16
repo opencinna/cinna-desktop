@@ -18,6 +18,8 @@ import type { ChatRouter } from '../../../../shared/chatRouting'
  */
 
 const agentList = vi.hoisted(() => ({ current: [] as unknown[] }))
+/** What `localAgents.list` answers: the folder agents behind the composer's notice rows. */
+const localAgentList = vi.hoisted(() => ({ current: [] as unknown[] }))
 /** What `chat.get` answers: a refetch on mount must not replace the seeded chat. */
 const chatDetail = vi.hoisted(() => ({ current: null as unknown }))
 const spies = vi.hoisted(() => ({
@@ -33,6 +35,31 @@ const spies = vi.hoisted(() => ({
   clipboardWrite: vi.fn(async (_text: string) => ({ success: true })),
   notesGet: vi.fn(async () => null as unknown)
 }))
+
+/** Every `useFinishSetup` the composer made, with its options. */
+const finishSetupCalls = vi.hoisted(() => ({ current: [] as { agentId: string | null; options: unknown }[] }))
+/** `chatModes.list`, replaceable so a test can hold the chat modes pending. */
+const chatModes = vi.hoisted(() => ({ list: async (): Promise<unknown[]> => [] }))
+/** `providers.list`: the AI credentials on this machine. */
+const providerList = vi.hoisted(() => ({ current: [] as unknown[] }))
+/** One AI credential the agent's runtime does not resolve to, so there is something to choose. */
+const UNRELATED_PROVIDER = { id: 'other', name: 'Other', type: 'openai', enabled: true }
+const openPath = vi.hoisted(() => vi.fn(async (_input: unknown) => ({ success: true })))
+
+// The dialog itself is FinishSetupDialog's own test; here only who owns it and when it opens.
+vi.mock('../agents/local/FinishSetupDialog', async () => {
+  const { createElement: h, useState } = await import('react')
+  return {
+    useFinishSetup: (agentId: string | null, name: string, options?: unknown) => {
+      finishSetupCalls.current.push({ agentId, options })
+      const [open, setOpen] = useState(false)
+      return {
+        open: () => setOpen(true),
+        dialog: open ? h('div', { role: 'dialog', 'aria-label': `Finish setting up ${name}` }) : null
+      }
+    }
+  }
+})
 
 /** A namespace with named methods, every other method a harmless default. */
 function namespace(methods: Record<string, unknown>): unknown {
@@ -66,6 +93,10 @@ const api: Record<string, unknown> = new Proxy(
       if (ns === 'auth') return namespace({ cinnaReauth: spies.cinnaReauth })
       if (ns === 'notes') return namespace({ list: spies.notesList, get: spies.notesGet })
       if (ns === 'clipboard') return namespace({ writeText: spies.clipboardWrite })
+      if (ns === 'localAgents') return namespace({ list: async () => ({ agents: localAgentList.current, errors: [] }), openPath })
+      if (ns === 'engine') return namespace({ defaultRuntime: async () => ({ engine: 'opencode' }) })
+      if (ns === 'chatModes') return namespace({ list: () => chatModes.list() })
+      if (ns === 'providers') return namespace({ list: async () => providerList.current })
       if (ns === 'localTools') {
         return namespace({
           engineLogin: spies.engineLogin,
@@ -83,6 +114,7 @@ const api: Record<string, unknown> = new Proxy(
 Element.prototype.scrollIntoView = function scrollIntoView(): void {}
 
 const { ChatInput } = await import('./ChatInput')
+const { useUIStore } = await import('../../stores/ui.store')
 
 const DOWN = { state: 'unreachable', reason: 'Could not reach the agent.' }
 
@@ -181,6 +213,11 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 beforeEach(() => {
   agentList.current = []
+  localAgentList.current = []
+  finishSetupCalls.current = []
+  openPath.mockClear()
+  chatModes.list = async () => []
+  providerList.current = []
   chatDetail.current = null
   spies.list.mockClear()
   spies.agentSend.mockReset()
@@ -600,5 +637,154 @@ describe('composer send hold', () => {
     mountHeld(null, onNewChat)
     typeAndEnter('hello')
     expect(onNewChat).toHaveBeenCalledWith('hello', undefined, undefined)
+  })
+})
+
+describe('composer notice rows from the folder agent itself', () => {
+  /** The folder agent's DTO as `localAgents.list` reports it; on Claude, so no AI credential row unless asked. */
+  function folderDto(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'folder:alpha',
+      name: 'Invoices',
+      kind: 'kit',
+      readiness: 'ok',
+      readinessReason: null,
+      identity: 'manifest',
+      validation: { errors: [], warnings: [], infos: [] },
+      credentials: [],
+      runtime: { engine: 'claude' },
+      ...over
+    }
+  }
+  const slot = (name: string, satisfied: boolean): Record<string, unknown> => ({
+    name, type: 'api_token', optional: false, envPrefix: `${name.toUpperCase()}_`, expectedKeys: [], presentKeys: [], satisfied
+  })
+  const finding = (path: string, message: string): Record<string, unknown> => ({ code: 'manifest.x', message, path })
+  const panel = (): HTMLElement => screen.getByRole('status', { name: 'Agent status' })
+
+  it('lists a non-blocking folder’s findings, the rest behind “N more”, with Reveal on the first', async () => {
+    localAgentList.current = [folderDto({
+      readiness: 'invalid',
+      readinessReason: 'First problem.',
+      validation: {
+        errors: [finding('cinna-agent.json', 'First problem.'), finding('docs/A.md', 'Second problem.'), finding('docs/B.md', 'Third problem.')],
+        warnings: [],
+        infos: []
+      }
+    })]
+    // The driver says `ok` for a folder whose findings do not block.
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    await screen.findByText('First problem.')
+    fireEvent.click(screen.getByRole('button', { name: /2 more/ }))
+    expect(screen.getByText('Second problem.')).toBeTruthy()
+    expect(screen.getByText('Third problem.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }))
+    await waitFor(() => expect(openPath).toHaveBeenCalledWith({ agentId: 'folder:alpha', relPath: 'cinna-agent.json' }))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+  })
+
+  it('offers Finish setup for missing credentials, opening the dialog the composer owns, never on a request', async () => {
+    const reason = 'Add the credentials for Vendor by attaching them or configuring credentials/.env.'
+    localAgentList.current = [folderDto({ readiness: 'credentials_needed', readinessReason: reason, credentials: [slot('Vendor', false)] })]
+    mountActive(catalogAgent({ state: 'credentials_needed', reason }))
+    const button = await screen.findByRole('button', { name: 'Finish setup' })
+    // One row, not the readiness row too: no Check again, the reason once.
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
+    expect(screen.getAllByText(reason)).toHaveLength(1)
+    expect(send().getAttribute('aria-describedby')).toBe(screen.getByText(reason).getAttribute('id'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(button)
+    expect(screen.getByRole('dialog', { name: 'Finish setting up Invoices' })).toBeTruthy()
+    // The page answers team library requests; this one opens only when clicked.
+    const mine = finishSetupCalls.current.filter((call) => call.agentId === 'folder:alpha')
+    expect(mine.length).toBeGreaterThan(0)
+    expect(mine.every((call) => (call.options as { followRequests?: boolean } | undefined)?.followRequests === false)).toBe(true)
+  })
+
+  it('shows missing credentials beside findings on a folder whose readiness says only `invalid`', async () => {
+    localAgentList.current = [folderDto({
+      readiness: 'invalid',
+      readinessReason: 'Broken.',
+      validation: { errors: [finding('cinna-agent.json', 'Broken.')], warnings: [], infos: [] },
+      credentials: [slot('Vendor', false), slot('Other', true)]
+    })]
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    await screen.findByText('Broken.')
+    expect(screen.getByText('Add the credentials for Vendor by attaching them or configuring credentials/.env.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Finish setup' })).toBeTruthy()
+  })
+
+  it('says an OpenCode agent has no AI credential, and Choose credential opens its runtime settings', async () => {
+    providerList.current = [UNRELATED_PROVIDER]
+    localAgentList.current = [folderDto({ runtime: { engine: 'opencode' } })]
+    useUIStore.setState({ activeView: 'chat', agentPageMode: 'chat', activeLocalAgentId: null })
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    const button = await screen.findByRole('button', { name: 'Choose credential' })
+    expect(panel().textContent).toContain('No AI credential is set for this agent.')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+    fireEvent.click(button)
+    const ui = useUIStore.getState()
+    expect(ui.activeView).toBe('local-agent')
+    expect(ui.activeLocalAgentId).toBe('folder:alpha')
+    expect(ui.agentPageMode).toBe('settings')
+  })
+
+  it('keeps the driver’s own `invalid` row beside the findings when it says something else', async () => {
+    localAgentList.current = [folderDto({
+      readiness: 'invalid',
+      readinessReason: 'Broken.',
+      validation: { errors: [finding('cinna-agent.json', 'Broken.')], warnings: [], infos: [] }
+    })]
+    mountActive(catalogAgent({ state: 'invalid', reason: 'The agent’s folder was not found.' }))
+    await screen.findByRole('button', { name: 'Reveal' })
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy()
+    expect(send().getAttribute('aria-describedby')).toBe(screen.getByText('The agent’s folder was not found.').getAttribute('id'))
+  })
+
+  it('lets the findings row stand for a driver `invalid` that says the same thing', async () => {
+    localAgentList.current = [folderDto({
+      readiness: 'invalid',
+      readinessReason: 'Broken.',
+      validation: { errors: [finding('cinna-agent.json', 'Broken.')], warnings: [], infos: [] }
+    })]
+    mountActive(catalogAgent({ state: 'invalid', reason: 'Broken.' }))
+    const reveal = await screen.findByRole('button', { name: 'Reveal' })
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
+    const row = reveal.closest('li') as HTMLElement
+    expect(send().getAttribute('aria-describedby')).toBe(row.querySelector('p')?.getAttribute('id'))
+  })
+
+  it('says nothing of the AI credential until the chat modes have answered', async () => {
+    let answer: (modes: unknown[]) => void = () => undefined
+    chatModes.list = () => new Promise((resolve) => { answer = resolve })
+    providerList.current = [UNRELATED_PROVIDER]
+    localAgentList.current = [folderDto({ runtime: { engine: 'opencode' }, credentials: [slot('Vendor', false)] })]
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    // Providers, settings and the folder are in; only the chat modes are pending.
+    await screen.findByRole('button', { name: 'Finish setup' })
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    expect(screen.queryByRole('button', { name: 'Choose credential' })).toBeNull()
+    await act(async () => { answer([]) })
+    expect(await screen.findByRole('button', { name: 'Choose credential' })).toBeTruthy()
+  })
+
+  it('offers Add credential, opening Settings → AI Credentials, when this machine has none', async () => {
+    localAgentList.current = [folderDto({ runtime: { engine: 'opencode' } })]
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    const button = await screen.findByRole('button', { name: 'Add credential' })
+    expect(screen.queryByRole('button', { name: 'Choose credential' })).toBeNull()
+    fireEvent.click(button)
+    const ui = useUIStore.getState()
+    expect(ui.activeView).toBe('settings')
+    expect(ui.settingsTab).toBe('llm')
+  })
+
+  it('says nothing of an AI credential for an agent on a CLI engine', async () => {
+    localAgentList.current = [folderDto({ credentials: [slot('Vendor', false)] })]
+    mountActive(catalogAgent({ state: 'ok', reason: null }))
+    await screen.findByRole('button', { name: 'Finish setup' })
+    expect(screen.queryByRole('button', { name: 'Choose credential' })).toBeNull()
   })
 })

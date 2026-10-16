@@ -233,7 +233,7 @@ function missingSlots(userId: string, agentId: string): Set<string> | null {
  * `before` is what was missing before an Update or Use the team's version:
  * the dialog opens then only when the team's files **added** a missing slot,
  * so a user who chose Finish later is not asked again on every Update while
- * the same slot stays empty — the readiness strip's Finish setup still is.
+ * the same slot stays empty — the composer's credentials row offers Finish setup still.
  * Without `before` (a Get, or a read that failed), anything missing opens it.
  */
 async function credentialSetup(

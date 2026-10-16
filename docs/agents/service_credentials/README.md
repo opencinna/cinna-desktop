@@ -69,7 +69,7 @@ The verb's result says what was attached (`autoAttached`, slot and record names)
 
 ### The dialog
 
-Opened that way, from **Finish setup** on the agent page's readiness strip whenever the agent reads `credentials_needed` (or its readiness line shows while a deliverable skill's slot is unfilled), or from **Finish setup** on such a skill's row on the Addons tab. One row per slot, each in the scanner's own verdict, so the dialog can never call ready what readiness calls missing:
+Opened that way, from **Finish setup** on the composer notice panel's credentials row whenever a required slot of the agent's own is unfilled, or from **Finish setup** on a deliverable skill's row on the Addons tab when that skill's slot is. The composer's copy opens only on that click; a team library action's request is answered by the agent page's. One row per slot, each in the scanner's own verdict, so the dialog can never call ready what readiness calls missing:
 
 - **Connected automatically** / **Connected** — a matching attachment is ready; *automatically* when main attached it without asking during this app session
 - **Set on this computer** — no attachment, and `credentials/.env` fills the slot
@@ -134,7 +134,7 @@ Before the mark existed, removing a skill left behind every credential filled fo
 
 Below the agent's own slots, a **Skills** group: "Skills find these by Service URI. A missing one does not stop the agent; the skill fails when it needs it." One row per skill slot, drawn by the same row as an agent slot, with **Needed by skill(s) *names* · *type*** under the name. It offers the account's strictly fitting records with **Use this**, never `.env` names (a skill reads only the credentials file). A missing row with nothing to offer says why, in this order: an attached record has the Service URI but another type ("*name* has this Service URI but is a *type* credential, not *type*."); the publisher provides it but not for this computer; the publisher provides it but cannot share it with you; a record of the slot's type and Service URI is in the account without Allow local use ("*name* is shared with you, but not for use on this computer. *owner* can turn on Allow local use.", the owner left out when unknown); or "Nothing in your account fits it: it needs a credential of type *type* whose Service URI is *slot*." A skill slot is remembered under `skill:<slot>`, so it never reads as an agent slot of the same name.
 
-Ways in for skill slots: the **Finish setup** link on a Skills row with an unfilled slot, and the readiness strip's **Finish setup**, which it adds for an unfilled skill slot to a readiness line it already shows. A skill-only gap raises no strip of its own — the agent is ready, and a banner is for what needs attention ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 2).
+Way in for skill slots: the **Finish setup** link on a Skills row with an unfilled slot. A skill-only gap raises no line on the agent page or in the composer — the agent is ready, and a banner is for what needs attention ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 2).
 
 Not built: a detach that a running turn refused is not retried; the entry stays attached until the agent's next catalog skill Remove or Update.
 

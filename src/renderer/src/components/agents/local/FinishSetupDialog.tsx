@@ -95,13 +95,24 @@ export interface FinishSetup {
   dialog: ReactNode
 }
 
+export interface FinishSetupOptions {
+  /**
+   * Whether a team library action's request (`finishSetup.store`'s `pending`)
+   * opens this instance too. On by default: the agent page answers those. A
+   * second surface for the same agent (the composer's notice panel) turns it
+   * off, so one request does not open two dialogs; it opens only when clicked.
+   */
+  followRequests?: boolean
+}
+
 /**
  * The dialog and its two writes, owned by the agent page so a mode switch
  * neither closes it nor drops a write's result (ux_rules rule 5). Shown while
  * the user opened it or a team library action asked for it (see
  * `finishSetup.store`), until it is closed.
  */
-export function useFinishSetup(agentId: string | null, agentName: string): FinishSetup {
+export function useFinishSetup(agentId: string | null, agentName: string, options: FinishSetupOptions = {}): FinishSetup {
+  const followRequests = options.followRequests ?? true
   const queryClient = useQueryClient()
   const [openedHere, setOpenedHere] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,7 +121,7 @@ export function useFinishSetup(agentId: string | null, agentName: string): Finis
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   /** Done is saving what was typed; it closes when that lands. */
   const [finishing, setFinishing] = useState(false)
-  const requested = useFinishSetupStore((s) => agentId !== null && s.pending.includes(agentId))
+  const requested = useFinishSetupStore((s) => followRequests && agentId !== null && s.pending.includes(agentId))
   const autoAttached = useFinishSetupStore((s) => (agentId ? s.autoAttached[agentId] : undefined))
 
   // A dialog opened by hand, and anything typed into it, belongs to the agent it was opened for.
@@ -172,7 +183,8 @@ export function useFinishSetup(agentId: string | null, agentName: string): Finis
   const unsaved = Object.values(drafts).some((value) => value !== '')
 
   const close = (): void => {
-    if (agentId) useFinishSetupStore.getState().clear(agentId)
+    // A request is the page's to answer; an instance that does not follow them leaves it alone.
+    if (agentId && followRequests) useFinishSetupStore.getState().clear(agentId)
     setOpenedHere(false)
     setError(null)
     setNotice(null)

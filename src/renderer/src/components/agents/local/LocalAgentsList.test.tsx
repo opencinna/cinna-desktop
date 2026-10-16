@@ -233,19 +233,33 @@ describe('LocalAgentsList — the row’s chat button', () => {
   it('is withheld on a row the chat could not attach to', () => {
     // A duplicate-id folder is listed but never indexed: the new-chat screen
     // would look it up, find nothing, and show nothing, and its page offers no
-    // Start chat. The gate is on `readiness` and so also covers an indexed
-    // folder with an invalid manifest, which cannot run a turn either.
+    // Start chat. The gate is `folderReadinessBlocksTurn`, so it also covers
+    // an unparseable manifest, which cannot run a turn either.
     AGENTS = [
       {
         ...AGENT,
         id: 'folder:duplicate:alpha',
         readiness: 'invalid',
-        readinessReason: 'Another folder already claims this id.'
-      } as LocalAgentDto
+        readinessReason: 'Another folder already claims this id.',
+        validation: { errors: [{ code: 'manifest.id.duplicate', message: 'Another folder already claims this id.', path: null }], warnings: [], infos: [] }
+      } as unknown as LocalAgentDto
     ]
     renderList()
     expect(screen.getByRole('button', { name: /^Alpha/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: CHAT })).toBeNull()
+  })
+
+  it('is offered on a folder whose only problem is validation findings', () => {
+    AGENTS = [
+      {
+        ...AGENT,
+        readiness: 'invalid',
+        readinessReason: '`slug` must equal the folder name.',
+        validation: { errors: [{ code: 'manifest.slug.mismatch', message: '`slug` must equal the folder name.', path: null }], warnings: [], infos: [] }
+      } as unknown as LocalAgentDto
+    ]
+    renderList()
+    expect(screen.getByRole('button', { name: CHAT })).toBeTruthy()
   })
 })
 

@@ -65,7 +65,7 @@ import { withDeveloperToolShims } from '../../shell/developerToolShims'
 import { buildClaudeEnv } from './acp/claudeEnv'
 import { readFolderAgents } from './acp/claudeAgents'
 import { fetchAgentCard } from '../a2a-client'
-import type { LocalAgentKind } from '../../../shared/localAgents'
+import { folderReadinessBlocksTurn, type LocalAgentKind } from '../../../shared/localAgents'
 import type { AcpRuntimeMode } from './acp/types'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
@@ -780,6 +780,7 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
       enabled: dto.enabled,
       readiness: dto.readiness,
       readinessReason: dto.readinessReason,
+      blocksTurn: folderReadinessBlocksTurn(dto),
       runtime: dto.runtime,
       coordinatorHandback: dto.kind === 'kit' && Array.isArray(dto.manifest.handovers) && dto.manifest.handovers.some(isCoordinatorHandover)
     }
@@ -806,7 +807,7 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
       // whatever `.claude/settings.json` the workspace happens to carry.
       folder: { name: agent.name, slug: `cinna-build-${agent.id}`, description: agent.description ?? '',
         path: context.workspacePath, kind: 'bare', runtimeMode: 'isolated',
-        enabled: agent.enabled, readiness: 'ok', readinessReason: null,
+        enabled: agent.enabled, readiness: 'ok', readinessReason: null, blocksTurn: false,
         runtime: { engine: context.runtime.launcher } },
       validate(chatId) { state.validate(chatId); desktopFeatures.contextForDevelopmentAgent(agent) }
     }
