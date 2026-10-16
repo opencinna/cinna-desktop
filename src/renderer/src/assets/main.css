@@ -340,6 +340,28 @@
     opacity: 0.75;
     animation: composer-notice-orbit 9s linear infinite;
   }
+  /* A notice's action: a filled secondary button, so it reads as a button
+     against the tinted panel rather than as a bordered label. Raised a step
+     above the panel in either theme — lighter grey in dark, white in light. */
+  .composer-notice-button {
+    background-color: var(--color-bg-hover);
+    border: 1px solid color-mix(in srgb, var(--color-text-muted) 45%, var(--color-border));
+    color: var(--color-text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+  .composer-notice-button:hover:not([aria-disabled="true"]) {
+    background-color: color-mix(in srgb, var(--color-bg-hover), white 7%);
+    border-color: var(--color-text-muted);
+  }
+  [data-theme="light"] .composer-notice-button {
+    background-color: var(--color-bg);
+    border-color: var(--color-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+  [data-theme="light"] .composer-notice-button:hover:not([aria-disabled="true"]) {
+    background-color: var(--color-bg-secondary);
+    border-color: color-mix(in srgb, var(--color-text-muted) 60%, var(--color-border));
+  }
   @keyframes composer-notice-orbit {
     from { --ambient-border-angle: 0deg; }
     to { --ambient-border-angle: 360deg; }

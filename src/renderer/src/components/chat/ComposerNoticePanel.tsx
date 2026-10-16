@@ -79,13 +79,14 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
 
 /**
  * A notice's one action, drawn at the size of the composer's badges (the
- * router's "Local" badge): the same padding, radius, border and type, so the
- * panel reads as part of the composer rather than as a settings form. Icons
- * inside it are size 12, as the badge's are.
+ * router's "Local" badge): the same padding, radius and type, so the panel
+ * reads as part of the composer rather than as a settings form, but filled
+ * (`.composer-notice-button`, per theme) so it stands out from the tinted
+ * panel as something to click. Icons inside it are size 12, as the badge's are.
  */
 export function NoticeButton({ className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
   return <button type="button" {...props}
-    className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border border-[var(--color-border)] text-[11px] font-semibold tracking-wide whitespace-nowrap text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] aria-disabled:cursor-default aria-disabled:opacity-70 transition-colors ${className}`} />
+    className={`composer-notice-button flex items-center gap-1 px-1.5 py-1 rounded-lg text-[11px] font-semibold tracking-wide whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] aria-disabled:cursor-default aria-disabled:opacity-70 transition-colors ${className}`} />
 }
 
 /** The validator's markdown-ish sentence, with its `code` spans drawn as code rather than backticks. */
