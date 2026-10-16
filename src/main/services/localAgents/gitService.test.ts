@@ -92,8 +92,15 @@ const {
   restoreLeftoverLocalOnlyFiles,
   hasLeftoverLocalOnlyFiles,
   preflightShare,
-  neverTravelPaths
+  neverTravelPaths,
+  beginAdoption,
+  checkAdoptionFinish,
+  discardAdoption,
+  readVersionsBetween,
+  diffBetween,
+  ADOPTION_BEFORE_NOTE
 } = await import('./gitService')
+import type { AdoptionPoints } from './gitService'
 
 let sandbox: string
 let origin: string
@@ -460,7 +467,7 @@ describe('sharing an agent folder', () => {
     expect(tree).toContain('from-b.md')
   }, 60_000)
 
-  it('answers diverged_conflict on clashing edits, and leaves the folder exactly as it was', async () => {
+  it('refuses dirty with an unsent version unless told to combine, then answers diverged_conflict on clashing edits, and leaves the folder exactly as it was', async () => {
     expect((await pullRebaseClean(a, EXTERNAL)).done).toBe(true)
     writeFileSync(join(a, 'AGENT.md'), '# Alpha\n\nLine one, by A.\nLine two.\n')
     expect((await shareChanges(a, 'A rewrites line one', EXTERNAL)).done).toBe(true)
@@ -474,17 +481,26 @@ describe('sharing an agent folder', () => {
     expect(status.behind).toBe(1)
     expect(shareStateOf(status)).toBe('diverged')
 
-    expect((await pullRebaseClean(b, EXTERNAL)).refusal).toBe('diverged_conflict')
+    // Update never combines an unsent version on its own, clash or no clash.
+    expect((await pullRebaseClean(b, EXTERNAL)).refusal).toBe('dirty')
+    expect(git(b, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect(readFileSync(join(b, 'AGENT.md'), 'utf8')).toBe('# Alpha\n\nLine one, by B.\nLine two.\n')
+    expect(git(b, 'status', '--porcelain')).toBe('')
+
+    expect((await pullRebaseClean(b, EXTERNAL, null, undefined, { combine: true })).refusal).toBe('diverged_conflict')
     expect(git(b, 'rev-parse', 'HEAD').trim()).toBe(head)
     expect(readFileSync(join(b, 'AGENT.md'), 'utf8')).toBe('# Alpha\n\nLine one, by B.\nLine two.\n')
     expect(git(b, 'status', '--porcelain')).toBe('')
     expect(existsSync(join(b, '.git', 'rebase-merge'))).toBe(false)
     expect(existsSync(join(b, '.git', 'rebase-apply'))).toBe(false)
 
-    // Sending hits the same wall, through the one retry, and never forces.
+    // Sending never forces either: the team's version touches the same file
+    // as the unsent one, so the send's retry is refused before any combine is
+    // tried — Bring together is the answer, and it is what meets the clash.
     const teamHead = git(team, 'rev-parse', 'main').trim()
-    expect((await pushAgent(b, EXTERNAL)).refusal).toBe('diverged_conflict')
+    expect((await pushAgent(b, EXTERNAL)).refusal).toBe('team_changed_again')
     expect(git(team, 'rev-parse', 'main').trim()).toBe(teamHead)
+    expect(git(b, 'rev-parse', 'HEAD').trim()).toBe(head)
   }, 60_000)
 
   it('reports the team as ahead when the library lists a head this folder does not have', async () => {
@@ -721,7 +737,9 @@ describe('sharing an agent folder', () => {
     git(alice, 'commit', '-q', '-m', 'T1')
     git(alice, 'push', '-q', remote, 'main')
 
-    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: true, refusal: null, detail: null })
+    // Bob has an unsent version: only a caller that decided to combine gets the rebase.
+    expect(await pullRebaseClean(bob, CINNA)).toEqual({ done: false, refusal: 'dirty', detail: null })
+    expect(await pullRebaseClean(bob, CINNA, null, undefined, { combine: true })).toEqual({ done: true, refusal: null, detail: null })
     expect(readFileSync(join(bob, 'credentials', 'README.md'), 'utf8')).toBe('Put your keys in .env\n')
     expect(readFileSync(join(bob, 't'), 'utf8')).toBe('from Alice\n')
     expect(readFileSync(join(bob, 'bob.md'), 'utf8')).toBe('from Bob\n')
@@ -821,6 +839,262 @@ describe('sharing an agent folder', () => {
 // ---------------------------------------------------------------------------
 // A version the library refused, and the files that never travel
 // ---------------------------------------------------------------------------
+
+describe('bringing the team\'s changes together', () => {
+  let box: string
+  let team: string
+  /** This machine's folder, and the teammate's clone of the same team version. */
+  let a: string
+  let b: string
+  const BEA = { name: 'Bea', email: 'bea@example.test' }
+  const DONE = { done: true, refusal: null, detail: null }
+
+  beforeAll(async () => {
+    box = mkdtempSync(join(tmpdir(), 'cinna-adopt-'))
+    team = bare(join(box, 'team.git'))
+    a = join(box, 'workshopA', 'Local', 'alpha')
+    mkdirSync(a, { recursive: true })
+    kitAgent(a, 'Alpha')
+    mkdirSync(join(a, 'credentials'), { recursive: true })
+    writeFileSync(join(a, 'credentials', '.env'), 'KEY=mine\n')
+    mkdirSync(join(a, '.claude'), { recursive: true })
+    writeFileSync(join(a, '.claude', 'settings.local.json'), '{"mine":true}\n')
+    mkdirSync(join(a, 'skills'), { recursive: true })
+    writeFileSync(join(a, 'skills', 'pricing.md'), '# Pricing\n\nTax 10%.\n')
+    writeFileSync(join(a, 'from-team.md'), 'line one\nline two\nline three\n')
+    expect((await initWithRemote(a, team, EXTERNAL)).done).toBe(true)
+    b = join(box, 'workshopB', 'Local', 'alpha')
+    expect((await cloneAgent(team, b, EXTERNAL)).done).toBe(true)
+  }, 60_000)
+
+  afterAll(() => {
+    rmSync(box, { recursive: true, force: true })
+  })
+
+  /** The teammate changes one file and shares it. */
+  async function teamShares(rel: string, content: string, note: string): Promise<void> {
+    mkdirSync(dirname(join(b, rel)), { recursive: true })
+    writeFileSync(join(b, rel), content)
+    expect((await shareChanges(b, note, EXTERNAL, BEA)).done).toBe(true)
+  }
+
+  /** Back to the team's version, as if nothing had happened here. */
+  function resetToTeam(dir: string): void {
+    git(dir, 'fetch', '-q')
+    git(dir, 'reset', '-q', '--hard', 'origin/main')
+  }
+
+  it('combines a clean divergence: the loose edits recorded first, the points handed over before anything moves', async () => {
+    await teamShares('knowledge/terms.md', 'Clients pay net 30.\n', 'Teammate adds the payment terms')
+    writeFileSync(join(a, 'AGENT.md'), '# Alpha\n\nLine one.\nLine two.\nLine three, mine.\n')
+    const seen: AdoptionPoints[] = []
+    const result = await beginAdoption(a, EXTERNAL, null, undefined, (points) => {
+      seen.push(points)
+      // The loose edits are a version of their own now, and the team's file
+      // is not here yet: the record is written before history moves.
+      expect(git(a, 'rev-parse', 'HEAD').trim()).toBe(points.headBefore)
+      expect(git(a, 'status', '--porcelain')).toBe('')
+      expect(existsSync(join(a, 'knowledge', 'terms.md'))).toBe(false)
+    })
+    expect(result).toEqual(DONE)
+    expect(seen).toHaveLength(1)
+    const [points] = seen
+    expect(points.teamHead).toBe(git(team, 'rev-parse', 'main').trim())
+    expect(points.base).toBe(git(a, 'rev-parse', 'origin/main~1').trim())
+    // Both sides are in the folder, one unsent version on top of the team's.
+    expect(readFileSync(join(a, 'knowledge', 'terms.md'), 'utf8')).toBe('Clients pay net 30.\n')
+    expect(readFileSync(join(a, 'AGENT.md'), 'utf8')).toContain('Line three, mine.')
+    expect(git(a, 'rev-list', '--count', 'origin/main..HEAD').trim()).toBe('1')
+    expect(git(a, 'rev-list', '--count', 'HEAD..origin/main').trim()).toBe('0')
+    expect(git(a, 'log', '-1', '--format=%s').trim()).toBe(ADOPTION_BEFORE_NOTE)
+    // What the brief is built from, on each side.
+    expect((await readVersionsBetween(a, points.base, points.teamHead)).map((v) => [v.note, v.author, v.files])).toEqual([
+      ['Teammate adds the payment terms', 'Bea', ['knowledge/terms.md']]
+    ])
+    expect((await readVersionsBetween(a, points.base, points.headBefore)).map((v) => [v.note, v.files])).toEqual([
+      [ADOPTION_BEFORE_NOTE, ['AGENT.md']]
+    ])
+    const theirs = await diffBetween(a, points.base, points.teamHead)
+    expect(theirs.map((d) => d.path)).toEqual(['knowledge/terms.md'])
+    expect(theirs[0].diff).toContain('+Clients pay net 30.')
+    expect((await diffBetween(a, points.base, points.headBefore)).map((d) => d.path)).toEqual(['AGENT.md'])
+    // Nothing to bring together once the team's version is in.
+    const again = await beginAdoption(a, EXTERNAL, null, undefined, () => {
+      throw new Error('no points when there is nothing to combine')
+    })
+    expect(again).toEqual({ done: false, refusal: 'adoption_blocked', detail: 'Nothing to bring together: this agent already has the team’s changes.' })
+    expect((await shareChanges(a, 'Line three', EXTERNAL)).done).toBe(true)
+  }, 60_000)
+
+  it('answers diverged_conflict on clashing edits, HEAD at headBefore with the loose edits recorded', async () => {
+    resetToTeam(b)
+    await teamShares('AGENT.md', '# Alpha\n\nLine one, by the team.\nLine two.\nLine three, mine.\n', 'Teammate rewrites line one')
+    writeFileSync(join(a, 'AGENT.md'), '# Alpha\n\nLine one, by me.\nLine two.\nLine three, mine.\n')
+    const seen: AdoptionPoints[] = []
+    const result = await beginAdoption(a, EXTERNAL, null, undefined, (points) => seen.push(points))
+    expect(result.refusal).toBe('diverged_conflict')
+    expect(seen).toHaveLength(1)
+    expect(git(a, 'rev-parse', 'HEAD').trim()).toBe(seen[0].headBefore)
+    expect(git(a, 'log', '-1', '--format=%s').trim()).toBe(ADOPTION_BEFORE_NOTE)
+    expect(readFileSync(join(a, 'AGENT.md'), 'utf8')).toContain('Line one, by me.')
+    expect(git(a, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(a, '.git', 'rebase-merge'))).toBe(false)
+    resetToTeam(a)
+  }, 60_000)
+
+  it('refuses to finish on markers, on a combine left half-done, and when the team’s version left the history', async () => {
+    const teamHead = git(a, 'rev-parse', 'origin/main').trim()
+    expect(await checkAdoptionFinish(a, teamHead)).toEqual(DONE)
+    // Markers in an untracked file count; a setext underline alone does not;
+    // an ignored file is not read.
+    writeFileSync(join(a, 'notes.md'), '<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> team\n')
+    expect(await checkAdoptionFinish(a, teamHead)).toEqual({
+      done: false,
+      refusal: 'adoption_blocked',
+      detail: 'Some files still hold both versions, marked with <<<<<<< and >>>>>>> lines: notes.md.'
+    })
+    writeFileSync(join(a, 'notes.md'), 'Heading\n=======\n\nBody.\n')
+    writeFileSync(join(a, 'app-data', 'scratch.md'), '<<<<<<< HEAD\n')
+    expect(await checkAdoptionFinish(a, teamHead)).toEqual(DONE)
+    rmSync(join(a, 'notes.md'))
+    rmSync(join(a, 'app-data', 'scratch.md'))
+    // A rebase stopped on a clash and left there.
+    writeFileSync(join(a, 'skills', 'pricing.md'), '# Pricing\n\nTax 10%, by me.\n')
+    git(a, 'add', '-A')
+    git(a, 'commit', '-q', '-m', 'my tax line')
+    resetToTeam(b)
+    await teamShares('skills/pricing.md', '# Pricing\n\nTax 20%, by the team.\n', 'Teammate changes the tax')
+    git(a, 'fetch', '-q')
+    expect(() => git(a, 'rebase', '-q', 'origin/main')).toThrow()
+    expect(existsSync(join(a, '.git', 'rebase-merge'))).toBe(true)
+    expect(await checkAdoptionFinish(a, teamHead)).toEqual({
+      done: false,
+      refusal: 'adoption_blocked',
+      detail: 'An earlier combine in this folder is still unfinished.'
+    })
+    git(a, 'rebase', '--abort')
+    expect(await checkAdoptionFinish(a, teamHead)).toEqual(DONE)
+    // The team moved on: its new version is not in this history.
+    const moved = git(a, 'rev-parse', 'origin/main').trim()
+    expect(await checkAdoptionFinish(a, moved)).toEqual({
+      done: false,
+      refusal: 'adoption_blocked',
+      detail: 'This agent’s history no longer includes the team’s version the session started from.'
+    })
+    resetToTeam(a)
+  }, 60_000)
+
+  it('discard that cannot put the folder back says so in one fixed sentence, without git’s words', async () => {
+    const head = git(a, 'rev-parse', 'HEAD').trim()
+    expect(await discardAdoption(a, 'f'.repeat(40))).toEqual({
+      done: false,
+      refusal: 'adoption_blocked',
+      detail: 'The folder could not be put back to where the session began.'
+    })
+    expect(git(a, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect(git(a, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(a, '.git', 'cinna-local-only'))).toBe(false)
+  }, 30_000)
+
+  it('the brief’s diff carries no secret that was recorded at one point and gone at the other', async () => {
+    mkdirSync(join(a, 'tools'), { recursive: true })
+    writeFileSync(join(a, 'tools', '.env'), 'TOKEN=plain-secret\n')
+    git(a, 'add', '-f', 'tools/.env')
+    git(a, 'commit', '-q', '-m', 'a token slipped in')
+    git(a, 'rm', '-q', 'tools/.env')
+    git(a, 'commit', '-q', '-m', 'drop the token')
+    // Not tracked now, so the index-based exclusion misses it on both ranges.
+    for (const [from, to] of [['HEAD~1', 'HEAD'], ['HEAD~2', 'HEAD~1']]) {
+      const entries = await diffBetween(a, from, to)
+      expect(entries.map((d) => d.path)).toEqual([])
+      expect(JSON.stringify(entries)).not.toContain('plain-secret')
+    }
+    resetToTeam(a)
+  }, 30_000)
+
+  it('discard puts the folder back where the session began, keeping this machine’s local-only files as they are now', async () => {
+    resetToTeam(b)
+    await teamShares('knowledge/terms.md', 'Clients pay net 45.\n', 'Teammate revises the terms')
+    writeFileSync(join(a, 'notes.md'), 'loose, mine\n')
+    writeFileSync(join(a, 'credentials', '.env'), 'KEY=mine-at-begin\n')
+    writeFileSync(join(a, '.claude', 'settings.local.json'), '{"mine":"at begin"}\n')
+    const anchor: { points: AdoptionPoints | null } = { points: null }
+    expect(await beginAdoption(a, EXTERNAL, null, undefined, (points) => { anchor.points = points })).toEqual(DONE)
+    expect(readFileSync(join(a, 'knowledge', 'terms.md'), 'utf8')).toBe('Clients pay net 45.\n')
+    // The session: the agent edits a file and makes one; this machine's own files move too.
+    writeFileSync(join(a, 'AGENT.md'), '# Alpha\n\nEdited in the session.\n')
+    writeFileSync(join(a, 'made-in-session.md'), 'x\n')
+    writeFileSync(join(a, 'credentials', '.env'), 'KEY=during-the-session\n')
+    writeFileSync(join(a, '.claude', 'settings.local.json'), '{"mine":"during"}\n')
+    expect(await discardAdoption(a, anchor.points!.headBefore)).toEqual(DONE)
+    expect(git(a, 'rev-parse', 'HEAD').trim()).toBe(anchor.points!.headBefore)
+    expect(git(a, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(a, 'made-in-session.md'))).toBe(false)
+    expect(readFileSync(join(a, 'AGENT.md'), 'utf8')).not.toContain('Edited in the session.')
+    expect(readFileSync(join(a, 'knowledge', 'terms.md'), 'utf8')).toBe('Clients pay net 30.\n')
+    // The version recorded at begin stays: the user's own work.
+    expect(readFileSync(join(a, 'notes.md'), 'utf8')).toBe('loose, mine\n')
+    expect(git(a, 'log', '-1', '--format=%s').trim()).toBe(ADOPTION_BEFORE_NOTE)
+    expect(readFileSync(join(a, 'credentials', '.env'), 'utf8')).toBe('KEY=during-the-session\n')
+    expect(readFileSync(join(a, '.claude', 'settings.local.json'), 'utf8')).toBe('{"mine":"during"}\n')
+    expect(existsSync(join(a, '.git', 'cinna-local-only'))).toBe(false)
+    resetToTeam(a)
+  }, 60_000)
+
+  it('sends after a teammate shared first when the files are disjoint, and refuses team_changed_again when they overlap', async () => {
+    resetToTeam(b)
+    await teamShares('from-team.md', 'line one, by the team\nline two\nline three\n', 'Teammate changes line one')
+    // Disjoint: this folder's unsent version touches another file. One
+    // rebase, one more send, as before.
+    writeFileSync(join(a, 'from-me.md'), 'me\n')
+    expect(await shareChanges(a, 'I add a file', EXTERNAL)).toEqual(DONE)
+    const tree = git(team, 'ls-tree', '-r', '--name-only', 'main')
+    expect(tree).toContain('from-me.md')
+    expect(git(team, 'show', 'main:from-team.md')).toBe('line one, by the team\nline two\nline three\n')
+    // Overlap on different lines: git would combine it cleanly, and that is
+    // exactly the silent combine the gate refuses.
+    await teamShares('from-team.md', 'line one, revised by the team\nline two\nline three\n', 'Teammate revises line one')
+    const teamHead = git(team, 'rev-parse', 'main').trim()
+    writeFileSync(join(a, 'from-team.md'), 'line one, by the team\nline two\nline three, by me\n')
+    const refused = await shareChanges(a, 'I change line three', EXTERNAL)
+    expect(refused).toEqual({ done: false, refusal: 'team_changed_again', detail: null })
+    expect(git(team, 'rev-parse', 'main').trim()).toBe(teamHead)
+    expect(git(a, 'rev-list', '--count', 'origin/main..HEAD').trim()).toBe('1')
+    expect(git(a, 'log', '-1', '--format=%s').trim()).toBe('I change line three')
+    expect(git(a, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(a, '.git', 'rebase-merge'))).toBe(false)
+    // The team's version was already fetched (a status read does that for an
+    // external remote on every page open): the gate measures from the point
+    // the two sides last matched, not from the last fetch, so it still refuses.
+    git(a, 'fetch', '--quiet', 'origin')
+    expect(git(a, 'rev-parse', 'origin/main').trim()).toBe(teamHead)
+    expect(await shareChanges(a, 'I change line three', EXTERNAL)).toEqual({
+      done: false,
+      refusal: 'team_changed_again',
+      detail: null
+    })
+    expect(git(team, 'rev-parse', 'main').trim()).toBe(teamHead)
+  }, 60_000)
+
+  it('the send’s gate sees the team’s version on a folder that never fetched one', async () => {
+    const c = join(box, 'workshopC', 'Local', 'alpha')
+    expect((await cloneAgent(team, c, EXTERNAL)).done).toBe(true)
+    // Linked to the team, but no team ref here yet.
+    git(c, 'update-ref', '-d', 'refs/remotes/origin/main')
+    expect(() => git(c, 'rev-parse', '--verify', '--quiet', 'origin/main')).toThrow()
+    resetToTeam(b)
+    await teamShares('from-team.md', 'line one, by the team, again\nline two\nline three\n', 'Teammate changes line one again')
+    const teamHead = git(team, 'rev-parse', 'main').trim()
+    // Overlap on different lines: git would combine it cleanly, and that is
+    // exactly the silent combine the gate refuses.
+    writeFileSync(join(c, 'from-team.md'), `${readFileSync(join(c, 'from-team.md'), 'utf8').replace(/line three.*\n/, 'line three, by C\n')}`)
+    const refused = await shareChanges(c, 'C changes line three', EXTERNAL)
+    expect(refused).toEqual({ done: false, refusal: 'team_changed_again', detail: null })
+    expect(git(team, 'rev-parse', 'main').trim()).toBe(teamHead)
+    expect(git(c, 'rev-list', '--count', 'origin/main..HEAD').trim()).toBe('1')
+    expect(git(c, 'log', '-1', '--format=%s').trim()).toBe('C changes line three')
+  }, 60_000)
+})
 
 describe('a version the library refused does not block later shares', () => {
   let box: string

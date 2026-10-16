@@ -27,8 +27,23 @@ const useTeamVersion = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
 const itemPeople = vi.hoisted(() => vi.fn())
 const setItemPeople = vi.hoisted(() => vi.fn())
+const beginAdoption = vi.hoisted(() => vi.fn())
+const setAdoptionChat = vi.hoisted(() => vi.fn())
+const finishAdoption = vi.hoisted(() => vi.fn())
+const discardAdoption = vi.hoisted(() => vi.fn())
+const dismissTeamChanges = vi.hoisted(() => vi.fn())
 vi.mock('../services/localAgents/sharingService', () => ({
-  sharingService: { useTeamVersion, update, itemPeople, setItemPeople }
+  sharingService: {
+    useTeamVersion,
+    update,
+    itemPeople,
+    setItemPeople,
+    beginAdoption,
+    setAdoptionChat,
+    finishAdoption,
+    discardAdoption,
+    dismissTeamChanges
+  }
 }))
 
 const { registerSharingHandlers } = await import('./sharing.ipc')
@@ -42,6 +57,34 @@ beforeEach(() => {
   update.mockReset()
   itemPeople.mockReset()
   setItemPeople.mockReset()
+  for (const fn of [beginAdoption, setAdoptionChat, finishAdoption, discardAdoption, dismissTeamChanges]) fn.mockReset()
+})
+
+describe('the adoption session', () => {
+  it('hands each verb the ids as strings and answers the service’s result as data, retiring nothing', async () => {
+    beginAdoption.mockResolvedValue({ ...answer(true), brief: 'The team changed this agent…' })
+    expect(await handlers.get('sharing:begin-adoption')!({}, { agentId: 'folder:a1' })).toEqual({
+      success: true,
+      value: { ...answer(true), brief: 'The team changed this agent…' }
+    })
+    expect(beginAdoption).toHaveBeenCalledWith('__default__', 'folder:a1')
+    setAdoptionChat.mockResolvedValue(answer(true))
+    await handlers.get('sharing:adoption-chat')!({}, { agentId: 'folder:a1', chatId: 'c1' })
+    expect(setAdoptionChat).toHaveBeenCalledWith('__default__', 'folder:a1', 'c1')
+    await handlers.get('sharing:adoption-chat')!({}, { agentId: 'folder:a1', chatId: 42 })
+    expect(setAdoptionChat).toHaveBeenLastCalledWith('__default__', 'folder:a1', '')
+    const rest: Array<[string, ReturnType<typeof vi.fn>]> = [
+      ['sharing:finish-adoption', finishAdoption],
+      ['sharing:discard-adoption', discardAdoption],
+      ['sharing:dismiss-team-changes', dismissTeamChanges]
+    ]
+    for (const [channel, fn] of rest) {
+      fn.mockResolvedValue(answer(false))
+      expect(await handlers.get(channel)!({}, { agentId: 'folder:a1' })).toEqual({ success: true, value: answer(false) })
+      expect(fn).toHaveBeenCalledWith('__default__', 'folder:a1')
+    }
+    expect(retire).not.toHaveBeenCalled()
+  })
 })
 
 describe('sharing:use-team-version', () => {

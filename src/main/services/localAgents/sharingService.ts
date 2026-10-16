@@ -29,6 +29,7 @@ import { publishEvent } from '../../host/events'
 import { userRepo } from '../../db/users'
 import { getCinnaAccessToken, getStoredCinnaSubject } from '../../auth/cinna-tokens'
 import { getProfileScopeUserId } from '../../auth/scope'
+import { visibleChat } from '../../auth/chatScope'
 import { cinnaFetch } from '../cinna-http'
 import { CinnaApiError, LocalAgentError } from '../../errors'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
@@ -36,7 +37,9 @@ import { manifestPath, readManifest, writeManifest } from '../../kit/manifestIo'
 import { aiFunctions } from '../aiFunctionsService'
 import { SHARE_SUMMARY_SYSTEM_PROMPT } from '../aiFunctionPrompts'
 import { libraryTrust } from '../libraryTrust'
-import { desktopStateService, type DesktopSharedRemote } from './desktopStateService'
+import { desktopStateService, type DesktopAdoption, type DesktopSharedRemote, type DesktopState } from './desktopStateService'
+import { buildAdoptionBrief, liftAdoptionSummary } from './adoptionBrief'
+import { messageRepo } from '../../db/messages'
 import {
   catalogItemPath,
   libraryService,
@@ -52,10 +55,11 @@ import { AGENTS_SUBDIR, LOCAL_AGENT_CHANGED_CHANNEL, folderAgentId } from '../..
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import {
   SHARING_CHANGED_CHANNEL,
+  type AdoptionBeginResult,
+  type AdoptionFinishResult,
   type AgentPeopleDto,
   type AgentRemote,
   type AgentShareResult,
-  type AgentShareState,
   type AgentShareStatus,
   type AgentVersionDto,
   type LibraryAccess,
@@ -80,6 +84,7 @@ import {
   redactRemoteUrl,
   scrubCredentials,
   shareStateOf,
+  type AdoptionPoints,
   type CommitIdentity,
   type RemoteAuth,
   type ShareActionResult,
@@ -319,28 +324,71 @@ export function commitIdentity(remote: Pick<AgentRemote, 'kind' | 'host'> | null
   return { name, email: host ? `${user.id}@users.noreply.${host}` : ANONYMOUS_IDENTITY.email }
 }
 
-/** The catalog id this machine recorded for the folder (`shared_remote.bundle_id`), or null. */
-function recordedBundleId(dir: string): string | null {
+/** The folder's `app-data/desktop.json`, or null when it cannot be read. */
+function folderState(dir: string): DesktopState | null {
   try {
-    return desktopStateService.read(dir, 'kit').shared_remote?.bundle_id ?? null
+    return desktopStateService.read(dir, 'kit')
   } catch {
     return null
   }
+}
+
+/** The adoption session recorded in the folder, or null. */
+function adoptionRecord(dir: string): DesktopAdoption | null {
+  return folderState(dir)?.adoption ?? null
+}
+
+/**
+ * Write (or with null, clear) the folder's adoption record. Throws
+ * `LocalAgentError('write_failed')` as every desktop-state write does: at
+ * begin, before history moves, that is the right answer — no record, no
+ * session.
+ */
+function writeAdoption(dir: string, record: DesktopAdoption | null): void {
+  desktopStateService.patch(dir, 'kit', { adoption: record })
+}
+
+/** Clear a record once the session is over or never began; never throws. */
+function clearAdoption(dir: string): void {
+  try {
+    writeAdoption(dir, null)
+  } catch (err) {
+    logger.warn('could not clear the adoption record', { error: String(err) })
+  }
+}
+
+const NO_SESSION = 'No session is bringing the team’s changes together on this agent.'
+const NO_SUCH_CHAT = 'That chat could not be found.'
+
+/**
+ * Whether a session's chat is one the active profile sees and has not put in
+ * the trash — the same scope `chat:get` answers from. The record names a chat
+ * id the renderer handed over; nothing is read from a chat this check does
+ * not pass.
+ */
+function sessionChatVisible(chatId: string): boolean {
+  const chat = visibleChat(getProfileScopeUserId(), chatId)
+  return chat !== undefined && !chat.deletedAt
 }
 
 function buildStatus(
   agentId: string,
   shared: SharedAgent,
   counts: ShareCounts,
-  override: AgentShareState | null,
+  override: Exclude<AgentShareStatus['state'], 'adopting'> | null,
   access: AgentRemote['access']
 ): AgentShareStatus {
   const unshared = counts.ahead > 0 || counts.changedFiles > 0
+  const local = folderState(shared.dir)
+  const adoption = local?.adoption ?? null
+  const declined = local?.teamChangesDeclinedHead ?? null
   return {
     agentId,
     remote: { ...shared.remote, access },
-    bundleId: shared.remote.kind === 'cinna' ? recordedBundleId(shared.dir) : null,
-    state: override ?? shareStateOf(counts),
+    bundleId: shared.remote.kind === 'cinna' ? local?.shared_remote?.bundle_id ?? null : null,
+    // A session in progress outranks everything: the folder can only be left
+    // by Finish or Discard, whatever happened to its team version meanwhile.
+    state: adoption ? 'adopting' : override ?? shareStateOf(counts),
     headSha: counts.headSha,
     remoteHeadSha: counts.remoteHeadSha,
     ahead: counts.ahead,
@@ -348,8 +396,40 @@ function buildStatus(
     changedFiles: counts.changedFiles,
     unshared,
     fetched: counts.fetched,
-    refusal: counts.refusal === 'not_shared' ? null : counts.refusal
+    refusal: counts.refusal === 'not_shared' ? null : counts.refusal,
+    // A chat deleted since is no "Open the session" link; the record keeps its id.
+    adoption: adoption
+      ? { chatId: adoption.chatId && sessionChatVisible(adoption.chatId) ? adoption.chatId : null, startedAt: adoption.startedAt }
+      : null,
+    teamChangesDeclined: declined !== null && declined === counts.remoteHeadSha
   }
+}
+
+/** Clear the adoption record when HEAD is still `headBefore`; never throws. */
+async function clearAdoptionUnlessMoved(dir: string, headBefore: string): Promise<void> {
+  try {
+    const head = (await gitService.readShareStatus(dir, null, false)).headSha
+    if (head === headBefore) clearAdoption(dir)
+    else logger.warn('begin failed after history moved; the session record stays for Discard', { head, headBefore })
+  } catch (err) {
+    logger.warn('could not tell whether a failed begin moved history', { error: String(err) })
+  }
+}
+
+/**
+ * The session's first message: both sides' versions and changes between the
+ * recorded points, through `adoptionBrief`. `mine` is read from `headBefore`,
+ * the tip before the combine (and before its never-travel rewrite) on purpose.
+ */
+async function adoptionBriefFor(shared: SharedAgent, points: AdoptionPoints): Promise<string> {
+  const root = shared.root.path
+  const [teamVersions, mineVersions, teamDiff, mineDiff] = await Promise.all([
+    gitService.readVersionsBetween(shared.dir, points.base, points.teamHead, root),
+    gitService.readVersionsBetween(shared.dir, points.base, points.headBefore, root),
+    gitService.diffBetween(shared.dir, points.base, points.teamHead, root),
+    gitService.diffBetween(shared.dir, points.base, points.headBefore, root)
+  ])
+  return buildAdoptionBrief({ teamVersions, mineVersions, teamDiff, mineDiff })
 }
 
 /**
@@ -1070,6 +1150,7 @@ export const sharingService = {
   async shareChanges(userId: string, agentId: string, message: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
+    if (adoptionRecord(shared.dir)) return result({ done: false, refusal: 'adoption_in_progress' }, await statusOf(agentId, shared, false))
     const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
@@ -1103,6 +1184,7 @@ export const sharingService = {
   async update(userId: string, agentId: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
+    if (adoptionRecord(shared.dir)) return result({ done: false, refusal: 'adoption_in_progress' }, await statusOf(agentId, shared, false))
     const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
@@ -1137,6 +1219,7 @@ export const sharingService = {
   async useTeamVersion(userId: string, agentId: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
+    if (adoptionRecord(shared.dir)) return result({ done: false, refusal: 'adoption_in_progress' }, await statusOf(agentId, shared, false))
     const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
@@ -1232,6 +1315,163 @@ export const sharingService = {
       ...result({ done: true, refusal: null, detail: missedDetail(missed) }, status, folderAgentId(copyId)),
       ...setup
     }
+  },
+
+  /**
+   * Bring together: begin an adoption session on a folder whose team version
+   * and own changes both moved. Under the turn lock: the loose edits are
+   * recorded, the three points written to the folder's `app-data/desktop.json`
+   * **before** history moves (so Discard is always possible), the team's
+   * versions combined by a clean rebase (`diverged_conflict` when they do not
+   * apply cleanly — the record goes, the recorded edits stay, today's two
+   * buttons are the answer), and the brief for the session's first message
+   * built from both sides. The team's files arrived, so the credential setup
+   * and the pinned catalog skills follow as after Update; nothing was sent,
+   * so no install is reported.
+   */
+  async beginAdoption(userId: string, agentId: string): Promise<AdoptionBeginResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return { ...refused('not_shared'), brief: null }
+    const auth = authFor(shared)
+    if (auth === 'other_account') {
+      return { ...result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false)), brief: null }
+    }
+    if (adoptionRecord(shared.dir)) {
+      return { ...result({ done: false, refusal: 'adoption_in_progress' }, await statusOf(agentId, shared, false)), brief: null }
+    }
+    const lock = lockOrRefuse(agentId)
+    if (!lock) return { ...result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false)), brief: null }
+    const missingBefore = missingSlots(userId, agentId)
+    // A holder, not a `let`: an assignment inside the callback is not seen by
+    // the narrowing after the await.
+    const anchor: { points: AdoptionPoints | null } = { points: null }
+    let action: ShareActionResult
+    let brief: string | null = null
+    try {
+      action = await gitService.beginAdoption(shared.dir, auth, commitIdentity(shared.remote), shared.root.path, (points) => {
+        writeAdoption(shared.dir, { startedAt: new Date().toISOString(), ...points, chatId: null, mode: 'rebase' })
+        anchor.points = points
+      })
+      // Not combined: no session. The version recorded from the loose edits
+      // stays — it is the user's work, now recorded instead of loose.
+      if (!action.done && anchor.points !== null) clearAdoption(shared.dir)
+      if (action.done && anchor.points !== null) brief = await adoptionBriefFor(shared, anchor.points)
+    } catch (err) {
+      // Thrown after the record was written: with HEAD still where the record
+      // says the session began, nothing moved and there is nothing to discard
+      // — no session. Once history moved, the record stays so Discard can
+      // put the folder back.
+      if (anchor.points !== null) await clearAdoptionUnlessMoved(shared.dir, anchor.points.headBefore)
+      throw err
+    } finally {
+      lock.release()
+    }
+    if (!action.done) return { ...result(action, await statusOf(agentId, shared, false)), brief: null }
+    await refreshListing()
+    settle(userId, shared.root.id)
+    const setup = await credentialSetup(userId, agentId, missingBefore)
+    const status = await statusOf(agentId, shared, false)
+    catalogSkillService.ensurePinnedInBackground(userId, agentId)
+    return { ...result(action, status), ...setup, brief }
+  },
+
+  /**
+   * Record the session's chat, once the renderer made one: a chat the active
+   * profile sees (`adoption_blocked` with {@link NO_SUCH_CHAT} otherwise — the id is the
+   * renderer's word, and Finish reads the agent's summary out of that chat);
+   * `adoption_blocked` without a session.
+   */
+  async setAdoptionChat(userId: string, agentId: string, chatId: string): Promise<AgentShareResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return refused('not_shared')
+    const record = adoptionRecord(shared.dir)
+    if (!record) return result({ done: false, refusal: 'adoption_blocked', detail: NO_SESSION }, await statusOf(agentId, shared, false))
+    const id = chatId.trim() === '' ? null : chatId
+    if (id !== null && !sessionChatVisible(id)) {
+      return result({ done: false, refusal: 'adoption_blocked', detail: NO_SUCH_CHAT }, await statusOf(agentId, shared, false))
+    }
+    writeAdoption(shared.dir, { ...record, chatId: id })
+    publishEvent(SHARING_CHANGED_CHANNEL)
+    return result({ done: true, refusal: null }, await statusOf(agentId, shared, false))
+  },
+
+  /**
+   * Finish a session, under the turn lock: the deterministic checks
+   * (`checkAdoptionFinish` — on its line of history, no combine half-done, no
+   * file holding both versions, the team's version still in HEAD's history),
+   * each an `adoption_blocked` with the sentence and the record kept; then the
+   * agent's own "Summary of what I did" lifted from the last answer in the
+   * session's chat (none when that chat is not one the active profile sees,
+   * or is gone), and the record cleared. Records nothing and never sends: the
+   * session's edits stay loose, the renderer opens Share changes pre-filled
+   * with the summary, and the ordinary send records them under the note a
+   * person read — and possibly rewrote — before the team does. Recording here
+   * would leave that note nothing to be the note of.
+   */
+  async finishAdoption(userId: string, agentId: string): Promise<AdoptionFinishResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return { ...refused('not_shared'), summary: null }
+    const record = adoptionRecord(shared.dir)
+    if (!record) {
+      return { ...result({ done: false, refusal: 'adoption_blocked', detail: NO_SESSION }, await statusOf(agentId, shared, false)), summary: null }
+    }
+    const lock = lockOrRefuse(agentId)
+    if (!lock) return { ...result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false)), summary: null }
+    let action: ShareActionResult
+    let summary: string | null = null
+    try {
+      action = await gitService.checkAdoptionFinish(shared.dir, record.teamHead)
+      if (action.done) {
+        summary =
+          record.chatId && sessionChatVisible(record.chatId)
+            ? liftAdoptionSummary(messageRepo.lastByRole(record.chatId, 'assistant')?.content ?? '')
+            : null
+        writeAdoption(shared.dir, null)
+      }
+    } finally {
+      lock.release()
+    }
+    if (action.done) settle(userId, shared.root.id)
+    return { ...result(action, await statusOf(agentId, shared, false)), summary: action.done ? summary : null }
+  },
+
+  /**
+   * Discard a session, under the turn lock: the folder goes back to the tip
+   * recorded at begin — the session's edits dropped, the team's version and
+   * this machine's recorded changes untouched — and the record is cleared.
+   */
+  async discardAdoption(userId: string, agentId: string): Promise<AgentShareResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return refused('not_shared')
+    const record = adoptionRecord(shared.dir)
+    if (!record) return result({ done: false, refusal: 'adoption_blocked', detail: NO_SESSION }, await statusOf(agentId, shared, false))
+    const lock = lockOrRefuse(agentId)
+    if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    let action: ShareActionResult
+    try {
+      action = await gitService.discardAdoption(shared.dir, record.headBefore, shared.root.path)
+      if (action.done) writeAdoption(shared.dir, null)
+    } finally {
+      lock.release()
+    }
+    settle(userId, shared.root.id)
+    return result(action, await statusOf(agentId, shared, false))
+  },
+
+  /**
+   * Not now, to the chat banner's Bring together offer: remember the team
+   * head it was declined for, so the banner stays away until the team moves
+   * again. No fetch; `failed` when no team version is known to remember.
+   */
+  async dismissTeamChanges(userId: string, agentId: string): Promise<AgentShareResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return refused('not_shared')
+    const status = await statusOf(agentId, shared, false)
+    if (status.remoteHeadSha === null) {
+      return result({ done: false, refusal: 'failed', detail: 'The team’s version is not known yet.' }, status)
+    }
+    desktopStateService.patch(shared.dir, 'kit', { teamChangesDeclinedHead: status.remoteHeadSha })
+    return result({ done: true, refusal: null }, await statusOf(agentId, shared, false))
   },
 
   /** Name and description from the manifest, for the Share with the team dialog. */
@@ -1423,6 +1663,7 @@ export const sharingService = {
   async unshare(userId: string, agentId: string, deleteFromLibrary: boolean): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
+    if (adoptionRecord(shared.dir)) return result({ done: false, refusal: 'adoption_in_progress' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
     // An interrupted update's backup first: this machine's local-only files.

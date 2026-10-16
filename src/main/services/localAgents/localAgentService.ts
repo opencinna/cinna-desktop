@@ -567,6 +567,14 @@ function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: stri
  */
 async function refuseUnsharedChanges(agentDir: string): Promise<string | null> {
   if (!existsSync(join(agentDir, '.git'))) return null
+  // A Bring together session holds the folder between two states; trashing
+  // it would lose the session and what it reconciled.
+  if (desktopStateService.read(agentDir, 'kit').adoption) {
+    throw new LocalAgentError(
+      'adoption_in_progress',
+      'A session is bringing the team’s changes together on this agent. Finish or discard it first; nothing was removed.'
+    )
+  }
   const counts = await gitService.readShareStatus(agentDir, null, false)
   if (!counts.ownRepo || counts.originUrl === null) return null
   if (counts.ahead === 0 && counts.changedFiles === 0) return counts.originUrl

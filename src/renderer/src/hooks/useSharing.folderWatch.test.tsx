@@ -12,7 +12,7 @@ import type { LocalAgentChangedPayload } from '../../../shared/localAgents'
  * status — without a fetch — or the badge keeps "Up to date" after an edit.
  */
 
-const { resetSharingFetchClock, sharingStatusesKey, useShareStatus, useShareStatuses, useSharingWatch } =
+const { resetSharingFetchClock, sharingStatusesKey, useDismissTeamChanges, useShareStatus, useShareStatuses, useSharingWatch } =
   await import('./useSharing')
 
 const ALPHA = 'folder:alpha'
@@ -33,6 +33,8 @@ function status(agentId: string, overrides: Partial<AgentShareStatus> = {}): Age
     unshared: false,
     fetched: false,
     refusal: null,
+    adoption: null,
+    teamChangesDeclined: false,
     ...overrides
   }
 }
@@ -126,5 +128,37 @@ describe('useSharingWatch — a folder change', () => {
     })
     expect(sharing.status).toHaveBeenLastCalledWith(ALPHA, true)
     vi.restoreAllMocks()
+  })
+})
+
+describe('an action’s result and the shared-agent list', () => {
+  /**
+   * Not now, then the agent opened again within a second: the page decides the
+   * Bring together banner from the statuses list, so the entry has to carry
+   * `teamChangesDeclined` the moment the dismiss resolves — before the list's
+   * refetch lands, which here never does.
+   */
+  it('patches the list entry with the returned status at once, ahead of the refetch', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const diverged = status(ALPHA, { state: 'diverged', ahead: 1, behind: 1, changedFiles: 1, unshared: true })
+    client.setQueryData(sharingStatusesKey(null), [diverged, status(BETA)])
+    sharing.statuses.mockImplementation(() => new Promise(() => {}))
+    sharing.dismissTeamChanges = vi.fn().mockResolvedValue(
+      ok({ done: true, refusal: null, detail: null, status: { ...diverged, teamChangesDeclined: true }, agentId: ALPHA, autoAttached: [], setupNeeded: false })
+    )
+    let dismiss!: ReturnType<typeof useDismissTeamChanges>
+    function Page(): null {
+      dismiss = useDismissTeamChanges()
+      return null
+    }
+    render(createElement(QueryClientProvider, { client }, createElement(Page)))
+    await act(async () => {
+      await dismiss.mutateAsync(ALPHA)
+    })
+    const list = client.getQueryData<AgentShareStatus[]>(sharingStatusesKey(null))
+    expect(list?.find((entry) => entry.agentId === ALPHA)?.teamChangesDeclined).toBe(true)
+    // The other entry is untouched, and the list is still marked for a re-read behind it.
+    expect(list?.find((entry) => entry.agentId === BETA)).toEqual(status(BETA))
+    expect(client.getQueryState(sharingStatusesKey(null))?.isInvalidated).toBe(true)
   })
 })

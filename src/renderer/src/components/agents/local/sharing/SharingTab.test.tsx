@@ -23,6 +23,8 @@ const { useShareActions } = await import('./useShareActions')
 const { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
 const { resetSharingFetchClock, sharingStatusesKey } = await import('../../../../hooks/useSharing')
 const { useAuthStore } = await import('../../../../stores/auth.store')
+const { useChatStore } = await import('../../../../stores/chat.store')
+const { useUIStore } = await import('../../../../stores/ui.store')
 
 const AGENT = { id: 'folder:alpha', name: 'Alpha' }
 
@@ -40,6 +42,8 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
     unshared: false,
     fetched: false,
     refusal: null,
+    adoption: null,
+    teamChangesDeclined: false,
     ...overrides
   }
 }
@@ -219,6 +223,46 @@ describe('SharingTab — where it is shared', () => {
     const where = section(SHARE_UI_TEXT.whereShared)
     expect(within(where).getByRole('button', { name: SHARE_UI_TEXT.update })).toBeTruthy()
     expect(within(where).getByRole('button', { name: SHARE_UI_TEXT.shareChanges })).toBeTruthy()
+  })
+
+  it('while a session brings the team’s changes together: Finish… and Discard beside a one-line state, Open the session as a Session fact; no Update or Share changes', () => {
+    act(() => useUIStore.setState({ activeView: 'local-agent', sidebarTab: 'agents' } as never))
+    mount(
+      status({
+        state: 'adopting',
+        behind: 1,
+        ahead: 1,
+        unshared: true,
+        adoption: { chatId: 'chat-9', startedAt: '2026-10-16T09:00:00Z' }
+      })
+    )
+    const where = section(SHARE_UI_TEXT.whereShared)
+    expect(within(where).getByRole('button', { name: SHARE_UI_TEXT.finish })).toBeTruthy()
+    expect(within(where).getByRole('button', { name: SHARE_UI_TEXT.discard })).toBeTruthy()
+    expect(within(where).queryByRole('button', { name: SHARE_UI_TEXT.update })).toBeNull()
+    expect(within(where).queryByRole('button', { name: SHARE_UI_TEXT.shareChanges })).toBeNull()
+    expect(where.querySelector('[data-sharing-status]')?.innerHTML).not.toContain('--color-warning')
+    // The status row holds two buttons and a label that fits one line (ux_rules 7, 12);
+    // the session's chat is a fact under the divider, its value an accent-coloured text action (rule 11).
+    const row = where.querySelector('[data-sharing-status]') as HTMLElement
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual([SHARE_UI_TEXT.finish, SHARE_UI_TEXT.discard])
+    expect(row.textContent).toContain('Bringing team changes together')
+    expect(fact(where, SHARE_UI_TEXT.sessionLabel)).toBe(SHARE_UI_TEXT.openSession)
+    const open = within(where).getByRole('button', { name: SHARE_UI_TEXT.openSession })
+    expect(open.closest('dd')).not.toBeNull()
+    expect(open.className).toContain('--color-accent')
+    fireEvent.click(open)
+    expect(useChatStore.getState().activeChatId).toBe('chat-9')
+    expect(useUIStore.getState().activeView).toBe('chat')
+    expect(useUIStore.getState().sidebarTab).toBe('chats')
+  })
+
+  it('offers no Open the session when the session’s chat is not known', () => {
+    mount(status({ state: 'adopting', behind: 1, ahead: 1, unshared: true, adoption: { chatId: null, startedAt: '2026-10-16T09:00:00Z' } }))
+    const where = section(SHARE_UI_TEXT.whereShared)
+    expect(within(where).getByRole('button', { name: SHARE_UI_TEXT.finish })).toBeTruthy()
+    expect(within(where).queryByRole('button', { name: SHARE_UI_TEXT.openSession })).toBeNull()
+    expect(fact(where, SHARE_UI_TEXT.sessionLabel)).toBeNull()
   })
 })
 

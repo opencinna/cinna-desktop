@@ -13,11 +13,17 @@ import type { AgentShareResult, AgentShareStatus } from '../../../../../../share
  * Share changes, and the two-button conflict.
  */
 
+/** The chat the session opens: stubbed, since the flow behind it is the composer's and tested there. */
+const startNewChat = vi.hoisted(() => vi.fn())
+vi.mock('../../../../hooks/useNewChatFlow', () => ({ useNewChatFlow: () => ({ startNewChat }) }))
+
 const { AgentShareBadge } = await import('./AgentShareBadge')
 const { useShareActions } = await import('./useShareActions')
 const { SHARE_BADGE_TEXT, SHARE_REFUSAL_TEXT, SHARE_STATE_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
 const { resetSharingFetchClock, sharingStatusesKey } = await import('../../../../hooks/useSharing')
 const { useAuthStore } = await import('../../../../stores/auth.store')
+const { useChatStore } = await import('../../../../stores/chat.store')
+const { useUIStore } = await import('../../../../stores/ui.store')
 
 const AGENT = 'folder:alpha'
 
@@ -35,9 +41,13 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
     unshared: false,
     fetched: false,
     refusal: null,
+    adoption: null,
+    teamChangesDeclined: false,
     ...overrides
   }
 }
+
+const ADOPTION = { chatId: 'chat-9', startedAt: '2026-10-16T09:00:00Z' }
 
 function result(overrides: Partial<AgentShareResult> = {}): AgentShareResult {
   return { done: true, refusal: null, detail: null, status: null, agentId: null, autoAttached: [], setupNeeded: false, ...overrides }
@@ -57,8 +67,18 @@ beforeEach(() => {
     draftMessage: vi.fn().mockResolvedValue(ok('Tightened the workflow prompt.')),
     shareChanges: vi.fn(),
     update: vi.fn(),
-    useTeamVersion: vi.fn()
+    useTeamVersion: vi.fn(),
+    beginAdoption: vi.fn(),
+    setAdoptionChat: vi.fn().mockResolvedValue(ok(result())),
+    finishAdoption: vi.fn(),
+    discardAdoption: vi.fn(),
+    dismissTeamChanges: vi.fn()
   }
+  startNewChat.mockReset()
+  act(() => {
+    useChatStore.setState({ activeChatId: null })
+    useUIStore.setState({ activeView: 'local-agent', sidebarTab: 'agents' } as never)
+  })
   getAgent = vi.fn().mockResolvedValue({ ok: true, value: { id: 'folder:copy', name: 'Alpha (mine)' } })
   ;(window as unknown as { api: unknown }).api = {
     sharing,
@@ -174,6 +194,7 @@ describe('AgentShareBadge — what it says', () => {
     ['unshared', { state: 'unshared', unshared: true, changedFiles: 3 }, false],
     ['behind', { state: 'behind', behind: -1 }, false],
     ['diverged', { state: 'diverged', ahead: 1, behind: 2, unshared: true }, true],
+    ['adopting', { state: 'adopting', ahead: 1, behind: 2, unshared: true, adoption: ADOPTION }, false],
     ['removed', { state: 'removed' }, true],
     ['other_account', { state: 'other_account' }, false]
   ])('%s → its short form, the full sentence as its tooltip; warning-toned: %s', (state, overrides, warn) => {
@@ -213,6 +234,7 @@ describe('AgentShareBadge — which buttons', () => {
     ['unshared', { state: 'unshared', unshared: true, changedFiles: 1 }, [SHARE_UI_TEXT.shareChanges]],
     ['behind with local edits', { state: 'behind', behind: 1, unshared: true, changedFiles: 1 }, [SHARE_UI_TEXT.update, SHARE_UI_TEXT.shareChanges]],
     ['diverged', { state: 'diverged', behind: 1, ahead: 1, unshared: true }, [SHARE_UI_TEXT.shareChanges]],
+    ['bringing together', { state: 'adopting', behind: 1, ahead: 1, unshared: true, adoption: ADOPTION }, [SHARE_UI_TEXT.finish, SHARE_UI_TEXT.discard]],
     ['read-only access', { state: 'unshared', unshared: true, changedFiles: 1, remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'use' } }, []],
     ['external, unknown access', { state: 'unshared', unshared: true, changedFiles: 1, remote: { kind: 'external', url: 'u', repoId: null, host: null, access: null } }, [SHARE_UI_TEXT.shareChanges]],
     ['removed', { state: 'removed', behind: -1, unshared: true }, []],
@@ -376,5 +398,144 @@ describe('AgentShareBadge — the conflict dialog', () => {
     expect(sharing.useTeamVersion).toHaveBeenLastCalledWith(AGENT)
     expect(screen.queryByRole('dialog')).toBeNull()
     await waitFor(() => expect(onNote).toHaveBeenCalledWith(SHARE_UI_TEXT.keptCopy('Alpha (mine)')))
+  })
+})
+
+describe('AgentShareBadge — Bring together', () => {
+  const diverged = (): AgentShareStatus => status({ state: 'diverged', behind: 1, ahead: 1, unshared: true })
+  const dialog = (): HTMLElement => screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareChangesTitle })
+
+  it('Share changes opens on the Bring together step while both sides moved: no field, no draft', () => {
+    mount([diverged()])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.shareChanges }))
+    expect(dialog().textContent).toContain(SHARE_UI_TEXT.bringTogetherBanner)
+    expect(screen.queryByLabelText(SHARE_UI_TEXT.shareChangesLabel)).toBeNull()
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: SHARE_UI_TEXT.share })).toBeNull()
+    expect(sharing.draftMessage).not.toHaveBeenCalled()
+  })
+
+  it('begins the session, opens its chat with the brief as the first message, and records the chat', async () => {
+    const adopting = status({ state: 'adopting', behind: 1, ahead: 1, unshared: true, adoption: { ...ADOPTION, chatId: null } })
+    sharing.beginAdoption.mockResolvedValue(ok({ ...result({ status: adopting }), brief: 'The team changed the tax rule.' }))
+    startNewChat.mockImplementation(async () => {
+      useChatStore.setState({ activeChatId: 'chat-9' })
+      return true
+    })
+    const { onError } = mount([diverged()])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.shareChanges }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether }))
+    })
+    expect(sharing.beginAdoption).toHaveBeenCalledWith(AGENT)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(startNewChat).toHaveBeenCalledTimes(1))
+    expect(startNewChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'The team changed the tax rule.', agentIds: [AGENT], title: SHARE_UI_TEXT.adoptionChatTitle })
+    )
+    await waitFor(() => expect(sharing.setAdoptionChat).toHaveBeenCalledWith(AGENT, 'chat-9'))
+    await waitFor(() => expect(useUIStore.getState().activeView).toBe('chat'))
+    expect(useUIStore.getState().sidebarTab).toBe('chats')
+    expect(onError).not.toHaveBeenCalledWith(expect.any(String))
+    // The badge now says the session is on, with its two buttons.
+    expect(sentence()).toBe(SHARE_BADGE_TEXT.adopting(adopting))
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.finish })).toBeTruthy()
+  })
+
+  it('a chat that could not start says so in the page’s slot — the folder was still brought together', async () => {
+    sharing.beginAdoption.mockResolvedValue(ok({ ...result(), brief: 'Brief' }))
+    startNewChat.mockResolvedValue(false)
+    const { onError } = mount([diverged()])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.shareChanges }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether }))
+    })
+    await waitFor(() => expect(onError).toHaveBeenLastCalledWith(SHARE_UI_TEXT.sessionNotStarted))
+    expect(sharing.setAdoptionChat).not.toHaveBeenCalled()
+    expect(useUIStore.getState().activeView).toBe('local-agent')
+  })
+
+  it('a collision opens the two-button dialog; another refusal stays on the step', async () => {
+    sharing.beginAdoption.mockResolvedValueOnce(ok({ ...result({ done: false, refusal: 'turn_in_progress' }), brief: null }))
+    mount([diverged()])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.shareChanges }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether }))
+    })
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(SHARE_REFUSAL_TEXT.turn_in_progress)
+    expect(startNewChat).not.toHaveBeenCalled()
+
+    sharing.beginAdoption.mockResolvedValueOnce(ok({ ...result({ done: false, refusal: 'diverged_conflict' }), brief: null }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether }))
+    })
+    expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareChangesTitle })).toBeNull()
+    expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.conflictTitle })).toBeTruthy()
+  })
+
+  it('the team moving onto the same files during a send turns the dialog into the Bring together step, with no error line', async () => {
+    sharing.shareChanges.mockResolvedValue(ok(result({ done: false, refusal: 'team_changed_again' })))
+    mount([status({ state: 'unshared', unshared: true, changedFiles: 1 })])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.shareChanges }))
+    await act(async () => {})
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
+    })
+    expect(dialog().textContent).toContain(SHARE_UI_TEXT.bringTogetherBanner)
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.bringTogether })).toBeTruthy()
+    expect(dialog().querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('AgentShareBadge — Finish and Discard', () => {
+  const adopting = (): AgentShareStatus => status({ state: 'adopting', behind: 1, ahead: 1, unshared: true, adoption: ADOPTION })
+  const field = (): HTMLTextAreaElement => screen.getByLabelText(SHARE_UI_TEXT.shareChangesLabel) as HTMLTextAreaElement
+
+  it('Finish opens Share changes with the session’s own summary in the field, and asks for no draft', async () => {
+    const after = status({ state: 'unshared', unshared: true, ahead: 2 })
+    sharing.finishAdoption.mockResolvedValue(ok({ ...result({ status: after }), summary: 'Kept one tax rule.' }))
+    mount([adopting()])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.finish }))
+    })
+    expect(sharing.finishAdoption).toHaveBeenCalledWith(AGENT)
+    expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareChangesTitle })).toBeTruthy()
+    expect(field().value).toBe('Kept one tax rule.')
+    expect(sharing.draftMessage).not.toHaveBeenCalled()
+    expect(sentence()).toBe(SHARE_BADGE_TEXT.unshared(after))
+  })
+
+  it('Finish’s refusal goes to the page’s slot and the badge keeps its buttons', async () => {
+    sharing.finishAdoption.mockResolvedValue(ok({ ...result({ done: false, refusal: 'team_changed_again' }), summary: null }))
+    const { onError } = mount([adopting()])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.finish }))
+    })
+    expect(onError).toHaveBeenLastCalledWith(SHARE_REFUSAL_TEXT.team_changed_again)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.finish })).toBeTruthy()
+    expect(screen.getByRole('button', { name: SHARE_UI_TEXT.discard })).toBeTruthy()
+  })
+
+  it('Discard confirms first, keeps a refusal inside, and closes on success only', async () => {
+    mount([adopting()])
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.discard }))
+    const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.discardTitle })
+    expect(dialog.textContent).toContain(SHARE_UI_TEXT.discardBody('this agent'))
+    expect(sharing.discardAdoption).not.toHaveBeenCalled()
+
+    sharing.discardAdoption.mockResolvedValueOnce(ok(result({ done: false, refusal: 'turn_in_progress' })))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.discardConfirm }))
+    })
+    expect(sharing.discardAdoption).toHaveBeenCalledWith(AGENT)
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(SHARE_REFUSAL_TEXT.turn_in_progress)
+
+    sharing.discardAdoption.mockResolvedValueOnce(ok(result({ status: status({ state: 'diverged', behind: 1, ahead: 1, unshared: true }) })))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.discardConfirm }))
+    })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(sentence()).toBe(SHARE_BADGE_TEXT.diverged(status()))
   })
 })

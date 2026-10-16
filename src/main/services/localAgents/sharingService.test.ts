@@ -122,6 +122,9 @@ const { CinnaApiError } = await import('../../errors')
 const { folderAgentId } = await import('../../../shared/localAgents')
 const { CinnaReauthRequired } = await import('../../auth/cinna-oauth')
 const { serviceCredentialService } = await import('../serviceCredentials/service')
+const { chatRepo } = await import('../../db/chats')
+const { messageRepo } = await import('../../db/messages')
+const { ADOPTION_BEFORE_NOTE } = await import('./gitService')
 
 const GIT_ENV = {
   ...process.env,
@@ -379,8 +382,9 @@ describe('use the team version', () => {
     writeFileSync(join(agentDir, '.venv', 'bin', 'python'), '')
 
     const autoAttach = vi.spyOn(serviceCredentialService, 'autoAttach')
+    // Both sides moved: Update refuses rather than combining on its own.
     const update = await sharingService.update(USER, agentId)
-    expect(update.refusal).toBe('diverged_conflict')
+    expect(update.refusal).toBe('dirty')
     expect(update.status?.state).toBe('diverged')
     expect(autoAttach).not.toHaveBeenCalled()
 
@@ -484,7 +488,9 @@ describe('use the team version — Finish setup', () => {
     writeFileSync(join(agentDir, 'notes.md'), 'Line one, by me.\n')
     git(agentDir, 'commit', '-q', '-am', 'my edit')
     scannerService.markAllRootsDirty()
-    expect((await sharingService.update(USER, agentId)).refusal).toBe('diverged_conflict')
+    const update = await sharingService.update(USER, agentId)
+    expect(update.refusal).toBe('dirty')
+    expect(update.status?.state).toBe('diverged')
   }
 
   it('stays closed when the team’s version is missing only what this folder already was', async () => {
@@ -1656,6 +1662,324 @@ describe('remove sharing', () => {
     expect(calls('DELETE')).toEqual([])
     expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r1.git`)
   }, 30_000)
+})
+
+describe('bringing the team\'s changes together', () => {
+  const BEA_ENV = {
+    ...GIT_ENV,
+    GIT_AUTHOR_NAME: 'Bea',
+    GIT_AUTHOR_EMAIL: 'bea@example.test',
+    GIT_COMMITTER_NAME: 'Bea',
+    GIT_COMMITTER_EMAIL: 'bea@example.test'
+  }
+  const gitAsBea = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8', env: BEA_ENV })
+  let team: string
+  let mate: string
+  const WORKFLOW = join('docs', 'WORKFLOW_PROMPT.md')
+  const SESSION = {
+    startedAt: '2026-10-16T10:00:00.000Z',
+    headBefore: 'a'.repeat(40),
+    teamHead: 'b'.repeat(40),
+    base: 'c'.repeat(40),
+    chatId: null,
+    mode: 'rebase' as const
+  }
+  const record = (): unknown => desktopStateService.read(agentDir, 'kit').adoption ?? null
+
+  /** Shared with a team (a bare repository), the team's version in a teammate's clone beside it. */
+  function sharedWithMate(): void {
+    team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+  }
+
+  function mateShares(rel: string, content: string, note: string): void {
+    mkdirSync(dirname(join(mate, rel)), { recursive: true })
+    writeFileSync(join(mate, rel), content)
+    gitAsBea(mate, 'add', '-A')
+    gitAsBea(mate, 'commit', '-q', '-m', note)
+    gitAsBea(mate, 'push', '-q')
+  }
+
+  /** Both sides moved on different files: the team's terms, this folder's workflow. */
+  function diverge(): void {
+    sharedWithMate()
+    mateShares('knowledge/terms.md', 'Clients pay net 30.\n', 'Teammate adds the payment terms')
+    writeFileSync(join(agentDir, WORKFLOW), `${readFileSync(join(agentDir, WORKFLOW), 'utf8')}\nCheck the terms first.\n`)
+  }
+
+  it('adopting outranks removed, and the status carries the session', async () => {
+    makeOwnRepo(`${HOST}/git/r7.git`)
+    listed(libraryAgent('r1', 'other', null))
+    await libraryService.refresh(PROFILE)
+    expect((await sharingService.status(USER, agentId, false))?.state).toBe('removed')
+    const chat = chatRepo.create(PROFILE, { title: 'Bringing team changes together', agentId })
+    desktopStateService.patch(agentDir, 'kit', { adoption: { ...SESSION, chatId: chat.id } })
+    const status = await sharingService.status(USER, agentId, false)
+    expect(status?.state).toBe('adopting')
+    expect(status?.adoption).toEqual({ chatId: chat.id, startedAt: SESSION.startedAt })
+    expect(status?.teamChangesDeclined).toBe(false)
+  }, 30_000)
+
+  it('refuses Update, Share changes, Use the team’s version and Remove sharing while a session is in progress', async () => {
+    sharedWithMate()
+    desktopStateService.patch(agentDir, 'kit', { adoption: SESSION })
+    const attempts = [
+      sharingService.update(USER, agentId),
+      sharingService.shareChanges(USER, agentId, 'x'),
+      sharingService.useTeamVersion(USER, agentId),
+      sharingService.unshare(USER, agentId, false)
+    ]
+    for (const attempt of attempts) {
+      const answer = await attempt
+      expect(answer.done).toBe(false)
+      expect(answer.refusal).toBe('adoption_in_progress')
+      expect(answer.status?.state).toBe('adopting')
+    }
+    expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(team)
+    expect(existsSync(join(workshop, 'Local', 'alpha-mine'))).toBe(false)
+    expect(record()).toEqual(SESSION)
+  }, 60_000)
+
+  it('remembers Not now for the team head it answered, until the team moves again', async () => {
+    sharedWithMate()
+    mateShares('knowledge/terms.md', 'Net 30.\n', 'Terms')
+    let status = await sharingService.status(USER, agentId, true)
+    expect(status?.state).toBe('behind')
+    expect(status?.teamChangesDeclined).toBe(false)
+    const dismissed = await sharingService.dismissTeamChanges(USER, agentId)
+    expect(dismissed.done).toBe(true)
+    expect(dismissed.status?.teamChangesDeclined).toBe(true)
+    expect((await sharingService.status(USER, agentId, false))?.teamChangesDeclined).toBe(true)
+    mateShares('knowledge/terms.md', 'Net 45.\n', 'Terms, revised')
+    status = await sharingService.status(USER, agentId, true)
+    expect(status?.state).toBe('behind')
+    expect(status?.teamChangesDeclined).toBe(false)
+  }, 60_000)
+
+  it('cannot remember Not now before the team’s version is known', async () => {
+    makeOwnRepo('https://github.com/acme/alpha.git')
+    const answer = await sharingService.dismissTeamChanges(USER, agentId)
+    expect(answer.done).toBe(false)
+    expect(answer.refusal).toBe('failed')
+  }, 30_000)
+
+  it('begin records the points, combines, and writes the brief from both sides with secrets scrubbed and never-travel paths absent', async () => {
+    diverge()
+    mateShares('knowledge/terms.md', 'Clients pay net 30.\nAuthorization: Bearer abc\n', 'Teammate pastes a header by mistake')
+    mateShares('credentials/README.md', 'the team’s readme\n', 'Teammate edits the credentials readme')
+    const begun = await sharingService.beginAdoption(USER, agentId)
+    expect(begun.done).toBe(true)
+    expect(begun.refusal).toBeNull()
+    expect(begun.status?.state).toBe('adopting')
+    expect(begun.status?.adoption).toEqual({ chatId: null, startedAt: expect.any(String) })
+    const brief = begun.brief ?? ''
+    expect(brief).toContain('- Teammate adds the payment terms — Bea, ')
+    expect(brief).toContain('(knowledge/terms.md)')
+    expect(brief).toContain('+Clients pay net 30.')
+    expect(brief).toContain('Bearer ***')
+    expect(brief).not.toContain('Bearer abc')
+    // The two sides' content names no never-travel path (the asks name both folders, as "do not touch").
+    const content = brief.slice(0, brief.indexOf('## What I need from you'))
+    expect(content).not.toContain('credentials/')
+    expect(content).not.toContain('app-data/')
+    expect(content).not.toContain('the team’s readme')
+    expect(brief).toContain(`- ${ADOPTION_BEFORE_NOTE} — `)
+    expect(brief).toContain('(docs/WORKFLOW_PROMPT.md)')
+    expect(brief).toContain('+Check the terms first.')
+    expect(brief).toContain('## What I need from you')
+    // The folder holds both sides, and the record names the team's version.
+    expect(readFileSync(join(agentDir, 'knowledge', 'terms.md'), 'utf8')).toContain('Clients pay net 30.')
+    expect(readFileSync(join(agentDir, WORKFLOW), 'utf8')).toContain('Check the terms first.')
+    expect(record()).toMatchObject({ teamHead: gitAsBea(mate, 'rev-parse', 'HEAD').trim(), chatId: null, mode: 'rebase' })
+    expect(git(agentDir, 'rev-list', '--count', 'origin/main..HEAD').trim()).toBe('1')
+    // A second begin is refused while the first is in progress.
+    const again = await sharingService.beginAdoption(USER, agentId)
+    expect(again.refusal).toBe('adoption_in_progress')
+    expect(again.brief).toBeNull()
+  }, 60_000)
+
+  it('begin on a clash answers diverged_conflict and leaves no session behind', async () => {
+    sharedWithMate()
+    mateShares(WORKFLOW, '# The team’s workflow\n', 'Teammate rewrites the workflow')
+    writeFileSync(join(agentDir, WORKFLOW), '# My workflow\n')
+    const begun = await sharingService.beginAdoption(USER, agentId)
+    expect(begun.done).toBe(false)
+    expect(begun.refusal).toBe('diverged_conflict')
+    expect(begun.brief).toBeNull()
+    expect(begun.status?.state).toBe('diverged')
+    expect(record()).toBeNull()
+    expect(git(agentDir, 'log', '-1', '--format=%s').trim()).toBe(ADOPTION_BEFORE_NOTE)
+  }, 60_000)
+
+  it('finish lifts the agent’s summary from the session’s chat, clears the record and records nothing; Share changes records the session’s edits under the user’s note', async () => {
+    diverge()
+    const begun = await sharingService.beginAdoption(USER, agentId)
+    expect(begun.done).toBe(true)
+    const chat = chatRepo.create(PROFILE, { title: 'Bringing team changes together', agentId })
+    messageRepo.saveUser({ chatId: chat.id, content: begun.brief ?? '' })
+    messageRepo.saveAssistant({
+      chatId: chat.id,
+      content: 'I read both sides.\n\n## Summary of what I did\n\nKept one payment-terms rule, in knowledge/terms.md.\n'
+    })
+    const linked = await sharingService.setAdoptionChat(USER, agentId, chat.id)
+    expect(linked.done).toBe(true)
+    expect(linked.status?.adoption?.chatId).toBe(chat.id)
+    // The agent's edit in the session.
+    writeFileSync(join(agentDir, 'knowledge', 'terms.md'), 'Clients pay net 30 — the one rule.\n')
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    const finished = await sharingService.finishAdoption(USER, agentId)
+    expect(finished.done).toBe(true)
+    expect(finished.summary).toBe('Kept one payment-terms rule, in knowledge/terms.md.')
+    expect(record()).toBeNull()
+    expect(finished.status?.adoption).toBeNull()
+    // Nothing recorded, nothing sent: the session's edits are loose, for Share changes to record.
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect(git(agentDir, 'log', '-1', '--format=%s').trim()).toBe(ADOPTION_BEFORE_NOTE)
+    expect(git(agentDir, 'status', '--porcelain').trim()).toBe('M knowledge/terms.md')
+    expect(finished.status?.state).toBe('unshared')
+    // The workflow, in the version recorded at begin, and the loose terms edit.
+    expect(finished.status?.changedFiles).toBe(2)
+    expect(gitAsBea(mate, 'ls-remote', '--heads', 'origin', 'main').trim()).not.toContain(head)
+    const again = await sharingService.finishAdoption(USER, agentId)
+    expect(again.refusal).toBe('adoption_blocked')
+    expect(again.summary).toBeNull()
+    // The user rewrote the pre-filled note; it is the version's note, and the team has it.
+    const shared = await sharingService.shareChanges(USER, agentId, 'One payment-terms rule, net 30')
+    expect(shared.done).toBe(true)
+    expect(shared.status?.state).toBe('up_to_date')
+    expect(git(agentDir, 'status', '--porcelain')).toBe('')
+    expect(gitAsBea(team, 'log', '-1', '--format=%s').trim()).toBe('One payment-terms rule, net 30')
+    expect(gitAsBea(team, 'log', '-2', '--format=%s').trim().split('\n')).toEqual([
+      'One payment-terms rule, net 30',
+      ADOPTION_BEFORE_NOTE
+    ])
+  }, 60_000)
+
+  it('finish with a session that edited nothing leaves the folder as it was, with the record gone', async () => {
+    diverge()
+    expect((await sharingService.beginAdoption(USER, agentId)).done).toBe(true)
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    const finished = await sharingService.finishAdoption(USER, agentId)
+    expect(finished.done).toBe(true)
+    expect(finished.summary).toBeNull()
+    expect(record()).toBeNull()
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect(git(agentDir, 'status', '--porcelain')).toBe('')
+    expect(finished.status?.state).toBe('unshared')
+    // Only the workflow, in the version recorded at begin.
+    expect(finished.status?.changedFiles).toBe(1)
+  }, 60_000)
+
+  it('Update refuses as dirty when this folder has an unsent version and the team moved, and leaves HEAD where it was', async () => {
+    diverge()
+    git(agentDir, 'add', '-A')
+    git(agentDir, 'commit', '-q', '-m', 'Check the terms first')
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    expect((await sharingService.status(USER, agentId, true))?.state).toBe('diverged')
+    const updated = await sharingService.update(USER, agentId)
+    expect(updated.done).toBe(false)
+    expect(updated.refusal).toBe('dirty')
+    expect(updated.status?.state).toBe('diverged')
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect(git(agentDir, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(agentDir, 'knowledge', 'terms.md'))).toBe(false)
+    expect(record()).toBeNull()
+  }, 60_000)
+
+  it('finish keeps the session while a file still holds both versions', async () => {
+    diverge()
+    expect((await sharingService.beginAdoption(USER, agentId)).done).toBe(true)
+    writeFileSync(join(agentDir, 'knowledge', 'terms.md'), '<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> team\n')
+    const finished = await sharingService.finishAdoption(USER, agentId)
+    expect(finished.done).toBe(false)
+    expect(finished.refusal).toBe('adoption_blocked')
+    expect(finished.detail).toContain('knowledge/terms.md')
+    expect(finished.status?.state).toBe('adopting')
+    expect(record()).not.toBeNull()
+  }, 60_000)
+
+  it('discard puts the folder back where the session began and clears the record', async () => {
+    diverge()
+    expect((await sharingService.beginAdoption(USER, agentId)).done).toBe(true)
+    const begunAt = record() as { headBefore: string }
+    writeFileSync(join(agentDir, 'made-in-session.md'), 'x\n')
+    const discarded = await sharingService.discardAdoption(USER, agentId)
+    expect(discarded.done).toBe(true)
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).toBe(begunAt.headBefore)
+    expect(existsSync(join(agentDir, 'made-in-session.md'))).toBe(false)
+    expect(existsSync(join(agentDir, 'knowledge', 'terms.md'))).toBe(false)
+    expect(readFileSync(join(agentDir, WORKFLOW), 'utf8')).toContain('Check the terms first.')
+    expect(record()).toBeNull()
+    expect(discarded.status?.state).toBe('diverged')
+    expect((await sharingService.discardAdoption(USER, agentId)).refusal).toBe('adoption_blocked')
+  }, 60_000)
+
+  it('the session’s chat must be one this profile sees: another profile’s is refused, and yields no summary', async () => {
+    diverge()
+    expect((await sharingService.setAdoptionChat(USER, agentId, 'c1')).refusal).toBe('adoption_blocked')
+    expect((await sharingService.beginAdoption(USER, agentId)).done).toBe(true)
+    const theirs = chatRepo.create(OTHER, { title: 'Someone else’s chat', agentId })
+    messageRepo.saveAssistant({ chatId: theirs.id, content: '## Summary of what I did\n\nRead another profile’s chat.\n' })
+    const linked = await sharingService.setAdoptionChat(USER, agentId, theirs.id)
+    expect(linked.done).toBe(false)
+    expect(linked.refusal).toBe('adoption_blocked')
+    expect(linked.detail).toBe('That chat could not be found.')
+    expect(linked.status?.adoption?.chatId).toBeNull()
+    expect((record() as { chatId: string | null }).chatId).toBeNull()
+    expect((await sharingService.setAdoptionChat(USER, agentId, 'no-such-chat')).refusal).toBe('adoption_blocked')
+    // A record naming that chat anyway (an older record, a hand edit) is read no further.
+    desktopStateService.patch(agentDir, 'kit', { adoption: { ...(record() as typeof SESSION), chatId: theirs.id } })
+    const finished = await sharingService.finishAdoption(USER, agentId)
+    expect(finished.done).toBe(true)
+    expect(finished.summary).toBeNull()
+    expect(record()).toBeNull()
+  }, 60_000)
+
+  it('the status drops the session’s chat id once that chat is in the trash, and keeps the record', async () => {
+    sharedWithMate()
+    const chat = chatRepo.create(PROFILE, { title: 'Bringing team changes together', agentId })
+    desktopStateService.patch(agentDir, 'kit', { adoption: { ...SESSION, chatId: chat.id } })
+    let status = await sharingService.status(USER, agentId, false)
+    expect(status?.adoption).toEqual({ chatId: chat.id, startedAt: SESSION.startedAt })
+    expect(chatRepo.softDelete(PROFILE, chat.id)).toBe(true)
+    status = await sharingService.status(USER, agentId, false)
+    expect(status?.state).toBe('adopting')
+    expect(status?.adoption).toEqual({ chatId: null, startedAt: SESSION.startedAt })
+    expect(record()).toEqual({ ...SESSION, chatId: chat.id })
+  }, 30_000)
+
+  it('begin that throws after the record was written keeps it only when history moved', async () => {
+    diverge()
+    // Thrown by the brief, after the combine: HEAD moved, Discard must stay possible.
+    const broken = vi.spyOn(gitService, 'readVersionsBetween').mockRejectedValueOnce(new Error('git went away'))
+    await expect(sharingService.beginAdoption(USER, agentId)).rejects.toThrow('git went away')
+    broken.mockRestore()
+    const kept = record() as { headBefore: string; chatId: string | null }
+    expect(kept).not.toBeNull()
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).not.toBe(kept.headBefore)
+    expect((await sharingService.status(USER, agentId, false))?.state).toBe('adopting')
+    expect((await sharingService.discardAdoption(USER, agentId)).done).toBe(true)
+    expect(record()).toBeNull()
+    // Thrown before anything moved: no session is left behind.
+    const head = git(agentDir, 'rev-parse', 'HEAD').trim()
+    const stuck = vi.spyOn(gitService, 'beginAdoption').mockImplementationOnce(async (_dir, _auth, _identity, _root, onPoints) => {
+      onPoints({ headBefore: head, teamHead: 'b'.repeat(40), base: 'c'.repeat(40) })
+      throw new Error('the disk said no')
+    })
+    await expect(sharingService.beginAdoption(USER, agentId)).rejects.toThrow('the disk said no')
+    stuck.mockRestore()
+    expect(record()).toBeNull()
+    expect(git(agentDir, 'rev-parse', 'HEAD').trim()).toBe(head)
+    expect((await sharingService.status(USER, agentId, false))?.state).not.toBe('adopting')
+    // The lock went with it.
+    expect(turnLock.acquire(agentId, 'turn').release).toBeTypeOf('function')
+  }, 60_000)
 })
 
 describe('history', () => {

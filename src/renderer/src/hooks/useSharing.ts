@@ -7,6 +7,8 @@ import {
   type UseQueryResult
 } from '@tanstack/react-query'
 import type {
+  AdoptionBeginResult,
+  AdoptionFinishResult,
   AgentPeopleDto,
   AgentRemoteKind,
   AgentShareResult,
@@ -288,8 +290,17 @@ function applyResult(queryClient: QueryClient, agentId: string, result: AgentSha
   // unmount too. A result that lands after a profile switch is written under
   // the account now active, which is the one main answered for.
   const profileId = useAuthStore.getState().currentUser?.id ?? null
-  if (result.status) queryClient.setQueryData(sharingStatusKey(profileId, result.status.agentId), result.status)
-  else void queryClient.invalidateQueries({ queryKey: sharingStatusKey(profileId, agentId) })
+  if (result.status) {
+    const next = result.status
+    queryClient.setQueryData(sharingStatusKey(profileId, next.agentId), next)
+    // The list too, at once: a page opened again before its refetch lands
+    // decides the Bring together banner from this entry (Not now must hold).
+    queryClient.setQueriesData<AgentShareStatus[]>({ queryKey: ['sharing', 'statuses'] }, (list) =>
+      list?.map((entry) => (entry.agentId === next.agentId ? next : entry))
+    )
+  } else {
+    void queryClient.invalidateQueries({ queryKey: sharingStatusKey(profileId, agentId) })
+  }
   void queryClient.invalidateQueries({ queryKey: ['sharing', 'statuses'] })
   void queryClient.invalidateQueries({ queryKey: ['sharing', 'library'] })
   // An Update or a Share adds versions; a Remove sharing ends the list.
@@ -360,6 +371,65 @@ export function useUseTeamVersion(options: ShareMutationOptions<string> = {}) {
       if (result.done) invalidateRescanned(queryClient, [agentId, result.agentId])
       // The team's version keeps `agentId`; the kept copy is `result.agentId`.
       useFinishSetupStore.getState().record(agentId, result)
+      options.onResult?.(result, agentId)
+    }
+  })
+}
+
+/**
+ * Bring together: record this machine's loose edits, combine the team's
+ * versions with this folder's, and answer the brief for the session's chat.
+ * The folder is rewritten on success, and the combine can bring a credential
+ * slot the team added, so Finish setup is recorded as after an Update.
+ */
+export function useBeginAdoption(options: { onResult?: (result: AdoptionBeginResult, agentId: string) => void } = {}) {
+  const queryClient = useQueryClient()
+  return useMutation<AdoptionBeginResult, Error, string>({
+    mutationFn: async (agentId) => unwrapCatalogOutcome(await window.api.sharing.beginAdoption(agentId)),
+    onSuccess: (result, agentId) => {
+      applyResult(queryClient, agentId, result)
+      if (result.done) invalidateRescanned(queryClient, [agentId])
+      useFinishSetupStore.getState().record(agentId, result)
+      options.onResult?.(result, agentId)
+    }
+  })
+}
+
+/** Finish: check the folder, lift the agent's summary and end the session; the next Share changes records and sends. */
+export function useFinishAdoption(options: { onResult?: (result: AdoptionFinishResult, agentId: string) => void } = {}) {
+  const queryClient = useQueryClient()
+  return useMutation<AdoptionFinishResult, Error, string>({
+    mutationFn: async (agentId) => unwrapCatalogOutcome(await window.api.sharing.finishAdoption(agentId)),
+    onSuccess: (result, agentId) => {
+      applyResult(queryClient, agentId, result)
+      // Recording moves the folder's counts, not its files; the rescan
+      // follows the same path as every other action that rewrote history.
+      if (result.done) invalidateRescanned(queryClient, [agentId])
+      options.onResult?.(result, agentId)
+    }
+  })
+}
+
+/** Discard: the folder goes back to where the session began; its files are rewritten. */
+export function useDiscardAdoption(options: ShareMutationOptions<string> = {}) {
+  const queryClient = useQueryClient()
+  return useMutation<AgentShareResult, Error, string>({
+    mutationFn: async (agentId) => unwrapCatalogOutcome(await window.api.sharing.discardAdoption(agentId)),
+    onSuccess: (result, agentId) => {
+      applyResult(queryClient, agentId, result)
+      if (result.done) invalidateRescanned(queryClient, [agentId])
+      options.onResult?.(result, agentId)
+    }
+  })
+}
+
+/** Not now: the chat banner stays away until the team moves again. Nothing in the folder changes. */
+export function useDismissTeamChanges(options: ShareMutationOptions<string> = {}) {
+  const queryClient = useQueryClient()
+  return useMutation<AgentShareResult, Error, string>({
+    mutationFn: async (agentId) => unwrapCatalogOutcome(await window.api.sharing.dismissTeamChanges(agentId)),
+    onSuccess: (result, agentId) => {
+      applyResult(queryClient, agentId, result)
       options.onResult?.(result, agentId)
     }
   })

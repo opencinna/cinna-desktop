@@ -27,6 +27,12 @@ export interface NewChatOptions {
   isCurrent?: () => boolean
   message: string
   /**
+   * The chat's title, when the caller has a better one than the first
+   * message's opening words (the adoption session's "Bringing team changes
+   * together", whose first message is a brief the app wrote).
+   */
+  title?: string
+  /**
    * The new-chat agent pick list (`pendingAgentIds`) — populated by the `[+]`
    * capability picker and the `@` popup. Feeds `newChatRouter` together with
    * the on-demand MCP picks: one agent alone is the chat's root (`direct`),
@@ -200,7 +206,7 @@ export function useNewChatFlow(): {
         attachments,
         noteIds
       } = opts
-      const title = deriveTitleFromMessage(message)
+      const title = opts.title ?? deriveTitleFromMessage(message)
       const onDemandMcpSnapshot = onDemandMcpIds ? Array.from(onDemandMcpIds) : []
       const agentSnapshot = agentIds ?? []
       // The one decision, taken once, in the shared helper both processes read.

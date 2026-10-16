@@ -6,6 +6,7 @@ import {
   test,
   expect,
   agentName,
+  catalogEntry,
   buildAcmeReporter,
   cloneHistory,
   findAgent,
@@ -25,6 +26,8 @@ import {
   type SharingPerson,
   type Team
 } from '../fixtures/liveTeamSharing'
+import { installCachedEngine } from '../fixtures/engine-cache'
+import { OPENAI_API_KEY, seedOpenAiDefaultMode } from '../fixtures/live'
 
 /**
  * Two people changing one shared agent, against the real local cinna-core:
@@ -59,6 +62,15 @@ function edit(path: string, rel: string, text: string): void {
 
 function head(path: string): string {
   return execFileSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+}
+
+function isAncestor(path: string, commit: string): boolean {
+  try {
+    execFileSync('git', ['-C', path, 'merge-base', '--is-ancestor', commit, 'HEAD'])
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** The share badge, by the words it shows. */
@@ -166,6 +178,12 @@ test('a teammate shared first: Share changes brings their version in, sends once
   edit(aPath, ACME_MD, '# Acme\n\nA was here first.\n')
   await shareChanges(a, name, 'A first')
   edit(bPath, SKILL_MD, '---\nname: acme-report\ndescription: Write the Acme report.\n---\n\nB second.\n')
+  // B's app has not re-read the library since A shared (no refresh here, and
+  // its background re-read runs every five minutes), so B's status still
+  // reads "1 change not shared" and Share changes opens on the field, not on
+  // Bring together. Core refuses the first send; the send's safety net
+  // retries it on top of A's version because the two touched different
+  // files. This is that net, not the adoption session.
   await shareChanges(b, name, 'B second')
   expect(readFileSync(join(bPath, ACME_MD), 'utf8')).toContain('A was here first.')
   await updateFromBadge(a, name)
@@ -182,8 +200,26 @@ test('the same lines on both: Keep working on mine leaves both changed; Use the 
   await shareChanges(a, name, 'A says rockets')
   edit(bPath, ACME_MD, '# Acme\n\nAcme sells skates (from B).\n')
 
+  // B's status reads `diverged` once the library is re-read, so Share changes…
+  // opens on the Bring together step; a same-lines collision there answers
+  // with the old two buttons.
+  const bringTogetherFromShare = async (): Promise<void> => {
+    await openAgent(b, name)
+    await expect(badge(b, 'You and the team both changed it')).toBeVisible()
+    await b.page.getByRole('group', { name: 'Runtime summary' }).getByRole('button', { name: 'Share changes…', exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: 'Share changes' })
+    await expect(dialog.locator('[data-share-combine]')).toHaveText(
+      'The team changed this agent and you have changes you haven’t shared. Bring them together before working?'
+    )
+    await expect(dialog.getByRole('textbox')).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: 'Bring together', exact: true })).toBeFocused()
+    await dialog.getByRole('button', { name: 'Bring together', exact: true }).click()
+  }
+
   await test.step('Keep working on mine', async () => {
-    await shareChanges(b, name, 'B says skates')
+    await refreshLibrary(b)
+    await bringTogetherFromShare()
     await expect(conflict()).toBeVisible({ timeout: 60_000 })
     await expect(conflict().getByRole('button', { name: 'Keep working on mine (share later)', exact: true })).toBeFocused()
     await conflict().getByRole('button', { name: 'Keep working on mine (share later)', exact: true }).click()
@@ -194,10 +230,7 @@ test('the same lines on both: Keep working on mine leaves both changed; Use the 
   })
 
   await test.step('Use the team’s version (keep mine as a copy)', async () => {
-    await b.page.getByRole('group', { name: 'Runtime summary' }).getByRole('button', { name: 'Share changes…', exact: true }).click()
-    const dialog = b.page.getByRole('dialog', { name: 'Share changes' })
-    await dialog.getByRole('textbox').fill('B says skates again')
-    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await bringTogetherFromShare()
     await expect(conflict()).toBeVisible({ timeout: 60_000 })
     await conflict().getByRole('button', { name: 'Use the team’s version (keep mine as a copy)', exact: true }).click()
     await expect(conflict()).toHaveCount(0, { timeout: 60_000 })
@@ -217,30 +250,190 @@ test('the same lines on both: Keep working on mine leaves both changed; Use the 
   })
 })
 
-test('edits here and a team that moved: Update is refused, Share changes combines them', async ({ team }) => {
-  test.setTimeout(300_000)
-  const { a, b, name, aPath, bPath } = await sharedWithEditor(team)
+/**
+ * A shares an edit to `ACME_MD`; B has an unshared edit to `SKILL_MD` and
+ * re-reads the library, so B's agent is `diverged` (different files on both
+ * sides, nothing combined yet).
+ */
+async function bothChangedDifferentFiles(team: Team) {
+  const shared = await sharedWithEditor(team)
+  const { a, b, name, aPath, bPath } = shared
   edit(aPath, ACME_MD, '# Acme\n\nThe team moved.\n')
   await shareChanges(a, name, 'Team moved')
-  edit(bPath, SKILL_MD, '---\nname: acme-report\ndescription: Write the Acme report.\n---\n\nUnsent edit.\n')
+  edit(bPath, SKILL_MD, BS_SKILL)
   await refreshLibrary(b)
-  // Edits here and a team that moved is `diverged`: the badge and the Sharing
-  // tab offer only Share changes (canUpdate), so Update is the catalog tile's.
+  const id = (await findAgent(b, name)).id
+  const seen: string[] = []
+  await expect
+    .poll(async () => {
+      const status = await b.page.evaluate((agentId) => window.api.sharing.status(agentId), id)
+      seen.push(JSON.stringify(status))
+      return status.success ? status.value?.state : 'failed'
+    }, { timeout: 30_000 })
+    .toBe('diverged')
+    .catch((error: Error) => {
+      throw new Error(`${error.message}\nmain's status reads: ${seen.slice(-3).join('\n')}`)
+    })
+  return shared
+}
+
+/** B's reply to any question the session's agent asks. */
+const SESSION_ANSWER = 'Keep both sides: Acme sells anvils, and the team moved. Make the files consistent without asking again.'
+
+const BS_SKILL = '---\nname: acme-report\ndescription: Write the Acme report.\n---\n\nUnsent edit.\n'
+
+/** The adoption chat's banner on the agent page (chat mode). */
+function banner(app: PersonApp) {
+  return app.page.getByRole('region', { name: 'Bring the team’s changes together', exact: true })
+}
+
+/**
+ * Open the agent page afresh. The banner is decided once per mount, and the
+ * page B was left on (Get, Finish setting up) mounted before the team moved;
+ * clicking its row again keeps that mount. A new chat in between unmounts it.
+ */
+async function reopenAgent(app: PersonApp, name: string): Promise<void> {
+  await app.page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  await expect(app.page.getByRole('heading', { level: 1, name, exact: true })).toHaveCount(0)
+  await openAgent(app, name)
+}
+
+test('edits here and a team that moved: the chat offers Bring together, the agent combines them in a session, Finish shares it', async ({ team }) => {
+  // The one billed model turn of this spec: B's agent answers the brief, on
+  // the cached pinned OpenCode and the OpenAI key in `.env` (the team fixture
+  // has no real-login launcher, so CINNA_E2E_LIVE_ENGINE does not apply here).
+  test.skip(OPENAI_API_KEY === '', 'OPENAI_API_KEY is not set in .env')
+  test.setTimeout(480_000)
+  const { a, b, name, aPath, bPath } = await bothChangedDifferentFiles(team)
+  const teamHead = head(aPath)
+  installCachedEngine(b.sandbox.userData)
+  await seedOpenAiDefaultMode(b)
+
+  await test.step('the banner and the catalog tile both say bring together first', async () => {
+    await reopenAgent(b, name)
+    await expect(badge(b, 'You and the team both changed it')).toBeVisible()
+    await expect(banner(b)).toContainText(
+      'The team changed this agent and you have changes you haven’t shared. Bring them together before working?'
+    )
+    await expect(banner(b).getByRole('button', { name: 'Bring together', exact: true })).toBeVisible()
+    await expect(banner(b).getByRole('button', { name: 'Not now', exact: true })).toBeVisible()
+    const catalog = await openCatalogAgents(b)
+    const tile = catalog.getByRole('group', { name })
+    await tile.getByRole('button', { name: 'Update', exact: true }).click()
+    await expect(tile.getByRole('alert')).toHaveText('Bring the team’s changes together first — Share changes will offer it.')
+    await catalog.getByRole('button', { name: 'Close', exact: true }).click()
+    expect(readFileSync(join(bPath, ACME_MD), 'utf8')).not.toContain('The team moved.')
+  })
+
+  await test.step('Bring together opens the session chat with the brief, and the agent answers', async () => {
+    await openAgent(b, name)
+    await banner(b).getByRole('button', { name: 'Bring together', exact: true }).click()
+    const row = b.page.locator('[data-chat-row]').filter({ hasText: 'Bringing team changes together' })
+    await expect(row).toHaveCount(1, { timeout: 60_000 })
+    const chatId = (await row.getAttribute('data-chat-row'))!
+    const userBubble = b.page.locator('div.relative.group').filter({ hasText: 'Team moved' })
+    await expect(userBubble.first()).toContainText(ACME_MD)
+    // Both sides are in the folder from the start of the session.
+    expect(readFileSync(join(bPath, ACME_MD), 'utf8')).toContain('The team moved.')
+    expect(readFileSync(join(bPath, SKILL_MD), 'utf8')).toContain('Unsent edit.')
+    // The agent may ask to read or write (on OpenCode it asked to read the
+    // kit's own instructions first); B answers each ask as a user would.
+    const allow = b.page.getByRole('button', { name: 'Allow once', exact: true })
+    const answer = b.page.getByRole('button', { name: /^Answer( questions)?$/ })
+    const asks: string[] = []
+    await expect
+      .poll(
+        async () => {
+          if (await allow.first().isVisible()) {
+            asks.push((await b.page.getByText(/^The agent is asking to /).first().textContent().catch(() => null)) ?? '?')
+            await allow.first().click()
+            return 'asked'
+          }
+          // The brief tells it to ask, never guess, a fact the sides state
+          // differently; the test's edits are not real facts, so one answer
+          // settles any question it asks.
+          if (await answer.first().isVisible()) {
+            asks.push('question')
+            await answer.first().click()
+            const others = b.page.getByRole('button', { name: 'Other (enter custom answer)', exact: true })
+            for (let i = 0; i < (await others.count()); i++) {
+              await others.nth(i).click()
+              await b.page.getByPlaceholder('Type your answer…').nth(i).fill(SESSION_ANSWER)
+            }
+            await b.page.getByRole('button', { name: /^Send answers?$/ }).click()
+            return 'answered a question'
+          }
+          const chat = await b.page.evaluate((id) => window.api.chat.get(id), chatId)
+          if (!chat) return 'no chat'
+          if (chat.activeRunId) return 'running'
+          return chat.messages.some((m) => m.role === 'assistant' && m.content.trim() !== '') ? 'answered' : 'no answer'
+        },
+        { message: 'the session’s turn ends with an answer', timeout: 300_000, intervals: [2_000] }
+      )
+      .toBe('answered')
+    test.info().annotations.push({ type: 'asks answered', description: asks.join(' | ') || 'none' })
+    const first = (await b.page.evaluate((id) => window.api.chat.get(id), chatId))!.messages.find((m) => m.role === 'user')
+    expect(first?.content).toContain('Team moved')
+    expect(first?.content).toContain(ACME_MD)
+  })
+
+  await test.step('Finish… opens Share changes on the note, and Share sends the combined version', async () => {
+    await openAgent(b, name)
+    await expect(badge(b, 'Bringing team changes together')).toBeVisible()
+    const summary = b.page.getByRole('group', { name: 'Runtime summary' })
+    await expect(summary.getByRole('button', { name: 'Discard', exact: true })).toBeVisible()
+    await summary.getByRole('button', { name: 'Finish…', exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: 'Share changes' })
+    const field = dialog.getByRole('textbox')
+    await expect(field).toBeVisible({ timeout: 60_000 })
+    if ((await field.inputValue()).trim() === '') await field.fill('Brought the team’s changes together')
+    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+    await expect(badge(b, 'Up to date with the team')).toBeVisible({ timeout: 30_000 })
+    // The agent may reword either side's line, so the proof of the combine is
+    // git's: A's shared version is in what B sent.
+    expect(isAncestor(bPath, teamHead)).toBe(true)
+  })
+
+  await test.step('A’s Update brings the combined version', async () => {
+    const agent = await findAgent(b, name)
+    await expect
+      .poll(async () => (await catalogEntry(team.fixture, b.person.token, agent.slug))?.desktop?.head_sha, { timeout: 30_000 })
+      .toBe(head(bPath))
+    await updateFromBadge(a, name)
+    // The agent reconciles, so B's own line may be reworded: A gets whatever
+    // B shared, in both files.
+    for (const rel of [ACME_MD, SKILL_MD]) expect(readFileSync(join(aPath, rel), 'utf8')).toBe(readFileSync(join(bPath, rel), 'utf8'))
+    expect(head(aPath)).toBe(head(bPath))
+  })
+})
+
+test('Discard ends a Bring together session and puts the folder back where it began', async ({ team }) => {
+  // No model is set up for B, so the session's turn cannot answer: Discard
+  // is pressed on a session whose agent never edited anything.
+  test.setTimeout(300_000)
+  const { b, name, bPath } = await bothChangedDifferentFiles(team)
+  const before = head(bPath)
+  await reopenAgent(b, name)
+  await banner(b).getByRole('button', { name: 'Bring together', exact: true }).click()
+  // Whether or not the chat could start, the session is recorded on the badge.
+  await expect(b.page.locator('[data-chat-row]').filter({ hasText: 'Bringing team changes together' })).toHaveCount(1, { timeout: 60_000 })
   await openAgent(b, name)
-  await expect(badge(b, 'You and the team both changed it')).toBeVisible()
-  const catalog = await openCatalogAgents(b)
-  const tile = catalog.getByRole('group', { name })
-  await tile.getByRole('button', { name: 'Update', exact: true }).click()
-  await expect(tile.getByRole('alert')).toHaveText('Share your changes first — Share changes brings in the team’s version too.')
-  await catalog.getByRole('button', { name: 'Close', exact: true }).click()
-  expect(readFileSync(join(bPath, ACME_MD), 'utf8')).not.toContain('The team moved.')
-  await b.page.getByRole('group', { name: 'Runtime summary' }).getByRole('button', { name: 'Share changes…', exact: true }).click()
-  const dialog = b.page.getByRole('dialog', { name: 'Share changes' })
-  await dialog.getByRole('textbox').fill('Unsent edit')
-  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
-  await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+  await expect(badge(b, 'Bringing team changes together')).toBeVisible()
   expect(readFileSync(join(bPath, ACME_MD), 'utf8')).toContain('The team moved.')
-  await expect(badge(b, 'Up to date with the team')).toBeVisible()
+  // The loose edit was recorded as a version first.
+  expect(execFileSync('git', ['-C', bPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim()).toBe('')
+  await b.page.getByRole('group', { name: 'Runtime summary' }).getByRole('button', { name: 'Discard', exact: true }).click()
+  const confirm = b.page.getByRole('dialog', { name: 'Discard the session’s changes' })
+  await confirm.getByRole('button', { name: 'Discard changes', exact: true }).click()
+  await expect(confirm).toHaveCount(0, { timeout: 60_000 })
+  await expect(badge(b, 'You and the team both changed it')).toBeVisible({ timeout: 30_000 })
+  expect(readFileSync(join(bPath, ACME_MD), 'utf8')).not.toContain('The team moved.')
+  expect(readFileSync(join(bPath, SKILL_MD), 'utf8')).toBe(BS_SKILL)
+  expect(execFileSync('git', ['-C', bPath, 'log', '-1', '--format=%s'], { encoding: 'utf8' })).toContain(
+    'Changes made before bringing the team’s version in'
+  )
+  expect(head(bPath)).not.toBe(before)
 })
 
 test('Can use: no Share changes in the app, and a raw send is refused by core', async ({ team }) => {

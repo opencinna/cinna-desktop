@@ -443,7 +443,9 @@ describe('LocalAgentsList — shared rows', () => {
       changedFiles: 1,
       unshared: true,
       fetched: false,
-      refusal: null
+      refusal: null,
+      adoption: null,
+      teamChangesDeclined: false
     }]
     renderList()
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeTruthy()

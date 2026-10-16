@@ -46,7 +46,7 @@ export const PREFERRED_MODELS: readonly string[] = [
  * specs get a fast model that calls tools reliably; failing that, the first
  * listed id containing `mini` (the list is newest first).
  */
-export async function seedOpenAiDefaultMode(cinna: CinnaApp): Promise<string> {
+export async function seedOpenAiDefaultMode(cinna: Pick<CinnaApp, 'page'>): Promise<string> {
   return cinna.page.evaluate(async ({ apiKey, preferred }) => {
     const { id } = await window.api.providers.upsert({
       type: 'openai',

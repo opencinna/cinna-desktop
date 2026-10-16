@@ -53,6 +53,30 @@ export interface DesktopSharedRemote {
   bundle_id?: string | null
 }
 
+/**
+ * An adoption session — Bring together — in progress on this machine: the
+ * app combined the team's versions with this folder's and a chat with the
+ * agent reconciles what git could not see. Written by `sharingService`
+ * **before** history moves, so Discard can always restore `headBefore`;
+ * cleared by Finish or Discard, and by nothing else. Lives in `app-data/`,
+ * which never travels and which git ignores, so a `reset --hard` or a `clean`
+ * in the folder never touches it.
+ */
+export interface DesktopAdoption {
+  /** ISO 8601. */
+  startedAt: string
+  /** This folder's tip when the session began, after its loose edits were recorded: what Discard restores. */
+  headBefore: string
+  /** The team's version the session brought in: Finish requires it in HEAD's history. */
+  teamHead: string
+  /** Where the two last matched: the brief's "since" point on both sides. */
+  base: string
+  /** The session's chat, once the renderer made one; only serves the "Open the session" link. */
+  chatId: string | null
+  /** Phase 1 combines by a clean rebase only; `merge` is Phase 2's collision session. */
+  mode: 'rebase'
+}
+
 export interface DesktopState {
   serviceCredentials?: ServiceCredentialAttachments
   /** Loopback base URL the engine last served this agent's API on. */
@@ -167,6 +191,14 @@ export interface DesktopState {
    * agent's remote from `origin`, which a developer's own clone also has.
    */
   shared_remote?: DesktopSharedRemote | null
+  /** The Bring together session in progress, or null ({@link DesktopAdoption}). Only `sharingService` writes it. */
+  adoption?: DesktopAdoption | null
+  /**
+   * The team head Not now was answered for: the chat banner offering Bring
+   * together stays away while the team's version is still this one, and
+   * returns once the team moves. Only `sharingService` writes it.
+   */
+  teamChangesDeclinedHead?: string | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -271,8 +303,25 @@ function coerce(raw: unknown): DesktopState {
     handovers: raw.handovers === 'auto' || raw.handovers === 'ask' ? raw.handovers : null,
     delegations: raw.delegations === 'auto' || raw.delegations === 'ask' ? raw.delegations : null,
     cloudDelegations: raw.cloudDelegations === 'auto' || raw.cloudDelegations === 'ask' ? raw.cloudDelegations : null,
-    shared_remote: coerceSharedRemote(raw.shared_remote)
+    shared_remote: coerceSharedRemote(raw.shared_remote),
+    adoption: coerceAdoption(raw.adoption),
+    teamChangesDeclinedHead: asString(raw.teamChangesDeclinedHead)
   }
+}
+
+/**
+ * A malformed record reads as no session: the badge would otherwise offer
+ * Finish and Discard on points that cannot be restored. `mode` other than
+ * `rebase` is a record a newer build wrote; this one cannot finish it.
+ */
+function coerceAdoption(raw: unknown): DesktopAdoption | null {
+  if (!isRecord(raw)) return null
+  const startedAt = asString(raw.startedAt)
+  const headBefore = asString(raw.headBefore)
+  const teamHead = asString(raw.teamHead)
+  const base = asString(raw.base)
+  if (!startedAt || !headBefore || !teamHead || !base || raw.mode !== 'rebase') return null
+  return { startedAt, headBefore, teamHead, base, chatId: asString(raw.chatId), mode: 'rebase' }
 }
 
 function coerceSharedRemote(raw: unknown): DesktopSharedRemote | null {

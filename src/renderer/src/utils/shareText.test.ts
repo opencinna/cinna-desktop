@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentShareStatus, ShareRefusal } from '../../../shared/agentSharing'
 import {
-  FORBIDDEN_SHARE_WORDS,
   SHARE_ACCESS_TEXT,
   SHARE_BADGE_TEXT,
   SHARE_REFUSAL_TEXT,
@@ -10,8 +9,10 @@ import {
   libraryRefusalSentence,
   shareBadgeText,
   shareRefusalSentence,
-  shareStatusSentence
+  shareStatusSentence,
+  shareStatusWarns
 } from './shareText'
+import { FORBIDDEN_SHARE_WORDS, forbiddenShareWordPattern } from '../../../shared/agentSharing'
 
 /**
  * The sharing vocabulary is a contract (team-sharing plan, S9): no sentence a
@@ -33,14 +34,13 @@ const STATUS: AgentShareStatus = {
   changedFiles: 3,
   unshared: true,
   fetched: false,
-  refusal: null
+  refusal: null,
+  adoption: null,
+  teamChangesDeclined: false
 }
 
-/** Each word with the endings English gives it, as a whole word. */
-const FORBIDDEN = new RegExp(
-  `\\b(${FORBIDDEN_SHARE_WORDS.map((w) => `${w}(e?s|e?d|ing|ies)?`).join('|')}|repositories|merging|rebasing)\\b`,
-  'i'
-)
+/** The shared pattern main's adoption brief is read against too: one list, one test shape. */
+const FORBIDDEN = forbiddenShareWordPattern()
 
 function everyString(): string[] {
   const out: string[] = []
@@ -59,6 +59,7 @@ function everyString(): string[] {
 
 describe('the sharing vocabulary', () => {
   it('the pattern catches every forbidden word and its inflections', () => {
+    expect(FORBIDDEN_SHARE_WORDS).toContain('rebase')
     for (const word of ['branch', 'commits', 'pushed', 'Pull', 'merging', 'rebase', 'remote', 'repository', 'conflict', 'SHA']) {
       expect(FORBIDDEN.test(`The ${word} here`)).toBe(true)
     }
@@ -76,6 +77,41 @@ describe('the sharing vocabulary', () => {
     for (const fn of Object.values(SHARE_STATE_TEXT)) expect(fn(STATUS).trim()).not.toBe('')
   })
 
+  it('has the Bring together sentences: the session’s state, its refusals, the banner and the dialogs', () => {
+    expect(SHARE_REFUSAL_TEXT.adoption_in_progress.trim()).not.toBe('')
+    expect(SHARE_REFUSAL_TEXT.team_changed_again.trim()).not.toBe('')
+    expect(SHARE_REFUSAL_TEXT.adoption_blocked.trim()).not.toBe('')
+    expect(SHARE_STATE_TEXT.adopting(STATUS).trim()).not.toBe('')
+    expect(SHARE_BADGE_TEXT.adopting(STATUS).trim()).not.toBe('')
+    for (const key of [
+      'bringTogether',
+      'bringingTogether',
+      'notNow',
+      'bringTogetherBanner',
+      'bringTogetherBannerLabel',
+      'finish',
+      'finishing',
+      'discard',
+      'discarding',
+      'discardTitle',
+      'discardConfirm',
+      'openSession',
+      'sessionLabel',
+      'adoptionChatTitle',
+      'sessionNotStarted'
+    ] as const) {
+      expect(SHARE_UI_TEXT[key].trim()).not.toBe('')
+    }
+    expect(SHARE_UI_TEXT.discardBody('Alpha')).toContain('Alpha')
+    // Update's old refusal said to share first; sharing now offers the session instead.
+    expect(SHARE_REFUSAL_TEXT.dirty).toContain('Bring')
+  })
+
+  it('a session in progress is a neutral state, not a warning', () => {
+    expect(shareStatusWarns({ ...STATUS, state: 'adopting' })).toBe(false)
+    expect(shareStatusWarns({ ...STATUS, state: 'diverged' })).toBe(true)
+  })
+
   it('a failed read speaks its refusal, not its state', () => {
     expect(shareStatusSentence({ ...STATUS, refusal: 'git_missing' })).toBe(SHARE_REFUSAL_TEXT.git_missing)
     expect(shareStatusSentence(STATUS)).toBe(SHARE_STATE_TEXT.unshared(STATUS))
@@ -91,6 +127,12 @@ describe('the sharing vocabulary', () => {
       'A file that can hold a secret is recorded in this agent’s history (credentials/.env). Ask whoever maintains this agent to remove it before sharing.'
     )
     expect(shareRefusalSentence('secrets_tracked', null)).toBe(SHARE_REFUSAL_TEXT.secrets_tracked)
+    // What blocks a session is main's whole sentence; the fixed one only when none came.
+    expect(shareRefusalSentence('adoption_blocked', 'Some files still hold both versions.')).toBe(
+      'Some files still hold both versions.'
+    )
+    expect(shareRefusalSentence('adoption_blocked', null)).toBe(SHARE_REFUSAL_TEXT.adoption_blocked)
+    expect(shareRefusalSentence('adoption_blocked', '  ')).toBe(SHARE_REFUSAL_TEXT.adoption_blocked)
   })
 
   it('the badge says a short form of each state, and a failed read as such', () => {

@@ -92,6 +92,8 @@ import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } 
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
   SHARING_CHANGED_CHANNEL,
+  type AdoptionBeginResult,
+  type AdoptionFinishResult,
   type AgentPeopleDto,
   type AgentShareResult,
   type AgentShareStatus,
@@ -2079,6 +2081,26 @@ const api = {
      */
     useTeamVersion: (agentId: string): Promise<SharingOutcome<AgentShareResult>> =>
       ipcRenderer.invoke('sharing:use-team-version', { agentId }),
+    /**
+     * Bring together: record this machine's loose edits, combine the team's
+     * versions with this folder's, and answer the brief for the session's
+     * chat. Nothing moves until this is called; a collision answers
+     * `diverged_conflict` with the folder as it was.
+     */
+    beginAdoption: (agentId: string): Promise<SharingOutcome<AdoptionBeginResult>> =>
+      ipcRenderer.invoke('sharing:begin-adoption', { agentId }),
+    /** Record which chat the session runs in, for the "Open the session" link and for Finish's summary. */
+    setAdoptionChat: (agentId: string, chatId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:adoption-chat', { agentId, chatId }),
+    /** Finish: record what the session changed, with the agent's summary, and leave the session. Sends nothing. */
+    finishAdoption: (agentId: string): Promise<SharingOutcome<AdoptionFinishResult>> =>
+      ipcRenderer.invoke('sharing:finish-adoption', { agentId }),
+    /** Discard: put the folder back as it was when the session began; this machine's own recorded changes stay. */
+    discardAdoption: (agentId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:discard-adoption', { agentId }),
+    /** Not now: remember the team version Bring together was declined for, so the chat banner waits for the next one. */
+    dismissTeamChanges: (agentId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:dismiss-team-changes', { agentId }),
     /** Name and description from the manifest, for the Share with the team dialog. */
     shareWithTeamDraft: (agentId: string): Promise<SharingOutcome<ShareWithTeamDraft>> =>
       ipcRenderer.invoke('sharing:share-with-team-draft', { agentId }),

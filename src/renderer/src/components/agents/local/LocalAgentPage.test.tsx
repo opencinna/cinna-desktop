@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup as cleanupPage, render, screen, fireEvent, within } from '@testing-library/react'
-import { createElement } from 'react'
+import { act, cleanup as cleanupPage, render, screen, fireEvent, within } from '@testing-library/react'
+import { createElement, useEffect } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 
@@ -89,9 +89,36 @@ vi.mock('./sharing/AgentShareBadge', () => ({
   AgentShareBadge: ({ onOpenSharing }: { onOpenSharing: () => void }) =>
     createElement('button', { type: 'button', 'data-marker': 'share-badge', onClick: onOpenSharing }, 'share-badge')
 }))
-vi.mock('./sharing/SharingTab', () => ({ SharingTab: marker('sharing-tab') }))
+/** The tab registers its own error line while mounted, as the real one does. */
+vi.mock('./sharing/SharingTab', () => ({
+  SharingTab: ({ bindActionErrors }: { bindActionErrors: (sink: ((m: string | null) => void) | null) => void }) => {
+    useEffect(() => {
+      bindActionErrors(() => {})
+      return () => bindActionErrors(null)
+    }, [bindActionErrors])
+    return createElement('div', { 'data-marker': 'sharing-tab' }, 'sharing-tab')
+  }
+}))
+vi.mock('./sharing/BringTogetherBanner', () => ({ BringTogetherBanner: marker('bring-together-banner') }))
+/** What the page handed the share actions: its refusal route. */
+let shareOptions: { onError: (message: string | null) => void } | null = null
 vi.mock('./sharing/useShareActions', () => ({
-  useShareActions: () => ({ update: vi.fn(), updatePending: false, openShareChanges: vi.fn(), dialogs: null })
+  useShareActions: (_id: string, options: { onError: (message: string | null) => void }) => {
+    shareOptions = options
+    return {
+    update: vi.fn(),
+    updatePending: false,
+    openShareChanges: vi.fn(),
+    bringTogether: vi.fn(),
+    bringTogetherPending: false,
+    finish: vi.fn(),
+    finishPending: false,
+    discard: vi.fn(),
+    discardPending: false,
+    notNow: vi.fn(),
+    dialogs: null
+    }
+  }
 }))
 /** The agent's entry in the statuses list: null = not shared. */
 let listedShare: unknown = null
@@ -208,6 +235,17 @@ describe('LocalAgentPage — sharing', () => {
     expect(document.querySelector('[data-share-line]')).toBeNull()
     fireEvent.click(badge)
     expect(setAgentPageMode).toHaveBeenCalledWith('settings')
+  })
+
+  it('clears a share refusal from the page’s slot once the Sharing tab’s own line takes over', () => {
+    listedShare = SHARED
+    renderPage()
+    act(() => shareOptions!.onError('The team’s version couldn’t be reached.'))
+    expect(screen.getByRole('alert').textContent).toContain('couldn’t be reached')
+    fireEvent.click(screen.getByRole('tab', { name: 'Sharing' }))
+    expect(screen.getByText('sharing-tab')).toBeTruthy()
+    // The tab's line shows what comes next; the page's slot no longer repeats the old one.
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('moves focus to the Sharing tab after the badge opened it', () => {

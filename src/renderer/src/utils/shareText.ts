@@ -7,6 +7,12 @@ import type {
 } from '../../../shared/agentSharing'
 
 /**
+ * The words no sharing sentence says, held in shared so main's adoption brief
+ * and these sentences are read against one list.
+ */
+export { FORBIDDEN_SHARE_WORDS, forbiddenShareWordPattern } from '../../../shared/agentSharing'
+
+/**
  * Every sentence the team-sharing surfaces show, in one place.
  *
  * The vocabulary is a contract (team-sharing plan, S9; catalog plan U12): the
@@ -25,7 +31,7 @@ export const SHARE_REFUSAL_TEXT: Record<ShareRefusal, string> = {
   not_shared: 'Share this agent with the team first — it isn’t shared yet.',
   other_account: 'Switch to the account this agent was shared from to update it.',
   reauth_required: 'Sign in to Cinna again, then try once more.',
-  dirty: 'Share your changes first — Share changes brings in the team’s version too.',
+  dirty: 'Bring the team’s changes together first — Share changes will offer it.',
   diverged_conflict: 'Choose which version to keep — the team changed this agent too.',
   fetch_failed: 'Check your connection and try again — the team’s version couldn’t be reached.',
   push_rejected: 'Fix what the catalog refused, then share again.',
@@ -41,6 +47,11 @@ export const SHARE_REFUSAL_TEXT: Record<ShareRefusal, string> = {
   // (it may already be in the team's version); the maintainer can. `detail` names up to three of the files.
   secrets_tracked:
     'A file that can hold a secret is recorded in this agent’s history. Ask whoever maintains this agent to remove it before sharing.',
+  adoption_in_progress: 'Finish or discard the session that is bringing the team’s changes together first.',
+  team_changed_again: 'The team changed this agent again while you were sharing. Bring the changes together, then share.',
+  // The whole sentence travels in `detail` (what blocks the session is never
+  // fixed by trying again); this is the fallback when none came.
+  adoption_blocked: 'The session can’t be finished or discarded as the folder stands.',
   failed: 'Try again — that didn’t work.'
 }
 
@@ -57,6 +68,7 @@ export function shareRefusalSentence(refusal: ShareRefusal, detail: string | nul
     return `A file that can hold a secret is recorded in this agent’s history (${extra}). Ask whoever maintains this agent to remove it before sharing.`
   }
   if (refusal === 'exists') return `Open ${extra} instead — this agent is already on this computer.`
+  if (refusal === 'adoption_blocked') return extra
   if (refusal === 'push_rejected' || refusal === 'failed') return `${base} ${extra}`
   return base
 }
@@ -76,7 +88,9 @@ export const SHARE_STATE_TEXT: Record<AgentShareState, (status: AgentShareStatus
   // `behind: -1` is the listing saying the team moved, with no fetch to count
   // by; a count would only restate it, so the sentence is the same either way.
   behind: () => 'The team changed this agent',
-  diverged: () => 'Share changes to combine yours with the team’s — you both changed this agent',
+  diverged: () => 'Bring together to combine yours with the team’s — you both changed this agent',
+  // The buttons beside it (Finish…, Discard) say what to do; the sentence fits one line at 800px.
+  adopting: () => 'Bringing team changes together',
   removed: () => 'This agent is no longer shared',
   other_account: () => 'Shared on another account'
 }
@@ -99,6 +113,7 @@ export const SHARE_BADGE_TEXT: Record<AgentShareState, (status: AgentShareStatus
   },
   behind: () => 'The team changed this agent',
   diverged: () => 'You and the team both changed it',
+  adopting: () => 'Bringing team changes together',
   removed: () => 'No longer shared',
   other_account: () => 'Shared on another account'
 }
@@ -109,7 +124,11 @@ export function shareBadgeText(status: AgentShareStatus): string {
   return SHARE_BADGE_TEXT[status.state](status)
 }
 
-/** Whether the badge (and the Sharing tab's status) takes the warning tone. */
+/**
+ * Whether the badge (and the Sharing tab's status) takes the warning tone.
+ * `adopting` does not: a session in progress is a state the user chose, not
+ * something that needs attention.
+ */
 export function shareStatusWarns(status: AgentShareStatus): boolean {
   return status.refusal !== null || status.state === 'diverged' || status.state === 'removed'
 }
@@ -151,6 +170,27 @@ export const SHARE_UI_TEXT = {
   shareChangesLabel: 'What changed',
   shareChangesPlaceholder: 'Writing a summary…',
   shareChangesEmptyPlaceholder: 'Say what you changed, so the team knows.',
+  // Bring together: the chat banner, the Share changes dialog's first step
+  // while both sides moved, and the session's Finish / Discard.
+  bringTogether: 'Bring together',
+  bringingTogether: 'Bringing together…',
+  notNow: 'Not now',
+  /** The banner's accessible name: it holds two buttons, so it is a region, not a status. */
+  bringTogetherBannerLabel: 'Bring the team’s changes together',
+  bringTogetherBanner:
+    'The team changed this agent and you have changes you haven’t shared. Bring them together before working?',
+  finish: 'Finish…',
+  finishing: 'Finishing…',
+  discard: 'Discard',
+  discarding: 'Discarding…',
+  discardTitle: 'Discard the session’s changes',
+  discardBody: (name: string) =>
+    `Discard what the session changed in ${name}? The team’s version and your own recorded changes are kept; only the edits made since the session began are dropped.`,
+  discardConfirm: 'Discard changes',
+  openSession: 'Open the session',
+  adoptionChatTitle: 'Bringing team changes together',
+  sessionNotStarted:
+    'The session couldn’t be started — the changes were brought together, so Finish or Discard from the badge.',
   conflictTitle: 'The team changed this agent too',
   conflictBody:
     'Your changes and the team’s don’t fit together. Pick one to carry on with — nothing is lost either way.',
@@ -187,8 +227,10 @@ export const SHARE_UI_TEXT = {
   tabLabel: 'Sharing',
   whereShared: 'Where it’s shared',
   whereSharedInfo:
-    'This agent’s folder is linked to a team version. Update brings the team’s changes in; Share changes sends yours. Nothing is sent until you choose to.',
+    'This agent’s folder is linked to a team version. Update brings the team’s changes in; Share changes sends yours; when you both changed it, Bring together lets the agent combine the two in a chat before you share. Nothing is sent until you choose to.',
   serverLabel: 'Server',
+  /** The adopting row's fact whose value is Open the session. */
+  sessionLabel: 'Session',
   ownServer: 'Your own server',
   libraryNameLabel: 'Name in the catalog',
   libraryFolderLabel: 'Folder name',
@@ -251,20 +293,3 @@ export const SHARE_UI_TEXT = {
   updateAvailableFor: (name: string) => `Update available for ${name}`,
   updated: 'Updated. This agent now has the latest version.'
 } as const
-
-/**
- * Words the sharing surfaces never show (team-sharing plan, S9). Matched as
- * whole words, case-insensitively, by the test that reads every string above.
- */
-export const FORBIDDEN_SHARE_WORDS = [
-  'branch',
-  'commit',
-  'push',
-  'pull',
-  'merge',
-  'rebase',
-  'remote',
-  'repository',
-  'conflict',
-  'sha'
-] as const

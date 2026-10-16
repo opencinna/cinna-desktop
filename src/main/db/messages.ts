@@ -283,6 +283,17 @@ const rawMessageRepo = {
       .get()
   },
 
+  /** The newest message of one role in a chat — the agent's last answer, for the adoption session's summary. */
+  lastByRole(chatId: string, role: string): MessageRow | undefined {
+    return getDb()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.role, role)))
+      .orderBy(desc(messages.sortOrder))
+      .limit(1)
+      .get()
+  },
+
   /** The id of the newest message in a chat — where an agent's catch-up cursor lands. */
   lastId(chatId: string): string | null {
     const row = getDb()

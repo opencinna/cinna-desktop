@@ -81,6 +81,42 @@ export function registerSharingHandlers(): void {
     )
   })
 
+  // Bring together: the adoption session's five verbs. Refusals travel as data.
+  ipcHandle('sharing:begin-adoption', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:begin-adoption', () =>
+      sharingService.beginAdoption(getSettingsScopeUserId(), str(input?.agentId))
+    )
+  })
+
+  ipcHandle('sharing:adoption-chat', (_event, input?: { agentId?: unknown; chatId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:adoption-chat', () =>
+      sharingService.setAdoptionChat(getSettingsScopeUserId(), str(input?.agentId), str(input?.chatId))
+    )
+  })
+
+  ipcHandle('sharing:finish-adoption', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:finish-adoption', () =>
+      sharingService.finishAdoption(getSettingsScopeUserId(), str(input?.agentId))
+    )
+  })
+
+  ipcHandle('sharing:discard-adoption', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:discard-adoption', () =>
+      sharingService.discardAdoption(getSettingsScopeUserId(), str(input?.agentId))
+    )
+  })
+
+  ipcHandle('sharing:dismiss-team-changes', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:dismiss-team-changes', () =>
+      sharingService.dismissTeamChanges(getSettingsScopeUserId(), str(input?.agentId))
+    )
+  })
+
   ipcHandle('sharing:use-team-version', async (_event, input?: { agentId?: unknown }) => {
     userActivation.requireActivated()
     const agentId = str(input?.agentId)

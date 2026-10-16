@@ -205,6 +205,44 @@ describe('the contract’s shared_remote link', () => {
   })
 })
 
+describe('the adoption session record', () => {
+  const SESSION = {
+    startedAt: '2026-10-16T10:00:00.000Z',
+    headBefore: 'a'.repeat(40),
+    teamHead: 'b'.repeat(40),
+    base: 'c'.repeat(40),
+    chatId: null,
+    mode: 'rebase' as const
+  }
+
+  it('round-trips the record and the declined team head, and clears them with null', () => {
+    desktopStateService.patch(dir, 'kit', { adoption: SESSION, teamChangesDeclinedHead: 'd'.repeat(40) })
+    expect(desktopStateService.read(dir, 'kit').adoption).toEqual(SESSION)
+    expect(desktopStateService.read(dir, 'kit').teamChangesDeclinedHead).toBe('d'.repeat(40))
+    desktopStateService.patch(dir, 'kit', { adoption: { ...SESSION, chatId: 'chat-1' } })
+    expect(desktopStateService.read(dir, 'kit').adoption?.chatId).toBe('chat-1')
+    desktopStateService.patch(dir, 'kit', { adoption: null, teamChangesDeclinedHead: null })
+    expect(desktopStateService.read(dir, 'kit').adoption).toBeNull()
+    expect(desktopStateService.read(dir, 'kit').teamChangesDeclinedHead).toBeNull()
+  })
+
+  it('reads a malformed record as no session, never as one Finish or Discard could act on', () => {
+    for (const raw of [
+      'yes',
+      {},
+      { ...SESSION, headBefore: '' },
+      { ...SESSION, teamHead: 42 },
+      { startedAt: SESSION.startedAt, headBefore: SESSION.headBefore },
+      { ...SESSION, mode: 'merge' }
+    ]) {
+      mkdirSync(join(dir, 'app-data'), { recursive: true })
+      writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ adoption: raw, teamChangesDeclinedHead: 7 }))
+      expect(desktopStateService.read(dir, 'kit').adoption).toBeNull()
+      expect(desktopStateService.read(dir, 'kit').teamChangesDeclinedHead).toBeNull()
+    }
+  })
+})
+
 describe('who answers a Claude agent’s permission asks', () => {
   it('round-trips the choice, for either kind of folder', () => {
     desktopStateService.patch(dir, 'kit', { claudeApproval: 'ask' })

@@ -33,6 +33,7 @@ import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
 import { AgentShareBadge } from './sharing/AgentShareBadge'
 import { SharingTab } from './sharing/SharingTab'
 import { useShareActions } from './sharing/useShareActions'
+import { BringTogetherBanner } from './sharing/BringTogetherBanner'
 import { useFinishSetup } from './FinishSetupDialog'
 import { useListedShareStatus } from '../../../hooks/useSharing'
 import { SHARE_UI_TEXT } from '../../../utils/shareText'
@@ -159,7 +160,8 @@ export function LocalAgentPage(): React.JSX.Element {
   const shareErrorSink = useRef<((message: string | null) => void) | null>(null)
   const shareActions = useShareActions(activeLocalAgentId ?? '', {
     onError: (message) => (shareErrorSink.current ?? reportError)(message),
-    onNote: reportNote
+    onNote: reportNote,
+    agentName: agent?.name ?? ''
   })
   /**
    * Finish setup, owned here for the same reason: it opens after a Get lands
@@ -168,6 +170,9 @@ export function LocalAgentPage(): React.JSX.Element {
   const finishSetup = useFinishSetup(activeLocalAgentId, agent?.name ?? '')
   const bindShareErrors = useCallback((sink: ((message: string | null) => void) | null): void => {
     shareErrorSink.current = sink
+    // The tab's line takes over: a refusal still sitting in the page's slot
+    // would otherwise be read twice, once stale, beside the tab's own.
+    if (sink) setActionError(null)
   }, [])
   // After the badge's click: focus follows the user to the tab it opened.
   const [focusSharingTab, setFocusSharingTab] = useState(false)
@@ -421,6 +426,17 @@ export function LocalAgentPage(): React.JSX.Element {
         {mode === 'settings' && <RuntimePanel agent={agent} />}
 
         <div hidden={mode === 'settings'} className={mode === 'settings' ? undefined : 'flex flex-1 flex-col'}>
+          {/*
+            Decided from the list the sidebar already holds, so the banner is
+            there at first paint or not at all; keyed by agent so the decision
+            is taken once per agent opened, never re-evaluated upward.
+          */}
+          <BringTogetherBanner
+            key={agent.id}
+            agentId={agent.id}
+            initialOffered={listedShare?.state === 'diverged' && !listedShare.teamChangesDeclined}
+            actions={shareActions}
+          />
           <ChatWorkspace key={agent.id} agentId={agent.id} embedded />
         </div>
         {mode === 'settings' && <>

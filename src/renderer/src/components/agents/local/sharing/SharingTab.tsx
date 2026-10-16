@@ -9,6 +9,8 @@ import {
   useUnshare
 } from '../../../../hooks/useSharing'
 import { useOpenExternal } from '../../../../hooks/useSystem'
+import { useChatStore } from '../../../../stores/chat.store'
+import { useUIStore } from '../../../../stores/ui.store'
 import { unwrapIpcError } from '../../../../utils/ipcError'
 import {
   SHARE_ACCESS_TEXT,
@@ -28,10 +30,10 @@ import {
   SettingsSection,
   SettingsStatusRow
 } from '../../../settings/SettingsLayout'
-import { useAgentShareStatus } from './AgentShareBadge'
+import { useAgentShareStatus } from './useAgentShareStatus'
 import { RemoveSharingDialog } from './ShareDialogs'
 import { PeopleSection, usePeopleEditor } from './PeopleSection'
-import { canShareChanges, canUpdate, type ShareActions } from './useShareActions'
+import { canShareChanges, canUpdate, isAdopting, type ShareActions } from './useShareActions'
 
 const DATE = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -71,7 +73,7 @@ export function SharingTab({
   onNote
 }: {
   agent: { id: string; name: string }
-  /** The page's Update / Share changes, owned there (their dialogs too). */
+  /** The page's Update / Share changes / Finish / Discard, owned there (their dialogs too). */
   actions: ShareActions
   /** Route those actions' refusals to this tab's line while it is open; null hands them back. */
   bindActionErrors: (sink: ((message: string | null) => void) | null) => void
@@ -113,6 +115,16 @@ function WhereSection({
   }, [bindActionErrors])
   const openExternal = useOpenExternal()
   const warn = shareStatusWarns(status)
+  const adopting = isAdopting(status)
+  const sessionBusy = actions.finishPending || actions.discardPending
+  const sessionChatId = status.adoption?.chatId ?? null
+  /** The session's chat, where the agent is reconciling the two sides. */
+  const openSession = (): void => {
+    if (!sessionChatId) return
+    useChatStore.getState().setActiveChatId(sessionChatId)
+    useUIStore.getState().setActiveView('chat')
+    useUIStore.getState().setSidebarTab('chats')
+  }
   const latest = entry?.latest ?? null
   const cinna = status.remote.kind === 'cinna'
   const access = entry?.access ?? status.remote.access
@@ -144,6 +156,23 @@ function WhereSection({
         )
     }
   ]
+  // The session's chat as a fact, not a third button beside Finish… and
+  // Discard: the status row keeps two actions and its label fits (rules 7, 12).
+  if (adopting && sessionChatId) {
+    facts.push({
+      label: SHARE_UI_TEXT.sessionLabel,
+      value: (
+        <button
+          type="button"
+          onClick={openSession}
+          disabled={sessionBusy}
+          className="font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)] disabled:opacity-60"
+        >
+          {SHARE_UI_TEXT.openSession}
+        </button>
+      )
+    })
+  }
   if (entry) {
     facts.push(
       { label: SHARE_UI_TEXT.libraryNameLabel, value: entry.name },
@@ -196,7 +225,17 @@ function WhereSection({
             tone={warn ? 'warning' : status.state === 'up_to_date' ? 'ok' : 'neutral'}
             label={shareStatusSentence(status)}
             action={
-              canUpdate(status) || canShareChanges(status) ? (
+              adopting ? (
+                <div className="flex items-center gap-2">
+                  <SettingsButton onClick={actions.finish} disabled={sessionBusy} aria-busy={actions.finishPending}>
+                    {actions.finishPending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+                    {actions.finishPending ? SHARE_UI_TEXT.finishing : SHARE_UI_TEXT.finish}
+                  </SettingsButton>
+                  <SettingsButton onClick={actions.discard} disabled={sessionBusy}>
+                    {SHARE_UI_TEXT.discard}
+                  </SettingsButton>
+                </div>
+              ) : canUpdate(status) || canShareChanges(status) ? (
                 <div className="flex items-center gap-2">
                   {canUpdate(status) && (
                     <SettingsButton

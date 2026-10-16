@@ -294,6 +294,13 @@ export type LocalAgentErrorCode =
    * them; the message says how many.
    */
   | 'unshared_changes'
+  /**
+   * Remove from this computer, refused: a Bring together session is in
+   * progress on the agent (its `app-data/desktop.json` holds the adoption
+   * record). Finish or Discard first; the message says so, and nothing was
+   * removed.
+   */
+  | 'adoption_in_progress'
 
 /**
  * The local developer tooling around an agent folder: detecting installed

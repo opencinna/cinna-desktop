@@ -1,6 +1,4 @@
 import { Loader2, Users } from 'lucide-react'
-import type { AgentShareStatus } from '../../../../../../shared/agentSharing'
-import { useListedShareStatus, useShareStatus } from '../../../../hooks/useSharing'
 import {
   SHARE_UI_TEXT,
   shareBadgeText,
@@ -8,27 +6,20 @@ import {
   shareStatusWarns
 } from '../../../../utils/shareText'
 import { SUMMARY_BADGE } from '../fieldClasses'
-import { canShareChanges, canUpdate, type ShareActions } from './useShareActions'
+import { useAgentShareStatus } from './useAgentShareStatus'
+import { canShareChanges, canUpdate, isAdopting, type ShareActions } from './useShareActions'
+
+export { useAgentShareStatus } from './useAgentShareStatus'
 
 const ACTION =
   `${SUMMARY_BADGE} inline-flex shrink-0 items-center gap-1 font-medium !text-[var(--color-text)] transition-colors ` +
   'hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50'
 
 /**
- * This agent's own status once it lands, else its entry in the statuses list:
- * `undefined` while the list loads, `null` when the agent is not shared.
- */
-export function useAgentShareStatus(agentId: string): AgentShareStatus | null | undefined {
-  const listed = useListedShareStatus(agentId)
-  const own = useShareStatus(listed ? agentId : null, listed ? listed.remote.kind : null)
-  if (!listed) return listed
-  return own.data === undefined ? listed : own.data
-}
-
-/**
  * A shared agent's state with the team, as one badge in the chat header's
- * summary row, then the Update / Share changes… buttons the state allows, at
- * the badges' height.
+ * summary row, then the Update / Share changes… buttons the state allows —
+ * Finish… / Discard while a session is bringing the team's changes together —
+ * at the badges' height.
  *
  * **Present from the first paint or not at all.** Whether the agent is shared
  * comes from the statuses list the sidebar has already loaded, not from this
@@ -50,8 +41,11 @@ export function AgentShareBadge({
   onOpenSharing
 }: {
   agentId: string
-  /** The page's Update / Share changes, owned there. */
-  actions: Pick<ShareActions, 'update' | 'updatePending' | 'openShareChanges'>
+  /** The page's Update / Share changes / Finish / Discard, owned there. */
+  actions: Pick<
+    ShareActions,
+    'update' | 'updatePending' | 'openShareChanges' | 'finish' | 'finishPending' | 'discard' | 'discardPending'
+  >
   /** Settings → Sharing for this agent. */
   onOpenSharing: () => void
 }): React.JSX.Element | null {
@@ -63,6 +57,7 @@ export function AgentShareBadge({
   if (!status) return null
 
   const warn = shareStatusWarns(status)
+  const sessionBusy = actions.finishPending || actions.discardPending
   return (
     <span data-share-unit className="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5">
       <button
@@ -77,6 +72,23 @@ export function AgentShareBadge({
         <Users size={10} className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
         <span className="min-w-0 truncate">{shareBadgeText(status)}</span>
       </button>
+      {isAdopting(status) && (
+        <>
+          <button
+            type="button"
+            className={ACTION}
+            disabled={sessionBusy}
+            aria-busy={actions.finishPending}
+            onClick={actions.finish}
+          >
+            {actions.finishPending && <Loader2 size={10} className="animate-spin" aria-hidden="true" />}
+            {actions.finishPending ? SHARE_UI_TEXT.finishing : SHARE_UI_TEXT.finish}
+          </button>
+          <button type="button" className={ACTION} disabled={sessionBusy} onClick={actions.discard}>
+            {SHARE_UI_TEXT.discard}
+          </button>
+        </>
+      )}
       {canUpdate(status) && (
         <button
           type="button"

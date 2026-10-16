@@ -115,7 +115,9 @@ function sharedStatus(): AgentShareStatus {
     changedFiles: 0,
     unshared: false,
     fetched: false,
-    refusal: null
+    refusal: null,
+    adoption: null,
+    teamChangesDeclined: false
   }
 }
 

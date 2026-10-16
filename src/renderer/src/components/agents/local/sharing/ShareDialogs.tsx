@@ -13,8 +13,9 @@ import type {
 import { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } from '../../../../utils/shareText'
 
 /**
- * The sharing dialogs: Share changes, the two-button conflict (plan S8),
- * Share with the team, Share with a person and Remove sharing.
+ * The sharing dialogs: Share changes (with its Bring together step), the
+ * two-button conflict (plan S8), Discard the session's changes, Share with
+ * the team, Share with a person and Remove sharing.
  *
  * None of them owns its action. The mutation lives in the component that opens
  * the dialog and outlives it — the status line, the ⋯ menu — so a result that
@@ -119,27 +120,48 @@ export function ErrorLine({ error }: { error: string | null }): React.JSX.Elemen
  *
  * The field is there and editable from the first frame, with "Writing a
  * summary…" as its placeholder; the draft fills it only if the user has not
- * typed, so a slow summary never overwrites their words.
+ * typed, so a slow summary never overwrites their words. After Finish the
+ * field starts with the session's own summary (`initialMessage`) and no draft
+ * is asked for.
+ *
+ * `combineFirst` is the step before the field, when both sides moved: the
+ * one sentence and **Bring together** in place of Share — the silent combine
+ * inside a send is what the session replaces. The same width as the field
+ * step, so moving between them changes only the height (ux_rules rule 1).
  */
 export function ShareChangesDialog({
   agentId,
   pending,
   error,
+  combineFirst = false,
+  onBringTogether,
+  bringTogetherPending = false,
+  initialMessage = null,
   onShare,
   onCancel
 }: {
   agentId: string
   pending: boolean
   error: string | null
+  /** Show the Bring together step instead of the field. */
+  combineFirst?: boolean
+  onBringTogether?: () => void
+  bringTogetherPending?: boolean
+  /** What the field starts with; null asks main for a draft. */
+  initialMessage?: string | null
   onShare: (message: string) => void
   onCancel: () => void
 }): React.JSX.Element {
   const fieldRef = useRef<HTMLTextAreaElement>(null)
-  const [message, setMessage] = useState('')
-  const [drafting, setDrafting] = useState(true)
+  const bringRef = useRef<HTMLButtonElement>(null)
+  const [message, setMessage] = useState(initialMessage ?? '')
+  const [drafting, setDrafting] = useState(initialMessage === null)
   const touched = useRef(false)
 
   useEffect(() => {
+    // The session's summary is the field's text; a draft would say it twice.
+    // On the Bring together step there is no field yet to fill.
+    if (combineFirst || initialMessage !== null) return
     let cancelled = false
     void window.api.sharing
       .draftMessage(agentId)
@@ -156,11 +178,49 @@ export function ShareChangesDialog({
     return () => {
       cancelled = true
     }
-  }, [agentId])
+  }, [agentId, combineFirst, initialMessage])
 
   const submit = (): void => {
     if (pending) return
     onShare(message.trim())
+  }
+
+  if (combineFirst) {
+    return (
+      <DialogShell
+        title={SHARE_UI_TEXT.shareChangesTitle}
+        pending={bringTogetherPending}
+        onDismiss={onCancel}
+        initialFocusRef={bringRef}
+      >
+        <p data-share-combine className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+          {SHARE_UI_TEXT.bringTogetherBanner}
+        </p>
+        <ErrorLine error={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={bringTogetherPending} className={CANCEL}>
+            {SHARE_UI_TEXT.cancel}
+          </button>
+          <button
+            ref={bringRef}
+            type="button"
+            onClick={onBringTogether}
+            disabled={bringTogetherPending}
+            aria-busy={bringTogetherPending}
+            className={PRIMARY}
+          >
+            {bringTogetherPending ? (
+              <>
+                <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+                {SHARE_UI_TEXT.bringingTogether}
+              </>
+            ) : (
+              SHARE_UI_TEXT.bringTogether
+            )}
+          </button>
+        </div>
+      </DialogShell>
+    )
   }
 
   return (
@@ -205,6 +265,56 @@ export function ShareChangesDialog({
           ) : (
             SHARE_UI_TEXT.share
           )}
+        </button>
+      </div>
+    </DialogShell>
+  )
+}
+
+/**
+ * Discard the session's changes (adoption plan D6): what is kept is said
+ * first — the team's version and this machine's own recorded changes — then
+ * what is dropped. Cancel takes focus; undismissable while it runs (ux_rules
+ * rule 5), and a refusal stays here.
+ */
+export function DiscardAdoptionDialog({
+  name,
+  pending,
+  error,
+  onDiscard,
+  onCancel
+}: {
+  name: string
+  pending: boolean
+  error: string | null
+  onDiscard: () => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  return (
+    <DialogShell
+      title={SHARE_UI_TEXT.discardTitle}
+      pending={pending}
+      onDismiss={onCancel}
+      initialFocusRef={cancelRef}
+      danger
+    >
+      <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">{SHARE_UI_TEXT.discardBody(name)}</p>
+      <ErrorLine error={error} />
+      <div className="flex justify-end gap-2">
+        <button ref={cancelRef} type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
+          {SHARE_UI_TEXT.cancel}
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          disabled={pending}
+          aria-busy={pending}
+          // A fixed width, so the shorter "Discarding…" does not pull Cancel sideways.
+          className="inline-flex min-w-[8rem] items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+        >
+          {pending && <Loader2 size={11} className="animate-spin" aria-hidden="true" />}
+          {pending ? SHARE_UI_TEXT.discarding : SHARE_UI_TEXT.discardConfirm}
         </button>
       </div>
     </DialogShell>

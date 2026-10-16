@@ -789,6 +789,27 @@ describe('delete', () => {
       )
     }, 30_000)
 
+    it('refuses Remove from this computer while a session is bringing the team’s changes together', async () => {
+      share()
+      desktopStateService.patch(agentDir, 'kit', {
+        adoption: {
+          startedAt: '2026-10-16T10:00:00.000Z',
+          headBefore: 'a'.repeat(40),
+          teamHead: 'b'.repeat(40),
+          base: 'c'.repeat(40),
+          chatId: null,
+          mode: 'rebase'
+        }
+      })
+      const refusal = localAgentService.delete(USER, { agentId, trashFolder: true })
+      await expect(refusal).rejects.toMatchObject({ code: 'adoption_in_progress' })
+      await expect(refusal).rejects.toThrow(
+        'A session is bringing the team’s changes together on this agent. Finish or discard it first; nothing was removed.'
+      )
+      expect(trash).not.toHaveBeenCalled()
+      expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+    }, 30_000)
+
     it('removes a shared agent that is up to date with the team, and tells the catalog in the background', async () => {
       share()
       const report = vi.spyOn(catalogLocalInstalls, 'reportRemovedByOrigin').mockResolvedValue()

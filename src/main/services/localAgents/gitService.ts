@@ -1127,19 +1127,24 @@ export async function commitAll(
  * Fetch; nothing to do when not behind. Refuses `dirty` while tracked files
  * have edits, or while an untracked file sits where an incoming one would
  * land — either would be overwritten or block. Fast-forwards when nothing
- * here is recorded-but-unsent; otherwise rebases those versions onto the
- * team's, and when that does not apply cleanly aborts it (the tree is exactly
- * as it was) and answers `diverged_conflict`.
+ * here is recorded-but-unsent. Versions recorded here that the team does not
+ * have are never combined on their own: without `combine`, the answer is
+ * `dirty` (Bring together is the way through, and Share changes offers it).
+ * A caller that has already decided to combine — the send's gated retry, an
+ * adoption session's begin — passes `combine: true`: the unsent versions are
+ * rebased onto the team's, and when that does not apply cleanly the rebase is
+ * aborted (the tree is exactly as it was) and the answer is `diverged_conflict`.
  */
 export async function pullRebaseClean(
   dir: string,
   auth: RemoteAuth | null,
   identity?: CommitIdentity | null,
-  workshopRoot?: string
+  workshopRoot?: string,
+  options: PullRebaseOptions = {}
 ): Promise<ShareActionResult> {
   const gitPath = await resolveGit()
   if (!gitPath) return refuse('git_missing')
-  if (!isCinna(auth)) return bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot)
+  if (!isCinna(auth)) return bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot, options)
   // A copy an interrupted earlier update left under `.git/` is this
   // machine's, and wins over whatever is on disk now.
   restoreLeftoverLocalOnlyFiles(dir)
@@ -1164,7 +1169,7 @@ export async function pullRebaseClean(
   }
   let action: ShareActionResult | null = null
   try {
-    action = await bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot)
+    action = await bringInTeamChanges(gitPath, dir, auth, identity, workshopRoot, options)
     return action
   } finally {
     const landed = action?.done === true
@@ -1222,13 +1227,20 @@ export async function settleLocalOnlyFiles(dir: string, kept: Map<string, Buffer
   putBackLocalOnlyFiles(dir, kept, workshopRoot, true, carried)
 }
 
+/** What {@link pullRebaseClean} may do with versions recorded here that the team does not have. */
+export interface PullRebaseOptions {
+  /** Rebase them onto the team's version; without it the answer is `dirty`. */
+  combine?: boolean
+}
+
 /** {@link pullRebaseClean}'s git work. */
 async function bringInTeamChanges(
   gitPath: string,
   dir: string,
   auth: RemoteAuth | null,
   identity: CommitIdentity | null | undefined,
-  workshopRoot: string | undefined
+  workshopRoot: string | undefined,
+  options: PullRebaseOptions
 ): Promise<ShareActionResult> {
   const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
   if (!fetched.ok) {
@@ -1265,6 +1277,9 @@ async function bringInTeamChanges(
     }
     return done()
   }
+  // Both sides moved: the combine is a decision, never a side effect of an
+  // Update — the badge's and the Inbox card's Update both land here.
+  if (!options.combine) return refuse('dirty')
   if (isCinna(auth)) {
     // Before the rebase: replaying a version that untracked a never-travel
     // file deletes that file from the working tree; the rewritten version no
@@ -1306,7 +1321,12 @@ export async function push(
   if (attempt.ok) return done()
   let verdict = classifyPush(attempt.stderr)
   if (verdict === 'non_ff') {
-    const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
+    // The retry combines only what cannot disagree: when the versions that
+    // just arrived touch a file an unsent version here touches, the answer is
+    // Bring together (an adoption session), never a silent rebase.
+    const gate = await teamTouchedMyFiles(gitPath, dir, auth)
+    if (gate !== null) return gate
+    const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot, { combine: true })
     if (pulled.refusal !== null) return pulled
     if (isCinna(auth)) {
       // The rebased versions came from ones already cleared; this is a no-op
@@ -1379,7 +1399,8 @@ function refusedByPolicy(stderr: string): boolean {
  * the library accepted it, and only when the branch still points where it
  * did (compare-and-swap) — the working tree and index already match its tree.
  * Refused again, history stays exactly as it was and the library's sentence is
- * the answer. A non-fast-forward gets one update ({@link pullRebaseClean}) and
+ * the answer. A non-fast-forward gets one update ({@link pullRebaseClean},
+ * behind the same {@link teamTouchedMyFiles} gate as the send's retry) and
  * one more combined send, never a third and never a force.
  */
 async function sendCombined(
@@ -1405,7 +1426,11 @@ async function sendCombined(
         // teammate's work: bring it in first, once.
         if (updated) return refuse('push_rejected', 'The team version changed again while sending.')
         updated = true
-        const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
+        // The same gate as the send's retry (fetched just above): the versions
+        // that arrived must touch no file this folder's unsent versions touch.
+        const gate = await teamTouchedMyFiles(gitPath, dir, auth, false)
+        if (gate !== null) return gate
+        const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot, { combine: true })
         if (pulled.refusal !== null) return pulled
         const rewritten = await rewriteUnsent(gitPath, dir, neverTravelPaths(workshopRoot))
         if (rewritten) return rewritten
@@ -1795,7 +1820,10 @@ async function dropNeverTravelsFromUnsent(
   if (ref === null || (await headOf(gitPath, dir)) === null) return null
   const contained = await run(gitPath, dir, ['merge-base', '--is-ancestor', ref, 'HEAD'], LOCAL_TIMEOUT_MS)
   if (contained.ok) return null
-  const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot)
+  // The same gate as the send's retry: already fetched just above.
+  const gate = await teamTouchedMyFiles(gitPath, dir, auth, false)
+  if (gate !== null) return gate
+  const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot, { combine: true })
   return pulled.refusal !== null ? pulled : null
 }
 
@@ -2209,16 +2237,28 @@ async function trackedSecrets(
 ): Promise<string[] | string> {
   const tracked = await run(gitPath, dir, ['ls-files', '-z'], LOCAL_TIMEOUT_MS)
   if (!tracked.ok) return scrubCredentials(lastLine(tracked.stderr)).slice(0, MAX_DETAIL_CHARS)
+  const secret = secretShape(workshopRoot)
+  return tracked.stdout.split('\0').filter((rel) => rel !== '' && secret(rel))
+}
+
+/**
+ * Whether an agent-relative path can hold a credential value, by its shape
+ * alone — {@link trackedSecrets}' rule for a path that need not be tracked
+ * now: a secret recorded at one point of history and deleted at another is
+ * in neither index, and still must not be read out of a diff. In any case.
+ */
+function secretShape(workshopRoot: string | undefined): (rel: string) => boolean {
   let layout: ReturnType<typeof getLayoutView> | undefined
   try {
     layout = getLayoutView(workshopRoot)
   } catch {
     layout = undefined
   }
-  const owned = new Set(layout?.desktopOwned() ?? ['app-data/desktop.json'])
-  return tracked.stdout
-    .split('\0')
-    .filter((rel) => rel !== '' && (owned.has(rel) || isSecretFile(rel, layout)))
+  const owned = new Set((layout?.desktopOwned() ?? ['app-data/desktop.json']).map(foldPath))
+  return (rel) => {
+    const folded = foldPath(rel)
+    return owned.has(folded) || isSecretFile(rel, layout) || isSecretFile(folded, layout)
+  }
 }
 
 /**
@@ -2439,7 +2479,296 @@ export async function isBehindLibrary(dir: string, libraryHeadSha: string): Prom
   return !(await run(gitPath, dir, ['merge-base', '--is-ancestor', libraryHeadSha, 'HEAD'], LOCAL_TIMEOUT_MS)).ok
 }
 
+/**
+ * The gate before a send combines the team's versions with this folder's
+ * unsent ones (a teammate shared first): compare the files the team's
+ * versions since the two last matched (`merge-base..<team ref>`) touch with
+ * the files this folder's unsent versions (`merge-base..HEAD`) touch. Any
+ * path in both is `team_changed_again` — Bring together is the answer, never
+ * a silent rebase. Measured from the common point, not from the last fetch:
+ * a status read may already have fetched the team's versions, and the gate
+ * must still see them. With `fetch`, reaches the network first (`fetch_failed`).
+ * Null lets the combine go on as it did: no team ref yet, or one this folder
+ * already contains.
+ */
+async function teamTouchedMyFiles(
+  gitPath: string,
+  dir: string,
+  auth: RemoteAuth | null,
+  fetch = true
+): Promise<ShareActionResult | null> {
+  if (fetch) {
+    const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+    if (!fetched.ok) {
+      logger.warn('share fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
+      return refuse('fetch_failed')
+    }
+  }
+  // After the fetch: a folder linked to a team version it never fetched has
+  // no team ref before it, and the gate must see what is there now.
+  const ref = await teamRef(gitPath, dir)
+  if (ref === null) return null
+  const after = await shaOf(gitPath, dir, ref)
+  if (after === null) return null
+  const mergeBase = await run(gitPath, dir, ['merge-base', 'HEAD', after], LOCAL_TIMEOUT_MS)
+  const base = mergeBase.ok ? mergeBase.stdout.trim() : ''
+  if (base === '' || base === after) return null
+  const theirs = new Set(lines((await run(gitPath, dir, ['diff', '--name-only', base, after], LOCAL_TIMEOUT_MS)).stdout))
+  if (theirs.size === 0) return null
+  const mine = lines((await run(gitPath, dir, ['diff', '--name-only', base, 'HEAD'], LOCAL_TIMEOUT_MS)).stdout)
+  if (!mine.some((path) => theirs.has(path))) return null
+  logger.info('the team changed a file this folder\'s unsent versions changed too; not combining while sending')
+  return refuse('team_changed_again')
+}
+
+/** The full sha a ref names, or null. */
+async function shaOf(gitPath: string, dir: string, ref: string): Promise<string | null> {
+  const out = await run(gitPath, dir, ['rev-parse', '--verify', '--quiet', ref], LOCAL_TIMEOUT_MS)
+  const sha = out.ok ? out.stdout.trim() : ''
+  return sha === '' ? null : sha
+}
+
+// ---------------------------------------------------------------------------
+// Bringing the team's changes together — the adoption session
+// ---------------------------------------------------------------------------
+//
+// Both sides moved: the team shared versions this folder does not have, and
+// this folder has versions (or loose edits) the team does not have, on
+// different lines. Git combines them cleanly and sees nothing wrong; the
+// agent, in an ordinary chat, can read both sides and reconcile what they
+// mean. The app owns the mechanics here — record, combine, check, restore —
+// and the agent only edits files. `sharingService` keeps the session's record
+// in the folder's `app-data/desktop.json`, which git never touches.
+
+/** The points an adoption session is anchored on, read before history moves. */
+export interface AdoptionPoints {
+  /** This folder's tip once its loose edits were recorded: what Discard restores. */
+  headBefore: string
+  /** The team's version being brought in. */
+  teamHead: string
+  /** Where the two last matched. */
+  base: string
+}
+
+/** The note the loose edits are recorded under at the start of a session. */
+export const ADOPTION_BEFORE_NOTE = 'Changes made before bringing the team’s version in'
+
+const NOTHING_TO_BRING_TOGETHER = 'Nothing to bring together: this agent already has the team’s changes.'
+
+/**
+ * Begin an adoption session: fetch; record the folder's loose edits as a
+ * version of their own ({@link ADOPTION_BEFORE_NOTE} — a `dirty` refusal does
+ * not exist in this flow, the inputs to the combine are made clean first);
+ * read the three points and hand them to `onPoints` **before** anything
+ * moves, so the caller's record makes Discard possible whatever happens
+ * next; then combine ({@link pullRebaseClean} with `combine` — the one thing
+ * Update never does on its own): a clean rebase of the unsent versions onto
+ * the team's, or `diverged_conflict` after its own abort, leaving the tree as
+ * it was. `headBefore` is the tip
+ * before that rebase's never-travel rewrite on purpose: Discard restores
+ * exactly what the user had.
+ */
+export async function beginAdoption(
+  dir: string,
+  auth: RemoteAuth | null,
+  identity: CommitIdentity | null | undefined,
+  workshopRoot: string | undefined,
+  onPoints: (points: AdoptionPoints) => void
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  restoreLeftoverLocalOnlyFiles(dir)
+  const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+  if (!fetched.ok) {
+    logger.warn('share fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
+    return refuse('fetch_failed')
+  }
+  const ref = await teamRef(gitPath, dir)
+  if (ref === null) return refuse('not_shared')
+  const recorded = await commitAll(dir, ADOPTION_BEFORE_NOTE, identity, workshopRoot, isCinna(auth))
+  if (recorded.refusal !== null && recorded.refusal !== 'nothing_to_share') return recorded
+  const headBefore = await headOf(gitPath, dir)
+  if (headBefore === null) return refuse('adoption_blocked', 'Nothing is recorded in this folder yet.')
+  const teamHead = await shaOf(gitPath, dir, ref)
+  if (teamHead === null) return refuse('adoption_blocked', 'The team’s version could not be read.')
+  const mergeBase = await run(gitPath, dir, ['merge-base', 'HEAD', ref], LOCAL_TIMEOUT_MS)
+  const base = mergeBase.ok ? mergeBase.stdout.trim() : ''
+  if (base === '') return refuse('adoption_blocked', 'This folder’s history and the team’s have no point in common.')
+  const behind = count((await run(gitPath, dir, ['rev-list', '--count', `HEAD..${ref}`], LOCAL_TIMEOUT_MS)).stdout)
+  if (behind === 0) return refuse('adoption_blocked', NOTHING_TO_BRING_TOGETHER)
+  onPoints({ headBefore, teamHead, base })
+  const pulled = await pullRebaseClean(dir, auth, identity, workshopRoot, { combine: true })
+  if (!pulled.done && pulled.refusal === null) return refuse('adoption_blocked', NOTHING_TO_BRING_TOGETHER)
+  return pulled
+}
+
+/** Where git keeps the state of an unfinished rebase or merge, relative to the git dir. */
+const UNFINISHED_COMBINE_PATHS = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD']
+
+/**
+ * Whether a session may finish: the folder is on its line of history, no
+ * earlier combine is left half-done, no file holds both versions (a line
+ * starting `<<<<<<< ` or `>>>>>>> `, in tracked or untracked non-ignored text
+ * files — `=======` alone is not checked, it underlines a markdown heading),
+ * and the team's version the session started from is in HEAD's history. Each
+ * answer is `adoption_blocked` with the whole sentence: trying again changes
+ * nothing, the folder has to.
+ */
+export async function checkAdoptionFinish(dir: string, teamHead: string): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  // Before the line-of-history check: a rebase stopped half-way detaches
+  // HEAD, and the unfinished combine is the reason to give.
+  for (const name of UNFINISHED_COMBINE_PATHS) {
+    const at = await run(gitPath, dir, ['rev-parse', '--path-format=absolute', '--git-path', name], LOCAL_TIMEOUT_MS)
+    if (at.ok && at.stdout.trim() !== '' && existsSync(at.stdout.trim())) {
+      return refuse('adoption_blocked', 'An earlier combine in this folder is still unfinished.')
+    }
+  }
+  const branch = await run(gitPath, dir, ['symbolic-ref', '-q', 'HEAD'], LOCAL_TIMEOUT_MS)
+  if (!branch.ok || branch.stdout.trim() === '') {
+    return refuse('adoption_blocked', 'This folder is at a detached HEAD, off its line of history. Switch back to it, then finish.')
+  }
+  // Exit 1 is "no match" and `run` reports it as not ok with nothing on
+  // stdout; a real failure would have failed `symbolic-ref` above.
+  const markers = await run(
+    gitPath,
+    dir,
+    ['grep', '-I', '-l', '-E', '--untracked', '-e', '^(<<<<<<< |>>>>>>> )', '--', '.'],
+    LOCAL_TIMEOUT_MS
+  )
+  const marked = markers.ok ? lines(markers.stdout) : []
+  if (marked.length > 0) {
+    const named = marked.slice(0, 3).join(', ')
+    const rest = marked.length > 3 ? `, and ${marked.length - 3} more` : ''
+    return refuse('adoption_blocked', `Some files still hold both versions, marked with <<<<<<< and >>>>>>> lines: ${named}${rest}.`)
+  }
+  const contained = await run(gitPath, dir, ['merge-base', '--is-ancestor', teamHead, 'HEAD'], LOCAL_TIMEOUT_MS)
+  if (!contained.ok) {
+    return refuse('adoption_blocked', 'This agent’s history no longer includes the team’s version the session started from.')
+  }
+  return done()
+}
+
+/**
+ * Discard a session: the folder goes back to `headBefore` exactly — any
+ * combine half-done is aborted, the tree reset, files made since removed
+ * (never the ignored ones, and never the never-travel paths, belt and
+ * braces) — with this machine's local-only files kept around it as every
+ * history move here keeps them. The version recorded at begin stays: it is
+ * the user's own work, now recorded instead of loose.
+ */
+export async function discardAdoption(dir: string, headBefore: string, workshopRoot?: string): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const kept = keepLocalOnlyFiles(dir, workshopRoot)
+  saveLocalOnlyBackup(dir, kept)
+  // Either may have nothing to abort; that is not a failure.
+  await run(gitPath, dir, ['rebase', '--abort'], LOCAL_TIMEOUT_MS)
+  await run(gitPath, dir, ['merge', '--abort'], LOCAL_TIMEOUT_MS)
+  const reset = await run(gitPath, dir, ['reset', '--hard', '--quiet', headBefore], LOCAL_TIMEOUT_MS)
+  if (!reset.ok) {
+    if (putBackLocalOnlyFiles(dir, kept, workshopRoot, false)) dropLocalOnlyBackup(dir)
+    logger.warn('could not restore the folder to where the session began', { stderr: scrubCredentials(reset.stderr).slice(0, 400) })
+    return refuse('adoption_blocked', 'The folder could not be put back to where the session began.')
+  }
+  const spared = neverTravelPaths(workshopRoot).flatMap((entry) => ['-e', `/${pathOf(entry)}`])
+  const cleaned = await run(gitPath, dir, ['clean', '-fd', '-q', ...spared], LOCAL_TIMEOUT_MS)
+  if (!cleaned.ok) logger.warn('could not remove the files the session made', { stderr: scrubCredentials(cleaned.stderr).slice(0, 400) })
+  const carried = await trackedLocalOnlyFiles(gitPath, dir, workshopRoot)
+  if (putBackLocalOnlyFiles(dir, kept, workshopRoot, true, carried)) dropLocalOnlyBackup(dir)
+  return done()
+}
+
+/** One version between two points, for the adoption brief: its note, who, when, and the files it touched. */
+export interface AdoptionVersion {
+  note: string
+  author: string
+  /** ISO 8601. */
+  date: string
+  /** Agent-relative, never-travel paths left out. */
+  files: string[]
+}
+
+/**
+ * `\x1e<sha>\x1f<subject>\x1f<author>\x1f<iso date>\x1f` then the files, one per
+ * line, from `--name-only`: the record separator **opens** each version so the
+ * file list that git prints after the format closes the one before.
+ */
+const VERSIONS_FORMAT = '--format=%x1e%H%x1f%s%x1f%an%x1f%aI%x1f'
+
+/**
+ * The versions in `from..to`, oldest first, each with the files it touched —
+ * one `git log --reverse --name-only`, split on the record separator as
+ * {@link readHistory} does. Never-travel paths are left out of `files`.
+ */
+export async function readVersionsBetween(dir: string, from: string, to: string, workshopRoot?: string): Promise<AdoptionVersion[]> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return []
+  const log = await run(gitPath, dir, ['log', '--reverse', '--name-only', VERSIONS_FORMAT, `${from}..${to}`], LOCAL_TIMEOUT_MS)
+  if (!log.ok) return []
+  const never = neverTravelPaths(workshopRoot)
+  const out: AdoptionVersion[] = []
+  for (const record of log.stdout.split('\x1e')) {
+    const [sha, note, author, date, rest] = record.split('\x1f')
+    if (!sha || sha.trim() === '') continue
+    const files = lines(rest ?? '')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !travelsNot(line, never))
+    out.push({ note: note ?? '', author: author ?? '', date: (date ?? '').trim(), files })
+  }
+  return out
+}
+
+/**
+ * The change between two points, one entry per file, for the adoption
+ * brief: `git diff <from> <to>` with every never-travel path and every
+ * tracked secret left out (as {@link diffForSummary} leaves them out), split
+ * on the `diff --git` headers, each entry's text credential-scrubbed. A
+ * secret-shaped path that is not tracked now — added or deleted between the
+ * two points, so its whole content would be in the diff — is dropped after
+ * the split. No cap here; the brief caps.
+ */
+export async function diffBetween(
+  dir: string,
+  from: string,
+  to: string,
+  workshopRoot?: string
+): Promise<Array<{ path: string; diff: string }>> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return []
+  const secrets = await trackedSecrets(gitPath, dir, workshopRoot)
+  const excluded = [
+    ...neverTravelPaths(workshopRoot).map((entry) => `:(exclude,icase)${pathOf(entry)}`),
+    ...(Array.isArray(secrets) ? secrets.map((rel) => `:(exclude,literal)${rel}`) : [])
+  ]
+  const diff = await run(gitPath, dir, ['diff', '--no-color', from, to, '--', '.', ...excluded], LOCAL_TIMEOUT_MS)
+  if (!diff.ok) return []
+  const secret = secretShape(workshopRoot)
+  const out: Array<{ path: string; diff: string }> = []
+  let current: { path: string; text: string[] } | null = null
+  const close = (): void => {
+    if (current && !secret(current.path)) out.push({ path: current.path, diff: scrubCredentials(current.text.join('\n')) })
+  }
+  for (const line of diff.stdout.split('\n')) {
+    const header = line.match(/^diff --git a\/(.+?) b\/(.+)$/)
+    if (header) {
+      close()
+      current = { path: header[2], text: [line] }
+    } else if (current) {
+      current.text.push(line)
+    }
+  }
+  close()
+  return out
+}
+
 export const gitService = {
+  beginAdoption,
+  checkAdoptionFinish,
+  discardAdoption,
+  readVersionsBetween,
+  diffBetween,
   preflightShare,
   neverTravelPaths,
   restoreLocalOnlyFolders,

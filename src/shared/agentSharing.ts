@@ -51,8 +51,11 @@ export interface AgentRemote {
  * - `not_shared` — the folder has no team version (not its own repo, or no `origin`).
  * - `other_account` — a Cinna remote on an instance no active profile is signed in to.
  * - `reauth_required` — the Cinna session expired; the app-wide prompt handles it.
- * - `dirty` — Update refused: there are changes here that are not shared yet.
+ * - `dirty` — Update refused: there are changes here that are not shared yet; Bring together is the answer.
  * - `diverged_conflict` — the team's changes and these do not combine cleanly.
+ * - `adoption_in_progress` — a session is bringing the team's changes together; Finish or Discard it first.
+ * - `team_changed_again` — the team shared once more while these were being sent, touching the same files; Bring together, then share.
+ * - `adoption_blocked` — Bring together, Finish or Discard could not act; `detail` is the whole sentence (nothing to bring together, no point in common with the team's history, an unfinished combine, files holding both versions, the team's version gone from the history, a folder that could not be put back, no session, a chat that could not be found). Retrying changes nothing.
  * - `fetch_failed` — the team version could not be reached.
  * - `push_rejected` — the server refused the changes; `detail` carries its sentence.
  * - `no_access` — the caller may read but not change the team version.
@@ -84,22 +87,42 @@ export type ShareRefusal =
   | 'turn_in_progress'
   | 'unshared_changes'
   | 'secrets_tracked'
+  | 'adoption_in_progress'
+  | 'team_changed_again'
+  | 'adoption_blocked'
   | 'failed'
 
 /**
  * The one state the status line shows, decided in main.
  *
- * Precedence, highest first: `other_account`, `removed`, `diverged`,
- * `behind`, `unshared`, `up_to_date`. `diverged` is both sides having moved;
- * Share changes is what tries to bring them together.
+ * Precedence, highest first: `adopting`, `other_account`, `removed`,
+ * `diverged`, `behind`, `unshared`, `up_to_date`. `diverged` is both sides
+ * having moved; Bring together (an adoption session, see
+ * {@link AgentAdoptionInfo}) is what combines them. `adopting` outranks
+ * everything: a folder mid-session can only be left by Finish or Discard,
+ * whatever else happened to its team version meanwhile.
  */
 export type AgentShareState =
   | 'up_to_date'
   | 'unshared'
   | 'behind'
   | 'diverged'
+  | 'adopting'
   | 'removed'
   | 'other_account'
+
+/**
+ * An adoption session in progress on this machine: the app combined the
+ * team's versions with this folder's, and a chat with the agent is (or was)
+ * reconciling what git could not see. Recorded in the folder's
+ * `app-data/desktop.json`, so it survives restarts and the chat being
+ * deleted; `chatId` only serves the "Open the session" link.
+ */
+export interface AgentAdoptionInfo {
+  chatId: string | null
+  /** ISO 8601. */
+  startedAt: string
+}
 
 /** A shared agent's state on this machine. */
 export interface AgentShareStatus {
@@ -132,6 +155,14 @@ export interface AgentShareStatus {
   fetched: boolean
   /** Set when the status read itself failed (`fetch_failed`, `git_missing`, `reauth_required`). */
   refusal: ShareRefusal | null
+  /** The session bringing the team's changes together, while one is in progress (`state: 'adopting'`). */
+  adoption: AgentAdoptionInfo | null
+  /**
+   * True when Not now was answered to the Bring together offer for the team
+   * version this status sees (`remoteHeadSha`): the chat banner stays away
+   * until the team moves again. Share changes still offers it.
+   */
+  teamChangesDeclined: boolean
 }
 
 /** What one sharing action did. */
@@ -164,6 +195,25 @@ export interface AgentShareResult {
    * version, only when one is missing that was not before the action.
    */
   setupNeeded: boolean
+}
+
+/**
+ * What Bring together answered. `brief` is the first message the renderer
+ * sends into the session's chat, written by main in the user's voice: what
+ * the team changed and what this machine changed since the two last matched,
+ * and what the agent is asked to do. Null when the session did not begin.
+ */
+export interface AdoptionBeginResult extends AgentShareResult {
+  brief: string | null
+}
+
+/**
+ * What Finish answered. `summary` is the agent's own "Summary of what I did"
+ * from the session's chat, when it wrote one — the Share changes field is
+ * pre-filled with it, and a person reads it before the team does.
+ */
+export interface AdoptionFinishResult extends AgentShareResult {
+  summary: string | null
 }
 
 /** A maintainer, as the library lists them. */
@@ -334,3 +384,33 @@ export type SharingOutcome<T> =
 
 /** Main → renderer: the library listing or a shared agent's state moved; refetch. */
 export const SHARING_CHANGED_CHANNEL = 'sharing:changed'
+
+/**
+ * Words the sharing surfaces never show, and the adoption brief never says
+ * (team-sharing plan, S9): the user reads what the renderer renders and what
+ * the agent echoes back from its brief. Matched as whole words, case-insensitively,
+ * by the tests that read every sentence in `shareText.ts` and in `adoptionBrief.ts`.
+ */
+export const FORBIDDEN_SHARE_WORDS = [
+  'branch',
+  'commit',
+  'push',
+  'pull',
+  'merge',
+  'rebase',
+  'remote',
+  'repository',
+  'conflict',
+  'sha'
+] as const
+
+/**
+ * The forbidden words as one pattern, each with the endings English gives it,
+ * as whole words: what the vocabulary tests match every sentence against.
+ */
+export function forbiddenShareWordPattern(): RegExp {
+  return new RegExp(
+    `\\b(${FORBIDDEN_SHARE_WORDS.map((w) => `${w}(e?s|e?d|ing|ies)?`).join('|')}|repositories|merging|rebasing)\\b`,
+    'i'
+  )
+}
