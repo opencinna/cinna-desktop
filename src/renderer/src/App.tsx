@@ -30,6 +30,7 @@ import { useSharingWatch } from './hooks/useSharing'
 import { useCatalogItemsWatch } from './hooks/useCatalog'
 import { useSkillCredentialsWatch } from './hooks/useServiceCredentials'
 import { useEngineWatch } from './hooks/useEngine'
+import { useRuntimeSetupWatch } from './hooks/useRuntimeSetup'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
 import {
@@ -138,6 +139,9 @@ function Shell(): React.JSX.Element {
   // turns — happen while nobody is watching a particular screen, so the
   // subscription is here rather than in the card that renders the state.
   useEngineWatch()
+  // A runtime setup (install, sign-in) runs in main and outlives the card that
+  // started it; its end re-reads the login and the agent list from here.
+  useRuntimeSetupWatch()
   // ⌘N, ⇧⌘N and ⌘1–⌘9 from the application menu. Here, and not beside the
   // LogsOverlay, so the keys start nothing on the login or onboarding screens.
   useAppShortcuts()

@@ -1,13 +1,19 @@
 import { useState } from 'react'
 import type { DevelopmentContext } from '../../../../shared/developmentSession'
 import { DEFAULT_DEVELOPMENT_COMPLEXITY, DEVELOPMENT_RUNTIME_NAMES } from '../../../../shared/developmentSession'
-import { codexEffortForComplexity, isAgentEngine, type AgentEngine } from '../../../../shared/engine'
+import { codexEffortForComplexity, isAgentEngine, isEngineLoginId, type AgentEngine } from '../../../../shared/engine'
+import { isCredentialActive } from '../../../../shared/credentials'
 import { isWorkComplexity, WORK_COMPLEXITIES, WORK_COMPLEXITY_LABELS } from '../../../../shared/modelFamilies'
 import type { RuntimeToolId } from '../../../../shared/localTools'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { useAntigravityBinary, useClaudeBinary, useCodexBinary, useDefaultRuntime } from '../../hooks/useEngine'
 import { useInstallRuntimeTool, useLocalTools, useToolInstallPlan } from '../../hooks/useLocalTools'
 import { useProviders } from '../../hooks/useProviders'
+import { useRuntimeCardSetup } from '../../hooks/useRuntimeSetup'
+import { AntigravityTermsLine, AntigravityTermsTip } from '../settings/AntigravityTermsTip'
+import { claudeStatusText } from '../settings/claudeStatus'
+import { codexStatusText } from '../settings/codexStatus'
+import { antigravityStatusText } from '../settings/antigravityStatus'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RuntimeChoiceButtons } from '../settings/RuntimeChoiceButtons'
 import { InstallRuntimeDialog } from '../settings/InstallRuntimeDialog'
@@ -29,6 +35,7 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
   const { data: claudeBinary } = useClaudeBinary()
   const { data: antigravityBinary } = useAntigravityBinary()
   const { data: tools } = useLocalTools()
+  const { data: providers } = useProviders()
   const [installing, setInstalling] = useState<RuntimeToolId | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const plan = useToolInstallPlan(installing ?? 'claude')
@@ -42,18 +49,69 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
     setInstalling(null)
   } })
   const selected = isAgentEngine(settings?.localDevelopmentEngine) ? settings.localDevelopmentEngine : null
+  const pathSet = {
+    claude: (settings?.localAgentsClaudePath ?? '').trim() !== '',
+    codex: (settings?.localAgentsCodexPath ?? '').trim() !== '',
+    antigravity: (settings?.localAgentsAntigravityPath ?? '').trim() !== ''
+  }
+  const binaries = { claude: claudeBinary, codex: codexBinary, antigravity: antigravityBinary }
+  // The selected card's chip (Install, Log in, Add credential) and what a
+  // setup in main is doing. The Default Runtime card carries none.
+  const setup = useRuntimeCardSetup({
+    selected,
+    binaries,
+    pathSet,
+    hasOpenCodeCredential: providers ? providers.some(isCredentialActive) : undefined
+  })
+  const selectedBinary = isEngineLoginId(selected) ? binaries[selected] : undefined
+  /** A failed install says why, in the line under the cards; a saved path's failure is the Path field's. */
+  const binaryFailure =
+    isEngineLoginId(selected) && !pathSet[selected] && selectedBinary?.state === 'failed' ? selectedBinary.error : null
+  /**
+   * What the line under the cards says, on the Agents tab's terms: a setup's
+   * phase or failure, a failed install, or the download's progress — muted
+   * unless something failed. Null leaves the line to the terms or the choice.
+   */
+  const installingNow =
+    isEngineLoginId(selected) && !pathSet[selected] && (selectedBinary?.state === 'resolving' || setup.chips[selected]?.kind === 'installing')
+  const statusLine: { text: string; tone: 'muted' | 'danger'; cancel?: () => void } | null =
+    setup.status ??
+    (binaryFailure
+      ? { text: binaryFailure, tone: 'danger' }
+      : installingNow && isEngineLoginId(selected)
+        ? {
+            // Before main's first byte the state may still read `unresolved`:
+            // say "Checking…", never "installs on first use" over a running install.
+            text: STATUS_TEXT[selected](selectedBinary?.state === 'resolving' ? selectedBinary : { state: 'resolving' }, false),
+            tone: 'muted'
+          }
+        : null)
   const inheritedName = defaultRuntime ? DEVELOPMENT_RUNTIME_NAMES[defaultRuntime.engine] : 'Local-agent default'
   const complexity = isWorkComplexity(settings?.localDevelopmentComplexity) ? settings.localDevelopmentComplexity : DEFAULT_DEVELOPMENT_COMPLEXITY
   return <div data-sidebar-band-limit className="mx-auto max-w-4xl space-y-6 px-6 py-8">
     <SettingsSection title="Local Development Runtime">
       <SettingsCard>
         <RuntimeChoiceButtons selected={selected} tools={tools} codexBinary={codexBinary} claudeBinary={claudeBinary} antigravityBinary={antigravityBinary}
-          codexPathSet={(settings?.localAgentsCodexPath ?? '').trim() !== ''} claudePathSet={(settings?.localAgentsClaudePath ?? '').trim() !== ''}
-          antigravityPathSet={(settings?.localAgentsAntigravityPath ?? '').trim() !== ''}
+          codexPathSet={pathSet.codex} claudePathSet={pathSet.claude} antigravityPathSet={pathSet.antigravity}
+          chips={setup.chips} onChip={setup.onChip}
           installing={install.isPending ? installing : null} disabled={!settings || save.isPending || install.isPending}
           defaultChoice={{ description: inheritedName, onSelect: () => select('') }}
-          onSelect={select} onInstall={(tool) => { setFailure(null); setInstalling(tool) }} />
-        <p className="mt-3 text-[13px] text-[var(--color-text-secondary)]">{selected ? 'Used for local build sessions on this computer.' : `Uses the local-agent default${defaultRuntime ? `: ${inheritedName}` : ''}. Changes to that default apply here too.`}</p>
+          onSelect={(engine) => { select(engine); setup.afterSelect(engine) }} onInstall={(tool) => { setFailure(null); setInstalling(tool) }} />
+        {/* One line, always filled: what a setup is doing or why it stopped,
+            Antigravity's terms until it is ready, else what the choice means. */}
+        <div className="mt-3 flex min-w-0 gap-3 text-[13px] leading-relaxed">
+          {statusLine ? (
+            <p className={`min-w-0 flex-1 truncate ${statusLine.tone === 'danger' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'}`} title={statusLine.text}>{statusLine.text}</p>
+          ) : setup.antigravityTerms ? (
+            <AntigravityTermsLine />
+          ) : (
+            <p className="min-w-0 flex-1 text-[var(--color-text-secondary)]">{selected ? 'Used for local build sessions on this computer.' : `Uses the local-agent default${defaultRuntime ? `: ${inheritedName}` : ''}. Changes to that default apply here too.`}</p>
+          )}
+          {statusLine?.cancel && <button type="button" onClick={statusLine.cancel} className="shrink-0 font-medium text-[var(--color-accent)] hover:underline">Cancel</button>}
+          {/* As on the Agents tab: Google's terms behind a (?) at the line's end
+              while a status holds the line. */}
+          {statusLine && setup.antigravityTerms && <span className="flex h-[1lh] shrink-0 items-center"><AntigravityTermsTip /></span>}
+        </div>
         <div className={`${settingsDropdownRowClass} mt-4 border-t border-[var(--color-border)] pt-4`}>
           <SettingsLabel htmlFor="development-complexity" info={<p>Simple favors speed and lower cost; Medium balances capability and cost; Complex gives demanding builds more capability. Local Development defaults to Complex: Claude uses Opus, Codex uses high reasoning effort, and OpenCode selects a model from the Complex tier of your credential’s catalogue. This choice also applies when using Default Runtime.</p>}>
             Work complexity
@@ -85,6 +143,8 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
     {installing && plan && <InstallRuntimeDialog plan={plan} willSelect selectionDescription={`When it finishes, local build sessions use ${plan.label}.`} install={install} failure={failure} onCancel={() => setInstalling(null)} />}
   </div>
 }
+
+const STATUS_TEXT = { claude: claudeStatusText, codex: codexStatusText, antigravity: antigravityStatusText }
 
 function DevelopmentCredential(): React.JSX.Element {
   const { data: settings } = useAppSettings()

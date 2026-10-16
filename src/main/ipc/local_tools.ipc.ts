@@ -6,6 +6,7 @@ import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import { desktopAppsService } from '../services/localAgents/desktopAppsService'
 import { desktopAppConnectService } from '../services/localAgents/desktopAppConnectService'
+import { runtimeSetupService } from '../services/localAgents/runtimeSetupService'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
@@ -19,7 +20,13 @@ import {
   type ToolInstallPlan,
   type ToolInstallProgress
 } from '../../shared/localTools'
-import type { ClaudeAuthStatus, EngineLoginResult, EngineLoginRunning } from '../../shared/engine'
+import type {
+  ClaudeAuthStatus,
+  EngineLoginResult,
+  EngineLoginRunning,
+  RuntimeSetupResult,
+  RuntimeSetupRunning
+} from '../../shared/engine'
 import type {
   DesktopAppConnectResult,
   DesktopAppConnectRunning,
@@ -167,6 +174,34 @@ export function registerLocalToolsHandlers(): void {
       codex: engineLogins.codex.running(),
       antigravity: engineLogins.antigravity.running()
     }
+  })
+
+  /**
+   * Set up one runtime: its pinned binary, then a signed-in engine — see
+   * `runtimeSetupService`. Only the engine id and whether to install cross;
+   * the outcome comes back as data. A second call for the same engine joins
+   * the running one. Phase changes and the end of a run are pushed on
+   * `RUNTIME_SETUP_CHANNEL`.
+   */
+  ipcHandle('local-tools:runtime-setup', (_event, engine: unknown, options: unknown): Promise<RuntimeSetupResult> => {
+    userActivation.requireActivated()
+    const given = typeof options === 'object' && options !== null ? (options as { install?: unknown; login?: unknown }) : {}
+    return runtimeSetupService.setup(engine, {
+      install: given.install === true,
+      login: given.login === 'force' ? 'force' : 'auto'
+    })
+  })
+
+  /** Which runtime setups are running and in which phase, for a surface mounted mid-run. */
+  ipcHandle('local-tools:runtime-setup-running', (): RuntimeSetupRunning => {
+    userActivation.requireActivated()
+    return runtimeSetupService.running()
+  })
+
+  /** Cancel one engine's setup — its login, if one runs. False when nothing was running. */
+  ipcHandle('local-tools:runtime-setup-cancel', (_event, engine: unknown): boolean => {
+    userActivation.requireActivated()
+    return runtimeSetupService.cancel(engine)
   })
 
   /**

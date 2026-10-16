@@ -11,9 +11,7 @@ import {
   useRescanLocalAgents
 } from '../../hooks/useLocalAgents'
 import {
-  useAntigravityAuth,
   useDefaultTool,
-  useEngineLogin,
   useInstallRuntimeTool,
   useLocalTools,
   useOpenIn,
@@ -25,8 +23,6 @@ import { isLocalToolId, type RuntimeToolId } from '../../../../shared/localTools
 import {
   DEFAULT_AGENT_ENGINE,
   isAgentEngine,
-  loginFailureLead,
-  loginPendingText,
   opencodeVersionLabel,
   type AgentEngine,
   type EngineBinaryState
@@ -38,17 +34,15 @@ import { RootRepositoryDialog } from './RootRepositoryDialog'
 import { codexStatusText } from './codexStatus'
 import { claudeStatusText } from './claudeStatus'
 import { antigravityStatusText } from './antigravityStatus'
-import { AntigravityTermsTip } from './AntigravityTermsTip'
+import { AntigravityTermsLine, AntigravityTermsTip } from './AntigravityTermsTip'
 import {
   useAntigravityBinary,
   useClaudeBinary,
   useCodexBinary,
   useEngineBinary,
-  useResolveAntigravityBinary,
-  useResolveClaudeBinary,
-  useResolveCodexBinary,
   useResolveEngineBinary
 } from '../../hooks/useEngine'
+import { useRuntimeCardSetup } from '../../hooks/useRuntimeSetup'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgentsHomeStore } from '../../stores/agentsHome.store'
@@ -120,12 +114,6 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const { data: codexBinary } = useCodexBinary()
   const { data: claudeBinary } = useClaudeBinary()
   const { data: antigravityBinary } = useAntigravityBinary()
-  // Owned here, not by the text action that fires it: pressing it moves the
-  // state to `resolving`, which changes that action, and a mutation owned by a
-  // control that re-renders away loses its callbacks (ux_rules rule 5).
-  const resolveCodex = useResolveCodexBinary()
-  const resolveClaude = useResolveClaudeBinary()
-  const resolveAntigravity = useResolveAntigravityBinary()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
   const { tool: defaultTool, launchable } = useDefaultTool()
@@ -198,17 +186,6 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const claudePathSet = (appSettings?.localAgentsClaudePath ?? '').trim() !== ''
   const antigravityPathSet = (appSettings?.localAgentsAntigravityPath ?? '').trim() !== ''
   const onAntigravity = selectedRuntime === 'antigravity'
-  /**
-   * Antigravity's login, asked only while it is the runtime shown. Unlike Codex
-   * and Claude Code it has no terminal login a user could run instead — its
-   * sign-in is an ACP call to the server — so with Antigravity selected and
-   * logged out, this row is where the **Log in** lives, in the action slot the
-   * install uses. Owned here, for the reason `resolveCodex` is.
-   */
-  const { data: antigravityAuth } = useAntigravityAuth({ enabled: onAntigravity })
-  const antigravityLogin = useEngineLogin(onAntigravity ? 'antigravity' : null)
-  const antigravityLoggedOut =
-    onAntigravity && antigravityBinary?.state !== 'failed' && antigravityAuth?.state === 'logged_out'
   const installingPlan =
     installing !== null
       ? ((installPlans ?? []).find((plan) => plan.id === installing) ?? null)
@@ -247,6 +224,20 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const pinnedMissing = pinnedId !== '' && pinnedCredential === null
 
   /**
+   * **The selected card's next step**: an Install / Retry / Log in / Add
+   * credential chip on the card, and what a setup in main is doing, for the
+   * line under the cards. Owned here, not by the chip it draws: pressing a chip
+   * changes it, and a mutation owned by a control that re-renders away loses
+   * its callbacks (ux_rules rule 5). Only the selected engine's login is asked.
+   */
+  const runtimeSetup = useRuntimeCardSetup({
+    selected: selectedRuntime,
+    binaries: { claude: claudeBinary, codex: codexBinary, antigravity: antigravityBinary },
+    pathSet: { claude: claudePathSet, codex: codexPathSet, antigravity: antigravityPathSet },
+    hasOpenCodeCredential: providers ? activeProviders.length > 0 : undefined
+  })
+
+  /**
    * **What the selected runtime is doing**, as one line and one tone.
    *
    * Only the selected one. A machine running Claude Agent has an `opencode`
@@ -281,6 +272,12 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       return { text: installFailure, tone: 'danger' }
     }
     if (selectedRuntime === null) return { text: '', tone: 'muted' }
+    /**
+     * A setup in main — checking the login, logging in, a login that did not
+     * finish, a logged-out engine — speaks before the binary's own line: it is
+     * the one state here the user is waiting on or must act on.
+     */
+    if (runtimeSetup.status) return { text: runtimeSetup.status.text, tone: runtimeSetup.status.tone }
     if (onOpenCode) {
       return {
         // One line each at the 800px minimum (rule 12). Where the binary comes
@@ -316,17 +313,6 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       }
     }
     if (onAntigravity) {
-      /**
-       * The Codex branch's terms, with the login in front: an install that is
-       * fine but signed out is the one state here the user must act on, and the
-       * pending and failed sign-in say themselves in the same line.
-       */
-      if (antigravityLoggedOut || antigravityLogin.pending) {
-        const lead = loginFailureLead(antigravityLogin.failure)
-        return antigravityLogin.pending
-          ? { text: loginPendingText('antigravity', antigravityLogin.phase), tone: 'muted' }
-          : { text: lead ?? 'Antigravity is not logged in.', tone: 'danger' }
-      }
       return {
         text: antigravityStatusText(antigravityBinary, antigravityPathSet),
         tone: antigravityBinary?.state === 'failed' ? 'danger' : 'muted'
@@ -344,6 +330,19 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       tone: claudeBinary?.state === 'failed' ? 'danger' : 'muted'
     }
   })()
+
+  /**
+   * Antigravity selected and not ready yet: the line says whose terms the
+   * install and login accept — unless something more pressing holds it (a
+   * setup phase, a failure, a download's progress), in which case the terms
+   * move behind the (?) at the line's end.
+   */
+  const showsStatus =
+    !runtimeSetup.antigravityTerms ||
+    runtimeSetup.status !== null ||
+    runtimeStatus.tone !== 'muted' ||
+    antigravityBinary?.state === 'resolving' ||
+    (installFailure !== null && installingPlan === null)
 
   const forgettingRoot = roots.find((root) => root.id === forgetting) ?? null
   const managingRoot = roots.find((root) => root.id === managing) ?? null
@@ -692,9 +691,10 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                   agents — and this is where you change it.
                 </p>
                 <p>
-                  A runtime you do not have yet is still a button: pressing it installs that tool,
-                  with its own installer and after showing you the command, and then puts your agents
-                  on it.
+                  Choosing a runtime only selects it. One that is not on this computer yet shows
+                  Install on its card, and nothing is downloaded until you press Install or start a
+                  chat on it; once it is installed, Cinna checks its login and opens the login when
+                  it is needed.
                 </p>
               </SettingsInfoTip>
             </div>
@@ -708,9 +708,12 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               claudePathSet={claudePathSet}
               antigravityPathSet={antigravityPathSet}
               installing={install.isPending ? (install.variables ?? null) : null}
-              onSelect={(engine) =>
+              onSelect={(engine) => {
                 setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: engine })
-              }
+                runtimeSetup.afterSelect(engine)
+              }}
+              chips={runtimeSetup.chips}
+              onChip={runtimeSetup.onChip}
               onInstall={(tool) => {
                 setInstallFailure(null)
                 setInstalling(tool)
@@ -735,6 +738,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               running Claude Agent (rule 9).
             */}
             <div className="mt-2 flex min-h-[1lh] items-start gap-3 text-[13px] leading-relaxed">
+              {showsStatus ? (
               <p
                 className={`min-w-0 flex-1 truncate ${
                   runtimeStatus.tone === 'warning'
@@ -747,6 +751,9 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               >
                 {runtimeStatus.text}
               </p>
+              ) : (
+                <AntigravityTermsLine />
+              )}
               {/*
                 *Try again* belongs to the one state that does not resolve itself
                 — a binary this machine could not get (rule 12: give the status
@@ -770,58 +777,27 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 </button>
               )}
               {/*
-                The managed Codex CLI's action, in the same slot and the same
-                shape — and Claude Code's, from the one component, so the twins
-                cannot drift (the Codex row offered "Install now" beside a line
-                about the user's own file while the Claude row hid it).
+                Install, Retry and Log in are chips on the selected card now;
+                this line only explains. What stays here: *Fix path* for a
+                saved path that failed (the field is on another tab), and
+                *Cancel* while a login runs. Same text-action shape, so
+                nothing moves when one replaces the other.
               */}
-              {selectedRuntime === 'codex' && (
-                <ManagedCliAction
-                  binary={codexBinary}
-                  pathSet={codexPathSet}
-                  pending={resolveCodex.isPending}
-                  onResolve={() => resolveCodex.mutate()}
-                />
+              {selectedRuntime === 'codex' && <FixPathAction binary={codexBinary} pathSet={codexPathSet} />}
+              {selectedRuntime === 'claude' && <FixPathAction binary={claudeBinary} pathSet={claudePathSet} />}
+              {onAntigravity && <FixPathAction binary={antigravityBinary} pathSet={antigravityPathSet} />}
+              {runtimeSetup.status?.cancel && (
+                <button type="button" onClick={runtimeSetup.status.cancel} className={statusActionClass}>
+                  Cancel
+                </button>
               )}
-              {selectedRuntime === 'claude' && (
-                <ManagedCliAction
-                  binary={claudeBinary}
-                  pathSet={claudePathSet}
-                  pending={resolveClaude.isPending}
-                  onResolve={() => resolveClaude.mutate()}
-                />
+              {/* Google's terms behind a (?) last in the line while another
+                  sentence holds it: one fixed icon, so nothing moves. */}
+              {runtimeSetup.antigravityTerms && showsStatus && (
+                <span className="flex h-[1lh] shrink-0 items-center">
+                  <AntigravityTermsTip />
+                </span>
               )}
-              {/*
-                Antigravity's: Log in while it is signed out (and Cancel while
-                that runs), otherwise the managed install's action. Same slot,
-                same text-action shape, so nothing moves when one replaces the
-                other.
-              */}
-              {onAntigravity && (antigravityLoggedOut || antigravityLogin.pending) ? (
-                <>
-                  {antigravityLogin.pending ? (
-                    <button type="button" onClick={antigravityLogin.cancel} className={statusActionClass}>
-                      Cancel
-                    </button>
-                  ) : (
-                    <button type="button" onClick={antigravityLogin.start} className={statusActionClass}>
-                      Log in
-                    </button>
-                  )}
-                  {/* Google's terms behind a (?) last in the line: one fixed
-                      icon, so neither the press nor the sign-in moves a row. */}
-                  <span className="flex h-[1lh] shrink-0 items-center">
-                    <AntigravityTermsTip />
-                  </span>
-                </>
-              ) : onAntigravity ? (
-                <ManagedCliAction
-                  binary={antigravityBinary}
-                  pathSet={antigravityPathSet}
-                  pending={resolveAntigravity.isPending}
-                  onResolve={() => resolveAntigravity.mutate()}
-                />
-              ) : null}
             </div>
           </SettingsRow>
           <SettingsRow>
@@ -973,43 +949,25 @@ const statusActionClass =
   'shrink-0 text-[13px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline'
 
 /**
- * The one action beside a managed CLI's status line (Codex, Claude Code).
+ * *Fix path* beside a managed CLI's status line, when a saved path failed.
  *
- * Two states a user can act on here: a failed install (*Try again*), and nothing
- * fetched yet (*Install now*) — the download is large, and the alternative is
- * paying for it at the top of the first message. `|| pending` because pressing
- * either leaves both of those states, and a condition naming only them would
- * unmount the control on click.
- *
- * **With a path saved, neither is true.** Nothing installs, and *Try again*
- * re-checks the same bad path; what resolves that state is the field, which is
- * on another tab, so the action goes there (ux_rules rule 12: give the status
- * the control that resolves it).
+ * Install and Retry are the selected card's chips; with a path saved neither
+ * applies — nothing installs, and retrying re-checks the same bad file. What
+ * resolves that state is the field, which is on another tab, so the action
+ * goes there (ux_rules rule 12: give the status the control that resolves it).
  */
-function ManagedCliAction({
+function FixPathAction({
   binary,
-  pathSet,
-  pending,
-  onResolve
+  pathSet
 }: {
   binary: EngineBinaryState | undefined
   pathSet: boolean
-  pending: boolean
-  onResolve: () => void
 }): React.JSX.Element | null {
   const setSettingsMenu = useUIStore((state) => state.setSettingsMenu)
-  if (pathSet) {
-    if (binary?.state !== 'failed') return null
-    return (
-      <button type="button" onClick={() => setSettingsMenu('local-dev')} className={statusActionClass}>
-        Fix path
-      </button>
-    )
-  }
-  if (binary?.state !== 'failed' && binary?.state !== 'unresolved' && !pending) return null
+  if (!pathSet || binary?.state !== 'failed') return null
   return (
-    <button type="button" onClick={onResolve} disabled={pending} className={statusActionClass}>
-      {pending ? 'Installing…' : binary?.state === 'failed' ? 'Try again' : 'Install now'}
+    <button type="button" onClick={() => setSettingsMenu('local-dev')} className={statusActionClass}>
+      Fix path
     </button>
   )
 }

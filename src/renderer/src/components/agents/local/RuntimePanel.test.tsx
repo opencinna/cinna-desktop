@@ -152,6 +152,13 @@ vi.mock('../../../hooks/useLocalTools', () => ({
   useCodexAuth: () => ({ data: codexAuth }),
   useAntigravityAuth: () => ({ data: antigravityAuth })
 }))
+/** Main's runtime setup, as the panel asks for it when Runs on picks an engine. */
+const runtimeSetup = vi.hoisted(() => vi.fn())
+/** How main's last setup of each engine ended, as the hook reports it. */
+const setupResults = vi.hoisted(() => ({}) as Record<string, unknown>)
+vi.mock('../../../hooks/useRuntimeSetup', () => ({
+  useRuntimeSetup: () => ({ setup: runtimeSetup, cancel: vi.fn(), phase: () => null, result: (engine: string) => setupResults[engine] ?? null })
+}))
 vi.mock('../../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({
     data: settingsLoaded ? { localAgentsModelAdvanced: advanced, ...runtimePaths } : undefined
@@ -1020,7 +1027,9 @@ describe('RuntimePanel', () => {
       // means the same thing on either engine, so the user's answer to "how
       // hard is this work" is not something a change of runtime should discard.
       render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'complex' })} />)
+      runtimeSetup.mockClear()
       fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:claude' } })
+      expect(runtimeSetup).toHaveBeenCalledWith('claude', { install: false })
       const [vars] = save.mock.calls[0] as [
         { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
       ]
@@ -1033,7 +1042,10 @@ describe('RuntimePanel', () => {
 
     it('switching away from Claude clears the engine', () => {
       render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'medium' })} />)
+      runtimeSetup.mockClear()
       fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
+      // A credential is not an engine with a login: nothing to set up.
+      expect(runtimeSetup).not.toHaveBeenCalled()
       const [vars] = save.mock.calls[0] as [
         { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
       ]
@@ -1157,6 +1169,29 @@ describe('RuntimePanel', () => {
       expect(loginStart).not.toHaveBeenCalled()
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(loginCancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows a failed login that main ran for a setup, with its command, as Settings does', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      setupResults.claude = { outcome: 'login_failed', login: { outcome: 'timeout', command: "'/c' auth login" } }
+      try {
+        render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+        expect(screen.getByText('Sign-in timed out. You can also run this in a terminal:')).toBeTruthy()
+        expect(screen.getByText("'/c' auth login")).toBeTruthy()
+      } finally {
+        delete setupResults.claude
+      }
+    })
+
+    it('drops that failure once the engine is logged in', () => {
+      claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: null }
+      setupResults.claude = { outcome: 'login_failed', login: { outcome: 'timeout', command: "'/c' auth login" } }
+      try {
+        render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+        expect(screen.queryByText(/Sign-in timed out/)).toBeNull()
+      } finally {
+        delete setupResults.claude
+      }
     })
 
     it('offers the terminal command, with a copy button, after a sign-in that did not finish', async () => {
@@ -1544,8 +1579,12 @@ describe('Codex runtime', () => {
   it('selects Codex, clears the credential/model, and preserves complexity', () => {
     codexInstalled = true
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'complex' })} />)
+    runtimeSetup.mockClear()
     fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:codex' } })
     expect((save.mock.calls[0][0] as { runtime: unknown }).runtime).toMatchObject({ engine: 'codex', credential: null, modelId: null, complexity: 'complex' })
+    // A pick is a gesture: main checks the sign-in (and signs in on a definite
+    // "no"), but never installs from here.
+    expect(runtimeSetup).toHaveBeenCalledWith('codex', { install: false })
   })
   it('runs without a provider catalogue and explains reasoning effort', () => {
     codexInstalled = true
@@ -1613,8 +1652,10 @@ describe('Antigravity runtime', () => {
 
   it('is offered beside Codex, and selecting it clears the credential and model and keeps complexity', () => {
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5', complexity: 'complex' })} />)
+    runtimeSetup.mockClear()
     fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:antigravity' } })
     expect((save.mock.calls[0][0] as { runtime: unknown }).runtime).toMatchObject({ engine: 'antigravity', credential: null, modelId: null, complexity: 'complex' })
+    expect(runtimeSetup).toHaveBeenCalledWith('antigravity', { install: false })
   })
 
   it('names the managed pin in the Engine cell and says it runs on the Google login', () => {

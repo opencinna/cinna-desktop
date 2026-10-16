@@ -56,3 +56,39 @@ function AntigravityTermsContent(): React.JSX.Element {
     </>
   )
 }
+
+/**
+ * Antigravity's terms, as the status line while it is selected and not yet
+ * installed and logged in. The link never truncates: the lead does, with the
+ * whole sentence in `title`, so the one thing the line exists for survives
+ * the 800px minimum (ux_rules rule 7). A link the shell refused to open says
+ * so in place.
+ */
+export function AntigravityTermsLine(): React.JSX.Element {
+  const openExternal = useOpenExternal()
+  const [failed, setFailed] = useState(false)
+  const sentence = 'Installing and logging in accepts Google’s Antigravity terms.'
+  return (
+    <p className="flex min-w-0 flex-1 gap-1 text-[var(--color-text-muted)]" title={sentence}>
+      <span className="min-w-0 truncate">Installing and logging in accepts</span>{' '}
+      {failed ? (
+        <span className="shrink-0">Could not open {ANTIGRAVITY_TERMS_URL}</span>
+      ) : (
+        <button
+          type="button"
+          className="shrink-0 font-medium text-[var(--color-accent)] hover:underline"
+          title={ANTIGRAVITY_TERMS_URL}
+          onClick={() => {
+            void openExternal(ANTIGRAVITY_TERMS_URL)
+              .then((result) => {
+                if (!result.success) setFailed(true)
+              })
+              .catch(() => setFailed(true))
+          }}
+        >
+          Google’s Antigravity terms
+        </button>
+      )}
+    </p>
+  )
+}

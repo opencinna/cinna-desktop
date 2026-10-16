@@ -1,4 +1,5 @@
 import { Check, Download, Loader2 } from 'lucide-react'
+import { useRef, type MouseEvent } from 'react'
 import type { DetectedTool, RuntimeToolId } from '../../../../shared/localTools'
 import {
   PINNED_ANTIGRAVITY_VERSION,
@@ -22,9 +23,30 @@ import { SettingsBadge } from './SettingsLayout'
  * `engine` is what selecting it writes. All listed runtimes have ACP launchers;
  * CLI runtimes offer installation when their executable is missing.
  */
+export type RuntimeChoiceId = RuntimeToolId | 'antigravity' | 'opencode'
+
+/**
+ * What a **selected** card shows over itself.
+ *
+ * Something missing: a normal-size primary button centred over the card on a
+ * translucent scrim (Install, Retry, Log in, Add credential) — clicking a card
+ * only selects it, and anything that downloads or logs in is this button,
+ * pressed on purpose. `installing` / `logging_in`: the same spot, as status.
+ * `ready`: all set — no scrim, a green dot in the corner. Unselected cards
+ * show nothing over themselves.
+ */
+export type RuntimeChip =
+  | { kind: 'ready' }
+  | { kind: 'install' }
+  | { kind: 'installing'; percent: number | null }
+  | { kind: 'retry' }
+  | { kind: 'log_in' }
+  | { kind: 'logging_in' }
+  | { kind: 'add_credential' }
+
 export interface RuntimeChoice {
   /** Stable key for React and for the install dialog. */
-  id: RuntimeToolId | 'antigravity' | 'opencode'
+  id: RuntimeChoiceId
   label: string
   /** The detected tool this button reports, or null for the built-in runner. */
   tool: RuntimeToolId | null
@@ -32,9 +54,11 @@ export interface RuntimeChoice {
   engine: AgentEngine | null
   /**
    * The pinned version Cinna installs for itself, when it does. Such a runtime
-   * is **always available** — detection is not consulted, nothing is offered
-   * for install — and the sub-line names this version rather than whatever is
-   * on the user's PATH, because the PATH copy is not what its sessions run on.
+   * is **always selectable** — detection is not consulted, and selecting it
+   * downloads nothing — and the sub-line names this version rather than
+   * whatever is on the user's PATH, because the PATH copy is not what its
+   * sessions run on. "Not installed" when its binary is not on disk; the
+   * selected card's Install chip is then the one way to fetch it.
    */
   managedVersion?: string
 }
@@ -64,10 +88,19 @@ export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
  *
  * A button group rather than a `<select>`, because those two facts cannot be
  * expressed in an option label without it becoming a sentence, and because the
- * primary action for a runtime the user does not have is *install it*, which a
- * select cannot offer at all. Clicking a missing one installs it and then
- * selects it — one gesture for "I want to use this", whichever state it starts
- * in.
+ * selected runtime's next step (install it, sign in, add a credential) is a
+ * chip on its card, which a select cannot offer at all.
+ *
+ * **Clicking a card only selects it.** Clicking through four cards must not
+ * start four downloads of 100–300 MB; the Install chip on the selected card is
+ * the explicit gesture for that.
+ *
+ * **A card is a positioned box holding the select button and, over it, the
+ * overlay** — a button cannot nest in a button. The overlay is absolutely
+ * positioned over the whole card, so neither it nor the dot ever changes the
+ * card's size or touches its label (ux_rules rule 1). The select button stays
+ * in the tab order underneath; a selected card is already pressed, so a click
+ * on the scrim around the overlay's button has nothing to do.
  *
  * Selection is `aria-pressed`, and the accessible name is the visible text by
  * construction — no `aria-label` — so the name a screen reader announces
@@ -86,7 +119,9 @@ export function RuntimeChoiceButtons({
   antigravityBinary,
   codexPathSet = false,
   claudePathSet = false,
-  antigravityPathSet = false
+  antigravityPathSet = false,
+  chips,
+  onChip
 }: {
   /** The stored pin. Nothing is selected while it is still being decided. */
   selected: AgentEngine | null
@@ -117,7 +152,23 @@ export function RuntimeChoiceButtons({
   codexPathSet?: boolean
   claudePathSet?: boolean
   antigravityPathSet?: boolean
+  /** The chip on each card, by choice id — only the selected card's is drawn. */
+  chips?: Partial<Record<RuntimeChoiceId, RuntimeChip>>
+  onChip?: (id: RuntimeChoiceId) => void
 }): React.JSX.Element {
+  /**
+   * When the selection last moved, and to what. A chip appears under the
+   * pointer on the card just clicked, so the second click of a double-click
+   * would land on Install and start a 100–300 MB download nobody asked for
+   * (ux_rules rule 1): presses that soon after a selection are ignored. A
+   * selection already there when the picker mounts is not a fresh one.
+   */
+  const selectedAt = useRef<{ value: AgentEngine | null; at: number }>({ value: selected, at: 0 })
+  if (selectedAt.current.value !== selected) selectedAt.current = { value: selected, at: Date.now() }
+  const pressChip = (id: RuntimeChoiceId, event: MouseEvent<HTMLButtonElement>): void => {
+    if (event.detail > 1 || Date.now() - selectedAt.current.at < CHIP_SETTLE_MS) return
+    onChip?.(id)
+  }
   return (
     /*
       A grid of equal columns, not a wrapping flex row: four buttons wrapped as
@@ -167,18 +218,39 @@ export function RuntimeChoiceButtons({
         const busy = installing !== null && installing === choice.id
         /** Nothing to do: it is here, and this build cannot run agents on it. */
         const inert = choice.engine === null && detected === true
+        /**
+         * A managed binary that is not on disk (`unresolved` after main's look)
+         * — or being fetched now. Not with a path saved: that file is what
+         * runs, and its state is the status line's to explain.
+         */
+        const managedBinary =
+          choice.id === 'codex' ? codexBinary : choice.id === 'claude' ? claudeBinary : choice.id === 'antigravity' ? antigravityBinary : undefined
+        const managedPathSet =
+          choice.id === 'codex' ? codexPathSet : choice.id === 'claude' ? claudePathSet : choice.id === 'antigravity' ? antigravityPathSet : false
+        const chip = isSelected ? chips?.[choice.id] : undefined
+        // The words the progress chips leave out (they are a spinner).
+        const managedSub =
+          chip?.kind === 'logging_in'
+            ? 'Logging in…'
+            : managed && !managedPathSet
+              ? chip?.kind === 'installing' || managedBinary?.state === 'resolving'
+                ? 'Installing…'
+                : managedBinary?.state === 'unresolved'
+                  ? 'Not installed'
+                  : null
+              : null
         const sub =
           detected === undefined
             ? 'Checking…'
             : detected
-              ? (version ?? (choice.tool === null ? 'Built in' : 'Installed'))
+              ? (managedSub ?? version ?? (choice.tool === null ? 'Built in' : 'Installed'))
               : busy
                 ? 'Installing…'
                 : 'Not installed'
 
         return (
+          <div key={choice.id} className="relative min-w-0">
           <button
-            key={choice.id}
             type="button"
             aria-pressed={isSelected}
             disabled={disabled || busy || inert || detected === undefined}
@@ -197,7 +269,7 @@ export function RuntimeChoiceButtons({
                   ? `Install ${choice.label} and run agents on it`
                   : `Run agents on ${choice.label}`
             }
-            className={`min-w-0 rounded-lg border px-3 py-2 text-left transition-colors
+            className={`h-full w-full min-w-0 rounded-lg border px-3 py-2 text-left transition-colors
               disabled:cursor-not-allowed ${
                 isSelected
                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10'
@@ -219,20 +291,79 @@ export function RuntimeChoiceButtons({
                   <Download size={13} className="text-[var(--color-text-muted)]" />
                 ) : null}
               </span>
-              <span className={`${defaultChoice ? 'min-w-0 text-[13px]' : 'truncate text-[14px]'} font-medium text-[var(--color-text)]`}>
+              <span className={`truncate ${defaultChoice ? 'text-[13px]' : 'text-[14px]'} font-medium text-[var(--color-text)]`} title={choice.label}>
                 {choice.label}
               </span>
               {/* The one thing the sub-line cannot carry: *why* a detected
                   runtime is not selectable. */}
               {choice.engine === null && <SettingsBadge>Soon</SettingsBadge>}
             </span>
-            <span className="mt-0.5 block truncate pl-[1.375rem] font-mono text-[12px] text-[var(--color-text-muted)]">
+            <span className="mt-0.5 block truncate pl-[1.375rem] font-mono text-[12px] text-[var(--color-text-muted)]" title={sub}>
               {sub}
             </span>
           </button>
+          {chip && <RuntimeChipControl chip={chip} disabled={disabled} onPress={(event) => pressChip(choice.id, event)} />}
+          </div>
         )
       })}
     </div>
+    </div>
+  )
+}
+
+/** How long after a card becomes selected its overlay button ignores presses. */
+const CHIP_SETTLE_MS = 400
+
+/**
+ * A selected card's overlay. The actions are the app's primary button, centred
+ * on a scrim over the whole card; their visible text is their accessible name
+ * (rule 10). Progress sits in the same spot as status text with a spinner. All
+ * set is a green dot in the corner instead, and no scrim at all.
+ */
+function RuntimeChipControl({
+  chip,
+  disabled,
+  onPress
+}: {
+  chip: RuntimeChip
+  disabled: boolean
+  onPress: (event: MouseEvent<HTMLButtonElement>) => void
+}): React.JSX.Element {
+  if (chip.kind === 'ready') {
+    return (
+      <span
+        role="img"
+        aria-label="Ready"
+        title="Ready"
+        className="pointer-events-none absolute right-2 top-2 h-2 w-2 rounded-full bg-[var(--color-success)]"
+      />
+    )
+  }
+  const scrim = 'runtime-card-scrim absolute inset-0 flex items-center justify-center rounded-lg'
+  if (chip.kind === 'installing' || chip.kind === 'logging_in') {
+    const text =
+      chip.kind === 'logging_in' ? 'Logging in…' : chip.percent === null ? 'Installing…' : `Installing ${chip.percent}%`
+    return (
+      <div className={scrim}>
+        <span role="status" className="inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] font-medium text-[var(--color-text)]">
+          <Loader2 size={14} className="shrink-0 animate-spin" aria-hidden="true" />
+          {text}
+        </span>
+      </div>
+    )
+  }
+  const label =
+    chip.kind === 'install' ? 'Install' : chip.kind === 'retry' ? 'Retry' : chip.kind === 'log_in' ? 'Log in' : 'Add credential'
+  return (
+    <div className={scrim}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onPress}
+        className="whitespace-nowrap rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:enabled:bg-[var(--color-accent-hover)] disabled:opacity-50"
+      >
+        {label}
+      </button>
     </div>
   )
 }

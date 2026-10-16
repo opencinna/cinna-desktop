@@ -372,6 +372,47 @@ export type EngineLoginPhase = 'preparing' | 'waiting'
 /** Which engine logins the main process is running right now, and in which phase; null when none. */
 export type EngineLoginRunning = Record<EngineLoginId, EngineLoginPhase | null>
 
+/**
+ * Where a **runtime setup** is — the chain a runtime card (or the agent page's
+ * Runs-on pick) starts in main: `installing` while the pinned binary is fetched,
+ * `checking` while the login probe is asked again, `signing_in` while the
+ * engine's own in-app login runs.
+ */
+export type RuntimeSetupPhase = 'installing' | 'checking' | 'signing_in'
+
+/** Which engines have a setup running now, and in which phase; null when none. */
+export type RuntimeSetupRunning = Record<EngineLoginId, RuntimeSetupPhase | null>
+
+/**
+ * How one runtime setup ended. Data, never thrown.
+ *
+ * - `ready` — installed and signed in.
+ * - `needs_install` — the binary is not on disk and the caller did not ask to install it; nothing was downloaded.
+ * - `install_failed` — the install (or a configured path) did not resolve; `reason` is the sentence.
+ * - `login_failed` — the in-app login ran and ended `timeout` or `failed` (never `cancelled`).
+ * - `auth_unknown` — the probe could not say; no login is started on a guess (unless the user's Log in forced one).
+ * - `cancelled` — cancelled: before the login started, or the login itself was cancelled.
+ */
+export type RuntimeSetupResult =
+  | { outcome: 'ready' }
+  | { outcome: 'needs_install' }
+  | { outcome: 'install_failed'; reason: string }
+  | { outcome: 'login_failed'; login: EngineLoginResult }
+  | { outcome: 'auth_unknown' }
+  | { outcome: 'cancelled' }
+
+/**
+ * Main → renderer push on every setup phase change: what is running now, and
+ * — when one just ended — which engine and how, so every surface can refetch
+ * that engine's login, the login-running query and the agent list.
+ */
+export interface RuntimeSetupEvent {
+  running: RuntimeSetupRunning
+  ended?: { engine: EngineLoginId; result: RuntimeSetupResult }
+}
+
+export const RUNTIME_SETUP_CHANNEL = 'engine:runtime-setup-state'
+
 /** The product name each login engine is shown under. */
 export const ENGINE_LOGIN_NAMES: Record<EngineLoginId, string> = {
   claude: 'Claude Code',

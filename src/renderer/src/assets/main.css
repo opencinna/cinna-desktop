@@ -385,6 +385,15 @@
     border-color: rgba(255, 255, 255, 0.07);
   }
 
+  /* The scrim over a selected runtime card while it needs something (Install,
+     Log in, …): the card's own label and sub-line stay readable through it, the
+     centred button reads over them. `-webkit-` first, as everywhere here. */
+  .runtime-card-scrim {
+    background-color: color-mix(in srgb, var(--color-bg) 70%, transparent);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+  }
+
   /* Active nav-item highlight (chat list, settings menu) inside the (already
      blurred) sidebar — a translucent tint that picks up the panel's frosted
      background instead of reading as a solid block. */

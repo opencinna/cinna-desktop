@@ -36,6 +36,11 @@ vi.mock('../../hooks/useLocalTools', () => ({
     return engineLogin
   }
 }))
+// The runtime cards' chips and setup are `DevelopmentSettings`' own tests' subject.
+vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
+vi.mock('../../hooks/useRuntimeSetup', () => ({
+  useRuntimeCardSetup: () => ({ chips: {}, onChip: () => {}, afterSelect: () => {}, status: null, antigravityTerms: false })
+}))
 vi.mock('react-markdown', async (importOriginal) => {
   const original = await importOriginal<typeof import('react-markdown')>()
   return { ...original, default: (props: Parameters<typeof original.default>[0]) => {

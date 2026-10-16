@@ -79,9 +79,12 @@ import type {
   EngineLoginId,
   EngineLoginResult,
   EngineLoginRunning,
+  RuntimeSetupEvent,
+  RuntimeSetupResult,
+  RuntimeSetupRunning,
   LocalAgentRuntimeInput
 } from '../shared/engine'
-import { ANTIGRAVITY_BINARY_CHANNEL, CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
+import { ANTIGRAVITY_BINARY_CHANNEL, CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL, RUNTIME_SETUP_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
@@ -1665,6 +1668,25 @@ const api = {
     /** Which engine logins are running now (`preparing` / `waiting`, or null), for a surface mounted mid-login. */
     engineLoginRunning: (): Promise<EngineLoginRunning> =>
       ipcRenderer.invoke('local-tools:engine-login-running'),
+    /**
+     * Set up one runtime — install its pinned binary (only with `install: true`),
+     * ask whether it is signed in, and start the in-app login on a definite
+     * "signed out" (or unless signed in, with `login: 'force'` — the user's
+     * own Log in). Runs in main; a second call for the engine joins it.
+     */
+    runtimeSetup: (engine: EngineLoginId, options: { install: boolean; login?: 'auto' | 'force' }): Promise<RuntimeSetupResult> =>
+      ipcRenderer.invoke('local-tools:runtime-setup', engine, options),
+    /** Which runtime setups are running now and in which phase. */
+    runtimeSetupRunning: (): Promise<RuntimeSetupRunning> => ipcRenderer.invoke('local-tools:runtime-setup-running'),
+    /** Cancel one engine's setup (its login, if one runs); false when nothing ran. */
+    runtimeSetupCancel: (engine: EngineLoginId): Promise<boolean> =>
+      ipcRenderer.invoke('local-tools:runtime-setup-cancel', engine),
+    /** Fires on every setup phase change and when a run ends. Returns an unsubscribe. */
+    onRuntimeSetup: (handler: (event: RuntimeSetupEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, event: RuntimeSetupEvent): void => handler(event)
+      ipcRenderer.on(RUNTIME_SETUP_CHANNEL, listener)
+      return () => ipcRenderer.off(RUNTIME_SETUP_CHANNEL, listener)
+    },
     /** Vendor desktop apps found on this Mac (Claude Desktop, ChatGPT): id, name and engine only. */
     desktopApps: (): Promise<DetectedDesktopApp[]> => ipcRenderer.invoke('local-tools:desktop-apps'),
     /**

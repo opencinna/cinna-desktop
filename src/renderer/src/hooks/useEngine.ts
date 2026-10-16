@@ -75,22 +75,6 @@ export function useCodexBinary({ enabled = true }: { enabled?: boolean } = {}) {
   })
 }
 
-/**
- * Install or re-check the Codex CLI now — the row's *Install now* / *Try again*.
- *
- * Owned by the settings section, not by the text action that fires it: pressing
- * it moves the state to `resolving`, which unmounts that action, and a
- * mutate-level callback would be dropped with it. Resolves with a `failed`
- * state rather than rejecting, so the caller renders `data.error`.
- */
-export function useResolveCodexBinary() {
-  const queryClient = useQueryClient()
-  return useMutation<EngineBinaryState>({
-    mutationFn: () => window.api.engine.resolveCodex(),
-    onSuccess: (state) => queryClient.setQueryData(CODEX_BINARY_KEY, state)
-  })
-}
-
 export const CLAUDE_BINARY_KEY = ['claude-binary'] as const
 
 /** The pinned Claude Code CLI, as Settings sees it. {@link useCodexBinary}'s twin. */
@@ -99,15 +83,6 @@ export function useClaudeBinary({ enabled = true }: { enabled?: boolean } = {}) 
     queryKey: CLAUDE_BINARY_KEY,
     enabled,
     queryFn: () => window.api.engine.claudeBinary()
-  })
-}
-
-/** Install or re-check Claude Code now. Owned by the section, for the reason {@link useResolveCodexBinary} gives. */
-export function useResolveClaudeBinary() {
-  const queryClient = useQueryClient()
-  return useMutation<EngineBinaryState>({
-    mutationFn: () => window.api.engine.resolveClaude(),
-    onSuccess: (state) => queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
   })
 }
 
@@ -123,15 +98,6 @@ export function useAntigravityBinary({ enabled = true }: { enabled?: boolean } =
     queryKey: ANTIGRAVITY_BINARY_KEY,
     enabled,
     queryFn: () => window.api.engine.antigravityBinary()
-  })
-}
-
-/** Install or re-check Antigravity now. Owned by the section, for the reason {@link useResolveCodexBinary} gives. */
-export function useResolveAntigravityBinary() {
-  const queryClient = useQueryClient()
-  return useMutation<EngineBinaryState>({
-    mutationFn: () => window.api.engine.resolveAntigravity(),
-    onSuccess: (state) => queryClient.setQueryData(ANTIGRAVITY_BINARY_KEY, state)
   })
 }
 

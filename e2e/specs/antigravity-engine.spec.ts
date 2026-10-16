@@ -51,9 +51,11 @@ const DOWNLOAD_OFF = 'Set an Antigravity path in Settings: downloading Antigravi
 const COMPOSER_NOT_LOGGED_IN =
   "Antigravity is not signed in to Google. Choose Log in above the message box or on the agent's Settings tab."
 const TERMS = 'Antigravity is Google’s software, with its own terms and telemetry. Logging in runs it on your Google account.'
+/** A runtime card's chip ignores presses this long after the card is selected (the double-click guard). */
+const CHIP_SETTLE_MS = 450
 const LOGIN_PENDING = /^(Getting Antigravity ready…|Waiting for sign-in in your browser…)$/
 
-test('Antigravity as the Default runtime: downloads off says so, and Log in on a configured server moves nothing', async ({ cinna }) => {
+test('Antigravity as the Default runtime: selecting installs nothing, Install with downloads off says so, and Log in on a configured server moves nothing', async ({ cinna }) => {
   await cinna.skipOnboarding()
   const page = cinna.page
   // The sandbox HOME has no Antigravity login, on every machine (see the header).
@@ -62,45 +64,45 @@ test('Antigravity as the Default runtime: downloads off says so, and Log in on a
   await openSettings(cinna, 'Agents')
   await expect(page.getByText('Default runtime', { exact: true })).toBeVisible()
   const choice = page.getByRole('button', { name: /^Antigravity / })
-  await expect(choice).toHaveAccessibleName('Antigravity 1.3.0 managed')
+  await expect(choice).toHaveAccessibleName('Antigravity Not installed')
   await choice.click()
   await expect(choice).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => page.evaluate(() => window.api.settings.getAll().then((all) => all.localAgentsDefaultEngine))).toBe('antigravity')
 
-  // Nothing installed yet and nobody signed in: the line says the one thing to do, beside its terms.
-  const status = page.getByText(NOT_LOGGED_IN, { exact: true })
-  await expect(status).toBeVisible()
-  const logIn = page.getByRole('button', { name: 'Log in', exact: true })
+  // Selecting downloads nothing: the card offers Install, and the line names Google's terms.
+  const install = page.getByRole('button', { name: 'Install', exact: true })
+  await expect(install).toBeVisible()
+  // Never pressed: it opens Google's site in a real browser.
+  await expect(page.getByRole('button', { name: 'Google’s Antigravity terms', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => window.api.engine.antigravityBinary())).toEqual(expect.objectContaining({ state: 'unresolved' }))
+
+  // Install needs the server, and with downloads off there is none: said in words, with Retry on the card.
+  await page.waitForTimeout(CHIP_SETTLE_MS)
+  await install.click()
+  await expect(page.getByText(DOWNLOAD_OFF, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await expect(choice).toHaveAccessibleName('Antigravity Unavailable')
   const tip = page.getByRole('button', { name: 'About Antigravity’s terms', exact: true })
-  await expect(logIn).toBeVisible()
   await expect(tip).toBeVisible()
   await tip.click()
   await expect(page.getByText(TERMS, { exact: true })).toBeVisible()
-  // Never pressed: it opens Google's site in a real browser.
-  await expect(page.getByRole('button', { name: 'Google Antigravity terms', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByText(TERMS, { exact: true })).toHaveCount(0)
-
-  // Log in needs the server, and with downloads off there is none: said in words, with its retry.
-  await logIn.click()
-  await expect(page.getByText(DOWNLOAD_OFF, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeVisible()
-  await expect(choice).toHaveAccessibleName('Antigravity Unavailable')
-  await expect(logIn).toHaveCount(0)
   expect(await page.evaluate(() => window.api.engine.antigravityBinary())).toEqual({ state: 'failed', error: DOWNLOAD_OFF })
 
-  // A configured server (the scripted one) is unverified, and logged out it offers Log in again.
+  // A configured server (the scripted one) is unverified, and logged out it offers Log in on the card.
   const fake = writeFakeAntigravity(cinna)
   await page.evaluate((path) => window.api.settings.set('localAgentsAntigravityPath', path), fake.path)
   await expect(choice).toHaveAccessibleName('Antigravity unverified')
-  // The failed sign-in above stays on the line until a reload ("Sign-in didn't finish: Set an
-  // Antigravity path…", though a path is now set), so start this half from a fresh renderer.
   await page.reload()
   await openSettings(cinna, 'Agents')
   await expect(choice).toHaveAccessibleName('Antigravity unverified')
   await expect(choice).toHaveAttribute('aria-pressed', 'true')
+  const status = page.getByText(NOT_LOGGED_IN, { exact: true })
+  const logIn = page.getByRole('button', { name: 'Log in', exact: true })
   await expect(status).toBeVisible()
   await expect(logIn).toBeVisible()
+  await expect(tip).toBeVisible()
   expect(await page.evaluate(() => window.api.engine.resolveAntigravity())).toMatchObject({ state: 'ready', path: fake.path, source: 'configured' })
 
   const watched = {
@@ -111,16 +113,18 @@ test('Antigravity as the Default runtime: downloads off says so, and Log in on a
     heading: page.getByRole('heading', { name: 'Tasks', level: 2, exact: true })
   }
   const before = await boxes(watched)
+  await page.waitForTimeout(CHIP_SETTLE_MS)
   await logIn.click()
   // The sign-in runs on the configured server: initialize, then authenticate, held like a browser sign-in.
   await expect.poll(() => fake.received().map((request) => request.method)).toEqual(['initialize', 'authenticate'])
   expect(fake.received('authenticate')[0].params).toEqual({ methodId: 'oauth-personal' })
   const pending = page.getByText(LOGIN_PENDING)
   await expect(pending).toHaveText('Waiting for sign-in in your browser…')
+  await expect(page.getByRole('status').filter({ hasText: 'Logging in…' })).toBeVisible()
   const cancel = page.getByRole('button', { name: 'Cancel', exact: true })
   await expect(cancel).toBeVisible()
   // The sentence starts on the same line in the same place (its box is the row's flexible
-  // remainder, a few pixels narrower beside Cancel than beside Log in); everything else is exact.
+  // remainder, a few pixels narrower beside Cancel); everything else is exact.
   const during = await boxes({ ...watched, status: pending })
   const at = ({ x, y, height }: { x: number; y: number; height: number }) => ({ x, y, height })
   expect({ ...during, status: at(during.status) }).toEqual({ ...before, status: at(before.status) })

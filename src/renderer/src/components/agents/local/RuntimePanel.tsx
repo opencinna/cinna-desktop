@@ -27,6 +27,7 @@ import { claudeVersionLabel } from '../../settings/claudeStatus'
 import { codexVersionLabel } from '../../settings/codexStatus'
 import { antigravityDefaultOptionLabel, antigravityRunModelLabel, antigravityVersionLabel } from '../../settings/antigravityStatus'
 import { AntigravityTermsTip } from '../../settings/AntigravityTermsTip'
+import { useRuntimeSetup } from '../../../hooks/useRuntimeSetup'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
@@ -833,7 +834,32 @@ export function RuntimePanel({
       : onAntigravity
         ? 'antigravity'
         : null
-  const login = useEngineLogin(loginEngine)
+  const engineLogin = useEngineLogin(loginEngine)
+  /**
+   * Picking Claude, Codex or Antigravity under Runs on is a gesture toward that
+   * runtime: main then asks whether it is signed in and opens the sign-in on a
+   * definite "no". `install: false` — an engine that is not on disk is left to
+   * the install line below, and this pick downloads nothing.
+   */
+  const runtimeSetup = useRuntimeSetup()
+  /**
+   * A login main ran for a setup (from this pick, or a Settings card) never
+   * passes through `useEngineLogin`, so its failure is not that hook's. Shown
+   * here too, as Settings shows it — while this engine is still not logged in.
+   */
+  const setupResult = loginEngine ? runtimeSetup.result(loginEngine) : null
+  const authStateByEngine: Record<EngineLoginId, string | undefined> = {
+    claude: claudeAuth?.state,
+    codex: codexAuth?.state,
+    antigravity: antigravityAuth?.state
+  }
+  const engineAuthState = loginEngine ? authStateByEngine[loginEngine] : undefined
+  const setupLoginFailure =
+    setupResult?.outcome === 'login_failed' && engineAuthState !== 'logged_in' ? setupResult.login : null
+  const login: EngineLoginControl =
+    engineLogin.pending || engineLogin.failure || !setupLoginFailure
+      ? engineLogin
+      : { ...engineLogin, failure: setupLoginFailure }
   // A failed sign-in belongs to the agent and engine it was shown against.
   const resetLogin = login.reset
   /**
@@ -1592,10 +1618,12 @@ export function RuntimePanel({
       droppedEngine && text ? `${droppedEngine} ${text}` : (droppedEngine ?? text)
     if (value === CODEX_OPTION) {
       commit(null, null, declaredComplexity, { engine: 'codex', note: withDropped(declaredModel ? 'Codex will use its configured default model.' : undefined) })
+      runtimeSetup.setup('codex', { install: false })
       return
     }
     if (value === ANTIGRAVITY_OPTION) {
       commit(null, null, declaredComplexity, { engine: 'antigravity', note: withDropped(declaredModel ? `Antigravity will use ${antigravityRunModelLabel(null, declaredComplexity)}.` : undefined) })
+      runtimeSetup.setup('antigravity', { install: false })
       return
     }
     if (value === CLAUDE_OPTION) {
@@ -1605,6 +1633,7 @@ export function RuntimePanel({
           ? `Dropped “${nameOf(declaredModel)}” — Claude Agent runs on ${claudeModelForComplexity(declaredComplexity)}.`
           : undefined)
       })
+      runtimeSetup.setup('claude', { install: false })
       return
     }
     if (onCli) {
