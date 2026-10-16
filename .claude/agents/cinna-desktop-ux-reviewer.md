@@ -1,6 +1,7 @@
 ---
 name: cinna-desktop-ux-reviewer
 description: Reviews a change to a user-visible surface against the project's UX rules (docs/development/ui_guidelines/ux_rules.md) and visual guidelines, by reading the diff and by driving the built app to look at the screen. Use whenever a component, dialog, page or settings section was added or changed, before it is committed — alongside the code reviewer, not instead of it. Skip it when the user dictated the design themselves and said they will check it by hand; ask for a quick pass (diff only, no build) for tuning of an existing surface.
+model: opus
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 

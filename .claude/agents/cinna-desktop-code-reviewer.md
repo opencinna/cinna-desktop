@@ -1,6 +1,7 @@
 ---
 name: cinna-desktop-code-reviewer
 description: Reviews a diff for correctness defects and layering violations, verifying every finding against the code before reporting it. Use after a feature or fix is implemented and before it is committed — especially for anything crossing the main/renderer boundary, running work concurrently, or touching first-run.
+model: opus
 tools: Read, Bash, Grep, Glob
 ---
 

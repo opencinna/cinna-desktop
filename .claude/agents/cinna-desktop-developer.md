@@ -1,6 +1,7 @@
 ---
 name: cinna-desktop-developer
 description: Implements a well-specified chunk of Cinna Desktop in a fresh context — the edit, test, typecheck loop — from a brief that states the decisions already made. Use once the design is settled and the remaining work is mechanical, so the main session does not pay its full context on every small edit. Not for work whose design is still moving.
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 

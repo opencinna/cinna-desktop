@@ -1,6 +1,7 @@
 ---
 name: cinna-desktop-feature-documenter
 description: Writes and updates the layered docs under docs/ for a change that has already been implemented, working from the diff rather than from a description of it. Use when a feature lands, when behaviour a doc describes has changed, or when a doc has gone stale.
+model: sonnet
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 

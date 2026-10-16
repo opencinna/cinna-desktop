@@ -1,6 +1,7 @@
 ---
 name: e2e-test-writer
 description: Writes, runs and debugs Playwright E2E specs under e2e/ that drive the built Cinna Desktop app for a user scenario. Use when the user wants a new end-to-end test for a specific user flow, or an existing e2e spec fixed or extended.
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 

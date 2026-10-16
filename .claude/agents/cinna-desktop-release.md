@@ -1,6 +1,7 @@
 ---
 name: cinna-desktop-release
 description: Drives the release runbook — pre-flight, version bump, signed and notarized macOS build, tag push, Linux CI, draft verification and publication — stopping for a human before every irreversible step. Use when the user asks to cut, build, verify or publish a release.
+model: opus
 tools: Read, Bash, Grep, Glob
 ---
 
