@@ -132,7 +132,7 @@ describe('credential delivery integration', () => {
     const a = addAgent('kit'); mkdirSync(join(a.path, 'credentials')); writeFileSync(join(a.path, 'credentials/credentials.json'), '[]')
     execFileSync('git', ['init', '-q', a.path]); execFileSync('git', ['-C', a.path, 'add', 'credentials/credentials.json'])
     const c = service.save({ name: 'x', type: 'api_token', values: { api_token: 'fixture-secret' } }); await sleep()
-    await expect(service.setAttachments(a.id, 'local', [c.id])).rejects.toThrow('untracked')
+    await expect(service.setAttachments(a.id, 'local', [c.id])).rejects.toThrow('is tracked by git')
     expect(readFileSync(join(a.path, 'credentials/credentials.json'), 'utf8')).toBe('[]')
   })
 })

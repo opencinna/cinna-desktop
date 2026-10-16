@@ -21,7 +21,7 @@ Tests use dummy service secrets. Real Desktop authorizations were limited to two
 
 Pinned runtime probes used fake loopback providers, disposable homes, real ACP adapters/binaries, and a shell child that read `CINNA_CREDENTIALS_PATH` outside its cwd. All passed: Claude Code 2.1.276 / adapter 0.76.0; Codex 0.155.0 / adapter 1.11.0; OpenCode 1.18.27. They verify environment propagation and external-file access, not a promise of OS isolation.
 
-Service tests also exercise unavailable encryption, permissions/write-on-change, authored-file preservation, tracked-path refusal, stable attachment identity after profile recreation, busy-turn revocation, malformed-list preservation, account/suspend response invalidation, shared offline TTL, cleanup failure, moved bare folders, and Python helper precedence/placeholder/transform behavior. Screenshots of the new Settings and Agent Credentials surfaces were reviewed; create/attach/detach was driven through the UI.
+Service tests also exercise unavailable encryption, permissions/write-on-change, authored-file preservation, tracked-path refusal, a service-account side file written into a committed kit agent at `credentials/<id>/credentials.json` with `git status` unchanged, and removed with its folder on detach (`files.test.ts`), stable attachment identity after profile recreation, busy-turn revocation, malformed-list preservation, account/suspend response invalidation, shared offline TTL, cleanup failure, moved bare folders, and Python helper precedence/placeholder/transform behavior. Screenshots of the new Settings and Agent Credentials surfaces were reviewed; create/attach/detach was driven through the UI.
 
 ## Repeating locally
 

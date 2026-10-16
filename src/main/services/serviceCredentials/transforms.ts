@@ -42,7 +42,7 @@ export function localBundle(id: string, input: ServiceCredentialInput, values: R
     if (input.serviceUri) data.service_uri = input.serviceUri
   } else if (input.type === 'google_service_account') {
     serviceAccount = data
-    data = { file_path: `credentials/${id}.json`, project_id: data.project_id, client_email: data.client_email }
+    data = { file_path: `credentials/${id}/credentials.json`, project_id: data.project_id, client_email: data.client_email }
   }
   const entry: ServiceCredentialEntry = { id, name: input.name.trim(), type: input.type, notes: input.notes ?? null,
     service_uri: input.serviceUri || null, is_placeholder: !localComplete(input.type, values), credential_data: data }

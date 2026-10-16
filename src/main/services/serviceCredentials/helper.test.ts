@@ -50,7 +50,7 @@ it('matches the Core token and service-account delivery fixtures', () => {
   const sa = { name: 'SA', type: 'google_service_account' as const, values: { type: 'service_account', project_id: 'fixture', private_key: 'private-fixture', client_email: 'fixture@example.test' } }
   const bundle = localBundle('sa', sa, validateLocal(sa))
   expect(bundle.service_account_file).toEqual(sa.values)
-  expect(bundle.entry.credential_data).toEqual({ file_path: 'credentials/sa.json', project_id: 'fixture', client_email: 'fixture@example.test' })
+  expect(bundle.entry.credential_data).toEqual({ file_path: 'credentials/sa/credentials.json', project_id: 'fixture', client_email: 'fixture@example.test' })
   expect(bundle.entry.is_placeholder).toBe(false)
 })
 

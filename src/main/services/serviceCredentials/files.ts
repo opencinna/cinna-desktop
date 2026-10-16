@@ -1,6 +1,6 @@
 import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { runtimeHost } from '../../host/runtimeHost'
 import { handoverGit } from '../handoverGit'
 import { isIgnoredPath } from '../../kit/validator'
@@ -31,9 +31,16 @@ export async function checkCredentialPaths(agentDir: string, names = ['credentia
   for (const name of names) {
     const rel = `credentials/${name}`
     const check = await handoverGit.check(agentDir, rel)
-    if (!isIgnoredPath(agentDir, rel) || !['ignored', 'not_a_repo'].includes(check.result)) throw new Error('Credential files must be untracked and covered by the kit’s git ignore policy.')
+    if (check.result === 'tracked') throw new Error(`${rel} is tracked by git. Run git rm --cached ${rel} in the agent folder, then attach again.`)
+    if (!isIgnoredPath(agentDir, rel) || !['ignored', 'not_a_repo'].includes(check.result)) throw new Error(`${rel} must be covered by the agent’s git ignore rules before credentials are written there.`)
   }
 }
+/**
+ * Names a generation may own: `credentials.json`, a kit side file `<id>/credentials.json`,
+ * or a bare side file `<id>.json` (also what kit side files were called before, so an
+ * older inventory can still be cleaned up).
+ */
+const OWNED_NAME = /^(credentials\.json|[a-zA-Z0-9_-]{1,128}\.json|[a-zA-Z0-9_-]{1,128}\/credentials\.json)$/
 interface Inventory { agentDir: string; kind: LocalAgentKind; files: string[]; generation: string }
 function storage(agentDir: string) {
   const root = join(runtimeHost.getPath('userData'), 'agent-credentials')
@@ -54,7 +61,10 @@ function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCr
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(bundle.id)) throw new Error('Invalid credential identity.')
     const entry = structuredClone(bundle.entry)
     if (bundle.service_account_file) {
-      const name = `${bundle.id}.json`
+      // A kit side file is named credentials.json in its own folder: every kit ignore
+      // template, old ones included, ignores that basename at any depth, while
+      // `<id>.json` is covered by none — and a tracked ignore file must not be edited.
+      const name = kind === 'kit' ? `${bundle.id}/credentials.json` : `${bundle.id}.json`
       entry.credential_data.file_path = kind === 'kit' ? `credentials/${name}` : join(directory, name)
       files.set(name, JSON.stringify(bundle.service_account_file, null, 2) + '\n')
     }
@@ -78,7 +88,7 @@ export function compareGeneration(agentDir: string, kind: LocalAgentKind, bundle
     const current = new Map<string, string>()
     for (const name of inventory.files) {
       const path = join(directory, name)
-      if (!/^(credentials|[a-zA-Z0-9_-]+)\.json$/.test(name) || !existsSync(path) || lstatSync(path).isSymbolicLink()) return null
+      if (!OWNED_NAME.test(name) || !existsSync(path) || lstatSync(path).isSymbolicLink() || lstatSync(dirname(path)).isSymbolicLink()) return null
       current.set(name, readFileSync(path, 'utf8'))
     }
     return { current, next: renderFiles(directory, kind, bundles, synthetic) }
@@ -97,13 +107,18 @@ export async function writeCredentials(agentDir: string, kind: LocalAgentKind, b
   if (files.size) secureDir(directory)
   // Check all collisions before writing any bytes.
   for (const name of files.keys()) if (existsSync(join(directory, name)) && !old.files.includes(name)) throw new Error('An authored credential file already exists. Move it before attaching credentials.')
+  // A kit side file's own folder: a real 0700 directory, never a link, before any byte is written.
+  for (const name of files.keys()) if (name.includes('/')) secureDir(dirname(join(directory, name)))
   // Persist ownership before writes, so crash recovery can clean partial generation.
   const owned = [...new Set([...old.files, ...files.keys()])]
   atomicSecret(inventoryPath, JSON.stringify({ agentDir, kind, files: owned, generation }))
   for (const name of old.files) if (!files.has(name)) {
-    if (!/^(credentials|[a-zA-Z0-9_-]+)\.json$/.test(name)) throw new Error('Invalid generated file inventory.')
+    if (!OWNED_NAME.test(name)) throw new Error('Invalid generated file inventory.')
     const path = join(directory, name)
+    if (name.includes('/') && existsSync(dirname(path)) && lstatSync(dirname(path)).isSymbolicLink()) throw new Error('Generated credential folder was replaced by a link.')
     if (existsSync(path)) { if (lstatSync(path).isSymbolicLink()) throw new Error('Generated credential file was replaced by a link.'); unlinkSync(path) }
+    // The side file's folder goes with it once empty; anything an author put there keeps it.
+    if (name.includes('/') && existsSync(dirname(path)) && !readdirSync(dirname(path)).length) rmdirSync(dirname(path))
   }
   for (const [name, bytes] of files) atomicSecret(join(directory, name), bytes)
   atomicSecret(inventoryPath, JSON.stringify({ agentDir, kind, files: [...files.keys()], generation }))
