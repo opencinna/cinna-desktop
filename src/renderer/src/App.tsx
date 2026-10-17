@@ -17,6 +17,7 @@ import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { AgentColorsProvider } from './components/agents/AgentColorsProvider'
 import { FilePreviewModal } from './components/chat/FilePreviewModal'
+import { ArtifactsHost } from './components/artifacts/ArtifactsHost'
 import { useAuthStore } from './stores/auth.store'
 import { fetchSpeechStatus, SPEECH_STATUS_QUERY_KEY } from './components/chat/voice/useSpeechStatus'
 import { flagReauthFromError } from './stores/reauth.store'
@@ -255,6 +256,7 @@ function App(): React.JSX.Element {
         <CatalogSetupHost />
         <SyncSetupModal />
         <FilePreviewModal />
+        <ArtifactsHost />
         </AgentColorsProvider>
       </AuthGate>
     </QueryClientProvider>

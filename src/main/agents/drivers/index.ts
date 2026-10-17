@@ -105,6 +105,7 @@ import { createManagedTurnRecoverer } from './managed/managedTurnRecoverer'
 import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
+import { ARTIFACTS_SKILL_NAME, artifactsSkillInfo, ensureArtifactsSkillPlugin } from '../../services/artifacts/artifactsSkill'
 import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
@@ -311,6 +312,7 @@ function folderSystemPrompt(
     // (`installAntigravitySkill`), so the prompt names the skill; a native
     // folder keeps the path, since nothing is written to the user's home.
     if (engine === 'antigravity' && mode === 'isolated' && context.tasksSkill?.kind === 'pointer') context.tasksSkill = { kind: 'skill' }
+    if (engine === 'antigravity' && mode === 'isolated' && context.artifactsSkill?.kind === 'pointer') context.artifactsSkill = { kind: 'skill' }
     if (mode === 'native') {
       return assembleBareNativePrompt(agent.path, agent.name, context, engine)
     }
@@ -606,6 +608,10 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       const info = tasksSkillInfo()
       return info.available ? { name: TASKS_SKILL_NAME, dir: info.dir } : null
     },
+    artifactsSkill: () => {
+      const info = artifactsSkillInfo()
+      return { name: ARTIFACTS_SKILL_NAME, dir: info.available ? info.dir : null }
+    },
     settings: (userId, agentId) => {
       const synthetic = syntheticRuntimeProfiles.get(agentId)
       if (synthetic?.userId === userId) return { model: synthetic.context.modelId, approval: 'ask' }
@@ -687,6 +693,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
     systemPrompt: folderSystemPrompt('claude'),
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
+    artifactsSkillPlugin: () => ensureArtifactsSkillPlugin(),
     agentSkillsPlugin: kitAgentSkillsPlugin,
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the

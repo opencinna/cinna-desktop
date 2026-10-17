@@ -205,6 +205,26 @@ import type {
 } from '../shared/sync'
 import type { CatalogSkillEnsureResult, CatalogSkillOutcome } from '../shared/catalogSkills'
 import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
+import {
+  ARTIFACTS_APPROVALS_CHANNEL,
+  ARTIFACTS_CHANGED_CHANNEL,
+  ARTIFACTS_PROGRESS_CHANNEL,
+  type ArtifactApprovalAnswer,
+  type ArtifactApprovalAnswerInput,
+  type ArtifactApprovalSummary,
+  type PublishedArtifact,
+  type ArtifactCardDto,
+  type ArtifactPathInput,
+  type ArtifactsChangedPayload,
+  type ArtifactsDetailOutcome,
+  type ArtifactsInspectOutcome,
+  type ArtifactsLinkOutcome,
+  type ArtifactsProgressPayload,
+  type ArtifactsPublishOutcome,
+  type ArtifactsSupport,
+  type ArtifactVisibility,
+  type PublishArtifactInput
+} from '../shared/artifacts'
 
 export type { MessageAttachment }
 
@@ -2049,6 +2069,55 @@ const api = {
       ipcRenderer.invoke('skill-publish:preview', { agentId, name }),
     publish: (input: SkillPublishInput): Promise<SkillPublishOutcome> =>
       ipcRenderer.invoke('skill-publish:publish', input)
+  },
+
+  /**
+   * Artifacts: publish a file or folder from an agent's folder to the active
+   * profile's cinna-core, the chat cards that show it, and Share. Paths cross
+   * as `{agentId, path}` and main re-checks them; every answer, refusals
+   * included, is data. See `src/shared/artifacts.ts`.
+   */
+  artifacts: {
+    /** Whether the active profile can publish; false hides every artifact surface. */
+    support: (): Promise<ArtifactsSupport> => ipcRenderer.invoke('artifacts:support'),
+    inspect: (input: ArtifactPathInput & { entry?: string | null }): Promise<ArtifactsInspectOutcome> =>
+      ipcRenderer.invoke('artifacts:inspect', input),
+    publish: (input: PublishArtifactInput): Promise<ArtifactsPublishOutcome> =>
+      ipcRenderer.invoke('artifacts:publish', input),
+    /** A chat's artifact cards, from the local memory. */
+    cards: (chatId: string): Promise<ArtifactCardDto[]> => ipcRenderer.invoke('artifacts:cards', chatId),
+    detail: (artifactId: string): Promise<ArtifactsDetailOutcome> => ipcRenderer.invoke('artifacts:detail', artifactId),
+    setVisibility: (artifactId: string, visibility: ArtifactVisibility): Promise<ArtifactsDetailOutcome> =>
+      ipcRenderer.invoke('artifacts:set-visibility', { artifactId, visibility }),
+    /** The link's URL comes back this once; it is never stored. */
+    createLink: (artifactId: string, options: { withCode?: boolean } = {}): Promise<ArtifactsLinkOutcome> =>
+      ipcRenderer.invoke('artifacts:create-link', { artifactId, withCode: options.withCode === true }),
+    revokeLink: (artifactId: string, linkId: string): Promise<ArtifactsDetailOutcome> =>
+      ipcRenderer.invoke('artifacts:revoke-link', { artifactId, linkId }),
+    /** One artifact from the local memory, or null. */
+    local: (artifactId: string): Promise<PublishedArtifact | null> => ipcRenderer.invoke('artifacts:local', artifactId),
+    /** A chat's pending agent publishes, for the approval card. */
+    approvals: (chatId: string): Promise<ArtifactApprovalSummary[]> => ipcRenderer.invoke('artifacts:approvals', chatId),
+    answerApproval: (input: ArtifactApprovalAnswerInput): Promise<ArtifactApprovalAnswer> =>
+      ipcRenderer.invoke('artifacts:answer-approval', input),
+    /** A pending agent publish opened or settled in this chat. */
+    onApprovalsChanged: (handler: (payload: { chatId: string }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: { chatId: string }): void => handler(payload)
+      ipcRenderer.on(ARTIFACTS_APPROVALS_CHANNEL, listener)
+      return () => ipcRenderer.off(ARTIFACTS_APPROVALS_CHANNEL, listener)
+    },
+    /** Packing / uploading / sharing, for the publish with this `operationId`. */
+    onProgress: (handler: (payload: ArtifactsProgressPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: ArtifactsProgressPayload): void => handler(payload)
+      ipcRenderer.on(ARTIFACTS_PROGRESS_CHANNEL, listener)
+      return () => ipcRenderer.off(ARTIFACTS_PROGRESS_CHANNEL, listener)
+    },
+    /** An artifact was published, or its sharing changed: cards read again. */
+    onChanged: (handler: (payload: ArtifactsChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: ArtifactsChangedPayload): void => handler(payload)
+      ipcRenderer.on(ARTIFACTS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(ARTIFACTS_CHANGED_CHANNEL, listener)
+    }
   },
 
   /**

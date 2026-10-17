@@ -234,6 +234,7 @@ describe('scanning an agent’s skills', () => {
 
   it('reserves the platform’s own skill name', () => {
     expect(PLATFORM_SKILL_NAMES.has(TASKS_SKILL_NAME)).toBe(true)
+    expect(PLATFORM_SKILL_NAMES.has('cinna-artifacts')).toBe(true)
     skill(TASKS_SKILL_NAME, md(`name: ${TASKS_SKILL_NAME}\ndescription: Mine.`))
     expect(only(TASKS_SKILL_NAME).issues).toEqual([
       { code: 'reserved_name', message: 'This name is reserved by a platform skill.', severity: 'error' }

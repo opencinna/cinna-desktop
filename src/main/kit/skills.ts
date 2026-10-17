@@ -56,10 +56,11 @@ export const RESERVED_SKILL_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * Platform-owned skills an agent's own may not shadow — core's
- * `PLATFORM_SKILL_NAMES`. `cinna-tasks` is `tasksSkillService.TASKS_SKILL_NAME`;
- * a test keeps the two the same.
+ * `PLATFORM_SKILL_NAMES`. `cinna-tasks` is `tasksSkillService.TASKS_SKILL_NAME`
+ * and `cinna-artifacts` is `artifactsSkill.ARTIFACTS_SKILL_NAME`; a test keeps
+ * the set equal to the bundled `kit.json`'s `platform_skills`.
  */
-export const PLATFORM_SKILL_NAMES: ReadonlySet<string> = new Set(['cinna-tasks'])
+export const PLATFORM_SKILL_NAMES: ReadonlySet<string> = new Set(['cinna-tasks', 'cinna-artifacts'])
 
 const SKIP_DIR_NAMES: ReadonlySet<string> = new Set([
   '.git', '.venv', '__pycache__', '.mypy_cache', '.ruff_cache', 'node_modules'

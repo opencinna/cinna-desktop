@@ -306,6 +306,18 @@ describe('a chat runtime’s home and the cinna-tasks skill', () => {
     expect(existsSync(join(native, '.cinna'))).toBe(false)
   })
 
+  it('installs cinna-artifacts in an isolated home while delivered, and takes it out once it is not', async () => {
+    const source = skillSource()
+    const folder = tempDir()
+    const installed = join(antigravitySkillsDir(antigravityIsolatedHome(folder)), 'cinna-artifacts')
+    const on = await createAntigravityLauncher(deps({ artifactsSkill: () => ({ name: 'cinna-artifacts', dir: source }) })).plan(contexts(folder).isolated)
+    if (isRefusal(on)) throw new Error(on.error)
+    expect(existsSync(join(installed, 'SKILL.md'))).toBe(true)
+    const off = await createAntigravityLauncher(deps({ artifactsSkill: () => ({ name: 'cinna-artifacts', dir: null }) })).plan(contexts(folder).isolated)
+    if (isRefusal(off)) throw new Error(off.error)
+    expect(existsSync(installed)).toBe(false)
+  })
+
   it('copies the skill again only when its source changed, dropping files the source no longer has', () => {
     const source = skillSource()
     const home = join(tempDir(), 'home')

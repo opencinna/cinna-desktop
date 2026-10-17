@@ -284,7 +284,7 @@ export interface CinnaSendResult {
 export async function cinnaSend(
   userId: string,
   path: string,
-  opts: { method: 'POST' | 'PUT' | 'PATCH'; json?: unknown; bytes?: { data: Uint8Array; contentType: string } }
+  opts: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string } }
 ): Promise<CinnaSendResult> {
   if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is used.')
   const baseUrl = resolveBaseUrl(userId)

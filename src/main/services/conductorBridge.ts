@@ -21,7 +21,11 @@ import type { RunInput } from '../agents/drivers/driver'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 import type { RunEvent } from '../../shared/runEvents'
 
-interface Binding { input: RunInput; pending: number; calls: number; needsInput?: boolean; handovers?: ToolProvider }
+interface Binding {
+  input: RunInput; pending: number; calls: number; needsInput?: boolean; handovers?: ToolProvider
+  /** A folder agent's own session: `artifacts_publish` is offered while its profile's instance keeps artifacts. */
+  artifacts?: { scope: NonNullable<RunInput['runScope']>; chatId: string; agentId: string }
+}
 interface Entry {
   chatId: string
   agent: AgentRow
@@ -139,6 +143,11 @@ async function providers(entry: Entry): Promise<ToolProvider[]> {
   const controls = entry.binding?.input.coordinator
   const result: ToolProvider[] = controls ? [controls] : []
   if (entry.binding?.handovers) result.push(entry.binding.handovers)
+  if (entry.binding?.artifacts) {
+    const { artifactToolProviderFor } = await import('./artifacts/artifactAgentTools')
+    const artifacts = artifactToolProviderFor(entry.binding.artifacts)
+    if (artifacts) result.push(artifacts)
+  }
   result.push(...connectedMcp(new Set([...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId), ...addons])))
   const names = new Set(result.flatMap((provider) => provider.getTools().map((tool) => tool.name)))
   if (!controls && chat.router === 'coordinator') result.push(...buildAgentToolProviders(entry.chatId, entry.scope.settingsUserId,
@@ -180,6 +189,7 @@ export const conductorBridge = {
       // Every such session gets all eight `tasks_*`; `tasks_report` decides per call whether it is an executor's.
       const { DelegationToolProvider } = await import('./delegationToolProvider')
       binding.handovers = new DelegationToolProvider({ scope: input.runScope, chatId: input.chatId, agentId: agent.id })
+      binding.artifacts = { scope: input.runScope, chatId: input.chatId, agentId: agent.id }
     }
     // A follow-up the engine opened between turns carries no budget of its own; the task's checkpoint still caps it.
     const budget = input.toolCallBudget ?? taskToolCallBudgetForChat(input.chatId, input.runScope.profileUserId, agent.id)

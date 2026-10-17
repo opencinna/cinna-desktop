@@ -735,7 +735,7 @@ describe('the cinna-tasks skill', () => {
     // The skill tool asks `skill` with the skill name as its pattern; the last
     // matching rule wins, so the wildcard has to come first.
     const skill = CONVERSATION_PERMISSIONS.skill as Record<string, string>
-    expect(Object.entries(skill)).toEqual([['*', 'ask'], ['cinna-tasks', 'allow']])
+    expect(Object.entries(skill)).toEqual([['*', 'ask'], ['cinna-tasks', 'allow'], ['cinna-artifacts', 'allow']])
   })
 })
 
@@ -784,12 +784,12 @@ describe('a kit agent’s own skills', () => {
     expect(built.config.skills).toEqual({ paths: ['/app/kit/skills', '/data/links/skills'] })
     // Order is the mechanism: the wildcard first, so any other skill still asks.
     expect(Object.entries(agentOf(built).permission.skill as Record<string, string>)).toEqual([
-      ['*', 'ask'], ['cinna-tasks', 'allow'], ['pdf-tools', 'allow'], ['ledger', 'allow']
+      ['*', 'ask'], ['cinna-tasks', 'allow'], ['cinna-artifacts', 'allow'], ['pdf-tools', 'allow'], ['ledger', 'allow']
     ])
     // OpenCode reports a linked skill under the links folder, outside the project: its reads are allowed too.
     expect(agentOf(built).permission.external_directory).toEqual({ '*': 'ask', '/app/kit/skills/*': 'allow', '/data/links/skills/*': 'allow' })
     // The shared profile is not mutated.
-    expect(Object.keys(CONVERSATION_PERMISSIONS.skill as Record<string, string>)).toEqual(['*', 'cinna-tasks'])
+    expect(Object.keys(CONVERSATION_PERMISSIONS.skill as Record<string, string>)).toEqual(['*', 'cinna-tasks', 'cinna-artifacts'])
   })
 
   it('lists the folder without the bundled one, and never for an agent left out of the config', () => {

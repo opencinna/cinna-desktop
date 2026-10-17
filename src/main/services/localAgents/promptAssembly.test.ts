@@ -177,6 +177,19 @@ describe('assembleAgentPrompt', () => {
     expect(prompt).toContain('no instructions yet')
   })
 
+  it('names the artifacts folder as a second writable place only with the skill and a layout that has the role', () => {
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    const line = 'build anything you will publish as an artifact under `artifacts/<name>/`'
+    const both = assembleAgentPrompt(dir, manifest(), { ...CONTEXT, artifactsSkill: { kind: 'skill' }, artifactsFolder: 'artifacts' })
+    expect(both).toContain(line)
+    // An older contract (no role) or no artifacts on this instance: the plain rule.
+    for (const context of [{ ...CONTEXT, artifactsSkill: { kind: 'skill' as const } }, { ...CONTEXT, artifactsFolder: 'artifacts' }]) {
+      const prompt = assembleAgentPrompt(dir, manifest(), context)
+      expect(prompt).not.toContain(line)
+      expect(prompt).toContain('In conversation mode, write files only under `app-data/`. Everything else')
+    }
+  })
+
   it('treats a file of nothing but comments as empty', () => {
     write('docs/WORKFLOW_PROMPT.md', '<!-- fill this in -->\n')
     const prompt = assembleAgentPrompt(dir, manifest(), CONTEXT)

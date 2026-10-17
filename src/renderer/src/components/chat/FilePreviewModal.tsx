@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   Loader2,
   TableOfContents,
+  Upload,
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
@@ -42,7 +43,10 @@ import {
 } from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import { MAX_PREVIEW_BYTES, type PreviewRenderKind } from '../../../../shared/filePreview'
-import { agentFileName } from '../../../../shared/agentFiles'
+import { agentFileName, isCredentialFileRef } from '../../../../shared/agentFiles'
+import { useArtifactsSupport } from '../../hooks/useArtifacts'
+import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
+import { useChatStore } from '../../stores/chat.store'
 
 /** Labelled secondary button at the app-chrome scale (Contents); colours by state. */
 const HEADER_ACTION_CLASS =
@@ -244,6 +248,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const live = useFilePreviewStore()
   const { close, openAgentFileExternally, revealAgentFile, openInBrowser } = live
   const contentsOpen = useUIStore((s) => s.previewContentsOpen)
+  const { supported: canPublish } = useArtifactsSupport()
   const togglePreviewContents = useUIStore((s) => s.togglePreviewContents)
   // Closing fades out as fast as opening faded in. The store closes at once;
   // the modal keeps rendering the last open state until its exit ends. A new
@@ -599,6 +604,27 @@ export function FilePreviewModal(): React.JSX.Element | null {
               >
                 <TableOfContents size={12} />
                 Contents
+              </button>
+            )}
+            {fileActions && canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref) && (
+              <button
+                type="button"
+                onClick={() => {
+                  // The card lands in the chat: the preview steps aside for the dialog.
+                  const { agentId, ref, messageId } = agentFile
+                  close()
+                  useArtifactPublishStore.getState().open({
+                    agentId,
+                    path: ref.path,
+                    kind: ref.kind,
+                    chatId: useChatStore.getState().activeChatId,
+                    messageId: messageId ?? null
+                  })
+                }}
+                className={HEADER_ACTION_CLASS + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}
+              >
+                <Upload size={12} aria-hidden />
+                Publish…
               </button>
             )}
             {fileActions && (

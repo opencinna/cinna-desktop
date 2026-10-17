@@ -6,6 +6,8 @@ import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { useAgentFileRefs, type FileRefScope } from '../../hooks/useAgentFileRefs'
 import { repairNestedFences } from '../../utils/nestedFences'
+import { artifactIdFromUrl } from '../../../../shared/artifacts'
+import { ArtifactLinkCard } from '../artifacts/ArtifactCard'
 
 export type { FileRefScope }
 
@@ -15,10 +17,19 @@ export type { FileRefScope }
  */
 export const FileRefContext = createContext<FileRefScope | null>(null)
 
+/**
+ * The persisted message a bubble renders, or null (a live or optimistic
+ * bubble). A reference remembers it, so what is published from it can show
+ * its card right after that message.
+ */
+export const MessageIdContext = createContext<string | null>(null)
+
 /** The reference a rendered `code.file-ref` or `a.file-link` stands for, and whose folder it resolved in. */
 export interface FileRefTarget {
   agentId: string
   ref: AgentFileRef
+  /** The message it was rendered in, when that message is persisted. */
+  messageId?: string | null
 }
 
 /**
@@ -31,6 +42,12 @@ const fileRefTargets = new WeakMap<Element, FileRefTarget>()
 /** The reference `element` renders, or null for any other element. */
 export function fileRefTargetOf(element: Element): FileRefTarget | null {
   return fileRefTargets.get(element) ?? null
+}
+
+/** Open the preview; the message is passed on only when the bubble is a persisted one. */
+function openPreview(agentId: string, ref: AgentFileRef, origin: { x: number; y: number } | null, messageId: string | null): void {
+  const store = useFilePreviewStore.getState()
+  void (messageId ? store.openAgentFile(agentId, ref, origin, messageId) : store.openAgentFile(agentId, ref, origin))
 }
 
 /** True inside a fenced block: a `code` there is never a reference. */
@@ -76,6 +93,7 @@ function MarkdownCode({ node: _node, children, className, ...props }: ComponentP
   const insidePre = useContext(InsidePreContext)
   const insideLink = useContext(InsideLinkContext)
   const scope = useContext(FileRefContext)
+  const messageId = useContext(MessageIdContext)
   const text = textOf(children)
   const ref = !insidePre && !insideLink && scope && text !== null ? scope.refs.get(text) : undefined
   if (!scope || !ref || text === null) {
@@ -86,14 +104,14 @@ function MarkdownCode({ node: _node, children, className, ...props }: ComponentP
     )
   }
   const activate = (origin: { x: number; y: number } | null): void => {
-    void useFilePreviewStore.getState().openAgentFile(scope.agentId, ref, origin)
+    openPreview(scope.agentId, ref, origin, messageId)
   }
   return (
     <code
       {...props}
       ref={(element) => {
         if (!element) return
-        fileRefTargets.set(element, { agentId: scope.agentId, ref })
+        fileRefTargets.set(element, { agentId: scope.agentId, ref, messageId })
         return () => void fileRefTargets.delete(element)
       }}
       className={className ? `${className} file-ref` : 'file-ref'}
@@ -134,25 +152,30 @@ const EXTERNAL_HREF = /^https?:\/\//i
  */
 function MarkdownLink({ node: _node, children, href, ...props }: ComponentProps<'a'> & ExtraProps): React.JSX.Element {
   const scope = useContext(FileRefContext)
+  const messageId = useContext(MessageIdContext)
   if (href && EXTERNAL_HREF.test(href)) {
-    return (
+    const link = (
       <a {...props} href={href} target="_blank" rel="noreferrer noopener">
         <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
       </a>
     )
+    // Core's page for an artifact (`/artifact/<uuid>`) on the profile's own
+    // server or frontend renders as its card once main has read it; any
+    // other host, and any failure, is this link.
+    return artifactIdFromUrl(href) ? <ArtifactLinkCard href={href} link={link} /> : link
   }
   const ref = scope && href ? scope.links.get(href) : undefined
   if (!scope || !ref || !href) return <span title={href || undefined}>{children}</span>
   const label = textOf(children) ?? ref.displayPath
   const activate = (origin: { x: number; y: number } | null): void => {
-    void useFilePreviewStore.getState().openAgentFile(scope.agentId, ref, origin)
+    openPreview(scope.agentId, ref, origin, messageId)
   }
   return (
     <a
       {...props}
       ref={(element) => {
         if (!element) return
-        fileRefTargets.set(element, { agentId: scope.agentId, ref })
+        fileRefTargets.set(element, { agentId: scope.agentId, ref, messageId })
         return () => void fileRefTargets.delete(element)
       }}
       href={href}

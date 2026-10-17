@@ -15,7 +15,11 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
 import { MessageBubble } from './MessageBubble'
-import { FileRefContext, FileRefResolver, collectFileRefSources, type FileRefScope } from './fileRefs'
+import { FileRefContext, FileRefResolver, MessageIdContext, collectFileRefSources, type FileRefScope } from './fileRefs'
+import { ArtifactCard, ShownArtifactsContext } from '../artifacts/ArtifactCard'
+import { ArtifactPublishToolBlock, parsePublishResult } from '../artifacts/ArtifactPublishTool'
+import { ArtifactCardsSource, useArtifactsSupport } from '../../hooks/useArtifacts'
+import { ARTIFACTS_PROVIDER_NAME, ARTIFACTS_PUBLISH_TOOL, type ArtifactCardDto } from '../../../../shared/artifacts'
 import { useMessageContextMenu } from './MessageContextMenu'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -441,11 +445,25 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 }
 
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
+const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
+  // Artifact cards, anchored after the message each was published from.
+  // Read by `ArtifactCardsSource`, a sibling mounted only while supported.
+  const artifactsSupport = useArtifactsSupport()
+  const [artifactCards, setArtifactCards] = useState<ArtifactCardDto[]>(NO_ARTIFACT_CARDS)
+  const artifactCardsByMessage = useMemo(() => {
+    const map = new Map<string, ArtifactCardDto[]>()
+    if (!artifactsSupport.supported) return map
+    for (const card of artifactCards) {
+      if (card.chatId !== chatId) continue
+      map.set(card.messageId, [...(map.get(card.messageId) ?? []), card])
+    }
+    return map
+  }, [artifactCards, artifactsSupport.supported, chatId])
   const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds, sentVersion } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
   // **While a request block is answerable, new content must not move it.** A
@@ -657,16 +675,35 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     prevRef.current = { chatId, messageIds: messages.map((m) => m.id) }
   }, [chatId, messages])
 
+  // One card per artifact: what the transcript already draws as a card.
+  const shownArtifactIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const card of artifactCards) ids.add(card.artifact.id)
+    for (const message of messages) {
+      if (message.toolName !== ARTIFACTS_PUBLISH_TOOL || message.toolProvider !== ARTIFACTS_PROVIDER_NAME) continue
+      const result = parsePublishResult(message.content)
+      if (result) ids.add(result.artifact_id)
+    }
+    for (const block of streamingBlocks) {
+      if (block.type !== 'tool_call' || block.name !== ARTIFACTS_PUBLISH_TOOL || block.provider !== ARTIFACTS_PROVIDER_NAME) continue
+      const result = parsePublishResult(block.result)
+      if (result) ids.add(result.artifact_id)
+    }
+    return ids
+  }, [artifactCards, messages, streamingBlocks])
+
   return (
-    // No wrapper element (the provider renders no DOM): the pills are
-    // absolutely positioned against MainArea's `relative` chat container (the
-    // same one the composer overlay anchors to), so they need no layout box of
-    // their own and the scroll element stays the direct flex child it has
-    // always been.
+    <ShownArtifactsContext.Provider value={shownArtifactIds}>
+    {/* No wrapper element (the provider renders no DOM): the pills are
+        absolutely positioned against MainArea's `relative` chat container (the
+        same one the composer overlay anchors to), so they need no layout box of
+        their own and the scroll element stays the direct flex child it has
+        always been. */}
     <TranscriptExpansionContext.Provider value={expansionStore}>
     {/* Keyed by chat: the resolver remembers each agent's last answer, which
         belongs to this transcript only. */}
     {fileRefSources.size > 0 && <FileRefResolver key={chatId} sources={fileRefSources} onChange={setFileRefScopes} />}
+    {artifactsSupport.supported && <ArtifactCardsSource key={chatId} chatId={chatId} onChange={setArtifactCards} />}
     <div
       ref={containerRef}
       onContextMenu={messageContextMenu.onContextMenu}
@@ -687,8 +724,22 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
 
         {(() => {
           const renderNodes: RenderNode[] = []
+          // Artifact cards go right after the message they were published
+          // from: pushed when the next message starts, and after the last.
+          const pushArtifactCards = (messageId: string | null): void => {
+            for (const card of (messageId ? artifactCardsByMessage.get(messageId) : undefined) ?? []) {
+              renderNodes.push({
+                slot: 'plain',
+                key: `artifact-card-${card.id}`,
+                node: <ArtifactCard artifact={card.artifact} instanceName={artifactsSupport.instanceName} />
+              })
+            }
+          }
+          let cardAnchor: string | null = null
 
           for (const msg of messages) {
+            pushArtifactCards(cardAnchor)
+            cardAnchor = msg.id
             const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
             const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
 
@@ -727,6 +778,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               continue
             }
             if (msg.role === 'tool_call') {
+              // An agent's `artifacts_publish`: the artifact's card, or what became of the request.
+              if (msg.toolName === ARTIFACTS_PUBLISH_TOOL && msg.toolProvider === ARTIFACTS_PROVIDER_NAME) {
+                renderNodes.push({
+                  slot: 'plain',
+                  key: msg.id,
+                  node: (
+                    <>
+                      <ArtifactPublishToolBlock chatId={chatId} toolCallId={msg.toolCallId ?? msg.id} input={msg.toolInput as Record<string, unknown> | undefined}
+                        status={msg.toolError ? 'error' : 'done'} result={msg.content} parts={msg.parts} />
+                      {footer}
+                    </>
+                  )
+                })
+                continue
+              }
               // Agent-backed tool call (orchestrated mode): the rich agent
               // `parts[]` were persisted on the row — render the nested,
               // expandable sub-thread instead of the bare tool block. Plain
@@ -917,14 +983,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         }
                         return (
                           <FileRefContext.Provider key={k} value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
-                            <MessageBubble
-                              role="assistant"
-                              content={p.text}
-                              animate={shouldAnimate}
-                              animateDelay={idx * 80}
-                              agentName={idx === 0 ? sourceAgentName : null}
-                              agentId={sourceAgentId}
-                            />
+                            <MessageIdContext.Provider value={msg.id}>
+                              <MessageBubble
+                                role="assistant"
+                                content={p.text}
+                                animate={shouldAnimate}
+                                animateDelay={idx * 80}
+                                agentName={idx === 0 ? sourceAgentName : null}
+                                agentId={sourceAgentId}
+                              />
+                            </MessageIdContext.Provider>
                           </FileRefContext.Provider>
                         )
                       })}
@@ -1056,14 +1124,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       key: k,
                       node: (
                         <FileRefContext.Provider value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
-                          <MessageBubble
-                            role="assistant"
-                            content={p.text}
-                            animate={shouldAnimate}
-                            animateDelay={idx * 80}
-                            agentName={idx === 0 ? sourceAgentName : null}
-                            agentId={sourceAgentId}
-                          />
+                          <MessageIdContext.Provider value={msg.id}>
+                            <MessageBubble
+                              role="assistant"
+                              content={p.text}
+                              animate={shouldAnimate}
+                              animateDelay={idx * 80}
+                              agentName={idx === 0 ? sourceAgentName : null}
+                              agentId={sourceAgentId}
+                            />
+                          </MessageIdContext.Provider>
                         </FileRefContext.Provider>
                       )
                     })
@@ -1083,7 +1153,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 node: (
                   <>
                     <FileRefContext.Provider value={fileRefScopeFor(addressedAgentId ?? rootAgentId)}>
-                      <SystemTurnBlock content={msg.content} animate={shouldAnimate} />
+                      <MessageIdContext.Provider value={msg.id}>
+                        <SystemTurnBlock content={msg.content} animate={shouldAnimate} />
+                      </MessageIdContext.Provider>
                     </FileRefContext.Provider>
                     {footer}
                   </>
@@ -1101,22 +1173,26 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       msg.role === 'user' ? addressedAgentId ?? rootAgentId : sourceAgentId ?? rootAgentId
                     )}
                   >
-                    <MessageBubble
-                      role={msg.role as 'user' | 'assistant'}
-                      content={msg.content}
-                      animate={shouldAnimate}
-                      agentName={sourceAgentName}
-                      agentId={sourceAgentId}
-                      addressedAgentName={addressedAgentName}
-                      addressedAgentId={addressedAgentId}
-                      attachments={msg.role === 'user' ? msg.attachments ?? null : null}
-                    />
+                    <MessageIdContext.Provider value={msg.id}>
+                      <MessageBubble
+                        role={msg.role as 'user' | 'assistant'}
+                        content={msg.content}
+                        animate={shouldAnimate}
+                        agentName={sourceAgentName}
+                        agentId={sourceAgentId}
+                        addressedAgentName={addressedAgentName}
+                        addressedAgentId={addressedAgentId}
+                        attachments={msg.role === 'user' ? msg.attachments ?? null : null}
+                      />
+                    </MessageIdContext.Provider>
                   </FileRefContext.Provider>
                   {footer}
                 </>
               )
             })
           }
+
+          pushArtifactCards(cardAnchor)
 
           // Optimistic user bubble — shown immediately while the DB round-trip
           // is in flight so the dots always appear BELOW the user message.
@@ -1434,6 +1510,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               })
               return
             }
+            // An agent's `artifacts_publish`: its approval card while it waits.
+            if (block.name === ARTIFACTS_PUBLISH_TOOL && block.provider === ARTIFACTS_PROVIDER_NAME) {
+              renderNodes.push({
+                slot: 'plain',
+                key: `stream-artifact-${block.id}`,
+                node: <ArtifactPublishToolBlock chatId={chatId} toolCallId={block.id} input={block.input} status={block.status}
+                  result={block.result} error={block.error} />
+              })
+              return
+            }
             // Agent-backed tool call: render the live sub-thread, streaming the
             // agent's parts into an expandable block keyed by this tool call.
             if (block.providerType === 'agent') {
@@ -1535,6 +1621,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
       />
       {messageContextMenu.menu}
     </TranscriptExpansionContext.Provider>
+    </ShownArtifactsContext.Provider>
   )
 }
 

@@ -29,7 +29,7 @@ export interface PreviewOrigin {
  */
 export type PreviewTarget =
   | { type: 'attachment'; attachment: MessageAttachment; composer?: boolean }
-  | { type: 'agentFile'; agentId: string; ref: AgentFileRef }
+  | { type: 'agentFile'; agentId: string; ref: AgentFileRef; messageId?: string | null }
   | { type: 'path'; path: string; filename: string; mimeType: string }
 
 /** A composer file not sent yet, previewed by its path. */
@@ -117,7 +117,8 @@ interface FilePreviewState {
   ) => Promise<void>
   /** A composer file not sent yet, read by its path. */
   openPathPreview: (file: PathPreviewFile, kind: PreviewRenderKind) => Promise<void>
-  openAgentFile: (agentId: string, ref: AgentFileRef, origin?: PreviewOrigin | null) => Promise<void>
+  /** `messageId`: the persisted message the reference was in, where a publish from the preview anchors its card. */
+  openAgentFile: (agentId: string, ref: AgentFileRef, origin?: PreviewOrigin | null, messageId?: string | null) => Promise<void>
   openAgentFileExternally: () => Promise<void>
   revealAgentFile: () => Promise<void>
   /** An HTML agent file or attachment in the default web browser. */
@@ -348,10 +349,10 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
       )
     },
 
-    openAgentFile: async (agentId, ref, origin = null) => {
+    openAgentFile: async (agentId, ref, origin = null, messageId = null) => {
       const token = ++agentOpenToken
       const input = { agentId, path: ref.path }
-      const target: PreviewTarget = { type: 'agentFile', agentId, ref }
+      const target: PreviewTarget = { type: 'agentFile', agentId, ref, messageId }
       // A failure before there is anything to preview still opens the modal,
       // where the click was, saying why — a click that does nothing is worse.
       const openFailed = (step: AgentFileFailedStep, code: AgentFileErrorCode | null, reason: string): void => {

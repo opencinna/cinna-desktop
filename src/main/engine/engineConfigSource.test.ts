@@ -123,6 +123,10 @@ const tasksSkill = vi.hoisted(() => ({ available: false }))
 vi.mock('../services/tasksSkillService', () => ({
   tasksSkillInfo: () => ({ available: tasksSkill.available, dir: '/kit/skills/cinna-tasks', skillFile: '/kit/skills/cinna-tasks/SKILL.md', skillsRoot: '/kit/skills', version: '1' })
 }))
+const artifactsSkill = vi.hoisted(() => ({ available: false }))
+vi.mock('../services/artifacts/artifactsSkill', () => ({
+  artifactsSkillInfo: () => ({ available: artifactsSkill.available, dir: '/kit/skills/cinna-artifacts', skillFile: '/kit/skills/cinna-artifacts/SKILL.md' })
+}))
 const linksFolder = vi.hoisted(() => ({
   fails: false,
   skills: {} as Record<string, string[]>,
@@ -533,10 +537,14 @@ describe('collectEngineConfigInput', () => {
     expect(input.agents).toHaveLength(1)
   })
 
-  it('names the bundled skills folder for OpenCode only while the cinna-tasks skill is there', async () => {
+  it('names each platform skill folder for OpenCode only while it is delivered', async () => {
     tasksSkill.available = true
-    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills'])
+    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills/cinna-tasks'])
+    // cinna-artifacts only while the profile's instance keeps artifacts — never the whole bundle folder.
+    artifactsSkill.available = true
+    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills/cinna-tasks', '/kit/skills/cinna-artifacts'])
     tasksSkill.available = false
+    artifactsSkill.available = false
     expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual([])
   })
 })

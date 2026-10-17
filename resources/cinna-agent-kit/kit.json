@@ -1,6 +1,6 @@
 {
-  "kit_version": "5ce7065fa926ef39",
-  "contract_version": "1.11.0",
+  "kit_version": "56978c31f8dbaad5",
+  "contract_version": "1.12.0",
   "platform_url": "https://opencinna.io",
   "kit_base_url": "https://opencinna.io/api/agent-start",
   "start_url": "https://opencinna.io/agent-start",
@@ -17,10 +17,12 @@
   "publications_schema": "schema/publications.schema.json",
   "marketplace_schema": "schema/cinna-marketplace.schema.json",
   "protocols": {
-    "tasks": "protocols/tasks.schema.json"
+    "tasks": "protocols/tasks.schema.json",
+    "artifacts": "protocols/artifacts.schema.json"
   },
   "platform_skills": {
-    "cinna-tasks": "skills/cinna-tasks"
+    "cinna-tasks": "skills/cinna-tasks",
+    "cinna-artifacts": "skills/cinna-artifacts"
   },
   "agent_template": "templates/agent",
   "root_template": "templates/root",

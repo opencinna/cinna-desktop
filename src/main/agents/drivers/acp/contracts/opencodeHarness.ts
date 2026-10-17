@@ -62,8 +62,9 @@ export const PERSONAL_MARKERS = {
   claudeMd: 'CONTRACT_PERSONAL_CLAUDE_MD_3e3'
 } as const
 
-/** The bundled-skill stand-in under `kit/skills/`: its marker reaching the model is the positive control. */
+/** The bundled-skill stand-ins under `kit/skills/`: their markers reaching the model are the positive control. */
 export const KIT_SKILL_MARKER = 'CONTRACT_KIT_SKILL_9b4'
+export const KIT_ARTIFACTS_SKILL_MARKER = 'CONTRACT_KIT_ARTIFACTS_SKILL_9b5'
 
 export interface OpencodeScratch {
   root: string
@@ -72,8 +73,14 @@ export interface OpencodeScratch {
   cwd: string
   /** Where the launcher writes per-agent configs (`<userData>/acp` in the app). */
   configRoot: string
-  /** The kit's `skills/` directory, passed as `skillPaths`. */
+  /** The kit's `skills/` directory. */
   kitSkills: string
+  /**
+   * What the app passes as `skillPaths`: each platform skill by its own
+   * folder (`cinna-tasks`, `cinna-artifacts`), never the `skills/` root —
+   * `engineConfigSource.collectSkillPaths`.
+   */
+  kitSkillDirs: string[]
   /** What the launcher's `childEnv` returns: base env, scratch HOME and XDG dirs, the trap. */
   env: Record<string, string>
   dispose(): void
@@ -89,8 +96,10 @@ export function makeOpencodeScratch(prefix: string, input: { trapPort: number })
   const cwd = join(root, 'folder')
   const configRoot = join(root, 'acp')
   const kitSkills = join(root, 'kit', 'skills')
-  for (const directory of [home, cwd, configRoot, join(kitSkills, 'cinna-tasks'), join(root, 'tmp')]) mkdirSync(directory, { recursive: true })
+  const kitSkillDirs = [join(kitSkills, 'cinna-tasks'), join(kitSkills, 'cinna-artifacts')]
+  for (const directory of [home, cwd, configRoot, ...kitSkillDirs, join(root, 'tmp')]) mkdirSync(directory, { recursive: true })
   writeFileSync(join(kitSkills, 'cinna-tasks', 'SKILL.md'), `---\nname: cinna-tasks\ndescription: ${KIT_SKILL_MARKER} platform tasks\n---\nbody\n`)
+  writeFileSync(join(kitSkills, 'cinna-artifacts', 'SKILL.md'), `---\nname: cinna-artifacts\ndescription: ${KIT_ARTIFACTS_SKILL_MARKER} platform artifacts\n---\nbody\n`)
   const skill = (dir: string, name: string, marker: string): void => {
     mkdirSync(join(home, dir, name), { recursive: true })
     writeFileSync(join(home, dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${marker} personal skill\n---\nbody\n`)
@@ -100,7 +109,7 @@ export function makeOpencodeScratch(prefix: string, input: { trapPort: number })
   writeFileSync(join(home, '.claude', 'CLAUDE.md'), `${PERSONAL_MARKERS.claudeMd}\n`)
   const proxy = `http://127.0.0.1:${input.trapPort}`
   return {
-    root, home, cwd, configRoot, kitSkills,
+    root, home, cwd, configRoot, kitSkills, kitSkillDirs,
     env: {
       ...baseEnv(),
       HOME: home,

@@ -38,6 +38,7 @@ import {
 } from '../../../shared/localAgents'
 import { resolveBareInstructionsFile } from './externalScan'
 import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillService'
+import { artifactsFolderRole, artifactsSkillDeliveryFor, cinnaArtifactsSection, type ArtifactsSkillDelivery } from '../artifacts/artifactsSkill'
 import { agentSkillRows, deliverableSkills } from '../../kit/skills'
 import { catalogSkillCache } from '../catalogSkillCache'
 
@@ -90,6 +91,18 @@ export interface DesktopPromptContext {
    * delivery line out. Stable per engine and per build, so it may live here.
    */
   tasksSkill?: CinnaTasksSkillDelivery | null
+  /**
+   * How this engine's agent opens `cinna-artifacts`, or null/absent while the
+   * active profile's instance keeps no artifacts — then the prompt says
+   * nothing about them.
+   */
+  artifactsSkill?: ArtifactsSkillDelivery | null
+  /**
+   * The kit's `artifacts` folder (layout role, contract 1.13.0+) where a kit
+   * agent builds what it publishes — a second writable place beside
+   * `app-data/`, which is never published. Only with `artifactsSkill`.
+   */
+  artifactsFolder?: string | null
   /**
    * How this engine's agent reaches its **own** skills, when the producer
    * names the engine: `skill` where the engine loads them itself (Claude
@@ -277,7 +290,9 @@ function agentIdBullets(context: DesktopPromptContext): string[] {
  * itself is in the `cinna-tasks` skill; the section says how to open it.
  */
 function handoverSections(context: DesktopPromptContext): string[] {
-  return context.agentId ? [cinnaTasksSection(context.agentId, context.tasksSkill ?? null, context.cinnaCalls)] : []
+  return context.agentId
+    ? [cinnaTasksSection(context.agentId, context.tasksSkill ?? null, context.cinnaCalls), ...cinnaArtifactsSection(context.artifactsSkill ?? null)]
+    : []
 }
 
 /**
@@ -360,7 +375,9 @@ function desktopContextSection(agentDir: string, context: DesktopPromptContext):
     'You are running locally, inside Cinna Desktop, and you start in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
     `- Run scripts from the agent folder with \`uv run scripts/<name>.py\`, never a bare \`python\`.`,
-    '- In conversation mode, write files only under `app-data/`. Everything else in this folder is your definition, and may be open in an editor right now.',
+    context.artifactsSkill && context.artifactsFolder
+      ? `- In conversation mode, write files only under \`app-data/\`, and build anything you will publish as an artifact under \`${context.artifactsFolder}/<name>/\` (\`app-data/\` is never published). Everything else in this folder is your definition, and may be open in an editor right now.`
+      : '- In conversation mode, write files only under `app-data/`. Everything else in this folder is your definition, and may be open in an editor right now.',
     '- Never print, echo or log a credential value, and never read `credentials/.env` yourself — the scripts do that.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file under `app-data/storage/` with a short summary in your reply, not into the reply itself.',
@@ -778,13 +795,20 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
     /* keep the fallbacks */
   }
   let tasksSkill: CinnaTasksSkillDelivery | null = null
+  let artifactsSkill: ArtifactsSkillDelivery | null = null
   try {
     if (engine) tasksSkill = tasksSkillDeliveryFor(engine)
   } catch {
     /* no skill line rather than no prompt */
   }
+  try {
+    if (engine) artifactsSkill = artifactsSkillDeliveryFor(engine)
+  } catch {
+    /* no artifacts line rather than no prompt */
+  }
   // Codex has no skill loader, and Antigravity's reads only its own skill
   // folders; Claude and OpenCode load the agent's skills natively.
   const ownSkills = engine === 'codex' || engine === 'antigravity' ? 'pointer' : 'skill'
-  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills } : {}) }
+  const artifactsFolder = artifactsSkill ? artifactsFolderRole() : null
+  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills, ...(artifactsSkill ? { artifactsSkill, ...(artifactsFolder ? { artifactsFolder } : {}) } : {}) } : {}) }
 }

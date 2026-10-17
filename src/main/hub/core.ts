@@ -27,6 +27,7 @@ import { taskDispatchService } from '../services/taskDispatchService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
+import { artifactService } from '../services/artifacts/artifactService'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
 import { shutdownOpencodeBootstraps } from '../agents/drivers/acp/acpLaunchers'
@@ -46,6 +47,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // before any profile activates and the dispatcher starts waking.
   taskDispatchService.recoverInterrupted()
   userActivation.onProfileReady((userId) => { void remoteTurnRecoveryService.resume(userId) })
+  // Whether this profile's instance keeps artifacts, read now rather than when
+  // a window first asks: an agent's session offers `artifacts_publish` from it.
+  userActivation.onProfileReady(() => { void artifactService.support() })
   remoteTurnRecoveryService.onRetryDue((userId) => {
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })

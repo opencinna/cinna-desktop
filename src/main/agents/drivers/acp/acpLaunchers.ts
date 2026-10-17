@@ -722,6 +722,13 @@ export interface ClaudeLauncherDeps {
    */
   tasksSkillPlugin?(): string | null
   /**
+   * The desktop-owned plugin carrying `cinna-artifacts`
+   * (`artifactsSkill.ensureArtifactsSkillPlugin`), or null while the active
+   * profile's instance keeps no artifacts — an agent never reads about a tool
+   * it is not offered. Read per session, beside `cinna-tasks`.
+   */
+  artifactsSkillPlugin?(): string | null
+  /**
    * The local plugin carrying a **kit** agent's own skills
    * (`agentSkillsPlugin.ensureAgentSkillsPlugin`), or null when this session
    * is not a kit agent's or the agent has no deliverable skill. Asked on the
@@ -825,7 +832,8 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // The agent's own skills, beside cinna-tasks in the same array (two
       // local plugins load together, proven on 2.1.276 / adapter 0.76.0).
       const agentSkillsPath = native ? null : safely(() => deps.agentSkillsPlugin?.(ctx.userId, ctx.agentId) ?? null, null)
-      const pluginPaths = [pluginPath, agentSkillsPath].filter((path): path is string => !!path)
+      const artifactsPluginPath = safely(() => deps.artifactsSkillPlugin?.() ?? null, null)
+      const pluginPaths = [pluginPath, artifactsPluginPath, agentSkillsPath].filter((path): path is string => !!path)
       const plugins = pluginPaths.length > 0
         ? { plugins: pluginPaths.map((path) => ({ type: 'local' as const, path })) }
         : {}

@@ -10,6 +10,7 @@ import type { MessageAttachment } from '../../shared/attachments'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatOrigin } from '../../shared/chatOrigin'
+import type { ArtifactKind, ArtifactVisibility } from '../../shared/artifacts'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { MessageTelemetry, SessionTelemetry } from '../../shared/sessionTelemetry'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
@@ -1292,3 +1293,38 @@ export const delegations = sqliteTable('delegations', {
 })
 
 export const serviceCredentials = sqliteTable('service_credentials', { id: text('id').primaryKey(), userId: text('user_id').notNull() })
+
+/**
+ * Artifacts this profile published from a path on this machine (artifacts
+ * A12): the memory behind *Update "<title>" (rev N)*, kept in sync with core
+ * after every publish and Share action. Unique per (profile, server,
+ * artifact). `approved_agent_id` is the agent whose own publish of this path
+ * the user approved (D2). See `migrations/published-artifacts.ts`.
+ */
+export const publishedArtifacts = sqliteTable('published_artifacts', {
+  id: text('id').primaryKey(),
+  profileUserId: text('profile_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  serverUrl: text('server_url').notNull(),
+  sourcePath: text('source_path').notNull(),
+  agentId: text('agent_id').notNull(),
+  artifactId: text('artifact_id').notNull(),
+  title: text('title').notNull(),
+  kind: text('kind').$type<ArtifactKind>().notNull(),
+  revision: integer('revision').notNull(),
+  visibility: text('visibility').$type<ArtifactVisibility>().notNull(),
+  url: text('url').notNull(),
+  liveLinkCount: integer('live_link_count').notNull().default(0),
+  approvedAgentId: text('approved_agent_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
+})
+
+/** An artifact card in a chat, rendered after `message_id`. Goes with its chat. */
+export const chatArtifactCards = sqliteTable('chat_artifact_cards', {
+  id: text('id').primaryKey(),
+  profileUserId: text('profile_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull(),
+  artifactId: text('artifact_id').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
+})

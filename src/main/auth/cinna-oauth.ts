@@ -26,6 +26,10 @@ export interface CinnaEndpoints {
    * is what makes the block backward compatible in both directions.
    */
   local_dev?: CinnaLocalDev
+  /** The instance's own name, as its users know it ("Everyone on <instance_name>"). */
+  instance_name?: string
+  /** Present (≥ 1) on instances that keep published artifacts; absent hides every artifact surface. */
+  artifacts?: number
 }
 
 export interface CinnaUserProfile {

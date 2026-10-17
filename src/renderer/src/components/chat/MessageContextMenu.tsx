@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
+import { Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Upload, type LucideIcon } from 'lucide-react'
 import {
   agentFileContentKind,
   isCredentialFileRef,
@@ -14,6 +14,8 @@ import {
 import { previewKindFor } from '../../../../shared/filePreview'
 import { useSaveMessageNote } from '../../hooks/useNotes'
 import { useAuthStore } from '../../stores/auth.store'
+import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
+import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useToastStore } from '../../stores/toast.store'
 import { useUIStore } from '../../stores/ui.store'
 import { authorizeAgentFile, readAgentFileText } from '../../utils/agentFileAccess'
@@ -49,6 +51,7 @@ export type MessageMenuItem =
   | 'copy-path'
   | 'reveal'
   | 'reference'
+  | 'publish'
 
 /**
  * The menu's items, in groups separated by a divider. Decided once, from the
@@ -57,15 +60,22 @@ export type MessageMenuItem =
  * known binary type, a credential file — offers its path only: copied, shown
  * in its folder, referenced in a new chat. An HTML file
  * (`.html`, `.htm`, `.xhtml`) also offers Open in browser, first.
+ *
+ * `canPublish` (the profile's instance keeps artifacts) adds Publish…, last,
+ * for a file or folder inside the agent's folder that is not a credential
+ * file — main would leave nothing of one to publish.
  */
-export function messageMenuItems(file: FileRefTarget | undefined): MessageMenuItem[][] {
+export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false): MessageMenuItem[][] {
   if (!file) return [['copy-text', 'save-text']]
   const { ref } = file
   const pathOnly = ref.kind === 'dir' || isCredentialFileRef(ref) || agentFileContentKind(ref.path) === 'binary'
   const pathGroup: MessageMenuItem[] = ['copy-path', 'reveal', 'reference']
-  if (pathOnly) return [pathGroup]
+  const publish: MessageMenuItem[][] = canPublish && ref.inside && !isCredentialFileRef(ref) ? [['publish']] : []
+  if (pathOnly) return [pathGroup, ...publish]
   const contents: MessageMenuItem[] = ['copy-contents', 'save-contents']
-  return previewKindFor(ref.path) === 'html' ? [['open-in-browser'], contents, pathGroup] : [contents, pathGroup]
+  return previewKindFor(ref.path) === 'html'
+    ? [['open-in-browser'], contents, pathGroup, ...publish]
+    : [contents, pathGroup, ...publish]
 }
 
 /** What a new chat about `ref` starts with: its path, ready for the rest of the sentence. */
@@ -144,6 +154,7 @@ export function useMessageContextMenu(chatId: string) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const nextId = useRef(0)
   const profileId = useAuthStore((s) => s.currentUser?.id)
+  const { supported: canPublish } = useArtifactsSupport()
   const close = useCallback(() => setMenu(null), [])
   const closeCurrent = useCallback(() => setMenu((current) => current === menu ? null : current), [menu])
   useEffect(close, [chatId, profileId, close])
@@ -170,11 +181,11 @@ export function useMessageContextMenu(chatId: string) {
   }, [])
   return {
     onContextMenu,
-    menu: menu ? <MessageContextMenu key={menu.id} {...menu} onClose={closeCurrent} /> : null
+    menu: menu ? <MessageContextMenu key={menu.id} {...menu} chatId={chatId} canPublish={canPublish} onClose={closeCurrent} /> : null
   }
 }
 
-function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState & { onClose: () => void }) {
+function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, onClose }: MenuState & { chatId: string; canPublish: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<MenuPosition>({ left: x, top: y })
   const [error, setError] = useState<string | null>(null)
@@ -380,7 +391,19 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
         useToastStore.getState().show(unavailableAgentMessage(agents, file.agentId, 'That agent is no longer available'))
       }
       onClose()
-    }, 'Could not start a new chat.')
+    }, 'Could not start a new chat.'),
+    // The dialog is app-wide and owns its publish; the menu only opens it.
+    'publish': () => run('publish', async () => {
+      if (!file) return
+      useArtifactPublishStore.getState().open({
+        agentId: file.agentId,
+        path: file.ref.path,
+        kind: file.ref.kind,
+        chatId,
+        messageId: file.messageId ?? null
+      })
+      onClose()
+    }, 'Could not open Publish.')
   }
 
   const labels: Record<MessageMenuItem, [string, LucideIcon]> = {
@@ -391,9 +414,11 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
     'save-contents': ['Save to Notes', NotebookPen],
     'copy-path': ['Copy full path', Link],
     'reveal': ['Show in the folder', FolderOpen],
-    'reference': ['Reference in a new chat', MessageSquarePlus]
+    'reference': ['Reference in a new chat', MessageSquarePlus],
+    'publish': ['Publish…', Upload]
   }
-  const groups = messageMenuItems(file)
+  // Decided once, at open: nothing appears or disappears while the menu is open.
+  const [groups] = useState(() => messageMenuItems(file, canPublish))
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (['Escape', 'Tab', 'PageUp', 'PageDown'].includes(event.key)) {

@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `5ce7065fa926ef39`.
+Your current kit is version `56978c31f8dbaad5`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,34 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.12.0 — artifacts
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.12.0 folder, because the majors match.
+
+### Added
+
+- **`protocols/artifacts.schema.json`** — one tool, `artifacts_publish {path,
+  title, description?, entry?, artifact_id?}`, on the same `cinna` MCP server as
+  the task tools. It publishes a workspace file or folder as an artifact: a
+  private page the agent's owner opens in Cinna (a report, a set of files, a
+  small self-contained dashboard). Publishing the same `path` again adds a
+  revision to the same artifact. Agents get no share, visibility or delete
+  verb; a person shares from the artifact's page. A host serves the tool in
+  every mode it runs an agent in, including the one where the agent is being
+  built.
+- **`skills/cinna-artifacts/`** — the platform skill hosts deliver beside
+  `cinna-tasks`: when to publish, and how to build a site that works in the
+  artifact sandbox (one folder, root `index.html`, relative paths, every library
+  bundled, no browser storage, no `new Worker(url)`, sql.js on the main thread
+  with its `.wasm` beside it, data under ~20 MB). `cinna-artifacts` joins
+  `cinna-tasks` as a reserved skill name: a workspace or catalog skill may not
+  take it.
+- **`templates/artifact-sqlite-dashboard/`** — a minimal dashboard folder the
+  skill points at.
+- `kit.json` names the new protocol under `protocols.artifacts` and the skill
+  under `platform_skills.cinna-artifacts`.
 
 ## 1.11.0 — antigravity engine
 

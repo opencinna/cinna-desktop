@@ -17,7 +17,7 @@ import { OPENCODE_CONTRACT } from './opencode.contract'
 import { lineDiff, sorted } from './snapshotTools'
 import { startEgressTrap, type EgressTrap } from './claudeHarness'
 import {
-  KIT_SKILL_MARKER, PERSONAL_MARKERS, descendantsOf, findContractOpencode, isAlive, makeOpencodeScratch, reap, spawnAcp, startFakeOpenAi,
+  KIT_ARTIFACTS_SKILL_MARKER, KIT_SKILL_MARKER, PERSONAL_MARKERS, descendantsOf, findContractOpencode, isAlive, makeOpencodeScratch, reap, spawnAcp, startFakeOpenAi,
   type AcpConnection, type AcpMessage, type FakeOpenAi, type OpenAiReply, type OpenAiTurn, type OpencodeScratch
 } from './opencodeHarness'
 
@@ -225,7 +225,7 @@ async function scenario(binary: string): Promise<void> {
           baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: MODEL_ID, name: 'Contract model' }] }],
         agents: [{ agentId: AGENT_ID, slug: 'contract', description: 'contract', prompt: `${SYSTEM_MARKER} You are the contract agent.`,
           providerId: PROVIDER_ID, modelId: MODEL_ID }],
-        skillPaths: [scratch!.kitSkills]
+        skillPaths: scratch!.kitSkillDirs
       }),
       configRoot: () => scratch!.configRoot,
       childEnv: async () => ({ ...env })
@@ -501,7 +501,8 @@ function snapshot(): Json {
     model: {
       offeredTools: [...(first?.tools ?? [])].sort(),
       systemPromptArrives: first?.systemText.includes(SYSTEM_MARKER) ?? false,
-      kitSkill: first?.mentions(KIT_SKILL_MARKER) ?? false,
+      // Both per-skill folders from `skills.paths` (cinna-tasks, cinna-artifacts).
+      kitSkill: (first?.mentions(KIT_SKILL_MARKER) && first?.mentions(KIT_ARTIFACTS_SKILL_MARKER)) ?? false,
       personal: Object.fromEntries(Object.entries(PERSONAL_MARKERS).map(([name, marker]) => [name, first?.mentions(marker) ?? false])),
       personalWithoutPluginEntry: Object.fromEntries(Object.entries(PERSONAL_MARKERS).map(([name, marker]) => [name, seen.control.turns[0]?.mentions(marker) ?? false]))
     },
@@ -541,7 +542,9 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     expect(first, 'no tool-bearing request reached the provider').toBeDefined()
     expect(seen.configPlugins).toEqual([OPENCODE_NO_COMPATIBILITY_PLUGIN])
     // The positive control: the kit's skill is read the way the personal ones would be.
-    expect(first!.mentions(KIT_SKILL_MARKER), 'the kit skill from skills.paths was not listed').toBe(true)
+    // Each skill is passed by its own folder (`skills.paths`), its SKILL.md at that folder's root.
+    expect(first!.mentions(KIT_SKILL_MARKER), 'cinna-tasks from its skills.paths folder was not listed').toBe(true)
+    expect(first!.mentions(KIT_ARTIFACTS_SKILL_MARKER), 'cinna-artifacts from its skills.paths folder was not listed').toBe(true)
     const leaked = Object.entries(PERSONAL_MARKERS).filter(([, marker]) => first!.mentions(marker)).map(([name]) => name).sort()
     expect(leaked).toEqual([])
     // The control: without the plugin entry the same HOME's skills do reach

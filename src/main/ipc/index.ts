@@ -29,6 +29,7 @@ import { registerSyncHandlers } from './sync.ipc'
 import { registerLocalToolsHandlers } from './local_tools.ipc'
 import { registerLocalAgentHandlers } from './local_agent.ipc'
 import { registerAgentFileHandlers } from './agent_files.ipc'
+import { registerArtifactHandlers } from './artifacts.ipc'
 import { registerHtmlPreviewHandlers } from './html_preview.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
@@ -79,6 +80,8 @@ export function registerAllIpcHandlers(): void {
   registerSkillPublishHandlers()
   registerServiceCredentialHandlers()
   registerAgentFileHandlers()
+  // Artifacts: publish a file or folder from an agent's folder to cinna-core, and share it.
+  registerArtifactHandlers()
   registerHtmlPreviewHandlers()
   registerEngineHandlers()
   registerConnectHandlers()

@@ -43,7 +43,7 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'opencode.launch.personal-skills', area: 'launch & env', surface: 'file', name: 'opencode.json plugins: -opencode.config.compatibility',
-    expectation: 'With the launcher’s generated config, a session’s model request lists the kit skill from `skills.paths` and none of `~/.claude/skills`, `~/.agents/skills` or `~/.claude/CLAUDE.md` from the sandbox HOME; the same config with `plugins: []` lists both personal skills, so their absence is the plugin entry’s doing. 2.0.27 sends `~/.claude/CLAUDE.md` in neither session (the snapshot’s `personalWithoutPluginEntry`), so its absence proves nothing about the plugin.',
+    expectation: 'With the launcher’s generated config, a session’s model request lists each kit skill passed by its own folder in `skills.paths` (`cinna-tasks`, `cinna-artifacts`, a root `SKILL.md` each) and none of `~/.claude/skills`, `~/.agents/skills` or `~/.claude/CLAUDE.md` from the sandbox HOME; the same config with `plugins: []` lists both personal skills, so their absence is the plugin entry’s doing. 2.0.27 sends `~/.claude/CLAUDE.md` in neither session (the snapshot’s `personalWithoutPluginEntry`), so its absence proves nothing about the plugin.',
     owners: [`${LAUNCHERS}#OPENCODE_NO_COMPATIBILITY_PLUGIN`, `${CONFIG}#skillPaths`],
     feature: 'A Cinna agent silently picks up the user’s personal Claude Code skills and instructions, and an agent shared with a team behaves differently on each member’s machine.',
     flow: NO_FLOW

@@ -970,3 +970,35 @@ describe('chats.origin and tasks.started_by_user on an install that predates the
     raw.close()
   })
 })
+
+describe('published artifacts on an install that predates them', () => {
+  it('creates both tables, replays as a no-op, and keeps rows across boots', () => {
+    const raw = freshDatabase()
+    expect(tableNames(raw)).toContain('published_artifacts')
+    expect(tableNames(raw)).toContain('chat_artifact_cards')
+    for (const col of ['profile_user_id', 'server_url', 'source_path', 'agent_id', 'artifact_id', 'title', 'kind', 'revision', 'visibility', 'url', 'live_link_count', 'approved_agent_id', 'created_at', 'updated_at']) {
+      expect(columnNames(raw, 'published_artifacts')).toContain(col)
+    }
+    for (const col of ['id', 'profile_user_id', 'chat_id', 'message_id', 'artifact_id', 'created_at']) {
+      expect(columnNames(raw, 'chat_artifact_cards')).toContain(col)
+    }
+    // An install from before: neither table, a profile and a chat already there.
+    raw.exec(`DROP TABLE chat_artifact_cards; DROP TABLE published_artifacts;
+      INSERT INTO users (id, type, username, display_name, created_at) VALUES ('p', 'cinna_user', 'p', 'P', 1);
+      INSERT INTO chats (id, title, created_at, updated_at) VALUES ('c', 'Chat', 1, 1);`)
+    runAllMigrations(adaptDatabase(raw))
+    raw.exec(`INSERT INTO published_artifacts (id, profile_user_id, server_url, source_path, agent_id, artifact_id, title, kind, revision, visibility, url, created_at, updated_at)
+      VALUES ('r', 'p', 'https://a', '/x', 'folder:a', 'art', 'T', 'site', 1, 'private', 'u', 1, 1);
+      INSERT INTO chat_artifact_cards (id, profile_user_id, chat_id, message_id, artifact_id, created_at) VALUES ('k', 'p', 'c', 'm', 'art', 1);`)
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT live_link_count FROM published_artifacts').get()).toEqual({ live_link_count: 0 })
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM chat_artifact_cards').get()).toEqual({ n: 1 })
+    raw.exec("DELETE FROM chats WHERE id = 'c'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM chat_artifact_cards').get()).toEqual({ n: 0 })
+    raw.exec("DELETE FROM users WHERE id = 'p'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM published_artifacts').get()).toEqual({ n: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})

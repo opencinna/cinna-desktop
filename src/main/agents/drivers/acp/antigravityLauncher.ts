@@ -164,6 +164,11 @@ export function installAntigravitySkill(home: string, skill: { name: string; dir
   renameSync(staging, target)
 }
 
+/** Take a skill an earlier launch installed out of an isolated home. */
+export function removeAntigravitySkill(home: string, name: string): void {
+  rmSync(join(antigravitySkillsDir(home), name), { recursive: true, force: true })
+}
+
 function directoryDigest(dir: string): string {
   const hash = createHash('sha256')
   const walk = (path: string, rel: string): void => {
@@ -264,6 +269,12 @@ export interface AntigravityLauncherDeps {
    * prompt points at the file instead.
    */
   tasksSkill?(): { name: string; dir: string } | null
+  /**
+   * `cinna-artifacts` for an isolated home while the active profile's
+   * instance keeps artifacts: `{ name, dir }` installs it, `{ name, dir: null }`
+   * removes an earlier copy, null leaves the home alone.
+   */
+  artifactsSkill?(): { name: string; dir: string | null } | null
   platform?: NodeJS.Platform
 }
 
@@ -333,6 +344,9 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           phase = 'skills'
           const skill = deps.tasksSkill?.() ?? null
           if (skill) installAntigravitySkill(home, skill)
+          const artifacts = deps.artifactsSkill?.() ?? null
+          if (artifacts?.dir) installAntigravitySkill(home, { name: artifacts.name, dir: artifacts.dir })
+          else if (artifacts) removeAntigravitySkill(home, artifacts.name)
           env.GEMINI_HOME = home
         }
         phase = 'instructions'

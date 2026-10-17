@@ -165,7 +165,7 @@ describe('the OpenCode launcher', () => {
     const config = JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8'))
     expect(config.skills).toEqual({ paths: ['/app/kit/skills', '/tmp/agents/pineapple/skills'] })
     const entry = Object.values(config.agent)[0] as { permission: Record<string, unknown> }
-    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'pdf-tools': 'allow' })
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', 'pdf-tools': 'allow' })
 
     // The same set again: the warm process is kept. One more skill: replaced.
     expect(plan(await launcher(withSkills(['pdf-tools'])).plan(CTX)).spec.key).toBe(p.spec.key)
@@ -650,6 +650,19 @@ describe('the Claude launcher', () => {
       const broken = { ...deps, tasksSkillPlugin: () => { throw new Error('disk full') } }
       expect('plugins' in claudeOptions(plan(await createClaudeLauncher(broken).plan(ctx)))).toBe(false)
     }
+  })
+
+  it('loads the cinna-artifacts plugin after cinna-tasks only when it is delivered', async () => {
+    // Mutation: drop the dep from the plugin list and an agent offered artifacts_publish never gets the skill.
+    const both = { ...deps, tasksSkillPlugin: () => '/data/cinna-plugins/cinna-tasks', artifactsSkillPlugin: () => '/data/cinna-plugins/cinna-artifacts' }
+    for (const ctx of [CTX, BARE_CTX]) {
+      expect(claudeOptions(plan(await createClaudeLauncher(both).plan(ctx))).plugins).toEqual([
+        { type: 'local', path: '/data/cinna-plugins/cinna-tasks' },
+        { type: 'local', path: '/data/cinna-plugins/cinna-artifacts' }
+      ])
+    }
+    const closed = { ...both, artifactsSkillPlugin: () => null }
+    expect(claudeOptions(plan(await createClaudeLauncher(closed).plan(CTX))).plugins).toEqual([{ type: 'local', path: '/data/cinna-plugins/cinna-tasks' }])
   })
 
   it('loads a kit agent’s own skills plugin beside cinna-tasks, on the isolated branch only', async () => {

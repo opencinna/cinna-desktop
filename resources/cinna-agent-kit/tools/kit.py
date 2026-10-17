@@ -2705,7 +2705,7 @@ RESERVED_SKILL_NAMES = frozenset(
 
 # Skills the platform itself ships. `kit.json` → `platform_skills` is the
 # authority; this is the fallback when that file says nothing.
-DEFAULT_PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks"})
+DEFAULT_PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks", "cinna-artifacts"})
 
 # A credential slot a skill declares is a credential's `service_uri`.
 SKILL_CREDENTIAL_SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
