@@ -228,7 +228,7 @@ function firstExisting(candidates: readonly string[]): string | null {
   return null
 }
 
-function claudeBinary(): string | null {
+export function claudeBinary(): string | null {
   return firstExisting([
     (process.env.CINNA_E2E_CLAUDE_PATH ?? '').trim(),
     join(homedir(), '.local', 'bin', 'claude'),
@@ -268,7 +268,7 @@ function antigravityLoginProblem(): string | null {
 }
 
 /** `claude auth status` — runs no turn and bills nothing; JSON with a boolean `loggedIn`. */
-function claudeLoginProblem(binary: string): string | null {
+export function claudeLoginProblem(binary: string): string | null {
   const out = spawnSync(binary, ['auth', 'status'], { encoding: 'utf8', timeout: 15_000 })
   try {
     if (JSON.parse(out.stdout)?.loggedIn === true) return null
