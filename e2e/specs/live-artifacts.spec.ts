@@ -102,6 +102,8 @@ const L2_OTHER_BASE_TITLE = `E2E artifacts other ${TAG}`
 const L5_AGENT_TITLE = `E2E artifacts draft ${TAG}`
 const L5_EDITED_TITLE = `E2E artifacts edited ${TAG}`
 const L5_INBOX_TITLE = `E2E artifacts inbox ${TAG}`
+/** Set once L5 starts, so cleanup also sweeps its run-tagged titles. */
+let l5Ran = false
 const L3_TITLE = `E2E artifacts web ${TAG}`
 const L4_TITLE = `E2E artifacts cli ${TAG}`
 
@@ -196,7 +198,18 @@ test.afterAll(async () => {
     rmSync(cliAccount, { recursive: true, force: true })
     cliAccount = null
   }
-  if (!live || (created.size === 0 && createdLinks.length === 0)) return
+  if (!live) return
+  if (l5Ran) {
+    // L5's Edit… publish is recorded from the agent's tool result; a failure
+    // between the dialog's Publish and that result would leave it behind.
+    // Its titles carry this run's TAG, so an exact title match is this run's.
+    const titles = new Set([L5_AGENT_TITLE, L5_EDITED_TITLE, L5_INBOX_TITLE])
+    const listed = await core(`/artifacts?scope=mine&q=${encodeURIComponent(TAG)}&limit=200`).catch(() => null)
+    for (const item of (listed?.status === 200 ? listed.body?.data : null) ?? []) {
+      if (titles.has(item?.title) && typeof item?.id === 'string' && UUID_PATTERN.test(item.id)) created.add(item.id)
+    }
+  }
+  if (created.size === 0 && createdLinks.length === 0) return
   const token = await signIn(live)
   for (const { artifactId, linkId } of createdLinks) {
     const response = await fetch(`${live.serverUrl}/api/v1/artifacts/${artifactId}/links/${linkId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
@@ -718,6 +731,7 @@ async function publishedResults(cinna: CinnaApp, chatId: string): Promise<Array<
 }
 
 test('L5 a real agent’s approval: Edit… publishes under the person’s title, and Publish from the Inbox with the chat not shown publishes', async ({ cinna }) => {
+  l5Ran = true
   test.setTimeout(600_000)
   const config = live!
   await cinna.skipOnboarding()

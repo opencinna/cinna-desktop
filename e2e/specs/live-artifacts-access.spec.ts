@@ -46,7 +46,7 @@ import { approveDesktopAuth, preflight, requireLiveCinna, signIn, type LiveCinna
  * Nothing it can find again. Every artifact, link and user it creates is
  * recorded by id **before** any assertion; `afterAll` revokes those links,
  * deletes those artifacts, and deletes those users by exact id — and only
- * when the user's email still carries this run's marker. Each desktop test
+ * when core still holds that id under the email this run gave it. Each desktop test
  * registers one OAuth client on core, as the other live specs do.
  */
 
@@ -88,8 +88,13 @@ test.afterAll(async () => {
     console.log(`live-artifacts-access cleanup: DELETE artifact ${id} → HTTP ${(await call(`/artifacts/${id}`)).status}`)
   }
   for (const [id, email] of createdUsers) {
-    // Exact id, and only while it is still the user this run made.
-    if (!email.startsWith(`${MARKER}-`)) continue
+    // Exact id, and only while core still holds it under this run's email.
+    const response = await fetch(`${live!.serverUrl}/api/v1/users/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+    const held = response.ok ? ((await response.json()) as { email?: string }).email : undefined
+    if (held !== email || !email.startsWith(`${MARKER}-`)) {
+      console.log(`live-artifacts-access cleanup: user ${id} not deleted (HTTP ${response.status}, email ${held ?? '-'})`)
+      continue
+    }
     console.log(`live-artifacts-access cleanup: DELETE user ${id} (${email}) → HTTP ${(await call(`/users/${id}`)).status}`)
   }
 })
