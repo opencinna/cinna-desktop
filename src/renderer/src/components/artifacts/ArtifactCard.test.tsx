@@ -172,6 +172,24 @@ describe('the card', () => {
     expect(screen.getByText('rev 3 · everyone on Acme · 3 public links')).toBeTruthy()
   })
 
+  it('the owner’s card says what core says now: grants made on core’s page, which the local row never holds', async () => {
+    detailCall.mockResolvedValue({ ok: true, detail: { ...detail, grantCount: 2, liveLinkCount: 1 } })
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    expect(screen.getByText('rev 3 · only you')).toBeTruthy()
+    expect(await screen.findByText('rev 3 · only you · shared with 2 people · 1 public link')).toBeTruthy()
+    expect(detailCall).toHaveBeenCalledWith(ID)
+  })
+
+  it('keeps the local row’s audience when core cannot be read, and reads nothing for a card it cannot share', async () => {
+    detailCall.mockResolvedValue({ ok: false, message: 'offline' })
+    wrap(<ArtifactCard artifact={{ ...artifact, liveLinkCount: 1 }} instanceName="Acme" />)
+    await waitFor(() => expect(detailCall).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('rev 3 · only you · 1 public link')).toBeTruthy()
+    detailCall.mockClear()
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" canShare={false} />)
+    expect(detailCall).not.toHaveBeenCalled()
+  })
+
   it('names its buttons after the artifact, keeping the visible labels', () => {
     wrap(<ArtifactCard artifact={artifact} />)
     expect(screen.getByRole('button', { name: 'Open Q3 churn' }).textContent).toBe('Open')

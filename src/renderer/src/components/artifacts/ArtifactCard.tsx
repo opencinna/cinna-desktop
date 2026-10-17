@@ -351,7 +351,12 @@ export function ArtifactCard({
   const dismissWarning = useArtifactPublishStore((s) => s.dismissWarning)
   const [message, setMessage] = useState<string | null>(null)
   const Icon = artifact.kind === 'site' ? Globe : FileText
-  const audience = artifactAudience(artifact, instanceName)
+  // Who can see it is core's fact: grants are made on core's page and never
+  // reach the local row, so the owner's card reads it (shared with Share…'s
+  // read and a link card's); the row stands in until core answers or if it fails.
+  const detailQuery = useArtifactDetail(artifact.id, canShare)
+  const current = detailQuery.data?.ok ? detailQuery.data.detail : null
+  const audience = artifactAudience(current ?? artifact, instanceName)
   return (
     <span
       role="group"
