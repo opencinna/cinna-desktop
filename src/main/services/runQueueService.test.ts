@@ -15,7 +15,7 @@ vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn, error: () => {} })
 }))
 
-const { createRunQueueService, RUN_QUEUE_ATTACHMENTS_REFUSAL } = await import('./runQueueService')
+const { createRunQueueService } = await import('./runQueueService')
 const { activeRunsByChat } = await import('./runExecutionState')
 const { taskRunnersByChat } = await import('./taskRunnerState')
 
@@ -81,6 +81,8 @@ function running(steer?: (content: string) => ReturnType<RunHandle['steer']>): F
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const payload = (content: string, extra: Partial<RunSendPayload> = {}): RunSendPayload => ({ chatId: CHAT, content, ...extra })
+const FILE_1 = { id: 'f1', filename: 'one.png', size: 1, mimeType: 'image/png', source: 'cinna' as const }
+const FILE_2 = { id: 'f2', filename: 'two.pdf', size: 2, mimeType: 'application/pdf', source: 'cinna' as const }
 const options = vi.fn((sent: RunSendPayload) => ({ observe: () => {}, sent }))
 
 beforeEach(() => {
@@ -270,13 +272,46 @@ describe('runQueueService.submit', () => {
     expect(service.list(SCOPE, CHAT).items).toEqual([])
   })
 
-  it('refuses files while a turn runs', async () => {
+  it('queues a message with files instead of steering it, even for the running turn’s own agent', async () => {
+    const service = createRunQueueService()
+    const active = running(async () => 'injected')
+    const result = await service.submit(SCOPE, payload('see file', { attachments: [FILE_1] }), options)
+    expect(active.steer).not.toHaveBeenCalled()
+    expect(result).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    expect(service.list(SCOPE, CHAT).items).toEqual([
+      { id: (result as { queuedId: string }).queuedId, content: 'see file', createdAt: expect.any(Number), attachments: [FILE_1] }
+    ])
+  })
+
+  it('accepts a files-only message while a turn runs, and still refuses one with neither text nor files', async () => {
+    const service = createRunQueueService()
+    running()
+    expect(await service.submit(SCOPE, payload('  ', { attachments: [FILE_1] }), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    await expect(service.submit(SCOPE, payload('  ', { attachments: [] }), options)).rejects.toThrow('Type a message to send while the turn runs.')
+    expect(service.list(SCOPE, CHAT).items.map((item) => item.attachments)).toEqual([[FILE_1]])
+  })
+
+  it('drains files with the messages, joining only the non-empty texts', async () => {
     const service = createRunQueueService()
     const active = running()
-    const attachments = [{ id: 'f1', source: 'cinna' }] as unknown as RunSendPayload['attachments']
-    await expect(service.submit(SCOPE, payload('see file', { attachments }), options)).rejects.toThrow(RUN_QUEUE_ATTACHMENTS_REFUSAL)
-    expect(active.steer).not.toHaveBeenCalled()
-    expect(service.list(SCOPE, CHAT).items).toEqual([])
+    await service.submit(SCOPE, payload('first'), options)
+    await service.submit(SCOPE, payload('', { attachments: [FILE_1] }), options)
+    await service.submit(SCOPE, payload('third', { attachments: [FILE_2] }), options)
+    active.end('completed')
+    await flush()
+    const merged = { chatId: CHAT, content: 'first\n\nthird', attachments: [FILE_1, FILE_2], addressedAgentId: 'agent-a' }
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith(SCOPE, merged, { observe: expect.any(Function), sent: merged })
+  })
+
+  it('keeps the files of a drain whose start is refused, held', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('see', { attachments: [FILE_1] }), options)
+    start.mockImplementationOnce(() => { throw new Error('Chat not found') })
+    active.end('completed')
+    await flush()
+    expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'see', attachments: [FILE_1] }], held: true })
   })
 
   it('refuses a chat the profile does not own', async () => {
@@ -425,6 +460,29 @@ describe('runQueueService, handing queued messages to a turn that can take them 
     expect(service.list(SCOPE, CHAT).items.map((item) => item.content)).toEqual(['b1', 'a3'])
   })
 
+  it('hands over the leading texts and stops before the first message with files, which drains after the turn', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('a1'), options)
+    await service.submit(SCOPE, payload('a2'), options)
+    await service.submit(SCOPE, payload('with file', { attachments: [FILE_1] }), options)
+    await service.submit(SCOPE, payload('a3'), options)
+    active.steer.mockClear().mockImplementation(async () => 'injected')
+    active.offer()
+    await flush()
+    expect(active.steer.mock.calls.map((call) => call[0])).toEqual(['a1\n\na2'])
+    expect(service.list(SCOPE, CHAT).items.map((item) => item.content)).toEqual(['with file', 'a3'])
+    // A file-bearing head is never handed over, however often the turn offers.
+    active.offer()
+    await flush()
+    expect(active.steer).toHaveBeenCalledTimes(1)
+    active.end('completed')
+    await flush()
+    expect(start.mock.calls.map((call) => call[1])).toEqual([
+      { chatId: CHAT, content: 'with file\n\na3', attachments: [FILE_1], addressedAgentId: 'agent-a' }
+    ])
+  })
+
   const elapse = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   const TWICE = expect.stringContaining('may reach the agent twice')
 
@@ -487,9 +545,19 @@ describe('runQueueService take, remove, edit and clear', () => {
     await service.submit(SCOPE, payload('two'), options)
     active.end('canceled')
     await flush()
-    expect(service.take(SCOPE, CHAT)).toEqual(['one', 'two'])
+    expect(service.take(SCOPE, CHAT)).toEqual([{ content: 'one' }, { content: 'two' }])
     expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
     expect(service.take(SCOPE, CHAT)).toEqual([])
+  })
+
+  it('take gives back each message’s files with its text', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    await service.submit(SCOPE, payload('', { attachments: [FILE_1, FILE_2] }), options)
+    active.end('canceled')
+    await flush()
+    expect(service.take(SCOPE, CHAT)).toEqual([{ content: 'one' }, { content: '', attachments: [FILE_1, FILE_2] }])
   })
 
   it('remove drops one message and the rest still send', async () => {
@@ -530,6 +598,21 @@ describe('runQueueService take, remove, edit and clear', () => {
     await flush()
     expect(service.edit(SCOPE, CHAT, queued.queuedId, 'too late')).toBe(false)
     expect(start).toHaveBeenCalledWith(SCOPE, { chatId: CHAT, content: 'draft', addressedAgentId: 'agent-a' }, expect.anything())
+  })
+
+  it('edit allows empty text only on a message that carries files', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const plain = await service.submit(SCOPE, payload('text'), options) as { queuedId: string }
+    const withFile = await service.submit(SCOPE, payload('caption', { attachments: [FILE_1] }), options) as { queuedId: string }
+    expect(() => service.edit(SCOPE, CHAT, plain.queuedId, '')).toThrow('cannot be empty')
+    expect(service.edit(SCOPE, CHAT, withFile.queuedId, '')).toBe(true)
+    expect(service.list(SCOPE, CHAT).items[1]).toMatchObject({ content: '', attachments: [FILE_1] })
+    active.end('completed')
+    await flush()
+    expect(start.mock.calls.map((call) => call[1])).toEqual([
+      { chatId: CHAT, content: 'text', attachments: [FILE_1], addressedAgentId: 'agent-a' }
+    ])
   })
 
   it('clear forgets a chat’s queue', async () => {

@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react'
 import { createElement, Fragment, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RunQueueView, RunStartResult } from '../../../../shared/ipcPayloads'
+import type { RunQueueTakenItem, RunQueueView, RunStartResult } from '../../../../shared/ipcPayloads'
+import type { MessageAttachment } from '../../../../shared/attachments'
 
 /**
  * Typing while a turn runs: the text goes to main (into the turn, or queued
@@ -16,9 +17,24 @@ const run = vi.hoisted(() => ({
   start: vi.fn(async (): Promise<RunStartResult> => ({ kind: 'queued', queuedId: 'q-1' })),
   cancelChat: vi.fn(async () => undefined),
   queueList: vi.fn(async (): Promise<RunQueueView> => ({ items: [], held: false })),
-  queueTake: vi.fn(async (): Promise<string[]> => []),
+  queueTake: vi.fn(async (): Promise<RunQueueTakenItem[]> => []),
   queueEdit: vi.fn(async (): Promise<boolean> => true),
   onQueueChanged: vi.fn((_handler: (payload: { chatId: string }) => void) => () => undefined)
+}))
+
+const IMAGE: MessageAttachment = { id: 'file-1', filename: 'shot.png', size: 3, mimeType: 'image/png', source: 'local' }
+const NOTE_FILE: MessageAttachment = { id: 'note-file-1', filename: 'Plan.md', size: 5, mimeType: 'text/markdown', source: 'local' }
+const others = vi.hoisted(() => ({
+  llm: {
+    getModelCapability: vi.fn(async () => ({ acceptedMimeTypes: ['image/png'], maxFileSizeBytes: 1_000_000, maxFilesPerMessage: 5 }))
+  },
+  notes: { attachAsFiles: vi.fn(async (): Promise<unknown> => ({ success: true, files: [] })) },
+  files: {
+    clipboardHasFileRefs: vi.fn(() => false),
+    pasteFromClipboard: vi.fn(async (): Promise<unknown> => ({ success: true, paths: [] })),
+    getPathForFile: vi.fn((): string => ''),
+    readThumbnail: vi.fn(async () => ({ success: false, error: 'no' }))
+  }
 }))
 
 function namespace(methods: Record<string, unknown> = {}): unknown {
@@ -29,7 +45,7 @@ function namespace(methods: Record<string, unknown> = {}): unknown {
 }
 ;(window as unknown as { api: unknown }).api = new Proxy(
   {},
-  { get: (_t, ns: string) => (ns === 'run' ? namespace(run) : namespace()) }
+  { get: (_t, ns: string) => (ns === 'run' ? namespace(run) : ns in others ? namespace(others[ns as keyof typeof others]) : namespace()) }
 )
 
 const { ChatInput, QUEUED_EDIT_TOO_LATE } = await import('./ChatInput')
@@ -41,9 +57,9 @@ const DRAFT_KEY = composerDraftKey(undefined, 'chat:chat-1')
 const RUNNING_PLACEHOLDER = 'Send a follow-up · Esc Esc to stop'
 const TOO_LATE_WORDING = 'Sent before your edit was saved — your edit is still here.'
 
-function chatRow(id: string, activeRunId: string | null, userTexts: string[]): unknown {
+function chatRow(id: string, activeRunId: string | null, userTexts: string[], model: { providerId: string; modelId: string } | null = null): unknown {
   return {
-    id, router: 'direct', agentId: null, modeId: null, providerId: null, modelId: null,
+    id, router: 'direct', agentId: null, modeId: null, providerId: model?.providerId ?? null, modelId: model?.modelId ?? null,
     messages: userTexts.flatMap((content, index) => [
       { id: `u-${index}`, role: 'user', content },
       { id: `a-${index}`, role: 'assistant', content: `reply ${index}` }
@@ -59,9 +75,16 @@ function Bubbles(): React.JSX.Element {
 
 interface Mounted { client: QueryClient; rerender: RenderResult['rerender'] }
 
-function mount(activeRunId: string | null, userTexts: string[] = [], options: { bubbles?: boolean } = {}): Mounted {
+/** A local model that takes images answers the chat, so the composer offers to attach files. */
+const MEDIA_MODEL = { providerId: 'p-1', modelId: 'm-1' }
+
+function mount(activeRunId: string | null, userTexts: string[] = [], options: { bubbles?: boolean; media?: boolean } = {}): Mounted {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  client.setQueryData(['chat', 'chat-1'], chatRow('chat-1', activeRunId, userTexts))
+  client.setQueryData(['chat', 'chat-1'], chatRow('chat-1', activeRunId, userTexts, options.media ? MEDIA_MODEL : null))
+  if (options.media) {
+    client.setQueryData(['model-capability', MEDIA_MODEL.providerId, MEDIA_MODEL.modelId],
+      { acceptedMimeTypes: ['image/png'], maxFileSizeBytes: 1_000_000, maxFilesPerMessage: 5 })
+  }
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
   const { rerender } = render(
@@ -109,9 +132,8 @@ beforeEach(() => {
 })
 
 describe('the composer while a turn runs', () => {
-  it('sends only the text to main, shows no optimistic bubble, and keeps notes in the draft', async () => {
+  it('sends the text to main and shows no optimistic bubble', async () => {
     mount('run-1')
-    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ notes: [{ id: 'n-1', title: 'Plan' }] })))
     fireEvent.change(box(), { target: { value: 'also this' } })
     key('Enter')
 
@@ -120,8 +142,60 @@ describe('the composer while a turn runs', () => {
     }))
     await waitFor(() => expect(box().value).toBe(''))
     expect(useChatStore.getState().pendingUserMessage).toBeNull()
-    expect(useComposerDraftStore.getState().drafts[DRAFT_KEY].notes).toEqual([{ id: 'n-1', title: 'Plan' }])
     expect(run.cancelChat).not.toHaveBeenCalled()
+  })
+
+  it('sends the draft’s files and notes with the text, as an idle send does, and clears them from the draft', async () => {
+    others.notes.attachAsFiles.mockResolvedValueOnce({ success: true, files: [NOTE_FILE] })
+    mount('run-1', [], { media: true })
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, (draft) => ({
+      notes: [{ id: 'n-1', title: 'Plan' }],
+      files: { ...draft.files, attachments: [IMAGE] }
+    })))
+    fireEvent.change(box(), { target: { value: 'see these' } })
+    key('Enter')
+
+    await waitFor(() => expect(run.start).toHaveBeenCalledWith({
+      chatId: 'chat-1', content: 'see these', attachments: [IMAGE, NOTE_FILE], addressedAgentId: null
+    }))
+    expect(others.notes.attachAsFiles).toHaveBeenCalledWith({ chatId: 'chat-1', scope: 'local', noteIds: ['n-1'] })
+    await waitFor(() => expect(box().value).toBe(''))
+    const draft = useComposerDraftStore.getState().drafts[DRAFT_KEY]
+    expect(draft.files.attachments).toEqual([])
+    expect(draft.notes).toEqual([])
+    expect(useChatStore.getState().pendingUserMessage).toBeNull()
+  })
+
+  it('sends files alone into a running turn: Send, not Stop, stands while files are pending', async () => {
+    mount('run-1', [], { media: true })
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, (draft) => ({ files: { ...draft.files, attachments: [IMAGE] } })))
+    await waitFor(() => expect(sendSlot()).toBeTruthy())
+    expect(sendSlot()!.hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
+    fireEvent.click(sendSlot()!)
+    await waitFor(() => expect(run.start).toHaveBeenCalledWith({
+      chatId: 'chat-1', content: '', attachments: [IMAGE], addressedAgentId: null
+    }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy())
+  })
+
+  it('offers Attach files, takes a drop and attaches a pasted image while a turn runs', async () => {
+    others.files.getPathForFile.mockReturnValue('/tmp/dropped.png')
+    others.files.pasteFromClipboard.mockResolvedValue({ success: true, paths: [] })
+    mount('run-1', [], { media: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to chat' }))
+    expect(screen.getByRole('menuitem', { name: 'Attach files' })).toBeTruthy()
+
+    const notPrevented = fireEvent.paste(box(), { clipboardData: { types: ['Files'], getData: () => '', files: [] } })
+    expect(notPrevented).toBe(false)
+    await waitFor(() => expect(others.files.pasteFromClipboard).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText('Files can be attached once the reply finishes.')).toBeNull()
+
+    // Dropped on the input, it bubbles to the composer's drop zone.
+    const dropped = new File(['x'], 'dropped.png', { type: 'image/png' })
+    fireEvent.drop(box(), { dataTransfer: { types: ['Files'], files: [dropped] } })
+    expect(others.files.getPathForFile).toHaveBeenCalledWith(dropped)
   })
 
   it('offers Stop on an empty input, a blue Send in its place while there is text, and Stop again once emptied', () => {
@@ -209,12 +283,33 @@ describe('a held queue', () => {
 
     const held = { ...queued('first', 'second'), held: true }
     run.queueList.mockResolvedValue(held)
-    run.queueTake.mockResolvedValueOnce(['first', 'second'])
+    run.queueTake.mockResolvedValueOnce([{ content: 'first' }, { content: 'second' }])
     act(() => notify({ chatId: 'chat-1', view: held }))
 
     await waitFor(() => expect(box().value).toBe('keep me\n\nfirst\n\nsecond'))
     expect(run.queueTake).toHaveBeenCalledTimes(1)
     expect(run.queueTake).toHaveBeenCalledWith('chat-1')
+  })
+
+  it('brings queued files back into the draft’s files, after those already there, once each', async () => {
+    let notify!: (payload: { chatId: string; view?: RunQueueView }) => void
+    run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+    const other: MessageAttachment = { ...IMAGE, id: 'file-2', filename: 'other.png' }
+    mount(null, [], { media: true })
+    await waitFor(() => expect(run.queueList).toHaveBeenCalledWith('chat-1'))
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, (draft) => ({ files: { ...draft.files, attachments: [other] } })))
+    fireEvent.change(box(), { target: { value: 'keep me' } })
+
+    const held = { ...queued('first', '', 'third'), held: true }
+    run.queueList.mockResolvedValue(held)
+    run.queueTake.mockResolvedValueOnce([
+      { content: 'first' }, { content: '', attachments: [IMAGE] }, { content: 'third', attachments: [IMAGE, other] }
+    ])
+    act(() => notify({ chatId: 'chat-1', view: held }))
+
+    // The files-only message adds no text and no separator.
+    await waitFor(() => expect(box().value).toBe('keep me\n\nfirst\n\nthird'))
+    expect(useComposerDraftStore.getState().drafts[DRAFT_KEY].files.attachments).toEqual([other, IMAGE])
   })
 
   it('leaves the input alone for a queue that is still waiting on its turn', async () => {
@@ -233,6 +328,15 @@ describe('message history', () => {
     const back: string[] = []
     for (let i = 0; i < 4; i++) { key('ArrowDown'); back.push(box().value) }
     expect(back).toEqual(['two', 'queued A', 'queued B', ''])
+  })
+
+  it('skips a queued message that is only files: there is no text to recall or edit', async () => {
+    const files = queued('queued A', '')
+    files.items[1].attachments = [{ id: 'f-1', filename: 'shot.png', size: 1, mimeType: 'image/png', source: 'local' }]
+    await mountWithQueue('run-1', ['one'], files)
+    key('ArrowUp')
+    expect(box().value).toBe('queued A')
+    expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
   })
 
   it('counts a message the running turn took in, before it is saved, between the saved and the queued ones', async () => {
@@ -375,7 +479,7 @@ describe('message history', () => {
 
     const held = { ...queued('fix tests', 'then docs'), held: true }
     run.queueList.mockResolvedValue(held)
-    run.queueTake.mockResolvedValueOnce(['fix tests', 'then docs'])
+    run.queueTake.mockResolvedValueOnce([{ content: 'fix tests' }, { content: 'then docs' }])
     act(() => notify({ chatId: 'chat-1', view: held }))
     await waitFor(() => expect(run.queueTake).toHaveBeenCalledWith('chat-1'))
     await waitFor(() => expect(box().value).toBe('fix tests please\n\nthen docs'))
@@ -405,7 +509,7 @@ describe('message history', () => {
     // …then the start is refused and it is back, held, under the same id.
     const held = { ...queued('queued A'), held: true }
     run.queueList.mockResolvedValue(held)
-    run.queueTake.mockResolvedValueOnce(['queued A'])
+    run.queueTake.mockResolvedValueOnce([{ content: 'queued A' }])
     act(() => notify({ chatId: 'chat-1', view: held }))
     await waitFor(() => expect(run.queueTake).toHaveBeenCalledWith('chat-1'))
     await act(async () => { await Promise.resolve() })

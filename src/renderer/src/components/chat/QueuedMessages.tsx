@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import type { RunQueueView } from '../../../../shared/ipcPayloads'
+import type { MessageAttachment } from '../../../../shared/attachments'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { useChatStore } from '../../stores/chat.store'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -18,6 +19,8 @@ export type QueuedPhase = 'queued' | 'sent' | 'leaving'
 interface Tracked {
   id: string
   content: string
+  /** The message's files; they render under its bubble. */
+  attachments?: MessageAttachment[]
   phase: QueuedPhase
   /** For `sent`: the text main sent, which several bubbles may share when it merged them. */
   sentAs?: string
@@ -59,6 +62,7 @@ function clearCancelTooLate(): void {
 export interface QueuedBubble {
   id: string
   content: string
+  attachments?: MessageAttachment[]
   phase: QueuedPhase
   animateIn: boolean
 }
@@ -139,6 +143,10 @@ export function useQueuedMessages(
   const removeQueued = useCallback((id: string, again: boolean): void => {
     useChatStore.getState().noteQueuedCancelled(id)
     cancelledRef.current.add(id)
+    // Read while it is still listed: once main confirms the cancel, its uploads
+    // go as a file taken off the draft does.
+    const attachments = queryClient.getQueryData<RunQueueView>(['run-queue', chatId])
+      ?.items?.find((item) => item.id === id)?.attachments ?? []
     // The cancel did not happen: main sent the message first, or the call
     // failed. It is no longer a cancel the composer should keep quiet about,
     // and the bubble comes back rather than fading. If it already left the
@@ -175,6 +183,9 @@ export function useQueuedMessages(
           setTracked((previous) =>
             previous.map((entry) => (entry.id === id && entry.cancelling ? { ...entry, cancelling: false } : entry))
           )
+          for (const attachment of attachments) {
+            void window.api.files.remove({ id: attachment.id, source: attachment.source ?? 'cinna' }).catch(() => {})
+          }
         })
         .catch((error) => refused(unwrapIpcError(error, 'The queued message could not be cancelled.')))
         .finally(() => void queryClient.invalidateQueries({ queryKey: ['run-queue', chatId] }))
@@ -217,9 +228,9 @@ export function useQueuedMessages(
         .map((entry): Tracked => {
           if (data.held || !present.has(entry.id)) return entry
           if (cancelAgain.has(entry.id)) {
-            return { id: entry.id, content: entry.content, phase: 'leaving', endsAt: leavesAt, cancelling: true, animateIn: false }
+            return { id: entry.id, content: entry.content, attachments: entry.attachments, phase: 'leaving', endsAt: leavesAt, cancelling: true, animateIn: false }
           }
-          if (entry.phase === 'sent') return { id: entry.id, content: entry.content, phase: 'queued', animateIn: false }
+          if (entry.phase === 'sent') return { id: entry.id, content: entry.content, attachments: entry.attachments, phase: 'queued', animateIn: false }
           if (entry.phase === 'leaving' && entry.cancelling && entry.sentAs !== undefined) {
             return { ...entry, sentAs: undefined, rowsBefore: undefined, liveBefore: undefined, send: undefined }
           }
@@ -232,7 +243,8 @@ export function useQueuedMessages(
       const left = standing.filter((entry) => (entry.phase === 'queued' || leavesUnanswered(entry)) && !present.has(entry.id))
       // Items leave a held queue only by being taken back into the composer.
       const takenBack = wasHeld || data.held
-      const sentAs = left.map((entry) => entry.content).join('\n\n')
+      // As main merges them: a files-only message adds no text, nor a separator.
+      const sentAs = left.map((entry) => entry.content).filter((content) => content.trim()).join('\n\n')
       // Counted when it is sent, not when it was queued: a message with the
       // same words saved in between — or taken into the turn and saved with its
       // rows after this — is not this message's row. Nor is the row of an
@@ -270,7 +282,7 @@ export function useQueuedMessages(
       const known = new Set(standing.map((entry) => entry.id))
       for (const item of data.items ?? []) {
         if (known.has(item.id) || cancelledRef.current.has(item.id)) continue
-        next.push({ id: item.id, content: item.content, phase: 'queued', animateIn: !firstLoad })
+        next.push({ id: item.id, content: item.content, attachments: item.attachments, phase: 'queued', animateIn: !firstLoad })
       }
       return next
     })
@@ -319,7 +331,7 @@ export function useQueuedMessages(
 
   const bubbles = tracked
     .filter((entry) => !retired.has(entry.id) && !(entry.phase === 'queued' && data?.held))
-    .map(({ id, content, phase, animateIn }) => ({ id, content, phase, animateIn }))
+    .map(({ id, content, attachments, phase, animateIn }) => ({ id, content, attachments, phase, animateIn }))
   const handsOverTexts = new Set(
     tracked.filter((entry) => retired.has(entry.id)).map((entry) => entry.sentAs ?? entry.content)
   )
@@ -387,7 +399,7 @@ function QueuedBubbleRow({
         <div className="pt-3">
           {/* Above the badge in paint order, so the badge's top edge tucks under it. */}
           <div className="relative z-10">
-            <MessageBubble role="user" content={bubble.content} animate={bubble.animateIn} />
+            <MessageBubble role="user" content={bubble.content} attachments={bubble.attachments ?? null} animate={bubble.animateIn} />
           </div>
           {/* The badge's row closes as it slides up under the bubble. */}
           <div

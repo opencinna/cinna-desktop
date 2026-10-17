@@ -24,7 +24,7 @@ export const PASTE_NOT_ACCEPTED = "Files can't be attached in this chat."
 /** …and on the new-chat screen, where no destination exists yet (no AI provider, no Cinna account). */
 export const PASTE_NEEDS_DESTINATION = 'Add an AI provider or sign in to attach files.'
 
-/** …and while a reply is running (the [+] menu's Attach files is disabled then too). */
+/** …and on the new-chat screen while its first reply starts (the [+] menu's Attach files is disabled then too). */
 export const PASTE_WHILE_STREAMING = 'Files can be attached once the reply finishes.'
 /** The clipboard said files, but main found none it could attach. */
 export const PASTE_NOTHING_USABLE = 'Nothing on the clipboard could be attached.'

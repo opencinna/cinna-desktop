@@ -8,7 +8,8 @@ import { taskHandoffRepo } from '../db/taskHandoffs'
 import { settleRefusedStart } from './interruptedTurnService'
 import { chatOwnerFor, ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { createLogger } from '../logger/logger'
-import type { RunQueueItem, RunQueueView, RunSendPayload, RunStartResult } from '../../shared/ipcPayloads'
+import type { RunQueueItem, RunQueueTakenItem, RunQueueView, RunSendPayload, RunStartResult } from '../../shared/ipcPayloads'
+import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('run-queue')
 
@@ -50,14 +51,12 @@ interface ChatQueue {
 /** Stops that must not carry the next message along with them. */
 const HOLDING_STATES: ReadonlySet<RunOutcome['state']> = new Set(['canceled', 'failed', 'budget'])
 
-export const RUN_QUEUE_ATTACHMENTS_REFUSAL = 'Files can be sent once the current turn finishes.'
-
 /**
  * How long a flush still waits for the turn's answer once that turn has ended.
  *
  * Nothing is bounded while the turn runs: its driver settles every steer before
  * the turn finishes, or gives up on it. But a hand-over nobody ever answers
- * would leave the chat flushing for good — a file refused, every text only
+ * would leave the chat flushing for good — every later message only
  * queued — until a restart. So once the turn has ended the wait is bounded, and
  * a flush that runs out counts as refused: the messages go back to the head of
  * the queue and drain, or hold, as the turn's ending says.
@@ -71,7 +70,8 @@ export interface RunQueueServiceOptions {
 
 function viewOf(queue: ChatQueue | undefined): RunQueueView {
   return {
-    items: (queue?.items ?? []).map(({ id, content, createdAt }) => ({ id, content, createdAt })),
+    items: (queue?.items ?? []).map(({ id, content, createdAt, attachments }) => (
+      attachments?.length ? { id, content, createdAt, attachments } : { id, content, createdAt })),
     held: !!queue?.held
   }
 }
@@ -105,6 +105,9 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     }
   }
 
+  /** A message with files waits for the turn to end: a steer carries text only. */
+  const hasFiles = (item: RunQueueItem): boolean => !!item.attachments?.length
+
   const forget = (key: string, queue: ChatQueue): void => {
     if (!queue.items.length && !queue.flushing && queues.get(key) === queue) queues.delete(key)
   }
@@ -127,9 +130,13 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     let count = 1
     while (count < queue.items.length && queue.items[count].addressedAgentId === address) count++
     const items = queue.items.splice(0, count)
+    // Joined over the non-empty texts only, so a files-only message adds no
+    // stray separator; its files ride along in order.
+    const attachments: MessageAttachment[] = items.flatMap((item) => item.attachments ?? [])
     const payload: RunSendPayload = {
       chatId: queue.chatId,
-      content: items.map((item) => item.content).join('\n\n'),
+      content: items.map((item) => item.content).filter((content) => content.trim()).join('\n\n'),
+      ...(attachments.length ? { attachments } : {}),
       addressedAgentId: address
     }
     // Announced **before** the start, whose user row reaches the renderer on
@@ -175,16 +182,18 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
    * Hand what is queued to the running turn once it can take a message again —
    * for an ACP turn, when its last tool call has ended. The leading run of
    * messages for that turn's agent goes as one message, as a drain would send
-   * it; messages for someone else wait for the turn to end.
+   * it; messages for someone else wait for the turn to end. A steer carries
+   * text only, so the run stops before the first message with files, and one
+   * at the head is not handed over at all: it leaves when the turn ends.
    */
   const flush = (key: string): void => {
     const queue = queues.get(key)
     if (!queue || !queue.items.length || queue.held || queue.flushing) return
     const active = activeRunsByChat.get(queue.chatId)
     const address = active?.agentId
-    if (!active || !address || !active.steerable || queue.items[0].addressedAgentId !== address) return
+    if (!active || !address || !active.steerable || queue.items[0].addressedAgentId !== address || hasFiles(queue.items[0])) return
     let count = 1
-    while (count < queue.items.length && queue.items[count].addressedAgentId === address) count++
+    while (count < queue.items.length && queue.items[count].addressedAgentId === address && !hasFiles(queue.items[count])) count++
     const items = queue.items.splice(0, count)
     queue.flushing = true
     // Announced **before** the steer, as a drain announces before its start:
@@ -286,13 +295,14 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       }
       const chat = visible
       if (!chat) throw new Error('Chat not found')
-      if (payload.attachments?.length) throw new Error(RUN_QUEUE_ATTACHMENTS_REFUSAL)
-      if (!payload.content.trim()) throw new Error('Type a message to send while the turn runs.')
+      const attachments = payload.attachments?.length ? payload.attachments : undefined
+      if (!payload.content.trim() && !attachments) throw new Error('Type a message to send while the turn runs.')
 
       const target = runExecutionService.answererOf(chat, payload)
       const forRunningTurn = target.kind === 'agent' && !!active?.agentId && target.agentId === active.agentId
       const aheadOfIt = !!queues.get(key)?.items.length || !!queues.get(key)?.flushing
-      const steered = !!active && forRunningTurn && !aheadOfIt
+      // A steer takes text only: a message with files is queued for the drain.
+      const steered = !!active && forRunningTurn && !aheadOfIt && !attachments
       if (active && steered) {
         let delivered: Awaited<ReturnType<RunHandle['steer']>> = 'unavailable'
         try { delivered = await active.steer(payload.content) } catch (error) {
@@ -312,6 +322,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
         id: nanoid(),
         content: payload.content,
         createdAt: Date.now(),
+        ...(attachments ? { attachments } : {}),
         // Who answers is settled now, not at the drain: an unaddressed message
         // follows the last addressed one, and by the time it drains that can be
         // a message queued after it.
@@ -333,14 +344,14 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       return viewOf(queues.get(chatKey(scope, chatId)))
     },
 
-    /** Every queued message's text, in order; the queue is empty afterwards. */
-    take(scope: RunScope, chatId: string): string[] {
+    /** Every queued message's text and files, in order; the queue is empty afterwards. */
+    take(scope: RunScope, chatId: string): RunQueueTakenItem[] {
       const key = chatKey(scope, chatId)
       const queue = queues.get(key)
       if (!queue) return []
       queues.delete(key)
       if (queue.items.length) announce(key)
-      return queue.items.map((item) => item.content)
+      return queue.items.map((item) => (item.attachments?.length ? { content: item.content, attachments: item.attachments } : { content: item.content }))
     },
 
     remove(scope: RunScope, chatId: string, id: string): boolean {
@@ -356,12 +367,13 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
 
     /**
      * Replace a queued message's text. False when it is no longer queued (sent,
-     * removed or taken back); empty text is refused.
+     * removed or taken back); empty text is refused unless the message carries files.
      */
     edit(scope: RunScope, chatId: string, id: string, content: string): boolean {
-      if (typeof content !== 'string' || !content.trim()) throw new Error('A queued message cannot be empty.')
+      if (typeof content !== 'string') throw new Error('A queued message cannot be empty.')
       const key = chatKey(scope, chatId)
       const item = queues.get(key)?.items.find((entry) => entry.id === id)
+      if (!content.trim() && !(item && hasFiles(item))) throw new Error('A queued message cannot be empty.')
       if (!item) return false
       item.content = content
       announce(key)

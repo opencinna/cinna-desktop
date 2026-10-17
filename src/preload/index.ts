@@ -116,6 +116,7 @@ import {
 } from '../shared/agentDrivers'
 import {
   RUN_QUEUE_CHANGED_CHANNEL,
+  type RunQueueTakenItem,
   type RunQueueView,
   type RunSendPayload,
   type RunStartResult
@@ -994,8 +995,8 @@ const api = {
     start: (payload: RunSendPayload): Promise<RunStartResult> => ipcRenderer.invoke('run:start', payload),
     /** The messages main is holding for this chat until its turn ends. */
     queueList: (chatId: string): Promise<RunQueueView> => ipcRenderer.invoke('run:queue-list', chatId),
-    /** Every queued message's text, in order; the queue is empty afterwards. */
-    queueTake: (chatId: string): Promise<string[]> => ipcRenderer.invoke('run:queue-take', chatId),
+    /** Every queued message's text and files, in order; the queue is empty afterwards. */
+    queueTake: (chatId: string): Promise<RunQueueTakenItem[]> => ipcRenderer.invoke('run:queue-take', chatId),
     queueRemove: (chatId: string, id: string): Promise<boolean> =>
       ipcRenderer.invoke('run:queue-remove', chatId, id),
     /** Replace a queued message's text; false when it is no longer queued. */

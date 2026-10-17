@@ -39,8 +39,8 @@ A message typed while an agent or model is still answering is neither refused no
 
 ### Cancelling or editing a queued message
 
-1. The tab's [x] sits on a small chip beside its label. Hovering or focusing it turns the label into a red **Cancel?**; clicking removes the message, whose bubble fades and closes together with the gap above it.
-2. ArrowUp in an empty composer walks back through the user's own messages in this chat, newest first, so queued ones come first. Recalling a queued message enters edit mode: the composer's Stop becomes a check-mark **Save**, the bubble's tab reads **Editing**, Enter or Save replaces the queued text, and Esc leaves edit mode and empties the input. In a recalled message of several lines the arrows move the caret; ArrowUp steps on only from the first line, ArrowDown only from the last.
+1. The tab's [x] sits on a small chip beside its label. Hovering or focusing it turns the label into a red **Cancel?**; clicking removes the message, whose bubble fades and closes together with the gap above it. A message with files shows them under its bubble, and cancelling it removes its uploads too, but only once main confirms the cancel: a cancel that came too late leaves the message sent, with its files, so they are kept.
+2. ArrowUp in an empty composer walks back through the user's own messages in this chat, newest first, so queued ones come first; a queued message with files and no text has nothing to recall and is skipped. Recalling a queued message enters edit mode: the composer's Stop becomes a check-mark **Save**, the bubble's tab reads **Editing**, Enter or Save replaces the queued text, and Esc leaves edit mode and empties the input. In a recalled message of several lines the arrows move the caret; ArrowUp steps on only from the first line, ArrowDown only from the last.
 3. Recalling a message that was already delivered just fills the input; sending it sends a new message.
 4. If the message being edited leaves the queue before the edit is saved, edit mode ends and the edited text stays in the composer. What else happens depends on why it left:
    - The user cancelled it from its bubble's [x]: nothing else. The text is an ordinary draft.
@@ -52,7 +52,7 @@ A message typed while an agent or model is still answering is neither refused no
 
 1. The user presses Stop, or Esc Esc, with two messages queued.
 2. The turn ends canceled. The queue is held, and its bubbles leave the transcript.
-3. Their text is appended to the composer after anything typed since, separated by blank lines, with the caret at the end. Nothing is sent until the user sends it.
+3. Their text is appended to the composer after anything typed since, separated by blank lines, with the caret at the end; the files they carried go back into the draft's files, after any already there. Nothing is sent until the user sends it.
 4. If one of them was being edited, the input held that edit: the composer then holds the queued texts in order, with the edit in place of the message it rewrote.
 
 ## Business Rules
@@ -65,13 +65,13 @@ A message typed while an agent or model is still answering is neither refused no
 - **Never steer past the queue.** When anything is already queued in the chat, a new message queues behind it even if the turn could take it. Otherwise a later message would reach the agent before an earlier one. Messages that are being handed to the turn count as queued until it answers, so a message sent during a hand-off queues behind them, even if the turn has ended by then.
 - **Queued messages go into the running turn once it can take them.** Each time the turn offers mid-turn delivery, main hands it the leading run of queued messages for that turn's agent, joined with blank lines the way a drain joins them. That happens once the agent has started streaming the turn, and again whenever its last running tool call ends. If the first queued message is for another agent, nothing is handed in, and the queue waits for the turn to end. Messages queued before the turn started streaming are handed in as soon as it does, rather than waiting for the turn to finish. Holding them to the end would turn "not during a command" into "not during this turn": the correction would arrive after the work it was meant to correct.
 - **A refused hand-off goes back where it was.** If the turn will not take the messages after all, they return to the head of the queue in their order, ahead of anything queued meanwhile. Nothing hands them in again until the turn makes a new offer or the user sends another message, because a turn that refused while still offering would otherwise be asked in a loop. A turn that ended while it was being asked drains or holds the queue as usual, once the messages are back.
-- **A hand-off is waited for at most 3 s after its turn ends.** While the turn runs, the wait is unbounded, because the turn answers every message before it finishes. Once the turn has ended, a hand-off still unanswered after 3 s counts as refused: the messages go back to the head of the queue, and drain or hold as the turn's ending says. Without the bound, a hand-off nobody answers would leave the chat waiting on it for good, with files refused and every later message only queued, until a restart.
+- **A hand-off is waited for at most 3 s after its turn ends.** While the turn runs, the wait is unbounded, because the turn answers every message before it finishes. Once the turn has ended, a hand-off still unanswered after 3 s counts as refused: the messages go back to the head of the queue, and drain or hold as the turn's ending says. Without the bound, a hand-off nobody answers would leave the chat waiting on it for good, with every later message only queued, until a restart.
 - **Known gap: a hand-off answered after those 3 s can reach the agent twice.** The messages are already back in the queue by then, and nothing takes text back from an agent. Main only logs it.
 - **Who answers is settled at queue time.** An unaddressed message in a `human` chat follows the last addressed one; by the time it drains, that can be a message queued after it, which would silently re-point it at somebody else.
 - **A drain is one turn per agent run.** Consecutive messages for the same agent are joined with blank lines and sent as one message; a message for a different agent waits for that turn to end and drains next. Splitting would cost a full turn per line; merging across agents would hand one agent another's instructions.
 - **Only a finished turn drains.** `completed` and `needs_input` drain; `canceled`, `failed` and `budget` hold. Sending the next message into a conversation that just stopped — most of all one the user just stopped — carries forward work nobody asked to continue. Returning the text to the input is also what Claude Code does on an interrupt.
 - **A refused drain holds too.** If the drained start throws — the profile changed, a task runner took the chat — the messages go back to the head of the queue and it is held, so the user finds them in the composer rather than behind a queue that silently never sends.
-- **Text only.** Files and notes are refused while a turn runs ("Files can be sent once the current turn finishes.") and stay in the draft for a turn of their own. A steered message has no attachment channel, and a queued file would need its ingest scope decided long after the send.
+- **A message with files is never steered.** Files, images and notes can be sent while a turn runs in an active chat, through the same path as an idle send (a note becomes a `.md` file there), so the upload's ingest scope is decided at the send, not at the drain. A steer has no attachment channel, so main queues such a message and it leaves when the turn ends, with the files it carries. A hand-off stops before the first message with files, and one at the head is not handed in at all: text queued behind a file waits with it, or it would reach the agent first. A drain joins the texts of the leading run that are not empty and sends all their files, in order, as one message. The message may have no text; an edit empties the text only of a message that carries files. The new-chat screen still takes no files until its first send has landed: it has no chat to queue into.
 - **Chats something else drives are never queued into.** A chat a task runner owns (autonomous or script), one being handed off, or one with an unresolved handoff receipt goes straight to the ordinary start, which refuses it in its own words.
 - **The queue goes with its chat.** Moving a chat to the Trash, deleting it — directly or with its job run — and removing a profile drop its queue. Deleting a running chat is refused, so what would remain is a held queue nothing can reach.
 
@@ -118,7 +118,7 @@ A message typed while an agent or model is still answering is neither refused no
 ## What this deliberately does not do
 
 - **No persistence** — see above.
-- **No mid-turn files or notes.**
+- **No files in a running turn.** Files wait for the turn to end, whatever the engine; a steer is text only.
 - **No reordering and no "send now".** A queued message cannot be moved ahead or forced into a turn that does not take messages; Stop, then send, is that action.
 - **No interrupting a running command with a message.** A message sent during a tool call waits for the call to end. Stop is how the user interrupts a command.
 - **No change to the Claude adapter's steering priority.** Why it stays `now` is in [the ACP contract](../../agents/local_agents/acp_contract.md#the-steering-extension).
@@ -145,7 +145,7 @@ ChatInput (turn running) -> useChatStream.startRun -> run:start
             unavailable, or no answer 3 s after the turn ended -> back at the head of the queue
   RunHandle.completed
        completed / needs_input  -> drain the leading same-agent run -> runExecutionService.start
-       canceled / failed / budget -> held -> ChatInput run:queue-take -> composer text
+       canceled / failed / budget -> held -> ChatInput run:queue-take -> composer text and files
 ```
 
 ## Integration Points

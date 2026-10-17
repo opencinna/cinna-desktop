@@ -56,18 +56,18 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Pasting files or an image
 
-1. The user pastes into the composer's text box (Cmd/Ctrl+V or the Edit menu) while it can take files — the same condition as a drop: the **Attach files** item would show and no reply is running.
+1. The user pastes into the composer's text box (Cmd/Ctrl+V or the Edit menu) while it can take files — the same condition as a drop: the **Attach files** item would show and this is not the new-chat screen waiting for its first reply to start; in an active chat a running turn takes files too, and they go once it ends (see [Pending Messages](../pending_messages/pending_messages.md)).
 2. Plain text pastes natively, untouched. The composer looks at the clipboard's types first and only claims the paste when it carries files.
 3. **Files copied in Finder / Explorer attach** — every file of a multi-file copy on macOS, a `text/uri-list` on Linux, one file on Windows. The file's own icon, which the clipboard also carries as an image, is ignored: the user copied the file, not its icon.
 4. **An image with no file behind it attaches as a PNG** named like a macOS screenshot, `Pasted image 2026-09-30 at 14.05.33.png`; a second paste in the same second gets ` (2)`.
 5. **A copy from Excel, Word or a web page pastes as text.** Those put a picture of the selection on the clipboard beside its text; the text wins over a picture of itself.
 6. From there the flow matches a drop — active chats ingest immediately, the new-chat screen holds the files as pending — and focus returns to the composer.
-7. **When the composer cannot take files**, a paste that also carries text pastes the text with no complaint. A paste with nothing to fall back on says why, in the toolbar: "Files can be attached once the reply finishes.", "Files can't be attached in this chat.", or on the new-chat screen "Add an AI provider or sign in to attach files."
+7. **When the composer cannot take files**, a paste that also carries text pastes the text with no complaint. A paste with nothing to fall back on says why, in the toolbar: "Files can be attached once the reply finishes." (only on the new-chat screen while its first reply starts), "Files can't be attached in this chat.", or on the new-chat screen "Add an AI provider or sign in to attach files."
 8. **A copied folder is refused** with the drop's sentence, "Folders and unresolved files cannot be attached"; a copy of files and folders keeps the files. A clipboard that turned out to hold nothing usable says "Nothing on the clipboard could be attached."
 
 ### Viewing sent attachments
 
-1. User bubbles render their `attachments[]` right-aligned: an image the preview can show (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`) as a 64×64 thumbnail, first, and every other file as a badge with file-type icon, truncated filename and size. The optimistic user bubble (shown while the persisted row is still in flight) carries the turn's already-ingested attachments too, so they appear instantly on send rather than only after the chat refetches — see the optimistic user-message lifecycle in [Messaging tech](../messaging/messaging_tech.md).
+1. User bubbles render their `attachments[]` right-aligned: an image the preview can show (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`) as a 64×64 thumbnail, first, and every other file as a badge with file-type icon, truncated filename and size. A user message with files and no text shows only its files, with no empty text pill above them, in the live view and in saved rows alike. The optimistic user bubble (shown while the persisted row is still in flight) carries the turn's already-ingested attachments too, so they appear instantly on send rather than only after the chat refetches — see the optimistic user-message lifecycle in [Messaging tech](../messaging/messaging_tech.md).
 2. Clicking a thumbnail, or the badge of a type [File Preview](../file_preview/file_preview.md) shows, opens the preview modal; its header keeps a **Download** button.
 3. Clicking any other badge downloads: the OS save dialog opens (default = Downloads / original filename, with `basename(filename)` applied to strip any traversal), the file streams from the right store (Cinna backend or local disk) to the chosen path, and the OS file manager reveals the saved file.
 

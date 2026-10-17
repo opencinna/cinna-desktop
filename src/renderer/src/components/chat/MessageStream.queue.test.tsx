@@ -1,10 +1,11 @@
+const files = vi.hoisted(() => ({ remove: vi.fn(async () => undefined) }))
 const run = vi.hoisted(() => {
   const methods = {
     queueList: vi.fn(),
     queueRemove: vi.fn(async () => true),
     onQueueChanged: vi.fn((_handler: (payload: { chatId: string; view: unknown }) => void) => () => undefined)
   }
-  Object.assign(window, { api: { app: { setTheme: async () => {} }, run: methods } })
+  Object.assign(window, { api: { app: { setTheme: async () => {} }, run: methods, files } })
   return methods
 })
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -158,6 +159,51 @@ describe('a queued message in the transcript', () => {
     data.messages = [{ id: 'u-1', role: 'user', content: 'first\n\nsecond' }]
     view.rerender()
     expect(document.querySelectorAll('[data-queued-message]')).toHaveLength(0)
+  })
+
+  it('shows a queued message’s files under its bubble, and a files-only one is retired by the row main merged without it', async () => {
+    const report = { id: 'f-1', filename: 'report.pdf', size: 10, mimeType: 'application/pdf', source: 'cinna' }
+    run.queueList.mockResolvedValue({
+      items: [{ id: 'q-1', content: 'first', createdAt: 1 }, { id: 'q-2', content: '', createdAt: 2, attachments: [report] }],
+      held: false
+    })
+    const view = renderStream()
+    await screen.findByText('first')
+    expect(bubbleRow('report.pdf').dataset.phase).toBe('queued')
+    await queueBecomes({ items: [], held: false })
+    expect(bubbleRow('report.pdf').dataset.phase).toBe('sent')
+
+    // Main joins only the non-empty texts: the merged row says "first", no trailing separator.
+    data.messages = [{ id: 'u-1', role: 'user', content: 'first', attachments: [report] }]
+    view.rerender()
+    expect(document.querySelectorAll('[data-queued-message]')).toHaveLength(0)
+  })
+
+  it('removes a cancelled message’s uploads once main confirms the cancel, and keeps them when it was sent first', async () => {
+    const report = { id: 'f-1', filename: 'report.pdf', size: 10, mimeType: 'application/pdf', source: 'local' }
+    const chart = { id: 'f-2', filename: 'chart.png', size: 10, mimeType: 'image/png', source: 'cinna' }
+    run.queueList.mockResolvedValue({
+      items: [{ id: 'q-1', content: 'see this', createdAt: 1, attachments: [report] }, { id: 'q-2', content: 'and this', createdAt: 2, attachments: [chart] }],
+      held: false
+    })
+    renderStream()
+    await screen.findByText('see this')
+
+    const [first, second] = screen.getAllByRole('button', { name: 'Cancel queued message' })
+    fireEvent.click(first)
+    await waitFor(() => expect(files.remove).toHaveBeenCalledWith({ id: 'f-1', source: 'local' }))
+
+    // Main had already sent it: its files belong to the sent message now.
+    const gone = { items: [], held: false }
+    run.queueList.mockResolvedValue(gone)
+    run.queueRemove.mockImplementationOnce(async () => {
+      run.onQueueChanged.mock.calls.at(-1)![0]({ chatId: 'chat', view: gone })
+      return false
+    })
+    fireEvent.click(second)
+    await waitFor(() => expect(run.queueRemove).toHaveBeenCalledWith('chat', 'q-2'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(files.remove).toHaveBeenCalledTimes(1)
   })
 
   it('is not retired by the same words the ended turn took in, only by its own row', async () => {

@@ -47,11 +47,23 @@ export type RunStartResult =
   | { kind: 'injected'; saved?: true }
   | { kind: 'queued'; queuedId: string }
 
-/** One message waiting for the chat's running turn to end. Text only. */
+/**
+ * One message waiting for the chat's running turn to end. `content` may be
+ * empty when the message carries files; `attachments` is present only when it
+ * does. A message with files is never handed to the running turn — it waits
+ * for the turn to end and is sent as an idle send would send it.
+ */
 export interface RunQueueItem {
   id: string
   content: string
   createdAt: number
+  attachments?: MessageAttachment[]
+}
+
+/** A queued message as `run:queue-take` gives it back to the composer. */
+export interface RunQueueTakenItem {
+  content: string
+  attachments?: MessageAttachment[]
 }
 
 /**

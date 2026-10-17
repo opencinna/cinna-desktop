@@ -445,19 +445,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (editedId === returnedId) clearEditTooLate()
     }
     void window.api.run.queueTake(chatId)
-      .then((texts) => {
-        if (!texts.length) return
+      .then((items) => {
+        if (!items.length) return
+        const texts = items.map((item) => item.content)
+        // A queued message's files come back into the draft's files, after
+        // those already there; a files-only message adds no text.
+        const files = items.flatMap((item) => item.attachments ?? [])
+        const joinText = (parts: string[]): string => parts.filter((part) => part.trim()).join('\n\n')
         useComposerDraftStore.getState().update(key, (draft) => {
           const kept = draft.text.replace(/\n+$/, '')
           const index = editedIndex < 0
             ? -1
             : texts.length === heldItems.length ? editedIndex : texts.indexOf(heldItems[editedIndex].content)
+          const known = new Set(draft.files.attachments.map((file) => file.id))
+          const added = files.filter((file) => !known.has(file.id) && known.add(file.id))
+          const filesPatch = added.length
+            ? { files: { ...draft.files, attachments: [...draft.files.attachments, ...added] } }
+            : {}
           if (index >= 0) {
             // An emptied edit was never savable; the original stands.
-            return { text: texts.map((text, at) => (at === index && kept.trim() ? kept : text)).join('\n\n') }
+            return { text: joinText(texts.map((text, at) => (at === index && kept.trim() ? kept : text))), ...filesPatch }
           }
-          const joined = texts.join('\n\n')
-          return { text: kept ? `${kept}\n\n${joined}` : joined }
+          const joined = joinText(texts)
+          return { text: kept && joined ? `${kept}\n\n${joined}` : kept || joined, ...filesPatch }
         })
         requestAnimationFrame(() => {
           const el = textareaRef.current
@@ -485,7 +495,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       ? streamingBlocks.flatMap((block) => (block.type === 'user' && block.content.trim() ? [{ text: block.content }] : []))
       : []
     const queued = runQueue && !runQueue.held
-      ? (runQueue.items ?? []).map((item) => ({ text: item.content, queuedId: item.id }))
+      ? (runQueue.items ?? []).flatMap((item) => (item.content.trim() ? [{ text: item.content, queuedId: item.id }] : []))
       : []
     return [...delivered, ...steered, ...queued]
   }, [chatId, chatData?.messages, storeChatId, streamingBlocks, runQueue])
@@ -901,13 +911,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       ? selectedAgent ?? null
       : null
   const readiness = useComposerReadiness(directTarget, input)
-  // While a turn runs the row's one button is Stop on an empty input, and Send
-  // once there is text or a queued message is being edited — unless readiness
-  // refuses the target, whose Send would leave no way to stop but the keyboard.
+  // While a turn runs the row's one button is Stop on an empty composer, and
+  // Send once there is text, a file or a note to send, or a queued message is
+  // being edited — unless readiness refuses the target, whose Send would leave
+  // no way to stop but the keyboard.
   // The refusal, not `blocksSend`: that one follows the typed text (a catalog
   // command gets through), and the button must not flip while typing. A new
   // chat has no Send to offer mid-stream, so it keeps Stop.
-  const showStop = isStreaming && (!chatId || (!editingId && (!input.trim() || readiness.refusal !== null)))
+  const hasSendableFiles = (targetSupportsAttachments && pendingAttachments.length > 0) || pendingNotes.length > 0
+  const showStop = isStreaming && (!chatId || (!editingId && ((!input.trim() && !hasSendableFiles) || readiness.refusal !== null)))
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
@@ -941,7 +953,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // enters keeps the overlay stable until the user truly leaves.
   const [dragOverDepth, setDragOverDepth] = useState(0)
   const isDraggingOver = dragOverDepth > 0
-  const canAcceptDrop = canShowAttachButton && !isStreaming
+  // A running turn takes files too: they queue and go once it ends. The
+  // new-chat screen still takes none until its first send has landed.
+  const attachBlockedByStream = isStreaming && !chatId
+  const canAcceptDrop = canShowAttachButton && !attachBlockedByStream
   const handleDragEnter = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       if (!canAcceptDrop) return
@@ -1007,10 +1022,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (!types.includes('Files')) return
       // Files cannot be taken now: whatever text came with them pastes as
       // usual; only a paste with no text to fall back on says why.
-      if (!canShowAttachButton || isStreaming) {
+      if (!canShowAttachButton || attachBlockedByStream) {
         if (types.includes('text/plain')) return
         e.preventDefault()
-        setAttachError(isStreaming ? PASTE_WHILE_STREAMING : chatId ? PASTE_NOT_ACCEPTED : PASTE_NEEDS_DESTINATION)
+        setAttachError(attachBlockedByStream ? PASTE_WHILE_STREAMING : chatId ? PASTE_NOT_ACCEPTED : PASTE_NEEDS_DESTINATION)
         return
       }
       if (pasteIntent(types, () => window.api.files.clipboardHasFileRefs()) === 'text') return
@@ -1025,7 +1040,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
         .finally(focusComposer)
     },
-    [canShowAttachButton, isStreaming, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer]
+    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -1329,24 +1344,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // stop it.
     if (blocksSendRef.current) return
 
-    // A turn is running here: the text goes to main, which takes it into the
-    // turn or holds it until the turn ends. Files and notes stay in the draft
-    // for a turn of their own.
-    if (chatId && isStreaming) {
-      if (!trimmed || !useComposerDraftStore.getState().beginSend(draftKey)) return
-      try {
-        if (await composer.submit(trimmed)) {
-          useComposerDraftStore.getState().update(draftKey, (draft) => ({
-            text: draft.text === input ? '' : draft.text
-          }))
-          clearEditTooLate()
-          vanishedEditRef.current = null
-        }
-      } finally {
-        useComposerDraftStore.getState().endSend(draftKey)
-      }
-      return
-    }
+    // A turn running here changes nothing below: main takes the message into
+    // the turn, or holds it — files and all — until the turn ends.
 
     // Allow attachment-only sends (no text) so users can drop a file in and
     // hit send with a quick "look at this" — only for active chats where the
@@ -1687,14 +1686,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     (editingId
       ? !input.trim()
       : blocksSend ||
-        (isStreaming
-          ? !input.trim()
-          : !input.trim() &&
-            !(
-              chatId !== null &&
-              ((targetSupportsAttachments && pendingAttachments.length > 0) ||
-                pendingNotes.length > 0)
-            )))
+        (!input.trim() && !(chatId !== null && hasSendableFiles)))
   // The headphone double click: exactly what a click on Send would do, and
   // nothing where Send is disabled or Stop stands in its place.
   const sendFromHeadphones = (): void => {
@@ -1904,7 +1896,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         <div className="flex items-center gap-1.5 flex-nowrap min-w-0">
           <div className="shrink-0">
             <ComposerPlusMenu
-              canAttachFiles={canShowAttachButton && !isStreaming}
+              canAttachFiles={canShowAttachButton && !attachBlockedByStream}
               uploading={isUploading}
               onAttachFiles={() => {
                 observeHint('files-picked-via-menu')

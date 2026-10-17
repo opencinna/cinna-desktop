@@ -131,9 +131,11 @@ export function MessageBubble({
       : null
 
   if (isUser) {
+    // A files-only message is its files: no empty pill above them.
+    const showsPill = !!content.trim() || !!addressedAgentName || !attachments?.length
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="relative group max-w-[80%]">
+        {showsPill && <div className="relative group max-w-[80%]">
           <div
             data-message-markdown={markdown}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
@@ -156,7 +158,7 @@ export function MessageBubble({
               </div>
             )}
           </div>
-        </div>
+        </div>}
         {attachments && attachments.length > 0 && (
           <AttachmentList
             attachments={attachments}
