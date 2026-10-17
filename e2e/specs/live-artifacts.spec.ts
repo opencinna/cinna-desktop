@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { chromium, type Browser, type Frame, type Locator, type Page } from '@playwright/test'
 import { answerAgentsFolder, homeDir, test, expect, type CinnaApp } from '../fixtures/app'
-import { LIVE_REQUESTED } from '../fixtures/live'
-import { claudeBinary, claudeLoginProblem, expectNoAgentTurn } from '../fixtures/liveEngine'
+import { LIVE_REQUESTED, requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { claudeBinary, claudeLoginProblem, expectNoAgentTurn, liveEngineFor, type LiveEngine, type LiveEngineName } from '../fixtures/liveEngine'
 import { approveDesktopAuth, preflight, requireLiveCinna, signIn, type LiveCinnaConfig } from '../fixtures/liveCinna'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { repoRoot } from '../playwright.config'
@@ -31,7 +31,9 @@ import { repoRoot } from '../playwright.config'
  *   sends it to `artifacts/<name>`: the spec reads the path from the
  *   `artifacts_publish` call, finds the file there and has git say it is
  *   ignored. Then the approval card, a republish with no card as rev 2, and
- *   a Deny that leaves core untouched.
+ *   a Deny that leaves core untouched. Runs once per entry of
+ *   `CINNA_E2E_LIVE_ARTIFACT_ENGINES` (below; `claude-haiku` alone by default),
+ *   titled `L2 [<entry>] …`.
  * - L3 — core's web frontend (the origin core puts in its artifact URLs, never
  *   hard-coded) in a separate headless Chromium: the public link the desktop
  *   created shows the site framed with its script run and its own CSV
@@ -47,6 +49,13 @@ import { repoRoot } from '../playwright.config'
  *   `cinna artifacts show` then reports. The profile is fresh, so it has never
  *   seen core's frontend origin: the card proves a link on it is read from
  *   core and drawn because core's own `url` is on that origin.
+ * - L5 — the same kit agent on `haiku`: Edit… on its approval card opens
+ *   `Publish for <agent>` prefilled with the agent's title, and the edited
+ *   title is what core holds (none under the agent's); the next request is
+ *   answered from the Inbox with the chat off screen, the publish lands before
+ *   the chat is shown again, and the answered row stays as `Answered: Publish.`.
+ *   The prompts give the agent the text to publish: it turns down other
+ *   subjects as outside its role and will not invent figures.
  *
  * ## Running it
  *
@@ -67,7 +76,8 @@ import { repoRoot } from '../playwright.config'
  * ## What it costs and leaves
  *
  * L2 runs three Claude turns on `haiku` on the developer's subscription
- * (about $0.05–0.15 at API prices); L1, L3 and L4 run no model turn. Each test
+ * (the turns' own telemetry estimates about $0.007; `claude-sonnet` about
+ * $0.14), L5 two (about $0.005); L1, L3 and L4 run no model turn. Each test
  * registers one desktop OAuth client on core (as `cinna-integration.spec.ts`
  * does). Artifacts the run created are hard-deleted in `afterAll` by the exact
  * ids recorded here (the CLI's own by `cinna artifacts delete <id>`), never by
@@ -75,10 +85,10 @@ import { repoRoot } from '../playwright.config'
  *
  * ## What it does not prove
  *
- * Edit… on an approval and the Inbox's answer path against the real core
- * (the fake-core spec covers both), named-people grants, link expiry, the
- * code's lock-out after three wrong tries, a `files` artifact's viewers on
- * core's page, and Claude on any model but `haiku`. The owner page is opened
+ * Named-people grants, link expiry, the code's lock-out after three wrong
+ * tries, a `files` artifact's viewers on core's page; L5 on any engine but
+ * Claude `haiku`. The engine list's `opencode`, `codex` and `antigravity`
+ * entries are wired but have never been run. The owner page is opened
  * with a JWT put where core's frontend keeps it, not through its login form.
  */
 
@@ -87,8 +97,11 @@ const TAG = `${Date.now().toString(36)}`
 const AGENT = 'Artifact Desk'
 const KIT_AGENT = 'Quarter Reporter'
 const L1_TITLE = `E2E artifacts site ${TAG}`
-const L2_TITLE = `E2E artifacts summary ${TAG}`
-const L2_OTHER_TITLE = `E2E artifacts other ${TAG}`
+const L2_BASE_TITLE = `E2E artifacts summary ${TAG}`
+const L2_OTHER_BASE_TITLE = `E2E artifacts other ${TAG}`
+const L5_AGENT_TITLE = `E2E artifacts draft ${TAG}`
+const L5_EDITED_TITLE = `E2E artifacts edited ${TAG}`
+const L5_INBOX_TITLE = `E2E artifacts inbox ${TAG}`
 const L3_TITLE = `E2E artifacts web ${TAG}`
 const L4_TITLE = `E2E artifacts cli ${TAG}`
 
@@ -121,15 +134,55 @@ test.use({
   liveEngineCheck: BINARY ? { engine: 'claude', binary: BINARY } : null
 })
 
-test.beforeEach(async () => {
+/**
+ * The engines L2 runs on: `CINNA_E2E_LIVE_ARTIFACT_ENGINES`, a comma list of
+ * `claude-haiku`, `claude-sonnet`, `claude-opus`, `claude`, `opencode`,
+ * `codex`, `antigravity`; unset, `claude-haiku` alone (the run this spec always
+ * made). An entry that names its model keeps it; a bare engine takes
+ * `CINNA_E2E_LIVE_MODEL`, else its default (`liveEngine.ts`: Claude `haiku`
+ * here, OpenCode `gpt-5.6-luna` through the `.env` key, Codex `gpt-5.6-luna`,
+ * Antigravity `gemini-3.6-flash-low`). An unknown entry throws at import.
+ */
+interface ArtifactEngine {
+  entry: string
+  engine: LiveEngine
+  /** What the turns' telemetry `model` must match, when the engine reports one; null checks nothing. */
+  model: RegExp | null
+}
+
+const ARTIFACT_ENGINES: ArtifactEngine[] = ((process.env.CINNA_E2E_LIVE_ARTIFACT_ENGINES ?? '').trim() || 'claude-haiku')
+  .split(',').map((raw) => raw.trim()).filter(Boolean).map(artifactEngine)
+
+function artifactEngine(entry: string): ArtifactEngine {
+  const override = (process.env.CINNA_E2E_LIVE_MODEL ?? '').trim()
+  const claude = /^claude-(haiku|sonnet|opus)$/.exec(entry)
+  if (claude) return { entry, engine: liveEngineFor('claude', claude[1]), model: new RegExp(claude[1], 'i') }
+  if (entry === 'claude') {
+    const model = override || 'haiku'
+    return { entry, engine: liveEngineFor('claude', model), model: /^(haiku|sonnet|opus)$/.test(model) ? new RegExp(model, 'i') : null }
+  }
+  if (entry === 'opencode' || entry === 'codex' || entry === 'antigravity') {
+    const engine = liveEngineFor(entry as LiveEngineName, override)
+    // OpenCode reports no telemetry; Codex names the slug it ran; Antigravity's name is logged, not matched.
+    const slug = engine.runtime?.modelId ?? ''
+    return { entry, engine, model: entry === 'codex' && slug ? new RegExp(slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null }
+  }
+  throw new Error(`CINNA_E2E_LIVE_ARTIFACT_ENGINES: unknown entry "${entry}" (claude-haiku, claude-sonnet, claude-opus, claude, opencode, codex, antigravity)`)
+}
+
+/** Titles of the per-engine L2 tests start with this; their engine's own prerequisites are checked in the test. */
+const ENGINE_TEST_PREFIX = 'L2 ['
+
+test.beforeEach(async ({}, testInfo) => {
   test.skip(!LIVE_REQUESTED, 'live specs run only through make e2e-live or make e2e-one SPEC=<live spec>')
   live = requireLiveCinna()
-  test.skip(BINARY === null, 'no Claude Code binary (set CINNA_E2E_CLAUDE_PATH, or install ~/.local/bin/claude)')
-  const login = claudeLoginProblem(BINARY!)
-  test.skip(login !== null, login ?? '')
   const ready = await preflight(live)
   test.skip(!ready.ok, ready.ok ? '' : `live cinna-core not usable: ${ready.reason}`)
   test.skip((ready as { discovery: { artifacts?: number } }).discovery.artifacts === undefined, `${live.serverUrl} does not advertise artifacts`)
+  if (testInfo.title.startsWith(ENGINE_TEST_PREFIX)) return
+  test.skip(BINARY === null, 'no Claude Code binary (set CINNA_E2E_CLAUDE_PATH, or install ~/.local/bin/claude)')
+  const login = claudeLoginProblem(BINARY!)
+  test.skip(login !== null, login ?? '')
 })
 
 test.afterAll(async () => {
@@ -244,21 +297,28 @@ async function bareAgent(cinna: CinnaApp, files: Record<string, string>, folder 
   return { agentId: agent.id, dir }
 }
 
-/** A kit agent scaffolded from the bundled contract, its manifest's runtime set to Claude `haiku`. */
-async function kitAgent(cinna: CinnaApp): Promise<{ agentId: string; dir: string }> {
+const HAIKU_RUNTIME = { engine: 'claude', credential: null, modelId: 'haiku', complexity: null } as const
+
+/**
+ * A kit agent scaffolded from the bundled contract, its manifest's runtime set
+ * to `runtime` (Claude `haiku` unless a test names another); null keeps the
+ * scaffold's Default runtime (OpenCode on the default chat mode).
+ */
+async function kitAgent(cinna: CinnaApp, runtime: LiveEngine['runtime'] = HAIKU_RUNTIME): Promise<{ agentId: string; dir: string }> {
   const root = await addAgentRoot(cinna)
   const agent = await createFolderAgent(cinna, root, KIT_AGENT, 'Writes short business reports for its owner.')
-  const outcome = await cinna.page.evaluate(async (agentId) => {
+  if (runtime === null) return { agentId: agent.id, dir: agent.path }
+  const outcome = await cinna.page.evaluate(async ({ agentId, runtime }) => {
     const got = await window.api.localAgents.get(agentId)
     if (!got.ok) return { ok: false as const, message: got.message }
     const stamp = got.value.stamps['cinna-agent.json']
     if (!stamp) return { ok: false as const, message: 'the kit agent has no manifest stamp' }
     return window.api.localAgents.updateField({
       agentId,
-      update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: 'haiku', complexity: null } },
+      update: { field: 'runtime', value: runtime },
       expectedStamp: stamp
     })
-  }, agent.id)
+  }, { agentId: agent.id, runtime })
   expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
   return { agentId: agent.id, dir: agent.path }
 }
@@ -426,8 +486,12 @@ test('L1 a person publishes a site folder, republishes it, and shares it with th
 })
 
 interface TurnWatch {
-  /** What to do when an approval card shows: answer it, or fail the turn for showing one. */
-  approval: 'publish' | 'deny' | 'none'
+  /**
+   * What to do when an approval card shows: answer it, fail the turn for
+   * showing one, or hand the card to the test (once; it must leave no card on
+   * screen when it returns).
+   */
+  approval: 'publish' | 'deny' | 'none' | ((approval: Locator, chatId: string) => Promise<void>)
 }
 
 /**
@@ -444,27 +508,37 @@ async function turn(cinna: CinnaApp, chatId: string | null, prompt: string, watc
   let id = chatId
   let approvals = 0
   const approvalCard = page.locator('[data-artifact-approval]')
-  await expect.poll(async () => {
-    if (!id) {
-      const chats = await page.evaluate(() => window.api.chat.list())
-      id = chats.find((row) => row.agentId !== null)?.id ?? null
-      if (!id) return 'no chat yet'
-    }
-    const allow = page.getByRole('button', { name: 'Allow once', exact: true })
-    if (await allow.count() > 0) await allow.first().click().catch(() => undefined)
-    if (await approvalCard.count() > 0) {
-      approvals += 1
-      if (watch.approval === 'none') return 'an approval card appeared'
-      await approvalCard.first().getByRole('button', { name: watch.approval === 'publish' ? 'Publish' : 'Deny', exact: true }).click().catch(() => undefined)
-      await expect(approvalCard).toHaveCount(0, { timeout: 30_000 })
-    }
-    const chat = await page.evaluate((chat) => window.api.chat.get(chat), id)
-    const messages = chat?.messages ?? []
-    recordPublished(messages)
-    const last = messages[messages.length - 1]
-    if (chat?.activeRunId || messages.length <= before + 1 || last?.role !== 'assistant' || !last.content) return 'running'
-    return 'done'
-  }, { timeout: 240_000, intervals: [500], message: `the turn for “${prompt.slice(0, 40)}…” ends` }).toBe('done')
+  const handler = typeof watch.approval === 'function' ? watch.approval : null
+  for (;;) {
+    let state = ''
+    await expect.poll(async () => {
+      if (!id) {
+        const chats = await page.evaluate(() => window.api.chat.list())
+        id = chats.find((row) => row.agentId !== null)?.id ?? null
+        if (!id) return (state = 'no chat yet')
+      }
+      const allow = page.getByRole('button', { name: 'Allow once', exact: true })
+      if (await allow.count() > 0) await allow.first().click().catch(() => undefined)
+      if (await approvalCard.count() > 0) {
+        if (watch.approval === 'none') return (state = 'an approval card appeared')
+        // The test's own handler runs outside the poll, so its assertions fail the test instead of being retried.
+        if (handler) return (state = 'approval')
+        approvals += 1
+        await approvalCard.first().getByRole('button', { name: watch.approval === 'publish' ? 'Publish' : 'Deny', exact: true }).click().catch(() => undefined)
+        await expect(approvalCard).toHaveCount(0, { timeout: 30_000 })
+      }
+      const chat = await page.evaluate((chat) => window.api.chat.get(chat), id)
+      const messages = chat?.messages ?? []
+      recordPublished(messages)
+      const last = messages[messages.length - 1]
+      if (chat?.activeRunId || messages.length <= before + 1 || last?.role !== 'assistant' || !last.content) return (state = 'running')
+      return (state = 'done')
+    }, { timeout: 240_000, intervals: [500], message: `the turn for “${prompt.slice(0, 40)}…” ends` }).toMatch(/^(done|approval)$/)
+    if (state === 'done') break
+    approvals += 1
+    await handler!(approvalCard.first(), id!)
+    await expect(approvalCard).toHaveCount(0, { timeout: 30_000 })
+  }
   const chat = await page.evaluate((chat) => window.api.chat.get(chat), id!)
   const messages = chat!.messages
   return { chatId: id!, reply: messages[messages.length - 1].content, approvals }
@@ -518,12 +592,26 @@ function gitIgnores(dir: string, relPath: string): { ignored: boolean; how: stri
   return { ignored, how: `no repository; the agent's .gitignore ${ignored ? 'lists' : 'does not list'} artifacts/` }
 }
 
-test('L2 a kit agent on real Claude builds under artifacts/, publishes behind the card, republishes without one, and hears a Deny', async ({ cinna }) => {
+for (const { entry, engine, model: expectedModel } of ARTIFACT_ENGINES) test.describe(`on ${entry}`, () => {
+  test.use({
+    engine: true,
+    realLogin: engine.realLogin,
+    liveEngineCheck: { engine: engine.name, binary: engine.realLogin?.binary ?? null }
+  })
+  // One run may hold several engines: each one's artifacts carry its entry.
+  const L2_TITLE = `${L2_BASE_TITLE} ${entry}`
+  const L2_OTHER_TITLE = `${L2_OTHER_BASE_TITLE} ${entry}`
+
+test(`${ENGINE_TEST_PREFIX}${entry}] a kit agent on ${engine.label} builds under artifacts/, publishes behind the card, republishes without one, and hears a Deny`, async ({ cinna }) => {
   test.setTimeout(900_000)
+  if (engine.name === 'opencode') requireLiveKey()
+  test.skip(engine.skipReason !== null, engine.skipReason ?? '')
   const config = live!
   await cinna.skipOnboarding()
   await signInDesktop(cinna, config)
-  const { dir } = await kitAgent(cinna)
+  // OpenCode runs on the default chat mode: the `.env` OpenAI key, gpt-5.6-luna unless CINNA_E2E_LIVE_MODEL names another.
+  if (engine.name === 'opencode') console.log(`live-artifacts L2 OpenCode default mode on ${await seedOpenAiDefaultMode(cinna)}`)
+  const { dir } = await kitAgent(cinna, engine.runtime)
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
@@ -546,16 +634,16 @@ test('L2 a kit agent on real Claude builds under artifacts/, publishes behind th
     const published = calls.find((call) => call.result && typeof call.result === 'object' && call.result.artifact_id)
     expect(published, JSON.stringify(calls)).toBeTruthy()
     path = published!.path ?? ''
-    console.log(`live-artifacts L2 the agent published ${path}`)
+    console.log(`live-artifacts L2 ${entry} the agent published ${path}`)
     expect(path, JSON.stringify(calls)).toMatch(/^artifacts\/[^/]/)
     expect(existsSync(join(dir, path)), `${path} exists in the agent folder`).toBe(true)
     const ignore = gitIgnores(dir, path)
-    console.log(`live-artifacts L2 ${ignore.how}`)
+    console.log(`live-artifacts L2 ${entry} ${ignore.how}`)
     expect(ignore.ignored, ignore.how).toBe(true)
     artifactId = published!.result.artifact_id
     url = published!.result.url
     created.add(artifactId)
-    console.log(`live-artifacts L2 created artifact ${artifactId}`)
+    console.log(`live-artifacts L2 ${entry} created artifact ${artifactId}`)
     expect(url).toMatch(new RegExp(`/artifact/${artifactId}$`))
     expect(done.reply).toContain(`/artifact/${artifactId}`)
     const { body } = await core(`/artifacts/${artifactId}`)
@@ -604,12 +692,130 @@ test('L2 a kit agent on real Claude builds under artifacts/, publishes behind th
     await expect(page.getByText('Not published — you declined', { exact: true })).toBeVisible()
   })
 
+  await test.step(`every turn ran on ${engine.label}`, async () => {
+    const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
+    const assistant = (chat?.messages ?? []).filter((message) => message.role === 'assistant')
+    const models = assistant.map((message: any) => message.telemetry?.model).filter(Boolean) as string[]
+    const cost = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
+    console.log(`live-artifacts L2 ${entry} models ${JSON.stringify([...new Set(models)])}, estimated $${cost.toFixed(3)}`)
+    // Only the Claude and Codex launchers report telemetry; the fixture's engine check proves the launcher either way.
+    if (engine.name === 'claude' || engine.name === 'codex') expect(models.length, 'the turns report their model').toBeGreaterThan(0)
+    if (expectedModel) for (const model of models) expect(model).toMatch(expectedModel)
+  })
+})
+})
+
+/** The title an approval card asks to publish under, from its accessible name. */
+async function requestedTitle(approval: Locator): Promise<string> {
+  return ((await approval.getAttribute('aria-label')) ?? '').replace(/^Publish request: /, '')
+}
+
+/** The successful `artifacts_publish` results in the chat, oldest first (every id already recorded for cleanup). */
+async function publishedResults(cinna: CinnaApp, chatId: string): Promise<Array<{ path: string | null; artifact_id: string; url: string; revision: number }>> {
+  return (await publishCalls(cinna, chatId))
+    .filter((call) => call.result && typeof call.result === 'object' && typeof call.result.artifact_id === 'string')
+    .map((call) => ({ path: call.path, ...call.result }))
+}
+
+test('L5 a real agent’s approval: Edit… publishes under the person’s title, and Publish from the Inbox with the chat not shown publishes', async ({ cinna }) => {
+  test.setTimeout(600_000)
+  const config = live!
+  await cinna.skipOnboarding()
+  await signInDesktop(cinna, config)
+  await kitAgent(cinna)
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+  await cinna.page.evaluate(() => window.api.localAgents.rescan())
+  const page = cinna.page
+  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await answerAgentsFolder(cinna)
+  await page.getByRole('button', { name: `Start a new chat with ${KIT_AGENT}` }).click()
+
+  let chatId = ''
+  await test.step('Edit… on the card opens the dialog with the agent’s title; Publish puts the edited title on core', async () => {
+    let asked = ''
+    const done = await turn(cinna, null,
+      // On the agent's own subject, with the figures given: it turns down other subjects as outside its role, and will not invent numbers.
+      `Please put this two-line Markdown summary in a file: "Q3 sales rose 12%. Costs held flat." Then publish it as a Cinna artifact titled "${L5_AGENT_TITLE}". Reply with the artifact's link.`,
+      {
+        approval: async (approval) => {
+          await expect(approval.getByRole('button')).toHaveText(['Deny', 'Edit…', 'Publish'])
+          asked = await requestedTitle(approval)
+          console.log(`live-artifacts L5 the agent asked to publish “${asked}”`)
+          await approval.getByRole('button', { name: 'Edit…', exact: true }).click()
+          const dialog = page.getByRole('dialog', { name: `Publish for ${KIT_AGENT}`, exact: true })
+          await expect(dialog.getByRole('list', { name: 'Files to publish' })).not.toHaveAttribute('aria-busy', 'true')
+          const title = dialog.getByLabel('Title', { exact: true })
+          await expect(title).toHaveValue(asked)
+          await title.fill(L5_EDITED_TITLE)
+          await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
+          await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+        }
+      })
+    chatId = done.chatId
+    expect(done.approvals).toBe(1)
+    expect(asked).not.toBe(L5_EDITED_TITLE)
+    const results = await publishedResults(cinna, chatId)
+    expect(results, JSON.stringify(await publishCalls(cinna, chatId))).toHaveLength(1)
+    const { artifact_id: artifactId, url } = results[0]
+    console.log(`live-artifacts L5 created artifact ${artifactId} (Edit…)`)
+    const { status, body } = await core(`/artifacts/${artifactId}`)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ id: artifactId, title: L5_EDITED_TITLE, visibility: 'private', source_kind: 'desktop', current_revision_number: 1, url })
+    // Core holds no artifact under the title the agent asked for.
+    const titles = ((await core('/artifacts?limit=200')).body.data as Array<{ title: string }>).map((row) => row.title)
+    expect(titles).not.toContain(asked)
+    await expect(page.locator('[data-artifact-tool="published"]').getByRole('group', { name: `Artifact ${L5_EDITED_TITLE}`, exact: true })).toBeVisible()
+    await expect(page.getByRole('group', { name: `Artifact ${asked}`, exact: true })).toHaveCount(0)
+  })
+
+  await test.step('the next request answered from the Inbox, with the chat not on screen, publishes', async () => {
+    let asked = ''
+    let inboxArtifact = ''
+    const done = await turn(cinna, chatId,
+      `Now put this one-line Markdown note in a separate file: "Q4 outlook: steady." Publish it as a new, separate Cinna artifact titled "${L5_INBOX_TITLE}". Reply with its link.`,
+      {
+        approval: async (approval, chat) => {
+          asked = await requestedTitle(approval)
+          console.log(`live-artifacts L5 the agent asked to publish “${asked}”`)
+          await page.getByRole('button', { name: /^Inbox/ }).click()
+          await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+          // The chat, and with it the card, is off screen: only the Inbox can answer now.
+          await expect(page.locator('[data-artifact-approval]')).toHaveCount(0)
+          const row = page.getByRole('article').filter({ hasText: `${KIT_AGENT} wants to publish “${asked}”` })
+          await expect(row).toHaveCount(1, { timeout: 20_000 })
+          await expect(row).toContainText(new RegExp(`${KIT_AGENT} wants to publish “[^”]+” — 1 file, \\d+ B, visible to only you\\.`))
+          await row.getByRole('button', { name: 'Answer', exact: true }).click()
+          const modal = page.getByLabel('Question', { exact: true })
+          await modal.getByRole('button', { name: /^Publish/ }).click()
+          await modal.getByRole('button', { name: 'Send answer', exact: true }).click()
+          // Published while the Inbox is still the screen.
+          await expect.poll(async () => (await publishedResults(cinna, chat)).length, { timeout: 60_000, message: 'the Inbox answer reaches the agent as a published result' }).toBe(2)
+          inboxArtifact = (await publishedResults(cinna, chat))[1].artifact_id
+          // An answered row stays in the Inbox, settled: the answer line, no Answer button.
+          await expect(row.getByText('Answered: Publish.', { exact: true })).toBeVisible({ timeout: 20_000 })
+          await expect(row.getByRole('button', { name: 'Answer', exact: true })).toHaveCount(0)
+          expect(await page.evaluate((id) => window.api.artifacts.approvals(id), chat)).toEqual([])
+          await page.getByRole('button', { name: 'Chats', exact: true }).click()
+        }
+      })
+    expect(done.approvals).toBe(1)
+    console.log(`live-artifacts L5 created artifact ${inboxArtifact} (Inbox)`)
+    const results = await publishedResults(cinna, chatId)
+    expect(results.map((result) => result.artifact_id)).toEqual([results[0].artifact_id, inboxArtifact])
+    expect(inboxArtifact).not.toBe(results[0].artifact_id)
+    const { status, body } = await core(`/artifacts/${inboxArtifact}`)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ id: inboxArtifact, title: asked, visibility: 'private', source_kind: 'desktop', current_revision_number: 1 })
+    await expect(page.locator('[data-artifact-tool="published"]').getByRole('group', { name: `Artifact ${asked}`, exact: true })).toBeVisible({ timeout: 30_000 })
+  })
+
   await test.step('every turn ran on haiku', async () => {
     const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
     const assistant = (chat?.messages ?? []).filter((message) => message.role === 'assistant')
     const models = assistant.map((message: any) => message.telemetry?.model).filter(Boolean) as string[]
     const cost = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
-    console.log(`live-artifacts L2 models ${JSON.stringify([...new Set(models)])}, estimated $${cost.toFixed(3)}`)
+    console.log(`live-artifacts L5 models ${JSON.stringify([...new Set(models)])}, estimated $${cost.toFixed(3)}`)
     expect(models.length, 'the turns report their model').toBeGreaterThan(0)
     for (const model of models) expect(model).toMatch(/haiku/i)
   })

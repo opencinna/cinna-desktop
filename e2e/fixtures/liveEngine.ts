@@ -86,6 +86,15 @@ const MODEL_OVERRIDE = (process.env.CINNA_E2E_LIVE_MODEL ?? '').trim()
 export const LIVE_ENGINE: LiveEngine = resolve(RAW)
 
 /**
+ * The same resolution for an engine and model a spec names itself rather than
+ * reading `CINNA_E2E_LIVE_ENGINE` (`live-artifacts.spec.ts`'s engine list); an
+ * empty `model` takes the engine's default above.
+ */
+export function liveEngineFor(name: LiveEngineName, model: string): LiveEngine {
+  return resolve(name, model)
+}
+
+/**
  * `test.use(liveEngineOptions())` at the top of a live spec: the cached
  * OpenCode always (harmless on the other engines), the real login when the
  * run is on Claude or Codex, and the proof that the turns ran there — after a
@@ -166,7 +175,7 @@ export async function useLiveRuntime(cinna: CinnaApp, agentId: string): Promise<
   expect(outcome.ok, `the ${LIVE_ENGINE.label} runtime is saved on ${agentId}: ${outcome.ok ? '' : outcome.message}`).toBe(true)
 }
 
-function resolve(name: LiveEngineName): LiveEngine {
+function resolve(name: LiveEngineName, override: string = MODEL_OVERRIDE): LiveEngine {
   if (name === 'opencode') {
     return {
       name,
@@ -181,12 +190,12 @@ function resolve(name: LiveEngineName): LiveEngine {
   if (name === 'claude') {
     const binary = claudeBinary()
     // A tier unless a model alias is named: `simple` / `medium` / `complex` stay tiers.
-    const tier = MODEL_OVERRIDE === '' ? 'medium' : ['simple', 'medium', 'complex'].includes(MODEL_OVERRIDE) ? MODEL_OVERRIDE : null
+    const tier = override === '' ? 'medium' : ['simple', 'medium', 'complex'].includes(override) ? override : null
     return {
       name,
-      label: `claude ${tier === null ? MODEL_OVERRIDE : tier === 'simple' ? 'haiku' : tier === 'medium' ? 'sonnet' : 'opus'}`,
+      label: `claude ${tier === null ? override : tier === 'simple' ? 'haiku' : tier === 'medium' ? 'sonnet' : 'opus'}`,
       realLogin: binary ? { engine: 'claude', binary, pathSetting: 'localAgentsClaudePath' } : null,
-      runtime: { engine: 'claude', credential: null, modelId: tier === null ? MODEL_OVERRIDE : null, complexity: (tier ?? null) as LocalAgentRuntimeInput['complexity'] },
+      runtime: { engine: 'claude', credential: null, modelId: tier === null ? override : null, complexity: (tier ?? null) as LocalAgentRuntimeInput['complexity'] },
       skipReason: binary === null
         ? 'CINNA_E2E_LIVE_ENGINE=claude: no Claude Code binary (set CINNA_E2E_CLAUDE_PATH, or install ~/.local/bin/claude)'
         : claudeLoginProblem(binary),
@@ -195,7 +204,7 @@ function resolve(name: LiveEngineName): LiveEngine {
   }
   if (name === 'antigravity') {
     const binary = antigravityServer()
-    const model = MODEL_OVERRIDE || ANTIGRAVITY_LIVE_MODEL
+    const model = override || ANTIGRAVITY_LIVE_MODEL
     return {
       name,
       label: `antigravity ${model}`,
@@ -208,7 +217,7 @@ function resolve(name: LiveEngineName): LiveEngine {
     }
   }
   const binary = codexBinary()
-  const model = MODEL_OVERRIDE || CODEX_LIVE_MODEL
+  const model = override || CODEX_LIVE_MODEL
   return {
     name,
     label: `codex ${model}`,
