@@ -1,4 +1,6 @@
-import { test, expect, type CinnaApp } from '../fixtures/app'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { customAcpCommand, type CustomAcpCommand } from '../fixtures/customAcpCommand'
 import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSupport/fakeAcp'
 
@@ -28,6 +30,9 @@ import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSuppor
  * - Stop / edit / composer: no steering; the prompt blocks on `awaitCancel`.
  *
  * ## What it does not cover
+ *
+ * Files on a queued message (test 6) are checked here only as far as the
+ * engine's wire: `live-attachments.spec.ts` has a real agent read them.
  *
  * A real Claude Code or Codex steer, a steer that lands late (`saved`), a
  * refused drain, several queued messages merged into one turn, a message
@@ -302,4 +307,86 @@ test('5 while a turn runs the composer offers Stop, typing puts Send in its plac
   await input.press('Backspace')
   await expect(stop).toBeVisible()
   await expect(sendButton(cinna)).toHaveCount(0)
+})
+
+test('6 files attached while a turn runs queue with their message and go with the drained turn', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, PARKS_ON_PERMISSION)
+  const downloads = homeDir(cinna, 'Downloads')
+  const notes = { name: 'release-checklist.txt', text: 'Checklist code: oak-5521.' }
+  const extra = { name: 'linux-hashes.txt', text: 'Linux hashes: fir-0937.' }
+  writeFileSync(join(downloads, notes.name), notes.text)
+  writeFileSync(join(downloads, extra.name), extra.text)
+  const chatId = await startTurn(cinna, peer)
+  const rows = queuedRows(cinna)
+  const page = cinna.page
+
+  /** `Add to chat` → `Attach files`, with main's OS picker answering `name`; enabled mid-turn is the claim. */
+  async function attach(name: string): Promise<void> {
+    await cinna.electronApp.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog
+    }, join(downloads, name))
+    await page.getByRole('button', { name: 'Add to chat', exact: true }).click()
+    const item = page.getByRole('menu', { name: 'Add to chat' }).getByRole('menuitem', { name: 'Attach files' })
+    await expect(item).toBeEnabled()
+    await item.click()
+    await expect(page.getByRole('button', { name: `Remove ${name}`, exact: true })).toBeVisible()
+  }
+
+  await test.step('a message with a file, sent mid-turn, is queued with its file badge', async () => {
+    await expect(page.getByRole('button', { name: 'Allow once', exact: true })).toBeEnabled()
+    await attach(notes.name)
+    await sendFollowUp(cinna, FOLLOW_UP)
+    await expect(page.getByRole('button', { name: `Remove ${notes.name}`, exact: true })).toHaveCount(0)
+    await expect(rows).toHaveCount(1)
+    await expect(rows.getByText(FOLLOW_UP, { exact: true })).toBeVisible()
+    await expect(rows.getByText('Queued', { exact: true })).toBeVisible()
+    await expect(rows.getByRole('button', { name: `Preview ${notes.name}`, exact: true })).toBeVisible()
+  })
+
+  await test.step('a files-only message, sent mid-turn, is queued too', async () => {
+    await attach(extra.name)
+    // Files and no text: Send stands where Stop was.
+    await expect(stopButton(cinna)).toHaveCount(0)
+    await sendButton(cinna).click()
+    await expect(rows).toHaveCount(2)
+    await expect(rows.nth(1).getByRole('button', { name: `Preview ${extra.name}`, exact: true })).toBeVisible()
+    await expect(rows.nth(1).getByText('Queued', { exact: true })).toBeVisible()
+    const view = await page.evaluate((id) => window.api.run.queueList(id), chatId)
+    expect(view.held).toBe(false)
+    expect(view.items.map((item) => [item.content, (item.attachments ?? []).map((file) => file.filename)])).toEqual([
+      [FOLLOW_UP, [notes.name]],
+      ['', [extra.name]]
+    ])
+    // Files never go into the running turn.
+    expect(peer.received('_session/steering')).toEqual([])
+    expect(peer.received('session/prompt')).toHaveLength(1)
+  })
+
+  await test.step('the turn completes and both go as one next turn, with their files', async () => {
+    await page.getByRole('button', { name: 'Allow once', exact: true }).click()
+    await expect.poll(() => peer.received('session/prompt').length).toBe(2)
+    // A command-line agent gets the files copied for it and their paths ahead of the text, as an idle send.
+    const blocks = peer.received('session/prompt')[1].params?.prompt as Array<{ type: string; text?: string }>
+    expect(blocks.map((block) => block.type)).toEqual(['text'])
+    const listed = /^Uploaded files:\n- (.+)\n- (.+)\n---\n\n(.*)$/s.exec(blocks[0].text ?? '')
+    expect(listed, blocks[0].text).not.toBeNull()
+    const [, first, second, text] = listed as RegExpExecArray
+    expect(text).toBe(FOLLOW_UP)
+    expect([basename(first), readFileSync(first, 'utf8')]).toEqual([notes.name, notes.text])
+    expect([basename(second), readFileSync(second, 'utf8')]).toEqual([extra.name, extra.text])
+    await page.getByRole('button', { name: 'Allow once', exact: true }).click()
+    await expect(stopButton(cinna)).toHaveCount(0, { timeout: 15_000 })
+  })
+
+  await test.step('the saved user row carries both files, and nothing is left queued', async () => {
+    await expect(rows).toHaveCount(0)
+    await expect.poll(() => page.evaluate(async (id) => {
+      const detail = await window.api.chat.get(id)
+      return (detail?.messages ?? []).filter((message) => message.role === 'user')
+        .map((message) => [message.content, (message.attachments ?? []).map((file) => file.filename)])
+    }, chatId)).toEqual([[PROMPT, []], [FOLLOW_UP, [notes.name, extra.name]]])
+    await expect(page.getByRole('button', { name: `Preview ${notes.name}`, exact: true })).toHaveCount(1)
+    expect(await page.evaluate((id) => window.api.run.queueList(id), chatId)).toEqual({ held: false, items: [] })
+  })
 })

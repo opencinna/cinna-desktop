@@ -37,9 +37,19 @@ import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, requireOpenCode, see
  *    the uploaded file; the copy has the same bytes; and after the test the
  *    fixture proves from the main log that the turn ran on that engine.
  *
+ * 3. **@live, per engine: files sent while a turn runs.** The first turn is
+ *    held open by a shell `sleep 20`; meanwhile a text file (a code) and a
+ *    PNG (a number drawn on a canvas) are attached through the same menu and
+ *    sent with a question. Witnesses: `Attach files` is enabled mid-turn, the
+ *    message shows as a `Queued` bubble with both file badges and main's
+ *    queue holds it with both files (a message with files is never steered);
+ *    after the first turn it is saved as its own user row with both files, and
+ *    the reply that follows it holds the code and the number, which no prompt
+ *    contains. The scripted twin is `pending-messages.spec.ts` test 6.
+ *
  * ## Cost
  *
- * One short turn (2–4 requests). OpenCode bills the `.env` OpenAI key
+ * One short turn (2–4 requests); the queued-files test two (a sleep, then the question). OpenCode bills the `.env` OpenAI key
  * (gpt-5.6-luna, about a cent); Claude, Codex and Antigravity spend the
  * developer's own subscription. Run one engine at a time:
  * `make e2e-one SPEC=e2e/specs/live-attachments.spec.ts LIVE_ENGINE=<engine>`.
@@ -131,9 +141,9 @@ async function attachAndSend(cinna: CinnaApp, prompt: string, agent: string | nu
 }
 
 /** The kit agent, its runtime (live) and a relaunch so the agent page and composer see it. */
-async function arrangeAgent(cinna: CinnaApp, live: boolean): Promise<{ agentPath: string; pdfPath: string }> {
+async function arrangeAgent(cinna: CinnaApp, live: boolean, name = AGENT, description = 'Reads the invoices the user sends.'): Promise<{ agentPath: string; pdfPath: string }> {
   const root = await addAgentRoot(cinna)
-  const agent = await createFolderAgent(cinna, root, AGENT, 'Reads the invoices the user sends.')
+  const agent = await createFolderAgent(cinna, root, name, description)
   if (live) await useLiveRuntime(cinna, agent.id)
   const downloads = join(cinna.sandbox.home, 'Downloads')
   mkdirSync(downloads, { recursive: true })
@@ -387,5 +397,137 @@ test.describe('@live', () => {
     expect(turn.reply.replace(/,/g, '')).toContain(invoice.amount)
     // The text went in the prompt: nothing was copied for the chat runtime to open.
     expect(existsSync(join(cinna.sandbox.userData, 'agent-uploads'))).toBe(false)
+  })
+})
+
+test.describe('@live files queued behind a running turn', () => {
+  test.use(liveEngineOptions())
+  test.beforeEach(() => requireLiveEngine())
+
+  const HOLD = 'Use your shell tool to run the command `sleep 20`, wait for it to finish, then reply with the single word done.'
+  const QUESTION = 'What code is in the attached text file, and what number is written in the attached image? Reply with the code and the number only.'
+  const HELPER = 'Desk Helper'
+  const TEXT_NAME = 'vault-note.txt'
+  const IMAGE_NAME = 'badge-number.png'
+
+  interface Transcript { users: Array<{ content: string; files: string[] }>; after: string; errors: string[] }
+
+  /** The user rows of the one chat, and what the assistant said after the last of them. */
+  async function transcript(cinna: CinnaApp): Promise<Transcript | null> {
+    return cinna.page.evaluate(async () => {
+      const [row] = await window.api.chat.list()
+      if (!row) return null
+      const messages = (await window.api.chat.get(row.id))?.messages ?? []
+      const lastUser = messages.map((message) => message.role).lastIndexOf('user')
+      return {
+        users: messages.filter((message) => message.role === 'user')
+          .map((message) => ({ content: message.content, files: (message.attachments ?? []).map((file) => file.filename) })),
+        after: messages.slice(lastUser + 1).filter((message) => message.role === 'assistant').map((message) => message.content).join('\n'),
+        errors: messages.filter((message) => message.role === 'error').map((message) => message.content.slice(0, 500))
+      }
+    })
+  }
+
+  test(`@live a file sent mid-turn queues, then goes as its own turn (${LIVE_ENGINE.name})`, async ({ cinna }) => {
+    test.setTimeout(6 * 60_000)
+    await cinna.skipOnboarding()
+    const model = await seedLiveModel(cinna)
+    await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+    // A general persona: the invoice clerk turns down a shell command and a vault code as off-topic.
+    await arrangeAgent(cinna, true, HELPER, 'A general assistant: runs the shell commands the user asks for and reads the files the user sends.')
+    if (LIVE_ENGINE.name === 'antigravity') {
+      await expect.poll(() => cinna.page.evaluate(() => window.api.localTools.antigravityAuth()), { timeout: 30_000 })
+        .toEqual({ state: 'logged_in' })
+    }
+    const page = cinna.page
+    const downloads = homeDir(cinna, 'Downloads')
+    const code = `KESTREL-${randomBytes(2).toString('hex').toUpperCase()}`
+    const number = String(1000 + Math.floor(Math.random() * 8999))
+    const textPath = join(downloads, TEXT_NAME)
+    const imagePath = join(downloads, IMAGE_NAME)
+    writeFileSync(textPath, `The vault code is ${code}.\n`)
+    // The number drawn black on white, large, by the renderer's own canvas.
+    const png = await page.evaluate((digits) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 480
+      canvas.height = 200
+      const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, 480, 200)
+      ctx.fillStyle = '#000000'
+      ctx.font = 'bold 120px Helvetica, Arial, sans-serif'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(digits, 40, 105)
+      return canvas.toDataURL('image/png').split(',')[1]
+    }, number)
+    writeFileSync(imagePath, Buffer.from(png, 'base64'))
+    await cinna.electronApp.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: picked })) as typeof dialog.showOpenDialog
+    }, [textPath, imagePath])
+
+    await test.step('the first turn starts and stays running', async () => {
+      await page.getByRole('button', { name: 'Agents', exact: true }).click()
+      await page.getByRole('button', { name: HELPER, exact: true }).click()
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(HELPER)
+      const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+      await input.fill(HOLD)
+      await input.press('Enter')
+      await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible({ timeout: 30_000 })
+    })
+
+    const queued = page.locator('[data-queued-message]')
+    await test.step('mid-turn, both files attach and the message queues with its badges', async () => {
+      const running = page.getByRole('combobox', { name: 'Send a follow-up · Esc Esc to stop', exact: true })
+      await expect(running).toBeVisible()
+      await page.getByRole('button', { name: 'Add to chat', exact: true }).click()
+      const attach = page.getByRole('menu', { name: 'Add to chat' }).getByRole('menuitem', { name: 'Attach files' })
+      await expect(attach).toBeEnabled()
+      await attach.click()
+      await expect(page.getByRole('button', { name: `Remove ${TEXT_NAME}`, exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: `Remove ${IMAGE_NAME}`, exact: true })).toBeVisible()
+      await running.fill(QUESTION)
+      await running.press('Enter')
+      await expect(running).toHaveValue('')
+      await expect(queued).toHaveCount(1)
+      await expect(queued.getByText(QUESTION, { exact: true })).toBeVisible()
+      await expect(queued.getByText('Queued', { exact: true })).toBeVisible()
+      await expect(queued.getByRole('button', { name: `Preview ${TEXT_NAME}`, exact: true })).toBeVisible()
+      await expect(queued.getByRole('button', { name: `Preview ${IMAGE_NAME}`, exact: true })).toBeVisible()
+      const view = await page.evaluate(async () => window.api.run.queueList((await window.api.chat.list())[0].id))
+      expect(view.items.map((item) => [item.content, (item.attachments ?? []).map((file) => file.filename)]))
+        .toEqual([[QUESTION, [TEXT_NAME, IMAGE_NAME]]])
+      // Still the first turn: nothing has been sent but the hold prompt.
+      expect((await transcript(cinna))?.users).toEqual([{ content: HOLD, files: [] }])
+    })
+
+    const asks: string[] = []
+    let last: Transcript | null = null
+    await test.step('after the first turn the queued message runs as its own turn', async () => {
+      await expect.poll(async () => {
+        const ask = page.getByText(/^The agent is asking to /)
+        if ((await ask.count()) > 0) {
+          if (asks.length >= 4) return 'too many asks'
+          asks.push(await ask.first().innerText())
+          await page.getByRole('button', { name: 'Allow once', exact: true }).first().click()
+          return 'answered an ask'
+        }
+        last = await transcript(cinna)
+        if (last && last.errors.length > 0) return `error: ${last.errors[0]}`
+        const busy = (await page.getByRole('button', { name: 'Stop', exact: true }).count()) > 0
+        return !busy && (await queued.count()) === 0 && last !== null && last.users.length === 2 && last.after.trim() !== '' ? 'done' : 'running'
+      }, { message: 'both turns end', timeout: 5 * 60_000, intervals: [1000] }).toBe('done')
+    })
+
+    const settled = last as unknown as Transcript
+    console.log(`live-attachments queued ${model}: ${asks.length} asks, reply ${JSON.stringify(settled.after.slice(0, 200))}`)
+    test.info().annotations.push({ type: 'model', description: model }, { type: 'asks', description: JSON.stringify(asks) }, { type: 'reply', description: settled.after.slice(0, 500) })
+
+    await test.step('the saved user row carries both files, and the reply holds the code and the number', async () => {
+      expect(settled.errors).toEqual([])
+      expect(settled.users).toEqual([{ content: HOLD, files: [] }, { content: QUESTION, files: [TEXT_NAME, IMAGE_NAME] }])
+      expect(settled.after).toContain(code)
+      expect(settled.after.replace(/[,\s]/g, '')).toContain(number)
+      await expect(page.getByText(code).first()).toBeVisible()
+    })
   })
 })
