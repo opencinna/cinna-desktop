@@ -218,11 +218,28 @@ interface FakeKey {
   producerId: string; slot: string
 }
 
-/** A fake Core on node:http that lists and materializes issued Agent API keys and serves the producer's /ping. */
-async function startFakeKeyCore(keys: FakeKey[]) {
+/** A Google OAuth record on the fake Core: `pending_authorization` until the test plays the consent by setting `oauthStatus: 'ready'`. */
+interface FakeGoogle {
+  id: string; type: string; name: string; oauthStatus: 'pending_authorization' | 'ready' | 'reauth_required'; revision: string
+  grantedUserEmail: string | null; accessToken: string
+}
+const GOOGLE_NAMES: Record<string, string> = { gmail_oauth: 'Gmail', gmail_oauth_readonly: 'Gmail (read-only)', gdrive_oauth: 'Google Drive', gdrive_oauth_readonly: 'Google Drive (read-only)',
+  gcalendar_oauth: 'Google Calendar', gcalendar_oauth_readonly: 'Google Calendar (read-only)', gmeet_oauth: 'Google Meet', gmeet_oauth_readonly: 'Google Meet (read-only)' }
+
+/**
+ * A fake Core on node:http that lists and materializes issued Agent API keys and serves the producer's /ping.
+ * It also brokers Google OAuth as Core does: `POST /external/credentials/oauth` creates a pending record
+ * (or hands back the caller's pending one of that type) in `google`, answering a loopback consent URL.
+ */
+async function startFakeKeyCore(keys: FakeKey[], google: FakeGoogle[] = []) {
   const { createServer } = await import('node:http')
-  const seen = { list: [] as string[], materialize: [] as string[], pings: [] as { auth: string | undefined; status: number }[] }
+  const seen = { list: [] as string[], materialize: [] as string[], pings: [] as { auth: string | undefined; status: number }[], oauthCreate: [] as unknown[] }
   let base = ''
+  let googleSeq = 0
+  const googleEntry = (g: FakeGoogle) => ({
+    id: g.id, name: g.name, type: g.type, notes: null, service_uri: null, is_placeholder: false,
+    credential_data: { access_token: g.accessToken, token_type: 'Bearer', expires_at: Math.floor(Date.now() / 1000) + 3600, scope: 'https://www.googleapis.com/auth/gmail.readonly', granted_user_email: g.grantedUserEmail }
+  })
   const entryFor = (k: FakeKey) => ({
     id: k.id, name: k.name, type: 'agent_api', notes: null, service_uri: k.slot, is_placeholder: false,
     credential_data: { base_url: `${base}/api/v1/agent-api/${k.producerId}`, spec_url: `${base}/api/v1/agent-api/${k.producerId}/openapi.json`, token: k.token, label: 'CRM key', producer_agent_id: k.producerId }
@@ -239,11 +256,31 @@ async function startFakeKeyCore(keys: FakeKey[]) {
     }
     if (req.method === 'GET' && url.pathname === '/api/v1/external/credentials') {
       seen.list.push(url.search)
-      return json(200, { items: keys.map(k => ({
+      return json(200, { items: [...keys.map(k => ({
         id: k.id, name: k.name, type: 'agent_api', notes: null, service_uri: k.slot, status: 'complete', is_placeholder: false,
         relation: 'owned', owner_email: null, local_use_allowed: true, revision: k.revision, key_status: k.keyStatus, expires_at: k.expiresAt,
         agent_api: { producer_agent_id: k.producerId, producer_name: 'CRM producer', issuer_email: 'ana@example.com', base_url: `${base}/api/v1/agent-api/${k.producerId}`, spec_url: `${base}/api/v1/agent-api/${k.producerId}/openapi.json`, expires_at: k.expiresAt }
-      })) })
+      })), ...google.map(g => ({
+        id: g.id, name: g.name, type: g.type, notes: null, service_uri: null, status: g.oauthStatus === 'ready' ? 'complete' : 'incomplete', is_placeholder: false,
+        relation: 'owned', category: 'mine', owner_email: null, local_use_allowed: true, revision: g.revision, key_status: null, expires_at: null, agent_api: null,
+        oauth_status: g.oauthStatus, granted_user_email: g.oauthStatus === 'ready' ? g.grantedUserEmail : null
+      }))] })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/v1/external/credentials/oauth') {
+      let body = ''
+      req.on('data', c => { body += c })
+      req.on('end', () => {
+        const { type } = JSON.parse(body || '{}') as { type?: string }
+        seen.oauthCreate.push(JSON.parse(body || '{}'))
+        if (!type || !GOOGLE_NAMES[type]) return json(422, { detail: { code: 'unsupported_type', message: 'Not a Google OAuth type.' } })
+        let g = google.find(x => x.type === type && x.oauthStatus === 'pending_authorization')
+        if (!g) {
+          g = { id: `9e0f1a2b-0000-4000-8000-0000000000${String(++googleSeq).padStart(2, '0')}`, type, name: GOOGLE_NAMES[type], oauthStatus: 'pending_authorization', revision: 'g-rev-1', grantedUserEmail: null, accessToken: `ya29.fake-google-access-${googleSeq}-token` }
+          google.push(g)
+        }
+        json(201, { credential_id: g.id, authorization_url: `${base}/fake-google/consent?credential=${g.id}`, expires_at: Math.floor(Date.now() / 1000) + 600 })
+      })
+      return
     }
     if (req.method === 'POST' && url.pathname === '/api/v1/external/credentials/materialize') {
       seen.materialize.push(url.search)
@@ -253,6 +290,12 @@ async function startFakeKeyCore(keys: FakeKey[]) {
         const ids = (JSON.parse(body || '{}') as { credential_ids?: string[] }).credential_ids ?? []
         const items: unknown[] = [], refused: unknown[] = []
         for (const id of ids) {
+          const g = google.find(x => x.id === id)
+          if (g) {
+            if (g.oauthStatus === 'ready') items.push({ id, revision: g.revision, service_account_file: null, ssh_key: null, entry: googleEntry(g) })
+            else refused.push({ id, reason: g.oauthStatus === 'reauth_required' ? 'reauthorization_required' : 'pending_authorization' })
+            continue
+          }
           const k = keys.find(x => x.id === id)
           if (!k) { refused.push({ id, reason: 'not_found' }); continue }
           if (k.keyStatus === 'active') items.push({ id, revision: k.revision, service_account_file: null, ssh_key: null, entry: entryFor(k) })
@@ -422,6 +465,140 @@ test('picker hides a revoked key, shows a paused one with its warning glyph', as
     await expect(picker.getByTestId(`credential-card-${paused.id}`)).toBeVisible()
     await picker.getByRole('textbox', { name: 'Search credentials' }).fill('')
     await page.screenshot({ path: '/tmp/cinna-agent-api-key-picker.png' })
+  } finally { await core.close() }
+})
+
+// ---- Google OAuth connect (New Google credential in Attach credential) -----------------------
+
+/** Replaces `shell.openExternal` in main: the consent URL is recorded, no browser opens. */
+async function recordBrowser(cinna: CinnaApp) {
+  await cinna.electronApp.evaluate(({ shell }) => {
+    const globals = globalThis as unknown as { __openedUrls?: string[] }
+    globals.__openedUrls = []
+    shell.openExternal = async (url: string): Promise<void> => { globals.__openedUrls!.push(url) }
+  })
+  return () => cinna.electronApp.evaluate(() => [...((globalThis as unknown as { __openedUrls?: string[] }).__openedUrls ?? [])])
+}
+
+/** A signed-in profile on the fake Core, one folder agent, its Credentials tab open and the picker on the chooser. */
+async function openGoogleChooser(cinna: CinnaApp, core: { url: string }, agentName: string) {
+  await cinna.skipOnboarding(); await keychain(cinna)
+  await cinnaProfile(cinna, core.url, 'Google owner')
+  const root = await addAgentRoot(cinna)
+  const agent = await createFolderAgent(cinna, root, agentName)
+  await cinna.page.evaluate(() => window.api.localAgents.rescan())
+  await cinna.page.reload()
+  const opened = await recordBrowser(cinna)
+  await openAgentCredentials(cinna, agentName)
+  await cinna.page.getByRole('button', { name: 'Attach', exact: true }).click()
+  const picker = cinna.page.getByRole('dialog', { name: 'Attach credential' })
+  await picker.getByRole('button', { name: /^New Google credential/ }).click()
+  await expect(picker.getByRole('radiogroup', { name: 'Google service' }).getByRole('radio')).toHaveCount(4)
+  return { agent, picker, opened }
+}
+
+const flowOf = (cinna: CinnaApp, agentId: string) => cinna.page.evaluate(id => window.api.serviceCredentials.oauthFlow(id), agentId)
+const attachedOf = (cinna: CinnaApp, agentId: string) => cinna.page.evaluate(async id => {
+  const r = await window.api.serviceCredentials.attachments(id)
+  return r.ok ? r.value.map(a => ({ ref: a.ref, state: a.state })) : r.message
+}, agentId)
+
+test('Google OAuth New: waiting until consent, then attached, the picker closes and credentials.json holds the token', async ({ cinna }) => {
+  const google: FakeGoogle[] = []
+  const core = await startFakeKeyCore([], google)
+  try {
+    const { agent, picker, opened } = await openGoogleChooser(cinna, core, 'Google reader')
+    const page = cinna.page
+
+    await test.step('the chooser names what Connect will create', async () => {
+      await picker.locator('label').filter({ hasText: /^Google Drive$/ }).click()
+      await expect(picker.getByText('Will be named “Google Drive”', { exact: true })).toBeVisible()
+      await picker.locator('label').filter({ hasText: /^Gmail$/ }).click()
+      await expect(picker.getByRole('radio', { name: 'Gmail', exact: true })).toBeChecked()
+      const readOnly = picker.getByRole('switch', { name: 'Read-only', exact: true })
+      await readOnly.click()
+      await expect(readOnly).toHaveAttribute('aria-checked', 'true')
+      await expect(picker.getByText('Will be named “Gmail (read-only)”', { exact: true })).toBeVisible()
+    })
+
+    await test.step('Connect asks Core, opens the consent URL and waits', async () => {
+      await picker.getByRole('button', { name: 'Connect', exact: true }).click()
+      await expect(picker.getByText('Finish in your browser', { exact: true })).toBeVisible()
+      await expect(picker.getByText('Sign in to Google and allow Gmail (read-only) for this Cinna account. This closes by itself once Google confirms.', { exact: true })).toBeVisible()
+      expect(core.seen.oauthCreate).toEqual([{ type: 'gmail_oauth_readonly' }])
+      expect(google.map(g => [g.type, g.name, g.oauthStatus])).toEqual([['gmail_oauth_readonly', 'Gmail (read-only)', 'pending_authorization']])
+      const consent = `${core.url}/fake-google/consent?credential=${google[0].id}`
+      await expect.poll(opened).toEqual([consent])
+      await picker.getByRole('button', { name: 'Reopen browser', exact: true }).click()
+      await expect.poll(opened).toEqual([consent, consent])
+    })
+
+    await test.step('a poll that still sees pending attaches nothing', async () => {
+      const before = core.seen.list.length
+      await expect.poll(() => core.seen.list.length, { timeout: 15_000 }).toBeGreaterThan(before)
+      await expect(picker.getByText('Finish in your browser', { exact: true })).toBeVisible()
+      expect(await attachedOf(cinna, agent.id)).toEqual([])
+      const flow = await flowOf(cinna, agent.id)
+      expect(flow.ok && flow.value?.state).toBe('waiting')
+    })
+
+    await test.step('consent on Core: the record is attached and the picker closes by itself', async () => {
+      Object.assign(google[0], { oauthStatus: 'ready', revision: 'g-rev-2', grantedUserEmail: 'owner@gmail.example' })
+      await expect(picker).toHaveCount(0, { timeout: 15_000 })
+      const row = page.getByRole('listitem').filter({ has: page.getByTitle('Gmail (read-only)', { exact: true }) })
+      await expect(row).toHaveCount(1)
+      await expect(row.getByRole('img', { name: 'Ready', exact: true })).toBeVisible()
+      await expect(row.getByRole('button', { name: 'Detach Gmail (read-only)', exact: true })).toBeVisible()
+      await expect(row.getByRole('button', { name: 'Reconnect Gmail (read-only)', exact: true })).toHaveCount(0)
+      expect(await attachedOf(cinna, agent.id)).toEqual([{ ref: google[0].id, state: 'ready' }])
+      const flow = await flowOf(cinna, agent.id)
+      expect(flow.ok && flow.value).toBe(null)
+    })
+
+    await test.step('credentials.json carries the access token Core delivered', async () => {
+      const path = join(agent.path, 'credentials/credentials.json')
+      const entryOf = () => existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as { id: string; type: string; unavailable_reason?: string; credential_data: Record<string, unknown> }[]).find(e => e.id === google[0].id) : undefined
+      await expect.poll(() => entryOf()?.credential_data.access_token).toBe(google[0].accessToken)
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+      const entry = entryOf()!
+      expect(entry.type).toBe('gmail_oauth_readonly')
+      expect(entry.unavailable_reason).toBeUndefined()
+      expect(entry.credential_data.token_type).toBe('Bearer')
+      expect(entry.credential_data.granted_user_email).toBe('owner@gmail.example')
+      // The access token stays in main and the agent's file: nothing the renderer reads carries it.
+      const userId = (await page.evaluate(() => window.api.auth.getCurrent()))!.id
+      expect(await rendererView(cinna, userId, core.url, agent.id)).not.toContain(google[0].accessToken)
+    })
+  } finally { await core.close() }
+})
+
+test('Google OAuth New: Cancel while waiting goes back to the list and attaches nothing, even once Core is ready', async ({ cinna }) => {
+  const google: FakeGoogle[] = []
+  const core = await startFakeKeyCore([], google)
+  try {
+    const { agent, picker, opened } = await openGoogleChooser(cinna, core, 'Google canceller')
+    await picker.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(picker.getByText('Finish in your browser', { exact: true })).toBeVisible()
+    expect(core.seen.oauthCreate).toEqual([{ type: 'gmail_oauth' }])
+    await expect.poll(opened).toHaveLength(1)
+
+    await picker.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(picker.getByRole('textbox', { name: 'Search credentials' })).toBeVisible()
+    await expect(picker.getByRole('button', { name: /^New Google credential/ })).toBeVisible()
+    await expect(picker.getByText('Finish in your browser', { exact: true })).toHaveCount(0)
+    const flow = await flowOf(cinna, agent.id)
+    expect(flow.ok && flow.value).toBe(null)
+
+    // Consent finishes after the cancel: a sync brings the ready record into the picker, unattached.
+    Object.assign(google[0], { oauthStatus: 'ready', revision: 'g-rev-2', grantedUserEmail: 'owner@gmail.example' })
+    const userId = (await cinna.page.evaluate(() => window.api.auth.getCurrent()))!.id
+    expect((await syncNow(cinna, userId, core.url)).ok).toBe(true)
+    const card = picker.getByTestId(`credential-card-${google[0].id}`)
+    await expect(card).toContainText('owner@gmail.example')
+    await expect(card.getByRole('button', { name: 'Attach Gmail', exact: true })).toBeEnabled()
+    await expect(picker).toBeVisible()
+    expect(await attachedOf(cinna, agent.id)).toEqual([])
+    expect(existsSync(join(agent.path, 'credentials/credentials.json'))).toBe(false)
   } finally { await core.close() }
 })
 
