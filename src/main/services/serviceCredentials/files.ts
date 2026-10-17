@@ -64,9 +64,12 @@ function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCr
       // A kit side file is named credentials.json in its own folder: every kit ignore
       // template, old ones included, ignores that basename at any depth, while
       // `<id>.json` is covered by none — and a tracked ignore file must not be edited.
-      const name = kind === 'kit' ? `${bundle.id}/credentials.json` : `${bundle.id}.json`
-      entry.credential_data.file_path = kind === 'kit' ? `credentials/${name}` : join(directory, name)
-      files.set(name, JSON.stringify(bundle.service_account_file, null, 2) + '\n')
+      // A kit entry names its file relative to the agent folder; a bare one, absolutely.
+      const [name, filePath] = kind === 'kit'
+        ? [`${bundle.id}/credentials.json`, `credentials/${bundle.id}/credentials.json`]
+        : [`${bundle.id}.json`, join(directory, `${bundle.id}.json`)]
+      entry.credential_data.file_path = filePath
+      files.set(name,JSON.stringify(bundle.service_account_file, null, 2) + '\n')
     }
     entries.push(entry)
   }
