@@ -69,7 +69,7 @@ function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCr
         ? [`${bundle.id}/credentials.json`, `credentials/${bundle.id}/credentials.json`]
         : [`${bundle.id}.json`, join(directory, `${bundle.id}.json`)]
       entry.credential_data.file_path = filePath
-      files.set(name,JSON.stringify(bundle.service_account_file, null, 2) + '\n')
+      files.set(name, JSON.stringify(bundle.service_account_file, null, 2) + '\n')
     }
     entries.push(entry)
   }
