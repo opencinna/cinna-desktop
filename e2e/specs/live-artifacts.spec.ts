@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -56,6 +56,15 @@ import { repoRoot } from '../playwright.config'
  *   the chat is shown again, and the answered row stays as `Answered: Publish.`.
  *   The prompts give the agent the text to publish: it turns down other
  *   subjects as outside its role and will not invent figures.
+ * - L6 — a **cinna-core cloud agent** (`CINNA_E2E_CORE_AGENT`, in its own
+ *   core environment, not a desktop kit agent) is asked through
+ *   `cinna chat --agent` in plain words to make a summary and publish it, then
+ *   in the same session to add a line and update it: core holds rev 1 and then
+ *   rev 2 of one id with `source_kind: "core_agent"`, the agent as its source
+ *   and the session it ran in. The agent's own reply is seeded into a desktop
+ *   chat (plus the bare URL when the reply has it only in a code span, which
+ *   is drawn as code), the card reads `rev 2 · only you`, and the card's
+ *   in-app preview and core's owner page both show the added line.
  *
  * ## Running it
  *
@@ -66,7 +75,10 @@ import { repoRoot } from '../playwright.config'
  * otherwise. L4 also needs `cinna` on `PATH` and `CINNA_E2E_CLI_ACCOUNT_DIR`:
  * an account workspace (absolute, or relative to this repository) whose
  * `.cinna/account.json` holds a CLI token **for the same user on the same
- * core**; it skips without one. Only `account.json` is read: it is copied
+ * core**; it skips without one. L6 needs the same account folder and
+ * `CINNA_E2E_CORE_AGENT`: the name or id of an agent on that core, reachable
+ * by that account, whose environment can publish artifacts; it skips without
+ * one and needs no `claude`. Only `account.json` is read: it is copied
  * into a temp folder and the CLI runs there, so nothing (its path memory, its
  * `cinna.log`) is written into that workspace. Runs under the real-`HOME`
  * exception (`realLogin.ts`): throwaway userData, a fresh
@@ -77,7 +89,9 @@ import { repoRoot } from '../playwright.config'
  *
  * L2 runs three Claude turns on `haiku` on the developer's subscription
  * (the turns' own telemetry estimates about $0.007; `claude-sonnet` about
- * $0.14), L5 two (about $0.005); L1, L3 and L4 run no model turn. Each test
+ * $0.14), L5 two (about $0.005), L6 two turns on core's agent, billed to
+ * whatever model its environment runs (gpt-5.4-mini: under $0.02); L1, L3 and
+ * L4 run no model turn. Each test
  * registers one desktop OAuth client on core (as `cinna-integration.spec.ts`
  * does). Artifacts the run created are hard-deleted in `afterAll` by the exact
  * ids recorded here (the CLI's own by `cinna artifacts delete <id>`), never by
@@ -129,6 +143,25 @@ const createdLinks: Array<{ artifactId: string; linkId: string }> = []
 let cliAccount: string | null = null
 const cliCreated = new Set<string>()
 let live: LiveCinnaConfig | null = null
+/** L6's temp account folder for `cinna chat`, and the core sessions it started (cleanup matches publishes to them). */
+let coreAgentAccount: string | null = null
+const coreAgentSessions = new Set<string>()
+/** L6's title prefix: the file-level `beforeEach` needs no `claude` for it. */
+const CORE_AGENT_TEST_PREFIX = 'L6 '
+const L6_TITLE = `E2E artifacts core ${TAG}`
+/**
+ * The agent's workspace outlives its sessions and core keys an agent's
+ * publish by path: a file name used before updates that older artifact. A
+ * per-run name makes this run's rev 1. Each run leaves this file in the env.
+ */
+const L6_FILE = `q3-${TAG}.md`
+const L6_MARKER = `hire-${TAG}`
+const RUN_STARTED = Date.now()
+/** Core's timestamps may come without a zone; they are UTC. NaN (never ≥) when unreadable. */
+function coreTime(value: unknown): number {
+  if (typeof value !== 'string') return Number.NaN
+  return Date.parse(/(Z|[+-]\d\d:?\d\d)$/.test(value) ? value : `${value}Z`)
+}
 
 test.use({
   engine: true,
@@ -181,7 +214,8 @@ test.beforeEach(async ({}, testInfo) => {
   const ready = await preflight(live)
   test.skip(!ready.ok, ready.ok ? '' : `live cinna-core not usable: ${ready.reason}`)
   test.skip((ready as { discovery: { artifacts?: number } }).discovery.artifacts === undefined, `${live.serverUrl} does not advertise artifacts`)
-  if (testInfo.title.startsWith(ENGINE_TEST_PREFIX)) return
+  // L2 checks its own engine; L6's model runs on core, not on this machine.
+  if (testInfo.title.startsWith(ENGINE_TEST_PREFIX) || testInfo.title.startsWith(CORE_AGENT_TEST_PREFIX)) return
   test.skip(BINARY === null, 'no Claude Code binary (set CINNA_E2E_CLAUDE_PATH, or install ~/.local/bin/claude)')
   const login = claudeLoginProblem(BINARY!)
   test.skip(login !== null, login ?? '')
@@ -198,7 +232,22 @@ test.afterAll(async () => {
     rmSync(cliAccount, { recursive: true, force: true })
     cliAccount = null
   }
+  if (coreAgentAccount) {
+    rmSync(coreAgentAccount, { recursive: true, force: true })
+    coreAgentAccount = null
+  }
   if (!live) return
+  if (coreAgentSessions.size > 0) {
+    // A publish whose tool result the run never read (a CLI timeout) is still
+    // this run's when core says it came from one of this run's sessions.
+    const listed = await core(`/artifacts?scope=mine&q=${encodeURIComponent(TAG)}&limit=200`).catch(() => null)
+    for (const item of (listed?.status === 200 ? listed.body?.data : null) ?? []) {
+      if (typeof item?.id !== 'string' || !UUID_PATTERN.test(item.id) || created.has(item.id)) continue
+      const detail = await core(`/artifacts/${item.id}`).catch(() => null)
+      // Made by this run, not merely updated by it: an older artifact an agent republished is not ours to delete.
+      if (detail?.status === 200 && coreAgentSessions.has(detail.body?.source_session_id) && coreTime(detail.body?.created_at) >= RUN_STARTED) created.add(item.id)
+    }
+  }
   if (l5Ran) {
     // L5's Edit… publish is recorded from the agent's tool result; a failure
     // between the dialog's Publish and that result would leave it behind.
@@ -1096,5 +1145,201 @@ test('L4 the CLI publishes, the desktop draws the card for its URL, and a Share 
     const shown = cli(['artifacts', 'show', artifactId, '--json'])
     expect(shown.status, shown.stderr).toBe(0)
     expect(shown.result?.artifact, shown.stderr).toMatchObject({ id: artifactId, title: L4_TITLE, visibility: 'instance', source_kind: 'cli' })
+  })
+})
+
+/** Markdown text with its fenced blocks and code spans removed: what can still render as a link. */
+function outsideCode(markdown: string): string {
+  return markdown.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+}
+
+/** One `cinna chat` turn, parsed from its NDJSON: the session, the agent's text and its publish results. */
+interface CoreAgentTurn {
+  sessionId: string
+  outcome: string
+  reply: string
+  published: Array<{ artifact_id: string; revision: number; url: string; [key: string]: unknown }>
+  raw: string
+}
+
+/**
+ * `cinna chat <args>` in L6's temp account folder, without blocking the
+ * worker (a turn takes 20–90 s), attachments not downloaded. Every
+ * `cinna_artifacts_publish` result and the session id are recorded for
+ * cleanup as soon as the output is read, before any assertion.
+ */
+function coreChat(args: string[]): Promise<CoreAgentTurn> {
+  return new Promise((done, fail) => {
+    const child = spawn('cinna', ['chat', '--no-download', '--timeout', '300', ...args], {
+      cwd: coreAgentAccount!,
+      env: { ...process.env, CINNA_NO_INPUT: '1' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => (stdout += chunk))
+    child.stderr.on('data', (chunk) => (stderr += chunk))
+    child.on('error', fail)
+    child.on('close', (status) => {
+      const turn: CoreAgentTurn = { sessionId: '', outcome: '', reply: '', published: [], raw: `exit ${status}\n${stdout.slice(-4000)}\n${stderr.slice(-2000)}` }
+      const replies: string[] = []
+      for (const line of stdout.split('\n')) {
+        let event: any
+        try {
+          event = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (event?.event === 'session' && typeof event.session_id === 'string') {
+          turn.sessionId = event.session_id
+          coreAgentSessions.add(event.session_id)
+        }
+        if (event?.event === 'done') turn.outcome = String(event.outcome ?? '')
+        if (event?.event !== 'message' || event.role !== 'agent') continue
+        if (typeof event.content === 'string' && event.content) replies.push(event.content)
+        for (const step of event.events ?? []) {
+          if (step?.type !== 'tool_result' || step.tool_name !== 'cinna_artifacts_publish') continue
+          let result: any = step.content
+          try {
+            if (typeof result === 'string') result = JSON.parse(result)
+          } catch {
+            continue
+          }
+          if (typeof result?.artifact_id !== 'string' || !UUID_PATTERN.test(result.artifact_id)) continue
+          // Rev 1 is an artifact this run made; a later revision of an id it never saw is someone else's, kept.
+          if (result.revision === 1 || created.has(result.artifact_id)) created.add(result.artifact_id)
+          turn.published.push(result)
+        }
+      }
+      turn.reply = replies.join('\n\n')
+      done(turn)
+    })
+  })
+}
+
+test('L6 a cinna-core cloud agent publishes and updates an artifact; the desktop card, its preview and core’s page show what it published', async ({ cinna }) => {
+  test.setTimeout(600_000)
+  const config = live!
+  const agent = (process.env.CINNA_E2E_CORE_AGENT ?? '').trim()
+  test.skip(agent === '', 'set CINNA_E2E_CORE_AGENT in .env to the name or id of a core agent this account can chat with')
+  const source = cliAccountSource()
+  test.skip(source === '', 'set CINNA_E2E_CLI_ACCOUNT_DIR in .env to an account workspace whose .cinna/account.json is for this core and account')
+  test.skip(!existsSync(join(source, '.cinna', 'account.json')), 'CINNA_E2E_CLI_ACCOUNT_DIR has no .cinna/account.json')
+  test.skip(spawnSync('cinna', ['--version'], { encoding: 'utf8' }).status !== 0, 'no cinna CLI on PATH')
+  const account = JSON.parse(readFileSync(join(source, '.cinna', 'account.json'), 'utf8')) as { platform_url?: string }
+  test.skip(new URL(account.platform_url ?? 'http://invalid').origin !== new URL(config.serverUrl).origin, `the CLI account is for ${account.platform_url}, not ${config.serverUrl}`)
+  // No desktop agent runs here: the model turns are core's.
+  expectNoAgentTurn()
+  // Only account.json travels: the CLI's log and any side files land in this temp folder.
+  coreAgentAccount = mkdtempSync(join(tmpdir(), 'cinna-e2e-core-agent-'))
+  mkdirSync(join(coreAgentAccount, '.cinna'))
+  copyFileSync(join(source, '.cinna', 'account.json'), join(coreAgentAccount, '.cinna', 'account.json'))
+
+  let sessionId = ''
+  let artifactId = ''
+  let url = ''
+  let title = ''
+  /** The agent's replies that name the page, oldest first. */
+  const replies: string[] = []
+  await test.step('asked in plain words, the core agent publishes a private rev 1 from its own session', async () => {
+    const turn = await coreChat(['--agent', agent, `make a short q3 summary called ${L6_FILE} titled "${L6_TITLE}" and publish it for me`])
+    console.log(`live-artifacts L6 turn 1: session ${turn.sessionId}, outcome ${turn.outcome}, published ${JSON.stringify(turn.published)}`)
+    expect(turn.outcome, turn.raw).toBe('completed')
+    expect(turn.published, turn.raw).toHaveLength(1)
+    sessionId = turn.sessionId
+    artifactId = turn.published[0].artifact_id
+    url = turn.published[0].url
+    console.log(`live-artifacts L6 created artifact ${artifactId}`)
+    expect(turn.published[0].revision).toBe(1)
+    expect(url).toMatch(new RegExp(`/artifact/${artifactId}$`))
+    expect(turn.reply, turn.raw).toContain(`/artifact/${artifactId}`)
+    replies.push(turn.reply)
+    const { status, body } = await core(`/artifacts/${artifactId}`)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ id: artifactId, visibility: 'private', source_kind: 'core_agent', source_session_id: sessionId, current_revision_number: 1, url })
+    if (UUID_PATTERN.test(agent)) expect(body.source_agent_id).toBe(agent)
+    else expect(body.source_label).toBe(agent)
+    expect(typeof body.source_label === 'string' && body.source_label.length > 0, JSON.stringify(body)).toBe(true)
+    expect(typeof body.source_agent_id === 'string' && UUID_PATTERN.test(body.source_agent_id), JSON.stringify(body)).toBe(true)
+    title = body.title
+    console.log(`live-artifacts L6 core holds “${title}” (${body.kind}) from ${body.source_label} ${body.source_agent_id}`)
+    expect(title).toContain(TAG)
+    expect(currentRevision(body).files.some((file: { path: string }) => file.path.endsWith('.md')), JSON.stringify(currentRevision(body).files)).toBe(true)
+  })
+
+  await test.step('asked in the same session to add a line and update it, it publishes rev 2 of the same id', async () => {
+    const turn = await coreChat(['--resume', sessionId, `add a line "hiring 2 engineers (${L6_MARKER})" and update it`])
+    console.log(`live-artifacts L6 turn 2: outcome ${turn.outcome}, published ${JSON.stringify(turn.published)}`)
+    expect(turn.outcome, turn.raw).toBe('completed')
+    expect(turn.published, turn.raw).toHaveLength(1)
+    expect(turn.published[0]).toMatchObject({ artifact_id: artifactId, revision: 2, url })
+    if (turn.reply.includes(`/artifact/${artifactId}`)) replies.push(turn.reply)
+    const { body } = await core(`/artifacts/${artifactId}`)
+    expect(body).toMatchObject({ id: artifactId, visibility: 'private', source_kind: 'core_agent', current_revision_number: 2, revision_count: 2, url })
+    const view = await core(`/artifacts/${artifactId}/view`, { method: 'POST' })
+    expect(view.status, JSON.stringify(view.body)).toBe(200)
+    const md = (view.body.files as Array<{ path: string }>).find((file) => file.path.endsWith('.md'))
+    expect(md, JSON.stringify(view.body.files)).toBeTruthy()
+    const text = await (await fetch(`${view.body.content_base}${md!.path.split('/').map(encodeURIComponent).join('/')}`)).text()
+    expect(text).toContain(L6_MARKER)
+  })
+
+  // The desktop draws a card for a *link* to the page; a URL inside a code
+  // span is code (docs/chat/artifacts/artifacts.md, step 1). This agent
+  // (gpt-5.4-mini, cinna-artifacts skill) mostly writes it as `http://…`, so
+  // its reply alone often draws no card: the reply is seeded verbatim, and when
+  // it links the page only from code, a bare URL follows it, as a person
+  // pasting the link would send it. The run says which it was.
+  const reply = replies[replies.length - 1]
+  const linked = outsideCode(reply).includes(`/artifact/${artifactId}`)
+  if (!linked) {
+    const note = 'the agent’s reply holds the artifact URL only in a code span, which the desktop draws as code, not a card; a bare URL message was added'
+    test.info().annotations.push({ type: 'core-agent reply', description: note })
+    console.log(`live-artifacts L6 ${note}`)
+  }
+  await cinna.skipOnboarding()
+  await signInDesktop(cinna, config)
+  const question = 'Where is the q3 summary?'
+  await cinna.page.evaluate(async ({ question, messages }) => {
+    const chat = await window.api.chat.create()
+    await window.api.chat.update(chat.id, { title: question })
+    await window.api.chat.addMessage(chat.id, { role: 'user', content: question })
+    for (const content of messages) await window.api.chat.addMessage(chat.id, { role: 'assistant', content })
+  }, { question, messages: linked ? [reply] : [reply, url] })
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+
+  await test.step('the agent’s URL in a desktop chat draws the card at rev 2; its preview shows the added line', async () => {
+    const page = cinna.page
+    await page.getByText(question, { exact: true }).first().click()
+    const drawn = page.locator(`[data-artifact-card="${artifactId}"]`)
+    await expect(drawn).toBeVisible({ timeout: 30_000 })
+    await expect(drawn).toHaveCount(1)
+    await expect(drawn).toHaveAttribute('aria-label', `Artifact ${title}`)
+    await expect(drawn).toContainText('rev 2 · only you')
+    console.log(`live-artifacts L6 the card reads “${(await drawn.locator('[data-artifact-card-body]').innerText()).replace(/\s+/g, ' ')}”`)
+    await drawn.getByRole('button', { name: `Preview ${title}`, exact: true }).click()
+    const preview = page.getByRole('dialog', { name: `Preview of ${title}`, exact: true })
+    await expect(preview).toBeVisible()
+    await expect(preview).toContainText('rev 2')
+    await expect(preview.getByTestId('artifact-preview-text')).toContainText(L6_MARKER, { timeout: 30_000 })
+    await page.keyboard.press('Escape')
+    await expect(preview).toHaveCount(0)
+  })
+
+  await test.step('core’s owner page renders the same document', async () => {
+    const browser = await chromium.launch()
+    try {
+      const jwt = await signIn(config)
+      const context = await browser.newContext()
+      await context.addInitScript((token) => window.localStorage.setItem('access_token', token), jwt)
+      const web = await context.newPage()
+      await web.goto(url)
+      await expect(web.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(web.getByText(L6_MARKER).first()).toBeVisible({ timeout: 30_000 })
+      await context.close()
+    } finally {
+      await browser.close()
+    }
   })
 })
