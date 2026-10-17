@@ -18,7 +18,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1024,
-            "description": "A file or folder, relative to the workspace root (`reports/q3-dashboard`, `out/summary.md`)."
+            "description": "A file or folder, relative to the workspace root. Build what you publish under `artifacts/<name>/` (`artifacts/q3-dashboard`, `artifacts/summary.md`)."
           },
           "title": {
             "type": "string",

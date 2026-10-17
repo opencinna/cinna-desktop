@@ -40,8 +40,8 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 
 ### An artifact link in the agent's text
 
-1. An agent that publishes pastes the artifact's URL into its reply. A link whose path is exactly `/artifact/<uuid>` on an allowed origin renders as a card: a skeleton at the card's height at once, then the card, or the ordinary link if the read fails. One card per artifact: a link to an artifact the chat already shows as a card (a publish's card, an agent's tool row) stays a link, so an agent repeating the URL it was given adds no second card.
-2. Allowed origins are the profile's server and any frontend origin core named in an artifact URL. Any other host stays a plain link and is never read.
+1. An agent that publishes pastes the artifact's URL into its reply. A link whose path is exactly `/artifact/<uuid>` renders as a card, on the conditions in step 2: a skeleton at the card's height at once, then the card, or the ordinary link if the read fails. One card per artifact: a link to an artifact the chat already shows as a card (a publish's card, an agent's tool row) stays a link, so an agent repeating the URL it was given adds no second card.
+2. The id is read from the profile's own core whatever host the link names, because a link the CLI or a colleague made reaches a fresh profile before any artifact URL has told it where core's web frontend lives. The card is drawn only when core's own `url` for that id is on the link's origin, so a look-alike host that borrows a real id stays a plain link. On the profile's server or a frontend origin core already named, the link is trusted without that comparison. Artifacts unsupported, or any other path, is a plain link and no read.
 
 ## Business Rules
 
@@ -90,7 +90,7 @@ Agent's text link -> ArtifactLinkCard -> artifacts:detail -> cinnaFetch
 - [File Preview](../file_preview/file_preview.md): the **Publish…** header button of an agent file.
 - [Agent Publish](agent_publish.md): the `artifacts_publish` tool, its approval card and the Inbox row.
 - [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md): the `cinna` MCP server the tool lives on, and the skill delivery shared with `cinna-tasks`.
-- [Kit Contract](../../agents/local_agents/kit_contract.md): the vendored `artifacts.schema.json` and `cinna-artifacts` skill (contract 1.12.0).
+- [Kit Contract](../../agents/local_agents/kit_contract.md): the vendored `artifacts.schema.json` and `cinna-artifacts` skill (contract 1.12.0; the `artifacts/` folder role, 1.13.0).
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md): the signed-in profile that gates support.
 
 [Technical details](artifacts_tech.md)

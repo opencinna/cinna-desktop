@@ -425,11 +425,15 @@ export function ArtifactCard({
 }
 
 /**
- * A link to `/artifact/<uuid>` in agent text. Only on the profile's server
- * or a frontend origin core named (`ArtifactsSupport.linkOrigins`) is
- * it read: a skeleton at the card's height at once, then the card; the
- * ordinary link on a failure. Any other host, or artifacts unsupported, is
- * the link and no read at all.
+ * A link to `/artifact/<uuid>` in agent text: a skeleton at the card's height
+ * at once, then the card; the ordinary link on a failure. Artifacts
+ * unsupported, or any other path, is the link and no read at all.
+ *
+ * The id is read from the profile's own server whatever the link's host, since
+ * core's frontend origin is known only once core has named it in an artifact
+ * URL (`ArtifactsSupport.linkOrigins`), and a link a colleague or the CLI made
+ * comes first. Off those origins the card is drawn only when core's own `url`
+ * for that id is on the link's origin, so a look-alike host stays a link.
  */
 /**
  * Artifacts this transcript already draws as a card (a publish's card, an
@@ -441,16 +445,27 @@ export const ShownArtifactsContext = createContext<ReadonlySet<string>>(new Set(
 export function ArtifactLinkCard({ href, link }: { href: string; link: ReactElement }): React.JSX.Element {
   const support = useArtifactsSupport()
   const shown = useContext(ShownArtifactsContext)
-  const artifactId = support.supported ? artifactIdFromUrl(href, support.linkOrigins ?? []) : null
+  const artifactId = support.supported ? artifactIdFromUrl(href) : null
   if (!artifactId || shown.has(artifactId)) return link
-  return <LoadedArtifactLinkCard artifactId={artifactId} link={link} instanceName={support.instanceName} />
+  const known = artifactIdFromUrl(href, support.linkOrigins ?? []) !== null
+  return <LoadedArtifactLinkCard artifactId={artifactId} link={link} instanceName={support.instanceName} origin={known ? null : new URL(href).origin} />
 }
 
-function LoadedArtifactLinkCard({ artifactId, link, instanceName }: { artifactId: string; link: ReactElement; instanceName?: string }): React.JSX.Element {
+function sameOrigin(url: string, origin: string): boolean {
+  try {
+    return new URL(url).origin === origin
+  } catch {
+    return false
+  }
+}
+
+function LoadedArtifactLinkCard({ artifactId, link, instanceName, origin }: { artifactId: string; link: ReactElement; instanceName?: string; origin: string | null }): React.JSX.Element {
   // A refetch keeps the last answer on screen (TanStack keeps `data` while it reads again).
   const query = useArtifactDetail(artifactId)
   const outcome = query.data
-  if (outcome?.ok) return <ArtifactCard artifact={outcome.detail} instanceName={instanceName} canShare={outcome.detail.isOwner} />
+  if (outcome?.ok && (origin === null || sameOrigin(outcome.detail.url, origin))) {
+    return <ArtifactCard artifact={outcome.detail} instanceName={instanceName} canShare={outcome.detail.isOwner} />
+  }
   if (query.isPending && query.fetchStatus !== 'idle') return <ArtifactCardSkeleton />
   return link
 }

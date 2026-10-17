@@ -58,6 +58,12 @@ describe('classifyEvent — what a watch event means', () => {
     expect(classifyEvent(ROOT, 'alpha/app-data/cache/anything.json')).toEqual({ kind: 'ignore' })
   })
 
+  it('ignores the top-level artifacts/ an agent builds into, and nothing deeper of that name', () => {
+    expect(classifyEvent(ROOT, 'alpha/artifacts/q3/index.html')).toEqual({ kind: 'ignore' })
+    expect(classifyEvent(ROOT, 'alpha/artifacts')).toEqual({ kind: 'ignore' })
+    expect(classifyEvent(ROOT, 'alpha/docs/artifacts/notes.md')).toEqual({ kind: 'agent', dir: join(ROOT, 'Local', 'alpha') })
+  })
+
   it('ignores dot-entries, including the scaffolder’s staging folder', () => {
     expect(classifyEvent(ROOT, '.alpha.scaffold-1-2/cinna-agent.json')).toEqual({
       kind: 'ignore'

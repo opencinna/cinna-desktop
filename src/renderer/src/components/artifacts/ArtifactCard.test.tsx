@@ -83,14 +83,27 @@ describe('a link to an artifact page in agent text', () => {
     expect(screen.getByText('rev 4 · only you')).toBeTruthy()
   })
 
-  it('reads only a link on the profile’s server or a frontend core named; any other host stays a link', async () => {
+  it('draws a card only on the origin core’s own url names; a look-alike host stays a link', async () => {
+    detailCall.mockResolvedValue({ ok: true, detail: { ...detail, url: `https://web.example/artifact/${ID}` } })
     useArtifactsSupportStore.setState({ profileId: 'alice', support: { supported: true, instanceName: 'Acme', limits: LIMITS, linkOrigins: ['https://core.example', 'https://web.example'] } })
     wrap(<MessageBubble role="assistant" content={`[evil](https://evil.example/artifact/${ID}) [web](https://web.example/artifact/${ID}) [lookalike](https://web.example.evil/artifact/${ID})`} />)
     expect(await screen.findByRole('group', { name: 'Artifact Q3 churn' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'evil' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'evil' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'lookalike' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'web' })).toBeNull()
+    expect(screen.getAllByRole('group')).toHaveLength(1)
+    // One id, one read: the three links share it.
     expect(detailCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads a link on a frontend this profile has not seen yet, and draws it when core’s url is there', async () => {
+    // A link the CLI or a colleague made reaches a fresh profile before any
+    // artifact URL has told it where core's frontend lives.
+    detailCall.mockResolvedValue({ ok: true, detail: { ...detail, url: `http://web.test/artifact/${ID}` } })
+    wrap(<MessageBubble role="assistant" content={`See [the dashboard](http://web.test/artifact/${ID}).`} />)
+    expect(await screen.findByRole('group', { name: 'Artifact Q3 churn' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'the dashboard' })).toBeNull()
+    expect(detailCall).toHaveBeenCalledWith(ID)
   })
 
   it('stays the ordinary link when the read fails', async () => {

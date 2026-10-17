@@ -15,11 +15,17 @@ An artifact is something you made that a person opens in Cinna: a Markdown repor
 
 Everything you publish is **private to your owner**. You cannot share it, make it public or delete it; a person does that from the artifact's page. Do not tell anyone a link will work for them; give the `url` to your owner.
 
+## Where to build it
+
+Build anything meant to be published under **`artifacts/<name>/`**, one subfolder per artifact (`artifacts/q3-dashboard/index.html`); a single file directly inside, `artifacts/summary.md`, is fine too. This is the same place for an agent on your owner's computer and an agent in the cloud. Then publish it with `artifacts_publish {path: "artifacts/<name>"}`.
+
+`artifacts/` is one of the two places you may write at runtime, beside `app-data/`. Keep scratch work, caches and durable state in `app-data/`, which is never published; `artifacts/` holds only what you build to publish. Like `app-data/`, it stays with this one person: it is not committed, not shared with teammates and not copied to the cloud with the agent. Keep the same `artifacts/<name>` for the same artifact so republishing updates it.
+
 ## Publishing
 
 `artifacts_publish {path, title, description?, entry?, artifact_id?}`
 
-- `path` is a file or a folder relative to the workspace root.
+- `path` is a file or a folder relative to the workspace root, normally `artifacts/<name>`.
 - A single `.md`, `.csv`, `.pdf`, image or `.html` file is a fine artifact on its own.
 - A folder with `index.html` at its root becomes a site; name another start page with `entry`. A folder without one is shown as a file browser.
 - **Updating:** publish the same `path` again and the same artifact gets a new revision, with the same page URL. Pass `artifact_id` from an earlier result when the files moved to another path. Never publish a second copy to "update" one.
@@ -47,4 +53,4 @@ Check it before publishing: open `index.html` from the folder with a local stati
 
 ## Starter
 
-`templates/artifact-sqlite-dashboard/` in the Local Agent Kit is a minimal dashboard: `index.html`, a script that reads `data.json`, and a note on adding sql.js. Copy it, replace the data, publish the folder.
+`templates/artifact-sqlite-dashboard/` in the Local Agent Kit is a minimal dashboard: `index.html`, a script that reads `data.json`, and a note on adding sql.js. Copy it to `artifacts/<name>/`, replace the data, publish the folder.

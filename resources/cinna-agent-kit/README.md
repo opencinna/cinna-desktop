@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `56978c31f8dbaad5` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
+Kit version `86a3c3efd5cb1158` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
 
 ## Documents
 
@@ -111,8 +111,10 @@ not get `STATUS.md`. Unused scaffolding costs the user real attention later.
 | `app-data/storage/` | runtime | yes, per install | results the agent produces, `STATUS.md` |
 | `app-data/cache/` | runtime | yes, per install | disposable, rebuildable snapshots |
 | `app-data/uploads/` | runtime | yes, per install | files the user attaches |
+| `artifacts/` | runtime | yes, per install; never shared or copied to the cloud | what the agent builds to publish as Cinna artifacts, one subfolder per artifact |
 
-Write runtime output to `app-data/storage/`. Never to `files/` or `docs/`.
+Write runtime output to `app-data/storage/`, and anything meant to be published under
+`artifacts/<name>/`. Never to `files/` or `docs/`.
 
 ## Placeholders
 

@@ -348,6 +348,7 @@ DEFAULT_EXCLUDES = [
     ".vscode/",
     ".idea/",
     "app-data/",
+    "artifacts/",
     "temp/",
     "credentials/",
     "credentials.json",

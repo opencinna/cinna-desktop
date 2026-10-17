@@ -1428,8 +1428,8 @@ describe('the never-travel paths in the contract\'s two shapes, in any case', ()
     expect(neverTravelPaths(root)).toEqual(['credentials/', 'notes.md', 'App-Data/', '.claude/settings.local.json'])
     const listed = workshopListing('listed', ['credentials/', '.Claude/Settings.local.json', 'CREDENTIALS/'])
     expect(neverTravelPaths(listed)).toEqual(['credentials/', '.Claude/Settings.local.json'])
-    // The bundled contract (1.9.0) lists it itself.
-    expect(neverTravelPaths()).toEqual(['credentials/', 'app-data/', '.claude/settings.local.json'])
+    // The bundled contract lists it itself (1.9.0), and artifacts/ beside app-data/ (1.13.0).
+    expect(neverTravelPaths()).toEqual(['credentials/', 'app-data/', 'artifacts/', '.claude/settings.local.json'])
   })
 
   it('leaves a tracked .Claude/Settings.local.json and Credentials/ out of every version sent, and nothing more', async () => {

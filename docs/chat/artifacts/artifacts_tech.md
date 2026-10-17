@@ -55,7 +55,7 @@ All `ipcHandle`, all behind `userActivation.requireActivated()`, all returning d
 - `inspect(input, options?)` — `confine` then `walk`. `confine` finds the agent folder from the agent id (or the validated session), takes `realpath` of the path (relative paths are resolved against the folder: the agent tool names files that way), requires `isWithin`, and applies `exclusionFor` to every segment of the path itself — so a file inside `credentials/` or a named `.env` is refused (`path_refused`, with the reason) as well as dropped inside a folder.
 - `publish(input, options?)` — validates (title 1–200, description ≤ 2000, `visibility` one of `private|instance|link|keep`, `artifactId` a UUID), re-walks, re-checks entry and limits, reads each kept file with `O_NOFOLLOW` and the per-file cap, zips, then `POST /api/v1/artifacts` (new: `source_kind=desktop`, `source_label="<agent> · <path>"`) or `POST /api/v1/artifacts/<id>/revisions`. Then, per the chosen audience: `PATCH` visibility, or `POST …/links` (URL and code returned once). Failures of that follow-up become `warning`, not an error. Records memory (`recordPublish`, `sync`), anchors the card (`addCard`; after `anchor.messageId`, else `latestMessageId(chatId)`), emits `artifacts:changed`.
 - `detail`, `setVisibility`, `createLink`, `revokeLink` — each reads back `GET /api/v1/artifacts/<id>` (`readDetail`), which syncs the row only when `is_owner`, and learns the page URL's origin.
-- `linkOrigins(profile, server)` — the server origin, plus origins in remembered rows (`repo.urls`), plus origins learned this session; what `artifactIdFromUrl` is checked against.
+- `linkOrigins(profile, server)` — the server origin, plus origins in remembered rows (`repo.urls`), plus origins learned this session; what `artifactIdFromUrl` is checked against to skip the origin comparison above; it no longer gates the read.
 - `local`, `cards`, `serverOf`, `supportedNow` — memory/no-network reads.
 - `guarded` maps `CinnaReauthRequired` → `reauth_required`, `CinnaApiError` 404 → `gone`, `not_cinna_user` → `not_supported`, others → `request_failed`.
 
@@ -71,14 +71,14 @@ All `ipcHandle`, all behind `userActivation.requireActivated()`, all returning d
 - `PublishArtifactDialog` — one global instance driven by `useArtifactPublishStore`. Fixed layout (every row present from the first frame, a refusal rendered last under the buttons). Edit… of an agent request starts from `request.approval`. Inspection runs on open; a result for a stale open is dropped.
 - `artifactPublish.store.ts` — the publish call lives in the store so a result lands even if the dialog unmounted (a mutate-level callback would be dropped). Closes on success only.
 - `ArtifactCard` / `SharePopover` — Open, Copy link (via main's clipboard: `navigator.clipboard` refuses once a dialog has focus), Share…; revoke asks inline in the row; a revoked link stays inert in place until the popover closes. Hide-this-note dismisses a one-time warning.
-- `ArtifactLinkCard` — only for `artifactIdFromUrl(href, support.linkOrigins)`; skeleton at the card's height, then `artifacts:detail`; any failure renders the original link. Unsupported means no read at all.
+- `ArtifactLinkCard` — any `/artifact/<uuid>` link (`artifactIdFromUrl(href)`, no origin list) when supported: skeleton at the card's height, then `artifacts:detail`; any failure renders the original link. When the href's origin is not already in `support.linkOrigins`, `LoadedArtifactLinkCard` draws the card only if `sameOrigin(detail.url, origin)` — core's own url for the id is the proof; a mismatch stays the link. Unsupported means no read at all. `ShownArtifactsContext` still keeps one card per artifact.
 - `MessageStream` — cards are keyed by message id and pushed right after that message; `ArtifactCardsSource` is mounted only while supported, so an unsupported transcript asks nothing.
 - The reference menu's items are decided once at open, with `canPublish`; a credential reference never gets **Publish…**.
 
 ## Configuration
 
 - No setting. Support and limits are the instance's. The dependency is the discovery document's `artifacts` (integer) and `instance_name`, and `GET /api/v1/artifacts/capabilities`.
-- Kit contract 1.12.0 (`protocols/artifacts.schema.json`, `skills/cinna-artifacts/`, `templates/artifact-sqlite-dashboard/`) — see [Kit Contract (tech)](../../agents/local_agents/kit_contract_tech.md).
+- Kit contract 1.12.0, and 1.13.0 for the `artifacts/` role (`protocols/artifacts.schema.json`, `skills/cinna-artifacts/`, `templates/artifact-sqlite-dashboard/`) — see [Kit Contract (tech)](../../agents/local_agents/kit_contract_tech.md).
 
 ## Security
 

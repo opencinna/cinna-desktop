@@ -93,6 +93,13 @@ const REARM_DELAY_MS = 2_000
 const IGNORED_SEGMENT = 'app-data'
 
 /**
+ * The kit's `artifacts/` role (contract 1.13.0): what the agent builds to
+ * publish, written while a turn runs like `app-data/`. Ignored only as the
+ * agent's top-level folder — a `docs/artifacts/` is the agent's definition.
+ */
+const ARTIFACTS_DIR = 'artifacts'
+
+/**
  * Sub-directories the per-directory fallback watches in addition to the agent
  * root. Without recursion a change one level down is invisible, and both of
  * these change readiness:
@@ -246,6 +253,7 @@ export function classifyEvent(rootPath: string, filename: string | null): WatchT
   // churn is precisely the scanner loop this service exists to avoid, so it is
   // dropped outright rather than downgraded to a root rescan.
   if (rest.includes(IGNORED_SEGMENT)) return { kind: 'ignore' }
+  if (rest[0] === ARTIFACTS_DIR) return { kind: 'ignore' }
 
   // A bare slug is the agent folder itself appearing or disappearing — that
   // changes the root's membership, and only a root scan can insert or prune.

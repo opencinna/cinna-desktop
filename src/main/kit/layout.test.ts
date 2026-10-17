@@ -149,7 +149,7 @@ describe('shared_remote.never_travels', () => {
     const { readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
     const raw = JSON.parse(readFileSync(join(process.cwd(), 'resources', 'cinna-agent-kit', 'layout.json'), 'utf8'))
-    expect(parseLayout(raw).never_travels).toEqual(['credentials/', 'app-data/', '.claude/settings.local.json'])
+    expect(parseLayout(raw).never_travels).toEqual(['credentials/', 'app-data/', 'artifacts/', '.claude/settings.local.json'])
   })
 
   it('is absent from a contract that predates it', () => {

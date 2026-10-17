@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `56978c31f8dbaad5`.
+Your current kit is version `86a3c3efd5cb1158`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,44 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.13.0 — the artifacts folder
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.13.0 folder, because the majors match.
+
+`app-data/` was the only place an agent could write, and `app-data/` is never
+published, so an agent asked to build a report and publish it had nowhere that
+worked. `artifacts/` is that place, the same for a kit agent and a cloud agent.
+
+### Added
+
+- **The `artifacts` role in `layout.json`** — directory `artifacts/`, one
+  subfolder (or a single file) per artifact: `artifacts/q3-dashboard/index.html`,
+  `artifacts/summary.md`. Written at runtime, the second writable place beside
+  `app-data/`. Scratch, caches and durable state stay in `app-data/`.
+- `artifacts/` is runtime-only, like `app-data/`: listed in
+  `cloud_import_excludes` (and `kit.py`'s `DEFAULT_EXCLUDES`), in
+  `shared_remote.never_travels.paths` and `.roles`, and ignored by
+  `templates/agent/gitignore`. What it holds is one person's output and must not
+  reach teammates through a team library. The scaffold does not create it; a
+  host creates it on the first write.
+
+### Changed
+
+- `app-data`'s role description names both writable places.
+- `skills/cinna-artifacts/SKILL.md` says to build what you publish under
+  `artifacts/<name>/` and publish `{path: "artifacts/<name>"}`; the `path`
+  examples in `protocols/artifacts.schema.json` use it. `app-data/` stays in the
+  never-published list.
+- A host remembers which `artifacts/<name>` maps to which published artifact (no
+  marker file inside the folder), so republishing the same path updates the same
+  artifact.
+
+### Update by hand
+
+Add `artifacts/` to an existing agent's `.gitignore`. `kit.py refresh` does not
+rewrite a folder's own `.gitignore`.
 
 ## 1.12.0 — artifacts
 

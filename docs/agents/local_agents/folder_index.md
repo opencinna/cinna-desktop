@@ -220,13 +220,13 @@ Every event is classified into exactly **three** outcomes — `ignore`, `root`, 
 
 | Outcome | When | Response |
 |---|---|---|
-| `ignore` | A dot-entry, or anything under `app-data/` | Nothing at all |
+| `ignore` | A dot-entry, anything under `app-data/`, or anything under the agent's top-level `artifacts/` | Nothing at all |
 | `root` | No filename from the platform, or a bare agent-folder name (membership changed) | Rescan the whole root |
 | `agent` | A path inside one agent folder | Rescan that agent only |
 
 An **external** root is classified by a different function (`classifyExternalEvent`) with the filter inverted: it is watched recursively at its own path — the user's ordinary working directory, churning constantly — so only an `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` basename, one of the kit markers that decide whether the weak names count (`cinna-agent.json`, a `.cinna-kit` last segment), or a **directory** appearing or disappearing within the scan depth is acted on, everything else is ignored, and the answer is always `root`. Directory-ness is stat'd rather than assumed, because assuming it turned every ordinary file an agent wrote into a whole-root rescan. There is no `agent` outcome, because a bare agent's id comes from the walk and an event cannot be attributed to one without redoing it. See [Bare Agents & External Roots](bare_agents.md#the-watchers-filter-is-inverted-for-an-external-root).
 
-The three-way result is load-bearing, not a stylistic choice. Collapsing "ignore this", "cannot attribute this" and "root membership changed" into one nullable value **inverts the ignore rule**: `app-data/` — the one directory deliberately not watched, and the one the agent writes constantly while a turn runs — then triggers the most expensive response available on every `STATUS.md` write. A single-value assertion also cannot tell the three apart in a test.
+The three-way result is load-bearing, not a stylistic choice. Collapsing "ignore this", "cannot attribute this" and "root membership changed" into one nullable value **inverts the ignore rule**: `app-data/` and the top-level `artifacts/` (the kit's 1.13.0 folder an agent builds what it will publish in) — the directories deliberately not watched, and the ones the agent writes constantly while a turn runs — then triggers the most expensive response available on every `STATUS.md` write or file the agent builds. A single-value assertion also cannot tell the three apart in a test.
 
 **Both** rescan branches honour the turn lock:
 

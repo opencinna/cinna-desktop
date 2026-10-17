@@ -64,7 +64,7 @@ export const ARTIFACTS_TOOL_SCHEMAS = {
           type: 'string',
           minLength: 1,
           maxLength: 1024,
-          description: 'A file or folder, relative to the workspace root (`reports/q3-dashboard`, `out/summary.md`).'
+          description: 'A file or folder, relative to the workspace root. Build what you publish under `artifacts/<name>/` (`artifacts/q3-dashboard`, `artifacts/summary.md`).'
         },
         title: { type: 'string', minLength: 1, maxLength: 200, description: 'What a person sees in their artifact list.' },
         description: { type: 'string', maxLength: 2000, description: 'One or two sentences on what this shows and where the data came from.' },
