@@ -190,6 +190,13 @@ describe('the card', () => {
     expect(detailCall).not.toHaveBeenCalled()
   })
 
+  it('says an artifact deleted on core is gone, with Share… disabled in its place', async () => {
+    detailCall.mockResolvedValue({ ok: false, code: 'gone', message: 'gone' })
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    expect(await screen.findByText('rev 3 · deleted on Acme')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Share Q3 churn' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('names its buttons after the artifact, keeping the visible labels', () => {
     wrap(<ArtifactCard artifact={artifact} />)
     expect(screen.getByRole('button', { name: 'Open Q3 churn' }).textContent).toBe('Open')

@@ -10,7 +10,7 @@ A folder agent leaves files: a report, a CSV, a folder with a small dashboard in
 - **Kind** — decided by core from the files sent: a **site** has an HTML entry and runs in a sandbox on core's page; **files** are browsed. A folder with a root `index.html` is a site; a lone `.html` file is a site; a folder with other `.html` files but no root `index.html` is files until the user picks a **start page**.
 - **Revision** — publishing the same path again adds a revision to the same artifact (**Update**). The artifact's page, links and audience stay.
 - **Artifact card** — the chat's own rendering of an artifact: an icon by kind, the title, revision and audience, then **Open** (core's page in the browser), **Copy link** and, for the owner, **Share…**. It sits right after the message the publish came from. A link to an artifact in an agent's text renders as the same card.
-- **Audience** — two independent facts: *who can see it* (**only you** or **everyone on the instance**) and *how many public links are live*; core's web page can also share it with named people, which the card shows ("shared with 2 people") and the desktop never edits. "Public" is never a visibility. It is a link.
+- **Audience** — two independent facts: *who can see it* (**only you** or **everyone on the instance**) and *how many public links are live*; core's web page can also share it with named people, which the card shows ("shared with 2 people") and the desktop never edits. The owner's card asks core for this rather than trusting what was stored at publish, because a grant made on core's page never reaches the local row; until core answers, or if it cannot be read, the card shows the stored audience. "Public" is never a visibility. It is a link.
 - **Public link** — an unguessable URL (optionally with a code) anyone can open. Its URL and code are shown once when created and are never stored on this machine.
 - **Publish approval** — the card an agent's publish request waits on. See [Agent Publish](agent_publish.md).
 - **Published memory** — the desktop's own record of which artifact a path on this machine was published as, per profile and server. It is what turns *Publish* into *Update*. There is no marker file in the agent's folder.
@@ -58,7 +58,7 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 
 - Publishing records `(profile, server, path) → artifact`. A path published twice as new has two entries; the latest is the one offered as *Update*.
 - If the artifact being updated was deleted on core the update is refused as "gone"; the dialog switches to **Publish as new** and the memory entry is dropped.
-- The chat's cards are persisted per chat and message, and go with the chat. A card whose message is gone renders nowhere.
+- The chat's cards are persisted per chat and message, and go with the chat. A card whose message is gone renders nowhere. A card for an artifact deleted on core reads *deleted on <instance>* with **Share…** disabled while it is on screen; the owner card's read of core drops the memory entry, so the card is gone from the chat the next time it opens.
 - Everything is keyed by profile and server: the same path published from two accounts is two artifacts.
 
 ### Failures

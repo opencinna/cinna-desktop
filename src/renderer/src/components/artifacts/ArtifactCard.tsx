@@ -356,7 +356,10 @@ export function ArtifactCard({
   // read and a link card's); the row stands in until core answers or if it fails.
   const detailQuery = useArtifactDetail(artifact.id, canShare)
   const current = detailQuery.data?.ok ? detailQuery.data.detail : null
-  const audience = artifactAudience(current ?? artifact, instanceName)
+  // Deleted on core: main forgets the row on that 404, so the card leaves the
+  // chat the next time it opens; until then it says so instead of an audience.
+  const gone = detailQuery.data?.ok === false && detailQuery.data.code === 'gone'
+  const audience = gone ? `deleted on ${instanceName || 'the instance'}` : artifactAudience(current ?? artifact, instanceName)
   return (
     <span
       role="group"
@@ -397,6 +400,7 @@ export function ArtifactCard({
               ref={popover.triggerRef}
               className={CARD_ACTION}
               aria-label={`Share ${artifact.title}`}
+              disabled={gone}
               aria-expanded={popover.open}
               aria-haspopup="dialog"
               onClick={() => {
