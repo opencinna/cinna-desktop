@@ -63,7 +63,7 @@ const logger = createLogger('local-agent-command')
  * `PYTHONPATH` — the same env its engine gets, so a kit command or scheduled run that calls a
  * skill script finds `core.cinna_api`.
  */
-let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean }> = async () => ({})
+let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean; tokenEndpoint?: { url: string; token: string } }> = async () => ({})
 export function installCommandCredentialPreparation(prepare: typeof prepareCredentials): void { prepareCredentials = prepare }
 
 /**
@@ -251,7 +251,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     onStart?.()
     const env = shellEnvForChild(await getShellEnv())
     const prepared = await prepareCredentials(agentId)
-    const outcome = await execute(localCommand, agentDir, engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true }), signal, timeoutMs)
+    const outcome = await execute(localCommand, agentDir, engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint }), signal, timeoutMs)
     const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
     outcome.stdoutIsExactOk = !outcome.stdoutTruncated && outcome.stdout.trim() === 'OK'
     outcome.output = redactCredentialText(outcome.output)

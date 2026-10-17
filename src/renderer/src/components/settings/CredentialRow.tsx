@@ -60,18 +60,23 @@ export function ManageCredentialButton({ name, url, onError, disabled }: { name:
  * status, ownership, Service URI, then the row's actions on the right. Every
  * element is one line and fixed-size, so no state change moves a neighbour.
  * `typeTitle` carries facts about the type (an issued key's producer) as the
- * badge's and icon's tooltip, so every row keeps one line.
+ * badge's and icon's tooltip, so every row keeps one line. A name that is the
+ * type's own (Core names a Google record after its type) drops the badge rather
+ * than say it twice; `account`, the Google account a record was granted for,
+ * stands right after it, so it lands in the badge's place when there is none.
  *
  * `expandable` makes the header toggle a body below it (the local list's edit
  * form). The toggle is a real button for keyboard use; the whole header also
  * takes the click, and `actions` stop their clicks from reaching it.
  */
-export function CredentialRow({ name, type, typeTitle, serviceUri, health, ownership, actions, expandable, compact = false, children }: {
+export function CredentialRow({ name, type, typeTitle, serviceUri, account, health, ownership, actions, expandable, compact = false, children }: {
   name: string
   type?: string
   /** Tooltip and accessible name of the type icon, when it says more than the badge. */
   typeTitle?: string
   serviceUri?: string | null
+  /** The Google account the record was granted for; null before consent and for other types. */
+  account?: string | null
   health: CredentialHealth
   ownership?: CredentialOwnership | null
   actions?: ReactNode
@@ -92,7 +97,8 @@ export function CredentialRow({ name, type, typeTitle, serviceUri, health, owner
       ? <Glyph label={typeTitle} className="text-[var(--color-accent)]"><TypeIcon size={compact ? 14 : 16} aria-hidden /></Glyph>
       : <TypeIcon size={compact ? 14 : 16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />)}
     <span title={name} className={`min-w-0 shrink truncate font-medium ${compact ? 'text-xs' : 'text-[14px]'}`}>{name}</span>
-    {type && <SettingsBadge title={titled ? typeTitle : undefined}>{typeName}</SettingsBadge>}
+    {type && typeName !== name && <SettingsBadge title={titled ? typeTitle : undefined}>{typeName}</SettingsBadge>}
+    {account && <span title={account} className={`min-w-0 shrink-[2] truncate text-[var(--color-text-muted)] ${compact ? 'text-[11px]' : 'text-[12px]'}`}>{account}</span>}
     <CredentialStatusGlyph health={health} size={compact ? 12 : 14} />
     {ownership && <CredentialOwnershipGlyph ownership={ownership} size={compact ? 12 : 14} />}
     {serviceUri && <code title={`Service URI: ${serviceUri}`} className={`min-w-0 shrink-[2] truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[var(--color-text-secondary)] ${compact ? 'text-[11px]' : 'text-[12px]'}`}>{serviceUri}</code>}

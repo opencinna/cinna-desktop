@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { ServiceCredentialRow } from '../../db/serviceCredentials'
-const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn(), provision: vi.fn() }))
-vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.home, keystore: {
+const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn(), provision: vi.fn(), open: vi.fn(), oauthCreate: vi.fn(), oauthAuthorize: vi.fn(), accessToken: vi.fn() }))
+vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.home, shell: { openExternal: (url: string) => world.open(url) }, keystore: {
   isEncryptionAvailable: () => true,
   isSecureStorageAvailable: () => world.secure,
   encryptString: (s: string) => Buffer.from([...Buffer.from(s)].map(b => b ^ 0x93)),
@@ -16,14 +16,22 @@ vi.mock('../../host/events', () => ({ publishEvent: vi.fn() }))
 vi.mock('../../auth/scope', () => ({ getProfileScopeUserId: () => world.user }))
 vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: (id: string) => id.replace('new-', '') }))
 vi.mock('../../db/users', () => ({ userRepo: { get: (id: string) => world.users.get(id) ?? ({ id, type: id === '__default__' ? 'local_user' : 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null }), list: () => [...world.users.values()] } }))
-vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => { const { keyStub: _stub, ...m } = JSON.parse(r.metadata); return { ...m, keyStatus: m.keyStatus ?? null, agentApi: m.agentApi ?? null, keyBlocked: m.keyBlocked ?? null, id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at } }, serviceCredentialRepo: {
+vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => { const { keyStub: _stub, ...m } = JSON.parse(r.metadata); return { ...m, keyStatus: m.keyStatus ?? null, agentApi: m.agentApi ?? null, keyBlocked: m.keyBlocked ?? null, oauthStatus: m.oauthStatus ?? null, grantedUserEmail: m.grantedUserEmail ?? null, id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at } }, serviceCredentialRepo: {
   list: (id: string) => [...world.rows.values()].filter(r => r.user_id === id), get: (id: string) => world.rows.get(id), put: (r: any) => world.rows.set(r.id, r), remove: (id: string) => world.rows.delete(id), clearProfile: (id: string) => { for (const [key, row] of world.rows) if (row.user_id === id && row.origin === 'cloud') world.rows.delete(key) }
 } }))
 vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
 vi.mock('../localAgents/scannerService', () => ({ markAllRootsDirty() {} }))
 vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
-vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args), provisionLocal: (...args: unknown[]) => world.provision(...args) } }))
-import { keyApiUrl, serviceCredentialService as service } from './service'
+vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args), provisionLocal: (...args: unknown[]) => world.provision(...args),
+  createOAuth: (...args: unknown[]) => world.oauthCreate(...args), authorizeOAuth: (...args: unknown[]) => world.oauthAuthorize(...args), accessToken: (...args: unknown[]) => world.accessToken(...args) } }))
+import { keyApiUrl, oauthFlowTiming, tokenTiming, serviceCredentialService as service } from './service'
+import { publishEvent } from '../../host/events'
+import { SERVICE_CREDENTIALS_CHANGED } from '../../../shared/serviceCredentials'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { engineCredentialEnv } from '../skillRuntime'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { turnLock } from '../localAgents/turnLock'
 import { desktopStateService } from '../localAgents/desktopStateService'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
@@ -1203,6 +1211,493 @@ except CredentialMissing as e:
       lock.release(); await sleep()
       expect((await service.detachUnusedAutoAttachments(a.id)).map(v => v.ref)).toEqual(['erp-1', 'crm-1'])
       expect(group(a, 'account-b')).toEqual(['notes'])
+    })
+  })
+})
+
+describe('Google OAuth credentials (core-brokered)', () => {
+  const run = promisify(execFile)
+  const shim = join(process.cwd(), 'resources/skill-runtime')
+  const g = { token: 'ya29.google-token-AAA111', expires: 0, refuse: null as null | string, scope: 'https://www.googleapis.com/auth/gmail.readonly' }
+  const now = () => Math.floor(Date.now() / 1000)
+  function gmail(id = 'g-1', extra: Record<string, unknown> = {}) {
+    return { id, name: 'Gmail (read-only)', type: 'gmail_oauth_readonly', notes: null, service_uri: 'gmail', status: 'complete', is_placeholder: false, relation: 'owned', owner_email: null,
+      local_use_allowed: true, revision: 'g1', expires_at: g.expires, oauth_status: 'ready', granted_user_email: 'me@gmail.test', ...extra }
+  }
+  const plain = (id = 'plain') => ({ ...metadata(), id, service_uri: id })
+  const deliveredG = (id: string, meta: any) => ({ id, name: meta.name, type: meta.type, notes: null, service_uri: meta.service_uri, is_placeholder: false,
+    credential_data: { access_token: g.token, token_type: 'Bearer', expires_at: g.expires, scope: g.scope, granted_user_email: 'me@gmail.test', granted_user_name: 'Me' } })
+  const file = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as any[]
+  const acc = key('account-a')
+  beforeEach(() => {
+    g.token = 'ya29.google-token-AAA111'; g.expires = now() + 3600; g.refuse = null; g.scope = 'https://www.googleapis.com/auth/gmail.readonly'
+    oauthFlowTiming.pollMs = 20; oauthFlowTiming.windowMs = 600_000
+    world.open.mockReset(); world.oauthCreate.mockReset(); world.oauthAuthorize.mockReset(); world.accessToken.mockReset(); world.fetch.mockClear(); world.list.mockClear()
+    world.fetch.mockImplementation(async (_user: string, ids: string[]) => {
+      const refused = g.refuse ? ids.map(id => ({ id, reason: g.refuse })) : []
+      const items = g.refuse ? [] : ids.map(id => {
+        const meta = world.metadata.find(m => m.id === id)
+        const entry = meta.type === 'api_token' ? { id, name: meta.name, type: meta.type, notes: null, service_uri: meta.service_uri, is_placeholder: false, credential_data: { http_header_name: 'Authorization', http_header_value: `Bearer ${world.token}` } } : deliveredG(id, meta)
+        return { id, revision: meta.revision, entry, service_account_file: null, ssh_key: null }
+      })
+      return { items, refused, current_user: null, owner_identity: null }
+    })
+  })
+  afterEach(async () => { oauthFlowTiming.pollMs = 2_000; oauthFlowTiming.windowMs = 600_000; tokenTiming.replyWaitMs = 2_000; tokenTiming.unavailableRetryMs = 60_000; await service.closeTokenServer() })
+  async function setup(items: any[] = [gmail()], refs = ['g-1'], kind: 'kit' | 'bare' = 'kit') {
+    world.metadata = items
+    const a = addAgent(kind); await login('account-a')
+    if (refs.length) await service.setAttachments(a.id, acc, refs)
+    return a
+  }
+  /** Sync, then let the queued regeneration (an exclusive hold) finish. */
+  async function relist(items: any[]) {
+    world.metadata = items; await service.sync(); await sleep()
+    for (let i = 0; i < 100 && world.agents.some(a => turnLock.isExclusivelyLocked(a.id)); i++) await sleep()
+  }
+  const authorized = (id: string) => ({ status: 201, ok: true, body: { credential_id: id, authorization_url: `https://accounts.google.com/o/oauth2/auth?state=fixture-state-${id}`, expires_at: now() + 600 } })
+  const flowState = (id: string) => service.oauthFlow(id)?.state
+
+  it('lists Core’s status and Google account, delivers the access token, and keeps it out of DTOs and logs', async () => {
+    const a = await setup([gmail(), plain()], ['g-1', 'plain'])
+    const p = await prepare(a.id)
+    expect(file(p.path!).find(e => e.id === 'g-1').credential_data).toMatchObject({ access_token: g.token, expires_at: g.expires })
+    const dtos = service.attachments(a.id)
+    expect(dtos.map(d => [d.ref, d.state, d.credential?.oauthStatus, d.credential?.grantedUserEmail])).toEqual([['g-1', 'ready', 'ready', 'me@gmail.test'], ['plain', 'ready', null, null]])
+    expect(JSON.stringify([dtos, service.list(), service.attachOptions(a.id)])).not.toContain(g.token)
+    expect(redactCredentialText(`token ${g.token}`)).toBe('token ***REDACTED***')
+    expect(p.prompt).toContain('Gmail (read-only) (gmail_oauth_readonly; slot gmail): ready')
+  })
+
+  it('never fetches a record Core has not authorized, and writes it token-less with the reason the helpers name', async () => {
+    const a = await setup([gmail('g-1', { oauth_status: 'pending_authorization', granted_user_email: null })])
+    const p = await prepare(a.id)
+    expect(world.fetch.mock.calls.flatMap(([, ids]) => ids)).not.toContain('g-1')
+    expect(service.attachments(a.id)[0].state).toBe('pending_authorization')
+    expect(file(p.path!)).toEqual([{ id: 'g-1', name: 'Gmail (read-only)', type: 'gmail_oauth_readonly', notes: null, service_uri: 'gmail', is_placeholder: false, unavailable_reason: 'pending_authorization', credential_data: {} }])
+    expect(p.prompt).toContain('unavailable — the Google account is not connected yet')
+    await relist([gmail('g-1', { oauth_status: 'reauth_required', revision: 'g2' })])
+    const again = await prepare(a.id)
+    expect(service.attachments(a.id)[0].state).toBe('reauth_required')
+    expect(file(again.path!)[0]).toMatchObject({ unavailable_reason: 'reauthorization_required', credential_data: {} })
+    // An unknown status reads as not authorized.
+    await relist([gmail('g-1', { oauth_status: 'something_new', revision: 'g3' })])
+    expect(service.attachments(a.id)[0].state).toBe('pending_authorization')
+  })
+
+  it('keeps an entry whose access token has expired: it is refetched, never called expired', async () => {
+    g.expires = now() - 60
+    const a = await setup()
+    world.fetch.mockClear()
+    const p = await prepare(a.id)
+    // Within the 600 s window, so the turn asks Core again (Core refreshes before it delivers).
+    expect(world.fetch.mock.calls.flatMap(([, ids]) => ids)).toContain('g-1')
+    expect(service.attachments(a.id)[0].state).toBe('ready')
+    expect(file(p.path!)[0].credential_data.access_token).toBe(g.token)
+  })
+
+  it('keeps the generation across a token renewal, so the engine process is not respawned', async () => {
+    g.expires = now() + 300
+    const a = await setup()
+    const first = await prepare(a.id)
+    g.token = 'ya29.google-token-RENEWED'; g.expires = now() + 3599
+    await relist([gmail('g-1', { revision: 'g2' })])
+    const second = await prepare(a.id)
+    expect(file(second.path!)[0].credential_data.access_token).toBe('ya29.google-token-RENEWED')
+    expect(second.generation).toBe(first.generation)
+    g.refuse = 'reauthorization_required'
+    await relist([gmail('g-1', { revision: 'g3', oauth_status: 'reauth_required' })])
+    expect((await prepare(a.id)).generation).not.toBe(first.generation)
+  })
+
+  it('maps delivery refusals: token_unavailable keeps the cached token, pending/reauth set the state until the next list', async () => {
+    g.expires = now() + 300
+    const a = await setup()
+    const p = await prepare(a.id)
+    g.refuse = 'token_unavailable'
+    await prepare(a.id)
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'ready', credential: { localUseAllowed: true, oauthStatus: 'ready', hasValues: true } })
+    expect(file(p.path!)[0].credential_data.access_token).toBe(g.token)
+    g.refuse = 'reauthorization_required'
+    await prepare(a.id)
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'reauth_required', credential: { localUseAllowed: true, oauthStatus: 'reauth_required', hasValues: false } })
+    expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'reauthorization_required' })
+    g.refuse = 'pending_authorization'
+    await relist([gmail()])
+    expect(service.attachments(a.id)[0].state).toBe('pending_authorization')
+    g.refuse = null
+    await relist([gmail('g-1', { revision: 'g2' })])
+    expect(service.attachments(a.id)[0].state).toBe('ready')
+  })
+
+  it('leaves a record Core could not get a token for alone for the back-off, then asks again', async () => {
+    g.expires = now() + 120 // inside the 600 s window: every pass would ask
+    tokenTiming.unavailableRetryMs = 300
+    const a = await setup()
+    await prepare(a.id)
+    const asked = () => world.fetch.mock.calls.flatMap(([, ids]) => ids).filter((id: string) => id === 'g-1').length
+    g.refuse = 'token_unavailable'; world.fetch.mockClear()
+    await service.sync(); await sleep()
+    expect(asked()).toBe(1)
+    await service.sync(); await service.sync(); await sleep()
+    expect(asked()).toBe(1)
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'ready', credential: { hasValues: true } })
+    await new Promise(resolve => setTimeout(resolve, 320))
+    await service.sync(); await sleep()
+    expect(asked()).toBe(2)
+  })
+
+  it('never offers or auto-attaches a pending record a canceled connect left, unless it is attached already', async () => {
+    const pending = gmail('g-pend', { oauth_status: 'pending_authorization', granted_user_email: null })
+    const a = await setup([pending, plain()], []) as any
+    a.credentials = [{ name: 'mail', type: 'gmail_oauth_readonly', optional: false, envPrefix: null, serviceUri: 'gmail', expectedKeys: [], presentKeys: [], satisfied: false, attachment: null }]
+    a.skills = [{ name: 'inbox', description: '', version: null, source: 'authored', path: '', deliverable: true, issues: [], credentials: [{ slot: 'gmail', type: 'gmail_oauth_readonly', description: null }] }]
+    const offered = () => service.attachOptions(a.id).groups.find(gr => gr.key === acc)!.items.map(i => [i.cloudId, i.attached])
+    expect(offered()).toEqual([['plain', false]])
+    const setupNow = service.setupState(a.id)
+    expect([setupNow.slots[0].options, setupNow.skillSlots[0].options]).toEqual([[], []])
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+    // Once ready it is offered and attached like any record.
+    await relist([gmail('g-pend', { revision: 'g2' }), plain()])
+    expect(offered()).toEqual([['g-pend', false], ['plain', false]])
+    expect(service.setupState(a.id).slots[0].options.map(o => o.ref)).toEqual(['g-pend'])
+    // Already attached (it lost its grant to pending): still listed, as attached.
+    await service.setAttachments(a.id, acc, ['g-pend'])
+    await relist([pending, plain()])
+    expect(offered()).toEqual([['g-pend', true], ['plain', false]])
+  })
+
+  describe('during a running turn', () => {
+    it('writes a renewed access token at once (keyOnlyChange), and a lost grant too', async () => {
+      const a = await setup()
+      const p = await prepare(a.id)
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        g.token = 'ya29.google-token-BBB222'; g.expires = now() + 3599
+        await relist([gmail('g-1', { revision: 'g2' })])
+        await vi.waitFor(() => expect(file(p.path!)[0].credential_data).toMatchObject({ access_token: 'ya29.google-token-BBB222', expires_at: g.expires }))
+        await relist([gmail('g-1', { revision: 'g3', oauth_status: 'reauth_required' })])
+        await vi.waitFor(() => expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'reauthorization_required' }))
+        expect(readFileSync(p.path!, 'utf8')).not.toContain('ya29.')
+      } finally { turn.release() }
+    })
+    it('waits for the turn when anything but the token changes', async () => {
+      const a = await setup()
+      const p = await prepare(a.id), bytes = readFileSync(p.path!, 'utf8')
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      g.token = 'ya29.google-token-CCC333'; g.scope = 'https://www.googleapis.com/auth/gmail.modify'
+      await relist([gmail('g-1', { revision: 'g2' })]); await sleep(); await sleep()
+      expect(readFileSync(p.path!, 'utf8')).toBe(bytes)
+      g.scope = 'https://www.googleapis.com/auth/gmail.readonly'
+      await relist([gmail('g-1', { revision: 'g3', name: 'Renamed' })]); await sleep(); await sleep()
+      expect(readFileSync(p.path!, 'utf8')).toBe(bytes)
+      turn.release()
+      await vi.waitFor(() => expect(file(p.path!)[0]).toMatchObject({ name: 'Renamed', credential_data: { access_token: 'ya29.google-token-CCC333' } }))
+    })
+  })
+
+  describe('connect flow', () => {
+    it('creates on Core, opens the browser, polls, and attaches the ready record beside what is attached', async () => {
+      const a = await setup([plain(), gmail('g-new', { oauth_status: 'pending_authorization', granted_user_email: null })], ['plain'])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      const flow = await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      expect(flow).toMatchObject({ agentId: a.id, group: acc, type: 'gmail_oauth_readonly', credentialId: 'g-new', reconnect: false, state: 'waiting', error: null })
+      expect(world.oauthCreate).toHaveBeenCalledWith('account-a', 'gmail_oauth_readonly', expect.anything())
+      expect(world.open).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/auth?state=fixture-state-g-new')
+      // The consent URL stays in main.
+      expect(JSON.stringify([flow, service.oauthFlow(a.id)])).not.toContain('fixture-state')
+      await sleep(); await sleep()
+      expect(flowState(a.id)).toBe('waiting')
+      world.metadata = [plain(), gmail('g-new', { revision: 'g2' })]
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(service.attachments(a.id).map(d => [d.ref, d.state])).toEqual([['plain', 'ready'], ['g-new', 'ready']])
+      const p = await prepare(a.id)
+      expect(file(p.path!).map(e => e.id)).toEqual(['plain', 'g-new'])
+      service.cancelOAuth(a.id, flow.id)
+      expect(service.oauthFlow(a.id)).toBeNull()
+    })
+
+    it('polls lightly: an unchanged list announces nothing, fetches nothing and queues no regeneration', async () => {
+      const a = await setup([plain(), gmail('g-new', { oauth_status: 'pending_authorization', granted_user_email: null })], ['plain'])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      await sleep()
+      const events = vi.mocked(publishEvent), locks = vi.spyOn(turnLock, 'withQueuedLock')
+      try {
+        events.mockClear(); world.fetch.mockClear()
+        const calls = world.list.mock.calls.length
+        await vi.waitFor(() => expect(world.list.mock.calls.length).toBeGreaterThanOrEqual(calls + 3), { timeout: 3000 })
+        expect(events).not.toHaveBeenCalled()
+        expect(locks).not.toHaveBeenCalled()
+        expect(world.fetch).not.toHaveBeenCalled()
+      } finally { locks.mockRestore() }
+      world.metadata = [plain(), gmail('g-new', { revision: 'g2' })]
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(events.mock.calls.some(([name]) => name === SERVICE_CREDENTIALS_CHANGED)).toBe(true)
+      expect(service.attachments(a.id).map(d => [d.ref, d.state])).toEqual([['plain', 'ready'], ['g-new', 'ready']])
+    })
+
+    it('announces a replaced flow gone when the new start fails, refused or unreachable', async () => {
+      const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
+      const events = vi.mocked(publishEvent)
+      const announced = () => events.mock.calls.filter(([name]) => name === SERVICE_CREDENTIALS_CHANGED).length
+      for (const fail of [
+        () => world.oauthCreate.mockResolvedValueOnce({ status: 503, ok: false, body: { detail: { code: 'oauth_not_configured', message: 'Not configured.' } } }),
+        () => world.oauthCreate.mockRejectedValueOnce(new Error('offline'))
+      ]) {
+        world.oauthCreate.mockResolvedValueOnce(authorized('g-new'))
+        await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+        expect(flowState(a.id)).toBe('waiting')
+        fail(); events.mockClear()
+        await expect(service.createOAuth(a.id, acc, 'gmail_oauth_readonly')).rejects.toHaveProperty('code')
+        expect(service.oauthFlow(a.id)).toBeNull()
+        expect(announced()).toBe(1)
+      }
+    })
+
+    it('cancel stops polling, attaches nothing and leaves the record on Core', async () => {
+      const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      const flow = await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      await sleep()
+      service.cancelOAuth(a.id, flow.id)
+      expect(service.oauthFlow(a.id)).toBeNull()
+      world.metadata = [gmail('g-new', { revision: 'g2' })]
+      const calls = world.list.mock.calls.length
+      await sleep(); await sleep(); await sleep()
+      expect(world.list.mock.calls.length).toBe(calls)
+      expect(service.attachments(a.id)).toEqual([])
+      await expect(service.reopenOAuth(a.id, flow.id)).rejects.toMatchObject({ code: 'flow_not_found' })
+    })
+
+    it('fails with timeout once the window closes, and a new flow replaces an old one', async () => {
+      const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      oauthFlowTiming.windowMs = 80
+      const first = await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      await vi.waitFor(() => expect(service.oauthFlow(a.id)).toMatchObject({ id: first.id, state: 'failed', error: { code: 'timeout' } }), { timeout: 3000 })
+      oauthFlowTiming.windowMs = 600_000
+      const second = await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      expect(service.oauthFlow(a.id)).toMatchObject({ id: second.id, state: 'waiting' })
+      await service.reopenOAuth(a.id, second.id)
+      expect(world.open).toHaveBeenCalledTimes(3)
+      service.cancelOAuth(a.id, first.id)
+      expect(service.oauthFlow(a.id)?.id).toBe(second.id)
+    })
+
+    it('returns Core’s refusal and bad input as coded errors, with no flow', async () => {
+      const a = await setup([], [])
+      world.oauthCreate.mockResolvedValue({ status: 503, ok: false, body: { detail: { code: 'oauth_not_configured', message: 'Google OAuth is not configured on this platform. Ask an administrator.' } } })
+      await expect(service.createOAuth(a.id, acc, 'gmail_oauth')).rejects.toMatchObject({ code: 'oauth_not_configured', message: 'Google OAuth is not configured on this platform. Ask an administrator.' })
+      world.oauthCreate.mockResolvedValue({ status: 429, ok: false, body: { detail: 'Too many requests' } })
+      await expect(service.createOAuth(a.id, acc, 'gmail_oauth')).rejects.toMatchObject({ code: 'rate_limited' })
+      world.oauthCreate.mockResolvedValue({ status: 201, ok: true, body: { credential_id: 'g-x', authorization_url: 'javascript:alert(1)', expires_at: now() + 600 } })
+      await expect(service.createOAuth(a.id, acc, 'gmail_oauth')).rejects.toMatchObject({ code: 'invalid_response' })
+      await expect(service.createOAuth(a.id, 'local', 'gmail_oauth')).rejects.toMatchObject({ code: 'invalid_group' })
+      await expect(service.createOAuth(a.id, acc, 'api_token')).rejects.toMatchObject({ code: 'unsupported_type' })
+      await expect(service.createOAuth(a.id, 'ffffffffffffffff', 'gmail_oauth')).rejects.toMatchObject({ code: 'account_unavailable' })
+      expect(service.oauthFlow(a.id)).toBeNull()
+      expect(world.open).not.toHaveBeenCalled()
+    })
+
+    it('reconnects an attached record and regenerates it once Core reports a new grant', async () => {
+      const a = await setup([gmail('g-1', { oauth_status: 'reauth_required' })])
+      world.oauthAuthorize.mockResolvedValue(authorized('g-1'))
+      await expect(service.reconnectOAuth(a.id, acc, 'g-2')).rejects.toMatchObject({ code: 'not_attached' })
+      const flow = await service.reconnectOAuth(a.id, acc, 'g-1')
+      expect(flow).toMatchObject({ reconnect: true, credentialId: 'g-1', type: 'gmail_oauth_readonly', state: 'waiting' })
+      expect(world.oauthAuthorize).toHaveBeenCalledWith('account-a', 'g-1', expect.anything())
+      world.metadata = [gmail('g-1', { revision: 'g2' })]
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(service.attachments(a.id).map(d => [d.ref, d.state])).toEqual([['g-1', 'ready']])
+    })
+  })
+
+  describe('token endpoint', () => {
+    const ask = (endpoint: { url: string; token: string }, id = 'g-1', bearer = endpoint.token, body: unknown = { min_ttl: 600, known_expires_at: g.expires }) =>
+      fetch(`${endpoint.url}/${id}/access-token`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const python = (code: string, env: Record<string, string>) => run('python3', ['-I', '-B', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(shim)})
+from core.cinna_api import credentials, CredentialRefreshError
+try:
+    print(credentials.access_token(${code}))
+except CredentialRefreshError as e:
+    print('error', e.code, str(e))`], { env: { PATH: process.env.PATH ?? '', ...env } }).then(r => r.stdout.trim())
+    async function ready(items: any[] = [gmail(), plain()], refs = ['g-1', 'plain']) {
+      const a = await setup(items, refs)
+      const p = await prepare(a.id)
+      expect(p.tokenEndpoint?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/credentials$/)
+      return { a, p, endpoint: p.tokenEndpoint! }
+    }
+
+    it('is offered only to an agent with a Google record attached, with one bearer for the session', async () => {
+      world.metadata = [gmail(), plain()]
+      const other = addAgent('bare')
+      const { a, endpoint } = await ready()
+      await service.setAttachments(other.id, acc, ['plain'])
+      expect((await prepare(other.id)).tokenEndpoint).toBeUndefined()
+      expect((await prepare(a.id)).tokenEndpoint).toEqual(endpoint)
+      expect(redactCredentialText(`bearer ${endpoint.token}`)).toBe('bearer ***REDACTED***')
+      expect(engineCredentialEnv({ CINNA_CREDENTIALS_TOKEN: 'stale', CINNA_CREDENTIALS_TOKEN_URL: 'stale' }, { skillRuntime: false })).toEqual({})
+      expect(engineCredentialEnv({}, { skillRuntime: false, tokenEndpoint: endpoint })).toEqual({ CINNA_CREDENTIALS_TOKEN_URL: endpoint.url, CINNA_CREDENTIALS_TOKEN: endpoint.token })
+    })
+
+    it('refuses a wrong bearer and an ended turn with 401, and an unattached or non-Google record with 404', async () => {
+      world.metadata = [gmail(), gmail('g-2'), plain()]
+      const { a, endpoint } = await ready(world.metadata, ['g-1', 'plain'])
+      expect((await ask(endpoint)).status).toBe(401) // no turn holds the agent
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        expect((await ask(endpoint, 'g-1', 'x'.repeat(endpoint.token.length))).status).toBe(401)
+        for (const id of ['g-2', 'plain', 'unknown']) {
+          const res = await ask(endpoint, id)
+          expect(res.status).toBe(404)
+          expect((await res.json()).detail.code).toBe('credential_not_linked')
+        }
+        expect(world.accessToken).not.toHaveBeenCalled()
+      } finally { turn.release() }
+      const editor = turnLock.acquire(a.id, 'editor')
+      try { expect((await ask(endpoint)).status).toBe(401) } finally { editor.release() }
+    })
+
+    it('asks Core, rewrites the cached row and credentials.json before answering, mid-turn', async () => {
+      const { a, p, endpoint } = await ready()
+      const fresh = now() + 3599
+      world.accessToken.mockResolvedValue({ status: 200, ok: true, body: { access_token: 'ya29.renewed-DDD444', token_type: 'Bearer', expires_at: fresh, refreshed: true } })
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        const res = await ask(endpoint)
+        expect(res.status).toBe(200)
+        expect(res.headers.get('cache-control')).toBe('no-store')
+        expect(await res.json()).toEqual({ access_token: 'ya29.renewed-DDD444', token_type: 'Bearer', expires_at: fresh, refreshed: true })
+        expect(world.accessToken).toHaveBeenCalledWith('account-a', 'g-1', { min_ttl: 600, known_expires_at: g.expires }, expect.anything())
+        expect(file(p.path!).find(e => e.id === 'g-1').credential_data).toMatchObject({ access_token: 'ya29.renewed-DDD444', expires_at: fresh, scope: g.scope })
+        expect(service.attachments(a.id)[0].credential).toMatchObject({ expiresAt: fresh * 1000, hasValues: true })
+        expect(redactCredentialText('ya29.renewed-DDD444')).toBe('***REDACTED***')
+      } finally { turn.release() }
+    })
+
+    it('mirrors Core’s coded refusal, records a lost grant, and answers 503 without a code when Core is unreachable', async () => {
+      const { a, p, endpoint } = await ready()
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        world.accessToken.mockRejectedValue(Object.assign(new Error('offline'), { code: 'request_failed' }))
+        const offline = await ask(endpoint)
+        expect(offline.status).toBe(503)
+        expect((await offline.json()).detail).toBe('Cinna could not be reached.')
+        world.accessToken.mockResolvedValue({ status: 502, ok: false, body: { detail: { code: 'refresh_in_progress', message: 'busy' } }, retryAfter: '1' })
+        const busy = await ask(endpoint)
+        expect([busy.status, busy.headers.get('retry-after'), (await busy.json()).detail.code]).toEqual([502, '1', 'refresh_in_progress'])
+        world.accessToken.mockResolvedValue({ status: 409, ok: false, body: { detail: { code: 'reauthorization_required', message: 'Google no longer accepts it.' } } })
+        const res = await ask(endpoint)
+        expect(res.status).toBe(409)
+        expect(await res.json()).toEqual({ detail: { code: 'reauthorization_required', message: 'Google no longer accepts it.' } })
+        expect(service.attachments(a.id)[0].state).toBe('reauth_required')
+        await vi.waitFor(() => expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'reauthorization_required' }))
+      } finally { turn.release() }
+    })
+
+    it('is what the skill runtime’s access_token calls: endpoint, coded error, retry, and fallback', async () => {
+      g.expires = now() + 120 // short of the default min_ttl (300), so the helper asks
+      const { a, p, endpoint } = await ready()
+      const env = engineCredentialEnv({}, { path: p.path!, skillRuntime: false, tokenEndpoint: endpoint })
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        world.accessToken.mockResolvedValue({ status: 200, ok: true, body: { access_token: 'ya29.from-endpoint-EEE555', token_type: 'Bearer', expires_at: now() + 900, refreshed: true } })
+        expect(await python("'g-1'", env)).toBe('ya29.from-endpoint-EEE555')
+        // The file was rewritten before the answer: the next call needs no network.
+        world.accessToken.mockClear()
+        expect(await python("'g-1'", env)).toBe('ya29.from-endpoint-EEE555')
+        expect(world.accessToken).not.toHaveBeenCalled()
+        expect(await python("'g-1', min_ttl=1800", env)).toBe('ya29.from-endpoint-EEE555') // 900 s left: asks again
+        expect(world.accessToken).toHaveBeenCalledTimes(1)
+        world.accessToken.mockResolvedValueOnce({ status: 502, ok: false, body: { detail: { code: 'refresh_in_progress', message: 'busy' } } })
+          .mockResolvedValueOnce({ status: 200, ok: true, body: { access_token: 'ya29.after-retry-FFF666', token_type: 'Bearer', expires_at: now() + 900, refreshed: true } })
+        expect(await python("'g-1', min_ttl=1800", env)).toBe('ya29.after-retry-FFF666')
+        world.accessToken.mockResolvedValue({ status: 502, ok: false, body: { detail: { code: 'provider_error', message: 'Google said no' } } })
+        expect(await python("'g-1', min_ttl=1800", env)).toMatch(/^error provider_error provider_error: Google could not issue/)
+        // Cinna unreachable: the synced token while it lasts.
+        world.accessToken.mockRejectedValue(Object.assign(new Error('offline'), { code: 'request_failed' }))
+        expect(await python("'g-1', min_ttl=1800", env)).toBe('ya29.after-retry-FFF666')
+        // A refused bearer: the synced token while it has any life left (Desktop's departure from Core's helper).
+        expect(await python("'g-1', min_ttl=1800", { ...env, CINNA_CREDENTIALS_TOKEN: 'wrong' })).toBe('ya29.after-retry-FFF666')
+      } finally { turn.release() }
+      // Without the endpoint: the synced token only while it has min_ttl left (the previous behaviour).
+      expect(await python("'g-1'", { CINNA_CREDENTIALS_PATH: p.path! })).toBe('ya29.after-retry-FFF666')
+      expect(await python("'g-1', min_ttl=1800", { CINNA_CREDENTIALS_PATH: p.path! })).toMatch(/^error unavailable /)
+      expect(await python("'g-1', min_ttl=1800", { CINNA_CREDENTIALS_PATH: p.path!, CINNA_CREDENTIALS_TOKEN_URL: endpoint.url, CINNA_CREDENTIALS_TOKEN: endpoint.token })).toBe('ya29.after-retry-FFF666')
+    }, 20_000)
+
+    it('is called directly, never through the user\'s http_proxy', async () => {
+      g.expires = now() + 120
+      const { a, p, endpoint } = await ready()
+      const seen: string[] = []
+      const proxy = createServer((req, res) => { seen.push(`${req.method} ${req.url}`); res.writeHead(502); res.end() })
+      await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve))
+      const via = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+      const env = { ...engineCredentialEnv({}, { path: p.path!, skillRuntime: false, tokenEndpoint: endpoint }), http_proxy: via, HTTP_PROXY: via, all_proxy: via, ALL_PROXY: via }
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        world.accessToken.mockResolvedValue({ status: 200, ok: true, body: { access_token: 'ya29.direct-GGG777', token_type: 'Bearer', expires_at: now() + 900, refreshed: true } })
+        expect(await python("'g-1'", env)).toBe('ya29.direct-GGG777')
+        expect(world.accessToken).toHaveBeenCalledTimes(1)
+        expect(seen).toEqual([])
+      } finally { turn.release(); await new Promise(resolve => proxy.close(resolve)) }
+    }, 20_000)
+
+    it('falls back to the synced token on a 401 while it has any life left, and says unauthorized once it has none', async () => {
+      g.expires = now() + 120
+      const { p, endpoint } = await ready()
+      const env = engineCredentialEnv({}, { path: p.path!, skillRuntime: false, tokenEndpoint: endpoint })
+      // No turn holds the agent (a child process outliving its turn): 401.
+      expect(await python("'g-1'", env)).toBe(g.token)
+      const expired = join(world.home, 'expired.json')
+      writeFileSync(expired, JSON.stringify(file(p.path!).map(e => e.id === 'g-1' ? { ...e, credential_data: { ...e.credential_data, expires_at: now() - 10 } } : e)))
+      expect(await python("'g-1'", { ...env, CINNA_CREDENTIALS_PATH: expired })).toMatch(/^error unauthorized unauthorized: Cinna Desktop did not accept/)
+      expect(world.accessToken).not.toHaveBeenCalled()
+    }, 20_000)
+
+    it('answers within the reply wait when a turn\'s preparation holds the file, and the write lands later', async () => {
+      g.expires = now() + 120 // a turn start re-fetches it, inside the chain
+      tokenTiming.replyWaitMs = 100
+      const { a, p, endpoint } = await ready()
+      let release: (value: unknown) => void = () => {}
+      world.fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        const blocked = prepare(a.id)
+        await vi.waitFor(() => expect(world.fetch).toHaveBeenCalledTimes(2))
+        const fresh = now() + 3599
+        world.accessToken.mockResolvedValue({ status: 200, ok: true, body: { access_token: 'ya29.unblocked-HHH888', token_type: 'Bearer', expires_at: fresh, refreshed: true } })
+        const answered = await Promise.race([ask(endpoint).then(res => res.json()), new Promise(resolve => setTimeout(() => resolve('stuck'), 1_500))])
+        expect(answered).toMatchObject({ access_token: 'ya29.unblocked-HHH888', expires_at: fresh })
+        expect(file(p.path!).find(e => e.id === 'g-1').credential_data.access_token).toBe(g.token)
+        release({ items: [], refused: [{ id: 'g-1', reason: 'token_unavailable' }], current_user: null, owner_identity: null })
+        await blocked
+        await vi.waitFor(() => expect(file(p.path!).find(e => e.id === 'g-1').credential_data).toMatchObject({ access_token: 'ya29.unblocked-HHH888', expires_at: fresh }))
+      } finally { release({ items: [], refused: [], current_user: null, owner_identity: null }); turn.release() }
+    })
+
+    it('keeps a newer token the endpoint stored over an older delivery that lands after it', async () => {
+      g.expires = now() + 120
+      tokenTiming.replyWaitMs = 100
+      const { a, p, endpoint } = await ready()
+      let release: (value: unknown) => void = () => {}
+      world.fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        const blocked = prepare(a.id)
+        await vi.waitFor(() => expect(world.fetch).toHaveBeenCalledTimes(2))
+        const fresh = now() + 3599
+        world.accessToken.mockResolvedValue({ status: 200, ok: true, body: { access_token: 'ya29.newer-JJJ000', token_type: 'Bearer', expires_at: fresh, refreshed: true } })
+        await ask(endpoint)
+        const meta = world.metadata.find(m => m.id === 'g-1')
+        release({ items: [{ id: 'g-1', revision: meta.revision, entry: { ...deliveredG('g-1', meta), credential_data: { ...deliveredG('g-1', meta).credential_data, access_token: 'ya29.older-III999', expires_at: now() + 1800 } }, service_account_file: null, ssh_key: null }], refused: [], current_user: null, owner_identity: null })
+        await blocked
+        await vi.waitFor(() => expect(file(p.path!).find(e => e.id === 'g-1').credential_data).toMatchObject({ access_token: 'ya29.newer-JJJ000', expires_at: fresh }))
+        expect(file((await prepare(a.id)).path!).find(e => e.id === 'g-1').credential_data.access_token).toBe('ya29.newer-JJJ000')
+      } finally { release({ items: [], refused: [], current_user: null, owner_identity: null }); turn.release() }
     })
   })
 })

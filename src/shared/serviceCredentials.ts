@@ -2,6 +2,15 @@
 export const SERVICE_CREDENTIALS_CHANGED = 'service-credentials:changed'
 export const LOCAL_CREDENTIAL_TYPES = ['api_token', 'email_imap', 'email_smtp', 'odoo', 'google_service_account'] as const
 export type LocalCredentialType = typeof LOCAL_CREDENTIAL_TYPES[number]
+/**
+ * Core's eight Google OAuth types. Core holds the refresh token; Desktop only ever sees a short-lived
+ * access token (in `credential_data.access_token` / `expires_at`) and gets a new one from Core.
+ */
+export const GOOGLE_OAUTH_TYPES = ['gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'gmeet_oauth', 'gmeet_oauth_readonly'] as const
+export type GoogleOAuthType = typeof GOOGLE_OAUTH_TYPES[number]
+export const isGoogleOAuthType = (type: string): type is GoogleOAuthType => (GOOGLE_OAUTH_TYPES as readonly string[]).includes(type)
+/** Core's `oauth_status` for a Google OAuth record; null for every other type. */
+export type OAuthCredentialStatus = 'pending_authorization' | 'ready' | 'reauth_required'
 /** Status of an issued Agent API key, as Core computes it. Only `active` delivers a token. */
 export const AGENT_API_KEY_STATUSES = ['active', 'revoked_by_issuer', 'producer_removed', 'issuer_removed', 'expired', 'api_disabled', 'external_access_paused'] as const
 export type AgentApiKeyStatus = typeof AGENT_API_KEY_STATUSES[number]
@@ -21,6 +30,10 @@ export interface ServiceCredentialDto {
   agentApi: AgentApiKeyInfo | null
   /** Set when Desktop refused to store an issued key's delivery (`insecure_base_url`); null otherwise. Not secret. */
   keyBlocked: 'insecure_base_url' | (string & {}) | null
+  /** Google OAuth types only: Core's authorization status (a delivery refusal overrides it until the next list); null otherwise. */
+  oauthStatus: OAuthCredentialStatus | null
+  /** The Google account a Google OAuth record was authorized for; null before consent and for other types. */
+  grantedUserEmail: string | null
 }
 export interface ServiceCredentialInput {
   id?: string; name: string; type: LocalCredentialType; serviceUri?: string; notes?: string
@@ -53,6 +66,29 @@ export interface ServiceCredentialAttachmentDto {
   account: { name: string; email: string } | null
 }
 export type ServiceCredentialAttachmentState = 'ready' | 'missing' | 'incomplete' | 'local_use_not_allowed' | 'not_cached' | 'expired' | 'account_unavailable' | 'key_unavailable'
+  /** Google OAuth: consent not finished yet, or Google rejected the grant and the owner must reconnect. */
+  | 'pending_authorization' | 'reauth_required'
+/**
+ * One agent's Google connect in progress (New in Attach credential, or Reconnect), owned by main so it
+ * survives the modal closing. `waiting`: the browser was opened and main polls Core's list. `failed`:
+ * stopped with `error` (Core's refusal, `timeout`, `reauth_required`, …); Retry starts a new flow.
+ * `attached`: the record is ready and attached; the renderer closes the modal and dismisses the flow.
+ */
+export interface OAuthConnectFlow {
+  id: string
+  agentId: string
+  /** The account key the record lives in (an attach-options group key, never `'local'`). */
+  group: string
+  type: GoogleOAuthType
+  /** Core's record id once known (at once for a reconnect, after Core answers for a New). */
+  credentialId: string | null
+  /** True for a Reconnect of an attached record. */
+  reconnect: boolean
+  state: 'waiting' | 'failed' | 'attached'
+  error: { code: string; message: string } | null
+  /** Epoch ms: when polling gives up (Core's state expiry, at most 10 minutes). */
+  expiresAt: number
+}
 /** One attach-picker section: local records, or one eligible account's cache. */
 export interface ServiceCredentialAttachGroup {
   key: string; label: string; detail: string; error: string | null

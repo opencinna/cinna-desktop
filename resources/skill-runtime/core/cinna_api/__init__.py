@@ -18,7 +18,7 @@ reads it fresh on every call.
 
 Supported here: ``credentials`` (``all``, ``get``, ``by_type``,
 ``all_by_type``, ``by_slot``, ``require_slot``, ``agent_api_session``,
-``access_token`` without a platform refresh), ``CredentialMissing`` and
+``access_token``, refreshed through Cinna Desktop's token endpoint), ``CredentialMissing`` and
 ``CredentialRefreshError``. Not supported: the agent REST API SDK (``api``,
 ``caller``, ``Caller``, ``error`` and the FastAPI / Pydantic re-exports),
 which only an agent served by cinna-core has.

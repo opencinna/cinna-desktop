@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ServiceCredentialDto } from '../../../../shared/serviceCredentials'
-import { accountReference, credentialHealth, credentialManageUrl, credentialOwnership, profileReference } from './credentialPresentation'
+import { accountReference, credentialHealth, credentialManageUrl, credentialOwnership, oauthFlowHealth, profileReference } from './credentialPresentation'
 
 const dto: ServiceCredentialDto = {
   id: 'c', origin: 'cloud', cloudId: 'core-id', name: 'Token', type: 'api_token', serviceUri: null, notes: null,
   status: 'complete', isPlaceholder: false, relation: 'owned', ownerEmail: null, localUseAllowed: true,
-  revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null
+  revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null
 }
 
 describe('credentialHealth', () => {
@@ -28,6 +28,22 @@ describe('credentialHealth', () => {
     expect(credentialHealth(null, 'missing')).toMatchObject({ tone: 'error' })
     expect(credentialHealth(dto, 'local_use_not_allowed')).toEqual({ tone: 'error', label: 'The owner must allow use on your computer' })
     expect(credentialHealth(null, 'account_unavailable')).toMatchObject({ tone: 'error' })
+    expect(credentialHealth(dto, 'pending_authorization')).toEqual({ tone: 'warning', label: 'Waiting for Google sign-in' })
+    expect(credentialHealth(dto, 'reauth_required')).toEqual({ tone: 'error', label: 'Google access expired' })
+  })
+
+  it('reads a Google record’s grant from its oauth status before its values', () => {
+    const google: ServiceCredentialDto = { ...dto, type: 'gmail_oauth', hasValues: false }
+    expect(credentialHealth({ ...google, oauthStatus: 'ready' })).toMatchObject({ tone: 'ok' })
+    expect(credentialHealth({ ...google, oauthStatus: 'pending_authorization', isPlaceholder: true })).toEqual({ tone: 'warning', label: 'Waiting for Google sign-in' })
+    expect(credentialHealth({ ...google, oauthStatus: 'reauth_required' })).toEqual({ tone: 'error', label: 'Google access expired' })
+    // Only the owner can sign in again: a shared record names whom to ask.
+    const shared = { ...google, relation: 'shared' as const, ownerEmail: 'bob@example.com' }
+    expect(credentialHealth({ ...shared, oauthStatus: 'reauth_required' })).toEqual({ tone: 'error', label: 'Google access expired — ask bob@example.com to reconnect' })
+    expect(credentialHealth(shared, 'pending_authorization')).toEqual({ tone: 'warning', label: 'Waiting for bob@example.com to finish Google sign-in' })
+    expect(credentialHealth({ ...shared, ownerEmail: null }, 'reauth_required').label).toBe('Google access expired — ask the owner to reconnect')
+    // An attachment state still wins: main has already resolved it.
+    expect(credentialHealth({ ...google, oauthStatus: 'reauth_required' }, 'ready')).toEqual({ tone: 'ok', label: 'Ready' })
   })
 })
 
@@ -120,5 +136,13 @@ describe('profileReference', () => {
 describe('accountReference', () => {
   it('keeps the host as stored when the server URL does not parse', () => {
     expect(accountReference({ name: 'Ann', email: 'ann@example.com', serverUrl: 'not a url' })).toEqual({ name: 'Ann', email: 'ann@example.com', serverUrl: 'not a url', host: 'not a url' })
+  })
+})
+
+describe('oauthFlowHealth', () => {
+  it('reads a waiting flow as a pending grant and a failed one as its reason', () => {
+    expect(oauthFlowHealth({ state: 'waiting', error: null })).toEqual({ tone: 'warning', label: 'Waiting for Google sign-in' })
+    expect(oauthFlowHealth({ state: 'failed', error: { code: 'timeout', message: 'x' } })).toEqual({ tone: 'error', label: 'Google sign-in was not finished in time.' })
+    expect(oauthFlowHealth({ state: 'failed', error: { code: 'other', message: 'Core said no.' } }).label).toBe('Core said no.')
   })
 })

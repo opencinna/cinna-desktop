@@ -95,15 +95,22 @@ export function withSkillRuntime(env: Record<string, string>, dir: string): Reco
  * delivery wrote (or removed when it wrote none), and for a kit agent (`skillRuntime`) the skill runtime on
  * `PYTHONPATH`, so its skill scripts find credentials by slot as they do in cinna-core. Every
  * engine (Claude, Codex, OpenCode) is launched with it and passes it to its tools' shell.
+ *
+ * With a Google record attached (`tokenEndpoint`), `CINNA_CREDENTIALS_TOKEN_URL` (the base the skill
+ * runtime appends `/{id}/access-token` to) and `CINNA_CREDENTIALS_TOKEN` (the agent's bearer for it);
+ * inherited values are always dropped first.
  */
 export function engineCredentialEnv(
   base: Record<string, string>,
-  prepared: { path?: string; skillRuntime: boolean },
+  prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string } },
   runtimeDir: () => string | null = ensureSkillRuntime
 ): Record<string, string> {
   const env = { ...base }
   delete env.CINNA_CREDENTIALS_PATH
+  delete env.CINNA_CREDENTIALS_TOKEN_URL
+  delete env.CINNA_CREDENTIALS_TOKEN
   if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
+  if (prepared.tokenEndpoint) { env.CINNA_CREDENTIALS_TOKEN_URL = prepared.tokenEndpoint.url; env.CINNA_CREDENTIALS_TOKEN = prepared.tokenEndpoint.token }
   const dir = prepared.skillRuntime ? runtimeDir() : null
   return dir ? withSkillRuntime(env, dir) : env
 }

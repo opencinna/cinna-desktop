@@ -1,4 +1,4 @@
-import { cinnaFetch } from '../cinna-http'
+import { cinnaFetch, cinnaSend } from '../cinna-http'
 import type { ServiceCredentialBundle, ServiceCredentialEntry } from '../../../shared/serviceCredentials'
 /** Non-secret facts Core sends with an issued Agent API key. Every field is optional; producer fields are null once it is removed, issuer_email once the issuer is. */
 export interface CloudAgentApiKeyFacts {
@@ -14,6 +14,10 @@ export interface CloudCredentialMetadata {
   /** Issued Agent API key status (`type: "agent_api"` only); null or absent for every other type. */
   key_status?: string | null
   agent_api?: CloudAgentApiKeyFacts | null
+  /** Google OAuth types only: `pending_authorization` | `ready` | `reauth_required`; null otherwise. */
+  oauth_status?: string | null
+  /** Google OAuth types only: the Google account it was authorized for; null before consent. */
+  granted_user_email?: string | null
 }
 export interface CloudDelivery {
   items: ServiceCredentialBundle[]; refused: { id: string; reason: string; key_status?: string | null }[]
@@ -25,6 +29,8 @@ export interface CloudDelivery {
 export interface CloudSkillProvision {
   slots: { slot: string; type: string; provided_by: string; outcome: string; credential_id: string | null }[]
 }
+/** Bounded like the other calls; `signal` (an account's or the app's) still aborts it first. */
+const within = (ms: number, signal?: AbortSignal) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms)
 export const serviceCredentialCloud = {
   /**
    * Ask Core to share a catalog skill revision's publisher-provided credentials with this account
@@ -39,5 +45,14 @@ export const serviceCredentialCloud = {
   materialize: (userId: string, ids: string[], signal?: AbortSignal) => cinnaFetch<CloudDelivery>(userId, '/api/v1/external/credentials/materialize?include=agent_api_keys', {
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     method: 'POST', body: { credential_ids: ids, include_current_user: true }, sensitive: true
-  })
+  }),
+  /**
+   * Google OAuth, Core-brokered. Each answers `{status, ok, body}` so Core's coded refusals
+   * (`{detail: {code, message}}`) come back as data. Create sends no name: Core names the record
+   * by its type ("Gmail (read-only)") and reuses the caller's newest pending one of that type.
+   */
+  createOAuth: (userId: string, type: string, signal?: AbortSignal) => cinnaSend(userId, '/api/v1/external/credentials/oauth', { method: 'POST', json: { type }, signal: within(30_000, signal) }),
+  authorizeOAuth: (userId: string, id: string, signal?: AbortSignal) => cinnaSend(userId, `/api/v1/external/credentials/${encodeURIComponent(id)}/oauth/authorize`, { method: 'POST', signal: within(30_000, signal) }),
+  accessToken: (userId: string, id: string, body: { min_ttl: number; known_expires_at: number | null }, signal?: AbortSignal) =>
+    cinnaSend(userId, `/api/v1/external/credentials/${encodeURIComponent(id)}/access-token`, { method: 'POST', json: body, signal: within(25_000, signal) })
 }

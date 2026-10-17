@@ -66,7 +66,7 @@ export function ServiceCredentialsSection({ cloud = false }: { cloud?: boolean }
   </div> : undefined}>
     {reference && <p className="flex text-[13px] text-[var(--color-text-muted)]"><AccountReferenceLabel reference={reference} onError={setError} /></p>}
     {items.map(c => cloud
-      ? <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} typeTitle={credentialTypeTitle(c)} health={credentialHealth(c)} ownership={credentialOwnership(c)}
+      ? <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} account={c.grantedUserEmail} typeTitle={credentialTypeTitle(c)} health={credentialHealth(c)} ownership={credentialOwnership(c)}
         actions={(() => { const url = credentialManageUrl(c.cloudId, profile?.cinnaServerUrl); return url ? <ManageCredentialButton name={c.name} url={url} onError={setError} /> : null })()} />
       : <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} health={credentialHealth(c)} ownership={credentialOwnership(c)}
         expandable={{ expanded: open?.id === c.id, onToggle: () => openRow(c.id, 'edit'), disabled: formOpen && open?.id !== c.id }}

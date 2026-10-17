@@ -15,7 +15,7 @@ const AGENT = 'folder:acme'
 const record = (over: Partial<ServiceCredentialDto>): ServiceCredentialDto => ({
   id: 'row', origin: 'cloud', cloudId: 'c', name: 'Acme API', type: 'api_token', serviceUri: 'acme-api', notes: null,
   status: 'complete', isPlaceholder: false, relation: 'shared', ownerEmail: 'admin@example.test', localUseAllowed: true,
-  revision: 'r1', hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, ...over
+  revision: 'r1', hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null, ...over
 })
 const slot = (over: Partial<CredentialSetupSlot>): CredentialSetupSlot => ({
   name: 'acme', type: 'api_token', optional: false, envPrefix: null, state: 'missing', attached: null,

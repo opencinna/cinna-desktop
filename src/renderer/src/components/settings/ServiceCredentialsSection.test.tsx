@@ -8,7 +8,7 @@ import { ServiceCredentialsSection } from './ServiceCredentialsSection'
 const local: ServiceCredentialDto = {
   id: 'local', origin: 'local', cloudId: null, name: 'Local token', type: 'api_token',
   serviceUri: null, notes: null, status: 'complete', isPlaceholder: false, relation: 'owned',
-  ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null
+  ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null
 }
 const remote: ServiceCredentialDto = { ...local, id: 'cloud', origin: 'cloud', cloudId: 'cloud', name: 'Cloud token' }
 const list = vi.fn(), sync = vi.fn(), save = vi.fn(), remove = vi.fn(), openExternal = vi.fn()
@@ -248,4 +248,18 @@ it('names the profile and links its server in the remote header', async () => {
   fireEvent.click(link)
   await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://fixture.test'))
   expect(screen.queryByText(/Server:/)).toBeNull()
+})
+
+it('names a Google record’s granted account in place of a type badge that would repeat its name', async () => {
+  const gmail: ServiceCredentialDto = { ...remote, id: 'g', cloudId: 'g', name: 'Gmail', type: 'gmail_oauth', oauthStatus: 'reauth_required', grantedUserEmail: 'alice@gmail.com' }
+  list.mockResolvedValue({ ok: true, value: { items: [gmail, { ...remote, id: 'd', cloudId: 'd', name: 'Team drive', type: 'gdrive_oauth', oauthStatus: 'ready', grantedUserEmail: 'bob@gmail.com' }], lastSync: 1, error: null, secureStorage: true } })
+  render(<QueryClientProvider client={queryClient}><ServiceCredentialsSection cloud /></QueryClientProvider>)
+  expect(await screen.findAllByText('Gmail')).toHaveLength(1)
+  expect(screen.getByText('alice@gmail.com')).toBeTruthy()
+  // A name of its own keeps the badge, with the account after it.
+  expect(screen.getByText('Google Drive')).toBeTruthy()
+  expect(screen.getByText('bob@gmail.com')).toBeTruthy()
+  // No Reconnect here, so the label promises none (rule 12).
+  expect(screen.getByRole('img', { name: 'Google access expired' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /Reconnect/ })).toBeNull()
 })

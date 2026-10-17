@@ -28,4 +28,10 @@ export function registerServiceCredentialHandlers(): void {
   ipcHandle('service-credentials:attach', (_, id: string, group: string, ref: string) => outcome(() => service.attach(id, group, ref)))
   ipcHandle('service-credentials:setup-state', (_, id: string) => outcome(() => service.setupState(id)))
   ipcHandle('service-credentials:setup-skills', (_, id: string) => outcome(() => service.autoAttachSkills(id)))
+  // Google OAuth connect: the flow lives in main; refusals come back as `{ok: false, code}`.
+  ipcHandle('service-credentials:create-oauth', (_, id: string, group: string, type: string) => outcome(() => service.createOAuth(id, group, type)))
+  ipcHandle('service-credentials:reconnect-oauth', (_, id: string, group: string, ref: string) => outcome(() => service.reconnectOAuth(id, group, ref)))
+  ipcHandle('service-credentials:oauth-flow', (_, id: string) => outcome(() => service.oauthFlow(id)))
+  ipcHandle('service-credentials:reopen-oauth', (_, id: string, flowId: string) => outcome(() => service.reopenOAuth(id, flowId)))
+  ipcHandle('service-credentials:cancel-oauth', (_, id: string, flowId: string) => outcome(() => service.cancelOAuth(id, flowId)))
 }

@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { ArrowLeft, Database, FileKey, KeyRound, Mail, PlugZap, Search, Send, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Database, FileKey, HardDrive, KeyRound, Mail, PlugZap, Search, Send, Video, type LucideIcon } from 'lucide-react'
 import type { LocalCredentialType, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 import { credentialResult } from '../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -14,7 +14,16 @@ const credentialTypes: { type: LocalCredentialType; name: string; description: s
 ]
 /** Types that only arrive from a Cinna account: named and drawn like the rest, never offered by Add Credential. */
 const cloudCredentialTypes: { type: string; name: string; icon: LucideIcon }[] = [
-  { type: 'agent_api', name: 'Agent API key', icon: PlugZap }
+  { type: 'agent_api', name: 'Agent API key', icon: PlugZap },
+  // Google OAuth: created through New in Attach credential (the consent runs on Core), named as Core names them.
+  { type: 'gmail_oauth', name: 'Gmail', icon: Mail },
+  { type: 'gmail_oauth_readonly', name: 'Gmail (read-only)', icon: Mail },
+  { type: 'gdrive_oauth', name: 'Google Drive', icon: HardDrive },
+  { type: 'gdrive_oauth_readonly', name: 'Google Drive (read-only)', icon: HardDrive },
+  { type: 'gcalendar_oauth', name: 'Google Calendar', icon: CalendarDays },
+  { type: 'gcalendar_oauth_readonly', name: 'Google Calendar (read-only)', icon: CalendarDays },
+  { type: 'gmeet_oauth', name: 'Google Meet', icon: Video },
+  { type: 'gmeet_oauth_readonly', name: 'Google Meet (read-only)', icon: Video }
 ]
 const typeEntry = (type: string) => credentialTypes.find(c => c.type === type) ?? cloudCredentialTypes.find(c => c.type === type)
 export const credentialTypeName = (type: string) => typeEntry(type)?.name ?? type.replaceAll('_', ' ')

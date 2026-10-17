@@ -51,3 +51,16 @@ export function useCredentialSetup(agentId: string, enabled = true) {
   return useQuery({ queryKey: ['service-credentials', 'setup', agentId], enabled,
     queryFn: async () => credentialResult(await window.api.serviceCredentials.setupState(agentId)) })
 }
+export const oauthFlowKey = (agentId: string) => ['service-credential-oauth-flow', agentId] as const
+/**
+ * The agent's Google connect flow (New in Attach credential, or Reconnect), or null. The flow lives
+ * in main and outlives the modal; main announces its changes through `onChanged`, so it is refetched then.
+ */
+export function useOAuthConnectFlow(agentId: string, enabled = true) {
+  const queryClient = useQueryClient()
+  useEffect(() => window.api.serviceCredentials.onChanged(() => {
+    void queryClient.invalidateQueries({ queryKey: oauthFlowKey(agentId) })
+  }), [queryClient, agentId])
+  return useQuery({ queryKey: oauthFlowKey(agentId), enabled,
+    queryFn: async () => credentialResult(await window.api.serviceCredentials.oauthFlow(agentId)) })
+}

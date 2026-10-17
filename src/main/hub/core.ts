@@ -90,11 +90,13 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   taskSyncScheduler.stop()
   const processes = acpProcessPool.shutdown()
   const conductor = conductorBridge.shutdown()
+  // The credential token endpoint's loopback listener ends with the app, its bearers with it.
+  const credentialTokens = serviceCredentialService.closeTokenServer()
   // A login waiting on a browser sign-in holds a loopback port; it ends with the app.
   const logins = shutdownEngineLogins()
   // Cinna's OpenCode database is created by an engine outside the pool; it ends with the app too.
   const bootstraps = shutdownOpencodeBootstraps()
   toolInstallService.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, conductor, logins, bootstraps, mcpManager.disconnectAll()])
+  await Promise.all([processes, conductor, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
 }

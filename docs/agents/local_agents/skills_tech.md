@@ -190,7 +190,7 @@ Every channel below gates on `userActivation.requireActivated()`, runs in the **
 ### `src/main/agents/drivers/index.ts`
 - `kitAgentSkillsPlugin(userId, agentId)`: null for a synthetic runtime profile, an AI function profile, a missing row, a chat conductor or a development (build) agent; otherwise `ensureKitAgentSkillsPlugin`. Wired as `ClaudeLauncherDeps.agentSkillsPlugin`
 - `folderSystemPrompt(engine)`: for a kit agent whose context says `ownSkills: 'skill'`, asks `kitAgentSkillsPlugin` and downgrades to `'pointer'` when it answers null or throws
-- The turn's env is `engineCredentialEnv(plan.spec.env, prepared)`, where `prepared` is `serviceCredentialService.prepare(agentId)` — `{path, skillRuntime: agent.skills !== undefined}`
+- The turn's env is `engineCredentialEnv(plan.spec.env, prepared)`, where `prepared` is `serviceCredentialService.prepare(agentId)` — `{path, skillRuntime: agent.skills !== undefined, tokenEndpoint?}`, the last only with a Google record attached
 
 ### `src/main/agents/drivers/acp/acpLaunchers.ts`
 - Claude: on the isolated branch only, `deps.agentSkillsPlugin(ctx.userId, ctx.agentId)` through `safely`; its path joins `tasksSkillPlugin()`'s in `_meta.claudeCode.options.plugins`, `cinna-tasks` first. Not asked on the native branch. The path is not part of the spec key
@@ -209,7 +209,7 @@ Every channel below gates on `userActivation.requireActivated()`, runs in the **
 - `skillRuntimeSourceDir()`: `Resources/skill-runtime` packaged, `<app>/resources/skill-runtime` in development (the bundled kit's rule)
 - `ensureSkillRuntime(source?)`: `contractTreeHash(source)`; returns `<userData>/skill-runtime/<first 16 hex>/` when its `.cinna-runtime-hash` matches; else copies without `__pycache__` into `.tmp-<pid>-<time>`, writes the hash file, `swapInto`, and removes every other entry. Null on failure, logged
 - `withSkillRuntime(env, dir)`: `dir` first on `PYTHONPATH`, the rest kept after it, never twice
-- `engineCredentialEnv(base, prepared, runtimeDir?)`: `CINNA_CREDENTIALS_PATH` set to the delivered file or removed; the runtime prepended when `prepared.skillRuntime`
+- `engineCredentialEnv(base, prepared, runtimeDir?)`: `CINNA_CREDENTIALS_PATH` set to the delivered file or removed; `CINNA_CREDENTIALS_TOKEN_URL` and `CINNA_CREDENTIALS_TOKEN` set from `prepared.tokenEndpoint` or removed (an inherited value is never passed on); the runtime prepended when `prepared.skillRuntime`. What the pair is: [Google OAuth credentials](../service_credentials/README.md#google-oauth-credentials)
 
 ### `src/main/services/localAgents/watcherService.ts`
 - The per-directory fallback (Linux, or wherever recursive watching is refused) watches `skills/` — a skill appearing or going — and each `skills/<name>/`, where its `SKILL.md` is edited. Without the second level an edit was invisible there. The cache is not watched: every change to it comes from a verb that settles

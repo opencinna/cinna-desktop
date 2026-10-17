@@ -1,4 +1,4 @@
-import type { ServiceCredentialAttachmentState, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
+import type { OAuthConnectFlow, ServiceCredentialAttachmentState, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 
 /**
  * What the service-credential rows say about a record, as pure functions so the
@@ -20,7 +20,35 @@ const attachmentHealth: Record<ServiceCredentialAttachmentState, CredentialHealt
   local_use_not_allowed: { tone: 'error', label: 'The owner must allow use on your computer' },
   account_unavailable: { tone: 'error', label: 'Account not signed in' },
   // The detail comes from the record's key status; this stands in when it is unknown.
-  key_unavailable: { tone: 'error', label: 'Unavailable — open it on the remote for details' }
+  key_unavailable: { tone: 'error', label: 'Unavailable — open it on the remote for details' },
+  pending_authorization: { tone: 'warning', label: 'Waiting for Google sign-in' },
+  // No "reconnect" here: only the agent tab offers it, beside the label (rule 12).
+  reauth_required: { tone: 'error', label: 'Google access expired' }
+}
+
+/**
+ * A Google record's grant. Only its owner can sign in again, so a shared record
+ * says whom to ask instead.
+ */
+function googleGrantHealth(state: 'pending_authorization' | 'reauth_required', dto: Pick<ServiceCredentialDto, 'relation' | 'ownerEmail'> | null): CredentialHealth {
+  if (dto?.relation !== 'shared') return attachmentHealth[state]
+  const owner = dto.ownerEmail ?? 'the owner'
+  return state === 'reauth_required'
+    ? { tone: 'error', label: `Google access expired — ask ${owner} to reconnect` }
+    : { tone: 'warning', label: `Waiting for ${owner} to finish Google sign-in` }
+}
+
+/** A failed connect flow's reason in the user's words; main's message for anything else. */
+const flowErrors: Record<string, string> = {
+  timeout: 'Google sign-in was not finished in time.',
+  oauth_not_configured: 'Google sign-in is not set up on this Cinna server.',
+  reauth_required: 'Sign in to this Cinna account again.'
+}
+export const oauthFlowErrorText = (error: OAuthConnectFlow['error']): string => error ? flowErrors[error.code] ?? error.message : 'Google sign-in did not finish.'
+
+/** A Google connect flow in progress, as the health of the row that stands for it. */
+export function oauthFlowHealth(flow: Pick<OAuthConnectFlow, 'state' | 'error'>): CredentialHealth {
+  return flow.state === 'failed' ? { tone: 'error', label: oauthFlowErrorText(flow.error) } : attachmentHealth.pending_authorization
 }
 
 type KeyFacts = Pick<ServiceCredentialDto, 'keyStatus' | 'agentApi'> & Partial<Pick<ServiceCredentialDto, 'keyBlocked'>>
@@ -55,10 +83,13 @@ export function agentApiKeyHealth(dto: KeyFacts | null | undefined): CredentialH
  */
 export function credentialHealth(dto: ServiceCredentialDto | null, attachmentState?: ServiceCredentialAttachmentState, now = Date.now()): CredentialHealth {
   if (attachmentState === 'key_unavailable') return dto?.keyStatus === 'active' && !dto.keyBlocked ? attachmentHealth.key_unavailable : agentApiKeyHealth(dto)
+  if (attachmentState === 'pending_authorization' || attachmentState === 'reauth_required') return googleGrantHealth(attachmentState, dto)
   if (attachmentState) return attachmentHealth[attachmentState]
   if (!dto) return attachmentHealth.missing
   // An issued key's own status says more than anything below it.
   if ((dto.keyStatus != null && dto.keyStatus !== 'active') || dto.keyBlocked) return agentApiKeyHealth(dto)
+  // A Google record's grant, likewise: until consent is finished its values say nothing.
+  if (dto.oauthStatus === 'pending_authorization' || dto.oauthStatus === 'reauth_required') return googleGrantHealth(dto.oauthStatus, dto)
   if (!dto.localUseAllowed) return attachmentHealth.local_use_not_allowed
   if (dto.isPlaceholder || dto.status !== 'complete') return attachmentHealth.incomplete
   if (dto.expiresAt !== null && dto.expiresAt <= now) return attachmentHealth.expired

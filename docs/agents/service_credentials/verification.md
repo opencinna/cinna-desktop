@@ -132,3 +132,15 @@ Tests cover:
 - `service-credentials.spec.ts` (E2E, fake Core).
 
 No test run is recorded here for this section: rerun the files above and `npm run typecheck` before relying on it. The kit is built from an uncommitted core tree, so `make kit-sync` must be rerun once core commits contract 1.7.0.
+
+## Google OAuth credentials — 2026-10-17
+
+Desktop connects, lists, materializes and renews Google OAuth credentials brokered by cinna-core (kit contract 1.14.0, helper 1.14.0). The kit bundle was synced from a core commit; read `core_commit` and `core_dirty` in `kit.lock.json` for whether the render was from a clean tree.
+
+Tests cover:
+- `tokenServer.test.ts` (the loopback endpoint on a real socket): one port and one bearer per agent for the session; a live agent answered through the handler, `no-store`, with `min_ttl` clamped; a wrong or missing bearer, and an agent no turn holds, both 401; another `Host` and any `Origin` refused before anything else; one route, the rest 404; a malformed or oversized body refused; Core's refusal and `Retry-After` passed through; every bearer forgotten on close; Core's defaults for the body;
+- `service.test.ts`: the connect flow (create on Core, open the browser, poll lightly and attach the ready record; a replaced flow announced gone; Cancel keeping the record; `timeout` when the window closes; Core's refusals as coded errors; reconnect regenerating once Core reports a new grant); `oauth_status` mapped to the attachment states and to token-less entries; a pending record not offered or auto-attached unless already attached; `token_unavailable` backoff; the endpoint end to end (offered only with a Google record attached, 401 for a wrong bearer or an ended turn, 404 for an unattached record, cache and file rewritten before the answer, Core's refusals mirrored and a lost grant recorded, 503 uncoded when Core is unreachable, the reply wait when a preparation holds the file), and the real Python helper against it (endpoint, coded error, retry, bypassing `http_proxy`, the 401 fallback); the fingerprint staying put on renewal and moving on a token-less entry; a renewal written while a turn runs and a mixed change waiting;
+- renderer: `CredentialAttachModal.test.tsx` (the New card, chooser, waiting and failed views), `ServiceCredentialsTab.test.tsx` (the flow row, **Reconnect** for owned records only), `ServiceCredentialsSection.test.tsx`, `credentialPresentation.test.ts` (Google status labels), `FinishSetupDialog.test.tsx`;
+- `service-credentials.spec.ts` (E2E, fake Core with `FakeGoogle` records): the New flow through consent played by the test.
+
+**Not covered.** The flow ending when its account leaves the eligible set or the profile is switched has no test that this review found. No test or live run against a real Google consent is recorded; the endpoint is exercised against a fake Core only. No test run is recorded for this section: rerun the files above and `npm run typecheck` before relying on it.

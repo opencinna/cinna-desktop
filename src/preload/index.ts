@@ -1,4 +1,4 @@
-import type { AutoAttachedCredential, CredentialSetupDto, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { AutoAttachedCredential, CredentialSetupDto, GoogleOAuthType, OAuthConnectFlow, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -441,6 +441,19 @@ const api = {
     setupState: (id: string): Promise<ServiceCredentialResult<CredentialSetupDto>> => ipcRenderer.invoke('service-credentials:setup-state', id),
     /** Fill the agent's skill slots exactly one record fits, after `provision-local` (Finish setup opening). Answers what it attached. */
     setupSkills: (id: string): Promise<ServiceCredentialResult<AutoAttachedCredential[]>> => ipcRenderer.invoke('service-credentials:setup-skills', id),
+    /**
+     * New in Attach credential: create a Google OAuth record of `type` in account `group` on Core, open Google's consent
+     * page in the browser, and attach the record to the agent once Core reports it ready. Replaces the agent's previous flow.
+     */
+    createOAuth: (id: string, group: string, type: GoogleOAuthType): Promise<ServiceCredentialResult<OAuthConnectFlow>> => ipcRenderer.invoke('service-credentials:create-oauth', id, group, type),
+    /** Reconnect an attached Google OAuth record (`ref` = Core id) whose grant is pending or rejected; same flow as `createOAuth`. */
+    reconnectOAuth: (id: string, group: string, ref: string): Promise<ServiceCredentialResult<OAuthConnectFlow>> => ipcRenderer.invoke('service-credentials:reconnect-oauth', id, group, ref),
+    /** The agent's current connect flow, or null. Changes are announced through `onChanged`. */
+    oauthFlow: (id: string): Promise<ServiceCredentialResult<OAuthConnectFlow | null>> => ipcRenderer.invoke('service-credentials:oauth-flow', id),
+    /** Open the flow's consent page again (`waiting` only). */
+    reopenOAuth: (id: string, flowId: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:reopen-oauth', id, flowId),
+    /** Stop polling and forget the flow (Cancel, or dismissing a `failed`/`attached` one). The record on Core is kept. */
+    cancelOAuth: (id: string, flowId: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:cancel-oauth', id, flowId),
     /** `payload.autoAttached` names skill slots main filled without asking, in the background. */
     onChanged: (cb: (payload: ServiceCredentialsChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload?: ServiceCredentialsChangedPayload): void => cb(payload ?? {})

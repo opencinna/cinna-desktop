@@ -14,10 +14,12 @@ import { createLocalScheduleScheduler } from '../localScheduleScheduler'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
 import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
+import { createCredentialTokenServer, type CredentialTokenAnswer, type CredentialTokenRequest } from './tokenServer'
+import type { CinnaSendResult } from '../cinna-http'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates } from './slotMatch'
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -91,6 +93,21 @@ const KEY_STATUS_WORDS: Record<string, string> = { revoked_by_issuer: 'revoked b
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 const AUTO_ATTACH_RETRIES = 25, AUTO_ATTACH_RETRY_MS = 200
 const FAST_POLL = 60_000, SLOW_POLL = 300_000, TURN_SYNC_AGE = 120_000, TURN_SYNC_BUDGET = 5_000
+/**
+ * `replyWaitMs`: how long the token endpoint waits for the calling agent's credentials.json write before
+ * answering anyway (the per-path chain can be held by a turn's preparation; the write still lands later).
+ * `unavailableRetryMs`: how long a sync pass leaves a Google record alone after Core answered
+ * `token_unavailable` for it (transient), so polls do not spend Core's materialize budget on it. Tests shorten both.
+ */
+export const tokenTiming = { replyWaitMs: 2_000, unavailableRetryMs: 60_000 }
+/** Row id → until when, and at which revision, a sync pass does not re-fetch it after `token_unavailable`. */
+const tokenBackoff = new Map<string, { until: number; revision: string | null }>()
+function backedOff(row: ServiceCredentialRow): boolean {
+  const b = tokenBackoff.get(row.id)
+  if (!b) return false
+  if (b.until > Date.now() && b.revision === (stored(row).revision ?? null)) return true
+  tokenBackoff.delete(row.id); return false
+}
 /** An issued key's list expiry in ms: epoch seconds, or an ISO-8601 string; anything else is no expiry. */
 function expiresAt(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value * 1000 : null
@@ -107,6 +124,16 @@ function rowKeyUnavailable(row: ServiceCredentialRow): boolean { const m = store
 function keyTerminal(m: ServiceCredentialDto): boolean { return isDeadKey(m) }
 /** An issued key that is active or paused: one worth polling for and syncing at turn start. */
 function liveKey(row: ServiceCredentialRow): boolean { const m = credentialDto(row); return isKey(m) && !keyTerminal(m) }
+const OAUTH_STATUSES: readonly OAuthCredentialStatus[] = ['pending_authorization', 'ready', 'reauth_required']
+function isOAuth(m: Pick<ServiceCredentialDto, 'type'>): boolean { return isGoogleOAuthType(m.type) }
+/** A Google record Core has not authorized (yet, or any more): no token is fetched for it and its entry is token-less. */
+/**
+ * A Google record Core holds but nobody has connected (a canceled or timed-out connect leaves one). Never offered
+ * or auto-attached unless already attached: it would attach a broken credential, and Core hands the same pending
+ * record back on the next New of that type.
+ */
+function pendingOAuth(m: Pick<ServiceCredentialDto, 'type' | 'oauthStatus'>): boolean { return isOAuth(m) && m.oauthStatus === 'pending_authorization' }
+function oauthUnavailable(m: Pick<ServiceCredentialDto, 'type' | 'oauthStatus'>): boolean { return isOAuth(m) && m.oauthStatus !== 'ready' }
 function unavailableReason(status: string | null): string { return status === 'expired' ? 'key_expired' : AGENT_API_KEY_PAUSED_STATUSES.includes(status ?? '') ? 'key_paused' : 'key_revoked' }
 function keyStub(data: Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -114,7 +141,7 @@ function keyStub(data: Record<string, unknown> | null | undefined): Record<strin
   return out
 }
 /** Rows a materialize call may fetch: allowed locally and not a non-active issued key. */
-function deliverable(row: ServiceCredentialRow): boolean { return credentialDto(row).localUseAllowed && !rowKeyUnavailable(row) }
+function deliverable(row: ServiceCredentialRow): boolean { const m = credentialDto(row); return m.localUseAllowed && !rowKeyUnavailable(row) && !oauthUnavailable(m) }
 /**
  * An issued key's API address must be absolute http(s). Plain http only to this computer or to the
  * very origin this account already signs in to (a local or LAN Core the user configured over http):
@@ -132,6 +159,15 @@ function unavailableBundle(row: ServiceCredentialRow): ServiceCredentialBundle {
   const m = stored(row)
   return { id: row.cloud_id!, revision: m.revision ?? '', service_account_file: null, ssh_key: null, entry: { id: row.cloud_id!, name: m.name, type: m.type, notes: m.notes,
     service_uri: m.serviceUri, is_placeholder: false, unavailable_reason: m.keyStatus === 'active' && m.keyBlocked ? m.keyBlocked : unavailableReason(m.keyStatus), ...(m.keyStatus && !(m.keyStatus === 'active' && m.keyBlocked) ? { key_status: m.keyStatus } : {}), credential_data: { ...m.keyStub } } }
+}
+/**
+ * The token-less entry an attached Google record writes while Core has not authorized it, named as
+ * Core's materialize refusal names it, so the skill runtime and the kit helper can say what to do.
+ */
+function oauthUnavailableBundle(row: ServiceCredentialRow): ServiceCredentialBundle {
+  const m = stored(row)
+  return { id: row.cloud_id!, revision: m.revision ?? '', service_account_file: null, ssh_key: null, entry: { id: row.cloud_id!, name: m.name, type: m.type, notes: m.notes,
+    service_uri: m.serviceUri, is_placeholder: false, unavailable_reason: m.oauthStatus === 'reauth_required' ? 'reauthorization_required' : 'pending_authorization', credential_data: {} } }
 }
 interface Guard { global: number; accounts: [Account, number][] }
 function guard(list: Account[]): Guard { return { global: epoch, accounts: list.map(acc => [acc, acc.epoch]) } }
@@ -175,14 +211,16 @@ function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialA
   const m = credentialDto(row)
   if (rowKeyUnavailable(row)) return 'key_unavailable'
   if (!m.localUseAllowed) return 'local_use_not_allowed'
+  if (oauthUnavailable(m)) return m.oauthStatus === 'reauth_required' ? 'reauth_required' : 'pending_authorization'
   if (!row.payload_enc) return m.isPlaceholder || m.status !== 'complete' ? 'incomplete' : 'not_cached'
-  if ((m.relation === 'shared' && (row.payload_fetched_at ?? 0) + SHARED_TTL <= Date.now()) || (row.expires_at && row.expires_at <= Date.now())) return 'expired'
+  // A Google record's expiry is its access token's: the entry stays, and the skill runtime asks the token endpoint for a new one.
+  if ((m.relation === 'shared' && (row.payload_fetched_at ?? 0) + SHARED_TTL <= Date.now()) || (!isOAuth(m) && row.expires_at && row.expires_at <= Date.now())) return 'expired'
   if (m.isPlaceholder || m.status !== 'complete') return 'incomplete'
   return 'ready'
 }
 function queue(a: LocalAgentDto): void {
-  // A running turn holds the agent shared: an issued key's rotation or loss is written now (D7), the rest waits below.
-  if (turnLock.isLocked(a.id) && !turnLock.isExclusivelyLocked(a.id)) writeKeyChanges(a)
+  // A running turn holds the agent shared: an issued key's rotation or loss, or a new Google access token, is written now (D7), the rest waits below.
+  if (turnLock.isLocked(a.id) && !turnLock.isExclusivelyLocked(a.id)) void writeKeyChanges(a)
   if (pendingAgents.has(a.id)) return
   pendingAgents.add(a.id)
   // Queued, so the exclusive hold is taken atomically once the agent is free:
@@ -214,15 +252,28 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
       const refusal = delivery.refused.find(v => v.id === row.cloud_id)
       if (refusal) {
         const m = stored(row)
+        // Google could not issue a token just now: transient. The cached token (if any) stays, untouched.
+        if (isOAuth(m) && refusal.reason === 'token_unavailable') {
+          logger.warn('Google token not issued at delivery; the cached one is kept', { userId: account.userId, cloud_id: row.cloud_id })
+          tokenBackoff.set(row.id, { until: Date.now() + tokenTiming.unavailableRetryMs, revision: m.revision ?? null })
+          continue
+        }
+        tokenBackoff.delete(row.id)
         // Backstop for a key the list still called active: record its status; the
         // owner's local-use setting is not what refused it. Stands until the next list pass,
         // which takes the status from Core's list again.
         if (isKey(m) && typeof refusal.reason === 'string' && refusal.reason.startsWith('key_')) {
           m.keyStatus = typeof refusal.key_status === 'string' && KEY_STATUS.test(refusal.key_status) && refusal.key_status !== 'active' ? refusal.key_status : REFUSAL_STATUS[refusal.reason] ?? 'revoked_by_issuer'
           logger.warn('Issued key refused at delivery', { userId: account.userId, cloud_id: row.cloud_id, key_status: m.keyStatus })
+        } else if (isOAuth(m) && (refusal.reason === 'pending_authorization' || refusal.reason === 'reauthorization_required')) {
+          // Core's authorization state, not the owner's local-use setting. Like a key's status, it holds until
+          // the next list pass, which takes `oauth_status` from Core's list again.
+          m.oauthStatus = refusal.reason === 'reauthorization_required' ? 'reauth_required' : 'pending_authorization'
+          logger.warn('Google credential refused at delivery', { userId: account.userId, cloud_id: row.cloud_id, reason: refusal.reason })
         } else m.localUseAllowed = false
         repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() })
       } else if (item && item.entry?.id === row.cloud_id && item.entry.type === credentialDto(row).type && item.ssh_key === null && typeof item.revision === 'string') {
+        tokenBackoff.delete(row.id)
         rememberCredentialSecrets(item)
         const m = stored(row); m.revision = item.revision
         const keyed = isKey(m)
@@ -239,6 +290,8 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
           } else if (url.origin !== account.origin) logger.warn('Issued key calls an API on another origin than its account', { userId: account.userId, cloud_id: row.cloud_id, apiOrigin: url.origin })
         }
         const expiry = item.entry.credential_data.expires_at
+        // The token endpoint may have stored a newer Google token while this delivery was in flight: keep it.
+        if (isOAuth(m) && typeof expiry === 'number' && current.expires_at !== null && current.expires_at > expiry * 1000) continue
         if (blocked) { repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() }); continue }
         repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: encrypt(item, row.payload_enc), payload_fetched_at: Date.now(),
           expires_at: typeof expiry === 'number' ? expiry * 1000 : keyed ? row.expires_at : null, updated_at: Date.now() })
@@ -280,6 +333,7 @@ function candidate(attached: Resolved[]): { bundles: ServiceCredentialBundle[]; 
   const bundles = attached.flatMap(v => {
     const status = attachmentState(v.row)
     if (v.row && status === 'key_unavailable') return [{ bundle: unavailableBundle(v.row), account: v.account }]
+    if (v.row && (status === 'pending_authorization' || status === 'reauth_required')) return [{ bundle: oauthUnavailableBundle(v.row), account: v.account }]
     if (!v.row || !['ready', 'incomplete'].includes(status)) return []
     const bundle = decrypt(v.row)
     return bundle ? [{ bundle, account: v.account }] : []
@@ -298,11 +352,20 @@ function candidate(attached: Resolved[]): { bundles: ServiceCredentialBundle[]; 
   const identity = contributing.length === 1 ? contributing[0].synthetic.filter(e => e.type === 'current_user') : []
   const keys = contributing.map(account => account.key)
   // A single account fingerprints as its bare key, so upgraded single-account runtimes stay stable.
-  const generation = effective.length ? createHash('sha256').update(JSON.stringify([keys.length === 0 ? null : keys.length === 1 ? keys[0] : keys, effective.map(v => v.bundle), identity])).digest('hex') : 'empty'
+  // A Google access token is renewed about hourly (and Core's revision moves with it); the file is rewritten
+  // in place and read fresh, so a renewal alone must not change the fingerprint and respawn the engine.
+  const fingerprint = (b: ServiceCredentialBundle): ServiceCredentialBundle => {
+    if (!isGoogleOAuthType(b.entry.type) || b.entry.unavailable_reason) return b
+    const { access_token: _token, expires_at: _expiry, token_type: _kind, ...data } = b.entry.credential_data
+    return { ...b, revision: '', entry: { ...b.entry, credential_data: data } }
+  }
+  const generation = effective.length ? createHash('sha256').update(JSON.stringify([keys.length === 0 ? null : keys.length === 1 ? keys[0] : keys, effective.map(v => fingerprint(v.bundle)), identity])).digest('hex') : 'empty'
   return { bundles: effective.map(v => v.bundle), identity, generation }
 }
 function promptState(row: ServiceCredentialRow): string {
   const state = attachmentState(row)
+  if (state === 'pending_authorization') return 'unavailable — the Google account is not connected yet'
+  if (state === 'reauth_required') return 'unavailable — Google needs the account reconnected'
   if (state !== 'key_unavailable') return state
   if (credentialDto(row).keyStatus === 'active') return 'unavailable — insecure API address'
   const words = KEY_STATUS_WORDS[credentialDto(row).keyStatus ?? '']
@@ -346,9 +409,10 @@ function sameFields(x: Record<string, unknown>, y: Record<string, unknown>, igno
   return [...new Set([...Object.keys(x), ...Object.keys(y)])].every(k => ignore.includes(k) || JSON.stringify(x[k]) === JSON.stringify(y[k]))
 }
 /**
- * Whether the next generation differs from the one on disk only by issued keys:
- * an active key's token changed (a rotation), or a key entry is now token-less.
- * Same files, same entries in the same order, every other field equal.
+ * Whether the next generation differs from the one on disk only by tokens: an issued key's token
+ * changed (a rotation) or its entry is now token-less, or a Google record's access token was renewed
+ * (`access_token`, `expires_at`, `token_type`) or its entry is now token-less. Same files, same
+ * entries in the same order, every other field equal.
  */
 function keyOnlyChange(current: Map<string, string>, next: Map<string, string>): boolean {
   if (current.size !== next.size || [...next.keys()].some(name => !current.has(name))) return false
@@ -361,7 +425,15 @@ function keyOnlyChange(current: Map<string, string>, next: Map<string, string>):
   return now.every((n, i) => {
     const o = old[i]
     if (JSON.stringify(o) === JSON.stringify(n)) return true
-    if (o?.type !== 'agent_api' || n?.type !== 'agent_api' || o.id !== n.id) return false
+    if (!o || !n || o.id !== n.id || o.type !== n.type) return false
+    if (isGoogleOAuthType(n.type)) {
+      if (!sameFields(o as unknown as Record<string, unknown>, n as unknown as Record<string, unknown>, ['credential_data', 'unavailable_reason'])) return false
+      // Becoming (or staying) unavailable may only remove data: no access token in the new entry.
+      if (n.unavailable_reason) return !('access_token' in (n.credential_data ?? {}))
+      // A renewal: both available, only the token and its expiry differ.
+      return !o.unavailable_reason && typeof n.credential_data?.access_token === 'string' && sameFields(o.credential_data ?? {}, n.credential_data, ['access_token', 'expires_at', 'token_type'])
+    }
+    if (n.type !== 'agent_api') return false
     if (!sameFields(o as unknown as Record<string, unknown>, n as unknown as Record<string, unknown>, ['credential_data', 'unavailable_reason', 'key_status'])) return false
     // Becoming (or staying) unavailable may only remove data: no token in the new entry.
     if (n.unavailable_reason) return !('token' in (n.credential_data ?? {}))
@@ -371,22 +443,25 @@ function keyOnlyChange(current: Map<string, string>, next: Map<string, string>):
 }
 /**
  * D7: while a turn runs, an issued key's rotation or loss cannot wait for the
- * exclusive hold (the old secret dies 5 minutes after a rotate). Written through
- * the per-path chain like a turn's own preparation; atomic per file. Any other
- * change returns here untouched and waits for the queued exclusive regeneration.
+ * exclusive hold (the old secret dies 5 minutes after a rotate), and neither can a
+ * Google access token the token endpoint just renewed. Written through the
+ * per-path chain like a turn's own preparation; atomic per file. Any other change
+ * returns here untouched and waits for the queued exclusive regeneration.
+ * Answers whether it wrote; never rejects.
  */
-function writeKeyChanges(a: LocalAgentDto): void {
-  void chain(a.path, async () => {
+function writeKeyChanges(a: LocalAgentDto): Promise<boolean> {
+  return chain(a.path, async () => {
     // Re-checked when it runs: the turn may have ended, or an exclusive holder taken over, since it was queued.
-    if (suspended || !turnLock.isLocked(a.id) || turnLock.isExclusivelyLocked(a.id) || !runtimeHost.keystore.isSecureStorageAvailable()) return
+    if (suspended || !turnLock.isLocked(a.id) || turnLock.isExclusivelyLocked(a.id) || !runtimeHost.keystore.isSecureStorageAvailable()) return false
     const g = guard(attachedAccounts(a))
     check(g)
     const { bundles, identity, generation } = candidate(resolve(a).filter(v => v.available))
     const files = compareGeneration(a.path, a.kind, bundles, identity)
-    if (!files || !keyOnlyChange(files.current, files.next)) return
+    if (!files || !keyOnlyChange(files.current, files.next)) return false
     await writeCredentials(a.path, a.kind, bundles, identity, generation, () => check(g))
-    logger.info('Wrote an issued key change during a running turn', { agentId: a.id })
-  }).catch(() => { logger.warn('Issued key change waits for the running turn', { agentId: a.id }) })
+    logger.info('Wrote a token change during a running turn', { agentId: a.id })
+    return true
+  }).catch(() => { logger.warn('Token change waits for the running turn', { agentId: a.id }); return false })
 }
 function hostOf(url: string): string { try { return new URL(url).host } catch { return url } }
 /** Eligible: a Cinna profile with a server and stored tokens, not signed out this session, and either passwordless or unlocked. */
@@ -408,6 +483,7 @@ function eligible(): Map<string, AccountInfo> {
 function retireAccount(account: Account): void {
   account.abort.abort(); account.epoch++; account.flight = null; account.synthetic = []; account.scheduler.stop()
   accounts.delete(account.key)
+  failFlows(flow => flow.account === account, ACCOUNT_CHANGED)
 }
 /** Whether an agent has an issued key from this account attached that can still come back or rotate. */
 function watchesKeys(account: Account): boolean {
@@ -443,19 +519,27 @@ function refreshAccounts(): void {
   if (touched.size) regenerate(a => Object.keys(state(a).accounts).some(key => touched.has(key)))
   changed()
 }
-function syncAccount(account: Account): Promise<void> {
+/**
+ * `light` (a waiting Google connect's poll): read the list and update the cache, and only when a row
+ * actually changed fetch, regenerate and announce like a full pass. It joins a pass in flight as it
+ * is; a full request joining a light pass asks for one more, full, pass.
+ */
+function syncAccount(account: Account, light = false): Promise<void> {
   const g = guard([account])
-  if (account.flight?.epoch === account.epoch && account.flight.global === epoch) { account.flight.again = true; return account.flight.promise }
+  if (account.flight?.epoch === account.epoch && account.flight.global === epoch) { if (!light) account.flight.again = true; return account.flight.promise }
   const flight = { global: epoch, epoch: account.epoch, promise: Promise.resolve(), again: false }
   account.flight = flight
   flight.promise = (async () => {
-    do { flight.again = false; await syncPass(account, g) } while (flight.again && live(g))
+    let pass = light
+    do { flight.again = false; await syncPass(account, g, pass); pass = false } while (flight.again && live(g))
   })().finally(() => { if (account.flight === flight) account.flight = null })
   return flight.promise
 }
-async function syncPass(account: Account, g: Guard): Promise<void> {
+async function syncPass(account: Account, g: Guard, light = false): Promise<void> {
   if (!live(g)) return
   account.lastAttempt = Date.now()
+  const errorBefore = account.syncError
+  let dirty = false
   try {
     const response = await serviceCredentialCloud.list(account.userId, signal(account))
     check(g)
@@ -480,13 +564,17 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
       // The list is authoritative for key status: a delivery refusal (the backstop) holds only
       // until this pass, since a pause and resume can leave Core's revision where it was.
       const keyStatus: string | null = keyed ? item.key_status! : null
-      // Fail closed: a non-active key drops its cached token now and is never fetched while it stays so.
-      const allowed = item.local_use_allowed, usable = allowed && (!keyed || keyStatus === 'active')
+      // Google types: Core's authorization state, also authoritative here. Anything unknown reads as not authorized.
+      const oauth = isGoogleOAuthType(item.type)
+      const oauthStatus: OAuthCredentialStatus | null = oauth ? OAUTH_STATUSES.find(v => v === item.oauth_status) ?? 'pending_authorization' : null
+      // Fail closed: a non-active key, or a Google record Core has not authorized, drops its cached token now and is never fetched while it stays so.
+      const allowed = item.local_use_allowed, usable = allowed && (!keyed || keyStatus === 'active') && (!oauth || oauthStatus === 'ready')
       const facts = keyed && item.agent_api && typeof item.agent_api === 'object' ? item.agent_api : null
       const text = (v: unknown) => typeof v === 'string' ? v : null
       const metadata: StoredMetadata = { id, origin: 'cloud', cloudId: item.id, name: item.name, type: item.type, serviceUri: item.service_uri, notes: item.notes, status: item.status,
         isPlaceholder: item.is_placeholder, relation: item.relation, ownerEmail: item.owner_email, localUseAllowed: allowed, revision: item.revision, hasValues: false, expiresAt: null,
-        keyStatus, agentApi: facts ? { producerName: text(facts.producer_name), issuerEmail: text(facts.issuer_email) } : null }
+        keyStatus, agentApi: facts ? { producerName: text(facts.producer_name), issuerEmail: text(facts.issuer_email) } : null,
+        oauthStatus, grantedUserEmail: oauth ? text(item.granted_user_email)?.slice(0, 320) ?? null : null }
       if (keyed) {
         // The list's non-secret facts win; the last delivery's fill the gaps (label). Never the token.
         const listed = keyStub({ ...facts })
@@ -496,13 +584,18 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
         if (!usable && old?.payload_enc) logger.info('Issued key is not active; its cached token was dropped', { userId, cloud_id: item.id, key_status: keyStatus })
       }
       const expiry = keyed ? expiresAt(item.expires_at) ?? expiresAt(facts?.expires_at) : typeof item.expires_at === 'number' ? item.expires_at * 1000 : null
-      repo.put({ id, user_id: userId, origin: 'cloud', cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: usable ? old?.payload_enc ?? null : null,
+      const next = { id, user_id: userId, origin: 'cloud' as const, cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: usable ? old?.payload_enc ?? null : null,
         payload_fetched_at: usable && old && credentialDto(old).revision === item.revision ? old.payload_fetched_at : null,
-        expires_at: expiry, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() })
+        expires_at: expiry, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() }
+      if (!old || old.metadata !== next.metadata || !!old.payload_enc !== !!next.payload_enc || old.payload_fetched_at !== next.payload_fetched_at || old.expires_at !== next.expires_at) dirty = true
+      repo.put(next)
     }
-    for (const row of previous) if (!seen.has(row.cloud_id!)) repo.remove(row.id)
-    const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.account === account && v.row ? [v.row.id] : [])))
-    await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && deliverable(r) && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
+    for (const row of previous) if (!seen.has(row.cloud_id!)) { repo.remove(row.id); dirty = true }
+    if (!light || dirty) {
+      const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.account === account && v.row ? [v.row.id] : [])))
+      // A record Core just could not get a token for is left alone for a while (tokenTiming.unavailableRetryMs).
+      await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && deliverable(r) && !backedOff(r) && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
+    }
     check(g); account.lastSync = Date.now(); account.syncError = null
   } catch (err) {
     if (!live(g)) return
@@ -514,7 +607,8 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
     logger.warn('Credential sync failed for profile', { userId: account.userId, status: failure.status, code: account.syncError })
     if (account.syncError === 'reauth_required') account.scheduler.stop()
   }
-  if (live(g)) { updatePolling(account); regenerate(a => !!state(a).accounts[account.key]?.length); changed() }
+  // A light pass that changed nothing (rows nor error) regenerates and announces nothing.
+  if (live(g) && (!light || dirty || account.syncError !== errorBefore)) { updatePolling(account); regenerate(a => !!state(a).accounts[account.key]?.length); changed() }
 }
 function toAttachmentDto(v: Resolved): ServiceCredentialAttachmentDto {
   const account = v.group === 'local' ? undefined : accounts.get(v.group)
@@ -686,6 +780,237 @@ function provisionOf(account: Account | undefined, slot: SkillSlot): SkillProvis
   return null
 }
 
+/**
+ * One agent's Google connect (New in Attach credential, or Reconnect), owned here so it survives the
+ * modal closing. The consent URL stays in main: it opens the browser, and is never sent to the renderer.
+ */
+interface Flow {
+  dto: OAuthConnectFlow
+  account: Account; accountEpoch: number
+  url: string
+  timer: ReturnType<typeof setTimeout> | null
+  /** The record's status and revision when the flow began: a reconnect of a ready record succeeds only once its grant changed. */
+  start: { status: OAuthCredentialStatus | null; revision: string | null }
+}
+const flows = new Map<string, Flow>()
+/** The latest start per agent: an older start whose Core answer arrives late does not become the flow. */
+const flowStarts = new Map<string, number>()
+let flowSeq = 0
+/** How often a waiting connect polls Core's list, and its longest window (Core's state lives 10 minutes). Tests shorten both. */
+export const oauthFlowTiming = { pollMs: 2_000, windowMs: 600_000 }
+const ID = /^[a-zA-Z0-9_-]{1,128}$/
+function coded(code: string, message: string): Error { return Object.assign(new Error(message), { code }) }
+/** Core's coded refusal (`{detail: {code, message}}`), or a fixed sentence for an uncoded one. */
+function refusalOf(answer: CinnaSendResult): { code: string; message: string } {
+  const detail = (answer.body as { detail?: unknown } | null)?.detail
+  if (detail && typeof detail === 'object' && typeof (detail as { code?: unknown }).code === 'string') {
+    const { code, message } = detail as { code: string; message?: unknown }
+    return { code: code.slice(0, 64), message: typeof message === 'string' && message ? message.slice(0, 300) : 'Cinna refused the request.' }
+  }
+  if (answer.status === 429) return { code: 'rate_limited', message: 'Too many requests to Cinna. Try again in a minute.' }
+  if (answer.status === 403) return { code: 'permission_denied', message: 'Cinna refused the request for this app.' }
+  return { code: 'request_failed', message: `Cinna answered ${answer.status}.` }
+}
+/** Core's `{credential_id, authorization_url, expires_at}`; the URL must be https (http only to this computer). */
+function authorizationOf(body: unknown): { credentialId: string; url: string; expiresAt: number } | null {
+  const b = body as Record<string, unknown> | null
+  if (!b || typeof b.credential_id !== 'string' || !ID.test(b.credential_id) || typeof b.authorization_url !== 'string' || typeof b.expires_at !== 'number' || !Number.isFinite(b.expires_at)) return null
+  let url: URL
+  try { url = new URL(b.authorization_url) } catch { return null }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) return null
+  return { credentialId: b.credential_id, url: url.toString(), expiresAt: b.expires_at * 1000 }
+}
+function flowCurrent(flow: Flow): boolean { return flows.get(flow.dto.agentId) === flow && flow.dto.state === 'waiting' }
+function flowAccountLive(flow: Flow): boolean { return accounts.get(flow.account.key) === flow.account && flow.account.epoch === flow.accountEpoch }
+function stopFlow(flow: Flow): void { if (flow.timer) clearTimeout(flow.timer); flow.timer = null }
+function settleFlow(flow: Flow, state: 'failed' | 'attached', error: { code: string; message: string } | null): void {
+  stopFlow(flow)
+  if (!flowCurrent(flow)) return
+  flow.dto = { ...flow.dto, state, error }
+  logger.info('Google connect ended', { agentId: flow.dto.agentId, state, code: error?.code })
+  changed()
+}
+/** Waiting flows the filter picks fail with `error` (account retired, profile switched). */
+function failFlows(filter: (flow: Flow) => boolean, error: { code: string; message: string }): void {
+  for (const flow of [...flows.values()]) if (flow.dto.state === 'waiting' && filter(flow)) settleFlow(flow, 'failed', error)
+}
+const ACCOUNT_CHANGED = { code: 'account_changed', message: 'The account changed. Start the connection again.' }
+function schedulePoll(flow: Flow): void {
+  stopFlow(flow)
+  flow.timer = setTimeout(() => { flow.timer = null; void pollFlow(flow) }, oauthFlowTiming.pollMs)
+}
+/** One poll: a light sync of the account's list (the cache follows), then judge the record. */
+async function pollFlow(flow: Flow): Promise<void> {
+  if (!flowCurrent(flow)) return
+  if (!flowAccountLive(flow)) return settleFlow(flow, 'failed', ACCOUNT_CHANGED)
+  const account = flow.account
+  // Suspended (sleep): no sync, the window still runs.
+  if (!suspended) await syncAccount(account, true).catch(() => undefined)
+  if (!flowCurrent(flow)) return
+  if (!flowAccountLive(flow)) return settleFlow(flow, 'failed', ACCOUNT_CHANGED)
+  if (account.syncError === 'reauth_required') return settleFlow(flow, 'failed', { code: 'reauth_required', message: 'Sign in to Cinna again, then connect once more.' })
+  const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === flow.dto.credentialId)
+  const m = row ? stored(row) : null
+  if (m?.oauthStatus === 'ready' && (flow.start.status !== 'ready' || m.revision !== flow.start.revision)) return finishFlow(flow)
+  if (Date.now() >= flow.dto.expiresAt) return settleFlow(flow, 'failed', { code: 'timeout', message: 'The Google sign-in was not finished in time. Try again.' })
+  schedulePoll(flow)
+}
+/** Ready on Core: append it to the agent's group (a reconnect is attached already), then `attached`. */
+async function finishFlow(flow: Flow): Promise<void> {
+  stopFlow(flow)
+  const { agentId, group } = flow.dto, ref = flow.dto.credentialId!
+  try {
+    const a = agent(agentId)
+    if ((state(a).accounts[group] ?? []).some(v => v.ref === ref)) {
+      // A reconnect is attached already: fetch its token now (the light poll may have skipped or failed it), then regenerate.
+      const account = accounts.get(group), row = account && repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === ref)
+      if (account && row && deliverable(row)) await fetchValues(account, [row], guard([account])).catch(error => logger.warn('Reconnected credential not fetched yet', { agentId, error: String(error) }))
+      queue(a)
+    }
+    // Decided again under the lock: a flow canceled meanwhile attaches nothing.
+    else await writeAttachments(agentId, group, before => [...before.map(v => v.ref), ...(flowCurrent(flow) && !before.some(v => v.ref === ref) ? [ref] : [])])
+  } catch (error) {
+    return settleFlow(flow, 'failed', { code: (error as { code?: unknown }).code && typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'attach_failed',
+      message: error instanceof Error ? error.message : 'The credential could not be attached.' })
+  }
+  settleFlow(flow, 'attached', null)
+}
+/** Create (ref null) or reconnect (ref = Core id): ask Core for the consent URL, open it, start polling. */
+async function startFlow(agentId: string, group: string, type: unknown, ref: string | null): Promise<OAuthConnectFlow> {
+  const a = agent(agentId)
+  if (typeof group !== 'string' || group === 'local') throw coded('invalid_group', 'Google credentials live in a Cinna account, not on this computer.')
+  const account = accounts.get(group)
+  if (!account) throw coded('account_unavailable', 'Sign in to that account to connect a Google credential.')
+  let start: Flow['start'] = { status: null, revision: null }
+  let kind: string
+  if (ref === null) {
+    if (typeof type !== 'string' || !isGoogleOAuthType(type)) throw coded('unsupported_type', 'That is not a Google credential type.')
+    kind = type
+  } else {
+    if (typeof ref !== 'string' || !ID.test(ref) || !(state(a).accounts[group] ?? []).some(v => v.ref === ref)) throw coded('not_attached', 'That credential is not attached to this agent.')
+    const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === ref)
+    if (!row || !isOAuth(stored(row))) throw coded('unsupported_type', 'Only a Google credential can be reconnected.')
+    kind = stored(row).type
+    start = { status: stored(row).oauthStatus, revision: stored(row).revision }
+  }
+  // A new flow replaces the agent's previous one at once, whatever Core answers; every exit
+  // below announces it, so the renderer never keeps showing a flow main has dropped.
+  const previous = flows.get(agentId)
+  if (previous) { stopFlow(previous); flows.delete(agentId) }
+  try { return await requestFlow(agentId, group, account, kind, ref, start) }
+  catch (error) { if (previous) changed(); throw error }
+}
+async function requestFlow(agentId: string, group: string, account: Account, kind: string, ref: string | null, start: Flow['start']): Promise<OAuthConnectFlow> {
+  const seq = ++flowSeq, accountEpoch = account.epoch
+  flowStarts.set(agentId, seq)
+  let answer: CinnaSendResult
+  try { answer = ref === null ? await serviceCredentialCloud.createOAuth(account.userId, kind, signal(account)) : await serviceCredentialCloud.authorizeOAuth(account.userId, ref, signal(account)) }
+  catch (error) {
+    const code = (error as { code?: unknown }).code
+    throw coded(typeof code === 'string' ? code : 'request_failed', typeof code === 'string' && error instanceof Error ? error.message : 'Cinna could not be reached. Try again.')
+  }
+  if (flowStarts.get(agentId) !== seq) throw coded('superseded', 'Another Google connection for this agent started.')
+  if (accounts.get(group) !== account || account.epoch !== accountEpoch) throw coded(ACCOUNT_CHANGED.code, ACCOUNT_CHANGED.message)
+  if (!answer.ok) { const r = refusalOf(answer); throw coded(r.code, r.message) }
+  const auth = authorizationOf(answer.body)
+  if (!auth || (ref !== null && auth.credentialId !== ref)) throw coded('invalid_response', 'Cinna sent an answer this app cannot use.')
+  if (ref === null) {
+    // Core may hand back the caller's pending record of this type; judge success against what is cached now.
+    const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === auth.credentialId)
+    if (row) start = { status: stored(row).oauthStatus, revision: stored(row).revision }
+  }
+  const flow: Flow = { dto: { id: randomUUID(), agentId, group, type: kind as OAuthConnectFlow['type'], credentialId: auth.credentialId, reconnect: ref !== null, state: 'waiting', error: null,
+    expiresAt: Math.min(auth.expiresAt, Date.now() + oauthFlowTiming.windowMs) }, account, accountEpoch, url: auth.url, timer: null, start }
+  flows.set(agentId, flow)
+  logger.info('Google connect started', { agentId, reconnect: ref !== null, type: kind })
+  try { await runtimeHost.shell.openExternal(auth.url) }
+  catch (error) { logger.warn('Could not open the browser for a Google connect', { agentId, error: error instanceof Error ? error.message : String(error) }) }
+  if (flowCurrent(flow)) schedulePoll(flow)
+  changed()
+  return { ...flow.dto }
+}
+
+/** The loopback token endpoint (D4). Bearers are per agent and app session; a turn holding the agent makes one usable. */
+const tokenServer = createCredentialTokenServer({ live: agentId => turnLock.isLocked(agentId) && !turnLock.isExclusivelyLocked(agentId), issue: issueAccessToken },
+  error => logger.warn('Credential token listener error', { error: String(error) }))
+const NOT_LINKED: CredentialTokenAnswer = { status: 404, body: { detail: { code: 'credential_not_linked', message: 'This credential is not attached to this agent.' } } }
+/** No code: the skill runtime treats it as "platform unavailable" and falls back to a still-valid synced token. */
+const TOKEN_UNAVAILABLE: CredentialTokenAnswer = { status: 503, body: { detail: 'Cinna could not be reached.' } }
+/** Core answered `reauthorization_required`: record it like a delivery refusal (held until the next list) and regenerate. */
+function markReauth(rowId: string): void {
+  const current = repo.get(rowId)
+  if (!current) return
+  const m = stored(current)
+  if (!isOAuth(m) || m.oauthStatus === 'reauth_required') return
+  m.oauthStatus = 'reauth_required'
+  repo.put({ ...current, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() })
+  regenerate(o => resolve(o).some(v => v.row?.id === rowId)); changed()
+}
+/**
+ * A Google access token for one attached record, through Core (`/external/credentials/{id}/access-token`).
+ * The cached row and the calling agent's credentials.json take the new token before it is answered (the
+ * agent's turn holds it shared, so the token-only change is written at once); other agents holding the
+ * record follow through `queue`. Core's coded refusals are mirrored as they came.
+ */
+async function issueAccessToken({ agentId, credentialId, minTtl, knownExpiresAt }: CredentialTokenRequest): Promise<CredentialTokenAnswer> {
+  let a: LocalAgentDto
+  try { a = agent(agentId) } catch { return NOT_LINKED }
+  const v = resolve(a).find(v => v.available && v.origin === 'cloud' && v.ref === credentialId && v.row && v.account && isOAuth(credentialDto(v.row)))
+  if (!v) return NOT_LINKED
+  const account = v.account!, rowId = v.row!.id, g = guard([account])
+  let answer: CinnaSendResult
+  try { answer = await serviceCredentialCloud.accessToken(account.userId, credentialId, { min_ttl: minTtl, known_expires_at: knownExpiresAt }, signal(account)) }
+  catch (error) {
+    logger.warn('Google token request did not reach Cinna', { agentId, code: (error as { code?: unknown }).code })
+    return TOKEN_UNAVAILABLE
+  }
+  if (!live(g)) return TOKEN_UNAVAILABLE
+  if (!answer.ok) {
+    const detail = (answer.body as { detail?: unknown } | null)?.detail
+    if (!detail || typeof detail !== 'object' || typeof (detail as { code?: unknown }).code !== 'string') return TOKEN_UNAVAILABLE
+    const refusal = refusalOf(answer)
+    logger.warn('Cinna refused a Google token', { agentId, status: answer.status, code: refusal.code })
+    if (refusal.code === 'reauthorization_required') markReauth(rowId)
+    return { status: answer.status, body: { detail: refusal }, retryAfter: answer.retryAfter ?? null }
+  }
+  const b = answer.body as Record<string, unknown> | null
+  if (!b || typeof b.access_token !== 'string' || !b.access_token || typeof b.expires_at !== 'number' || !Number.isFinite(b.expires_at)) return TOKEN_UNAVAILABLE
+  const token = { access_token: b.access_token, token_type: typeof b.token_type === 'string' ? b.token_type : 'Bearer', expires_at: Math.trunc(b.expires_at) }
+  rememberCredentialSecrets(token)
+  try {
+    const current = repo.get(rowId)
+    if (current?.payload_enc && deliverable(current)) {
+      const bundle = decrypt(current)
+      if (bundle) {
+        bundle.entry.credential_data = { ...bundle.entry.credential_data, ...token }
+        repo.put({ ...current, payload_enc: encrypt(bundle, current.payload_enc), expires_at: token.expires_at * 1000, updated_at: Date.now() })
+        // Waits for the calling agent's file at most `replyWaitMs`: a turn's preparation can hold the per-path
+        // chain for up to ~30 s, longer than the skill's request lives. The write lands later either way.
+        const written = writeKeyChanges(a).then(wrote => { if (!wrote) queue(a) })
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([written, new Promise<void>(resolve => { timer = setTimeout(resolve, tokenTiming.replyWaitMs) })]).finally(() => clearTimeout(timer))
+        for (const other of allAgents()) if (other.id !== a.id && resolve(other).some(x => x.row?.id === rowId)) queue(other)
+      }
+    }
+  } catch (error) {
+    logger.warn('A new Google token was not cached', { agentId, error: error instanceof Error ? error.message : String(error) })
+  }
+  return { status: 200, body: { ...token, refreshed: b.refreshed === true } }
+}
+/** The token endpoint for an agent with a Google record attached (in an available account), or undefined. */
+async function tokenEndpointFor(a: LocalAgentDto): Promise<{ url: string; token: string } | undefined> {
+  if (!resolve(a).some(v => v.available && v.origin === 'cloud' && v.row && isOAuth(credentialDto(v.row)))) return undefined
+  try {
+    const origin = await tokenServer.start()
+    const token = tokenServer.bearer(a.id)
+    rememberCredentialSecrets({ token })
+    return { url: `${origin}/credentials`, token }
+  } catch (error) {
+    logger.warn('The credential token endpoint could not start', { agentId: a.id, error: error instanceof Error ? error.message : String(error) })
+    return undefined
+  }
+}
+
 export const serviceCredentialService = {
   metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.available && v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
   /** Local records plus the current profile's cloud cache (the settings pages). */
@@ -717,7 +1042,7 @@ export const serviceCredentialService = {
     rememberCredentialSecrets(bundle)
     const metadata: ServiceCredentialDto = { id, origin: 'local', cloudId: null, name: bundle.entry.name, type: input.type, serviceUri: bundle.entry.service_uri, notes: bundle.entry.notes,
       status: bundle.entry.is_placeholder ? 'incomplete' : 'complete', isPlaceholder: bundle.entry.is_placeholder,
-      relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null }
+      relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null }
     const now = Date.now()
     repo.put({ id, user_id: LOCAL, origin: 'local', cloud_id: null, server_origin: null, metadata: JSON.stringify(metadata), payload_enc: encrypt(bundle, old?.payload_enc), payload_fetched_at: now, expires_at: null, created_at: old?.created_at ?? now, updated_at: now })
     regenerate(); changed(); return metadata
@@ -730,7 +1055,8 @@ export const serviceCredentialService = {
   attachments(id: string): ServiceCredentialAttachmentDto[] { return resolve(agent(id)).map(toAttachmentDto) },
   /**
    * What can be attached to one agent: local records, then each eligible account's cache. Records the owner
-   * keeps off this computer are omitted, and so are dead issued keys unless this agent already has them attached.
+   * keeps off this computer are omitted, and so are dead issued keys and pending Google records unless this agent
+   * already has them attached.
    */
   attachOptions(id: string): ServiceCredentialAttachOptions {
     const s = state(agent(id))
@@ -739,7 +1065,7 @@ export const serviceCredentialService = {
       ...ordered().map(account => ({ key: account.key, label: account.label, detail: account.detail, error: account.syncError,
         items: repo.list(account.userId).flatMap(r => {
           const m = credentialDto(r), attached = (s.accounts[account.key] ?? []).some(v => v.ref === r.cloud_id)
-          return r.origin === 'cloud' && m.localUseAllowed && (attached || !keyTerminal(m)) ? [{ ...m, attached }] : []
+          return r.origin === 'cloud' && m.localUseAllowed && (attached || (!keyTerminal(m) && !pendingOAuth(m))) ? [{ ...m, attached }] : []
         }) }))
     ] }
   },
@@ -771,7 +1097,7 @@ export const serviceCredentialService = {
       const a = agent(id)
       const picks = new Map<string, { slot: string; credentialName: string }>()
       const mine = state(a).accounts[account.key] ?? []
-      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto)
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m))
       for (const slot of a.credentials) {
         if (slotState(slot) !== 'missing') continue
         const pick = autoMatch(spec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
@@ -825,7 +1151,7 @@ export const serviceCredentialService = {
       const slots = open()
       const a = agent(id)
       const mine = state(a).accounts[account.key] ?? []
-      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto)
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m))
       const picks = new Map<string, { slot: SkillSlot; credentialName: string }>()
       for (const slot of slots) {
         const pick = autoMatch(skillSlotSpec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
@@ -887,7 +1213,7 @@ export const serviceCredentialService = {
     const account = activeAccount()
     const rows = resolve(a).filter(v => v.available && v.row)
     const mine = account ? state(a).accounts[account.key] ?? [] : []
-    const pool = account ? repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !mine.some(v => v.ref === m.cloudId)) : []
+    const pool = account ? repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !mine.some(v => v.ref === m.cloudId) && !pendingOAuth(m)) : []
     const slots: CredentialSetupSlot[] = a.credentials.map(slot => {
       const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
       const verdict = slotState(slot)
@@ -921,7 +1247,28 @@ export const serviceCredentialService = {
    * A turn's or command's credentials: the files written (or removed), and whether the folder carries
    * skills (only a kit agent's DTO has `skills`), whose scripts get the skill runtime on `PYTHONPATH`.
    */
-  async prepare(id: string) { const a = agent(id); return { ...await materialize(a, true), skillRuntime: a.skills !== undefined } },
+  async prepare(id: string) {
+    const a = agent(id), prepared = await materialize(a, true), tokenEndpoint = await tokenEndpointFor(a)
+    return { ...prepared, skillRuntime: a.skills !== undefined, ...(tokenEndpoint ? { tokenEndpoint } : {}) }
+  },
+  /** New in Attach credential: a Google record of `type` in account `group`, attached once Core reports it ready. */
+  createOAuth(id: string, group: string, type: string): Promise<OAuthConnectFlow> { return startFlow(id, group, type, null) },
+  /** Reconnect an attached Google record (`ref` = Core id) of the group. */
+  reconnectOAuth(id: string, group: string, ref: string): Promise<OAuthConnectFlow> { return startFlow(id, group, null, typeof ref === 'string' ? ref : '') },
+  oauthFlow(id: string): OAuthConnectFlow | null { const flow = flows.get(id); return flow ? { ...flow.dto } : null },
+  async reopenOAuth(id: string, flowId: string): Promise<void> {
+    const flow = flows.get(id)
+    if (!flow || flow.dto.id !== flowId || flow.dto.state !== 'waiting') throw coded('flow_not_found', 'This connection has ended. Start it again.')
+    await runtimeHost.shell.openExternal(flow.url)
+  },
+  /** Stop polling and forget the flow, whatever its state. The record on Core is kept. */
+  cancelOAuth(id: string, flowId: string): void {
+    const flow = flows.get(id)
+    if (!flow || flow.dto.id !== flowId) return
+    stopFlow(flow); flows.delete(id); changed()
+  },
+  /** Shutdown: the token endpoint stops listening and forgets every bearer. */
+  closeTokenServer(): Promise<void> { return tokenServer.close() },
   /** Supplies the session unlock state; installed by the activation owner. */
   installUnlockCheck(fn: (userId: string) => boolean): void { unlocked = fn },
   /** Recompute eligible accounts after unlock, lock, logout, deletion or renewal. */
@@ -929,6 +1276,8 @@ export const serviceCredentialService = {
   /** Shutdown: invalidates every awaited request and stops all account timers. */
   retire(): void {
     lifecycleAbort.abort(); lifecycleAbort = new AbortController(); epoch++
+    for (const flow of flows.values()) stopFlow(flow)
+    flows.clear(); flowStarts.clear(); tokenBackoff.clear()
     for (const account of [...accounts.values()]) retireAccount(account)
     provisioned.clear()
     started = false
@@ -939,6 +1288,8 @@ export const serviceCredentialService = {
    * activation also scans for orphaned bare secrets and brings every agent current.
    */
   async activate(userId: string): Promise<void> {
+    // A profile switch ends every Google connect in progress: its modal belonged to the other profile.
+    if (userId !== currentUser) failFlows(() => true, ACCOUNT_CHANGED)
     signedOut.delete(userId); currentUser = userId; cleanupError = null
     const first = !started
     started = true

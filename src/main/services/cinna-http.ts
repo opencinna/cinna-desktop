@@ -264,6 +264,8 @@ export interface CinnaSendResult {
   status: number
   ok: boolean
   body: unknown
+  /** The answer's `Retry-After` header, as sent; null when absent. */
+  retryAfter?: string | null
 }
 
 /**
@@ -276,7 +278,8 @@ export interface CinnaSendResult {
  *
  * `body` is JSON (`json`) or raw bytes with their content type (`bytes`), for
  * a multipart upload. Only a path under the profile's server is accepted,
- * never an absolute URL, so the token goes nowhere else.
+ * never an absolute URL, so the token goes nowhere else. `signal` aborts it
+ * (an abort surfaces as `request_failed`, like any unanswered request).
  *
  * @throws CinnaApiError `request_failed` when no answer came back, and the
  *   profile errors of {@link cinnaFetch}.
@@ -284,12 +287,14 @@ export interface CinnaSendResult {
 export async function cinnaSend(
   userId: string,
   path: string,
-  opts: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string } }
+  opts: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string }; signal?: AbortSignal }
 ): Promise<CinnaSendResult> {
   if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is used.')
+  opts.signal?.throwIfAborted()
   const baseUrl = resolveBaseUrl(userId)
   const generation = cinnaSessionGeneration(userId)
   const authHeader = await resolveAuthHeader(userId)
+  opts.signal?.throwIfAborted()
   if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) throw new CinnaSessionChanged()
   const url = `${baseUrl}${path}`
   const headers: Record<string, string> = { Authorization: authHeader, Accept: 'application/json' }
@@ -304,7 +309,7 @@ export async function cinnaSend(
   const started = Date.now()
   let response: Response
   try {
-    response = await runtimeHost.http.fetch(url, { method: opts.method, headers, body, cache: 'no-store' })
+    response = await runtimeHost.http.fetch(url, { method: opts.method, headers, body, cache: 'no-store', ...(opts.signal ? { signal: opts.signal } : {}) })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('network error', { userId, url, method: opts.method, error: msg, durationMs: Date.now() - started })
@@ -325,5 +330,5 @@ export async function cinnaSend(
       parsed = null
     }
   }
-  return { status: response.status, ok: response.ok, body: parsed }
+  return { status: response.status, ok: response.ok, body: parsed, retryAfter: response.headers?.get('retry-after') ?? null }
 }
