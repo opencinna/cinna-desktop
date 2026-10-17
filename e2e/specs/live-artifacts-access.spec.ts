@@ -31,7 +31,8 @@ import { approveDesktopAuth, preflight, requireLiveCinna, signIn, type LiveCinna
  *   Python, an SVG carrying a script, a PDF) and a single Markdown file that
  *   opens straight in its viewer. Each renders, and no script runs: no
  *   `window.__pwned`, no request to the `pwned.invalid` marker host.
- * - V2 — a `.py` file is syntax-highlighted, as plan A5 says code is.
+ * - V2 — a `.py` file is syntax-highlighted, as plan A5 says code is (core
+ *   b09cd499 onwards).
  *
  * ## Running it
  *
@@ -702,12 +703,8 @@ test('V1 core’s page shows a files artifact’s Markdown, CSV, JSON, Python, S
 /* --------------------------------------------------------------------- V2 */
 
 test('V2 a Python file is syntax-highlighted on core’s page, as plan A5 says code is', async () => {
-  // PRODUCT GAP (core, 2026-10-17): plan A5 says "JSON/text/code (highlighted)",
-  // but core's FilePreview sends every text kind (.py included) to
-  // Environment/TextViewer, a bare <pre>{content}</pre>: the source is shown as
-  // one text node with no token markup. This passes, and so fails the run,
-  // once core highlights code.
-  test.fail()
+  // Core highlights code files by extension (lowlight; cinna-core b09cd499):
+  // the text stays exact and is split into token spans.
   test.setTimeout(120_000)
   const { id } = await publishOverApi(V2_TITLE, { 'script.py': SCRIPT_PY })
   const link = await makeLink(id, {})
