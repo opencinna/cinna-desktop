@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `86a3c3efd5cb1158`.
+Your current kit is version `af7747a334187896`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,41 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.14.0 — Google OAuth credentials on desktop
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.14.0 folder, because the majors match.
+
+The eight Google OAuth types (`gmail_oauth`, `gdrive_oauth`, `gcalendar_oauth`,
+`gmeet_oauth` and their `_readonly` variants) were cloud-only. A slot of one of
+those types can now be filled in Cinna Desktop when the credential is created
+there (New in Attach credential) or created on the platform and attached.
+
+### Changed
+
+- **OAuth slots are satisfiable on a desktop host.** The platform keeps the
+  refresh token; the host receives `access_token`, `token_type`, `expires_at`,
+  `scope` and the granted Google account (`granted_user_email`, `granted_user_name`). Read the token with
+  `credentials.access_token("<credential id>")`, which refreshes it, on both
+  hosts.
+- **Three new refusal reasons** an attached entry's `unavailable_reason` may
+  carry: `pending_authorization` (Google consent not finished),
+  `reauthorization_required` (the user must reconnect the account) and
+  `token_unavailable` (Google did not issue a token just now; try again).
+  `scripts/cinna_credentials.py` (helper 1.14.0) names each in its error.
+
+No folder change is needed. `google_service_account` remains the option for an
+agent whose user has no platform account.
+
+## Artifact links, not code
+
+Documentation update, with no schema-shape or contract-version change.
+`skills/cinna-artifacts/SKILL.md` and the `url` description in
+`protocols/artifacts.schema.json` now say to give a published artifact's page
+address as a plain Markdown link or a bare address on its own line, never in
+backticks or a code block. A host draws the artifact's card, and makes the
+address clickable, only for a link.
 
 ## 1.13.0 — the artifacts folder
 
