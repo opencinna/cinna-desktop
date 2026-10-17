@@ -2,6 +2,7 @@ import { getProfileScopeUserId, getSettingsScopeUserId } from '../../auth/scope'
 import { discoverCinnaEndpoints } from '../../auth/cinna-oauth'
 import { userRepo } from '../../db/users'
 import { publishedArtifactRepo } from '../../db/publishedArtifacts'
+import { artifactSupportRepo } from '../../db/artifactSupport'
 import { messageRepo } from '../../db/messages'
 import { publishEvent } from '../../host/events'
 import { cinnaFetch, cinnaSend } from '../cinna-http'
@@ -38,7 +39,8 @@ export const artifactService = createArtifactService({
   realpath: (path) => paths.realpath(path),
   repo: publishedArtifactRepo,
   publishEvent: (channel, payload) => publishEvent(channel, payload, 'all'),
-  latestMessageId: (chatId) => messageRepo.lastId(chatId)
+  latestMessageId: (chatId) => messageRepo.lastId(chatId),
+  supportMemory: artifactSupportRepo
 })
 
 /** Pending approvals of agents' `artifacts_publish` calls, and the Inbox's way back to them. */

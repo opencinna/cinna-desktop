@@ -39,6 +39,7 @@ import { buildZip, type ZipEntry } from './zip'
 import {
   ARTIFACTS_CHANGED_CHANNEL,
   ARTIFACTS_PROGRESS_CHANNEL,
+  ARTIFACTS_SUPPORT_CHANGED_CHANNEL,
   FALLBACK_ARTIFACT_LIMITS,
   formatArtifactBytes,
   type ArtifactCardDto,
@@ -99,6 +100,26 @@ export interface ArtifactServiceDeps {
   publishEvent: (channel: string, payload: unknown) => void
   /** The newest message of a chat: where a card goes when no message was named. */
   latestMessageId: (chatId: string) => string | null
+  /**
+   * The last *supported* answer per (profile, server), kept across launches
+   * (`artifact_support`). Without it nothing survives a restart.
+   */
+  supportMemory?: {
+    get(profileUserId: string, serverUrl: string): { instanceName?: string; limits: ArtifactLimits } | null
+    set(profileUserId: string, serverUrl: string, support: { instanceName?: string; limits: ArtifactLimits }): void
+    forget(profileUserId: string, serverUrl: string): void
+  }
+  /** Run `run` after `ms`; returns a cancel. Defaults to an unref'd `setTimeout`. */
+  schedule?: (run: () => void, ms: number) => () => void
+}
+
+/** The retry delays while core cannot be reached: 1s, 2s, 4s … capped here. */
+export const SUPPORT_RETRY_MAX_MS = 30_000
+
+function defaultSchedule(run: () => void, ms: number): () => void {
+  const timer = setTimeout(run, ms)
+  timer.unref?.()
+  return () => clearTimeout(timer)
 }
 
 const MESSAGES: Record<ArtifactErrorCode, string> = {
@@ -328,26 +349,152 @@ interface Confined {
 export function createArtifactService(deps: ArtifactServiceDeps) {
   /** Limits per server, read once a session when core answers. */
   const limitsByServer = new Map<string, ArtifactLimits>()
-  /** The last support answer per profile, for synchronous readers (the agent tool's offer). */
-  const lastSupport = new Map<string, ArtifactsSupport>()
+  /**
+   * The last answer per profile and the server it is for — what `supportedNow()`
+   * (the agent tool's offer, the skill gate) and an immediate `support()` read.
+   */
+  const answers = new Map<string, { serverUrl: string | null; support: ArtifactsSupport }>()
+  const memory = deps.supportMemory
+  const schedule = deps.schedule ?? defaultSchedule
+  /** One computation at a time per profile. */
+  const inflight = new Map<string, Promise<{ support: ArtifactsSupport; serverUrl: string | null }>>()
+  /** The retry while core cannot be reached; only ever for one (the active) profile. */
+  let retry: { profile: string; attempt: number; cancel: (() => void) | null } | null = null
 
-  async function supportFor(profile: string): Promise<{ support: ArtifactsSupport; serverUrl: string | null }> {
-    const answer = await computeSupport(profile)
-    lastSupport.set(profile, answer.support)
-    return answer
+  const UNSUPPORTED: ArtifactsSupport = { supported: false, limits: FALLBACK_ARTIFACT_LIMITS }
+
+  function rememberedRow(profile: string, serverUrl: string): { instanceName?: string; limits: ArtifactLimits } | null {
+    try {
+      return memory?.get(profile, serverUrl) ?? null
+    } catch {
+      return null
+    }
   }
 
-  async function computeSupport(profile: string): Promise<{ support: ArtifactsSupport; serverUrl: string | null }> {
-    const unsupported = { support: { supported: false, limits: FALLBACK_ARTIFACT_LIMITS }, serverUrl: null }
+  /**
+   * A supported answer already known for the profile's current server — this
+   * session's, else the one kept from an earlier launch — with link origins
+   * read fresh. Null when there is none, or the profile is not signed in.
+   */
+  function knownSupported(profile: string): { support: ArtifactsSupport; serverUrl: string } | null {
+    const account = deps.account(profile)
+    if (!account || !account.signedIn) return null
+    const held = answers.get(profile)
+    const heldHere = held !== undefined && held.serverUrl === account.serverUrl && held.support.supported
+    const base: { instanceName?: string; limits: ArtifactLimits } | null = heldHere ? held.support : rememberedRow(profile, account.serverUrl)
+    if (!base) return null
+    const support: ArtifactsSupport = {
+      supported: true,
+      ...(base.instanceName ? { instanceName: base.instanceName } : {}),
+      limits: base.limits,
+      linkOrigins: linkOrigins(profile, account.serverUrl)
+    }
+    // A session's answer goes through settle, so a link origin learned since
+    // it is pushed; one read back from an earlier launch is the first answer.
+    if (heldHere) settle(profile, account.serverUrl, support)
+    else answers.set(profile, { serverUrl: account.serverUrl, support })
+    return { support, serverUrl: account.serverUrl }
+  }
+
+  const sameSupport = (a: ArtifactsSupport, b: ArtifactsSupport): boolean =>
+    a.supported === b.supported &&
+    (a.instanceName ?? '') === (b.instanceName ?? '') &&
+    a.limits.maxRevisionBytes === b.limits.maxRevisionBytes &&
+    a.limits.maxRevisionFiles === b.limits.maxRevisionFiles &&
+    a.limits.maxFileBytes === b.limits.maxFileBytes &&
+    (a.linkOrigins ?? []).join('\n') === (b.linkOrigins ?? []).join('\n')
+
+  /** Record the profile's answer; push it when it differs from the one before. */
+  function settle(profile: string, serverUrl: string | null, support: ArtifactsSupport): void {
+    const before = answers.get(profile)?.support ?? UNSUPPORTED
+    answers.set(profile, { serverUrl, support })
+    if (!sameSupport(before, support)) deps.publishEvent(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, { profileId: profile, support })
+  }
+
+  function stopRetry(profile?: string): void {
+    if (!retry || (profile !== undefined && retry.profile !== profile)) return
+    retry.cancel?.()
+    retry = null
+  }
+
+  /** Ask again after a growing delay while discovery keeps failing; stops on any definite answer. */
+  function scheduleRetry(profile: string): void {
+    if (retry && retry.profile !== profile) stopRetry()
+    if (retry?.cancel) return
+    const state = retry ?? { profile, attempt: 0, cancel: null }
+    retry = state
+    const delay = Math.min(1000 * 2 ** state.attempt, SUPPORT_RETRY_MAX_MS)
+    state.attempt += 1
+    state.cancel = schedule(() => {
+      state.cancel = null
+      if (retry !== state) return
+      // The active profile changed meanwhile: its retry ends with it.
+      if (deps.profileId() !== profile) {
+        retry = null
+        return
+      }
+      void supportFor(profile).catch(() => {})
+    }, delay)
+  }
+
+  /**
+   * Compute the profile's answer now. A definite answer is recorded (and
+   * kept, or forgotten, across launches); a transient one — discovery could
+   * not be read — keeps any supported answer already known and retries.
+   */
+  function supportFor(profile: string): Promise<{ support: ArtifactsSupport; serverUrl: string | null }> {
+    const running = inflight.get(profile)
+    if (running) return running
+    const run = (async () => {
+      // The active profile changed since the retry began: it ends with that profile.
+      if (retry && retry.profile !== deps.profileId()) stopRetry()
+      const computed = await computeSupport(profile)
+      if (computed.transient) {
+        if (profile === deps.profileId()) scheduleRetry(profile)
+        const known = knownSupported(profile)
+        if (known) return known
+        settle(profile, null, UNSUPPORTED)
+        return { support: UNSUPPORTED, serverUrl: null }
+      }
+      stopRetry(profile)
+      const { support, serverUrl } = computed
+      try {
+        if (support.supported && serverUrl) {
+          const kept = rememberedRow(profile, serverUrl)
+          const next = { ...(support.instanceName ? { instanceName: support.instanceName } : {}), limits: support.limits }
+          if (!kept || !sameSupport({ supported: true, ...kept }, { supported: true, ...next })) memory?.set(profile, serverUrl, next)
+        } else if (computed.noArtifacts && computed.accountServer) {
+          memory?.forget(profile, computed.accountServer)
+        }
+      } catch {
+        // The memory is a head start; the live answer stands without it.
+      }
+      settle(profile, serverUrl, support)
+      return { support, serverUrl }
+    })().finally(() => inflight.delete(profile))
+    inflight.set(profile, run)
+    return run
+  }
+
+  async function computeSupport(profile: string): Promise<{
+    support: ArtifactsSupport
+    serverUrl: string | null
+    /** Discovery could not be read: no answer yet. */
+    transient?: boolean
+    /** Core answered without `artifacts >= 1`. */
+    noArtifacts?: boolean
+    accountServer?: string
+  }> {
+    const unsupported = { support: UNSUPPORTED, serverUrl: null }
     const account = deps.account(profile)
     if (!account || !account.signedIn) return unsupported
     let discovery: { artifacts?: number; instance_name?: string }
     try {
       discovery = await deps.discover(account.serverUrl)
     } catch {
-      return unsupported
+      return { ...unsupported, transient: true }
     }
-    if (typeof discovery.artifacts !== 'number' || discovery.artifacts < 1) return unsupported
+    if (typeof discovery.artifacts !== 'number' || discovery.artifacts < 1) return { ...unsupported, noArtifacts: true, accountServer: account.serverUrl }
     let limits = limitsByServer.get(account.serverUrl)
     if (!limits) {
       try {
@@ -512,12 +659,24 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
   }
 
   return {
-    /** Whether the active profile can publish, and the instance's limits. Never throws. */
+    /**
+     * Whether the active profile can publish, and the instance's limits. Never
+     * throws. A supported answer already known for the profile's server (this
+     * session's, or kept from the last launch) comes back at once and is
+     * revalidated in the background — a change is pushed on
+     * `artifacts:support-changed`; otherwise core is asked and awaited.
+     */
     async support(): Promise<ArtifactsSupport> {
+      const profile = deps.profileId()
       try {
-        return (await supportFor(deps.profileId())).support
+        const known = knownSupported(profile)
+        if (known) {
+          void supportFor(profile).catch(() => {})
+          return known.support
+        }
+        return (await supportFor(profile)).support
       } catch {
-        return { supported: false, limits: FALLBACK_ARTIFACT_LIMITS }
+        return UNSUPPORTED
       }
     },
 
@@ -734,9 +893,18 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
       })
     },
 
-    /** The last support answer for `profile` (or the active one), without asking again. False until one was read. */
+    /**
+     * The last support answer for `profile` (or the active one), without asking
+     * again: this session's, else the supported answer kept from the last launch.
+     * False until either exists.
+     */
     supportedNow(profile: string = deps.profileId()): ArtifactsSupport {
-      return lastSupport.get(profile) ?? { supported: false, limits: FALLBACK_ARTIFACT_LIMITS }
+      try {
+        // Supported this session, or kept from the last launch (right from startup).
+        return knownSupported(profile)?.support ?? UNSUPPORTED
+      } catch {
+        return UNSUPPORTED
+      }
     },
 
     /** The active profile's server, from its row (no network); null when it is not a Cinna profile. */

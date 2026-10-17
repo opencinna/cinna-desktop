@@ -13,8 +13,9 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld
 /**
  * Artifacts against a fake cinna-core: a person publishes a folder an agent
  * mentioned (A), an agent publishes through `artifacts_publish` behind the
- * approval card (B), and an instance that does not keep artifacts offers no
- * Publish… at all (C).
+ * approval card (B), an instance that does not keep artifacts offers no
+ * Publish… at all (C), and Publish… arrives without a window focus when core's
+ * discovery is unreachable at launch, and at once on the next launch (E).
  *
  * ## What is real and what is not
  *
@@ -127,6 +128,9 @@ async function fakeCore(options: { artifacts: boolean }) {
   const uploads: Upload[] = []
   const requests: string[] = []
   const patches: Array<{ id: string; body: unknown }> = []
+  /** Discovery answers 503 until this time (an instance not reachable yet); see `discoveryDown`. */
+  let discoveryDownUntil = 0
+  const discovery = { failed: 0, served: 0 }
   const pageUrl = (id: string): string => `${host}/artifact/${id}`
   const summary = (a: FakeArtifact) => ({
     id: a.id,
@@ -166,6 +170,12 @@ async function fakeCore(options: { artifacts: boolean }) {
       res.end(JSON.stringify(value))
     }
     if (req.method === 'GET' && url.pathname === '/.well-known/cinna-desktop') {
+      if (Date.now() < discoveryDownUntil) {
+        discovery.failed += 1
+        send({ detail: 'Starting up.' }, 503)
+        return
+      }
+      discovery.served += 1
       send({
         authorization_endpoint: `${host}/oauth/authorize`,
         token_endpoint: `${host}/oauth/token`,
@@ -250,6 +260,11 @@ async function fakeCore(options: { artifacts: boolean }) {
     requests,
     patches,
     pageUrl,
+    discovery,
+    /** Answer discovery with 503 for the next `ms` (0 ends an outage). */
+    discoveryDown(ms: number): void {
+      discoveryDownUntil = Date.now() + ms
+    },
     async close(): Promise<void> {
       server.closeAllConnections()
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -270,7 +285,13 @@ function writeFiles(dir: string, files: Record<string, string>): void {
  * linked to the fake core, and a chat opened through the agent's own
  * composer with the first prompt waiting in `fake.calls[0]`.
  */
-async function arrange(cinna: CinnaApp, fake: ScriptAcpEngine, core: FakeCore, files: Record<string, string>): Promise<{ agentId: string; agentDir: string; chatId: string }> {
+async function arrange(
+  cinna: CinnaApp,
+  fake: ScriptAcpEngine,
+  core: FakeCore,
+  files: Record<string, string>,
+  options: { discoveryOutageMs?: number } = {}
+): Promise<{ agentId: string; agentDir: string; chatId: string }> {
   await cinna.skipOnboarding()
   await fake.install(cinna)
   await cinna.page.evaluate(async ({ host, model }) => {
@@ -283,6 +304,8 @@ async function arrange(cinna: CinnaApp, fake: ScriptAcpEngine, core: FakeCore, f
   writeFiles(agent.path, files)
   await linkSandboxAccount(cinna, core.host)
 
+  // The launch that first reads the linked account finds core not answering yet.
+  if (options.discoveryOutageMs) core.discoveryDown(options.discoveryOutageMs)
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
@@ -655,6 +678,52 @@ test('C an instance whose discovery lacks artifacts offers no Publish…', async
     await expect(menu.getByRole('menuitem')).toHaveText(['Copy full path', 'Show in the folder', 'Reference in a new chat'])
     await page.keyboard.press('Escape')
     expect(core.requests.filter((request) => request.startsWith('POST'))).toEqual([])
+    expect(fake.unexpected).toEqual([])
+  } finally {
+    await fake.close()
+    await core.close()
+  }
+})
+
+test('E Publish… arrives without a window focus when discovery fails at launch, and at once on the next launch', async ({ cinna }) => {
+  test.setTimeout(150_000)
+  const fake = await scriptAcpEngine()
+  const core = await fakeCore({ artifacts: true })
+  try {
+    // About three seconds of 503s from discovery after the launch that links the account.
+    await arrange(cinna, fake, core, { [`${FOLDER}/summary.md`]: SUMMARY_TEXT }, { discoveryOutageMs: 3_000 })
+    fake.calls[0].release(`The quarter is written up in \`${FOLDER}\`.`)
+    const page = cinna.page
+
+    await test.step('main retries the unreachable core on its own and pushes the answer; a menu opened after it has Publish…', async () => {
+      await expect(folderLink(page, FOLDER)).toBeVisible({ timeout: 30_000 })
+      // The outage was real: main asked during it and was refused.
+      expect(core.discovery.failed).toBeGreaterThan(0)
+      // Main's retry reaches core (the window never gets focus under the harness)…
+      await expect.poll(() => core.discovery.served, { timeout: 30_000 }).toBeGreaterThan(0)
+      // …and main says yes. This asks main directly; the renderer's store moves only on main's push.
+      await expect.poll(() => page.evaluate(() => window.api.artifacts.support()).then((s) => s.supported), { timeout: 30_000 }).toBe(true)
+      const menu = await openMenuOn(page, folderLink(page, FOLDER))
+      await expect(menu.getByRole('menuitem')).toHaveText(['Copy full path', 'Show in the folder', 'Reference in a new chat', 'Publish…'])
+      await page.keyboard.press('Escape')
+      await expect(menu).toHaveCount(0)
+    })
+
+    await test.step('the next launch offers Publish… from the kept answer while discovery is still down', async () => {
+      core.discoveryDown(120_000)
+      const failedBefore = core.discovery.failed
+      const servedBefore = core.discovery.served
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      await cinna.page.getByText(CHAT, { exact: true }).first().click()
+      await expect(folderLink(cinna.page, FOLDER)).toBeVisible({ timeout: 30_000 })
+      const menu = await openMenuOn(cinna.page, folderLink(cinna.page, FOLDER))
+      await expect(menu.getByRole('menuitem')).toHaveText(['Copy full path', 'Show in the folder', 'Reference in a new chat', 'Publish…'])
+      // Core has not answered this launch: the item came from the kept answer.
+      expect(core.discovery.served).toBe(servedBefore)
+      await expect.poll(() => core.discovery.failed, { timeout: 10_000 }).toBeGreaterThan(failedBefore)
+      await cinna.page.keyboard.press('Escape')
+    })
     expect(fake.unexpected).toEqual([])
   } finally {
     await fake.close()

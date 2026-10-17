@@ -358,19 +358,16 @@ function card(page: Page, title: string): Locator {
 }
 
 /**
- * The menu reads whether artifacts are supported when it opens; right after a
- * launch main may still be on core's discovery, so a menu opened then has no
- * Publish… and does not gain it. Wait for main, then reopen until it is there.
+ * The menu reads whether artifacts are supported when it opens (a snapshot).
+ * Right after a launch main may still be on core's discovery; main pushes its
+ * answer when it arrives, so wait for main to say yes and open the menu once.
  */
 async function openPublishOn(page: Page, link: Locator): Promise<Locator> {
   await expect.poll(() => page.evaluate(() => window.api.artifacts.support()).then((s) => s.supported), { timeout: 30_000 }).toBe(true)
   const menu = page.getByRole('menu', { name: 'Message actions', exact: true })
   const publish = menu.getByRole('menuitem', { name: 'Publish…', exact: true })
-  await expect(async () => {
-    if (await menu.count() > 0) await page.keyboard.press('Escape')
-    await link.click({ button: 'right' })
-    await expect(publish).toBeVisible({ timeout: 2_000 })
-  }).toPass({ timeout: 30_000 })
+  await link.click({ button: 'right' })
+  await expect(publish).toBeVisible()
   await publish.click()
   const dialog = page.getByRole('dialog', { name: 'Publish to Cinna', exact: true })
   await expect(dialog.getByRole('list', { name: 'Files to publish' })).not.toHaveAttribute('aria-busy', 'true')

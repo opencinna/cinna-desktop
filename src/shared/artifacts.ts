@@ -232,6 +232,17 @@ export interface ArtifactCardDto {
 
 export const ARTIFACTS_PROGRESS_CHANNEL = 'artifacts:progress'
 export const ARTIFACTS_CHANGED_CHANNEL = 'artifacts:changed'
+/**
+ * Main's answer to "can this profile publish?" changed (supported, instance
+ * name, limits or link origins) — pushed so a surface opened afterwards needs
+ * no reload or window focus to see it.
+ */
+export const ARTIFACTS_SUPPORT_CHANGED_CHANNEL = 'artifacts:support-changed'
+
+export interface ArtifactsSupportChangedPayload {
+  profileId: string
+  support: ArtifactsSupport
+}
 
 export type ArtifactsProgressPhase = 'packing' | 'uploading' | 'sharing'
 

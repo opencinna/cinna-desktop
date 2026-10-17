@@ -1319,6 +1319,24 @@ export const publishedArtifacts = sqliteTable('published_artifacts', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })
 
+/**
+ * The last supported artifacts answer per (profile, server): what a relaunch
+ * offers Publish… from before core answers again. See `migrations/artifact-support.ts`.
+ */
+export const artifactSupport = sqliteTable(
+  'artifact_support',
+  {
+    profileUserId: text('profile_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    serverUrl: text('server_url').notNull(),
+    instanceName: text('instance_name'),
+    maxRevisionBytes: integer('max_revision_bytes').notNull(),
+    maxRevisionFiles: integer('max_revision_files').notNull(),
+    maxFileBytes: integer('max_file_bytes').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
+  },
+  (table) => [primaryKey({ columns: [table.profileUserId, table.serverUrl] })]
+)
+
 /** An artifact card in a chat, rendered after `message_id`. Goes with its chat. */
 export const chatArtifactCards = sqliteTable('chat_artifact_cards', {
   id: text('id').primaryKey(),

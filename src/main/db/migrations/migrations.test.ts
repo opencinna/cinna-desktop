@@ -971,6 +971,25 @@ describe('chats.origin and tasks.started_by_user on an install that predates the
   })
 })
 
+describe('kept artifacts support on an install that predates it', () => {
+  it('creates the table, replays as a no-op, keeps rows across boots and goes with the profile', () => {
+    const raw = freshDatabase()
+    for (const col of ['profile_user_id', 'server_url', 'instance_name', 'max_revision_bytes', 'max_revision_files', 'max_file_bytes', 'updated_at']) {
+      expect(columnNames(raw, 'artifact_support')).toContain(col)
+    }
+    raw.exec(`DROP TABLE artifact_support;
+      INSERT INTO users (id, type, username, display_name, created_at) VALUES ('p', 'cinna_user', 'p', 'P', 1);`)
+    runAllMigrations(adaptDatabase(raw))
+    raw.exec(`INSERT INTO artifact_support (profile_user_id, server_url, instance_name, max_revision_bytes, max_revision_files, max_file_bytes, updated_at)
+      VALUES ('p', 'https://a', 'Acme', 1, 2, 3, 1);`)
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM artifact_support').get()).toEqual({ n: 1 })
+    raw.exec("DELETE FROM users WHERE id = 'p'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM artifact_support').get()).toEqual({ n: 0 })
+    raw.close()
+  })
+})
+
 describe('published artifacts on an install that predates them', () => {
   it('creates both tables, replays as a no-op, and keeps rows across boots', () => {
     const raw = freshDatabase()

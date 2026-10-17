@@ -43,30 +43,42 @@ export function useArtifactsSupport(): ArtifactsSupport {
 /**
  * Asks main for the profile's support when the profile changes, when the
  * window regains focus, and after an artifact changed (a publish may have
- * taught main the frontend origin its links use).
+ * taught main the frontend origin its links use); and takes the answer main
+ * pushes on its own whenever it changes (core reachable at last after a
+ * launch, or core dropped artifacts) — so no focus or reload is needed.
+ * A menu already open keeps the items it opened with.
  */
 export function useArtifactsSupportLoader(): void {
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   useEffect(() => {
     if (profileId === null) return
     let cancelled = false
+    // A pushed answer is newer than a reply to a question asked before it.
+    let pushes = 0
     const load = (): void => {
+      const asked = pushes
       window.api.artifacts
         .support()
         .then((support) => {
-          if (!cancelled) useArtifactsSupportStore.getState().set(profileId, support)
+          if (!cancelled && pushes === asked) useArtifactsSupportStore.getState().set(profileId, support)
         })
         .catch(() => {
-          if (!cancelled) useArtifactsSupportStore.getState().set(profileId, UNSUPPORTED)
+          if (!cancelled && pushes === asked) useArtifactsSupportStore.getState().set(profileId, UNSUPPORTED)
         })
     }
     load()
     window.addEventListener('focus', load)
     const unsubscribe = window.api.artifacts.onChanged?.(load)
+    const unsubscribePush = window.api.artifacts.onSupportChanged?.((payload) => {
+      if (cancelled || payload.profileId !== profileId) return
+      pushes += 1
+      useArtifactsSupportStore.getState().set(profileId, payload.support)
+    })
     return () => {
       cancelled = true
       window.removeEventListener('focus', load)
       unsubscribe?.()
+      unsubscribePush?.()
     }
   }, [profileId])
 }

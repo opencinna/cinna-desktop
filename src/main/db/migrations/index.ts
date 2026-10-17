@@ -33,6 +33,7 @@ import { migrateNotes } from './notes'
 import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
 import { migrateInboxDismissals } from './inbox-dismissals'
 import { migratePublishedArtifacts } from './published-artifacts'
+import { migrateArtifactSupport } from './artifact-support'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
 import { shareLocalAgentChats } from './share-local-agent-chats'
@@ -112,6 +113,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateInboxDismissals(sqlite)
   // Published artifacts and their chat cards; FK → users, chats; creation only.
   migratePublishedArtifacts(sqlite)
+  // The last supported artifacts answer per profile+server; FK → users; creation only.
+  migrateArtifactSupport(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).
   runSyncMigrations(sqlite)
   // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).

@@ -19,7 +19,9 @@ A folder agent leaves files: a report, a CSV, a folder with a small dashboard in
 
 Artifacts exist only when **the active profile is a signed-in Cinna account and its instance's discovery document advertises `artifacts` at version 1 or more**. Otherwise no surface appears anywhere: no menu item, no header button, no card, no tool, no skill. A local-only profile never sees any of it.
 
-- Discovery is read once per server per app session and cached. An instance that gains artifacts needs the app restarted before this machine offers them; closing and reopening a window is not enough.
+- **A relaunch offers artifacts at once.** The last *supported* answer (instance name and limits) is kept per profile and server, so Publish… is there before core has answered; core is asked in the background and a change reaches open windows without a focus or reload. An open context menu keeps the items it opened with.
+- **A definite "no artifacts" removes the offer** and the kept answer; it is not retried. If core cannot be reached at all, a kept answer stands and the active profile asks again after 1 s, doubling to every 30 s, until core answers. With no kept answer nothing is offered meanwhile.
+- Discovery is cached per server for the app session, so an instance that gains artifacts while the app runs is noticed on the next launch, not before. The offer is never held for a server the profile no longer points at.
 - The limits (total bytes, file count, bytes per file) come from the instance's capabilities, read once a session. If they cannot be read the desktop uses core's own defaults (50 MB, 2000 files, 25 MB per file). An over-limit folder is refused on screen, from the same walk that publish repeats, and not by a failed upload.
 
 ## User Stories / Flows

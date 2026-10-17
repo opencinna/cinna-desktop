@@ -148,6 +148,8 @@ function setup(overrides: Partial<ArtifactServiceDeps> & { answers?: Array<Cinna
     repo: memory.repo,
     publishEvent: (channel, payload) => events.push({ channel, payload }),
     latestMessageId: (chatId) => (chatId === 'chat-1' ? 'latest-1' : null),
+    // No real timers: a retry waits until a test fires it.
+    schedule: () => () => {},
     ...overrides
   }
   return { service: createArtifactService(deps), calls, events, deps, ...memory }
@@ -212,6 +214,199 @@ describe('support', () => {
     expect(await service.publish({ agentId: 'folder:analyst', path: q3(), title: 'x', visibility: 'private' })).toMatchObject({ ok: false, code: 'not_supported' })
     expect(await service.detail(ID)).toMatchObject({ ok: false, code: 'not_supported' })
     expect(calls).toEqual([])
+  })
+})
+
+/** Timers a test fires by hand: `delays` is every delay asked for, in order. */
+function manualClock() {
+  const live: Array<{ run: () => void; cancelled: boolean }> = []
+  const delays: number[] = []
+  return {
+    delays,
+    schedule: (run: () => void, ms: number) => {
+      const timer = { run, cancelled: false }
+      live.push(timer)
+      delays.push(ms)
+      return () => {
+        timer.cancelled = true
+      }
+    },
+    pending: () => live.filter((timer) => !timer.cancelled).length,
+    /** Run the oldest live timer, then let the work it started settle. */
+    async fire() {
+      const timer = live.find((t) => !t.cancelled)
+      if (!timer) throw new Error('no timer pending')
+      live.splice(live.indexOf(timer), 1)
+      timer.run()
+      await settleWork()
+    }
+  }
+}
+
+const settleWork = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+function supportMemory(initial: Record<string, { instanceName?: string; limits: { maxRevisionBytes: number; maxRevisionFiles: number; maxFileBytes: number } }> = {}) {
+  const rows = new Map(Object.entries(initial))
+  return {
+    rows,
+    memory: {
+      get: (profile: string, server: string) => rows.get(`${profile}\n${server}`) ?? null,
+      set: (profile: string, server: string, value: { instanceName?: string; limits: { maxRevisionBytes: number; maxRevisionFiles: number; maxFileBytes: number } }) => {
+        rows.set(`${profile}\n${server}`, value)
+      },
+      forget: (profile: string, server: string) => {
+        rows.delete(`${profile}\n${server}`)
+      }
+    }
+  }
+}
+
+const KEPT = { instanceName: 'Acme', limits: { maxRevisionBytes: 1000, maxRevisionFiles: 10, maxFileBytes: 500 } }
+const supportEvents = (events: Array<{ channel: string; payload: unknown }>) =>
+  events.filter((event) => event.channel === 'artifacts:support-changed').map((event) => event.payload as { profileId: string; support: { supported: boolean; instanceName?: string } })
+
+describe('support across outages and launches', () => {
+  it('retries an unreachable core with backoff and pushes supported when it answers, with no caller asking again', async () => {
+    const clock = manualClock()
+    const store = supportMemory()
+    let failures = 2
+    const ctx = setup({
+      schedule: clock.schedule,
+      supportMemory: store.memory,
+      discover: async () => {
+        if (failures-- > 0) throw new Error('ECONNREFUSED')
+        return { artifacts: 1, instance_name: 'Acme' }
+      }
+    })
+    expect((await ctx.service.support()).supported).toBe(false)
+    expect(clock.delays).toEqual([1000])
+    await clock.fire()
+    expect(clock.delays).toEqual([1000, 2000])
+    expect(supportEvents(ctx.events)).toEqual([])
+    await clock.fire()
+    expect(supportEvents(ctx.events)).toEqual([{ profileId: 'profile-1', support: expect.objectContaining({ supported: true, instanceName: 'Acme' }) }])
+    expect(clock.pending()).toBe(0)
+    expect(store.rows.get(`profile-1\n${SERVER}`)).toEqual(KEPT)
+    expect(ctx.service.supportedNow().supported).toBe(true)
+  })
+
+  it('caps the backoff at 30 seconds and keeps going while core stays unreachable', async () => {
+    const clock = manualClock()
+    const ctx = setup({ schedule: clock.schedule, discover: async () => { throw new Error('ECONNREFUSED') } })
+    await ctx.service.support()
+    for (let i = 0; i < 6; i++) await clock.fire()
+    expect(clock.delays).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000])
+    expect(clock.pending()).toBe(1)
+    // A caller asking meanwhile does not restart the backoff or stack a second timer.
+    await ctx.service.support()
+    expect(clock.pending()).toBe(1)
+    expect(clock.delays).toHaveLength(7)
+  })
+
+  it('does not retry a definite "no artifacts", and forgets the kept answer', async () => {
+    const clock = manualClock()
+    const store = supportMemory({ [`profile-1\n${SERVER}`]: KEPT })
+    const ctx = setup({ schedule: clock.schedule, supportMemory: store.memory, discover: async () => ({ instance_name: 'Acme' }) })
+    // Kept from the last launch: offered at once…
+    expect((await ctx.service.support()).supported).toBe(true)
+    await settleWork()
+    // …and the background read finds core dropped artifacts: pushed, forgotten, not retried.
+    expect(supportEvents(ctx.events)).toEqual([{ profileId: 'profile-1', support: expect.objectContaining({ supported: false }) }])
+    expect(store.rows.size).toBe(0)
+    expect(clock.pending()).toBe(0)
+    expect(ctx.service.supportedNow().supported).toBe(false)
+    expect((await ctx.service.support()).supported).toBe(false)
+    expect(clock.pending()).toBe(0)
+  })
+
+  it('a fresh service answers from the kept answer at once — supportedNow too — and revalidates in the background', async () => {
+    const store = supportMemory({ [`profile-1\n${SERVER}`]: KEPT })
+    let release!: () => void
+    const discoveryHeld = new Promise<void>((resolve) => (release = resolve))
+    let discoveries = 0
+    const ctx = setup({
+      supportMemory: store.memory,
+      discover: async () => {
+        discoveries++
+        await discoveryHeld
+        return { artifacts: 1, instance_name: 'Acme 2' }
+      }
+    })
+    // Right from startup, before anything asked core: the agent tool's offer and the skill gate.
+    expect(ctx.service.supportedNow()).toMatchObject({ supported: true, instanceName: 'Acme' })
+    // Returned while discovery is still held: no wait on core.
+    expect(await ctx.service.support()).toEqual({ supported: true, instanceName: 'Acme', limits: KEPT.limits, linkOrigins: [SERVER] })
+    expect(discoveries).toBe(1)
+    release()
+    await settleWork()
+    expect(supportEvents(ctx.events)).toEqual([{ profileId: 'profile-1', support: expect.objectContaining({ supported: true, instanceName: 'Acme 2' }) }])
+    expect(store.rows.get(`profile-1\n${SERVER}`)).toEqual({ ...KEPT, instanceName: 'Acme 2' })
+  })
+
+  it('pushes a link origin learned since the last answer, even while core is unreachable', async () => {
+    const clock = manualClock()
+    const store = supportMemory({ [`profile-1\n${SERVER}`]: KEPT })
+    const ctx = setup({ schedule: clock.schedule, supportMemory: store.memory, discover: async () => { throw new Error('ECONNREFUSED') } })
+    await ctx.service.support()
+    await settleWork()
+    expect(supportEvents(ctx.events)).toEqual([])
+    ctx.rows.push({ ...ctx.rows[0], id: 'row-x', profileUserId: 'profile-1', serverUrl: SERVER, artifactId: 'x', url: 'https://app.acme.test/artifact/x' } as PublishedArtifactRow)
+    await clock.fire()
+    expect(supportEvents(ctx.events)).toEqual([{ profileId: 'profile-1', support: expect.objectContaining({ supported: true, linkOrigins: [SERVER, 'https://app.acme.test'] }) }])
+  })
+
+  it('keeps a kept "supported" through an unreachable core instead of flapping, and retries', async () => {
+    const clock = manualClock()
+    const store = supportMemory({ [`profile-1\n${SERVER}`]: KEPT })
+    const ctx = setup({ schedule: clock.schedule, supportMemory: store.memory, discover: async () => { throw new Error('ECONNREFUSED') } })
+    expect((await ctx.service.support()).supported).toBe(true)
+    await settleWork()
+    expect(clock.pending()).toBe(1)
+    await clock.fire()
+    expect(supportEvents(ctx.events)).toEqual([])
+    expect(ctx.service.supportedNow().supported).toBe(true)
+    expect(store.rows.size).toBe(1)
+    // A verb still finds the account (and fails on the network, not as unsupported).
+    expect(await ctx.service.inspect({ agentId: 'folder:analyst', path: q3() })).toMatchObject({ ok: true })
+  })
+
+  it('a kept answer is for its server and a signed-in profile only', async () => {
+    const store = supportMemory({ [`profile-1\nhttps://other.example`]: KEPT })
+    const signedOut = setup({ supportMemory: supportMemory({ [`profile-1\n${SERVER}`]: KEPT }).memory, account: () => ({ serverUrl: SERVER, signedIn: false }) })
+    expect(signedOut.service.supportedNow().supported).toBe(false)
+    expect((await signedOut.service.support()).supported).toBe(false)
+    const elsewhere = setup({ supportMemory: store.memory, discover: async () => { throw new Error('offline') } })
+    expect(elsewhere.service.supportedNow().supported).toBe(false)
+    expect((await elsewhere.service.support()).supported).toBe(false)
+  })
+
+  it('a change of active profile ends the retry', async () => {
+    const clock = manualClock()
+    const active = { profile: 'profile-1' }
+    let discoveries = 0
+    const ctx = setup({
+      schedule: clock.schedule,
+      profileId: () => active.profile,
+      account: (profile) => (profile === 'profile-1' ? { serverUrl: SERVER, signedIn: true } : null),
+      discover: async () => {
+        discoveries++
+        throw new Error('ECONNREFUSED')
+      }
+    })
+    await ctx.service.support()
+    expect(clock.pending()).toBe(1)
+    active.profile = 'profile-2'
+    // A timer that fires after the switch asks nothing and schedules nothing.
+    await clock.fire()
+    expect(discoveries).toBe(1)
+    expect(clock.pending()).toBe(0)
+    // And the new profile's first question cancels a pending one at once.
+    active.profile = 'profile-1'
+    await ctx.service.support()
+    expect(clock.pending()).toBe(1)
+    active.profile = 'profile-2'
+    await ctx.service.support()
+    expect(clock.pending()).toBe(0)
   })
 })
 
@@ -324,7 +519,7 @@ describe('publish', () => {
     })
     expect(rows).toMatchObject([{ sourcePath: q3(), agentId: 'folder:analyst', artifactId: ID, revision: 1, visibility: 'private' }])
     expect(cards).toEqual([{ id: 'card-0', chatId: 'chat-1', messageId: 'msg-1', artifactId: ID }])
-    expect(events).toEqual([
+    expect(events.filter((event) => event.channel !== 'artifacts:support-changed')).toEqual([
       { channel: 'artifacts:progress', payload: { operationId: 'op-1', phase: 'packing' } },
       { channel: 'artifacts:progress', payload: { operationId: 'op-1', phase: 'uploading' } },
       { channel: 'artifacts:changed', payload: { artifactId: ID } }
@@ -361,7 +556,7 @@ describe('publish', () => {
     expect(result).toMatchObject({ ok: true, artifact: { visibility: 'instance' } })
     expect(calls[1]).toMatchObject({ path: `/api/v1/artifacts/${ID}`, method: 'PATCH', json: { visibility: 'instance' } })
     expect(rows[0].visibility).toBe('instance')
-    expect(events.map((event) => (event.payload as { phase?: string }).phase)).toEqual(['packing', 'uploading', 'sharing', undefined])
+    expect(events.filter((event) => event.channel !== 'artifacts:support-changed').map((event) => (event.payload as { phase?: string }).phase)).toEqual(['packing', 'uploading', 'sharing', undefined])
   })
 
   it('Anyone with a link: creates a link and returns its URL once, never stored', async () => {

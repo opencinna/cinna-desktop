@@ -209,6 +209,7 @@ import {
   ARTIFACTS_APPROVALS_CHANNEL,
   ARTIFACTS_CHANGED_CHANNEL,
   ARTIFACTS_PROGRESS_CHANNEL,
+  ARTIFACTS_SUPPORT_CHANGED_CHANNEL,
   type ArtifactApprovalAnswer,
   type ArtifactApprovalAnswerInput,
   type ArtifactApprovalSummary,
@@ -222,6 +223,7 @@ import {
   type ArtifactsProgressPayload,
   type ArtifactsPublishOutcome,
   type ArtifactsSupport,
+  type ArtifactsSupportChangedPayload,
   type ArtifactVisibility,
   type PublishArtifactInput
 } from '../shared/artifacts'
@@ -2117,6 +2119,12 @@ const api = {
       const listener = (_event: IpcRendererEvent, payload: ArtifactsChangedPayload): void => handler(payload)
       ipcRenderer.on(ARTIFACTS_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(ARTIFACTS_CHANGED_CHANNEL, listener)
+    },
+    /** Main's support answer for a profile changed (core became reachable, or dropped artifacts). */
+    onSupportChanged: (handler: (payload: ArtifactsSupportChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: ArtifactsSupportChangedPayload): void => handler(payload)
+      ipcRenderer.on(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
     }
   },
 
