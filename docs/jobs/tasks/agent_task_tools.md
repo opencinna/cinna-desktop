@@ -118,4 +118,5 @@ Turn start -> Cinna task context block (current task, report required, counts)
 - [Jobs](../jobs/jobs.md) — a job run's attempt mapped from the agent's report.
 - [The Tasks View](../tasks_view/tasks_view.md) — the manual-move rules `tasks_update` follows.
 - [A Task on the User's Other Devices](cross_device.md) — why provenance and comments stay on this device.
+- [Agent Publish](../../chat/artifacts/agent_publish.md) — the ninth tool on the same `cinna` server, `artifacts_publish`, offered to the same folder-agent sessions (validated the same way) only while the active profile's instance keeps artifacts. It is not a task tool: it does not touch the queue, and it blocks on a person's approval.
 - [Technical details](agent_task_tools_tech.md).

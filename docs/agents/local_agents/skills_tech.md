@@ -194,7 +194,7 @@ Every channel below gates on `userActivation.requireActivated()`, runs in the **
 
 ### `src/main/agents/drivers/acp/acpLaunchers.ts`
 - Claude: on the isolated branch only, `deps.agentSkillsPlugin(ctx.userId, ctx.agentId)` through `safely`; its path joins `tasksSkillPlugin()`'s in `_meta.claudeCode.options.plugins`, `cinna-tasks` first. Not asked on the native branch. The path is not part of the spec key
-- OpenCode: `buildEngineConfig` receives `input.skillPaths` (the bundle's `skills/`). Before that was wired, the launcher dropped it, so an OpenCode ACP session had no `skills.paths` at all and `cinna-tasks` never reached it
+- OpenCode: `buildEngineConfig` receives `input.skillPaths` (each platform skill's own folder: `cinna-tasks`, and `cinna-artifacts` while supported). Before that was wired, the launcher dropped it, so an OpenCode ACP session had no `skills.paths` at all and `cinna-tasks` never reached it
 
 ### `src/main/engine/engineConfigSource.ts` / `configGenerator.ts`
 - `collectEngineAgents`: for a DTO carrying `skills`, `ensureKitAgentSkillsPlugin({id, path})` before the prompt, then `ownSkills: plugin ? 'skill' : 'pointer'` into the prompt and `ownSkills(plugin)` — `{skillPaths: [<plugin>/skills], skills: <names>, skillReadPaths?: plugin.readPaths}` — onto the entry

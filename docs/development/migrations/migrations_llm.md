@@ -43,6 +43,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 14. `migrateNotes` — notes tables
 15. `migrateAppSettings` — app settings
     - Followed by `migrateInboxDismissals` (`migrations/inbox-dismissals.ts`) — `inbox_dismissals` (dismissed Inbox cards per profile; no FK, creation only). See [Inbox](../../jobs/tasks/inbox.md)
+    - Then `migratePublishedArtifacts` (`migrations/published-artifacts.ts`) — `published_artifacts` (which artifact a path on this machine was published as, per profile and server; unique per `(profile_user_id, server_url, artifact_id)`; FK → `users` cascade) and `chat_artifact_cards` (a chat's artifact cards, anchored after a message; FK → `users`, `chats` cascade; `message_id` deliberately unreferenced). Creation only, no DML
 16. `runSyncMigrations` — `sync_state` / `sync_device_key` / `sync_tombstone` (after notes/jobs)
 17. `runSyncDepsMigrations` — `jobs.sync_deps`, `mcp_providers.created_by_sync`, `agents.created_by_sync`
 18. `migrateAgentDrivers` (`migrations/agent-drivers.ts`) — `agents.driver` + `agents.driver_config`, and the backfill: `'a2a'` for `source IN ('local', 'remote')`, `'opencode'` for `source = 'folder'`.

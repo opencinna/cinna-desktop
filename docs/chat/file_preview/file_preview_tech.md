@@ -243,6 +243,7 @@
 - `src/renderer/src/components/chat/MessageBubble.tsx`: user-message badges use `AttachmentList onClick={(a) => openAttachment(a)}`.
 - `src/renderer/src/components/chat/AgentAttachment.tsx`: agent-attachment badges use the same `openAttachment` routing. Both lists pass `thumbnailFor={attachmentImageRef}`, so image attachments render as `AttachmentThumbnail`.
 - `src/renderer/src/components/chat/ChatInput.tsx`: the composer's list passes `useComposerAttachmentOpen()`, `canClick={composerCanPreview}` and `thumbnailFor`.
+- `src/renderer/src/stores/artifactPublish.store.ts` and `hooks/useArtifacts.ts`: the header's **Publish…** reads `useArtifactsSupport()`, and opens `useArtifactPublishStore` with the target's `{agentId, ref.path, ref.kind, activeChatId, messageId}` after closing the preview ([Artifacts (tech)](../artifacts/artifacts_tech.md)).
 - `src/renderer/src/App.tsx`: mounts `<FilePreviewModal />` once at the app root, beside the other global overlays and modals.
 
 ### Renderer — utils

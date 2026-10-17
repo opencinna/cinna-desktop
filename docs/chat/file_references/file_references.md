@@ -21,7 +21,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Credential file**: a file whose name says it holds secrets. It is never read into the renderer.
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
 - **Open strategy**: how **Open** hands a file to the operating system, which never involves executing it.
-- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path**, **Show in the folder** and **Reference in a new chat**.
+- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path**, **Show in the folder** and **Reference in a new chat**, then, last and in a group of its own, **Publish…** when the profile can publish [artifacts](../artifacts/artifacts.md).
 - **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over the cap is refused. Copy contents reads up to 25 MB, the same as a preview; Save to Notes up to 4 MB.
 
 ## User Stories / Flows
@@ -66,6 +66,8 @@ A folder agent works inside its folder and names files all the time: `data/refor
 1. The user right-clicks a linked span with nothing selected in it. The reference is outlined, and the menu opens with two groups separated by a divider:
    - **Copy contents** and **Save to Notes**;
    - **Copy full path**, **Show in the folder** and **Reference in a new chat**.
+
+   A third group, **Publish…**, follows when the active profile is a signed-in Cinna account whose instance keeps [artifacts](../artifacts/artifacts.md) and the reference is a file or folder inside the agent's folder that is not a credential file. It is offered for folders and binary types too, since main publishes bytes, not text. It opens the Publish dialog, closes the menu, and the resulting card lands right after the message the reference was rendered in.
 
    Near the bottom of the window the menu opens upwards from the pointer instead.
 
@@ -269,6 +271,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Each use has its own cap.** Copy contents goes as far as a preview does, 25 MB, so a file the user can preview is a file they can copy; the clipboard takes it and nothing is edited. Save to Notes stays at 4 MB, because a note is opened and edited in place, not just held. The menu says which use it is; any other value gets the note cap.
 - **The menu survives the consent dialog, and only that.** A native dialog takes the window's focus, and a window blur normally closes the menu. A blur is ignored only while the consent call is pending; once it has answered, switching away closes the menu again even if the read or the note is still running. Declining closes the menu silently, as a declined click opens nothing.
 - **Copy contents writes the clipboard from main.** The renderer's clipboard refuses a write from a document without focus, and after a consent dialog the document may not have it back. Copy full path, which asks nothing, uses the renderer's clipboard as Copy text does.
+- **Publish… is decided with the other items, once, at open.** Whether artifacts are supported is read before the menu opens, so it neither appears nor disappears under the pointer. An outside reference and a credential reference never offer it: main would refuse the first and publish nothing of the second. The renderer only hands over `{agentId, path}`; main re-checks everything ([Artifacts](../artifacts/artifacts.md#what-may-be-published)).
 - **Reference in a new chat uses the reference's own agent**: the agent whose folder the span resolved in, which in a routed chat can be a different agent from the chat's. It lands where every "chat with this agent" action lands — the new-chat screen, that agent preselected, the Chats list beside it — as [New Chat with This Agent](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) does. The path is written into the new-chat screen's draft before the screen mounts, so it is in the input with the caret after it; a line break separates it from text the user had already typed there, which is kept.
 - **The path is the realpath**, for Copy full path and Reference in a new chat alike, not the display path: a relative path means nothing in another chat or tool.
 
@@ -326,5 +329,6 @@ For file paths, IPC signatures and method-level detail see [File References — 
 - [Kit Contract](../../agents/local_agents/kit_contract.md): the `credentials/` folder convention the credential rule follows.
 - [Conversation UI](../conversation_ui/conversation_ui.md): the message bubbles the links render in, and the transcript right-click menu the reference items live in.
 - [Notes](../../notes/notes/notes.md): Save to Notes creates an ordinary note from the file, and opens it as a saved excerpt is opened.
+- [Artifacts](../artifacts/artifacts.md): the **Publish…** item, and the persisted message a reference remembers (`MessageIdContext`) so the card goes after it. A link to `/artifact/<uuid>` is also no file link: it renders as an artifact card.
 - [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md): Reference in a new chat shares the "chat with this agent" landing and the disabled/missing-agent toast with the chat-starting shortcuts.
 - [Settings Scope](../../core/settings_scope/settings_scope.md): folder agents are located in the settings scope, and approvals are keyed by the profile scope.

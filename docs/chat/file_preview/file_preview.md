@@ -54,6 +54,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
   - Attachments get an icon-only Download, except one opened from the composer. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
+  - An agent file inside the agent's folder, other than a credential file, also gets a **Publish…** button (an upload icon and the word) before **⋯** while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it.
   - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
   - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
@@ -406,6 +407,7 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 - [File Attachments](../file_attachments/file_attachments.md): user-uploaded badges and thumbnails route through `useAttachmentOpen`, and preview reuses the same `cinna`/`local` source split. The composer's files, pasted ones included, open here through `useComposerAttachmentOpen`, and the inline thumbnails share this feature's image read and cache.
 - [Agent Attachments](../agent_attachments/agent_attachments.md): agent-attached badges preview too; they used to be download-only.
 - [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy. An HTML page's assets go through the same containment, consent and credential checks, and its right-click menu offers Open in browser.
+- [Artifacts](../artifacts/artifacts.md): the header's **Publish…** for an agent file. The preview target remembers the persisted message the reference was in (`messageId` on `useFilePreviewStore`'s `agentFile` target) so the card is placed after it.
 - [Note Attachments](../note_attachments/note_attachments.md): a separate preview surface, `NotePreviewModal`, which shows a live note body at the composer stage. This feature previews files already sent or on disk.
 
 ## Future Enhancements (Out of Scope)
