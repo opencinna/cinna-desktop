@@ -362,6 +362,32 @@
     background-color: var(--color-bg-secondary);
     border-color: color-mix(in srgb, var(--color-text-muted) 60%, var(--color-border));
   }
+  /* An artifact card's actions (Open, Copy link, Share…) and the Share
+     popover's: badge-sized, filled with a tint of the theme's accent so they
+     read as buttons on the frosted card in either theme. */
+  .artifact-card-button {
+    --artifact-tint: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-secondary));
+    background-color: var(--artifact-tint);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+    color: var(--color-text);
+  }
+  .artifact-card-button:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--color-accent) 20%, var(--color-bg-secondary));
+    border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  }
+  /* The card's actions, under it: they fade in and out, and an icon button
+     has no surface until hovered, then the accent tint. */
+  .artifact-card-drawer {
+    transition: opacity 160ms ease-out;
+  }
+  .artifact-icon-button {
+    color: var(--color-text-muted);
+    transition: background-color 120ms ease-out, color 120ms ease-out;
+  }
+  .artifact-icon-button:hover, .artifact-icon-button[aria-expanded="true"] {
+    background-color: color-mix(in srgb, var(--color-accent) 16%, transparent);
+    color: var(--color-text);
+  }
   @keyframes composer-notice-orbit {
     from { --ambient-border-angle: 0deg; }
     to { --ambient-border-angle: 360deg; }

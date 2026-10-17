@@ -68,7 +68,7 @@ export function ArtifactApprovalCard({ summary }: { summary: ArtifactApprovalSum
       role="group"
       aria-label={`Publish request: ${summary.title}`}
       data-artifact-approval={summary.requestId}
-      className="max-w-lg rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)] px-3 py-2.5"
+      className="max-w-lg rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-overlay-panel)] px-3 py-2.5 backdrop-blur-xl"
     >
       <div className="flex items-center gap-2">
         <Upload size={14} className="shrink-0 text-[var(--color-accent)]" aria-hidden />

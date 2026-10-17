@@ -9,7 +9,9 @@ A folder agent leaves files: a report, a CSV, a folder with a small dashboard in
 - **Artifact** — the published copy on cinna-core: a title, a kind, numbered revisions, who can see it, and a page at `<frontend>/artifact/<uuid>`. In code it is a `PublishedArtifact`, never to be confused with a task's `artifacts` field (`TaskArtifact`, `DelegationArtifact`), which is a link in a report.
 - **Kind** — decided by core from the files sent: a **site** has an HTML entry and runs in a sandbox on core's page; **files** are browsed. A folder with a root `index.html` is a site; a lone `.html` file is a site; a folder with other `.html` files but no root `index.html` is files until the user picks a **start page**.
 - **Revision** — publishing the same path again adds a revision to the same artifact (**Update**). The artifact's page, links and audience stay.
-- **Artifact card** — the chat's own rendering of an artifact: an icon by kind, the title, revision and audience, then **Open** (core's page in the browser), **Copy link** and, for the owner, **Share…**. It sits right after the message the publish came from. A link to an artifact in an agent's text renders as the same card.
+- **Artifact card** — the chat's own rendering of an artifact: one compact bordered target with an icon by kind, the title, and one line of revision and audience. Pressing it opens the in-app **Preview**. Under it sits a row kept for its actions — **Open** (core's page in the browser), **Copy link** and, for the owner, **Share…** — as icon buttons that fade in on hover or keyboard focus (and stay while Share… is open), each with a tooltip that appears at once. At rest only the card shows, and revealing the row moves nothing. It sits right after the message the publish came from. A link to an artifact in an agent's text renders as the same card.
+- **Audience line marks** — the card has no room for sentences, so a small mark ends the audience line and its tooltip says the rest: a warning triangle (the publish worked but sharing did not finish), a link mark (a public link made at publish is still held in Share…) and a red circle (Open or Copy link failed). The content behind the first two lives in the Share popover.
+- **Preview** — the in-app view of the artifact's *published revision* (not the folder on disk): a site shows its start page, a files artifact lists its files and shows the chosen one. See the flow below.
 - **Audience** — two independent facts: *who can see it* (**only you** or **everyone on the instance**) and *how many public links are live*; core's web page can also share it with named people, which the card shows ("shared with 2 people") and the desktop never edits. The owner's card asks core for this rather than trusting what was stored at publish, because a grant made on core's page never reaches the local row; until core answers, or if it cannot be read, the card shows the stored audience. "Public" is never a visibility. It is a link.
 - **Public link** — an unguessable URL (optionally with a code) anyone can open. Its URL and code are shown once when created and are never stored on this machine.
 - **Publish approval** — the card an agent's publish request waits on. See [Agent Publish](agent_publish.md).
@@ -32,13 +34,20 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 2. The **Publish** dialog opens with the path already inspected: a title (the name, a file's without the extension), an optional description, the kind line ("Mini-site · opens index.html", "3 files", "Markdown document"), the files with what is left out struck through and why, the total, and **Who can see it**: *Only you* (the default), *Everyone on the instance*, *Anyone with a link*.
 3. A folder with HTML files but no `index.html` also shows a **Start page** picker; without a choice it is published as files.
 4. If this path was published before the dialog offers **Update "<title>" (rev N)** — the default, taking that artifact's title and audience as its starting point — or **Publish as new**.
-5. **Publish** packs, uploads and (when the user chose more than private) applies the audience; the button says the phase. On success the dialog closes and the card appears in the chat after the message the reference came from. A link created for "Anyone with a link" is shown once on the card.
-6. A publish that worked while its follow-up did not (the audience, the link) is said once on the card — "Published, but it is still visible only to you: …" — and is not an error.
+5. **Publish** packs, uploads and (when the user chose more than private) applies the audience; the button says the phase. On success the dialog closes and the card appears in the chat after the message the reference came from. A link created for "Anyone with a link" is held for **Share…**, which shows it once; the card carries only a link mark.
+6. A publish that worked while its follow-up did not (the audience, the link) is not an error: the card's audience line gets a warning mark, and **Share…** opens with the sentence — "Published, but it is still visible only to you: …" — which can be dismissed.
 
 ### Share, copy and revoke from the card
 
-1. **Share…** opens a popover that reads core's current state: *Who can see it* and the **Public links** (live ones first, each revocable). Creating a link shows its URL once. Revoking asks inline in the link's own row ("People with this link lose access.").
+1. Hover or focus the card and press **Share…**. The popover reads core's current state: *Who can see it* and the **Public links** (live ones first, each revocable), and carries the publish warning and the just-made link when there are any. Creating a link shows its URL once. Revoking asks inline in the link's own row ("People with this link lose access.").
 2. Anything changed here, or on core's web page, shows on the card the next time it is read.
+3. **Copy link** shows "Copied" for a moment; **Open** sends core's page to the browser. If either fails, a red mark on the audience line carries the reason as its tooltip.
+
+### Preview an artifact
+
+1. Press the card (or an artifact-link card). A modal grows from the click, like the [file preview](../file_preview/file_preview.md), with the title, revision, **Open in browser** and **Copy link**.
+2. A **site** shows its start page in the same sandboxed frame an HTML file preview uses; its own relative files load from the published revision. **Files** list on the left, the chosen one on the right: markdown, CSV, JSON, XML, Python and plain text render with the file preview's own renderers, pages and images in the frame, anything else (an archive, a PDF) is listed but not shown.
+3. Loading, a failure and "deleted on <instance>" are said inside the modal; none of them closes it. A failure offers **Open in browser** instead.
 
 ### An artifact link in the agent's text
 
@@ -68,8 +77,17 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 - Every outcome is data. A refusal is said inside the dialog, which stays open and closes nothing; while publishing the dialog cannot be dismissed.
 - A sign-in that expired says "Sign in to Cinna again, then try once more." and an unreachable instance says to check the connection.
 
+### Preview
+
+- **Anyone who can view the artifact may preview it, owner or not** — a link card for a colleague's artifact previews too. Core decides: a refusal is said inside the modal.
+- **It needs the network.** Nothing is cached on this machine: every open asks core for a short-lived view of the artifact's *current* revision, and files are fetched from core as they are shown. Offline, or after the artifact was deleted, the modal says so and **Open in browser** is the way out.
+- **The view capability never reaches the renderer.** The URL that lets core serve the files is a credential; main keeps it and the renderer holds only an opaque token (at most 16 open, released when the preview closes, tied to the profile that opened it). Page, images and the rendered text all come through main, so a compromised renderer cannot read the capability.
+- **A page in the preview is as boxed in as an HTML file's:** same sandbox (no same-origin, no popups), and it may load only what the artifact itself holds. A web link in it opens in the browser.
+- **A long preview is not a longer capability:** main asks core for a fresh one shortly before the old one expires, so a page left open keeps working.
+
 ## What this does not do
 
+- It does not preview the folder on disk, nor older revisions: only what core serves now.
 - It does not edit who an artifact is shared with by name; that is core's page.
 - It does not delete or unpublish. A person does that on core.
 - It does not keep a marker in the source folder, and it does not watch the folder for changes: *Update* is always a deliberate act.
@@ -84,12 +102,15 @@ Reference menu / preview header -> artifactPublish store -> PublishArtifactDialo
         -> inspect (walk, no symlinks) -> zip -> cinnaSend (multipart) -> cinna-core /api/v1/artifacts
         -> publishedArtifactRepo (memory + chat card) -> artifacts:changed -> cards re-read
 Agent's text link -> ArtifactLinkCard -> artifacts:detail -> cinnaFetch
+Card -> artifactPreview store -> ArtifactPreviewModal -> html-preview:open-artifact -> cinna-core POST /artifacts/{id}/view
+   -> token; frame src cinna-preview://art-<token>/ -> artifactPreviewServer -> core's content origin
+   -> text files: html-preview:read-artifact-text -> file preview's renderers
 ```
 
 ## Integration Points
 
 - [File References](../file_references/file_references.md): the **Publish…** menu item, and the persisted message a reference was rendered in (where the card anchors).
-- [File Preview](../file_preview/file_preview.md): the **Publish…** header button of an agent file.
+- [File Preview](../file_preview/file_preview.md): the **Publish…** header button of an agent file; and the renderers (markdown, table, trees, highlighted source) and sandboxed frame the artifact Preview reuses.
 - [Agent Publish](agent_publish.md): the `artifacts_publish` tool, its approval card and the Inbox row.
 - [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md): the `cinna` MCP server the tool lives on, and the skill delivery shared with `cinna-tasks`.
 - [Kit Contract](../../agents/local_agents/kit_contract.md): the vendored `artifacts.schema.json` and `cinna-artifacts` skill (contract 1.12.0; the `artifacts/` folder role, 1.13.0).

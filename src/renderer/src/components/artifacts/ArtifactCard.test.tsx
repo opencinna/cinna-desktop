@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../stores/logger.store', () => ({
@@ -11,6 +11,7 @@ import { ArtifactCard } from './ArtifactCard'
 import { useAuthStore } from '../../stores/auth.store'
 import { useArtifactsSupportStore } from '../../hooks/useArtifacts'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
+import { useArtifactPreviewStore } from '../../stores/artifactPreview.store'
 import type { ArtifactDetail, PublishedArtifact } from '../../../../shared/artifacts'
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
@@ -49,6 +50,7 @@ beforeEach(() => {
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   useArtifactsSupportStore.setState({ profileId: 'alice', support: { supported: true, instanceName: 'Acme', limits: LIMITS, linkOrigins: ORIGINS } })
   useArtifactPublishStore.setState({ freshLinks: {}, warnings: {} })
+  useArtifactPreviewStore.setState({ artifact: null, origin: null })
 })
 
 describe('a link to an artifact page in agent text', () => {
@@ -145,10 +147,11 @@ describe('the card', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy link to Q3 churn' }))
     })
     expect(writeText).toHaveBeenCalledWith(artifact.url)
-    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    // The tooltip says it; the button keeps its name.
+    expect(screen.getByText('Copied')).toBeTruthy()
     writeText.mockResolvedValue({ success: false })
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Copied' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Copy link to Q3 churn' }))
     })
     expect(screen.getByRole('alert').textContent).toMatch(/clipboard refused/)
   })
@@ -190,27 +193,130 @@ describe('the card', () => {
     expect(detailCall).not.toHaveBeenCalled()
   })
 
-  it('says an artifact deleted on core is gone, with Share… disabled in its place', async () => {
+  it('says an artifact deleted on core is gone: no Share…, and its body opens nothing', async () => {
     detailCall.mockResolvedValue({ ok: false, code: 'gone', message: 'gone' })
-    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    // A warning from its publish would point at a Share… that is no longer there: no mark.
+    useArtifactPublishStore.setState({ warnings: { [ID]: 'Published, but it is still visible only to you.' } })
+    const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
     expect(await screen.findByText('rev 3 · deleted on Acme')).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'Share Q3 churn' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Share Q3 churn' })).toBeNull()
+    expect(container.querySelector('[data-artifact-warning-mark]')).toBeNull()
+    const body = screen.getByRole('button', { name: 'Q3 churn, deleted on Acme' }) as HTMLButtonElement
+    expect(body.disabled).toBe(true)
+    fireEvent.click(body)
+    expect(useArtifactPreviewStore.getState().artifact).toBeNull()
   })
 
-  it('names its buttons after the artifact, keeping the visible labels', () => {
+  it('shows only the card at rest; its icon buttons fade in under it on hover or keyboard focus, moving nothing', () => {
+    const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    const group = screen.getByRole('group', { name: 'Artifact Q3 churn' })
+    const main = container.querySelector('[data-artifact-card-main]') as HTMLElement
+    const drawer = container.querySelector('[data-artifact-card-drawer]') as HTMLElement
+    const body = container.querySelector('[data-artifact-card-body]') as HTMLElement
+    // The controls are not inside the card.
+    expect(main.contains(drawer)).toBe(false)
+    // A row of fixed height kept for them in both states, so nothing moves.
+    expect(drawer.className).toContain('h-7')
+    // At rest: present (so Tab reaches its buttons) but invisible and not clickable.
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('in')
+    expect(drawer.className).toContain('opacity-0')
+    expect(drawer.className).toContain('pointer-events-none')
+    const mainClass = main.className
+    const bodyClass = body.className
+    fireEvent.mouseEnter(group)
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('out')
+    expect(drawer.className).toContain('opacity-100')
+    expect(drawer.className).not.toContain('pointer-events-none')
+    // The card itself (title and audience line) is untouched by the hover.
+    expect(main.className).toBe(mainClass)
+    expect(body.className).toBe(bodyClass)
+    fireEvent.mouseLeave(group)
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('in')
+    // Keyboard: focus on the body brings it out, and it stays while focus moves along its buttons.
+    act(() => body.focus())
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('out')
+    act(() => screen.getByRole('button', { name: 'Open Q3 churn' }).focus())
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('out')
+    act(() => (document.activeElement as HTMLElement).blur())
+    expect(drawer.getAttribute('data-artifact-card-drawer')).toBe('in')
+  })
+
+  it('the card body opens the in-app preview of this artifact, from the click', () => {
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Q3 churn' }), { detail: 1, clientX: 40, clientY: 50 })
+    const state = useArtifactPreviewStore.getState()
+    expect(state.artifact?.id).toBe(ID)
+    expect(state.instanceName).toBe('Acme')
+    expect(state.origin).toEqual({ x: 40, y: 50 })
+  })
+
+  it('takes part in the ambient glow: the card and each button', () => {
+    const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    const main = container.querySelector('[data-artifact-card-main]') as HTMLElement
+    expect(main.hasAttribute('data-ambient-card')).toBe(true)
+    expect(main.className).toContain('ambient-button')
+    for (const name of ['Open Q3 churn', 'Copy link to Q3 churn', 'Share Q3 churn']) {
+      expect(screen.getByRole('button', { name }).className).toContain('ambient-button')
+    }
+  })
+
+  it('a sharing warning is a mark on the card and the sentence in Share…, dismissable there', async () => {
+    const warning = 'Published, but it is still visible only to you: Your role cannot share.'
+    useArtifactPublishStore.setState({ warnings: { [ID]: warning } })
+    const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    const card = container.querySelector('[data-artifact-card]') as HTMLElement
+    expect(card.textContent).not.toContain('still visible only to you')
+    expect(container.querySelector('[data-artifact-warning-mark]')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+    const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+    expect(popover.firstElementChild?.textContent).toContain(warning)
+    fireEvent.click(within(popover).getByRole('button', { name: 'Hide this note' }))
+    expect(useArtifactPublishStore.getState().warnings[ID]).toBeUndefined()
+    expect(popover.textContent).not.toContain('still visible only to you')
+    expect(container.querySelector('[data-artifact-warning-mark]')).toBeNull()
+  })
+
+  it('names its icon buttons after the artifact, each with a tooltip', () => {
     wrap(<ArtifactCard artifact={artifact} />)
-    expect(screen.getByRole('button', { name: 'Open Q3 churn' }).textContent).toBe('Open')
-    expect(screen.getByRole('button', { name: 'Copy link to Q3 churn' }).textContent).toBe('Copy link')
-    expect(screen.getByRole('button', { name: 'Share Q3 churn' }).textContent).toBe('Share…')
+    const tips = [
+      ['Open Q3 churn', 'Open in the browser'],
+      ['Copy link to Q3 churn', 'Copy link'],
+      ['Share Q3 churn', 'Share…']
+    ]
+    for (const [name, tip] of tips) {
+      const button = screen.getByRole('button', { name })
+      expect(button.textContent, name).toBe('')
+      expect(button.parentElement?.textContent, name).toBe(tip)
+    }
   })
 
-  it('shows a link created at publish once', () => {
-    useArtifactPublishStore.setState({ freshLinks: { [ID]: { url: 'http://core.test/s/tok' } } })
-    wrap(<ArtifactCard artifact={{ ...artifact, liveLinkCount: 1 }} />)
-    expect(screen.getByText('http://core.test/s/tok')).toBeTruthy()
-    expect(screen.getByText('rev 3 · only you · 1 public link')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Hide this link' }))
+  it('a link created at publish is a mark on the card and the URL at the top of Share…, until hidden', async () => {
+    useArtifactPublishStore.setState({ freshLinks: { [ID]: { url: 'http://core.test/s/tok', code: '1234' } } })
+    const { container } = wrap(<ArtifactCard artifact={{ ...artifact, liveLinkCount: 1 }} />)
+    // Nothing hangs under the card: only a mark on its audience line.
     expect(screen.queryByText('http://core.test/s/tok')).toBeNull()
+    expect(container.querySelector('[data-artifact-fresh-link]')).toBeNull()
+    expect(screen.getByRole('img', { name: 'New public link — open Share… to copy it' })).toBeTruthy()
+    expect(screen.getByText('rev 3 · only you · 1 public link')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+    const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+    expect(popover.querySelector('[data-artifact-share-fresh-link]')?.textContent).toContain('http://core.test/s/tok')
+    expect(popover.textContent).toContain('Code: 1234')
+    // Closing and opening Share… again keeps it: it stays until hidden.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+    const again = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+    fireEvent.click(within(again).getByRole('button', { name: 'Hide this link' }))
+    expect(screen.queryByText('http://core.test/s/tok')).toBeNull()
+    expect(screen.queryByRole('img', { name: 'New public link — open Share… to copy it' })).toBeNull()
+  })
+
+  it('at rest the card is one row: no block under it in any state', () => {
+    useArtifactPublishStore.setState({ freshLinks: { [ID]: { url: 'http://core.test/s/tok' } }, warnings: { [ID]: 'Published, but…' } })
+    const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    const main = container.querySelector('[data-artifact-card-main]') as HTMLElement
+    // The card holds its body row and nothing else.
+    expect([...main.children].map((child) => child.hasAttribute('data-artifact-card-body'))).toEqual([true])
   })
 
   it('Share… focuses the checked choice, and Escape closes it back onto Share…', async () => {

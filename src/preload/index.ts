@@ -1790,7 +1790,13 @@ const api = {
   htmlPreview: {
     open: (input: HtmlPreviewOpenInput): Promise<HtmlPreviewOpenResult> =>
       ipcRenderer.invoke('html-preview:open', input),
-    release: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('html-preview:release', token)
+    release: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('html-preview:release', token),
+    /** A published artifact's revision, served under `cinna-preview://<token>/`; `release` ends it too. */
+    openArtifact: (artifactId: string): Promise<import('../shared/artifacts').ArtifactPreviewOpenResult> =>
+      ipcRenderer.invoke('html-preview:open-artifact', artifactId),
+    /** One file's text from an open artifact preview (`openArtifact`'s token), read by main. */
+    readArtifactText: (token: string, path: string): Promise<import('../shared/artifacts').ArtifactPreviewTextResult> =>
+      ipcRenderer.invoke('html-preview:read-artifact-text', token, path)
   },
 
   /**

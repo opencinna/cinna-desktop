@@ -690,3 +690,55 @@ describe('share', () => {
     expect(service.cards(5)).toEqual([])
   })
 })
+
+describe('view', () => {
+  const VIEW = {
+    content_base: 'https://content.example/a/v/cap123/',
+    entry: 'index.html',
+    files: [
+      { path: 'index.html', size: 12, sha256: 'x', mime: 'text/html' },
+      { path: 'css/site.css', size: 3, sha256: 'y', mime: 'text/css' },
+      { path: '../escape.txt', size: 1, sha256: 'z', mime: 'text/plain' }
+    ],
+    revision_number: 4,
+    expires_at: '2026-10-17T12:00:00Z',
+    download_url: 'https://content.example/a/z/cap123'
+  }
+
+  it('mints a view capability on core and returns its base, entry and files', async () => {
+    const { service, calls, events } = setup({ answers: [{ status: 200, ok: true, body: VIEW }] })
+    expect(await service.view(ID.toUpperCase())).toEqual({
+      ok: true,
+      view: {
+        contentBase: 'https://content.example/a/v/cap123/',
+        entry: 'index.html',
+        files: [
+          { path: 'index.html', size: 12, mime: 'text/html' },
+          { path: 'css/site.css', size: 3, mime: 'text/css' }
+        ],
+        revision: 4,
+        expiresAt: '2026-10-17T12:00:00Z'
+      }
+    })
+    expect(calls.map((call) => [call.method, call.path])).toEqual([['POST', `/api/v1/artifacts/${ID}/view`]])
+    // Reading is not a change: no card reads again.
+    expect(events.filter((event) => event.channel !== 'artifacts:support-changed')).toEqual([])
+  })
+
+  it('a deleted (or unviewable) artifact is gone, as data', async () => {
+    const { service } = setup({ answers: [{ status: 404, ok: false, body: { detail: 'Not found' } }] })
+    expect(await service.view(ID)).toMatchObject({ ok: false, code: 'gone' })
+  })
+
+  it('refusals and malformed answers are data, never thrown', async () => {
+    const forbidden = setup({ answers: [{ status: 403, ok: false, body: { detail: 'No.' } }] })
+    expect(await forbidden.service.view(ID)).toMatchObject({ ok: false, code: 'forbidden', message: 'No.' })
+    const thrown = setup({ answers: [new CinnaApiError('request_failed', 'down', 'down', 502)] })
+    expect(await thrown.service.view(ID)).toMatchObject({ ok: false, code: 'request_failed' })
+    const odd = setup({ answers: [{ status: 200, ok: true, body: { ...VIEW, content_base: 'file:///etc/' } }] })
+    expect(await odd.service.view(ID)).toMatchObject({ ok: false, code: 'request_failed' })
+    const unsupported = setup({ discover: async () => ({}) })
+    expect(await unsupported.service.view(ID)).toMatchObject({ ok: false, code: 'not_supported' })
+    expect(await setup().service.view('../x')).toMatchObject({ ok: false, code: 'invalid_input' })
+  })
+})

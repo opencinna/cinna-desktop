@@ -9,6 +9,8 @@ import {
   createHtmlPreviewServer
 } from '../../services/htmlPreview/htmlPreviewServer'
 import { runtimeHost } from '../runtimeHost'
+import { createArtifactPreviewServer } from '../../services/htmlPreview/artifactPreviewServer'
+import { artifactService } from '../../services/artifacts/artifactService'
 import { agentFileService, openInBrowser } from './agentFiles'
 import {
   createExternalOpenGate,
@@ -48,6 +50,28 @@ export const htmlPreviewServer = createHtmlPreviewServer({
   readAgentAsset: (input, segments, maxBytes) => agentFileService.readHtmlAsset(input, segments, maxBytes)
 })
 
+/**
+ * The published-artifact preview on the same scheme (`cinna-preview://art-<token>/…`):
+ * the view capability stays here, its files are fetched from core's content
+ * origin through the host's HTTP stack.
+ */
+export const artifactPreviewServer = createArtifactPreviewServer({
+  currentUserId: getProfileScopeUserId,
+  mint: (artifactId, userId) => artifactService.view(artifactId, { profileUserId: userId }),
+  fetch: (url, init) => runtimeHost.http.fetch(url, init)
+})
+
+/** Which of the scheme's two servers a request is for, by its host. */
+function handlePreviewRequest(request: Request): Promise<Response> {
+  let host = ''
+  try {
+    host = new URL(request.url).hostname
+  } catch {
+    // Unparseable: the HTML preview's handler answers it with a 404.
+  }
+  return artifactPreviewServer.owns(host) ? artifactPreviewServer.handle(request) : htmlPreviewServer.handle(request)
+}
+
 const installed = new WeakSet<Session>()
 
 /**
@@ -59,7 +83,7 @@ const installed = new WeakSet<Session>()
 export function installHtmlPreviewSession(ses: Session = session.defaultSession): void {
   if (installed.has(ses)) return
   installed.add(ses)
-  ses.protocol.handle(HTML_PREVIEW_SCHEME, (request) => htmlPreviewServer.handle(request))
+  ses.protocol.handle(HTML_PREVIEW_SCHEME, handlePreviewRequest)
   ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
     const granted = isAppPermissionRequester(details)
     if (!granted) logger.info('refused a permission to a frame', { permission })

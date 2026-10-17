@@ -1,7 +1,10 @@
 import { userActivation } from '../auth/activation'
+import { getProfileScopeUserId } from '../auth/scope'
 import { ipcErrorShape } from '../errors'
 import { agentFileService } from '../host/desktop/agentFiles'
-import { htmlPreviewServer } from '../host/desktop/htmlPreview'
+import { artifactPreviewServer, htmlPreviewServer } from '../host/desktop/htmlPreview'
+import { artifactService } from '../services/artifacts/artifactService'
+import type { ArtifactPreviewOpenResult, ArtifactPreviewTextResult } from '../../shared/artifacts'
 import { assertFileScope } from '../services/fileService'
 import { previewKindFor } from '../../shared/filePreview'
 import type { HtmlPreviewOpenResult } from '../../shared/htmlPreview'
@@ -53,8 +56,34 @@ export function registerHtmlPreviewHandlers(): void {
     return { success: false, error: 'Nothing to preview.', code: 'invalid_input' }
   })
 
+  /**
+   * A published artifact's preview: core mints a view capability for the
+   * active profile, which main keeps; the renderer gets a token whose
+   * `cinna-preview://<token>/` serves the revision's files. Refusals are data.
+   */
+  ipcHandle('html-preview:open-artifact', async (_event, artifactId: unknown): Promise<ArtifactPreviewOpenResult> => {
+    userActivation.requireActivated()
+    // Read once: a profile switch during the call must not bind this view to the next profile.
+    const profileUserId = getProfileScopeUserId()
+    const outcome = await artifactService.view(artifactId, { profileUserId })
+    if (!outcome.ok) return outcome
+    const { token, baseUrl } = artifactPreviewServer.register(String(artifactId).toLowerCase(), outcome.view, profileUserId)
+    const { entry, files, revision } = outcome.view
+    return { ok: true, token, baseUrl, entry, files, revision }
+  })
+
+  /** One file's text from an open artifact preview, by its token; the capability stays in main. */
+  ipcHandle(
+    'html-preview:read-artifact-text',
+    async (_event, token: unknown, path: unknown): Promise<ArtifactPreviewTextResult> => {
+      userActivation.requireActivated()
+      return artifactPreviewServer.readText(token, path)
+    }
+  )
+
   ipcHandle('html-preview:release', (_event, token: unknown): { success: true } => {
     htmlPreviewServer.release(token)
+    artifactPreviewServer.release(token)
     return { success: true }
   })
 }

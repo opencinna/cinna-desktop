@@ -484,3 +484,48 @@ export function artifactRefusalLine(note: string | null | undefined, agentText: 
   if (agentText.startsWith(ARTIFACT_AGENT_SENTENCE.failed)) return `Not published — ${asArtifactClause(agentText.slice(ARTIFACT_AGENT_SENTENCE.failed.length))}`
   return 'Not published — the agent’s request could not be carried out'
 }
+
+/** One file of a published revision, as core's view lists it. */
+export interface ArtifactViewFile {
+  path: string
+  size: number
+  mime: string
+}
+
+/**
+ * A view capability for an artifact's current revision (core's
+ * `POST /artifacts/{id}/view`). Main-side only: `contentBase` holds the
+ * capability, so it never crosses IPC — the renderer gets a
+ * `cinna-preview:` token instead ({@link ArtifactPreviewOpenResult}).
+ */
+export interface ArtifactView {
+  /** `<content origin>/a/v/<cap>/`; every file is this plus its path. */
+  contentBase: string
+  /** The start page of a site; null for files. */
+  entry: string | null
+  files: ArtifactViewFile[]
+  revision: number
+  /** ISO time the capability stops working. */
+  expiresAt: string
+}
+
+export type ArtifactsViewOutcome = { ok: true; view: ArtifactView } | ArtifactFailure
+
+/** The in-app preview of a published artifact, served under `cinna-preview://<token>/`. */
+export type ArtifactPreviewOpenResult =
+  | {
+      ok: true
+      token: string
+      /** `cinna-preview://<token>/`; a file's URL is this plus its encoded path. */
+      baseUrl: string
+      entry: string | null
+      files: ArtifactViewFile[]
+      revision: number
+    }
+  | ArtifactFailure
+
+/**
+ * `html-preview:read-artifact-text`: one file of an open artifact preview, read
+ * by main through the token's capability, cut at `MAX_PREVIEW_BYTES`.
+ */
+export type ArtifactPreviewTextResult = { ok: true; text: string; truncated: boolean } | ArtifactFailure

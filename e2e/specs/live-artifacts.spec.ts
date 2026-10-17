@@ -459,6 +459,8 @@ test('L1 a person publishes a site folder, republishes it, and shares it with th
 
   await test.step('Share → Everyone on the instance is what core says', async () => {
     const page = cinna.page
+    // The card's drawer slides out on hover.
+    await card(page, L1_TITLE).locator('[data-artifact-card-body]').hover()
     await card(page, L1_TITLE).getByRole('button', { name: `Share ${L1_TITLE}`, exact: true }).click()
     const share = page.getByRole('dialog', { name: `Share ${L1_TITLE}`, exact: true })
     const everyone = share.getByRole('radio', { name: `Everyone on ${instance}`, exact: true })
@@ -886,6 +888,10 @@ test('L3 core’s web page shows what the desktop published: a public link, the 
       created.add(artifactId)
       console.log(`live-artifacts L3 created artifact ${artifactId}`)
 
+      // The card's drawer slides out on hover.
+
+      await card(page, L3_TITLE).locator('[data-artifact-card-body]').hover()
+
       await card(page, L3_TITLE).getByRole('button', { name: `Share ${L3_TITLE}`, exact: true }).click()
       const share = page.getByRole('dialog', { name: `Share ${L3_TITLE}`, exact: true })
       await share.getByRole('button', { name: 'Create link', exact: true }).click()
@@ -1077,6 +1083,8 @@ test('L4 the CLI publishes, the desktop draws the card for its URL, and a Share 
 
   await test.step('Everyone on the instance from the card’s Share is what cinna artifacts show reports', async () => {
     const page = cinna.page
+    // The card's drawer slides out on hover.
+    await card(page, L4_TITLE).locator('[data-artifact-card-body]').hover()
     await card(page, L4_TITLE).getByRole('button', { name: `Share ${L4_TITLE}`, exact: true }).click()
     const share = page.getByRole('dialog', { name: `Share ${L4_TITLE}`, exact: true })
     const everyone = share.getByRole('radio', { name: `Everyone on ${instance}`, exact: true })

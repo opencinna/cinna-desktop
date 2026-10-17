@@ -343,6 +343,14 @@ function card(page: Page, title: string): Locator {
   return page.getByRole('group', { name: `Artifact ${title}`, exact: true })
 }
 
+/** A card's action: it fades in beside the card on hover, so point at the card first. */
+async function cardAction(page: Page, title: string, name: string): Promise<Locator> {
+  await card(page, title).locator('[data-artifact-card-body]').hover()
+  const action = card(page, title).getByRole('button', { name, exact: true })
+  await expect(card(page, title).locator('[data-artifact-card-drawer="out"]')).toBeVisible()
+  return action
+}
+
 function readClipboard(cinna: CinnaApp): Promise<string> {
   return cinna.electronApp.evaluate(({ clipboard }) => clipboard.readText())
 }
@@ -432,14 +440,14 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
     await test.step('Copy link puts the core page on the clipboard', async () => {
       const page = cinna.page
       await writeClipboard(cinna, 'e2e clipboard sentinel')
-      await card(page, 'q3').getByRole('button', { name: 'Copy link to q3', exact: true }).click()
+      await (await cardAction(page, 'q3', 'Copy link to q3')).click()
       await expect.poll(() => readClipboard(cinna)).toBe(core.pageUrl(artifactId))
-      await expect(card(page, 'q3').getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
+      await expect(card(page, 'q3').getByText('Copied', { exact: true })).toBeVisible()
     })
 
     await test.step('Share… changes who can see it, and creates and revokes a public link', async () => {
       const page = cinna.page
-      await card(page, 'q3').getByRole('button', { name: 'Share q3', exact: true }).click()
+      await (await cardAction(page, 'q3', 'Share q3')).click()
       const share = page.getByRole('dialog', { name: 'Share q3', exact: true })
       await expect(share.getByText('Anyone with a link can open it. None yet.', { exact: true })).toBeVisible()
       await share.getByRole('radio', { name: `Everyone on ${INSTANCE}`, exact: true }).click()
@@ -465,7 +473,7 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
       await expect(card(page, 'q3')).toContainText(`rev 1 · everyone on ${INSTANCE}`)
       await expect(card(page, 'q3')).not.toContainText('public link')
       // Back to Only me for the update below.
-      await card(page, 'q3').getByRole('button', { name: 'Share q3', exact: true }).click()
+      await (await cardAction(page, 'q3', 'Share q3')).click()
       await share.getByRole('radio', { name: 'Only me', exact: true }).click()
       await expect(share.getByRole('radio', { name: 'Only me', exact: true })).toBeChecked()
       await expect(card(page, 'q3')).toContainText('rev 1 · only you')

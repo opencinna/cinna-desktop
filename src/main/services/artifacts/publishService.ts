@@ -61,6 +61,7 @@ import {
   type PublishedArtifact,
   type PublishVisibility
 } from '../../../shared/artifacts'
+import type { ArtifactsViewOutcome, ArtifactView, ArtifactViewFile } from '../../../shared/artifacts'
 
 export const ARTIFACTS_PATH = '/api/v1/artifacts'
 export const CAPABILITIES_PATH = `${ARTIFACTS_PATH}/capabilities`
@@ -894,6 +895,25 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
     },
 
     /**
+     * A view capability for the artifact's current revision (the in-app
+     * preview). Works for anyone core lets view it, owner or not. The
+     * capability is main-side state: callers never hand `contentBase` to the
+     * renderer. Read-only on core, so it announces nothing.
+     */
+    async view(artifactId: unknown, options: ArtifactCallOptions = {}): Promise<ArtifactsViewOutcome> {
+      return guarded(async () => {
+        if (!isArtifactId(artifactId)) return fail('invalid_input')
+        const who = await account(options)
+        if (isFailure(who)) return who
+        const answer = await deps.send(who.profile, `${ARTIFACTS_PATH}/${artifactId.toLowerCase()}/view`, { method: 'POST' })
+        if (!answer.ok) return refusal(answer, true)
+        const view = toView(answer.body)
+        if (!view) return fail('request_failed', 'Cinna answered with something that is not a view of the artifact.')
+        return { ok: true as const, view }
+      })
+    },
+
+    /**
      * The last support answer for `profile` (or the active one), without asking
      * again: this session's, else the supported answer kept from the last launch.
      * False until either exists.
@@ -939,3 +959,29 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
 }
 
 export type ArtifactService = ReturnType<typeof createArtifactService>
+
+/**
+ * Core's `ArtifactViewPublic`, checked: the content base must be an absolute
+ * `http(s)` URL ending in `/` (every file URL is it plus a path), and a file
+ * path a relative one with no `..` segment.
+ */
+function toView(value: unknown): ArtifactView | null {
+  const body = record(value)
+  if (!body || typeof body.content_base !== 'string' || typeof body.expires_at !== 'string') return null
+  const base = body.content_base
+  if (!/^https?:\/\//i.test(base) || !base.endsWith('/')) return null
+  try {
+    new URL(base)
+  } catch {
+    return null
+  }
+  const files: ArtifactViewFile[] = []
+  for (const raw of Array.isArray(body.files) ? body.files : []) {
+    const file = record(raw)
+    const path = text(file?.path)
+    if (!file || !path || path.startsWith('/') || path.includes('\\') || path.split('/').some((s) => s === '' || s === '.' || s === '..')) continue
+    files.push({ path, size: count(file.size), mime: text(file.mime) || 'application/octet-stream' })
+  }
+  const entry = typeof body.entry === 'string' && files.some((file) => file.path === body.entry) ? body.entry : null
+  return { contentBase: base, entry, files, revision: count(body.revision_number), expiresAt: body.expires_at }
+}

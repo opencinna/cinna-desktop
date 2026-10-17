@@ -419,6 +419,8 @@ test('G2 the card the desktop drew when it published shows a grant made on core'
 
   const page = cinna.page
   // Share… reads core's current state when it opens: the refresh the card has.
+  // The card's drawer slides out on hover.
+  await card(page, G2_TITLE).locator('[data-artifact-card-body]').hover()
   await card(page, G2_TITLE).getByRole('button', { name: `Share ${G2_TITLE}`, exact: true }).click()
   const share = page.getByRole('dialog', { name: `Share ${G2_TITLE}`, exact: true })
   await expect(share.getByRole('radio', { name: 'Only me', exact: true })).toBeEnabled({ timeout: 30_000 })
