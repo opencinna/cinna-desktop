@@ -4,6 +4,7 @@ import { createElement, Fragment, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunQueueTakenItem, RunQueueView, RunStartResult } from '../../../../shared/ipcPayloads'
 import type { MessageAttachment } from '../../../../shared/attachments'
+import { settleQueries as settle } from '../../test/queryNotifications'
 
 /**
  * Typing while a turn runs: the text goes to main (into the turn, or queued
@@ -112,8 +113,8 @@ async function mountWithQueue(
 ): Promise<Mounted> {
   run.queueList.mockResolvedValue(view)
   const mounted = mount(activeRunId, userTexts, options)
-  await waitFor(() => expect(run.queueList).toHaveBeenCalledWith('chat-1'))
-  await act(async () => {})
+  await waitFor(() => expect(mounted.client.getQueryState(['run-queue', 'chat-1'])?.status).toBe('success'))
+  await settle()
   return mounted
 }
 
@@ -487,7 +488,7 @@ describe('message history', () => {
     // Main announces the queue the take emptied.
     run.queueList.mockResolvedValue(queued())
     act(() => notify({ chatId: 'chat-1', view: queued() }))
-    await act(async () => {})
+    await settle()
     expect(box().value).toBe('fix tests please\n\nthen docs')
     expect(useChatStore.getState().sendError).toBeNull()
     expect(useChatStore.getState().editingQueued).toBeNull()
@@ -512,7 +513,7 @@ describe('message history', () => {
     run.queueTake.mockResolvedValueOnce([{ content: 'queued A' }])
     act(() => notify({ chatId: 'chat-1', view: held }))
     await waitFor(() => expect(run.queueTake).toHaveBeenCalledWith('chat-1'))
-    await act(async () => { await Promise.resolve() })
+    await settle()
     await nextFrame()
     expect(box().value).toBe('queued A, better')
     expect(useChatStore.getState().sendError).toBeNull()
@@ -525,8 +526,7 @@ describe('message history', () => {
       run.queueList.mockResolvedValue(view)
       act(() => notify({ chatId: 'chat-1', view }))
       // The cache tells its observers a tick later; then the effects run.
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-      await act(async () => {})
+      await settle()
     }
     async function editHandedOver(): Promise<void> {
       run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
@@ -589,8 +589,7 @@ describe('message history', () => {
       })
       key('Enter')
       await waitFor(() => expect(useChatStore.getState().sendError).toBe(QUEUED_EDIT_TOO_LATE))
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-      await act(async () => {})
+      await settle()
       expect(useChatStore.getState().editingQueued).toBeNull()
       expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
 
@@ -616,8 +615,7 @@ describe('message history', () => {
       })
       key('Enter')
       await waitFor(() => expect(run.queueEdit).toHaveBeenCalledTimes(1))
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-      await act(async () => {})
+      await settle()
       expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
       expect(box().value).toBe('queued A, better')
       expect(useChatStore.getState().sendError).toBeNull()
@@ -644,7 +642,7 @@ describe('message history', () => {
       await queueBecomes(queued('queued A'))
 
       await act(async () => { answer(false) })
-      await act(async () => {})
+      await settle()
       expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
       expect(box().value).toBe('queued A, better')
       expect(useChatStore.getState().sendError).toBeNull()
@@ -660,7 +658,7 @@ describe('message history', () => {
     run.queueList.mockResolvedValue(queued())
     fireEvent.click(screen.getByRole('button', { name: 'Cancel queued message' }))
     await waitFor(() => expect(useChatStore.getState().editingQueued).toBeNull())
-    await act(async () => {})
+    await settle()
     expect(useChatStore.getState().sendError).toBeNull()
     expect(box().value).toBe('queued A, better')
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
@@ -674,7 +672,7 @@ describe('message history', () => {
     client.setQueryData(['chat', 'chat-2'], chatRow('chat-2', null, []))
     client.setQueryData(['run-queue', 'chat-2'], queued())
     rerender(createElement(ChatInput, { chatId: 'chat-2' }))
-    await act(async () => {})
+    await settle()
     expect(useChatStore.getState().sendError).toBeNull()
     expect(useChatStore.getState().editingQueued).toBeNull()
     expect(box().value).toBe('')

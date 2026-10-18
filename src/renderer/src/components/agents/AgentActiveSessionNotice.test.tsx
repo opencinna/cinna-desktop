@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentActiveSession, AgentActiveSessionsResult } from '../../../../shared/agentSessions'
+import { settleQueries } from '../../test/queryNotifications'
 
 /**
  * The warning before starting one more session on an agent that already runs
@@ -44,7 +45,8 @@ function sessions(list: AgentActiveSession[]): void {
 async function renderNotice(agents = [LEDGER], props: Partial<Parameters<typeof AgentActiveSessionNotice>[0]> = {}): Promise<void> {
   render(createElement(AgentActiveSessionNotice, { agents, ...props }), { wrapper })
   await waitFor(() => expect(active).toHaveBeenCalled())
-  await act(async () => {})
+  await waitFor(() => expect(client.isFetching()).toBe(0))
+  await settleQueries()
 }
 
 beforeEach(() => {
