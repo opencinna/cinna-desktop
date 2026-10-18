@@ -135,7 +135,7 @@ No test run is recorded here for this section: rerun the files above and `npm ru
 
 ## Google OAuth credentials — 2026-10-17
 
-Desktop connects, lists, materializes and renews Google OAuth credentials brokered by cinna-core (kit contract 1.14.0, helper 1.14.0). The kit bundle was synced from a core commit; read `core_commit` and `core_dirty` in `kit.lock.json` for whether the render was from a clean tree.
+Desktop connects, lists, materializes and renews Google OAuth credentials brokered by cinna-core (kit contract 1.14.0 when it was verified, since moved to 1.15.0; helper 1.14.0). The kit bundle was synced from a core commit; read `core_commit` and `core_dirty` in `kit.lock.json` for whether the render was from a clean tree.
 
 Tests cover:
 - `tokenServer.test.ts` (the loopback endpoint on a real socket): one port and one bearer per agent for the session; a live agent answered through the handler, `no-store`, with `min_ttl` clamped; a wrong or missing bearer, and an agent no turn holds, both 401; another `Host` and any `Origin` refused before anything else; one route, the rest 404; a malformed or oversized body refused; Core's refusal and `Retry-After` passed through; every bearer forgotten on close; Core's defaults for the body;

@@ -228,6 +228,10 @@ Contract 1.10.0 adds two records. The desktop reads and checks both, and writes 
 
 `layout.json` → `shared_remote.local_state.fields` gains `bundle_id`, the catalog id of a shared agent, kept per machine in `app-data/desktop.json`. The desktop writes the catalog's own id when it gets or shares the agent, and shows it read-only in the Sharing tab; one another host wrote is kept when the desktop rewrites the file's other fields, while replacing the link itself writes the entry's id (Get, Share with the team) or clears the whole link (Remove sharing) ([Team Sharing](team_sharing_tech.md)).
 
+### Marketplace skills (1.15.0)
+
+Contract 1.15.0 adds `marketplace_skills[]` to `cinna-agent.json`: skills from the skills-format marketplaces connected to cinna-core, pinned by reference like `catalog_skills[]` but **content-addressed** (`entry_uuid`, `marketplace_uuid`, `marketplace_name`, `name`, `archive_sha256`; `commit_hash` and `version` for display). The files never live under `skills/`. One name space covers `skills/`, platform skills, catalog pins and marketplace pins; the validator reports each clash and a duplicate `entry_uuid` as errors, as `kit.py` does. Unknown keys on a pin survive a rewrite. Behaviour: [Agent Skills](skills.md).
+
 ### Scaffold ignore files
 
 Ignore rules ship **dotless** in the template trees and the scaffolder restores the dot in the created folder — shipping them dotted would make them live ignore rules wherever the contract is stored, hiding scaffold files from that repository. The pairs are declared in `layout.json`'s `scaffold_ignore_files`, per template tree, and a scaffolder must read that list rather than hard-code it: the set has already grown once (`app-data/cache/gitignore`), and a scaffolder that missed the addition left a cache folder tracked by git.

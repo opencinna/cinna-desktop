@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `af7747a334187896`.
+Your current kit is version `1b579f8a78d460d0`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,36 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.15.0 — marketplace skills on desktop
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.15.0 folder, because the majors match.
+
+A host can now give an agent a skill from one of the platform's plugin
+marketplaces, by reference, the way `catalog_skills[]` (1.10.0) does for catalog
+skills.
+
+### Added
+
+- **`marketplace_skills[]` in `cinna-agent.json`.** Each pin carries
+  `entry_uuid`, `marketplace_uuid`, `marketplace_name`, `name` and
+  `archive_sha256`, and optionally `commit_hash` and `version` (both string or
+  null, display only). The host writes a pin when someone adds a marketplace
+  skill and downloads the pinned snapshot, checking it against
+  `archive_sha256`. The files are kept by the host and never land under
+  `skills/`. Unknown keys on a pin are preserved.
+- **One skill namespace.** A pin's `name` must not be the name of a folder under
+  `skills/`, of a skill the platform provides, of a `catalog_skills[]` pin, or of
+  another marketplace pin. `kit.py validate` reports each clash as an error; a
+  duplicate `entry_uuid` is an error too.
+- Three conformance cases: `marketplace-skills-valid`,
+  `marketplace-skills-malformed` and
+  `marketplace-skills-name-collides-with-catalog-pin`.
+
+Cloud import ignores `marketplace_skills[]` for now; the pins travel unchanged in
+the copied manifest, and sharing or publishing a desktop agent keeps them as they
+are.
 
 ## 1.14.0 — Google OAuth credentials on desktop
 

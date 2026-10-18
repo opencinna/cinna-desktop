@@ -855,6 +855,35 @@ describe('skills (contract 1.10.0, kit.py validate parity)', () => {
     ])
   })
 
+  it('reports a marketplace pin named like a skill of this folder, like a platform skill, like a catalog pin, or twice', () => {
+    skill('pdf-report', '---\nname: pdf-report\ndescription: Reports.\n---\n')
+    const MPIN = {
+      entry_uuid: '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f',
+      marketplace_uuid: '8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d',
+      marketplace_name: 'Team skills',
+      name: 'pdf-report',
+      archive_sha256: 'd'.repeat(64)
+    }
+    patchManifest(agentDir, (m) => {
+      m.catalog_skills = [{ ...PIN, name: 'csv-export', package_id: 'io.example.skill.csv-export' }]
+      m.marketplace_skills = [
+        MPIN,
+        { ...MPIN, entry_uuid: '5e1d2c3b-4a59-4687-9a6b-5c4d3e2f1a0b', name: 'cinna-tasks' },
+        { ...MPIN, entry_uuid: '6f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b', name: 'csv-export' },
+        { ...MPIN, entry_uuid: MPIN.entry_uuid.toUpperCase(), name: 'ledger' },
+        { ...MPIN, entry_uuid: '7a3f4e5d-6c7b-48a9-9b8c-7d6e5f4a3b2c', name: 'ledger' }
+      ]
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors).sort()).toEqual([
+      'manifest.marketplace_skills.entry_uuid.duplicate',
+      'manifest.marketplace_skills.name.authored_clash',
+      'manifest.marketplace_skills.name.catalog_clash',
+      'manifest.marketplace_skills.name.duplicate',
+      'manifest.marketplace_skills.name.platform_clash'
+    ])
+  })
+
   it('reports a second pin of the same name or the same package', () => {
     const report = validateManifest(
       { ...readManifest(agentDir), catalog_skills: [PIN, { ...PIN, package_uuid: PIN.package_uuid.toUpperCase() }, { ...PIN, package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110' }] },

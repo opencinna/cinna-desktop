@@ -143,6 +143,28 @@ export interface CatalogSkillPin {
   [key: string]: unknown
 }
 
+/**
+ * A skill from one of the platform's skills-format marketplaces, pinned by
+ * content (contract 1.15.0): the marketplace entry and the digest of the
+ * snapshot archive core serves for it. Shares one name space with `skills/`,
+ * `catalog_skills[]` and the platform's own skills.
+ */
+export interface MarketplaceSkillPin {
+  /** The marketplace entry's (plugin's) id on the instance it came from. */
+  entry_uuid: string
+  /** The marketplace's id; informational. */
+  marketplace_uuid: string
+  /** The marketplace's name when the pin was written, for display only. */
+  marketplace_name: string
+  name: string
+  archive_sha256: string
+  /** The repository commit the snapshot was read at, for display only. */
+  commit_hash?: string | null
+  /** The SKILL.md version label when the pin was written, for display only. */
+  version?: string | null
+  [key: string]: unknown
+}
+
 /** DEPRECATED predecessor of `publications[]`, still parsed. */
 export interface AgentCloudStamp {
   platform_url?: string | null
@@ -177,6 +199,8 @@ export interface CinnaAgentManifest {
   features?: AgentFeatures
   /** Pinned catalog skills (1.10.0). Preserve on every rewrite; never copy one into `skills/`. */
   catalog_skills?: CatalogSkillPin[]
+  /** Pinned marketplace skills (contract 1.15.0). */
+  marketplace_skills?: MarketplaceSkillPin[]
   /** Legacy embedded history; new publishers write the sibling publications.json ledger. */
   publications?: AgentPublication[]
   cloud?: AgentCloudStamp

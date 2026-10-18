@@ -61,8 +61,10 @@ import {
   SKILL_FILE,
   SKILL_NAME_RE,
   catalogPinClashes,
+  catalogPinNames,
   catalogSkillName,
   isCatalogPinName,
+  marketplacePinClashes,
   scanAgentSkillDetails
 } from './skills'
 
@@ -809,6 +811,87 @@ function checkCatalogSkills(report: Report, manifest: CinnaAgentManifest): void 
 }
 
 /**
+ * `marketplace_skills[]` (contract 1.15.0) — `kit.py`'s
+ * `_validate_marketplace_skills`, field by field, each malformed field an
+ * error coded under the field. A pin's name may not be another marketplace
+ * pin's or a `catalog_skills[]` pin's: the arrays share one name space.
+ * Clashes with `skills/` and platform skills need the folder and are
+ * {@link checkSkills}' job.
+ */
+function checkMarketplaceSkills(report: Report, manifest: CinnaAgentManifest): void {
+  const pins = manifest.marketplace_skills
+  if (pins === undefined || pins === null) return
+  if (!Array.isArray(pins)) {
+    report.error('manifest.marketplace_skills.type', '`marketplace_skills` must be an array.', MANIFEST_FILE)
+    return
+  }
+  const catalogNames = catalogPinNames(manifest.catalog_skills)
+  const seenEntries = new Set<string>()
+  const seenNames = new Set<string>()
+  pins.forEach((raw: unknown, index) => {
+    const label = `marketplace_skills[${index}]`
+    if (!isRecord(raw)) {
+      report.error('manifest.marketplace_skills.item', `\`${label}\` must be an object.`, MANIFEST_FILE)
+      return
+    }
+    for (const [key, what] of [['entry_uuid', 'marketplace entry'], ['marketplace_uuid', 'marketplace']] as const) {
+      const canonical = canonicalUuid(raw[key])
+      if (canonical === null) {
+        report.error(`manifest.marketplace_skills.${key}`, `\`${label}.${key}\` must be the ${what}'s UUID.`, MANIFEST_FILE)
+      } else if (key === 'entry_uuid') {
+        if (seenEntries.has(canonical)) {
+          report.error(
+            'manifest.marketplace_skills.entry_uuid.duplicate',
+            `\`${label}.entry_uuid\` pins the same marketplace skill twice.`,
+            MANIFEST_FILE
+          )
+        }
+        seenEntries.add(canonical)
+      }
+    }
+    if (typeof raw.marketplace_name !== 'string') {
+      report.error('manifest.marketplace_skills.marketplace_name', `\`${label}.marketplace_name\` must be a string.`, MANIFEST_FILE)
+    }
+    const name = raw.name
+    if (!isCatalogPinName(name)) {
+      report.error(
+        'manifest.marketplace_skills.name',
+        `\`${label}.name\` must be the skill's name: lowercase words joined by single hyphens, at most 64 characters.`,
+        MANIFEST_FILE
+      )
+    } else {
+      if (seenNames.has(name)) {
+        report.error(
+          'manifest.marketplace_skills.name.duplicate',
+          `\`${label}.name\` pins a second marketplace skill named \`${name}\`; an agent holds one skill per name.`,
+          MANIFEST_FILE
+        )
+      } else if (catalogNames.has(name)) {
+        report.error(
+          'manifest.marketplace_skills.name.catalog_clash',
+          `\`${label}.name\` is \`${name}\`, which is also the name of a catalog_skills[] pin; an agent holds one skill per name.`,
+          MANIFEST_FILE
+        )
+      }
+      seenNames.add(name)
+    }
+    if (typeof raw.archive_sha256 !== 'string' || !SHA256_HEX_PATTERN.test(raw.archive_sha256)) {
+      report.error(
+        'manifest.marketplace_skills.archive_sha256',
+        `\`${label}.archive_sha256\` must be 64 lowercase hex characters.`,
+        MANIFEST_FILE
+      )
+    }
+    for (const key of ['commit_hash', 'version'] as const) {
+      const value = raw[key]
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        report.error(`manifest.marketplace_skills.${key}`, `\`${label}.${key}\` must be a string or null.`, MANIFEST_FILE)
+      }
+    }
+  })
+}
+
+/**
  * Validate the manifest object alone — every check that needs no filesystem.
  * Exported so a caller holding a manifest in memory (an editor, a scaffolder)
  * can check it before writing.
@@ -877,6 +960,7 @@ export function validateManifest(
   checkSchedules(report, doc)
   checkHandovers(report, doc, options.agentDir)
   checkCatalogSkills(report, doc)
+  checkMarketplaceSkills(report, doc)
   checkPublications(report, doc, options.agentDir)
 
   return report.toReport()
@@ -1349,7 +1433,7 @@ export { isSkillFinding }
 
 /**
  * `skills/<name>/SKILL.md` by the platform's rules, then the budget, then the
- * catalog pins against authored and platform skills — `kit.py`'s
+ * catalog and marketplace pins against authored and platform skills — `kit.py`'s
  * `_validate_skills`, read from the same scan the Addons tab and the engines
  * use ({@link scanAgentSkillDetails}) so the three cannot disagree. A skill's
  * error is an error under `skills.<core issue code>`; the body over 64 KB and
@@ -1397,6 +1481,23 @@ function checkSkills(report: Report, agentDir: string, manifest: CinnaAgentManif
       report.error(
         'manifest.catalog_skills.name.platform_clash',
         `\`catalog_skills[${index}]\` is named \`${name}\`, which is a skill the platform provides.`,
+        MANIFEST_FILE
+      )
+    }
+  }
+  for (const [index, clashes] of marketplacePinClashes(manifest.marketplace_skills, new Set(), authored)) {
+    const name = (manifest.marketplace_skills as Record<string, unknown>[])[index].name as string
+    // `duplicate` and `catalog` are checkMarketplaceSkills' findings; the folder adds the other two.
+    if (clashes.includes('authored')) {
+      report.error(
+        'manifest.marketplace_skills.name.authored_clash',
+        `\`marketplace_skills[${index}]\` is the marketplace skill \`${name}\`, and skills/${name}/ is a skill of the same name written here. Remove the pin or rename the folder — a marketplace skill never lives under skills/.`,
+        MANIFEST_FILE
+      )
+    } else if (clashes.includes('platform')) {
+      report.error(
+        'manifest.marketplace_skills.name.platform_clash',
+        `\`marketplace_skills[${index}]\` is named \`${name}\`, which is a skill the platform provides.`,
         MANIFEST_FILE
       )
     }
