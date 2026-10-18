@@ -33,8 +33,9 @@ import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
  * ## Why the geometry is the other assertion
  *
  * The two branches render different controls into the same panel — the
- * Advanced checkbox is gone on Claude, the third column reports a detected
- * binary rather than a startable process — and the page's tab strip sits
+ * tier's Default names Claude's floor rather than a credential's model, the
+ * third column reports a detected binary rather than a startable process — and
+ * the page's tab strip sits
  * directly below. If the panel's height moves, the tab strip moves out from
  * under the pointer that just used the select (ux_rules rule 1). Measured at
  * both the default width and the 800px minimum, because the panel is a
@@ -372,23 +373,28 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
     await expect(runsOn).toHaveValue(CLAUDE_VALUE)
   })
 
-  await test.step('the panel reports the Claude Code that runs, and offers no model list', async () => {
+  await test.step('the panel reports the Claude Code that runs, and keeps the tier with its floor', async () => {
     // Both names in one sentence, because both are on the screen: the option
     // says "Claude Agent" and the column beside it names the CLI.
     await expect(status(ON_CLAUDE)).toHaveText(ON_CLAUDE)
     // The binary that will run — the saved path, labelled as what an explicit
-    // path is — not the developer's own install on PATH. No version: this app
-    // process has resolved nothing since the relaunch, and reading the state
-    // never spawns a configured path just to ask (it is asked at first use).
-    await expect(panel.getByTitle(claudePath)).toHaveText('Claude Code unverified')
-    // Absent, not disabled-and-empty: there is no catalogue to pick a model
-    // from, and a checkbox that can never do anything invites a click.
-    await expect(advanced).toHaveCount(0)
-    // The tier survives as a control too, and its Default names the floor this
-    // engine runs on rather than a catalogue it does not have.
+    // path is — not the developer's own install on PATH. The version is the one
+    // the scripted CLI answered to `--version` — by the time the page is open
+    // main has asked the saved path, so the label carries what it reported —
+    // still `unverified` because a configured path is never checked against
+    // the pin.
+    await expect(panel.getByTitle(claudePath)).toHaveText(`Claude Code ${FAKE_CLAUDE_VERSION} unverified`)
+    // Advanced is on every engine now: Claude Code lists its own models
+    // (`useRuntimeModelCatalog`), so the exact-model picker has a real list
+    // behind it. The manifest names a tier, so the tier picker stays.
+    await expect(advanced).toBeVisible()
+    await expect(advanced).not.toBeChecked()
+    // The tier survives as a control too, and its unset entry names the floor
+    // this engine runs on — Cinna's choice, not the tool's own `default` —
+    // by the tool's name when listed and by the alias while nothing is.
     await expect(complexity).toHaveValue('medium')
     await expect(complexity.locator('option')).toHaveText([
-      'Default (sonnet)',
+      'Not set — sonnet',
       'Simple',
       'Medium',
       'Complex'
