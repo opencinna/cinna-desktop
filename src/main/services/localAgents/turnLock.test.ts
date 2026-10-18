@@ -4,7 +4,7 @@ vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-const { turnLock } = await import('./turnLock')
+const { turnLock, BRIEF_EXCLUSIVE_WAIT_MS } = await import('./turnLock')
 
 beforeEach(() => {
   turnLock.releaseAll()
@@ -212,6 +212,64 @@ describe('turnLock', () => {
       await queued
       expect(entered).toHaveBeenCalledOnce()
       expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('a shared hold waits out a brief credential write instead of refusing', async () => {
+      const write = turnLock.acquire('a', 'credentials')
+      const body = vi.fn(() => 'ran')
+      const turn = turnLock.withSharedLock('a', 'turn', body)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(body).not.toHaveBeenCalled()
+      write.release()
+      await expect(turn).resolves.toBe('ran')
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('a Stop during the wait for a credential write rejects at once and never runs the body', async () => {
+      const write = turnLock.acquire('a', 'credentials')
+      const controller = new AbortController()
+      const body = vi.fn()
+      const turn = turnLock.withSharedLock('a', 'turn', body, controller.signal)
+      await new Promise((r) => setTimeout(r, 20))
+      controller.abort()
+      await expect(turn).rejects.toThrow(/stopped/)
+      // Its waiter is gone: releasing the write takes no shared hold on its behalf.
+      write.release()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(body).not.toHaveBeenCalled()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('a stopped turn takes no hold and never runs its body', async () => {
+      const controller = new AbortController()
+      controller.abort()
+      const body = vi.fn()
+      await expect(turnLock.withSharedLock('a', 'turn', body, controller.signal)).rejects.toThrow(/stopped/)
+      expect(body).not.toHaveBeenCalled()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('a shared hold still refuses at once behind any other exclusive owner', async () => {
+      const editor = turnLock.acquire('a', 'editor')
+      const body = vi.fn()
+      await expect(turnLock.withSharedLock('a', 'turn', body)).rejects.toThrow(/busy/i)
+      expect(body).not.toHaveBeenCalled()
+      editor.release()
+    })
+
+    it('a shared hold refuses once the bounded wait for a credential write runs out', async () => {
+      vi.useFakeTimers()
+      try {
+        const write = turnLock.acquire('a', 'credentials')
+        const body = vi.fn()
+        const turn = turnLock.withSharedLock('a', 'turn', body)
+        const settled = expect(turn).rejects.toThrow(/busy/i)
+        await vi.advanceTimersByTimeAsync(BRIEF_EXCLUSIVE_WAIT_MS + 10)
+        await settled
+        expect(body).not.toHaveBeenCalled()
+        write.release()
+        expect(turnLock.isLocked('a')).toBe(false)
+      } finally { vi.useRealTimers() }
     })
 
     it('removes a cancelled queued shared holder and never runs its callback', async () => {

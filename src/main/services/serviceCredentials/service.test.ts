@@ -1023,6 +1023,21 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
   }
   const group = (a: { id: string }, user: string) => service.attachments(a.id).filter(v => v.group === key(user)).map(v => v.ref)
 
+  it('tells a background caller a turn refused the write, and attaches nothing meanwhile', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('erp-1', 'ERP', 'erp-api')]
+    await login('account-b')
+    const onBusy = vi.fn()
+    const turn = turnLock.acquireShared(a.id, 'turn')
+    try {
+      expect(await service.autoAttachSkills(a.id, { onBusy })).toEqual([])
+      expect(onBusy).toHaveBeenCalledOnce()
+      expect(group(a, 'account-b')).toEqual([])
+    } finally { turn.release() }
+    expect(await service.autoAttachSkills(a.id, { onBusy })).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    expect(onBusy).toHaveBeenCalledOnce()
+  })
+
   it('attaches the one record whose type and Service URI are the slot, and says it was a skill slot', async () => {
     const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
     world.metadata = [rec('erp-1', 'ERP', 'erp-api'), rec('imap', 'ERP mail', 'erp-api', { type: 'email_imap' }), rec('named', 'erp-api', null)]
@@ -1210,6 +1225,23 @@ except CredentialMissing as e:
       expect(group(a, 'account-b')).toEqual(['erp-1', 'crm-1', 'notes'])
       lock.release(); await sleep()
       expect((await service.detachUnusedAutoAttachments(a.id)).map(v => v.ref)).toEqual(['erp-1', 'crm-1'])
+      expect(group(a, 'account-b')).toEqual(['notes'])
+    })
+
+    it('treats a marketplace skill’s slot as in use, and keeps everything while a marketplace pin is not on this computer', async () => {
+      const marketplace = (name: string, declared: Declared[], path = '/cache/SKILL.md') =>
+        skill(name, declared, { source: 'marketplace', path, entryUuid: 'entry-uuid', archiveSha256: 'a'.repeat(64) })
+      const a = await attachedAgent([marketplace('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'crm-1', 'notes'])
+      // A pin not downloaded yet declares slots nobody can read: nothing goes.
+      a.skills = [marketplace('erp-orders', [], '')]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+      // Cached again, it still declares erp-api; the crm skill is gone.
+      a.skills = [marketplace('erp-orders', [{ slot: 'erp-api' }])]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([{ group: key('account-b'), ref: 'crm-1', slot: 'crm' }])
+      // The marketplace pin removed: its auto-attached record goes too.
+      a.skills = []
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([{ group: key('account-b'), ref: 'erp-1', slot: 'erp-api' }])
       expect(group(a, 'account-b')).toEqual(['notes'])
     })
   })

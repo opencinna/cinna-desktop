@@ -107,6 +107,7 @@ import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
 import { ARTIFACTS_SKILL_NAME, artifactsSkillInfo, ensureArtifactsSkillPlugin } from '../../services/artifacts/artifactsSkill'
 import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
+import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
@@ -322,6 +323,9 @@ function folderSystemPrompt(
     // cause is a folder answering on the kit assembler's "no instructions yet"
     // stub, which reads as a broken agent rather than as a wiring mistake.
     if (agent.kind === 'bare') return assembleBareAgentPrompt(agent.path, agent.name, context)
+    // Codex and Antigravity build no plugin: their pinned skills not on this computer are
+    // fetched from here, in the background and once per session (the plugin builder does it too).
+    pinnedSkillAutoFetch.fetchMissing(agentId, agent.skills)
     // "The skill tool has them" only when the plugin carrying them was written;
     // otherwise the prompt points at each `SKILL.md` instead.
     let ownSkills = context.ownSkills
@@ -933,8 +937,8 @@ export const acpDriver = createAcpDriver({
   resolveRequest,
   // Shared: turns on one agent run side by side (one per chat, which the run
   // service enforces); only the desktop's own exclusive folder writes keep them out.
-  withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
-    ? turnLock.withQueuedSharedLock(agentId, owner, queuedSignal, fn) : turnLock.withSharedLock(agentId, owner, fn),
+  withLock: (agentId, owner, fn, queuedSignal, signal) => queuedSignal
+    ? turnLock.withQueuedSharedLock(agentId, owner, queuedSignal, fn) : turnLock.withSharedLock(agentId, owner, fn, signal),
   // The title a Codex chat's root session gives its thread names the chat.
   sessionTitle: ({ profileUserId, chatId, agentId, title }) => {
     void import('../../services/chatTitleService')

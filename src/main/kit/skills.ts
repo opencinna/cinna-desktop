@@ -820,19 +820,192 @@ export function catalogSkillRows(
   return rows
 }
 
+/* --------------------------------------- marketplace skills (contract 1.15) */
+
 /**
- * Every skill row of a kit agent, name-sorted: its own (`skills/`) and its
- * pinned catalog skills, an own skill first where a name is on both. What the
- * Addons tab lists, and — through {@link deliverableSkills}, with the catalog
- * cache as `resolve` — what every engine is given.
+ * Why a marketplace pin's name collides, as `kit.py validate` reports it: the
+ * catalog kinds, plus `catalog` — a `catalog_skills[]` pin of the same name
+ * (the two arrays share one name space; the marketplace pin is the one in
+ * error). `duplicate` and `catalog` are either/or, as are `authored` and
+ * `platform`.
+ */
+export type MarketplacePinClash = CatalogPinClash | 'catalog'
+
+/** The `name`s of the manifest's well-formed `catalog_skills[]` pins. */
+export function catalogPinNames(catalogSkills: unknown): Set<string> {
+  const names = new Set<string>()
+  if (!Array.isArray(catalogSkills)) return names
+  for (const pin of catalogSkills as unknown[]) {
+    if (pin === null || typeof pin !== 'object' || Array.isArray(pin)) continue
+    const name = (pin as Record<string, unknown>).name
+    if (typeof name === 'string') names.add(name)
+  }
+  return names
+}
+
+/**
+ * Every pin of `marketplace_skills[]` (by index) whose name collides, and
+ * how. As {@link catalogPinClashes}, with the catalog pins' names as a fourth
+ * name space a marketplace pin may not take.
+ */
+export function marketplacePinClashes(
+  marketplaceSkills: unknown,
+  catalogNames: ReadonlySet<string>,
+  authored: ReadonlySet<string>
+): Map<number, MarketplacePinClash[]> {
+  const clashes = new Map<number, MarketplacePinClash[]>()
+  if (!Array.isArray(marketplaceSkills)) return clashes
+  const seen = new Set<string>()
+  marketplaceSkills.forEach((pin: unknown, index) => {
+    if (pin === null || typeof pin !== 'object' || Array.isArray(pin)) return
+    const name = (pin as Record<string, unknown>).name
+    if (!isCatalogPinName(name)) return
+    const found: MarketplacePinClash[] = []
+    if (seen.has(name)) found.push('duplicate')
+    else if (catalogNames.has(name)) found.push('catalog')
+    seen.add(name)
+    if (authored.has(name)) found.push('authored')
+    else if (PLATFORM_SKILL_NAMES.has(name)) found.push('platform')
+    if (found.length > 0) clashes.set(index, found)
+  })
+  return clashes
+}
+
+/** Sentences for a marketplace row's own issues. */
+export const MARKETPLACE_ISSUE_MESSAGES: Readonly<Record<string, string>> = {
+  not_downloaded: CATALOG_ISSUE_MESSAGES.not_downloaded,
+  download_failed: CATALOG_ISSUE_MESSAGES.download_failed,
+  duplicate_pin: 'Another marketplace skill of this agent has the same name.',
+  catalog_clash: 'A catalog skill of this agent has the same name. Remove one of the two.',
+  name_clash: 'This agent’s own skills/ folder has a skill of the same name. Remove the pin or rename the folder.',
+  reserved_name: CATALOG_ISSUE_MESSAGES.reserved_name
+}
+
+const MARKETPLACE_CLASH_CODES: Readonly<Record<MarketplacePinClash, string>> = {
+  duplicate: 'duplicate_pin',
+  catalog: 'catalog_clash',
+  authored: 'name_clash',
+  platform: 'reserved_name'
+}
+
+function marketplaceIssue(code: string, severity: 'error' | 'warning'): LocalAgentSkillIssue {
+  return { code, message: MARKETPLACE_ISSUE_MESSAGES[code], severity }
+}
+
+/** What a marketplace pin names, for the cache: the entry, the folder name and the snapshot digest. */
+export interface MarketplaceSkillRef {
+  entryUuid: string
+  name: string
+  archiveSha256: string
+}
+
+/** Answers {@link CatalogSkillCacheState} for a marketplace pin; `marketplaceSkillCache.resolve` provides it. */
+export type MarketplaceSkillResolver = (ref: MarketplaceSkillRef) => CatalogSkillCacheState
+
+/** A marketplace pin as a {@link MarketplaceSkillRef}. */
+export function marketplaceSkillRefOf(pin: Record<string, unknown>): MarketplaceSkillRef {
+  return {
+    entryUuid: typeof pin.entry_uuid === 'string' ? pin.entry_uuid : '',
+    name: typeof pin.name === 'string' ? pin.name : '',
+    archiveSha256: typeof pin.archive_sha256 === 'string' ? pin.archive_sha256 : ''
+  }
+}
+
+const textOrNull = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null)
+
+/**
+ * The manifest's `marketplace_skills[]` pins as skill rows
+ * (`source: 'marketplace'`), by the same rules as {@link catalogSkillRows}:
+ * not deliverable until the pinned snapshot is in the cache and passes the
+ * per-skill checks, `not_downloaded` / `download_failed` until then, and never
+ * delivered when its name collides — with `skills/`, the platform, another
+ * marketplace pin or a catalog pin.
+ */
+export function marketplaceSkillRows(
+  manifest: unknown,
+  authored: ReadonlySet<string>,
+  resolve?: MarketplaceSkillResolver
+): LocalAgentSkill[] {
+  if (manifest === null || typeof manifest !== 'object') return []
+  const record = manifest as Record<string, unknown>
+  const pins = record.marketplace_skills
+  if (!Array.isArray(pins)) return []
+  const clashes = marketplacePinClashes(pins, catalogPinNames(record.catalog_skills), authored)
+  const rows: LocalAgentSkill[] = []
+  pins.forEach((raw: unknown, index) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    const pin = raw as Record<string, unknown>
+    if (!isCatalogPinName(pin.name)) return
+    const ref = marketplaceSkillRefOf(pin)
+    const clashIssues = (clashes.get(index) ?? []).map((clash) => marketplaceIssue(MARKETPLACE_CLASH_CODES[clash], 'error'))
+    const pinnedVersion = textOrNull(pin.version)
+    const row: LocalAgentSkill = {
+      name: pin.name,
+      description: '',
+      version: pinnedVersion,
+      source: 'marketplace',
+      path: '',
+      deliverable: false,
+      issues: [...clashIssues, marketplaceIssue('not_downloaded', 'warning')],
+      credentials: [],
+      entryUuid: ref.entryUuid,
+      marketplaceUuid: typeof pin.marketplace_uuid === 'string' ? pin.marketplace_uuid : '',
+      marketplaceName: typeof pin.marketplace_name === 'string' ? pin.marketplace_name : '',
+      archiveSha256: ref.archiveSha256,
+      commitHash: textOrNull(pin.commit_hash)
+    }
+    let state: CatalogSkillCacheState = { state: 'missing' }
+    if (resolve) {
+      try {
+        state = resolve(ref)
+      } catch {
+        state = { state: 'missing' }
+      }
+    }
+    if (state.state === 'failed') {
+      row.issues = [
+        ...clashIssues,
+        { code: 'download_failed', message: state.message || MARKETPLACE_ISSUE_MESSAGES.download_failed, severity: 'warning' }
+      ]
+    } else if (state.state === 'ready') {
+      const cached = parseSkillDir(state.dir, pin.name).skill
+      row.path = join(state.dir, SKILL_FILE)
+      row.description = cached.description
+      row.version = pinnedVersion ?? cached.version
+      row.credentials = cached.credentials
+      row.issues = [...clashIssues, ...cached.issues]
+      row.deliverable = clashIssues.length === 0 && cached.deliverable
+    }
+    rows.push(row)
+  })
+  return rows
+}
+
+/** Whether a skill row reads from a pinned cache (catalog or marketplace) rather than the agent's `skills/`. */
+export function isPinnedSkill(skill: Pick<LocalAgentSkill, 'source'>): boolean {
+  return skill.source === 'catalog' || skill.source === 'marketplace'
+}
+
+/**
+ * Every skill row of a kit agent, name-sorted: its own (`skills/`), its
+ * pinned catalog skills and its pinned marketplace skills, an own skill first
+ * where a name is on both. What the Addons tab lists, and — through
+ * {@link deliverableSkills}, with the two caches as resolvers — what every
+ * engine is given.
  */
 export function agentSkillRows(
   agentDir: string,
   manifest: unknown,
-  resolve?: CatalogSkillResolver
+  resolve?: CatalogSkillResolver,
+  resolveMarketplace?: MarketplaceSkillResolver
 ): LocalAgentSkill[] {
   const authored = scanAgentSkills(agentDir)
-  const rows = [...authored, ...catalogSkillRows(manifest, new Set(authored.map((skill) => skill.name)), resolve)]
-  // Stable: an own skill keeps its place before a pin of the same name.
+  const names = new Set(authored.map((skill) => skill.name))
+  const rows = [
+    ...authored,
+    ...catalogSkillRows(manifest, names, resolve),
+    ...marketplaceSkillRows(manifest, names, resolveMarketplace)
+  ]
+  // Stable: an own skill keeps its place before a pin of the same name, a catalog pin before a marketplace one.
   return rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }

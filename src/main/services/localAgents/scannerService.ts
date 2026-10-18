@@ -32,6 +32,7 @@ import { parseFrontmatter } from '../../kit/miniYaml'
 import { agentSkillRows } from '../../kit/skills'
 import { judgeSkillRows } from '../serviceCredentials/skillSlots'
 import { catalogSkillCache } from '../catalogSkillCache'
+import { marketplaceSkillCache } from '../marketplaceSkillCache'
 import {
   isSkillFinding,
   readCommandCatalog,
@@ -668,7 +669,7 @@ export const scannerService = {
       // `shared_remote` link to a Cinna team agent reads "update to the team's version", any
       // other "access withdrawn" (`catalogSkillCache.resolverFor`).
       skills: judgeSkillRows(
-        agentSkillRows(agentDir, manifest, catalogSkillCache.resolverFor(desktop.shared_remote?.kind === 'cinna')),
+        agentSkillRows(agentDir, manifest, catalogSkillCache.resolverFor(desktop.shared_remote?.kind === 'cinna'), marketplaceSkillCache.resolve),
         attached
       ),
       status: readStatus(agentDir, layout.layout.agent.status_file),

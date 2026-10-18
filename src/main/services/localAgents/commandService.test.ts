@@ -147,7 +147,9 @@ describe('resolveCommandRunner — the actual dispatch point `agent_a2a.ipc.ts` 
 
   it('a scheduled /run:<name> waits for a busy agent; an interactive one is refused', async () => {
     writeCatalog('commands:\n  - name: greet\n    description: x\n    command: echo dispatched\n')
-    const held = turnLock.acquire(AGENT_ID, 'credentials')
+    // Not `credentials`: a shared hold waits a credential write out briefly, so
+    // that owner would only refuse after the bounded wait, not at once.
+    const held = turnLock.acquire(AGENT_ID, 'editor')
     const refused = await resolveCommandRunner('catalog', '/run:greet', USER, AGENT_ID, fallback)({ signal: new AbortController().signal, onEvent: () => {} })
     expect(refused.error?.message).toMatch(/busy/i)
     const queued = resolveCommandRunner('catalog', '/run:greet', USER, AGENT_ID, fallback, true)({ signal: new AbortController().signal, onEvent: () => {} })

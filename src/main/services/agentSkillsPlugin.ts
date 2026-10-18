@@ -8,9 +8,9 @@
  * `skills/<name>` inside the plugin is a link to the agent's real
  * `skills/<name>/`, so an edit to a `SKILL.md` reaches the next turn with no
  * rebuild, and the plugin is rebuilt only when the *set* of skills changes.
- * A pinned catalog skill whose revision is cached is linked the same way, to
- * its read-only folder in the shared cache (`catalogSkillCache.ts`), so a
- * re-pin to another revision is a changed link and a rebuild.
+ * A pinned catalog or marketplace skill whose copy is cached is linked the
+ * same way, to its read-only folder in the shared cache (`catalogSkillCache.ts`,
+ * `marketplaceSkillCache.ts`), so a re-pin is a changed link and a rebuild.
  *
  * What was proven on Claude Code 2.1.276 / adapter 0.76.0, and why the shape
  * is what it is:
@@ -40,12 +40,14 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { swapInto } from '../kit/treeSwap'
 import { manifestPath, parseManifest } from '../kit/manifestIo'
-import { agentSkillRows, deliverableSkills, SKILL_NAME_RE, SKILLS_DIR, MAX_NAME_LENGTH } from '../kit/skills'
+import { agentSkillRows, deliverableSkills, isPinnedSkill, SKILL_NAME_RE, SKILLS_DIR, MAX_NAME_LENGTH } from '../kit/skills'
 import { createLogger } from '../logger/logger'
 import type { LocalAgentSkill } from '../../shared/localAgents'
 import type { CinnaAgentManifest } from '../../shared/kit/manifest'
 import { TASKS_SKILL_NAME } from './tasksSkillService'
 import { catalogSkillCache } from './catalogSkillCache'
+import { marketplaceSkillCache } from './marketplaceSkillCache'
+import { pinnedSkillAutoFetch } from './pinnedSkillAutoFetch'
 
 const logger = createLogger('agent-skills-plugin')
 
@@ -163,12 +165,12 @@ function readKitManifest(agentDir: string): { slug: string; manifest: CinnaAgent
  * A name is never on both: a pin that clashes with an own skill is an error.
  */
 export function kitAgentDeliverableSkills(agentDir: string, manifest: unknown): LocalAgentSkill[] {
-  return deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve))
+  return deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve))
 }
 
-/** Where a deliverable skill's folder is: the agent's own, or the catalog cache's. */
+/** Where a deliverable skill's folder is: the agent's own, or the catalog or marketplace cache's. */
 function skillFolder(agentDir: string, skill: LocalAgentSkill): string {
-  return skill.source === 'catalog' && isAbsolute(skill.path)
+  return isPinnedSkill(skill) && isAbsolute(skill.path)
     ? dirname(skill.path)
     : join(agentDir, SKILLS_DIR, skill.name)
 }
@@ -178,7 +180,7 @@ export interface KitAgentSkillsPlugin {
   dir: string
   /** The deliverable skill names it links. */
   skills: string[]
-  /** Where linked catalog skills really live (the cache root); only when it links one. */
+  /** Where linked pinned skills really live (the catalog and marketplace cache roots); only when it links one. */
   readPaths?: string[]
 }
 
@@ -188,16 +190,25 @@ export interface KitAgentSkillsPlugin {
  * both must build it from the same input: the skills are scanned fresh (a
  * just-added skill reaches the next session) and the slug read fresh from the
  * manifest. Null when nothing is deliverable or the plugin could not be
- * written. The caller decides that the agent is a kit agent.
+ * written. The caller decides that the agent is a kit agent. Starts the
+ * background fetch of any pinned skill not on this computer yet
+ * (`pinnedSkillAutoFetch`).
  */
 export function ensureKitAgentSkillsPlugin(agent: { id: string; path: string }): KitAgentSkillsPlugin | null {
   const { slug, manifest } = readKitManifest(agent.path)
-  const skills = kitAgentDeliverableSkills(agent.path, manifest)
+  const rows = agentSkillRows(agent.path, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve)
+  // A pin not on this computer yet is fetched in the background (once per session): this session
+  // goes without it, the next one gets it.
+  pinnedSkillAutoFetch.fetchMissing(agent.id, rows)
+  const skills = deliverableSkills(rows)
   if (skills.length === 0) return null
   const dir = ensureAgentSkillsPlugin({ agentId: agent.id, slug, agentDir: agent.path, skills })
   if (!dir) return null
-  const cacheRoot = skills.some((skill) => skill.source === 'catalog') ? catalogSkillCache.root() : null
-  return { dir, skills: skills.map((skill) => skill.name), ...(cacheRoot ? { readPaths: [cacheRoot] } : {}) }
+  const readPaths = [
+    skills.some((skill) => skill.source === 'catalog') ? catalogSkillCache.root() : null,
+    skills.some((skill) => skill.source === 'marketplace') ? marketplaceSkillCache.root() : null
+  ].filter((root): root is string => root !== null)
+  return { dir, skills: skills.map((skill) => skill.name), ...(readPaths.length > 0 ? { readPaths } : {}) }
 }
 
 /**
@@ -224,7 +235,7 @@ export function ensureAgentSkillsPlugin(input: AgentSkillsPluginInput): string |
       join(staging, '.claude-plugin', 'plugin.json'),
       `${JSON.stringify({
         name: wanted.name,
-        description: 'This agent’s skills: its own skills/ folder and the catalog skills it pins. Provided by Cinna Desktop.',
+        description: 'This agent’s skills: its own skills/ folder and the catalog and marketplace skills it pins. Provided by Cinna Desktop.',
         version: '1'
       }, null, 2)}\n`
     )

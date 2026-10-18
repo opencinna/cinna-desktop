@@ -4108,7 +4108,7 @@ it('prepares credentials for the agent alone: delivery does not depend on the cu
 
 describe('concurrent turns on one agent', () => {
   /** The production dependency: a shared hold per turn. */
-  const sharedLock: AcpDriverDeps['withLock'] = (agentId, owner, fn) => turnLock.withSharedLock(agentId, owner, fn)
+  const sharedLock: AcpDriverDeps['withLock'] = (agentId, owner, fn, _queued, signal) => turnLock.withSharedLock(agentId, owner, fn, signal)
   const chunk = (text: string): FakeAcpStep => ({
     kind: 'update',
     update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
@@ -4170,6 +4170,28 @@ describe('concurrent turns on one agent', () => {
       expect((await w.run()).error?.message).toMatch(/busy/i)
       expect(w.fake.log().some((entry) => entry.dir === 'start')).toBe(false)
     } finally { editor.release() }
+  })
+
+  it('ends a turn stopped while it waits out a credential write as canceled, without preparing credentials', async () => {
+    const prepareCredentials = vi.fn(async (_agent: unknown, plan: unknown) => plan)
+    const w = world({ script: SAYS_HELLO, deps: { withLock: sharedLock, prepareCredentials: prepareCredentials as AcpDriverDeps['prepareCredentials'] } })
+    const write = turnLock.acquire(AGENT_ID, 'credentials')
+    try {
+      const controller = new AbortController()
+      const turn = w.run({ signal: controller.signal })
+      await new Promise((r) => setTimeout(r, 50))
+      const stoppedAt = Date.now()
+      controller.abort()
+      // The write ends right after the Stop: the stopped turn must not take the
+      // freed hold and prepare credentials anyway, nor sit out the bounded wait.
+      write.release()
+      const result = await turn
+      expect(Date.now() - stoppedAt).toBeLessThan(1000)
+      expect(result.error).toBeUndefined()
+      expect(result.taskState).toBe('canceled')
+      expect(prepareCredentials).not.toHaveBeenCalled()
+      expect(w.fake.log().some((entry) => entry.dir === 'start')).toBe(false)
+    } finally { write.release() }
   })
 })
 

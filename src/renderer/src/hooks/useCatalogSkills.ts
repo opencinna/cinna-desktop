@@ -54,6 +54,8 @@ export interface CatalogSkillAddState {
   message: string | null
   /** When it was asked; tells one add from the next. */
   submittedAt: number
+  /** The mutation's id: tells an add settled before this opening of a picker from one made in it. */
+  mutationId: number
 }
 
 /**
@@ -72,13 +74,14 @@ export function useCatalogSkillAdds(packageUuid: string, fallback: string): {
     filters: { mutationKey: key, exact: true },
     select: (mutation): CatalogSkillAddState | null => {
       const { status, variables, data, error, submittedAt } = mutation.state
+      const { mutationId } = mutation
       const agentId = (variables as AddVariables | undefined)?.agentId
       if (!agentId || status === 'idle') return null
-      if (status === 'pending') return { agentId, status: 'pending', message: null, submittedAt }
-      if (status === 'error') return { agentId, status: 'refused', message: unwrapIpcError(error, fallback), submittedAt }
+      if (status === 'pending') return { agentId, status: 'pending', message: null, submittedAt, mutationId }
+      if (status === 'error') return { agentId, status: 'refused', message: unwrapIpcError(error, fallback), submittedAt, mutationId }
       const outcome = data as CatalogSkillOutcome | undefined
-      if (outcome && !outcome.ok) return { agentId, status: 'refused', message: catalogSkillOutcomeMessage(outcome, fallback), submittedAt }
-      return { agentId, status: 'added', message: null, submittedAt }
+      if (outcome && !outcome.ok) return { agentId, status: 'refused', message: catalogSkillOutcomeMessage(outcome, fallback), submittedAt, mutationId }
+      return { agentId, status: 'added', message: null, submittedAt, mutationId }
     }
   })
   const byAgent = new Map<string, CatalogSkillAddState>()

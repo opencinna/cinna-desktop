@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpCircle, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2, Users } from 'lucide-react'
+import { ArrowUpCircle, ExternalLink, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2, Users } from 'lucide-react'
 import type { LocalAgentDto, LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
@@ -10,6 +10,15 @@ import {
   useRemoveCatalogSkill,
   useUpdateCatalogSkill
 } from '../../../hooks/useCatalogSkills'
+import {
+  marketplacePins,
+  useEnsureMarketplaceSkills,
+  useMarketplaceSkillStatus,
+  useRemoveMarketplaceSkill,
+  useUpdateMarketplaceSkill
+} from '../../../hooks/useMarketplaceSkills'
+import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
+import { MARKETPLACE_SKILL_TEXT } from '../../../utils/marketplaceSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
 import { useAuthStore } from '../../../stores/auth.store'
@@ -169,13 +178,14 @@ function slotHealth(credential: LocalAgentSkillCredential): CredentialHealth | n
  * verb in flight spins its icon; a refusal is the card's last line (rule 6).
  */
 function SkillRow({
-  skill,
+  skill: scanned,
   revealError,
   onReveal,
   onShare,
   onWhoCanUse,
   onFinishSetup,
-  catalogActions
+  catalogActions,
+  marketplaceStatus
 }: {
   skill: LocalAgentSkill
   revealError: string | null
@@ -187,8 +197,17 @@ function SkillRow({
   /** Authored rows shared to the catalog: opens Who can use, offered only to a maintainer of the package. */
   onWhoCanUse?: () => void
   catalogActions?: CatalogRowActions
+  /** Marketplace rows: where the pin stands against its marketplace, once read. */
+  marketplaceStatus?: MarketplaceSkillPinStatus | null
 }): React.JSX.Element {
-  const catalog = skill.source === 'catalog'
+  const marketplace = scanned.source === 'marketplace'
+  // An entry no longer visible is a warning on the row, never an error: the cached copy is still delivered.
+  const skill: LocalAgentSkill =
+    marketplace && marketplaceStatus?.state === 'unavailable'
+      ? { ...scanned, issues: [...scanned.issues, { code: 'marketplace_unavailable', message: MARKETPLACE_SKILL_TEXT.unavailable, severity: 'warning' }] }
+      : scanned
+  // A pinned row — catalog or marketplace — has no files in the folder: no reveal, the pin's actions instead.
+  const catalog = skill.source === 'catalog' || marketplace
   // One name per skill (rule 13): a catalog row goes by its catalog title,
   // as the catalog and the Inbox show it; the folder name is the code.
   const title = catalog && skill.title ? skill.title : skill.name
@@ -198,7 +217,11 @@ function SkillRow({
   const shareLabel = skill.shared ? SKILL_SHARE_TEXT.shareNewVersion(skill.name) : SKILL_SHARE_TEXT.share(skill.name)
   const pinned = !catalog
     ? null
-    : typeof skill.revisionNumber === 'number'
+    : marketplace
+      ? skill.version
+        ? MARKETPLACE_SKILL_TEXT.version(skill.version)
+        : null
+      : typeof skill.revisionNumber === 'number'
       ? catalogVersionLabel(skill.revisionNumber, skill.version)
       : skill.version
         ? `Version ${skill.version}`
@@ -217,8 +240,16 @@ function SkillRow({
     .join('\n')
   const finishSetup =
     onFinishSetup && skill.deliverable && skill.credentials.some((credential) => credential.filled === false) ? onFinishSetup : null
+  const marketplaceUpdate = marketplace && marketplaceStatus?.state === 'update_available' ? marketplaceStatus : null
+  // The pin names no URL; the status lookup brings the entry's, while it is still visible.
+  const marketplaceSource = marketplace ? (marketplaceStatus?.repositoryUrl ?? null) : null
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+    <div
+      className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
+      data-skill-row={skill.name}
+      data-skill-source={skill.source}
+      {...(marketplace ? { 'data-marketplace-skill': skill.entryUuid ?? '', 'data-marketplace-skill-state': marketplaceStatus?.state ?? 'unknown' } : {})}
+    >
       <div className="flex min-h-12 items-center gap-2 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Sparkles size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />
@@ -241,7 +272,11 @@ function SkillRow({
           {sharedVersion && (
             <SettingsBadge title={SKILL_SHARE_TEXT.sharedFactTitle(skill.shared?.packageId ?? '')}>{SKILL_SHARE_TEXT.sharedBadge}</SettingsBadge>
           )}
-          {catalog ? (
+          {marketplace ? (
+            <SettingsBadge title={MARKETPLACE_SKILL_TEXT.fromTitle(skill.marketplaceName ?? '')}>
+              {MARKETPLACE_SKILL_TEXT.from(skill.marketplaceName ?? '')}
+            </SettingsBadge>
+          ) : catalog ? (
             <SettingsBadge title={skill.packageId ? `Pinned from the catalog as ${skill.packageId}` : 'Pinned from the catalog'}>
               From the catalog
             </SettingsBadge>
@@ -275,7 +310,28 @@ function SkillRow({
         )}
         {catalog && catalogActions && (
           <div className="flex shrink-0 items-center gap-1.5">
-            {skill.updatable && !catalogActions.readOnly && typeof skill.latestRevision === 'number' && (
+            {marketplaceSource && (
+              <SettingsIconButton
+                onClick={() => void window.api.system.openExternal(marketplaceSource)}
+                title={MARKETPLACE_SKILL_TEXT.openRepository}
+                aria-label={MARKETPLACE_SKILL_TEXT.openRepositoryLabel(title)}
+              >
+                <ExternalLink size={14} />
+              </SettingsIconButton>
+            )}
+            {marketplaceUpdate && !catalogActions.readOnly && (
+              <SettingsIconButton
+                onClick={catalogActions.onUpdate}
+                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                title={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
+                aria-label={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
+              >
+                <BusyIcon busy={catalogActions.busy === 'update'}>
+                  <ArrowUpCircle size={14} />
+                </BusyIcon>
+              </SettingsIconButton>
+            )}
+            {!marketplace && skill.updatable && !catalogActions.readOnly && typeof skill.latestRevision === 'number' && (
               <SettingsIconButton
                 onClick={catalogActions.onUpdate}
                 disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
@@ -390,7 +446,7 @@ function SkillRow({
             className="border-t border-[var(--color-border)] px-4 py-3"
           >
             <p className="mb-3 text-[13px]">
-              {CATALOG_SKILL_TEXT.removeConfirm(title)}
+              {marketplace ? MARKETPLACE_SKILL_TEXT.removeConfirm(title) : CATALOG_SKILL_TEXT.removeConfirm(title)}
               {catalogActions.sharedEditable && ` ${CATALOG_SKILL_TEXT.removeShareHint}`}
             </p>
             <div className="flex gap-2">
@@ -446,6 +502,15 @@ export function AgentAddonsTab({
   const updateSkill = useUpdateCatalogSkill()
   const ensureSkills = useEnsureCatalogSkills()
   const removeSkill = useRemoveCatalogSkill()
+  // Marketplace rows: the same, over their own verbs, and where each pin stands.
+  const updateMarketplaceSkill = useUpdateMarketplaceSkill()
+  const ensureMarketplaceSkills = useEnsureMarketplaceSkills()
+  const removeMarketplaceSkill = useRemoveMarketplaceSkill()
+  const marketplaceStatus = useMarketplaceSkillStatus(agent.id, agent.skills)
+  const statusOf = (skill: LocalAgentSkill): MarketplaceSkillPinStatus | null => {
+    const result = marketplaceStatus.data
+    return result?.ok ? (result.pins.find((pin) => pin.name === skill.name) ?? null) : null
+  }
   const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb } | null>(null)
   const [skillError, setSkillError] = useState<{ name: string; message: string } | null>(null)
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
@@ -500,47 +565,60 @@ export function AgentAddonsTab({
       .finally(() => setSkillBusy(null))
   }
 
-  const catalogActionsFor = (skill: LocalAgentSkill): CatalogRowActions => ({
-    readOnly,
-    sharedEditable,
-    busy: skillBusy?.name === skill.name ? skillBusy.verb : null,
-    locked: skillBusy !== null && skillBusy.name !== skill.name,
-    error: skillError?.name === skill.name ? skillError.message : null,
-    confirming: confirmingRemove === skill.name,
-    onUpdate: () =>
-      runSkillVerb(skill.name, 'update', () => updateSkill.mutateAsync({ agentId: agent.id, name: skill.name }), CATALOG_SKILL_TEXT.updateFailed),
-    onEnsure: () =>
-      runSkillVerb(
-        skill.name,
-        'ensure',
-        async () => {
-          const result = await ensureSkills.mutateAsync({ agentId: agent.id })
-          if (!result.ok) return result
-          // One fetch covers every pin; this row's answer is its own failure, if any.
-          const failed = result.failed.find((failure) => failure.name === skill.name)
-          return failed ? { ok: false as const, message: failed.message } : { ok: true as const }
-        },
-        CATALOG_SKILL_TEXT.tryAgainFailed
-      ),
-    onCheck: () =>
-      runSkillVerb(
-        skill.name,
-        'ensure',
-        async () => {
-          const result = await ensureSkills.mutateAsync({ agentId: agent.id })
-          // This row's own refusal is its state after the rescan, not an error line.
-          return result.ok ? { ok: true as const } : result
-        },
-        CATALOG_SKILL_TEXT.tryAgainFailed
-      ),
-    onAskRemove: () => {
-      setSkillError(null)
-      setConfirmingRemove(skill.name)
-    },
-    onCancelRemove: () => setConfirmingRemove(null),
-    onRemove: () =>
-      runSkillVerb(skill.name, 'remove', () => removeSkill.mutateAsync({ agentId: agent.id, name: skill.name }), CATALOG_SKILL_TEXT.removeFailed)
-  })
+  const catalogActionsFor = (skill: LocalAgentSkill): CatalogRowActions => {
+    // A catalog pin and a marketplace pin may share a name (an error the row shows): each row is its own.
+    const key = `${skill.source}:${skill.name}`
+    const fromMarketplace = skill.source === 'marketplace'
+    const update = (): Promise<{ ok: true } | { ok: false; message: string }> =>
+      fromMarketplace
+        ? updateMarketplaceSkill.mutateAsync({ agentId: agent.id, name: skill.name })
+        : updateSkill.mutateAsync({ agentId: agent.id, name: skill.name })
+    const ensure = (): Promise<{ ok: true; failed: { name: string; message: string }[] } | { ok: false; message: string }> =>
+      fromMarketplace ? ensureMarketplaceSkills.mutateAsync({ agentId: agent.id }) : ensureSkills.mutateAsync({ agentId: agent.id })
+    const remove = (): Promise<{ ok: true } | { ok: false; message: string }> =>
+      fromMarketplace
+        ? removeMarketplaceSkill.mutateAsync({ agentId: agent.id, name: skill.name })
+        : removeSkill.mutateAsync({ agentId: agent.id, name: skill.name })
+    return {
+      readOnly,
+      sharedEditable,
+      busy: skillBusy?.name === key ? skillBusy.verb : null,
+      locked: skillBusy !== null && skillBusy.name !== key,
+      error: skillError?.name === key ? skillError.message : null,
+      confirming: confirmingRemove === key,
+      onUpdate: () => runSkillVerb(key, 'update', update, CATALOG_SKILL_TEXT.updateFailed),
+      onEnsure: () =>
+        runSkillVerb(
+          key,
+          'ensure',
+          async () => {
+            const result = await ensure()
+            if (!result.ok) return result
+            // One fetch covers every pin; this row's answer is its own failure, if any.
+            const failed = result.failed.find((failure) => failure.name === skill.name)
+            return failed ? { ok: false as const, message: failed.message } : { ok: true as const }
+          },
+          CATALOG_SKILL_TEXT.tryAgainFailed
+        ),
+      onCheck: () =>
+        runSkillVerb(
+          key,
+          'ensure',
+          async () => {
+            const result = await ensure()
+            // This row's own refusal is its state after the rescan, not an error line.
+            return result.ok ? { ok: true as const } : result
+          },
+          CATALOG_SKILL_TEXT.tryAgainFailed
+        ),
+      onAskRemove: () => {
+        setSkillError(null)
+        setConfirmingRemove(key)
+      },
+      onCancelRemove: () => setConfirmingRemove(null),
+      onRemove: () => runSkillVerb(key, 'remove', remove, CATALOG_SKILL_TEXT.removeFailed)
+    }
+  }
 
   // In attach order; a link whose connector is gone is never drawn (the
   // delete cascades, and the provider list may simply not have caught up).
@@ -594,7 +672,8 @@ export function AgentAddonsTab({
               <p>A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for.</p>
               <p className="mt-2">Every session of this agent can use the skills listed here as working. Claude and OpenCode load them as skills; Codex is told where each one’s SKILL.md is.</p>
               <p className="mt-2">A skill with an error is left out of every session until its SKILL.md is fixed.</p>
-              <p className="mt-2">A skill from the catalog is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one with Add.</p>
+              <p className="mt-2">A skill from the catalog, or from a skills marketplace an admin connected in Cinna, is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one with Add.</p>
+              <p className="mt-2">A marketplace skill offers Update when its marketplace has a newer copy. One that is no longer available to you keeps working from the copy on this computer.</p>
             </SettingsInfoTip>
           }
           action={
@@ -608,7 +687,7 @@ export function AgentAddonsTab({
                   ? CATALOG_SKILL_TEXT.checkingAccess
                   : readOnly
                     ? CATALOG_SKILL_TEXT.canUseOnlyTitle
-                    : 'Add a skill from the catalog'
+                    : 'Add a skill from the catalog or a marketplace'
               }
               onClick={() => setAddingSkill(true)}
             >
@@ -627,7 +706,8 @@ export function AgentAddonsTab({
                   <SkillRow
                     skill={skill}
                     revealError={revealError?.skill === skill.name ? revealError.message : null}
-                    catalogActions={skill.source === 'catalog' ? catalogActionsFor(skill) : undefined}
+                    catalogActions={skill.source !== 'authored' ? catalogActionsFor(skill) : undefined}
+                    marketplaceStatus={skill.source === 'marketplace' ? statusOf(skill) : undefined}
                     onFinishSetup={onFinishSetup}
                     onShare={
                       skill.source === 'authored'
@@ -684,7 +764,14 @@ export function AgentAddonsTab({
           onClose={() => setPeopleOf(null)}
         />
       )}
-      {agent.skills && <SkillAddModal open={addingSkill} agentId={agent.id} onClose={() => setAddingSkill(false)} />}
+      {agent.skills && (
+        <SkillAddModal
+          open={addingSkill}
+          agentId={agent.id}
+          pinnedEntries={marketplacePins(agent.skills).flatMap((skill) => (skill.entryUuid ? [skill.entryUuid] : []))}
+          onClose={() => setAddingSkill(false)}
+        />
+      )}
       <McpAttachModal
         open={picking}
         attachedIds={ids ?? []}

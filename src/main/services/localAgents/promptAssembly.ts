@@ -41,6 +41,7 @@ import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillServi
 import { artifactsFolderRole, artifactsSkillDeliveryFor, cinnaArtifactsSection, type ArtifactsSkillDelivery } from '../artifacts/artifactsSkill'
 import { agentSkillRows, deliverableSkills } from '../../kit/skills'
 import { catalogSkillCache } from '../catalogSkillCache'
+import { marketplaceSkillCache } from '../marketplaceSkillCache'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -218,32 +219,37 @@ export function listKnowledgeTopics(agentDir: string): string[] {
 
 /**
  * The agent's deliverable skills — its own (`skills/<name>/SKILL.md`) and the
- * pinned catalog skills whose revision is cached — or nothing.
+ * pinned catalog and marketplace skills whose copy is cached — or nothing.
  *
  * Claude gets them through the per-agent plugin and OpenCode through
  * `skills.paths`, so their prompt only says the skill tool has them — listing
  * them again would double what the engine already tells the model. Codex has
  * no skill loader: it gets the list, each with the file to read first — the
- * agent-relative path of an own skill, the absolute path of a cached catalog one.
+ * agent-relative path of an own skill, the absolute path of a cached pinned one.
  */
 function skillsSection(agentDir: string, manifest: CinnaAgentManifest, context: DesktopPromptContext): string | null {
-  const skills = deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve))
+  const skills = deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve))
   if (skills.length === 0) return null
-  const fromCatalog = skills.some((skill) => skill.source === 'catalog')
+  const kinds = [
+    skills.some((skill) => skill.source === 'catalog') ? 'catalog' : null,
+    skills.some((skill) => skill.source === 'marketplace') ? 'marketplace' : null
+  ].filter((kind): kind is string => kind !== null)
+  const pinned = kinds.length > 0 ? `the ${kinds.join(' and ')} skills this agent pins` : null
   if (context.ownSkills === 'skill') {
     return [
       '## Your skills',
       '',
-      fromCatalog
-        ? 'Your own skills, from `skills/` in this folder, and the catalog skills this agent pins are available through the skill tool by name. Open one when the task matches its description.'
+      pinned
+        ? `Your own skills, from \`skills/\` in this folder, and ${pinned} are available through the skill tool by name. Open one when the task matches its description.`
         : 'Your own skills, from `skills/` in this folder, are available through the skill tool by name. Open one when the task matches its description.'
     ].join('\n')
   }
   return [
     '## Your skills',
     '',
-    fromCatalog
-      ? 'Your own skills, from `skills/` in this folder, and the catalog skills this agent pins. When a task matches one, read its `SKILL.md` before using the skill.'
+    pinned
+      // A pinned skill's copy is cached outside the folder: say so, or the model looks for it under `skills/` first.
+      ? `Your own skills, from \`skills/\` in this folder, and ${pinned}, which are kept outside this folder and are not under \`skills/\`. When a task matches one, read the \`SKILL.md\` at the path listed after it, exactly as written, before using the skill.`
       : 'Your own skills, from `skills/` in this folder. When a task matches one, read its `SKILL.md` before using the skill.',
     '',
     ...skills.map((skill) => `- \`${skill.name}\` — ${skill.description.replace(/\s+/g, ' ')} — \`${skill.path}\``)

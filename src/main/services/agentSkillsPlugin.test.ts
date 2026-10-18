@@ -7,6 +7,8 @@ import { catalogSkillRefOf, scanAgentSkills } from '../kit/skills'
 import { readSkillArchive } from '../kit/skillArchive'
 import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
 import { catalogSkillCache, removeTree } from './catalogSkillCache'
+import { marketplaceSkillCache } from './marketplaceSkillCache'
+import { pinnedSkillAutoFetch } from './pinnedSkillAutoFetch'
 
 const host = vi.hoisted(() => ({ userData: '' }))
 vi.mock('../host/runtimeHost', () => ({
@@ -241,5 +243,85 @@ describe('pinned catalog skills', () => {
     rmSync(join(agentDir, 'skills', 'ledger'), { recursive: true, force: true })
     writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ catalog_skills: [{ ...clashing, archive_sha256: 'b'.repeat(64) }] }))
     expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.skills).toEqual(['broken', 'pdf-tools'])
+  })
+})
+
+describe('pinned marketplace skills', () => {
+  const ENTRY = '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f'
+  const pin = (archive: Buffer, name = 'pdf-report') => ({
+    entry_uuid: ENTRY,
+    marketplace_uuid: '8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d',
+    marketplace_name: 'Team skills',
+    name,
+    archive_sha256: sha256Of(archive)
+  })
+
+  beforeEach(() => {
+    catalogSkillCache._reset(join(root, 'userData', 'catalog-skills'))
+    marketplaceSkillCache._reset(join(root, 'userData', 'marketplace-skills'))
+  })
+  afterEach(() => {
+    removeTree(join(root, 'userData', 'catalog-skills'))
+    removeTree(join(root, 'userData', 'marketplace-skills'))
+    catalogSkillCache._reset()
+    marketplaceSkillCache._reset()
+  })
+
+  it('links a cached snapshot like any other skill, and names the marketplace cache as a read path', () => {
+    const archive = skillTgz('pdf-report')
+    const pinned = pin(archive)
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ slug: 'invoice-reader', marketplace_skills: [pinned] }))
+    // Not on this computer yet: the agent's own skills only.
+    expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })?.skills).toEqual(['broken', 'ledger', 'pdf-tools'])
+
+    const cached = marketplaceSkillCache.install(
+      'https-cinna.test',
+      { entryUuid: ENTRY, name: 'pdf-report', archiveSha256: sha256Of(archive) },
+      readSkillArchive(archive, 'pdf-report')
+    )
+    expect(cached).toBe(join(root, 'userData', 'marketplace-skills', 'https-cinna.test', ENTRY, sha256Of(archive), 'pdf-report'))
+    const built = ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })!
+    // The names are what OpenCode's `permission.skill` allows, one by one.
+    expect(built.skills).toEqual(['broken', 'ledger', 'pdf-report', 'pdf-tools'])
+    // OpenCode may read the real cache path a link resolves to; only the marketplace cache is linked here.
+    expect(built.readPaths).toEqual([join(root, 'userData', 'marketplace-skills')])
+    // Claude reads the skill through a link under the plugin's skills/, never through a plugin.json path.
+    expect(readlinkSync(join(built.dir, 'skills', 'pdf-report'))).toBe(cached)
+    expect(JSON.parse(readFileSync(join(built.dir, '.claude-plugin', 'plugin.json'), 'utf8')).skills).toBeUndefined()
+    expect(readFileSync(join(built.dir, 'skills', 'pdf-report', 'SKILL.md'), 'utf8')).toContain('name: pdf-report')
+  })
+
+  it('names both caches when the agent links a catalog and a marketplace skill', () => {
+    const marketplace = skillTgz('pdf-report')
+    const catalog = skillTgz('erp-lookup')
+    const catalogPin = { package_id: 'test.cinna.skill.erp-lookup', package_uuid: '0b6f3c1e-1111-4222-8333-444455556666', name: 'erp-lookup', revision_number: 1, archive_sha256: sha256Of(catalog) }
+    writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ catalog_skills: [catalogPin], marketplace_skills: [pin(marketplace)] }))
+    catalogSkillCache.install('https-cinna.test', catalogSkillRefOf(catalogPin), readSkillArchive(catalog, 'erp-lookup'))
+    marketplaceSkillCache.install('https-cinna.test', { entryUuid: ENTRY, name: 'pdf-report', archiveSha256: sha256Of(marketplace) }, readSkillArchive(marketplace, 'pdf-report'))
+    const built = ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })!
+    expect(built.skills).toEqual(['broken', 'erp-lookup', 'ledger', 'pdf-report', 'pdf-tools'])
+    expect(built.readPaths).toEqual([join(root, 'userData', 'catalog-skills'), join(root, 'userData', 'marketplace-skills')])
+  })
+})
+
+describe('pinned skills not on this computer', () => {
+  it('start their background fetch when the plugin is built, with the resolved rows, even when nothing is deliverable', () => {
+    const fetchMissing = vi.spyOn(pinnedSkillAutoFetch, 'fetchMissing').mockReturnValue({ catalog: false, marketplace: true })
+    try {
+      const pin = { entry_uuid: '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f', marketplace_uuid: '8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d', marketplace_name: 'Team skills', name: 'pdf-report', archive_sha256: 'd'.repeat(64) }
+      writeFileSync(join(agentDir, 'cinna-agent.json'), JSON.stringify({ slug: 'invoice-reader', marketplace_skills: [pin] }))
+      ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })
+      expect(fetchMissing).toHaveBeenCalledTimes(1)
+      const [agentId, rows] = fetchMissing.mock.calls[0]
+      expect(agentId).toBe('folder:abc')
+      expect(rows?.find((row) => row.name === 'pdf-report')).toMatchObject({ source: 'marketplace', issues: [{ code: 'not_downloaded' }] })
+
+      // No deliverable skill at all: the fetch still starts.
+      rmSync(join(agentDir, 'skills'), { recursive: true, force: true })
+      expect(ensureKitAgentSkillsPlugin({ id: 'folder:abc', path: agentDir })).toBeNull()
+      expect(fetchMissing).toHaveBeenCalledTimes(2)
+    } finally {
+      fetchMissing.mockRestore()
+    }
   })
 })

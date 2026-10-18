@@ -36,6 +36,7 @@ import { registerConnectHandlers } from './connect.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
 import { registerSharingHandlers } from './sharing.ipc'
 import { registerCatalogSkillHandlers } from './catalogSkills.ipc'
+import { registerMarketplaceSkillHandlers } from './marketplaceSkills.ipc'
 import { registerSkillPublishHandlers } from './skillPublish.ipc'
 
 export function registerAllIpcHandlers(): void {
@@ -77,6 +78,8 @@ export function registerAllIpcHandlers(): void {
   registerSharingHandlers()
   // Catalog skills pinned in folder agents: add, update, remove, fetch.
   registerCatalogSkillHandlers()
+  // Marketplace skills pinned in folder agents: discover, add, update, remove, fetch, status.
+  registerMarketplaceSkillHandlers()
   registerSkillPublishHandlers()
   registerServiceCredentialHandlers()
   registerAgentFileHandlers()

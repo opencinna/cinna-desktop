@@ -9,6 +9,7 @@ import {
   agentSkillRows,
   catalogSkillName,
   catalogSkillRows,
+  marketplaceSkillRows,
   coerceVersion,
   skillVersionProblem,
   deliverableSkills,
@@ -461,5 +462,98 @@ describe('catalog skill rows', () => {
       expect(missing.issues.map((issue) => issue.code)).toEqual(['not_downloaded'])
       expect(deliverableSkills(agentSkillRows(agent, { catalog_skills: [PIN] }, () => { throw new Error('boom') }))).toEqual([])
     })
+  })
+})
+
+describe('marketplace skill rows', () => {
+  const PIN = {
+    entry_uuid: '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f',
+    marketplace_uuid: '8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d',
+    marketplace_name: 'Team skills',
+    name: 'pdf-report',
+    archive_sha256: 'd'.repeat(64),
+    commit_hash: 'abc123',
+    version: '0.3.1'
+  }
+  const CATALOG_PIN = {
+    package_id: 'io.example.team.skill.pdf-report',
+    package_uuid: '6f1e2d3c-4b5a-4968-8776-655443322110',
+    name: 'pdf-report',
+    revision_number: 1,
+    archive_sha256: 'a'.repeat(64)
+  }
+
+  it('lists each pin as a marketplace row, not deliverable until it is on this computer', () => {
+    expect(marketplaceSkillRows({ marketplace_skills: [PIN] }, new Set())).toEqual([{
+      name: 'pdf-report',
+      description: '',
+      version: '0.3.1',
+      source: 'marketplace',
+      path: '',
+      deliverable: false,
+      issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }],
+      credentials: [],
+      entryUuid: PIN.entry_uuid,
+      marketplaceUuid: PIN.marketplace_uuid,
+      marketplaceName: 'Team skills',
+      archiveSha256: PIN.archive_sha256,
+      commitHash: 'abc123'
+    }])
+  })
+
+  it('shares one name space with own skills, catalog pins, platform skills and other marketplace pins', () => {
+    const other = '5e1d2c3b-4a59-4687-9a6b-5c4d3e2f1a0b'
+    const rows = marketplaceSkillRows({
+      catalog_skills: [CATALOG_PIN],
+      marketplace_skills: [
+        PIN,
+        { ...PIN, entry_uuid: other, name: 'pdf-tools' },
+        { ...PIN, entry_uuid: other, name: 'cinna-artifacts' },
+        { ...PIN, entry_uuid: other, name: 'csv-export' },
+        { ...PIN, entry_uuid: other, name: 'csv-export' },
+        { ...PIN, name: 'Not_A_Name' }
+      ]
+    }, new Set(['pdf-tools']))
+    expect(rows.map((row) => [row.name, row.issues.map((i) => `${i.severity}:${i.code}`)])).toEqual([
+      ['pdf-report', ['error:catalog_clash', 'warning:not_downloaded']],
+      ['pdf-tools', ['error:name_clash', 'warning:not_downloaded']],
+      ['cinna-artifacts', ['error:reserved_name', 'warning:not_downloaded']],
+      ['csv-export', ['warning:not_downloaded']],
+      ['csv-export', ['error:duplicate_pin', 'warning:not_downloaded']]
+    ])
+  })
+
+  it('delivers a cached snapshot beside own and catalog skills, and never the one whose name a catalog pin holds', () => {
+    skill('alpha', md('name: alpha\ndescription: a'))
+    const cacheDir = join(agent, '..', `${agent.split('/').pop()}-mcache`)
+    const dir = join(cacheDir, 'csv-export')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), md('name: csv-export\ndescription: Export CSV.'))
+    const clashing = join(cacheDir, 'pdf-report')
+    mkdirSync(clashing, { recursive: true })
+    writeFileSync(join(clashing, 'SKILL.md'), md('name: pdf-report\ndescription: Reports.'))
+    try {
+      const seen: unknown[] = []
+      const manifest = { catalog_skills: [CATALOG_PIN], marketplace_skills: [{ ...PIN, name: 'csv-export' }, PIN] }
+      const rows = agentSkillRows(agent, manifest, () => ({ state: 'missing' }), (ref) => {
+        seen.push(ref)
+        return { state: 'ready', dir: join(cacheDir, ref.name) }
+      })
+      expect(seen).toEqual([
+        { entryUuid: PIN.entry_uuid, name: 'csv-export', archiveSha256: PIN.archive_sha256 },
+        { entryUuid: PIN.entry_uuid, name: 'pdf-report', archiveSha256: PIN.archive_sha256 }
+      ])
+      expect(rows.map((row) => [row.name, row.source, row.deliverable])).toEqual([
+        ['alpha', 'authored', true],
+        ['csv-export', 'marketplace', true],
+        ['pdf-report', 'catalog', false],
+        ['pdf-report', 'marketplace', false]
+      ])
+      expect(deliverableSkills(rows).find((row) => row.name === 'csv-export')).toMatchObject({ path: join(dir, 'SKILL.md'), description: 'Export CSV.' })
+      // Without a marketplace resolver nothing of the marketplace is delivered.
+      expect(deliverableSkills(agentSkillRows(agent, manifest)).map((row) => row.name)).toEqual(['alpha'])
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true })
+    }
   })
 })

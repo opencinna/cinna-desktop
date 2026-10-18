@@ -43,6 +43,7 @@ import { cacheRefOf, catalogSkillCache, instanceKey, notAvailableSentence, revis
 import { catalogLocalInstalls } from './catalogLocalInstalls'
 import { localAgentService } from './localAgents/localAgentService'
 import { scannerService } from './localAgents/scannerService'
+import { turnLock } from './localAgents/turnLock'
 import { activeListing, linkedEntry } from './catalogSkillUpdates'
 import { libraryTrust } from './libraryTrust'
 import { gitService } from './localAgents/gitService'
@@ -210,13 +211,13 @@ async function phrased(outcome: FetchOutcome, teamTracked: () => Promise<boolean
 
 /* ---------------------------------------------------------------- agents */
 
-interface KitTarget {
+export interface KitTarget {
   rootId: string
   dir: string
 }
 
-/** The kit agent behind an id, or a refusal. */
-function locateKit(userId: string, agentId: string): KitTarget | Refused {
+/** The kit agent behind an id, or a refusal. Shared with `marketplaceSkillService`. */
+export function locateKit(userId: string, agentId: string): KitTarget | Refused {
   let agent: LocalAgentDto
   try {
     agent = localAgentService.get(userId, agentId)
@@ -294,7 +295,7 @@ function cinnaRepoIdOf(originUrl: string, cinnaServer: string | null): string | 
  * a second key. When git cannot answer (missing, or the read failed), the
  * link alone decides, as `changeableFromLink` does for the rows.
  */
-async function changeability(dir: string, listing: CachedListing | null): Promise<'ok' | 'read_only' | 'access_unknown'> {
+export async function changeability(dir: string, listing: CachedListing | null): Promise<'ok' | 'read_only' | 'access_unknown'> {
   const remote = await gitService.readShareRemote(dir)
   const linked = linkedEntry(dir, listing)
   if (!remote.ownRepo || remote.originUrl === null) {
@@ -379,7 +380,7 @@ function clashOf(dir: string, pins: CatalogSkillPin[], name: string, except: num
 }
 
 /** Tell the scanner and the renderer that what an agent's skills resolve to moved. */
-function settle(rootId: string, agentId: string | null): void {
+export function settle(rootId: string, agentId: string | null): void {
   scannerService.markAllRootsDirty()
   publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId, agentId, reason: 'rescan' })
 }
@@ -423,10 +424,10 @@ function account(): { profile: string; host: string } | Refused {
  * What it attached reaches the renderer on `SERVICE_CREDENTIALS_CHANGED` as `autoAttached`, so
  * Finish setup can say "Connected automatically".
  */
-async function skillCredentials(agentId: string): Promise<AutoAttachedCredential[]> {
+export async function skillCredentials(agentId: string, onBusy?: () => void): Promise<AutoAttachedCredential[]> {
   try {
     const { serviceCredentialService } = await import('./serviceCredentials/service')
-    const items = await serviceCredentialService.autoAttachSkills(agentId)
+    const items = await (onBusy ? serviceCredentialService.autoAttachSkills(agentId, { onBusy }) : serviceCredentialService.autoAttachSkills(agentId))
     if (items.length) {
       const payload: ServiceCredentialsChangedPayload = { autoAttached: { agentId, items } }
       publishEvent(SERVICE_CREDENTIALS_CHANGED, payload, 'all')
@@ -438,13 +439,32 @@ async function skillCredentials(agentId: string): Promise<AutoAttachedCredential
   }
 }
 
+/** Agents whose background skill attach a holder refused, waiting for the agent to be free. */
+const attachRetryPending = new Set<string>()
+
+/**
+ * {@link skillCredentials} after a background fetch of pinned skills. The fetch can land while a
+ * turn holds the agent, which refuses the write; then it is tried once more when the agent's last
+ * holder leaves — one pending retry per agent, and the retry does not arm another.
+ */
+export function skillCredentialsInBackground(agentId: string): Promise<AutoAttachedCredential[]> {
+  return skillCredentials(agentId, () => {
+    if (attachRetryPending.has(agentId)) return
+    attachRetryPending.add(agentId)
+    turnLock.whenFree(agentId, () => {
+      attachRetryPending.delete(agentId)
+      void skillCredentials(agentId)
+    })
+  })
+}
+
 /**
  * Detach what auto-attach put on the agent for skill slots nothing declares any more (a removed skill,
  * or a version that dropped a provider). Loaded on use like {@link skillCredentials}; in the background,
  * never failing the verb. Runs after `settle`, and the credential service re-reads the agent from its
  * folder, so it sees the pins as just written.
  */
-async function detachUnusedCredentials(agentId: string): Promise<void> {
+export async function detachUnusedCredentials(agentId: string): Promise<void> {
   try {
     const { serviceCredentialService } = await import('./serviceCredentials/service')
     await serviceCredentialService.detachUnusedAutoAttachments(agentId)
@@ -461,6 +481,14 @@ async function detachUnusedCredentials(agentId: string): Promise<void> {
  * cannot be read (gone, unparsable), makes the answer unknown.
  */
 function pinnedRevisions(): { ok: true; keep: Set<string> } | { ok: false; reason: string } {
+  return pinnedKeys((manifest) => pinsOf(manifest).map(revisionKeyOf))
+}
+
+/**
+ * {@link pinnedRevisions} for any kind of pin: the keys `keysOf` reads from every registered kit
+ * agent's manifest, or why that cannot be known. Shared with `marketplaceSkillService`.
+ */
+export function pinnedKeys(keysOf: (manifest: CinnaAgentManifest) => Iterable<string | null>): { ok: true; keep: Set<string> } | { ok: false; reason: string } {
   const userId = getSettingsScopeUserId()
   const scanned = agentRootRepo.list(userId).flatMap((root) => scannerService.scanRootCached(userId, root).agents)
   const reached = new Set(scanned.map((agent) => agent.path))
@@ -471,10 +499,7 @@ function pinnedRevisions(): { ok: true; keep: Set<string> } | { ok: false; reaso
   for (const agent of scanned) {
     if (agent.skills === undefined) continue
     try {
-      for (const pin of pinsOf(readManifest(manifestPath(agent.path)))) {
-        const key = revisionKeyOf(pin)
-        if (key) keep.add(key)
-      }
+      for (const key of keysOf(readManifest(manifestPath(agent.path)))) if (key) keep.add(key)
     } catch (err) {
       return { ok: false, reason: `an agent's manifest could not be read: ${err instanceof Error ? err.message : String(err)}` }
     }
@@ -675,7 +700,7 @@ export const catalogSkillService = {
    * are read from its cached SKILL.md.
    */
   ensurePinnedInBackground(userId: string, agentId: string): void {
-    void catalogSkillService.ensurePinned(userId, agentId).then(() => skillCredentials(agentId)).catch(() => undefined)
+    void catalogSkillService.ensurePinned(userId, agentId).then(() => skillCredentialsInBackground(agentId)).catch(() => undefined)
   },
 
   /**

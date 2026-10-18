@@ -14,6 +14,7 @@ window.api = {} as never
 const { SkillAddModal } = await import('./SkillAddModal')
 const { useAuthStore } = await import('../../../stores/auth.store')
 const { CATALOG_TEXT } = await import('../../../utils/catalogItems')
+const { useSkillAddSourceStore } = await import('../../../stores/skillAddSource.store')
 
 function item(overrides: Partial<CatalogItem>): CatalogItem {
   return {
@@ -59,6 +60,7 @@ const card = (name: string): HTMLElement => screen.getByRole('group', { name })
 beforeEach(() => {
   vi.resetAllMocks()
   pins = []
+  useSkillAddSourceStore.setState({ source: 'catalog' })
   useAuthStore.setState({
     currentUser: { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false } as never
   })
@@ -105,6 +107,27 @@ describe('SkillAddModal', () => {
     expect(add).toHaveBeenCalledWith('folder:a', 'u-erp')
     expect(screen.getByRole('dialog', { name: 'Add skill' })).toBeTruthy()
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('lets a skill removed since its add be added again in the next opening', async () => {
+    add.mockImplementation(async (_agentId: string, uuid: string) => {
+      pins = [...pins, uuid]
+      return { ok: true, name: 'erp-lookup', revisionNumber: 1 }
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const tree = (open: boolean) => createElement(QueryClientProvider, { client }, createElement(SkillAddModal, { open, agentId: 'folder:a', onClose }))
+    const { rerender } = render(tree(true))
+    await screen.findByText('erp-lookup')
+    await waitFor(() => expect((within(card('erp-lookup')).getByRole('button', { name: /^Add erp-lookup/ }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(within(card('erp-lookup')).getByRole('button', { name: /^Add erp-lookup/ }))
+    await within(card('erp-lookup')).findByRole('button', { name: 'erp-lookup added' })
+    // Removed from the agent's Skills section while the modal was closed.
+    rerender(tree(false))
+    pins = []
+    await client.invalidateQueries()
+    rerender(tree(true))
+    await screen.findByText('erp-lookup')
+    await waitFor(() => expect((within(card('erp-lookup')).getByRole('button', { name: /^Add erp-lookup/ }) as HTMLButtonElement).disabled).toBe(false))
   })
 
   it('shows a skill this agent already pins as Added', async () => {

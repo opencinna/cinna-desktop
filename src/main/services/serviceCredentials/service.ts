@@ -716,11 +716,11 @@ async function appendWithoutWaiting(id: string, account: Account, added: string[
 /**
  * The auto-attached entries of `a` (account groups only; only `autoAttachSkills` marks) that nothing
  * uses any more: no skill on the agent declares their slot, and no agent credential slot is judged by
- * their record. Null when the agent's skill slots cannot be known: a pinned catalog skill that is not
+ * their record. Null when the agent's skill slots cannot be known: a pinned catalog or marketplace skill not
  * on this computer declares slots nobody can read, and one of them may be the slot.
  */
 function unusedAutoEntries(a: LocalAgentDto): Map<string, Set<string>> | null {
-  if ((a.skills ?? []).some(skill => skill.source === 'catalog' && skill.path === '')) return null
+  if ((a.skills ?? []).some(skill => (skill.source === 'catalog' || skill.source === 'marketplace') && skill.path === '')) return null
   // Every declared slot, deliverable or not: a skill held back by a clash may still be fixed, and keeping is the safe side.
   const declared = new Set((a.skills ?? []).flatMap(skill => skill.credentials.map(c => c.slot)))
   const judged = new Set(a.credentials.flatMap(slot => slot.attachment ? [slot.attachment.credentialId] : []))
@@ -1115,7 +1115,7 @@ export const serviceCredentialService = {
   },
   /**
    * U11: fill the agent's skill slots without asking where the answer is unambiguous. Called after
-   * Add to agent and Update of a catalog skill, after the sharing verbs have fetched the pinned
+   * Add to agent and Update of a catalog or marketplace skill, after the sharing verbs have fetched the pinned
    * skills, and when Finish setup opens.
    *
    * 1. Only slots nobody chose for yet: an attachment with the slot's Service URI, of any type or
@@ -1125,9 +1125,11 @@ export const serviceCredentialService = {
    * 3. Attach a cloud record of the active account only when exactly one strictly fits
    *    `(type, service_uri = slot)` (owned before shared, as `autoMatch`). Appends only.
    *
-   * Never waits for a running turn and never throws: answers what it attached.
+   * Never waits for a running turn and never throws: answers what it attached. `onBusy` is
+   * called when a holder of the agent refused the write, so a background caller can try again
+   * once the agent is free.
    */
-  async autoAttachSkills(id: string): Promise<AutoAttachedCredential[]> {
+  async autoAttachSkills(id: string, options?: { onBusy?: () => void }): Promise<AutoAttachedCredential[]> {
     try {
       const account = activeAccount()
       if (!account) return []
@@ -1168,13 +1170,15 @@ export const serviceCredentialService = {
       logger.info('Attached matching credentials for skill slots', { agentId: id, count: appended.length })
       return appended.map(ref => ({ slot: picks.get(ref)!.slot.slot, credentialName: picks.get(ref)!.credentialName, skill: true as const }))
     } catch (error) {
-      if ((error as { code?: string }).code === 'turn_in_progress') logger.info('Did not attach skill credentials: a turn holds the agent', { agentId: id })
-      else logger.warn('Could not attach skill credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
+      if ((error as { code?: string }).code === 'turn_in_progress') {
+        logger.info('Did not attach skill credentials: a turn holds the agent', { agentId: id })
+        options?.onBusy?.()
+      } else logger.warn('Could not attach skill credentials', { agentId: id, error: error instanceof Error ? error.message : String(error) })
       return []
     }
   },
   /**
-   * After a catalog skill is removed or updated: detach, in every account group, each record
+   * After a catalog or marketplace skill is removed or updated: detach, in every account group, each record
    * `autoAttachSkills` put there for a skill slot that no skill on the agent declares any more and
    * that no agent credential slot is judged by. A record attached by hand is never touched. Decided
    * again under the agent's lock, on the fresh state; never waits for a running turn (one holding the

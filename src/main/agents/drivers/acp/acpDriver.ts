@@ -205,8 +205,10 @@ export interface AcpDriverDeps {
    * Take the agent's turn lock **shared** for the streaming part of the turn:
    * sibling turns of the same agent (other chats) run beside it, and only an
    * exclusive holder (the desktop's own folder write) refuses or queues it.
+   * `signal` is the turn's own: a Stop during a brief wait for a credential
+   * write ends the wait, and a stopped turn never runs `fn`.
    */
-  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal): Promise<T>
+  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal, signal?: AbortSignal): Promise<T>
   /**
    * Where a session's traffic goes between turns (see `acpSessionObserver.ts`).
    * One sink per observed session, built with the chat and agent it belongs
@@ -682,7 +684,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()
           return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
-        }, input.queueWhenBusy ? input.signal : undefined)
+        }, input.queueWhenBusy ? input.signal : undefined, input.signal)
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
         // already user-facing ("This agent is busy right now…"). Letting it

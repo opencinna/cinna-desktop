@@ -14,7 +14,9 @@
  * writes — the page editors, credential materialization, the credential
  * helper, deleting the agent — take an *exclusive* hold
  * ({@link TurnLock.acquire}), which is refused while any holder exists, and
- * every shared acquisition is refused while an exclusive one is held.
+ * every shared acquisition is refused while an exclusive one is held — except
+ * that {@link TurnLock.withSharedLock} waits a few seconds out a `credentials`
+ * write, which is short and may be a background auto-attach the user never saw.
  *
  * **Reader preference.** A queued exclusive waiter is admitted only when no
  * holder at all remains; a steady stream of overlapping turns can therefore
@@ -145,6 +147,58 @@ async function withQueued<T>(agentId: string, owner: string, mode: LockMode, sig
   } finally { handle.release() }
 }
 
+/**
+ * Exclusive owners a turn's shared hold waits out, briefly, instead of refusing:
+ * a credential write (`writeAttachments`, a materialization) holds the agent for
+ * well under a second, and the background auto-attach after a pinned-skill fetch
+ * can land on the very moment the user sends. Every other exclusive owner — the
+ * page editors, sharing verbs, deleting the agent — keeps refusing at once.
+ *
+ * Known limit: a `credentials` hold is usually a short local write, but
+ * `writeAttachments` (`serviceCredentials/service.ts`) can materialize a newly
+ * attached record with a network fetch to cinna-core under the lock. On a slow
+ * core the turn then waits the full {@link BRIEF_EXCLUSIVE_WAIT_MS} and is
+ * refused as before. Moving that fetch outside the lock is a possible follow-up.
+ */
+const BRIEF_EXCLUSIVE_OWNERS: ReadonlySet<string> = new Set(['credentials'])
+/** The longest a shared hold waits for brief exclusive holders before refusing as before. */
+export const BRIEF_EXCLUSIVE_WAIT_MS = 3000
+
+/** What a turn stopped during the wait (or before its body) rejects with; the caller maps it to its canceled ending. */
+const STOPPED_WHILE_WAITING = 'The turn was stopped while waiting for its agent.'
+
+/**
+ * A shared hold now, or after the brief exclusive holders ahead of it are gone
+ * (bounded by {@link BRIEF_EXCLUSIVE_WAIT_MS}). Refuses as {@link take} does
+ * when the holder is not brief, or the wait runs out. An abort of `signal`
+ * ends the wait at once, removing its waiter, and rejects.
+ */
+async function takeSharedWaitingOutBrief(agentId: string, owner: string, signal?: AbortSignal): Promise<TurnLockHandle> {
+  const deadline = Date.now() + BRIEF_EXCLUSIVE_WAIT_MS
+  for (;;) {
+    if (signal?.aborted) throw new Error(STOPPED_WHILE_WAITING)
+    const existing = blocker(agentId, 'shared')
+    const left = deadline - Date.now()
+    if (!existing || !BRIEF_EXCLUSIVE_OWNERS.has(existing.owner) || left <= 0) return take(agentId, owner, 'shared')
+    await new Promise<void>((resolve, reject) => {
+      const settle = (): void => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+        const waiters = releaseWaiters.get(agentId)?.filter((waiter) => waiter !== wake)
+        if (waiters?.length) releaseWaiters.set(agentId, waiters)
+        else releaseWaiters.delete(agentId)
+      }
+      const wake = (): void => { settle(); resolve() }
+      const abort = (): void => { settle(); reject(new Error(STOPPED_WHILE_WAITING)) }
+      const timer = setTimeout(() => { settle(); resolve() }, left)
+      const waiters = releaseWaiters.get(agentId) ?? []
+      waiters.push(wake)
+      releaseWaiters.set(agentId, waiters)
+      signal?.addEventListener('abort', abort, { once: true })
+    })
+  }
+}
+
 async function withHeld<T>(handle: TurnLockHandle, fn: () => Promise<T> | T): Promise<T> {
   try {
     return await fn()
@@ -190,9 +244,20 @@ export const turnLock = {
     return withHeld(take(agentId, owner, 'exclusive'), fn)
   },
 
-  /** Run `fn` under a shared hold, releasing it however `fn` ends. */
-  async withSharedLock<T>(agentId: string, owner: string, fn: () => Promise<T> | T): Promise<T> {
-    return withHeld(take(agentId, owner, 'shared'), fn)
+  /**
+   * Run `fn` under a shared hold, releasing it however `fn` ends. Refuses while
+   * an exclusive holder exists, except a brief credential write, which it waits
+   * out for up to {@link BRIEF_EXCLUSIVE_WAIT_MS}. An abort of `signal` during
+   * that wait rejects at once, and a signal already aborted once the hold is
+   * taken releases it without running `fn`.
+   *
+   * @throws LocalAgentError `turn_in_progress`
+   */
+  async withSharedLock<T>(agentId: string, owner: string, fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T> {
+    return withHeld(await takeSharedWaitingOutBrief(agentId, owner, signal), () => {
+      if (signal?.aborted) throw new Error(STOPPED_WHILE_WAITING)
+      return fn()
+    })
   },
 
   /** Exclusive, queued: acquires atomically once no holder remains; cancellation removes its waiter. */

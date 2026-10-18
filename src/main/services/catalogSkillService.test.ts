@@ -31,7 +31,7 @@ const remote = vi.hoisted(() => ({ ownRepo: false, originUrl: null as string | n
 const listing = vi.hoisted(() => ({ value: null as null | { items: unknown[]; agents: unknown[] } }))
 const refresh = vi.hoisted(() => vi.fn(async () => listing.value))
 /** The skill slots main fills after Add and Update (U11), faked: what it would have attached. */
-const autoAttachSkills = vi.hoisted(() => vi.fn(async (_agentId: string): Promise<unknown[]> => []))
+const autoAttachSkills = vi.hoisted(() => vi.fn(async (_agentId: string, _options?: { onBusy?: () => void }): Promise<unknown[]> => []))
 /** What main detaches after Remove and Update, faked. */
 const detachUnusedAutoAttachments = vi.hoisted(() => vi.fn(async (_agentId: string): Promise<unknown[]> => []))
 /** The registered roots, the agent index and what a scan of each root finds: what the garbage collection reads. */
@@ -90,6 +90,7 @@ const { disconnectedKey } = await import('../../shared/inbox')
 const { agentSkillRows, deliverableSkills } = await import('../kit/skills')
 const { CinnaApiError } = await import('../errors')
 const { libraryTrust } = await import('./libraryTrust')
+const { turnLock } = await import('./localAgents/turnLock')
 
 let root: string
 let agentDir: string
@@ -457,6 +458,24 @@ describe('fetching what an agent pins (U7)', () => {
     expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: false, code: 'not_found' })
   })
 
+  it('refuses a pin naming the revision under another name, keeping the folder another agent uses', async () => {
+    const good = skillTgz('erp-lookup')
+    const pinNamed = (name: string) => ({ package_id: 'p.skill.erp-lookup', package_uuid: UUID, name, revision_number: 2, archive_sha256: sha256Of(good) })
+    writeManifest({ catalog_skills: [pinNamed('erp-lookup')] })
+    serve({ 2: good })
+    expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({ ok: true, fetched: ['erp-lookup'] })
+    const marker = readFileSync(join(revisionDir(2), '.cinna-catalog-skill.json'), 'utf8')
+
+    writeManifest({ catalog_skills: [pinNamed('erp-renamed')] })
+    expect(await catalogSkillService.ensurePinned(USER, AGENT_ID)).toMatchObject({
+      ok: true,
+      fetched: [],
+      failed: [{ name: 'erp-renamed', code: 'invalid_archive' }]
+    })
+    expect(readFileSync(join(revisionDir(2), '.cinna-catalog-skill.json'), 'utf8')).toBe(marker)
+    expect(existsSync(join(revisionDir(2), 'erp-lookup', 'SKILL.md'))).toBe(true)
+  })
+
   it('says a team-tracked agent is behind the team’s latest on a 404: a shared_remote link, or a Cinna team origin', async () => {
     const pin = { package_id: 'p.skill.csv-export', package_uuid: UUID, name: 'csv-export', revision_number: 5, archive_sha256: sha256Of(skillTgz('csv-export')) }
     writeManifest({ catalog_skills: [pin] })
@@ -537,8 +556,32 @@ describe('fetching what an agent pins (U7)', () => {
       throw new Error('boom')
     })
     catalogSkillService.ensurePinnedInBackground(USER, AGENT_ID)
-    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID))
+    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID, expect.anything()))
     expect(cachedFirst).toBe('ready')
+  })
+
+  it('tries the background attach once more when the turn that refused it lets the agent go', async () => {
+    const good = skillTgz('erp-lookup')
+    writeManifest({ catalog_skills: [{ package_id: 'p.skill.erp-lookup', package_uuid: UUID, name: 'erp-lookup', revision_number: 2, archive_sha256: sha256Of(good) }] })
+    serve({ 2: good })
+    autoAttachSkills.mockClear()
+    // The turn holds the agent shared when the fetch lands: the write is refused, and says so twice.
+    autoAttachSkills.mockImplementationOnce(async (_id: string, options?: { onBusy?: () => void }) => {
+      options?.onBusy?.(); options?.onBusy?.()
+      return []
+    })
+    const turn = turnLock.acquireShared(AGENT_ID, 'turn')
+    try {
+      catalogSkillService.ensurePinnedInBackground(USER, AGENT_ID)
+      await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(1))
+      await new Promise((r) => setTimeout(r, 10))
+      expect(autoAttachSkills).toHaveBeenCalledTimes(1)
+    } finally { turn.release() }
+    // One retry, without arming another.
+    await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(2))
+    expect(autoAttachSkills.mock.calls[1]).toEqual([AGENT_ID])
+    await new Promise((r) => setTimeout(r, 10))
+    expect(autoAttachSkills).toHaveBeenCalledTimes(2)
   })
 })
 

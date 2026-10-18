@@ -205,6 +205,12 @@ import type {
   JobDependencyStatus
 } from '../shared/sync'
 import type { CatalogSkillEnsureResult, CatalogSkillOutcome } from '../shared/catalogSkills'
+import type {
+  MarketplaceSkillDiscoverResult,
+  MarketplaceSkillEnsureResult,
+  MarketplaceSkillOutcome,
+  MarketplaceSkillStatusResult
+} from '../shared/marketplaceSkills'
 import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
 import {
   ARTIFACTS_APPROVALS_CHANNEL,
@@ -2079,6 +2085,27 @@ const api = {
       ipcRenderer.invoke('catalog-skills:remove', { agentId, name }),
     ensure: (agentId: string): Promise<CatalogSkillEnsureResult> =>
       ipcRenderer.invoke('catalog-skills:ensure', { agentId })
+  },
+
+  /**
+   * Marketplace skills pinned in a kit agent's `marketplace_skills[]`: list the
+   * skills the connected skills marketplaces offer, add one's current
+   * snapshot, move a pin to its entry's current snapshot, drop one, fetch
+   * every pinned snapshot this computer lacks, and where each pin stands.
+   * Every answer is data, refusals included. See `src/shared/marketplaceSkills.ts`.
+   */
+  marketplaceSkills: {
+    discover: (): Promise<MarketplaceSkillDiscoverResult> => ipcRenderer.invoke('marketplace-skills:discover'),
+    add: (agentId: string, entryUuid: string): Promise<MarketplaceSkillOutcome> =>
+      ipcRenderer.invoke('marketplace-skills:add', { agentId, entryUuid }),
+    update: (agentId: string, name: string): Promise<MarketplaceSkillOutcome> =>
+      ipcRenderer.invoke('marketplace-skills:update', { agentId, name }),
+    remove: (agentId: string, name: string): Promise<MarketplaceSkillOutcome> =>
+      ipcRenderer.invoke('marketplace-skills:remove', { agentId, name }),
+    ensure: (agentId: string): Promise<MarketplaceSkillEnsureResult> =>
+      ipcRenderer.invoke('marketplace-skills:ensure', { agentId }),
+    status: (agentId: string): Promise<MarketplaceSkillStatusResult> =>
+      ipcRenderer.invoke('marketplace-skills:status', { agentId })
   },
 
   /**

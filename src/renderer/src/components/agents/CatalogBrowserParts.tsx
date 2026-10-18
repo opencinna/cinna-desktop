@@ -34,6 +34,9 @@ export const CATALOG_FILTERS: CatalogFilter[] = ['all', 'agents', 'skills']
 
 type CatalogQuery = UseQueryResult<CatalogItemsListing | null>
 
+/** What the load state reads of a list query: the catalog's, or the marketplace skills'. */
+type ListQuery = Pick<UseQueryResult<unknown>, 'data' | 'error' | 'isFetching'>
+
 /**
  * The items the filter and the search leave, the ones the filter alone
  * leaves (to tell an empty filter from a search matching nothing), and the
@@ -59,8 +62,8 @@ export interface CatalogReauth {
   error: string | null
 }
 
-/** Re-authenticate an expired Cinna session, then read the catalog again. */
-export function useCatalogReauth(catalog: CatalogQuery): CatalogReauth {
+/** Re-authenticate an expired Cinna session, then read the list again (the catalog, or the marketplace skills). */
+export function useCatalogReauth(catalog: { refetch: () => Promise<unknown> }): CatalogReauth {
   const cinnaReauth = useCinnaReauth()
   const [error, setError] = useState<string | null>(null)
   const run = async (): Promise<void> => {
@@ -142,7 +145,7 @@ export function CatalogSearchRow({
  * shows as loading (with nothing on screen) or as the Refresh spinner (over
  * tiles), never as an error beside a disabled Retry.
  */
-function loadState(catalog: CatalogQuery): { hasList: boolean; failed: boolean; errorCode: string | undefined } {
+function loadState(catalog: ListQuery): { hasList: boolean; failed: boolean; errorCode: string | undefined } {
   return {
     hasList: catalog.data !== undefined,
     failed: catalog.error !== null && !catalog.isFetching,
@@ -212,13 +215,15 @@ export function CatalogListBody({
 
 /**
  * Tiles on screen and a refresh failed: one line beside the Refresh button,
- * in space the header always has — nothing below it moves (rule 1).
+ * in space the header always has — nothing below it moves (rule 1). Any list
+ * query whose error carries main's `code` (the catalog, the marketplace
+ * skills).
  */
 export function CatalogRefreshFailure({
   catalog,
   reauth
 }: {
-  catalog: CatalogQuery
+  catalog: ListQuery
   reauth: CatalogReauth
 }): React.JSX.Element | null {
   const type = useCatalogType()

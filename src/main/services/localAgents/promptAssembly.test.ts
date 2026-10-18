@@ -24,6 +24,17 @@ vi.mock('../catalogSkillCache', () => ({
   }
 }))
 
+/** Where the marketplace skill cache says a pinned snapshot is; `missing` unless a test puts one there. */
+const marketplaceCache = vi.hoisted(() => ({ ready: new Map<string, string>() }))
+vi.mock('../marketplaceSkillCache', () => ({
+  marketplaceSkillCache: {
+    resolve: (ref: { entryUuid: string; archiveSha256: string }) => {
+      const dir = marketplaceCache.ready.get(`${ref.entryUuid}/${ref.archiveSha256}`)
+      return dir ? { state: 'ready', dir } : { state: 'missing' }
+    }
+  }
+}))
+
 const skill = vi.hoisted(() => ({ available: true }))
 vi.mock('../tasksSkillService', () => ({
   tasksSkillDeliveryFor: (engine: string) => !skill.available
@@ -854,7 +865,7 @@ describe('the agent’s own skills', () => {
       expect(section(prompt)).toBe([
         '## Your skills',
         '',
-        'Your own skills, from `skills/` in this folder, and the catalog skills this agent pins. When a task matches one, read its `SKILL.md` before using the skill.',
+        'Your own skills, from `skills/` in this folder, and the catalog skills this agent pins, which are kept outside this folder and are not under `skills/`. When a task matches one, read the `SKILL.md` at the path listed after it, exactly as written, before using the skill.',
         '',
         `- \`erp-lookup\` — Look things up in the ERP. — \`${join(cacheDir, 'erp-lookup', 'SKILL.md')}\``,
         '- `pdf-tools` — Fill and merge PDFs. — `skills/pdf-tools/SKILL.md`'
@@ -867,6 +878,39 @@ describe('the agent’s own skills', () => {
       const prompt = assembleAgentPrompt(dir, manifest({ catalog_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext('codex') })
       expect(prompt).not.toContain('erp-lookup')
       expect(section(prompt)).toContain('Your own skills, from `skills/` in this folder. When a task')
+    })
+  })
+
+  describe('with a pinned marketplace skill', () => {
+    const ENTRY = '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f'
+    const pin = {
+      entry_uuid: ENTRY,
+      marketplace_uuid: '8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d',
+      marketplace_name: 'Team skills',
+      name: 'pdf-report',
+      archive_sha256: 'd'.repeat(64)
+    }
+    let cacheDir: string
+    beforeEach(() => {
+      cacheDir = mkdtempSync(join(tmpdir(), 'cinna-prompt-mcache-'))
+      mkdirSync(join(cacheDir, 'pdf-report'))
+      writeFileSync(join(cacheDir, 'pdf-report', 'SKILL.md'), '---\nname: pdf-report\ndescription: Builds PDF reports.\n---\n')
+    })
+    afterEach(() => {
+      marketplaceCache.ready.clear()
+      rmSync(cacheDir, { recursive: true, force: true })
+    })
+
+    it('lists a cached one for Codex and Antigravity by the absolute path of its SKILL.md, and says where it comes from', () => {
+      marketplaceCache.ready.set(`${ENTRY}/${'d'.repeat(64)}`, join(cacheDir, 'pdf-report'))
+      for (const engine of ['codex', 'antigravity'] as const) {
+        const listed = section(assembleAgentPrompt(dir, manifest({ marketplace_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext(engine) }))
+        // Not under `skills/`: Codex otherwise tries `<agent>/skills/pdf-report/SKILL.md` first.
+        expect(listed, engine).toContain('and the marketplace skills this agent pins, which are kept outside this folder and are not under `skills/`. When a task matches one, read the `SKILL.md` at the path listed after it, exactly as written')
+        expect(listed, engine).toContain(`- \`pdf-report\` — Builds PDF reports. — \`${join(cacheDir, 'pdf-report', 'SKILL.md')}\``)
+      }
+      const claude = section(assembleAgentPrompt(dir, manifest({ marketplace_skills: [pin] }), { ...CONTEXT, ...resolveDesktopPromptContext('claude') }))
+      expect(claude).toContain('and the marketplace skills this agent pins are available through the skill tool')
     })
   })
 

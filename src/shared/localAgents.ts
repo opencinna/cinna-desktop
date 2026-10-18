@@ -393,10 +393,12 @@ export interface FileStamp {
  * Where a skill came from. `authored` is a folder the agent's own author wrote
  * under `skills/<name>/`; `catalog` is a pin in the manifest's
  * `catalog_skills[]` (contract 1.10.0), a platform catalog skill referenced by
- * package and revision whose files never live in the folder. Nothing downloads
- * a catalog skill yet, so a `catalog` row is never deliverable.
+ * package and revision whose files never live in the folder; `marketplace` is
+ * a pin in `marketplace_skills[]` (contract 1.15.0), a skill from one of the
+ * platform's skills marketplaces referenced by entry and snapshot digest. A
+ * pinned row is deliverable once its cached copy is on this computer.
  */
-export type LocalAgentSkillSource = 'authored' | 'catalog'
+export type LocalAgentSkillSource = 'authored' | 'catalog' | 'marketplace'
 
 /**
  * One condition a skill is flagged with — cinna-core's `skill_manifest.py`
@@ -488,6 +490,16 @@ export interface LocalAgentSkill {
    * shared one, `edit` or `maintain` on its package in the cached listing.
    */
   shareable?: boolean
+  /** `marketplace` rows only: the pin's `entry_uuid` (the marketplace entry), as written. */
+  entryUuid?: string
+  /** `marketplace` rows only: the pin's `marketplace_uuid`, as written. */
+  marketplaceUuid?: string
+  /** `marketplace` rows only: the marketplace's name when the pin was written (`''` when it has none). */
+  marketplaceName?: string
+  /** `marketplace` rows only: the pinned snapshot's `archive_sha256`, as written. */
+  archiveSha256?: string
+  /** `marketplace` rows only: the repository commit the snapshot was read at, or null. */
+  commitHash?: string | null
 }
 
 /** Where an authored skill was shared: the package and the version the last share created. */

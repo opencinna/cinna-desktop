@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -31,11 +31,18 @@ type Outcome = { ok: true; name: string; revisionNumber: number } | { ok: false;
 const updateSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
 const removeSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
 const ensureSkills = vi.fn<(agentId: string) => Promise<unknown>>()
+const updateMarketplaceSkill = vi.fn<(agentId: string, name: string) => Promise<unknown>>()
+const removeMarketplaceSkill = vi.fn<(agentId: string, name: string) => Promise<unknown>>()
+const ensureMarketplaceSkills = vi.fn<(agentId: string) => Promise<unknown>>()
+const marketplaceStatus = vi.fn<(agentId: string) => Promise<unknown>>()
+const openExternal = vi.fn()
 window.api = {
+  system: { openExternal },
   localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider, openPath },
   mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] },
   sharing: { statuses: () => statusesPending ?? Promise.resolve({ success: true, value: shareStatuses }) },
-  catalogSkills: { update: updateSkill, remove: removeSkill, ensure: ensureSkills }
+  catalogSkills: { update: updateSkill, remove: removeSkill, ensure: ensureSkills },
+  marketplaceSkills: { update: updateMarketplaceSkill, remove: removeMarketplaceSkill, ensure: ensureMarketplaceSkills, status: marketplaceStatus }
 } as never
 
 const { AgentAddonsTab, useAddonsBadge } = await import('./AgentAddonsTab')
@@ -557,5 +564,118 @@ describe('the Skills section — a catalog skill’s actions', () => {
     renderTab({ skills: undefined, kind: 'bare' } as never)
     await screen.findByText('No connectors attached.')
     expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
+  })
+})
+
+describe('the Skills section — a marketplace skill', () => {
+  const ENTRY = '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f'
+  const mpin = (name: string, extra: Partial<LocalAgentSkill> = {}): LocalAgentSkill => ({
+    name, description: `${name} things.`, version: '0.3.1', source: 'marketplace', path: `/cache/m/${name}/SKILL.md`, deliverable: true,
+    issues: [], credentials: [], entryUuid: ENTRY, marketplaceUuid: 'm-team', marketplaceName: 'Team skills',
+    archiveSha256: 'd'.repeat(64), commitHash: null, ...extra
+  })
+  const row = (name: string): HTMLElement => document.querySelector(`[data-skill-row="${name}"]`) as HTMLElement
+  const status = (state: string, extra: Record<string, unknown> = {}) =>
+    marketplaceStatus.mockResolvedValue({ ok: true, pins: [{ name: 'pdf-report', entryUuid: ENTRY, state, ...extra }] })
+
+  it('is the same row as a catalog pin, from its marketplace, with its version and no reveal', async () => {
+    status('current')
+    renderTab({ skills: [mpin('pdf-report')] })
+    await waitFor(() => expect(row('pdf-report').getAttribute('data-marketplace-skill-state')).toBe('current'))
+    const card = within(row('pdf-report'))
+    expect(card.getByText('From Team skills')).toBeTruthy()
+    expect(card.getByText('Version 0.3.1')).toBeTruthy()
+    expect(row('pdf-report').getAttribute('data-marketplace-skill')).toBe(ENTRY)
+    expect(card.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Remove pdf-report from this agent'])
+    expect(marketplaceStatus).toHaveBeenCalledWith('folder:a')
+  })
+
+  it('links the source of a pin whose entry names one, as a row icon', async () => {
+    status('current', { repositoryUrl: 'https://github.com/example/skills' })
+    renderTab({ skills: [mpin('pdf-report')] })
+    const source = await within(row('pdf-report')).findByRole('button', { name: 'Open the source of pdf-report' })
+    expect(source.getAttribute('title')).toBe('Open the source repository')
+    fireEvent.click(source)
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/example/skills')
+  })
+
+  it('reads where the pins stand again each time the tab mounts, and when the window regains focus', async () => {
+    status('current')
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const agent = { id: 'folder:a', kind: 'kit', skills: [mpin('pdf-report')] } as unknown as LocalAgentDto
+    const tree = createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent }))
+    const first = render(tree)
+    await waitFor(() => expect(marketplaceStatus).toHaveBeenCalledTimes(1))
+    first.unmount()
+    // Back to the agent well within the minute the status counts as fresh.
+    status('update_available', { latestSha256: 'e'.repeat(64), latestVersion: '0.4.0' })
+    render(tree)
+    await waitFor(() => expect(marketplaceStatus).toHaveBeenCalledTimes(2))
+    await screen.findByRole('button', { name: 'Update pdf-report to version 0.4.0' })
+    act(() => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
+    await waitFor(() => expect(marketplaceStatus).toHaveBeenCalledTimes(3))
+    focusManager.setFocused(undefined)
+  })
+
+  it('asks for no status on an agent with no marketplace pin', async () => {
+    renderTab({ skills: [] })
+    await screen.findByText('No skills yet.')
+    expect(marketplaceStatus).not.toHaveBeenCalled()
+  })
+
+  it('offers Update when the marketplace has a newer copy, named with its version, and runs the marketplace verb', async () => {
+    status('update_available', { latestSha256: 'e'.repeat(64), latestVersion: '0.4.0' })
+    updateMarketplaceSkill.mockResolvedValue({ ok: true, name: 'pdf-report', archiveSha256: 'e'.repeat(64) })
+    renderTab({ skills: [mpin('pdf-report')] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Update pdf-report to version 0.4.0' }))
+    await waitFor(() => expect(updateMarketplaceSkill).toHaveBeenCalledWith('folder:a', 'pdf-report'))
+    expect(updateSkill).not.toHaveBeenCalled()
+    // Read again once the update is in.
+    await waitFor(() => expect(marketplaceStatus.mock.calls.length).toBeGreaterThan(1))
+  })
+
+  it('offers no Update on an agent shared with the user to use only', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    status('update_available', { latestSha256: 'e'.repeat(64), latestVersion: '0.4.0' })
+    renderTab({ skills: [mpin('pdf-report')] })
+    await waitFor(() => expect(row('pdf-report').getAttribute('data-marketplace-skill-state')).toBe('update_available'))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove pdf-report from this agent' })).toBeNull())
+    expect(screen.queryByRole('button', { name: /^Update pdf-report/ })).toBeNull()
+  })
+
+  it('says a pin no longer available is so, as a warning, still delivered and still removable', async () => {
+    status('unavailable')
+    renderTab({ skills: [mpin('pdf-report')] })
+    const line = await within(row('pdf-report')).findByText('No longer available to you')
+    expect(line.className).toContain('--color-warning')
+    expect(within(row('pdf-report')).getByRole('button', { name: 'Remove pdf-report from this agent' })).toBeTruthy()
+    expect(within(row('pdf-report')).queryByRole('button', { name: /^Update/ })).toBeNull()
+  })
+
+  it('offers Try again when the snapshot is not here, through the marketplace verb', async () => {
+    marketplaceStatus.mockResolvedValue({ ok: true, pins: [] })
+    ensureMarketplaceSkills.mockResolvedValue({ ok: true, fetched: [], failed: [{ name: 'pdf-report', code: 'snapshot_missing', message: 'The server no longer keeps this version of the skill.' }] })
+    renderTab({ skills: [mpin('pdf-report', { path: '', deliverable: false, issues: [{ code: 'not_downloaded', message: 'Not on this computer yet.', severity: 'warning' }] })] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Download pdf-report again' }))
+    await waitFor(() => expect(ensureMarketplaceSkills).toHaveBeenCalledWith('folder:a'))
+    expect(ensureSkills).not.toHaveBeenCalled()
+    expect((await within(row('pdf-report')).findByRole('alert')).textContent).toBe('The server no longer keeps this version of the skill.')
+  })
+
+  it('removes after the confirm, which says it stays in its marketplace', async () => {
+    status('current')
+    removeMarketplaceSkill.mockResolvedValue({ ok: true, name: 'pdf-report', archiveSha256: 'd'.repeat(64) })
+    renderTab({ skills: [mpin('pdf-report')] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove pdf-report from this agent' }))
+    const confirm = screen.getByRole('group', { name: 'Remove pdf-report from this agent' })
+    expect(confirm.querySelector('p')!.textContent).toBe(
+      'Remove pdf-report from this agent? It stays in its marketplace; you can add it again. pdf-report stops being available to this agent in new chats.'
+    )
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Remove skill' }))
+    await waitFor(() => expect(removeMarketplaceSkill).toHaveBeenCalledWith('folder:a', 'pdf-report'))
+    expect(removeSkill).not.toHaveBeenCalled()
   })
 })

@@ -19,6 +19,8 @@ import { registerRecoverer, remoteTurnRecoveryService } from '../services/remote
 import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins } from '../agents/drivers'
 import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
+import { marketplaceSkillService } from '../services/marketplaceSkillService'
+import { pinnedSkillAutoFetch } from '../services/pinnedSkillAutoFetch'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
 import { handoverScheduler } from '../services/handoverScheduler'
@@ -61,9 +63,17 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   installAgentReadiness()
   // A listing that names a newer version of an installed cloud agent syncs the remote agents once.
   installCloudUpdateFollow()
-  // Cached catalog skill revisions no agent pins: once per start, off the boot path but in one
-  // synchronous run before any profile can activate, so no turn or schedule holds a path into it.
-  setImmediate(() => { catalogSkillService.collectGarbage() })
+  // Cached catalog revisions and marketplace snapshots no agent pins: once per start, off the boot
+  // path but in one synchronous run before any profile can activate, so no turn or schedule holds a path into it.
+  // Pinned skills not on this computer are fetched in the background once a profile is ready (no
+  // profile is active yet at this point, and nothing is tried without a Cinna account), and again on
+  // renewed credentials: the tried set is forgotten and pins whose download failed are retried too,
+  // since a lapsed sign-in is what a renewed session fixes. A turn fetches a missing pin only once.
+  setImmediate(() => {
+    catalogSkillService.collectGarbage()
+    marketplaceSkillService.collectGarbage()
+  })
+  userActivation.onProfileReady(() => { pinnedSkillAutoFetch.retryAllMissing() })
 }
 
 export { runExecutionService } from '../services/runExecutionService'

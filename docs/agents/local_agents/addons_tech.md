@@ -23,7 +23,7 @@ Implementation reference for [Agent Addons](addons.md).
 
 ### Renderer
 - `src/renderer/src/hooks/useMcp.ts`: `useAgentMcpProviders(agentId)` (`['agent-mcp', agentId]`), `useAttachAgentMcp`, `useDetachAgentMcp` (both invalidate `['agent-mcp', agentId]` and `['mcp-agents-using', mcpProviderId]`, and log failures under `agent-mcp`), `useMcpAgentsUsing`. `useDeleteMcpProvider` now also invalidates `['agent-mcp']` and `['mcp-agents-using']`, because a delete cascades
-- `src/renderer/src/components/agents/local/AgentAddonsTab.tsx`: `AgentAddonsTab` and `useAddonsBadge`. The Skills section and `SkillRow` in the same file are in [Agent Skills — Technical Details](skills_tech.md)
+- `src/renderer/src/components/agents/local/AgentAddonsTab.tsx`: `AgentAddonsTab` and `useAddonsBadge`. The Skills section and `SkillRow` in the same file (marketplace rows take their Update, source link and **No longer available to you** warning from `useMarketplaceSkillStatus`; the (?) names both kinds of pin; **Add** opens `SkillAddModal` with the entries this agent already pins) are in [Agent Skills — Technical Details](skills_tech.md)
 - `src/renderer/src/components/agents/local/McpAttachModal.tsx`: the attach dialog
 - `src/renderer/src/components/settings/mcpPresentation.ts`: `mcpProblem(provider)`
 - `src/renderer/src/components/settings/MCPProviderCard.tsx`: the `detach` prop and the warning glyph

@@ -260,7 +260,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     if (outcome.spawnError) outcome.spawnError = redactCredentialText(outcome.spawnError)
     return outcome
   }
-  return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body) : turnLock.withSharedLock(agentId, 'command', body)
+  return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body) : turnLock.withSharedLock(agentId, 'command', body, signal)
 }
 
 export interface CommandRunOutcome {
@@ -491,6 +491,10 @@ export const commandService = {
       // the driver result contract) is that it never throws, so this is caught
       // here rather than left for the execution service to rediscover.
       const message = err instanceof Error ? err.message : String(err)
+      // Stopped while waiting out a brief credential write: never started.
+      if (signal?.aborted) {
+        return { ok: false, name, localCommand, output: '', exitCode: null, aborted: true, busy: false, error: `"${localCommand}" was cancelled.` }
+      }
       // The lock refusing is the *expected* outcome of an unlucky moment, not
       // a fault: `warn` is reserved for a start that genuinely failed.
       const busy = err instanceof LocalAgentError && err.code === 'turn_in_progress'
