@@ -149,7 +149,8 @@
 | Setting/input | Effective behavior |
 |---|---|
 | `runtime.engine` | `antigravity` selects this launcher for kit and bare agents. Never chosen by `resolveDefaultEngine`. |
-| `runtime.model` | Explicit model id, set through the session's `model` option. Wins over complexity. |
+| `runtime.model` | Explicit model id, set through the session's `model` option. Wins over complexity. Settings marks it `modelDeclared`, so a model the session does not offer earns a chat note ([Runtime model catalogue](engine_tech.md#runtime-model-catalogue)). |
+| `runtime.effort` | None: Antigravity has no effort option; the desktop never writes one for it. |
 | `runtime.complexity` | `simple → gemini-3.8-flash-low`, `medium → gemini-3.8-flash-medium`, `complex → gemini-3.8-flash-high`; none → no model set (server default). |
 | `antigravityApproval` | `ask`/null → mode `default`; `auto` → `yolo`. |
 | `localAgentsAntigravityPath` | Absolute path or `''`; must be executable; not version-checked. |

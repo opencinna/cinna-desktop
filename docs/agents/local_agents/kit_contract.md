@@ -208,6 +208,10 @@ So the three shapes that do this are detected, not guessed at:
 
 The validator **never throws**. Its callers are a scanner and a page, and neither may crash on a file someone is mid-edit.
 
+#### `runtime.effort`
+
+A desktop-side key in the `runtime` block: the reasoning effort to run `runtime.model` at on Claude Code (its `effort` option) or Codex (`reasoning_effort`), a value that tool's own model list offers. The kit schema allows additional `runtime` properties, so a folder carrying it stays valid, but **core's contract does not define it yet**; it is a follow-up to propose in cinna-core (not made here: the bundled kit is never hand-edited). An effort is the effort *of* a model, so the desktop writes it only beside `runtime.model`, and a manifest carrying it without one gets a validator **warning** and the key is ignored at run time — a warning, for the reason `complexity` warns. Antigravity has no effort; OpenCode ignores it. On Codex a declared effort wins over the effort derived from `complexity`.
+
 #### Reading is tolerant, writing is strict
 
 The two grades are not interchangeable, and an `error` is not a stronger message — it is a decision about whether the folder is what its manifest promises. The scanner turns any error into readiness `invalid`, which the composer, the agent page and the sidebar all report as a problem with the folder. The agent still runs: only a manifest that does not parse, a duplicate id or a newer contract stops a turn (`folderReadinessBlocksTurn`). So an error is "this folder is broken, fix it", shown on every chat with the agent.
