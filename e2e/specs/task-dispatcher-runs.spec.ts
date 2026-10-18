@@ -12,8 +12,8 @@ import {
  * queue of native tasks, the global runner slot, Up to N, and two agents over
  * one working tree.
  *
- * Real: `taskDispatchService` (flights, the per-agent and per-folder rules,
- * `withRuntimeAgent`'s slots), `taskExecutionService.start`, native tasks and
+ * Real: `taskDispatchService` (flights, the per-agent count — no folder rule:
+ * agents over one folder start side by side — `withRuntimeAgent`'s slots), `taskExecutionService.start`, native tasks and
  * the folder adapter, the session's `cinna` MCP `tasks_report`, and the agent
  * page's Tasks tab (the single Run mode select, the status line). Scripted:
  * what each ACP turn does (`scriptAcpAgent.mjs`). No model, nothing billed.
@@ -174,11 +174,11 @@ const FIRST_TASK = 'Survey the basin-6301 shore'
 const SECOND_TASK = 'Map the basin-6302 shore'
 
 /**
- * The second agent is adopted through a symlink to the first one's folder:
- * the dispatcher tells folders apart by their real path (`folderOf`), so the
- * two read as one folder.
+ * The second agent is adopted through a symlink to the first one's folder, so
+ * the two work one tree. Sessions side by side are the user's call: neither
+ * agent's queue waits for the other's run there.
  */
-test('two agents sharing a folder: a One at a time agent waits while the other agent’s dispatched run is in the folder', async ({ cinna }) => {
+test('two agents sharing a folder: a One at a time agent starts beside the other agent’s dispatched run there', async ({ cinna }) => {
   test.setTimeout(240_000)
   const fake = await scriptAcpEngine()
   try {
@@ -194,31 +194,30 @@ test('two agents sharing a folder: a One at a time agent waits while the other a
     const i = await promptFor(fake, FIRST_TASK)
     await setMode(cinna, secondId, 'one')
 
-    await expect.poll(async () => (await cinna.page.evaluate((id) => window.api.taskDispatch.get(id), secondId))?.waiting, { timeout: 15_000 })
-      .toBe('folder_busy')
-    expect(fake.calls).toHaveLength(1)
-    expect(await taskStatus(cinna, secondTask)).toBe('open')
+    // The second starts while the first's turn is still held open, in the same tree.
+    const j = await promptFor(fake, SECOND_TASK)
+    expect(fake.calls[i].closed || fake.calls[i].released).toBe(false)
+    expect(realpathSync(fake.calls[j].cwd)).toBe(realpathSync(first.folder))
+    expect((await cinna.page.evaluate((id) => window.api.taskDispatch.get(id), secondId))?.waiting).toBeNull()
 
     await report(cinna, fake, i, firstTask, FIRST_TASK)
-    const j = await promptFor(fake, SECOND_TASK)
-    expect(realpathSync(fake.calls[j].cwd)).toBe(realpathSync(first.folder))
     await report(cinna, fake, j, secondTask, SECOND_TASK)
     expect(fake.unexpected).toEqual([])
   } finally { await fake.close() }
 })
 
 /**
- * The same symlinked folder: with a third slot free, only the folder rule
- * holds the One at a time agent back while the Up to 2 agent's runs are there.
+ * The same symlinked folder: with a third slot free, the One at a time agent
+ * starts beside the Up to 2 agent's two runs there.
  */
-test('a One at a time agent sharing an Up to 2 agent’s folder waits while its runs are there', async ({ cinna }) => {
+test('a One at a time agent sharing an Up to 2 agent’s folder starts beside its runs there', async ({ cinna }) => {
   test.setTimeout(240_000)
   const fake = await scriptAcpEngine()
   try {
     await arrange(cinna, fake)
     const wide = await adoptBare(cinna, 'marble-shared', WIDE)
     const narrowId = await adoptThroughLink(cinna, wide.folder, 'marble-shared-link')
-    // A third slot, so only the folder rule can hold the One at a time agent back.
+    // A third slot, so the One at a time agent's run has one beside the two.
     await cinna.page.evaluate(() => window.api.settings.set('taskRunnerConcurrency', 3))
     await relaunchAndRescan(cinna)
 
@@ -232,14 +231,13 @@ test('a One at a time agent sharing an Up to 2 agent’s folder waits while its 
     const second = await promptFor(fake, WIDE_TASKS[1])
     await setMode(cinna, narrowId, 'one')
 
-    await expect.poll(async () => (await cinna.page.evaluate((id) => window.api.taskDispatch.get(id), narrowId))?.waiting, { timeout: 15_000 })
-      .toBe('folder_busy')
-    expect(fake.calls).toHaveLength(2)
-    expect(await taskStatus(cinna, narrowTask)).toBe('open')
+    const j = await promptFor(fake, SECOND_TASK)
+    expect(fake.calls).toHaveLength(3)
+    for (const call of [first, second]) expect(fake.calls[call].closed || fake.calls[call].released).toBe(false)
+    expect(realpathSync(fake.calls[j].cwd)).toBe(realpathSync(wide.folder))
 
     await report(cinna, fake, first, ids[0], WIDE_TASKS[0])
     await report(cinna, fake, second, ids[1], WIDE_TASKS[1])
-    const j = await promptFor(fake, SECOND_TASK)
     await report(cinna, fake, j, narrowTask, SECOND_TASK)
     expect(fake.unexpected).toEqual([])
   } finally { await fake.close() }

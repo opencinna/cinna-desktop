@@ -9,7 +9,7 @@ import {
 
 /**
  * A stored answer: a dispatched turn that ends on a question, answered in the
- * Inbox while another dispatched run holds the folder.
+ * Inbox while the agent’s next dispatched run is still working.
  *
  * **How a folder agent's dispatched turn ends on a `next_message` ask.** An
  * ACP agent's own asks park the turn (`inputResume: 'reply'`); only A2A asks
@@ -146,10 +146,10 @@ test('a Ready task that already has a conversation continues in it when Run next
   } finally { await fake.close() }
 })
 
-test('an Inbox answer to a dispatched turn’s question waits while another dispatched run holds the folder, then is sent and settled by the report rule', async ({ cinna }) => {
+test('an Inbox answer to a dispatched turn’s question waits while the agent’s other dispatched run works, then is sent and settled by the report rule', async ({ cinna }) => {
   test.fixme(true, 'No agent kind can reach a next_message ask on a dispatched turn that the folder agent itself can answer. ' +
     'Once one can, it asserts: the folder agent is offered `delta_scout`; the A2A agent asks; the task is `blocked` with no dispatch note and the queue unpaused while ' +
-    '"Chart the delta-4418 channel" runs; the Inbox card holds the answer with "Sends when delta-ledger is free." and the A2A agent has one message; ' +
+    '"Chart the delta-4418 channel" runs; the Inbox card holds the answer with "Sends when Delta Ledger’s running task finishes." and the A2A agent has one message; ' +
     'after that run reports, the A2A agent receives the answer on context delta-scout-context / task delta-scout-task, and the task ends `blocked` with ' +
     '"Ended without reporting" and the queue paused on it ("Survey the delta-4417 shore ended without reporting").')
   test.setTimeout(300_000)
@@ -208,7 +208,7 @@ test('an Inbox answer to a dispatched turn’s question waits while another disp
       expect((await cinna.page.evaluate((id) => window.api.taskDispatch.get(id), agentId))?.paused).toBeNull()
     })
 
-    await test.step('the Inbox answer is stored: "Sends when delta-ledger is free."', async () => {
+    await test.step('the Inbox answer is stored: "Sends when Delta Ledger’s running task finishes."', async () => {
       await openInbox(cinna)
       const card = cinna.page.getByRole('article').filter({ hasText: QUESTION })
       await expect(card).toBeVisible({ timeout: 20_000 })
@@ -218,8 +218,8 @@ test('an Inbox answer to a dispatched turn’s question waits while another disp
       await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
       const queued = card.locator('[data-inbox-queued]')
       await expect(queued).toContainText(ANSWER, { timeout: 15_000 })
-      await expect(queued).toContainText('Sends when delta-ledger is free.')
-      // Not sent: the other dispatched run still holds the folder.
+      await expect(queued).toContainText('Sends when Delta Ledger’s running task finishes.')
+      // Not sent: the agent’s other dispatched run is still working (One at a time).
       expect(scout.sends).toHaveLength(1)
       expect(fake.calls[occupyCall].closed || fake.calls[occupyCall].released).toBe(false)
     })
