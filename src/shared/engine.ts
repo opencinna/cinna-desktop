@@ -289,7 +289,7 @@ export function isClaudeApproval(value: unknown): value is ClaudeApproval {
  * The Medium floor still applies in spirit — an agent that names no tier runs on
  * `sonnet`.
  */
-const CLAUDE_TIER_ALIAS: Record<WorkComplexity, string> = {
+export const CLAUDE_TIER_ALIAS: Readonly<Record<WorkComplexity, string>> = {
   simple: 'haiku',
   medium: 'sonnet',
   complex: 'opus'
@@ -439,6 +439,24 @@ export function loginPendingText(engine: EngineLoginId, phase: EngineLoginPhase 
 /** Codex keeps its configured model; complexity controls reasoning effort. */
 export function codexEffortForComplexity(complexity: WorkComplexity | null): string {
   return complexity === 'simple' ? 'low' : complexity === 'complex' ? 'high' : 'medium'
+}
+
+/**
+ * A runtime's declared reasoning effort (`runtime.effort`), only beside a
+ * declared model — an effort is the effort *of* a model, so one written alone
+ * (by hand, or by another tool) is ignored here as the validator says it is.
+ */
+export function declaredEffort(runtime: { model?: unknown; effort?: unknown } | null | undefined): string | null {
+  const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
+  const effort = typeof runtime?.effort === 'string' ? runtime.effort.trim() : ''
+  return model !== '' && effort !== '' ? effort : null
+}
+
+/** The effort a Codex turn runs at: the declared one beside a model, else the tier's. */
+export function codexEffortForRuntime(runtime: { model?: unknown; effort?: unknown; complexity?: unknown } | null | undefined): string {
+  const complexity = runtime?.complexity
+  return declaredEffort(runtime) ??
+    codexEffortForComplexity(complexity === 'simple' || complexity === 'medium' || complexity === 'complex' ? complexity : null)
 }
 
 /**
@@ -599,4 +617,11 @@ export interface LocalAgentRuntimeInput {
    * once rather than inventing a precedence nobody would remember.
    */
   complexity: WorkComplexity | null
+  /**
+   * The reasoning effort to run {@link modelId} at — a value the runtime's own
+   * catalogue offers (Claude's `effort`, Codex's `reasoning_effort`). Meaningful
+   * only beside a model, so it is written only with one; absent or null leaves
+   * the runtime's default. Ignored by Antigravity and OpenCode.
+   */
+  effort?: string | null
 }

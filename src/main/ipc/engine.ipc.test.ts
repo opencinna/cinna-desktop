@@ -32,7 +32,7 @@ vi.mock('../agents/drivers', () => ({ codexAuthProbe: probes.codex, claudeAuthPr
 vi.mock('../index', () => ({ getMainWindow: () => null }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'user' }))
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: vi.fn() } }))
-vi.mock('../services/runtimeModelCatalog', () => ({ getRuntimeModelCatalog: vi.fn() }))
+vi.mock('../services/runtimeModelCatalog', () => ({ getRuntimeModelCatalog: vi.fn(), refreshRuntimeModelCatalog: vi.fn() }))
 vi.mock('../services/localAgents/defaultEngineService', () => ({ defaultEngineService: { resolved: vi.fn() } }))
 
 const { registerEngineHandlers } = await import('./engine.ipc')

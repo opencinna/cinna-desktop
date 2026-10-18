@@ -146,6 +146,18 @@ describe('bare agent state', () => {
   })
 
   it('keeps only the runtime keys a picker can set', () => {
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: { engine: 'codex', model: 'gpt-6-luna', effort: 'xhigh' }
+    })
+    expect(desktopStateService.read(dir, 'bare').runtime).toEqual({ engine: 'codex', model: 'gpt-6-luna', effort: 'xhigh' })
+    // An effort with no model is not a choice the picker can make.
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: { engine: 'codex', effort: 'xhigh' }
+    })
+    expect(desktopStateService.read(dir, 'bare').runtime).toEqual({ engine: 'codex' })
+
     // This file has one writer, so unlike a manifest there is nothing to
     // round-trip: anything else in the block is a leftover from a build whose
     // surface is gone, and handing it to the engine long afterwards is how a

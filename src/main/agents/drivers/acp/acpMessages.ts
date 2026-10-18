@@ -92,6 +92,7 @@ import {
   type LocalPermissionRequest
 } from '../../../../shared/localAgentRequests'
 import type { InputQuestion } from '../../../../shared/runEvents'
+import { matchOfferedModel } from '../../../../shared/runtimeModelCatalog'
 import {
   KIND_METADATA_KEY,
   PARENT_TOOL_ID_METADATA_KEY,
@@ -177,33 +178,6 @@ export interface OfferedModelMatch {
   offered: string[]
 }
 
-/** Words that name no model family: `default` is whatever the CLI picks, `claude` is in every id. */
-const NOT_A_FAMILY = new Set(['claude', 'default', 'latest', 'context'])
-
-/** A model value's context tier (`opus[1m]` → `1m`), or null for the standard one. */
-function contextHintOf(value: string): string | null {
-  return value.trim().toLowerCase().match(/\[(\d+m)\]$/)?.[1] ?? null
-}
-
-/**
- * The model generation a text names (`claude-sonnet-4-5` → `4.5`, `Opus 4.7` →
- * `4.7`), or null. The adapter's own pattern (`session-model.js`
- * `extractModelFamilyVersion`), context hints dropped first.
- */
-function modelVersionOf(value: string | undefined): string | null {
-  const match = value?.replace(/\[\d+m\]/gi, '').match(/\b(\d+)(?:[-.](\d+))?\b/)
-  if (!match) return null
-  return match[2] ? `${match[1]}.${match[2]}` : match[1]
-}
-
-function modelFamilies(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/\[\d+m\]/g, ' ')
-    .split(/[^a-z0-9]+/)
-    .filter((token) => /^[a-z]+$/.test(token) && !NOT_A_FAMILY.has(token))
-}
-
 /**
  * The offered value a model the desktop chose resolves to, out of a session's
  * config options (`session/new` / `session/load`).
@@ -219,7 +193,8 @@ function modelFamilies(value: string): string[] {
  * `sonnet[1m]`), and a version the request names must not differ from one
  * the candidate's value, name or description names (`claude-opus-4-1` is not
  * `opus` described as Opus 4.7). Nothing safe → null, and the session keeps
- * its own model.
+ * its own model. The rule itself is `matchOfferedModel` in
+ * `shared/runtimeModelCatalog`, shared with the "no longer offered" warning.
  *
  * Null when the session offers no model option at all.
  */
@@ -244,28 +219,9 @@ export function resolveOfferedModel(configOptions: unknown, requested: string): 
   }
   collect(option.options)
   const current = str(option.currentValue)
-  const plain = (value: string): string => value.trim().toLowerCase().replace(/\[\d+m\]$/, '')
-  const wanted = requested.trim()
-  const families = modelFamilies(wanted)
-  const wantedHint = contextHintOf(wanted)
-  const wantedVersion = modelVersionOf(wanted)
-  // As the adapter's `modelVersionsCompatible`: the first version the value,
-  // name or description names must be the one the request names, if both do.
-  const versionFits = (o: { value: string; name: string; description: string }): boolean => {
-    if (!wantedVersion) return true
-    const version = modelVersionOf(o.value) ?? modelVersionOf(o.name) ?? modelVersionOf(o.description)
-    return !version || version === wantedVersion
-  }
-  const match =
-    offered.find((o) => o.value === wanted) ??
-    offered.find((o) => o.value.toLowerCase() === wanted.toLowerCase()) ??
-    offered.find((o) => o.value !== 'default' && plain(o.value) === plain(wanted)) ??
-    offered.find((o) =>
-      o.value !== 'default' &&
-      contextHintOf(o.value) === wantedHint &&
-      versionFits(o) &&
-      modelFamilies(`${o.value} ${o.name}`).some((family) => families.includes(family)))
-  return { configId, ...(current ? { current } : {}), value: match?.value ?? null, offered: offered.map((o) => o.value) }
+  // The matching rule is shared with the panel and composer's "no longer offered" check.
+  const value = matchOfferedModel(offered, requested)
+  return { configId, ...(current ? { current } : {}), value, offered: offered.map((o) => o.value) }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

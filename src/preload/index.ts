@@ -1,5 +1,5 @@
 import type { AutoAttachedCredential, CredentialSetupDto, GoogleOAuthType, OAuthConnectFlow, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
-import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
+import type { RuntimeModelCatalog, RuntimeModelCatalogRefresh } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
 import type { DevelopmentContext } from '../shared/developmentSession'
@@ -2301,6 +2301,13 @@ const api = {
   engine: {
     modelCatalog: (engine: import('../shared/engine').AgentEngine): Promise<RuntimeModelCatalog> =>
       ipcRenderer.invoke('engine:model-catalog', engine),
+    /**
+     * Ask a CLI runtime for its models now: main opens a session with no
+     * prompt and closes it. Resolves with the catalogue and a failure sentence
+     * (null on success) — never rejects for a runtime that could not answer.
+     */
+    refreshModelCatalog: (engine: import('../shared/engine').AgentEngine): Promise<RuntimeModelCatalogRefresh> =>
+      ipcRenderer.invoke('engine:refresh-model-catalog', engine),
     binary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:binary'),
     /**
      * Resolve one now, downloading and verifying the pinned build if this

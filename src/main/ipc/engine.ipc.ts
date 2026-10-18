@@ -1,5 +1,6 @@
 import { getProfileScopeUserId } from '../auth/scope'
-import { getRuntimeModelCatalog } from '../services/runtimeModelCatalog'
+import { getRuntimeModelCatalog, refreshRuntimeModelCatalog } from '../services/runtimeModelCatalog'
+import type { RuntimeModelCatalog, RuntimeModelCatalogRefresh } from '../../shared/runtimeModelCatalog'
 import type { AgentEngine } from '../../shared/engine'
 import { userActivation } from '../auth/activation'
 import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
@@ -42,10 +43,22 @@ import {
  *   for it. It happens at the top of a turn, or when the user asks here.
  */
 export function registerEngineHandlers(): void {
-  ipcHandle('engine:model-catalog', (_event, engine: AgentEngine) => {
+  ipcHandle('engine:model-catalog', (_event, engine: AgentEngine): Promise<RuntimeModelCatalog> => {
     userActivation.requireActivated()
     if (!isAgentEngine(engine)) throw new Error('Unknown runtime')
     return getRuntimeModelCatalog(getProfileScopeUserId(), engine)
+  })
+
+  /**
+   * Ask a CLI runtime for its models now — a session opened and closed with no
+   * prompt (`runtimeModelCatalog.refreshRuntimeModelCatalog`). Single-flight in
+   * the service; a failure is returned as data, because a rejection would reach
+   * the renderer as `Error invoking remote method…`.
+   */
+  ipcHandle('engine:refresh-model-catalog', (_event, engine: AgentEngine): Promise<RuntimeModelCatalogRefresh> => {
+    userActivation.requireActivated()
+    if (!isAgentEngine(engine)) throw new Error('Unknown runtime')
+    return refreshRuntimeModelCatalog(getProfileScopeUserId(), engine)
   })
 
   // One subscription for the app's lifetime, forwarding transitions to whatever

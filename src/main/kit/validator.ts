@@ -398,6 +398,22 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
       )
     }
   }
+  // `runtime.effort` — a desktop-side key (the schema allows unknown `runtime`
+  // keys), and a warning for the reason `complexity` warns: it has defined
+  // behaviour instead of a refusal. Without a model it is ignored, because an
+  // effort is the effort *of* a model; the desktop never writes one alone.
+  const effort = runtime.effort
+  if (effort !== undefined && effort !== null) {
+    if (typeof effort !== 'string') {
+      report.warn('manifest.runtime.effort', '`runtime.effort` should be a string, such as `high`. This one is ignored.', MANIFEST_FILE)
+    } else if (effort.trim() !== '' && !(typeof runtime.model === 'string' && runtime.model.trim() !== '')) {
+      report.warn(
+        'manifest.runtime.effort',
+        '`runtime.effort` is set without `runtime.model`, so it is ignored. Choose a model beside it, or remove it.',
+        MANIFEST_FILE
+      )
+    }
+  }
   const credential = runtime.credential
   if (typeof credential === 'string' && (SECRET_LOOKALIKE.test(credential) || credential.length > 200)) {
     report.error(

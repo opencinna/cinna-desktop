@@ -189,6 +189,12 @@ interface UIStore {
    */
   pendingDraftAgentId: string | null
   /**
+   * A folder agent whose Runs with Model select should take focus once its page
+   * shows it — one-shot, from the composer's "no longer offered" row. Consumed
+   * by the panel when the select is there and enabled.
+   */
+  pendingRuntimeModelFocusId: string | null
+  /**
    * Folder agents whose one-shot AI draft is running now. Kept here rather
    * than in the page's mutation instance so leaving the agent page and coming
    * back still knows — the call in main keeps running either way. The agent's
@@ -253,6 +259,7 @@ interface UIStore {
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
+  setPendingRuntimeModelFocusId: (id: string | null) => void
   addDraftingAgentId: (id: string) => void
   removeDraftingAgentId: (id: string) => void
   toggleSidebar: () => void
@@ -299,6 +306,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
+  pendingRuntimeModelFocusId: null,
   draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   sidebarDocking: readSidebarDocking(),
@@ -346,6 +354,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
+  setPendingRuntimeModelFocusId: (id) => set({ pendingRuntimeModelFocusId: id }),
   addDraftingAgentId: (id) =>
     set((state) =>
       state.draftingAgentIds.includes(id) ? state : { draftingAgentIds: [...state.draftingAgentIds, id] }

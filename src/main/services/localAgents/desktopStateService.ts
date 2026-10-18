@@ -338,7 +338,8 @@ function coerceSharedRemote(raw: unknown): DesktopSharedRemote | null {
 }
 
 /**
- * The three keys a runtime may carry, and nothing else.
+ * The keys a runtime may carry, and nothing else (engine, credential, model,
+ * its effort, complexity).
  *
  * Narrower than `AgentRuntimeRef` allows on purpose: a manifest's block is
  * round-tripped whole because another tool may have written keys we do not know
@@ -361,11 +362,14 @@ function coerceRuntime(raw: unknown): AgentRuntimeRef | null {
   const credential = asString(raw.credential)
   const model = asString(raw.model)
   const complexity = asString(raw.complexity)
+  // Effort rides with a model and means nothing without one.
+  const effort = model ? asString(raw.effort) : null
   if (!engine && !credential && !model && !complexity) return null
   const runtime: AgentRuntimeRef = {}
   if (engine) runtime.engine = engine
   if (credential) runtime.credential = credential
   if (model) runtime.model = model
+  if (effort) runtime.effort = effort
   if (complexity) runtime.complexity = complexity
   return runtime
 }

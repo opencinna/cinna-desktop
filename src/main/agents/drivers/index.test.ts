@@ -39,6 +39,8 @@ import type { AgentRow } from '../../db/agents'
 const state = vi.hoisted(() => ({
   utilityPlans: false,
   utilityEngine: 'opencode',
+  /** What `runtimeService.resolve` says the model came from. */
+  modelSource: 'floor' as string,
   codexPolicy: vi.fn(),
   liveRows: [] as AgentRow[],
   configInput: null as null | ((userId: string) => Promise<{ agents: { agentId: string; prompt: string; permissions?: Record<string, unknown> | null }[] }>),
@@ -261,7 +263,7 @@ vi.mock('./acp/claudeAuth', () => ({
 }))
 vi.mock('./acp/claudeEnv', () => ({ buildClaudeEnv: () => ({}) }))
 vi.mock('../../services/localAgents/runtimeService', () => ({
-  runtimeService: { resolve: () => ({ launcher: state.utilityEngine, modelId: 'sonnet', credentialId: null }) }
+  runtimeService: { resolve: () => ({ launcher: state.utilityEngine, modelId: 'sonnet', credentialId: null, modelSource: state.modelSource }) }
 }))
 vi.mock('../../shell/env', () => ({ getShellEnv: vi.fn(), shellEnvForChild: () => ({}) }))
 vi.mock('../../logger/logger', () => ({
@@ -554,10 +556,19 @@ describe('the Antigravity folder policy’s inputs', () => {
 
   it('gives a kit agent on Ask its pinned skills’ folders, and a bare one none', () => {
     // Mutation: drop `autoApprove` from the folder branch and no ask is settled.
-    expect(settings()).toEqual({ model: 'sonnet', approval: 'ask', autoApprove: { scriptRoots: ['/cache/catalog/word-count'] } })
+    expect(settings()).toEqual({ model: 'sonnet', modelDeclared: false, approval: 'ask', autoApprove: { scriptRoots: ['/cache/catalog/word-count'] } })
     state.kind = 'bare'
-    expect(settings()).toEqual({ model: 'sonnet', approval: 'ask', autoApprove: { scriptRoots: [] } })
+    expect(settings()).toEqual({ model: 'sonnet', modelDeclared: false, approval: 'ask', autoApprove: { scriptRoots: [] } })
     expect(state.pinnedAsked).toBe(1)
+  })
+
+  it('marks the model as declared only when the agent’s own runtime names it, so only that one is noted when stale', () => {
+    // Mutation: mark every folder model declared and a tier's Flash level earns a "choose another model" notice.
+    state.modelSource = 'declared'
+    expect(settings()).toMatchObject({ modelDeclared: true })
+    state.modelSource = 'tier'
+    expect(settings()).toMatchObject({ modelDeclared: false })
+    state.modelSource = 'floor'
   })
 
   it('gives no folders when they cannot be read, and no policy on Automatic', () => {

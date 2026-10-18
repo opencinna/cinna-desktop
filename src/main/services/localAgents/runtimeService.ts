@@ -78,6 +78,8 @@ const MAX_CREDENTIAL_REF = 200
 
 /** Longest a model id may be. Generous; provider ids are far shorter. */
 const MAX_MODEL_ID = 200
+/** An effort is a short value a runtime offers (`high`, `xhigh`); anything longer is not one. */
+const MAX_EFFORT = 40
 
 const UNRESOLVED: ResolvedRuntime = {
   source: 'none',
@@ -516,9 +518,12 @@ export const runtimeService = {
     credential: string | null
     modelId: string | null
     complexity: WorkComplexity | null
+    /** Null whenever there is no model: an effort without one is never written. */
+    effort: string | null
   } {
     const credential = normaliseRef(input?.credential, 'The credential', MAX_CREDENTIAL_REF)
     const modelId = normaliseRef(input?.modelId, 'The model', MAX_MODEL_ID)
+    const effort = modelId === null ? null : normaliseRef(input?.effort, 'The effort', MAX_EFFORT)
     const complexity = input?.complexity ?? null
     // Absent means keep, exactly like the explicit value: an `undefined` key
     // does not survive every serialisation, and a save that lost it must not
@@ -560,7 +565,7 @@ export const runtimeService = {
         'A runtime names a model or a work complexity, not both.'
       )
     }
-    return { engine, credential, modelId, complexity }
+    return { engine, credential, modelId, complexity, effort }
   },
 
   /**
@@ -579,7 +584,7 @@ export const runtimeService = {
     current: AgentRuntimeRef | null = null
   ): AgentRuntimeRef | null {
     const validated = this.validate(input, current?.engine)
-    const { credential, modelId, complexity } = validated
+    const { credential, modelId, complexity, effort } = validated
     const engine =
       validated.engine === KEEP_ENGINE
         ? typeof current?.engine === 'string' && current.engine.trim() !== ''
@@ -593,6 +598,7 @@ export const runtimeService = {
     if (engine !== null) runtime.engine = engine
     if (credential !== null) runtime.credential = credential
     if (modelId !== null) runtime.model = modelId
+    if (effort !== null) runtime.effort = effort
     if (complexity !== null) runtime.complexity = complexity
     return runtime
   },
@@ -613,7 +619,7 @@ export const runtimeService = {
   applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
     const existing =
       manifest.runtime && typeof manifest.runtime === 'object' ? { ...manifest.runtime } : {}
-    const { engine, credential, modelId, complexity } = this.validate(input, existing.engine)
+    const { engine, credential, modelId, complexity, effort } = this.validate(input, existing.engine)
 
     // A kept engine is left in `existing` — verbatim, whatever the file says,
     // including a name this build cannot run — and so survives as an unknown
@@ -621,6 +627,7 @@ export const runtimeService = {
     if (engine !== KEEP_ENGINE) delete existing.engine
     delete existing.credential
     delete existing.model
+    delete existing.effort
     delete existing.complexity
 
     if (
@@ -638,6 +645,7 @@ export const runtimeService = {
     if (engine !== null && engine !== KEEP_ENGINE) next.engine = engine
     if (credential !== null) next.credential = credential
     if (modelId !== null) next.model = modelId
+    if (effort !== null) next.effort = effort
     if (complexity !== null) next.complexity = complexity
     manifest.runtime = next
   }

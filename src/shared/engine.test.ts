@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { antigravityModelForComplexity, effectiveEngine, resolveDefaultEngine, isAgentEngine, opencodeVersionLabel } from './engine'
+import { antigravityModelForComplexity, codexEffortForRuntime, declaredEffort, effectiveEngine, resolveDefaultEngine, isAgentEngine, opencodeVersionLabel } from './engine'
 
 /**
  * The two rules that decide **which engine an agent runs on** when its folder
@@ -123,5 +123,22 @@ describe('opencodeVersionLabel', () => {
   it('keeps any other line as it is', () => {
     expect(opencodeVersionLabel('1.19.0')).toBe('1.19.0')
     expect(opencodeVersionLabel('local build')).toBe('local build')
+  })
+})
+
+describe('declared effort', () => {
+  it('counts an effort only beside a model', () => {
+    expect(declaredEffort({ model: 'opus', effort: 'high' })).toBe('high')
+    expect(declaredEffort({ effort: 'high' })).toBeNull()
+    expect(declaredEffort({ model: ' ', effort: 'high' })).toBeNull()
+    expect(declaredEffort(null)).toBeNull()
+  })
+
+  it('runs Codex at the declared effort beside a model, else at the tier’s', () => {
+    // Mutation: ignore `declaredEffort` here and a Codex agent pinned to xhigh runs at medium.
+    expect(codexEffortForRuntime({ model: 'gpt-6-luna', effort: 'xhigh' })).toBe('xhigh')
+    expect(codexEffortForRuntime({ model: 'gpt-6-luna' })).toBe('medium')
+    expect(codexEffortForRuntime({ complexity: 'complex', effort: 'low' })).toBe('high')
+    expect(codexEffortForRuntime({ complexity: 'bogus' })).toBe('medium')
   })
 })

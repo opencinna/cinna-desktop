@@ -78,7 +78,7 @@ import { StreamPartsAccumulator, TOOL_ID_METADATA_KEY, type MessageLike } from '
 import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
-import type { AgentEngine } from '../../../../shared/engine'
+import { ENGINE_LOGIN_NAMES, isEngineLoginId, type AgentEngine, type EngineLoginId } from '../../../../shared/engine'
 import type { AgentDriver, FollowUpOpener, FollowUpScope, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
 import { AcpMessageStream, resolveOfferedModel, selectedModelOf } from './acpMessages'
 import {
@@ -1649,12 +1649,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     try {
       runtime.validate(chatId)
-      await duringStart(
+      const fallback = await duringStart(
         applySetup(connection, sessionId, plan, offeredConfig, agent.id, (config) =>
-          ctx.telemetry?.model(selectedModelOf(config))
+          ctx.telemetry?.model(selectedModelOf(config)), ctx.launcherId
         )
       )
       runtime.validate(chatId)
+      if (plan.setup.modelDeclared) noteModelFallback(fallback, ctx.launcherId, connection, chatId, stream, emit)
     } catch (err) {
       if (input.signal.aborted || hitCeiling) {
         unbind?.()
@@ -2481,25 +2482,58 @@ async function applySetup(
   plan: AcpLaunchPlan,
   offeredConfig: unknown,
   agentId: string,
-  onConfig: (configOptions: unknown) => void
-): Promise<void> {
-  if (plan.setup.model) await assertModel(connection, sessionId, plan.setup.model, offeredConfig, agentId, onConfig)
+  onConfig: (configOptions: unknown) => void,
+  launcherId?: AcpLauncherId
+): Promise<ModelFallback | null> {
+  let fallback: ModelFallback | null = null
+  // The session's config as of the last accepted set: what a model change left
+  // offered (Claude rebuilds its effort levels for the model it switched to).
+  let latestConfig = offeredConfig
+  const noteConfig = (configOptions: unknown): void => {
+    if (Array.isArray(configOptions)) latestConfig = configOptions
+    onConfig(configOptions)
+  }
+  if (plan.setup.model) {
+    fallback = await assertModel(connection, sessionId, plan.setup.model, offeredConfig, agentId, noteConfig, plan.setup.modelDeclared === true)
+  }
   if (plan.setup.modeId) {
     await connection.setSessionMode({ sessionId, modeId: plan.setup.modeId })
   }
   for (const option of plan.setup.configOptions ?? []) {
+    // Antigravity names its model as an optional config option rather than
+    // through `setup.model`. On a runtime with a real catalogue, a model the
+    // session does not offer is the same stale model `assertModel` reports.
+    // Never for OpenCode: its catalogue fills in after `session/new`, so an
+    // unlisted model there is the documented race, not a stale choice.
+    const offered = launcherId && isStaleCheckedLauncher(launcherId) ? resolveOfferedModel(offeredConfig, option.value) : null
+    const isModel = offered !== null && offered.configId === option.configId
+    if (isModel && !offered.value && !fallback) {
+      fallback = { requested: option.value, ranOn: ranOnLabel(offeredConfig, offered.current), kind: 'not_offered' }
+    }
+    // **After a fallback, only what the session still offers.** A declared
+    // effort was chosen for the declared model; the default the turn fell back
+    // to may not offer it, and it is the desktop's preference, not a policy.
+    if (fallback && !isModel && option.optional && !configValueOffered(latestConfig, option.configId, option.value)) {
+      logger.info('the session’s fallback model does not offer the agent’s option; leaving it to the session', {
+        agentId,
+        configId: option.configId,
+        value: option.value
+      })
+      continue
+    }
     const set = connection.setSessionConfigOption({
       sessionId,
       configId: option.configId,
       value: option.value
     })
     if (!option.optional) {
-      onConfig((await set)?.configOptions)
+      noteConfig((await set)?.configOptions)
       continue
     }
     try {
-      onConfig((await set)?.configOptions)
+      noteConfig((await set)?.configOptions)
     } catch (err) {
+      if (isModel && !fallback) fallback = { requested: option.value, ranOn: ranOnLabel(offeredConfig, offered.current), kind: 'declined' }
       // See `AcpSessionSetup.configOptions`: an optional option is one the
       // session has already been told through its config, and refusing a turn
       // over a race about something already true is worse than proceeding.
@@ -2509,6 +2543,7 @@ async function applySetup(
       })
     }
   }
+  return fallback
 }
 
 /**
@@ -2519,6 +2554,15 @@ async function applySetup(
  * session with no model option, or a set the adapter declines is logged and the
  * turn runs on what the session has — the model is the desktop's preference,
  * not a policy like the mode, and an answer on another model beats no answer.
+ *
+ * **A declared model the session does not offer re-asserts the session's own
+ * current value.** The launcher also passed the model in `session/new`'s
+ * options, so the CLI was started with `--model <stale>` while the adapter
+ * reports its default as current — and Claude Code 2.1.296 answers a prompt on
+ * an unknown `--model` with "There's an issue with the selected model". The
+ * adapter accepts its own `currentValue` as a target and `setModel`s it, which
+ * moves the CLI onto the default the notice names. Not for an undeclared model
+ * (a tier alias or chat mode): nothing tells the user about it either way.
  */
 async function assertModel(
   connection: AcpConnection,
@@ -2526,8 +2570,9 @@ async function assertModel(
   requested: string,
   offeredConfig: unknown,
   agentId: string,
-  onConfig: (configOptions: unknown) => void
-): Promise<void> {
+  onConfig: (configOptions: unknown) => void,
+  declared = false
+): Promise<ModelFallback | null> {
   const match = resolveOfferedModel(offeredConfig, requested)
   if (!match || !match.value) {
     logger.warn('the agent’s model is not offered by its session; running on the session’s own', {
@@ -2536,9 +2581,36 @@ async function assertModel(
       current: match?.current ?? null,
       offered: match?.offered ?? []
     })
-    return
+    // A session with no model option at all says nothing about this model.
+    if (!match) return null
+    if (!declared) return { requested, ranOn: ranOnLabel(offeredConfig, match.current), kind: 'not_offered' }
+    // A loaded session reports its transcript's model as current, which can be
+    // the very model that is gone — so the target is an offered one: the
+    // current value when offered, else the session's `default`, else its first.
+    const target = match.current && match.offered.includes(match.current)
+      ? match.current
+      : match.offered.includes('default') ? 'default' : match.offered[0] ?? match.current
+    if (!target) return { requested, ranOn: null, kind: 'unchanged' }
+    const ranOn = ranOnLabel(offeredConfig, target)
+    try {
+      onConfig((await connection.setSessionConfigOption({ sessionId, configId: match.configId, value: target }))?.configOptions)
+      logger.info('re-asserted an offered model over a model the session does not offer', {
+        agentId,
+        requested,
+        value: target
+      })
+    } catch (err) {
+      logger.warn('an ACP session would not move off a model it does not offer', {
+        agentId,
+        requested,
+        value: target,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      return { requested, ranOn: null, kind: 'unchanged' }
+    }
+    return { requested, ranOn, kind: 'not_offered' }
   }
-  if (match.current === match.value) return
+  if (match.current === match.value) return null
   try {
     onConfig((await connection.setSessionConfigOption({ sessionId, configId: match.configId, value: match.value }))?.configOptions)
     logger.info('re-asserted the agent’s model over the session’s own choice', {
@@ -2554,7 +2626,111 @@ async function assertModel(
       value: match.value,
       error: err instanceof Error ? err.message : String(err)
     })
+    return { requested, ranOn: ranOnLabel(offeredConfig, match.current), kind: 'declined' }
   }
+  return null
+}
+
+/**
+ * Whether a session's config offers `value` for the option `configId`: false
+ * when the option is gone, true for an option with no list of values (a
+ * boolean), else whether the value is among its (possibly grouped) options.
+ */
+function configValueOffered(config: unknown, configId: string, value: string): boolean {
+  if (!Array.isArray(config)) return true
+  const option = config.find((o) => o && typeof o === 'object' && (o as { id?: unknown }).id === configId) as { options?: unknown } | undefined
+  if (!option) return false
+  if (!Array.isArray(option.options)) return true
+  const has = (items: unknown[]): boolean => items.some((item) => {
+    if (!item || typeof item !== 'object') return false
+    const o = item as { value?: unknown; options?: unknown }
+    return o.value === value || (Array.isArray(o.options) && has(o.options))
+  })
+  return has(option.options)
+}
+
+/** What the session's current model is called, for the notice: its offered name, else its value, else null. */
+function ranOnLabel(offeredConfig: unknown, current: string | undefined): string | null {
+  if (!current) return null
+  const options = Array.isArray(offeredConfig) ? offeredConfig : []
+  const model = options.find((o) => o && typeof o === 'object' && ((o as { id?: unknown }).id === 'model' || (o as { category?: unknown }).category === 'model')) as { options?: unknown } | undefined
+  const find = (items: unknown): string | undefined => {
+    if (!Array.isArray(items)) return undefined
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue
+      const o = item as { value?: unknown; name?: unknown; options?: unknown }
+      if (o.value === current && typeof o.name === 'string' && o.name) return o.name
+      const nested = find(o.options)
+      if (nested) return nested
+    }
+    return undefined
+  }
+  return find(model?.options) ?? current
+}
+
+/** A model the desktop asked for that the turn did not run on, and what it ran on instead (a name or id, or null when unknown). */
+export interface ModelFallback {
+  requested: string
+  ranOn: string | null
+  /**
+   * `not_offered`: the session does not list it, and the turn runs on the
+   * session's own. `declined`: it does, and refused the switch. `unchanged`:
+   * it does not list it, and the session could not be moved off it either.
+   */
+  kind: 'not_offered' | 'declined' | 'unchanged'
+}
+
+/** The runtimes whose session catalogue is the tool's own list, so an unlisted model is a stale one. */
+function isStaleCheckedLauncher(launcherId: AcpLauncherId): launcherId is EngineLoginId {
+  return isEngineLoginId(launcherId)
+}
+
+/** The chat and model pairs each connection already told about ({@link noteModelFallback}). */
+const modelFallbackNoted = new WeakMap<AcpConnection, Set<string>>()
+
+/**
+ * Say, in the chat, that the agent's model is no longer offered and the turn
+ * ran on the runtime's default instead. **The turn keeps running** — an answer
+ * on another model beats none — but the user chose that model, so a log line is
+ * not enough. Once per chat per connection and model, like the login notice:
+ * a notice on every turn stops being read.
+ */
+export function noteModelFallback(
+  fallback: ModelFallback | null,
+  launcherId: AcpLauncherId,
+  connection: AcpConnection,
+  chatId: string,
+  stream: AcpMessageStream,
+  emit: EmitMessage
+): void {
+  if (!fallback || !isStaleCheckedLauncher(launcherId)) return
+  let noted = modelFallbackNoted.get(connection)
+  if (!noted) {
+    noted = new Set()
+    modelFallbackNoted.set(connection, noted)
+  }
+  const key = JSON.stringify([chatId, fallback.requested])
+  if (noted.has(key)) return
+  noted.add(key)
+  emit(stream.note(modelFallbackNotice(launcherId, fallback)).message)
+}
+
+/**
+ * The chat notice for a model the turn did not run on. A model no longer
+ * offered asks for another choice; one the session lists but would not switch
+ * to is the runtime's refusal this once, not a stale choice, so it only says
+ * what happened.
+ */
+export function modelFallbackNotice(engine: EngineLoginId, fallback: ModelFallback): string {
+  const name = ENGINE_LOGIN_NAMES[engine]
+  const ran = fallback.ranOn ? `“${fallback.ranOn}”` : `${name}’s default model`
+  if (fallback.kind === 'declined') return `${name} did not switch to “${fallback.requested}”, so this turn ran on ${ran}.`
+  if (fallback.kind === 'unchanged') {
+    return `This agent’s model “${fallback.requested}” is no longer offered by ${name}, and the session could not be moved to ${name}’s default. ` +
+      'Choose another model in the agent’s Runs with panel.'
+  }
+  return `This agent’s model “${fallback.requested}” is no longer offered by ${name}, so this turn ran on ${ran}. ` +
+    'Choose another model in the agent’s Runs with panel.'
 }
 
 /* ------------------------------------------------------------- Cinna's tools */

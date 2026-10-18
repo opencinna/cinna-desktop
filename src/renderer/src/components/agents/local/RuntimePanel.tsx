@@ -34,9 +34,14 @@ import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import {
+  ANTIGRAVITY_TIER_MODEL,
+  CLAUDE_TIER_ALIAS,
   claudeModelForComplexity,
   codexEffortForComplexity,
+  codexEffortForRuntime,
+  declaredEffort as declaredEffortOf,
   DEFAULT_AGENT_ENGINE,
+  ENGINE_LOGIN_NAMES,
   effectiveEngine,
   isAgentEngine,
   KEEP_ENGINE,
@@ -51,6 +56,15 @@ import {
   opencodeVersionLabel
 } from '../../../../../shared/engine'
 import { FIELD, LABEL, SUMMARY_BADGE } from './fieldClasses'
+import { useRuntimeModelCatalog, useRuntimeModelCatalogRefresh } from '../../../hooks/useRuntimeModelCatalog'
+import { useUIStore } from '../../../stores/ui.store'
+import {
+  catalogDefaultModel,
+  catalogNeedsRefresh,
+  cliModelTier,
+  effortsFor,
+  isModelOffered
+} from '../../../../../shared/runtimeModelCatalog'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
@@ -160,12 +174,24 @@ const ANTIGRAVITY_OPTION = 'engine:antigravity'
  */
 const UNSUPPORTED_OPTION = 'engine:unsupported'
 
+/**
+ * {@link FIELD} without its `w-full`, for the two selects that share the Model
+ * column's row: `w-full` is emitted after `w-[4.75rem]` in the built CSS and
+ * wins, so the effort select took the row and the model select shrank to its
+ * chevron. Each of the two sets its own width instead.
+ */
+const FIELD_IN_ROW = FIELD.replace(/(^|\s)w-full(\s|$)/, ' ').trim()
+
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
 const DANGER = 'text-[10px] text-[var(--color-danger)]'
 
 /** One line of the panel's reserved status slot; `login` makes it the logged-out line with its button. */
-type StatusLine = { text: string; tone: string; login?: EngineLoginId }
+/**
+ * `title` carries the full sentence when `text` is the short form that fits the
+ * 800px line; `refresh` puts the labelled Refresh button after the text.
+ */
+type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true }
 
 /**
  * A bordered button at **this panel's** scale, sized to the 16px status slot.
@@ -916,6 +942,61 @@ export function RuntimePanel({
   const declaredComplexity = isWorkComplexity(agent.runtime?.complexity)
     ? agent.runtime.complexity
     : null
+  /** `runtime.effort`, read only beside a declared model, as the launchers read it. */
+  const declaredEffort = declaredEffortOf(agent.runtime)
+
+  /**
+   * **The CLI runtime's own model list**, for the Advanced picker on Claude,
+   * Codex and Antigravity: what the tool last advertised for this profile
+   * (kept across restarts by main), never a list of our own. The engine is
+   * named by its boolean, not compared by string, so the kind-branch ratchet
+   * stays where it is.
+   */
+  const cliEngine: 'claude' | 'codex' | 'antigravity' | null =
+    onCodex ? 'codex' : onAntigravity ? 'antigravity' : onClaude ? 'claude' : null
+  const cliName = cliEngine ? ENGINE_LOGIN_NAMES[cliEngine] : ''
+  const { data: cliCatalog } = useRuntimeModelCatalog(cliEngine)
+  const cliCatalogKnown = !!cliCatalog && cliCatalog.source !== 'unavailable' && cliCatalog.models.length > 0
+  /** A model by the name the tool gives it, else its id. */
+  const cliNameOf = (id: string | null): string | null =>
+    id ? (cliCatalog?.models.find((model) => model.id === id)?.name ?? id) : null
+  /** A tier's model by the tool's name for it when listed, else by `fallback` — the same words in the tier and Advanced views. */
+  const cliListedName = (id: string, fallback: string): string =>
+    cliCatalog?.models.find((model) => model.id === id)?.name ?? fallback
+  /** What an agent naming no model of its own runs on, by name. */
+  const cliDefaultName = onClaude ? cliListedName(claudeModelForComplexity(declaredComplexity), claudeModelForComplexity(declaredComplexity))
+    : onAntigravity ? (declaredComplexity
+      ? cliListedName(ANTIGRAVITY_TIER_MODEL[declaredComplexity], antigravityRunModelLabel(null, declaredComplexity))
+      : antigravityRunModelLabel(null, null))
+    : onCodex && catalogDefaultModel(cliCatalog) ? cliNameOf(catalogDefaultModel(cliCatalog))
+    : null
+  /**
+   * The declared model, judged against that list with the driver's own matching
+   * (`isModelOffered`): `true` only once the list is known and lacks it. Never a
+   * warning on a guess — an unknown list says nothing.
+   */
+  const staleModel = cliEngine !== null && declaredModel !== null && isModelOffered(cliCatalog, declaredModel) === false
+  /** What the CLI choice converts back to on the tier picker, when the panel can tell (`cliModelTier`). */
+  const cliTier = cliEngine && declaredModel !== null ? cliModelTier(cliEngine, declaredModel, declaredEffort, cliCatalog) : undefined
+  /**
+   * Codex converts by its *default* model, which only the list names. Until the
+   * list is known the conversion is neither possible nor refused: the checkbox
+   * waits, disabled, and says nothing it would have to take back.
+   */
+  const cliSessionList = cliCatalog?.source === 'session'
+  const cliConversionPending = onCodex && declaredModel !== null && (!cliSessionList || catalogDefaultModel(cliCatalog) === null)
+  /**
+   * Why Advanced stays on, once — the status line and the checkbox's tooltip
+   * read the same branch. The effort is the cause when the model alone would
+   * convert.
+   */
+  const cliUnconvertibleReason = cliEngine && declaredModel !== null && cliTier === null
+    ? declaredModel === 'default'
+      ? `${cliName}’s own default has no work complexity — pick a model first.`
+      : declaredEffort && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
+      ? `Advanced stays on — “${declaredEffort}” effort matches no work complexity.`
+      : `Advanced stays on — “${cliNameOf(declaredModel)}” matches no work complexity.`
+    : null
 
   /**
    * Which picker this agent gets.
@@ -1036,8 +1117,9 @@ export function RuntimePanel({
    * removes the need to instruct anyone to clear a hand-written id they cannot
    * retype — clearing the model enables the checkbox on its own.
    */
-  const unconvertible =
-    declaredModel !== null && classifyModel(declaredModel, providerType) === null
+  const unconvertible = onCli
+    ? declaredModel !== null && !cliConversionPending && cliTier === null
+    : declaredModel !== null && classifyModel(declaredModel, providerType) === null
   /**
    * The model id the last model → tier conversion moved away from, so the
    * reverse toggle restores it rather than re-deriving one. See
@@ -1045,16 +1127,14 @@ export function RuntimePanel({
    * would quietly trade a deliberately pinned dated snapshot for a floating one.
    */
   const [pinned, setPinned] = useState<{ agentId: string; modelId: string } | null>(null)
-  const advanced = onCli
-    ? // **There is no raw model list on the Claude path**, so the view cannot be
-      // Advanced whatever the remembered preference says. Forcing it here rather
-      // than at the render keeps one answer to "which picker is showing".
-      false
-    : unconvertible
-      ? true
-      : view?.agentId === agent.id
-        ? view.advanced
-        : (declaredView ?? settings?.localAgentsModelAdvanced === true)
+  // The same rule on every engine now that the CLI runtimes list their models:
+  // the agent's own runtime first, then this agent's sticky view, then the
+  // remembered preference.
+  const advanced = unconvertible
+    ? true
+    : view?.agentId === agent.id
+      ? view.advanced
+      : (declaredView ?? settings?.localAgentsModelAdvanced === true)
   /**
    * True while nothing can answer "which picker" yet: the manifest declares
    * neither and the preference has not arrived.
@@ -1067,7 +1147,40 @@ export function RuntimePanel({
    */
   const pickerUnknown =
     engineUnknown ||
-    (!onCli && declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
+    (declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
+
+  /**
+   * **Ask the tool for its list** when the Advanced picker for it is on screen
+   * and the list is missing or a day old, and when the agent names a model and
+   * no list is known at all (so the stale warning has something to judge by).
+   * Main opens a session with no prompt; nothing is billed.
+   */
+  const wantCliRefresh = cliEngine !== null && cliCatalog !== undefined && (cliConversionPending ||
+    ((!compact && advanced && !pickerUnknown && catalogNeedsRefresh(cliCatalog)) || (declaredModel !== null && !cliCatalogKnown)))
+  const cliRefresh = useRuntimeModelCatalogRefresh(cliEngine, wantCliRefresh)
+  /** Nothing to list yet: the catalogue query, or a refresh of a missing one, is in flight. */
+  const cliCatalogLoading = cliEngine !== null && (cliCatalog === undefined || (!cliCatalogKnown && cliRefresh.isFetching))
+  const cliRefreshError = cliRefresh.data?.error ?? null
+  /** A refresh is in flight for a list already shown (Refresh pressed over a stale model). */
+  const cliRefreshing = cliEngine !== null && cliRefresh.isFetching
+  /** The effort select is shown where the tool offers efforts, and kept in place on the two that do. */
+  /**
+   * **Two different things, named apart.** Unset is Cinna's choice — the tier
+   * floor on Claude (Sonnet), the server's or the CLI's default elsewhere — so
+   * it reads "Not set — <what runs>". The tool's own `default` entry (Claude
+   * lists one) is an ordinary choice that hands the pick to the tool, so it is
+   * listed like any model, named as the tool's default.
+   */
+  const cliToolDefault = cliCatalog?.models.find((model) => model.id === 'default') ?? null
+  const cliToolDefaultLabel = cliToolDefault
+    ? `${cliName} default${cliToolDefault.description && cliToolDefault.description.length <= 24 ? ` (${cliToolDefault.description})` : ''}`
+    : ''
+  const cliUnsetLabel = onCodex
+    ? `Not set — ${cliDefaultName ? `${cliDefaultName} (Codex default)` : 'Codex default'}`
+    : `Not set — ${cliDefaultName ?? `${cliName} default`}`
+  /** The chosen model's own efforts: none until a model is chosen, none for a model that offers none. */
+  const cliEfforts = (effortsFor(cliCatalog, declaredModel) ?? []).filter((effort) => effort.id !== 'default')
+  const effortSlot = (onClaude || onCodex) && !pickerUnknown && advanced
 
   /**
    * The Default runtime, flattened the way `runtimeService.resolveDefault`
@@ -1233,6 +1346,49 @@ export function RuntimePanel({
     tone: message.tone === 'warn' ? WARN : NOTE
   })
 
+  /**
+   * What the reserved line says about the CLI runtime's model list, below the
+   * install and login rungs and above the healthy sentence: a declared model
+   * the tool no longer offers first (it runs on the tool's default instead, and
+   * the chat says so), then — only in the Advanced view, where the list is the
+   * control — that it is being fetched or could not be, then why Advanced is
+   * not available.
+   */
+  const cliCatalogLine = (): StatusLine | null => {
+    // Short, so the line fits at 800px; the whole sentence is the `title`.
+    if (cliRefreshing && (staleModel || (advanced && !cliCatalogKnown))) return { text: `Checking ${cliName}’s models…`, tone: NOTE }
+    if (staleModel) {
+      return {
+        text: 'Model no longer offered — choose another.',
+        title: `${cliName} no longer offers “${declaredModel}”, so its turns run on ${cliName}’s default until another model is chosen.`,
+        tone: WARN,
+        refresh: true
+      }
+    }
+    if (advanced && cliCatalogLoading) return { text: `Checking ${cliName}’s models…`, tone: NOTE }
+    // Codex converts only by its own session's list; a cached one is shown but cannot convert.
+    if (cliConversionPending) {
+      if (cliRefreshError) return { text: `Couldn’t list ${cliName}’s models.`, title: cliRefreshError, tone: WARN, refresh: true }
+      if (cliRefreshing) return { text: `Checking ${cliName}’s models…`, tone: NOTE }
+    }
+    if (advanced && !cliCatalogKnown) {
+      return cliRefreshError
+        ? { text: `Couldn’t list ${cliName}’s models.`, title: cliRefreshError, tone: WARN, refresh: true }
+        : { text: `${cliName} has not listed its models yet.`, tone: WARN, refresh: true }
+    }
+    if (unconvertible && cliUnconvertibleReason) {
+      if (declaredModel === 'default') return { text: cliUnconvertibleReason, tone: NOTE }
+      return {
+        text: declaredEffort && cliEngine && declaredModel && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
+          ? `Advanced stays on — no tier for “${declaredEffort}” effort.`
+          : `Advanced stays on — no tier for “${cliNameOf(declaredModel)}”.`,
+        title: cliUnconvertibleReason,
+        tone: NOTE
+      }
+    }
+    return null
+  }
+
   const status = ((): StatusLine | null => {
     if (error) return { text: error, tone: DANGER }
     // What the user just clicked outranks a note about a write before it.
@@ -1288,7 +1444,18 @@ export function RuntimePanel({
       // The Log in button leads the line (see `LoginLine`); the turn error says
       // "choose Log in", so the two surfaces give one instruction.
       if (codexAuth?.state === 'logged_out') return { text: 'Codex is not logged in.', tone: DANGER, login: 'codex' }
-      return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
+      const catalogLine = cliCatalogLine()
+      if (catalogLine) return catalogLine
+      {
+        const codexModel = cliNameOf(declaredModel) ?? cliDefaultName ?? 'its configured default model'
+        const codexEffort = codexEffortForRuntime(agent.runtime)
+        return {
+          // Short: a long model id must not push the effort off the 800px line.
+          text: `Codex on ${codexModel}, ${codexEffort} reasoning effort.`,
+          title: `Codex uses your CLI login and configuration, on ${codexModel}, with ${codexEffort} reasoning effort.`,
+          tone: NOTE
+        }
+      }
     }
     if (onAntigravity) {
       // The Codex rung, on Google's login. No effort: Antigravity has none to set.
@@ -1297,7 +1464,9 @@ export function RuntimePanel({
       if (antigravityAuth?.state === 'logged_out') {
         return { text: 'Antigravity is not logged in.', tone: DANGER, login: 'antigravity' }
       }
-      return { text: `Antigravity uses your Google login, on ${antigravityRunModelLabel(declaredModel, declaredComplexity)}.`, tone: NOTE }
+      const catalogLine = cliCatalogLine()
+      if (catalogLine) return catalogLine
+      return { text: `Antigravity uses your Google login, on ${cliNameOf(declaredModel) ?? cliDefaultName}.`, tone: NOTE }
     }
     if (onClaude) {
       // Silent until its own state query answers — not PATH detection, which
@@ -1345,6 +1514,9 @@ export function RuntimePanel({
           login: 'claude'
         }
       }
+      const catalogLine = cliCatalogLine()
+      if (catalogLine) return catalogLine
+      const claudeModel = cliNameOf(declaredModel) ?? cliDefaultName
       return {
         // **Both names, in one sentence, because both are on the screen.** The
         // select says "Claude Agent" and the column beside it says "Claude Code
@@ -1364,8 +1536,8 @@ export function RuntimePanel({
         // control.
         text:
           claudeAuth.state === 'logged_in'
-            ? `Claude Agent runs on your own Claude Code login${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}, on ${claudeModelForComplexity(declaredComplexity)}.`
-            : `Claude Agent runs on Claude Code, on ${claudeModelForComplexity(declaredComplexity)}.`,
+            ? `Claude Agent runs on your own Claude Code login${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}, on ${claudeModel}.`
+            : `Claude Agent runs on Claude Code, on ${claudeModel}.`,
         tone: NOTE
       }
     }
@@ -1505,6 +1677,12 @@ export function RuntimePanel({
        * back; sending anything but "keep" from a model or tier change erased it.
        */
       engine?: AgentEngine | null
+      /**
+       * The effort to write beside `modelId`. Absent keeps the declared one
+       * while the model stays the same and drops it otherwise — an effort is
+       * the effort *of* a model, and main never writes one without a model.
+       */
+      effort?: string | null
     } = {}
   ): void => {
     if (!bare && !stamp) return
@@ -1514,11 +1692,16 @@ export function RuntimePanel({
     setSecrets(null)
     if (options.note) note(options.note, { model: modelId, complexity })
     else setDropped(null)
+    const effort = modelId === null ? null
+      : options.effort !== undefined ? options.effort
+      : modelId === declaredModel ? declaredEffort : null
     const runtime = {
       engine: options.engine === undefined ? KEEP_ENGINE : options.engine,
       credential,
       modelId,
-      complexity
+      complexity,
+      // Absent is "none" to main, so the key travels only when there is one.
+      ...(effort ? { effort } : {})
     }
     const handlers = {
       /**
@@ -1633,6 +1816,21 @@ export function RuntimePanel({
       return
     }
     changeCredential(value, unsupportedEngine ? { engine: null, droppedEngine } : undefined)
+  }
+
+  /**
+   * A model pick in the CLI Advanced view. The declared effort follows the
+   * model when the new one offers it; one it does not offer is dropped, and
+   * the line says so — efforts are per model. A model never seen as a
+   * session's own (no entry) keeps it: there is nothing to judge by.
+   */
+  const changeCliModel = (model: string | null): void => {
+    const offered = effortsFor(cliCatalog, model)
+    const keeps = declaredEffort !== null && model !== null && (offered === undefined || offered.some((effort) => effort.id === declaredEffort))
+    commit(null, model, null, {
+      effort: keeps ? declaredEffort : null,
+      ...(declaredEffort && model && !keeps ? { note: `Dropped “${declaredEffort}” effort — ${cliNameOf(model)} does not offer it.` } : {})
+    })
   }
 
   const changeCredential = (
@@ -1750,6 +1948,71 @@ export function RuntimePanel({
       return
     }
 
+    /**
+     * **The CLI runtimes convert by their own names**, on OpenCode's terms: a
+     * tier becomes the model it runs on today (Claude's alias, Antigravity's
+     * Flash level, Codex's default model at the tier's effort), and a model
+     * goes back to the tier it belongs to. A target the tool no longer lists
+     * becomes the tool's default, and the line says so; a model no tier
+     * describes never reaches here (`unconvertible` disables the checkbox).
+     */
+    if (cliEngine) {
+      if (next && declaredComplexity !== null) {
+        // **No list, no conversion**: what the tier runs on cannot be checked
+        // against what the tool offers, so the view moves and the file keeps
+        // its tier. The reserved line keeps saying why the list is missing
+        // (Codex counts only its own session's list: its cache ignores the
+        // user's configured model).
+        if (!cliCatalogKnown || (onCodex && !cliSessionList)) {
+          applyView(true)
+          return
+        }
+        const tierLabel = WORK_COMPLEXITY_LABELS[declaredComplexity]
+        const wanted = onCodex ? catalogDefaultModel(cliCatalog)
+          : onAntigravity ? ANTIGRAVITY_TIER_MODEL[declaredComplexity] : CLAUDE_TIER_ALIAS[declaredComplexity]
+        const wantedEffort = onCodex ? codexEffortForComplexity(declaredComplexity) : null
+        let target = wanted
+        let replaced: string | null = null
+        if (wanted && cliCatalogKnown && isModelOffered(cliCatalog, wanted) === false) {
+          target = catalogDefaultModel(cliCatalog)
+          replaced = wanted
+        }
+        if (!target) {
+          // Codex with no list yet: nothing honest to pin, so the view moves
+          // and the file keeps its tier — said, as OpenCode says it.
+          applyView(true)
+          note(`Still ${tierLabel} in the file — ${cliName} has not listed its models yet. Pick one to replace it.`)
+          return
+        }
+        // An effort the tool does not list is not written.
+        const effort = wantedEffort && (effortsFor(cliCatalog, target) ?? []).some((choice) => choice.id === wantedEffort) ? wantedEffort : null
+        commit(null, target, null, {
+          view: true,
+          persist: true,
+          keep: null,
+          effort,
+          note: replaced
+            ? `Pinned “${cliNameOf(target)}” — ${cliName} no longer offers “${replaced}”, what ${tierLabel} ran on.`
+            : `Pinned “${cliNameOf(target)}”${effort ? ` at ${effort} effort` : ''} — what ${tierLabel} ran on.`
+        })
+        return
+      }
+      if (!next && declaredModel !== null) {
+        // Unreachable through the checkbox while `unconvertible` — kept, as below.
+        if (!cliTier) return
+        const tier = cliTier.tier
+        commit(null, null, tier, {
+          view: false,
+          persist: true,
+          keep: null,
+          note: tier
+            ? `Switched to ${WORK_COMPLEXITY_LABELS[tier]} — the tier “${cliNameOf(declaredModel)}” belongs to.`
+            : `Switched to Default — “${cliNameOf(declaredModel)}” is ${cliName}’s default.`
+        })
+      }
+      return
+    }
+
     if (next && declaredComplexity !== null) {
       // The id this agent was pinned to before the opposite conversion, when the
       // tier has not moved since — so there and back is a no-op on the file.
@@ -1802,6 +2065,31 @@ export function RuntimePanel({
     }
   }
 
+  /**
+   * "Choose model" in the composer's row: once this agent's Model select is on
+   * screen and enabled, it takes focus and the request is spent. It waits only
+   * while the list is still being read; once that has settled with no enabled
+   * Model select (the tier view, a list that could not be read) the request is
+   * spent anyway, so a later tick of Advanced cannot steal focus. Leaving the
+   * agent drops it too.
+   */
+  const focusRequest = useUIStore((state) => state.pendingRuntimeModelFocusId)
+  const listSettled = !pickerUnknown && (cliEngine === null || (cliCatalog !== undefined && !cliCatalogLoading && !cliRefreshing))
+  useEffect(() => {
+    if (compact || focusRequest !== agent.id) return
+    const select = document.getElementById('runtime-model') as HTMLSelectElement | null
+    if (select && !select.disabled) select.focus()
+    else if (!listSettled) return
+    useUIStore.getState().setPendingRuntimeModelFocusId(null)
+  })
+  useEffect(() => {
+    if (compact) return
+    const id = agent.id
+    return () => {
+      if (useUIStore.getState().pendingRuntimeModelFocusId === id) useUIStore.getState().setPendingRuntimeModelFocusId(null)
+    }
+  }, [agent.id, compact])
+
   if (compact) {
     // Use the same resolved engine, credential and model as the settings controls.
     const subscription = claudeAuth?.state === 'logged_in' &&
@@ -1812,15 +2100,15 @@ export function RuntimePanel({
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
     const model = engineUnknown ? null
-      : onCodex ? `${declaredModel ?? 'CLI default'} · ${codexEffortForComplexity(declaredComplexity)} effort`
-      : onAntigravity ? antigravityRunModelLabel(declaredModel, declaredComplexity)
-      : onClaude ? claudeModelForComplexity(declaredComplexity)
+      : onCodex ? `${cliNameOf(declaredModel) ?? cliDefaultName ?? 'CLI default'} · ${codexEffortForRuntime(agent.runtime)} effort`
+      : onAntigravity ? (cliNameOf(declaredModel) ?? cliDefaultName)
+      : onClaude ? `${cliNameOf(declaredModel) ?? cliDefaultName}${declaredEffort ? ` · ${declaredEffort} effort` : ''}`
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = engineUnknown ? null
-      : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : onAntigravity
-        ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : null)
-      : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+        ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
+      : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : credentialIssue === 'missing' ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
     const badge = SUMMARY_BADGE
@@ -2028,15 +2316,10 @@ export function RuntimePanel({
               {pickerUnknown ? 'Model choice' : advanced ? 'Model' : 'Work complexity'}
             </label>
             {/*
-              **Hidden, not disabled-and-empty, on the Claude engine** — a
-              control that lists nothing is worse than a control that is not
-              there, and a disabled checkbox invites a click that can never do
-              anything. It is removed from *inside* the fixed-height row, so the
-              panel keeps its footprint and the page's tab strip does not move
-              out from under the pointer that just used the select (rule 1). The
-              reserved line below says what this agent runs on instead.
+              On every engine: the CLI runtimes list their own models now
+              (`useRuntimeModelCatalog`), so Advanced has a real list behind it
+              there too.
             */}
-            {!onCli && (
             <label
               className="flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-[var(--color-text-muted)]
                 transition-colors hover:text-[var(--color-text)]"
@@ -2048,20 +2331,22 @@ export function RuntimePanel({
               // action the checkbox can no longer perform.
               title={
                 unconvertible
-                  ? `Advanced stays on — “${nameOf(declaredModel)}” matches no work complexity.`
-                  : 'Pick the exact model instead of how hard the work is'
+                  ? (onCli ? (cliUnconvertibleReason ?? undefined) : `Advanced stays on — “${nameOf(declaredModel)}” matches no work complexity.`)
+                  : cliConversionPending
+                    ? (cliRefreshError ? `Couldn’t list ${cliName}’s models: ${cliRefreshError}`
+                      : cliRefreshing ? `Checking ${cliName}’s models…` : `${cliName} has not listed its models yet.`)
+                    : 'Pick the exact model instead of how hard the work is'
               }
             >
               <input
                 type="checkbox"
                 className="size-3 accent-[var(--color-accent)]"
                 checked={advanced}
-                disabled={disabled || unconvertible}
+                disabled={disabled || unconvertible || cliConversionPending}
                 onChange={(event) => toggleAdvanced(event.target.checked)}
               />
               Advanced
             </label>
-            )}
           </div>
           {pickerUnknown ? (
             /* Same footprint, no claim: which picker this agent gets is not
@@ -2069,6 +2354,70 @@ export function RuntimePanel({
             <select id="runtime-pending" aria-label="Model choice" className={FIELD} disabled>
               <option>Loading…</option>
             </select>
+          ) : advanced && onCli ? (
+            /*
+              **The tool's own list, verbatim**, with the effort beside it on
+              the two runtimes that have one. One row in every state — loading,
+              unavailable, listed — so the column never changes height; the
+              reason for a disabled list is on the reserved line below.
+            */
+            <div className="flex gap-1">
+              <select
+                id="runtime-model"
+                aria-label="Model"
+                className={`${FIELD_IN_ROW} min-w-0 flex-1`}
+                title={declaredModel ?? undefined}
+                disabled={disabled || cliCatalogLoading || !cliCatalogKnown}
+                value={cliCatalogLoading ? '' : (declaredModel ?? '')}
+                onChange={(event) => changeCliModel(event.target.value || null)}
+              >
+                {cliCatalogLoading ? (
+                  <option value="">Checking models…</option>
+                ) : (
+                  <>
+                    {/*
+                      **One Default.** A tool that lists its own `default`
+                      (Claude) gets that entry as the Default, named by what it
+                      runs; "not set" is then offered only while nothing is set,
+                      named by the floor it runs on. Elsewhere unset is the
+                      Default, named by the model it runs.
+                    */}
+                    <option value="">{cliUnsetLabel}</option>
+                    {/* Still selectable when the list lacks it, so the select never misreports the file. */}
+                    {declaredModel && !(cliCatalog?.models ?? []).some((model) => model.id === declaredModel) && (
+                      <option value={declaredModel}>{declaredModel}</option>
+                    )}
+                    {(cliCatalog?.models ?? []).map((model) => (
+                      <option key={model.id} value={model.id} title={model.description ? `${model.id} — ${model.description}` : model.id}>
+                        {model === cliToolDefault ? cliToolDefaultLabel : model.name}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+              {effortSlot && (
+                <select
+                  id="runtime-effort"
+                  aria-label="Effort"
+                  title={declaredModel ? 'Reasoning effort' : 'Pick a model to set its reasoning effort'}
+                  // Compact and fixed: the model name gets the room (`Xhigh` fits).
+                  className={`${FIELD_IN_ROW} w-[4.75rem] shrink-0`}
+                  disabled={disabled || cliCatalogLoading || !cliCatalogKnown || declaredModel === null || cliEfforts.length === 0}
+                  value={declaredEffort ?? ''}
+                  onChange={(event) => commit(null, declaredModel, null, { effort: event.target.value || null })}
+                >
+                  <option value="">Default</option>
+                  {declaredEffort && !cliEfforts.some((effort) => effort.id === declaredEffort) && (
+                    <option value={declaredEffort}>{declaredEffort}</option>
+                  )}
+                  {cliEfforts.map((effort) => (
+                    <option key={effort.id} value={effort.id} title={effort.name}>
+                      {effort.id.charAt(0).toUpperCase() + effort.id.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           ) : advanced ? (
             <select
               id="runtime-model"
@@ -2123,8 +2472,8 @@ export function RuntimePanel({
                 {onCodex ? 'Default (medium effort)' : onAntigravity ? antigravityDefaultOptionLabel() : onClaude
                   ? // The Medium floor, named: an agent that picks no tier on
                     // this engine runs on `sonnet`, and there is no catalogue
-                    // that could make that "none set".
-                    `Default (${claudeModelForComplexity(null)})`
+                    // that could make that "none set". By the tool's name when listed.
+                    `Not set — ${cliListedName(claudeModelForComplexity(null), claudeModelForComplexity(null))}`
                   : !modelsLoaded || inheritedName
                     ? 'Default'
                     : 'Default (none set)'}
@@ -2220,8 +2569,23 @@ export function RuntimePanel({
       <div className="mt-2 h-4">
         {status?.login ? (
           <LoginLine text={status.text} tone={status.tone} engine={status.login} login={login} />
+        ) : status?.refresh ? (
+          /*
+            The list could not be read, or no longer lists the agent's model:
+            the sentence, then the labelled way to ask the tool again, at this
+            panel's scale and inside the reserved line (rule 1). It bypasses
+            the ten-minute wait between automatic refreshes.
+          */
+          <div className="flex h-4 min-w-0 items-center gap-2">
+            <div className={`min-w-0 truncate ${status.tone}`} title={status.title ?? status.text}>
+              {status.text}
+            </div>
+            <button type="button" className={LINE_BUTTON} onClick={() => cliRefresh.retry()}>
+              Refresh
+            </button>
+          </div>
         ) : status && (
-          <div className={`truncate ${status.tone}`} title={status.text}>
+          <div className={`truncate ${status.tone}`} title={status.title ?? status.text}>
             {status.text}
           </div>
         )}

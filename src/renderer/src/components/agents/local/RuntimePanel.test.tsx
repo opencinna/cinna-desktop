@@ -200,7 +200,57 @@ vi.mock('../../../hooks/useEngine', () => ({
   useDefaultRuntime: () => ({ data: defaultRuntime })
 }))
 
+/**
+ * The CLI runtime's own model list, as main last recorded it, per engine;
+ * `undefined` is the query in flight. Refresh requests are recorded with the
+ * engine and whether the panel wanted one.
+ */
+let cliCatalogs: Record<string, unknown> = {}
+let cliRefreshing = false
+let cliRefreshResult: { error: string | null } | undefined
+const refreshWanted: [string | null | undefined, boolean][] = []
+const refreshRetry = vi.fn()
+vi.mock('../../../hooks/useRuntimeModelCatalog', () => ({
+  useRuntimeModelCatalog: (engine: string | null | undefined) => ({ data: engine ? cliCatalogs[engine] : undefined }),
+  useRuntimeModelCatalogRefresh: (engine: string | null | undefined, wanted: boolean) => {
+    refreshWanted.push([engine, wanted])
+    return { isFetching: wanted && cliRefreshing, data: wanted ? cliRefreshResult : undefined, retry: refreshRetry }
+  }
+}))
+const UNAVAILABLE = (engine: string): unknown => ({ engine, models: [], source: 'unavailable', updatedAt: null })
+const CLAUDE_CATALOG = {
+  engine: 'claude', source: 'session', updatedAt: Date.now(), defaultModelId: 'default',
+  models: [
+    { id: 'default', name: 'Default (recommended)' }, { id: 'opus', name: 'Opus 5.5' }, { id: 'fable', name: 'Fable 5' },
+    { id: 'sonnet', name: 'Sonnet 5' }, { id: 'haiku', name: 'Haiku 4.5' }, { id: 'claude-opus-4-6', name: 'Opus 4.6' }
+  ],
+  effortsByModel: {
+    default: [{ id: 'default', name: 'Default' }, { id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
+    opus: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
+    'claude-opus-4-6': [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+    sonnet: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+    haiku: []
+  }
+}
+const CODEX_CATALOG = {
+  engine: 'codex', source: 'session', updatedAt: Date.now(), defaultModelId: 'gpt-6-luna',
+  models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna' }, { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra' }],
+  effortsByModel: {
+    'gpt-6-luna': [{ id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }, { id: 'xhigh', name: 'Extra high' }],
+    'gpt-5.6-terra': [{ id: 'low', name: 'Low' }, { id: 'ultra', name: 'Ultra' }]
+  }
+}
+const AGY_CATALOG = {
+  engine: 'antigravity', source: 'session', updatedAt: Date.now(),
+  models: [
+    { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+    { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+    { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' }
+  ]
+}
+
 const { RuntimePanel } = await import('./RuntimePanel')
+const { useUIStore } = await import('../../../stores/ui.store')
 
 function agent(runtime: Record<string, string> | null): LocalAgentDto {
   return {
@@ -229,6 +279,11 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 }
 
 beforeEach(() => {
+  cliCatalogs = { claude: UNAVAILABLE('claude'), codex: UNAVAILABLE('codex'), antigravity: UNAVAILABLE('antigravity') }
+  cliRefreshing = false
+  cliRefreshResult = undefined
+  refreshWanted.length = 0
+  refreshRetry.mockClear()
   defaultRuntime = { engine: 'opencode' }
   codexBinary = { state: 'unresolved' }
   claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
@@ -1056,12 +1111,10 @@ describe('RuntimePanel', () => {
       })
     })
 
-    it('hides Advanced rather than offering a list with nothing in it', () => {
-      // A control that lists nothing is worse than a control that is not there,
-      // and there is no raw model catalogue on this path to list. Hidden from
-      // inside the fixed-height row, so the panel keeps its footprint (rule 1).
+    it('offers Advanced on the Claude engine, over the tier picker it opens on', () => {
+      // The CLI lists its own models now, so Advanced has a real list behind it.
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      expect(screen.queryByRole('checkbox', { name: /Advanced/ })).toBeNull()
+      expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', false)
       expect(screen.getByLabelText('Work complexity')).toBeTruthy()
     })
 
@@ -1593,7 +1646,7 @@ describe('Codex runtime', () => {
     render(<RuntimePanel agent={agent({ engine: 'codex', complexity: 'complex' })} />)
     expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:codex')
     expect(screen.getByText(/high reasoning effort/)).toBeTruthy()
-    expect(screen.queryByText('Advanced')).toBeNull()
+    expect(screen.getByRole('checkbox', { name: /Advanced/ })).toBeTruthy()
     expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
   })
   it('shows the login remedy, and keeps an explicitly selected Codex visible when its install failed', () => {
@@ -1662,11 +1715,13 @@ describe('Antigravity runtime', () => {
     antigravityBinary = READY
     models = undefined
     providers = []
-    render(<RuntimePanel agent={agent({ engine: 'antigravity', model: 'gemini-3-pro' })} />)
+    cliCatalogs.antigravity = AGY_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'antigravity', model: 'gemini-3.8-flash-high' })} />)
     expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:antigravity')
     expect(screen.getByText(/^Antigravity \S+ managed$/)).toBeTruthy()
-    expect(screen.getByText('Antigravity uses your Google login, on gemini-3-pro.')).toBeTruthy()
-    expect(screen.queryByText('Advanced')).toBeNull()
+    expect(screen.getByText('Antigravity uses your Google login, on Gemini 3.8 Flash (High).')).toBeTruthy()
+    // No effort: Antigravity offers none, so no second select.
+    expect(screen.queryByLabelText('Effort')).toBeNull()
     expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
   })
 
@@ -1745,4 +1800,284 @@ it('names the machine default separately from a pinned Codex runtime', () => {
   const picker = screen.getByLabelText('Runs on') as HTMLSelectElement
   expect(picker.value).toBe('engine:codex')
   expect(picker.querySelector('option[value=""]')?.textContent).not.toContain('Codex')
+})
+
+describe('Advanced on the CLI runtimes', () => {
+  const runtimeSaved = (): Record<string, unknown> => {
+    const [vars] = save.mock.calls[0] as [{ runtime: Record<string, unknown> }]
+    const { engine: _engine, ...rest } = vars.runtime
+    void _engine
+    return rest
+  }
+  const LOGGED_IN = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: null, email: null }
+  beforeEach(() => {
+    models = undefined
+    providers = []
+    claudeAuth = LOGGED_IN
+    codexBinary = { state: 'ready', path: '/data/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+    antigravityBinary = { state: 'ready', path: '/data/agy', source: 'managed', version: null }
+  })
+
+  it('lists the tool’s models verbatim, its own default as one of them, and the chosen model’s own efforts', () => {
+    cliCatalogs.claude = { ...CLAUDE_CATALOG, models: CLAUDE_CATALOG.models.map((m) => m.id === 'default' ? { ...m, description: 'Opus 5.5' } : m) }
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus' })} />)
+    const model = screen.getByLabelText('Model') as HTMLSelectElement
+    // Unset is Cinna's floor; the tool's `default` is a choice of its own, named as the tool's.
+    expect([...model.options].map((option) => option.value)).toEqual(['', 'default', 'opus', 'fable', 'sonnet', 'haiku', 'claude-opus-4-6'])
+    expect([...model.options].map((option) => option.textContent).slice(0, 2)).toEqual(['Not set — Sonnet 5', 'Claude Code default (Opus 5.5)'])
+    expect([...model.options].map((option) => option.textContent)).toContain('Opus 4.6')
+    expect(model.title).toBe('opus')
+    const effort = screen.getByLabelText('Effort') as HTMLSelectElement
+    expect([...effort.options].map((option) => option.value)).toEqual(['', 'low', 'high', 'max'])
+    fireEvent.change(effort, { target: { value: 'high' } })
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'opus', complexity: null, effort: 'high' })
+  })
+
+  it('keeps an effort the new model offers, drops one it does not and says so, and drops it with the model', () => {
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus', effort: 'high' })} />)
+    // An effort is a choice the tier picker cannot show, so it keeps Advanced on.
+    expect(screen.getByText('Advanced stays on — no tier for “high” effort.')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-4-6' } })
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'claude-opus-4-6', complexity: null, effort: 'high' })
+    save.mockClear()
+    // Mutation: keep the effort whatever the new model offers and Haiku is written with an effort it has no option for.
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'haiku' } })
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'haiku', complexity: null })
+    expect(screen.getByText('Dropped “high” effort — Haiku 4.5 does not offer it.')).toBeTruthy()
+  })
+
+  it('offers no efforts for a model that has none, in the same disabled select', () => {
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'haiku' })} />)
+    const effort = screen.getByLabelText('Effort') as HTMLSelectElement
+    expect(effort.disabled).toBe(true)
+    expect([...effort.options].map((option) => option.value)).toEqual([''])
+  })
+
+  it('keeps one footprint while the list loads: both selects, disabled, and the line says so', () => {
+    cliCatalogs.claude = undefined
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus' })} />)
+    const model = screen.getByLabelText('Model') as HTMLSelectElement
+    expect(model.disabled).toBe(true)
+    expect(model.options[0].textContent).toBe('Checking models…')
+    expect((screen.getByLabelText('Effort') as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByText('Checking Claude Code’s models…')).toBeTruthy()
+  })
+
+  it('says why the list is unavailable on the reserved line, with the same two disabled selects', () => {
+    cliRefreshResult = { error: 'Claude Code could not be started to list its models.' }
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus' })} />)
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('opus')
+    expect((screen.getByLabelText('Effort') as HTMLSelectElement).disabled).toBe(true)
+    const line = screen.getByText('Couldn’t list Claude Code’s models.')
+    expect(line.getAttribute('title')).toBe('Claude Code could not be started to list its models.')
+    // Mutation: drop the Refresh button and a failed list waits ten minutes with nothing to press.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(refreshRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not convert a tier while the list is unknown, and keeps the reason on the line', () => {
+    // Mutation: drop the unknown-list guard and Simple is pinned to `haiku` behind "Couldn't list…".
+    cliRefreshResult = { error: 'Claude Code is not logged in.' }
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'simple' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(save).not.toHaveBeenCalled()
+    expect(setSetting).toHaveBeenCalledWith({ key: 'localAgentsModelAdvanced', value: true })
+    expect(screen.getByText('Couldn’t list Claude Code’s models.')).toBeTruthy()
+  })
+
+  it('converts a Codex tier only by its own session’s list, never the CLI cache', () => {
+    cliCatalogs.codex = { ...CODEX_CATALOG, source: 'cli-cache' }
+    render(<RuntimePanel agent={agent({ engine: 'codex', complexity: 'complex' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(save).not.toHaveBeenCalled()
+    cleanup()
+    render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna', effort: 'low' })} />)
+    expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', true)
+    // …and asks for a session's list so it can.
+    expect(refreshWanted.at(-1)).toEqual(['codex', true])
+  })
+
+  it('spends the focus request once the list has settled with no Model select, and drops it when the panel goes', () => {
+    // Mutation: keep waiting for a Model select and a later Advanced tick steals focus long after the click.
+    cliCatalogs.claude = CLAUDE_CATALOG
+    useUIStore.getState().setPendingRuntimeModelFocusId('folder:a')
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'simple' })} />)
+    expect(useUIStore.getState().pendingRuntimeModelFocusId).toBeNull()
+    cleanup()
+    cliCatalogs.claude = undefined
+    useUIStore.getState().setPendingRuntimeModelFocusId('folder:a')
+    const { unmount } = render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'simple' })} />)
+    // Still reading the list: it waits…
+    expect(useUIStore.getState().pendingRuntimeModelFocusId).toBe('folder:a')
+    unmount()
+    // …and leaving the agent drops it.
+    expect(useUIStore.getState().pendingRuntimeModelFocusId).toBeNull()
+  })
+
+  it('focuses the Model select when the composer’s Choose model asked for it', () => {
+    cliCatalogs.claude = CLAUDE_CATALOG
+    useUIStore.getState().setPendingRuntimeModelFocusId('folder:a')
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'claude-opus-4-1' })} />)
+    expect(document.activeElement).toBe(screen.getByLabelText('Model'))
+    expect(useUIStore.getState().pendingRuntimeModelFocusId).toBeNull()
+  })
+
+  it('asks main for the list when the picker shows and none is known, or the agent names a model; not for a fresh one', () => {
+    // Mutation: drop the picker half of `wantCliRefresh` and an Advanced view over an unknown list never fetches one.
+    advanced = true
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+    expect(refreshWanted.at(-1)).toEqual(['claude', true])
+    cleanup()
+    refreshWanted.length = 0
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+    expect(refreshWanted.at(-1)).toEqual(['claude', false])
+    cleanup()
+    refreshWanted.length = 0
+    cliCatalogs.claude = { ...CLAUDE_CATALOG, updatedAt: Date.now() - 25 * 60 * 60 * 1000 }
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+    expect(refreshWanted.at(-1)).toEqual(['claude', true])
+    cleanup()
+    // The compact badge row shows no picker, but a named model with no list to judge it by still asks.
+    refreshWanted.length = 0
+    cliCatalogs.codex = UNAVAILABLE('codex')
+    render(<RuntimePanel compact agent={agent({ engine: 'codex', model: 'gpt-6-luna' })} />)
+    expect(refreshWanted.at(-1)).toEqual(['codex', true])
+  })
+
+  it('converts a Claude tier to its alias and back to the tier its family belongs to', () => {
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'simple' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'haiku', complexity: null })
+    expect(screen.getByText('Pinned “Haiku 4.5” — what Simple ran on.')).toBeTruthy()
+    cleanup()
+    save.mockClear()
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'claude-opus-4-6' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: null, complexity: 'complex' })
+    expect(screen.getByText('Switched to Complex — the tier “Opus 4.6” belongs to.')).toBeTruthy()
+  })
+
+  it('pins the tool’s default, and says so, when the tier’s model is no longer listed', () => {
+    cliCatalogs.claude = { ...CLAUDE_CATALOG, models: CLAUDE_CATALOG.models.filter((model) => model.id !== 'haiku') }
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'simple' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'default', complexity: null })
+    expect(screen.getByText('Pinned “Default (recommended)” — Claude Code no longer offers “haiku”, what Simple ran on.')).toBeTruthy()
+  })
+
+  it('converts a Codex tier to its default model at the tier’s effort, and back from a low/medium/high effort', () => {
+    cliCatalogs.codex = CODEX_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'codex', complexity: 'complex' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'gpt-6-luna', complexity: null, effort: 'high' })
+    expect(screen.getByText('Pinned “GPT-6-Luna” at high effort — what Complex ran on.')).toBeTruthy()
+    cleanup()
+    save.mockClear()
+    render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna', effort: 'low' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: null, complexity: 'simple' })
+  })
+
+  it('converts an Antigravity tier to its Flash level and back', () => {
+    cliCatalogs.antigravity = AGY_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'antigravity', complexity: 'medium' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: 'gemini-3.8-flash-medium', complexity: null })
+    cleanup()
+    save.mockClear()
+    render(<RuntimePanel agent={agent({ engine: 'antigravity', model: 'gemini-3.8-flash-low' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(runtimeSaved()).toEqual({ credential: null, modelId: null, complexity: 'simple' })
+  })
+
+  it('keeps Advanced on, disabled with the reason, for a choice no tier describes', () => {
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'fable' })} />)
+    expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', true)
+    expect(screen.getByText('Advanced stays on — no tier for “Fable 5”.')).toBeTruthy()
+    cleanup()
+    cliCatalogs.codex = CODEX_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna', effort: 'xhigh' })} />)
+    const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
+    expect(checkbox).toHaveProperty('disabled', true)
+    // The tooltip and the line read the same reason (the effort, not the model).
+    expect(checkbox.closest('label')?.title).toBe('Advanced stays on — “xhigh” effort matches no work complexity.')
+    expect(screen.getByText('Advanced stays on — no tier for “xhigh” effort.').getAttribute('title')).toBe(checkbox.closest('label')?.title)
+  })
+
+  it('waits, disabled and silent, to convert a Codex model until its list names the default', () => {
+    cliCatalogs.codex = undefined
+    render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna' })} />)
+    expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', true)
+    expect(screen.queryByText(/Advanced stays on/)).toBeNull()
+  })
+
+  it('warns that a declared model is no longer offered, on the line and the summary badge', () => {
+    // Mutation: drop `staleModel` from `cliCatalogLine` and the agent reads healthy while every turn runs elsewhere.
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'claude-opus-4-1' })} />)
+    const line = screen.getByText('Model no longer offered — choose another.')
+    expect(line.getAttribute('title')).toContain('“claude-opus-4-1”')
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy()
+    // Still selectable, so the select does not misreport the file.
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('claude-opus-4-1')
+    cleanup()
+    render(<RuntimePanel compact agent={agent({ engine: 'claude', model: 'claude-opus-4-1' })} />)
+    expect(screen.getByText('Model unavailable')).toBeTruthy()
+  })
+
+  it('never warns against a list it does not have, nor about a model under its alias', () => {
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'claude-opus-4-1' })} />)
+    expect(screen.queryByText(/no longer offered/)).toBeNull()
+    cleanup()
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'claude-haiku-4-5' })} />)
+    expect(screen.queryByText(/no longer offered/)).toBeNull()
+  })
+})
+
+describe('Advanced on the CLI runtimes — defaults and the Codex cache', () => {
+  beforeEach(() => {
+    models = undefined
+    providers = []
+    claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: null, email: null }
+    codexBinary = { state: 'ready', path: '/data/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+  })
+
+  it('treats the tool’s own default as a choice with no tier, said the same on the line and the checkbox', () => {
+    // Mutation: drop the `default` branch of the reason and it reads "no tier for “Default (recommended)”".
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'default' })} />)
+    const reason = 'Claude Code’s own default has no work complexity — pick a model first.'
+    const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
+    expect(checkbox).toHaveProperty('disabled', true)
+    expect(checkbox.closest('label')?.title).toBe(reason)
+    expect(screen.getByText(reason)).toBeTruthy()
+  })
+
+  it('names what an unset Codex model runs on, from the list it has', () => {
+    cliCatalogs.codex = { ...CODEX_CATALOG, source: 'cli-cache' }
+    advanced = true
+    render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).options[0].textContent).toBe('Not set — GPT-6-Luna (Codex default)')
+  })
+
+  it('gives the failure and Refresh, never "Checking…" for ever, when only the cache is known and the refresh failed', () => {
+    // Mutation: drop the pending-with-error rung and the line says nothing while the tooltip says "Checking…".
+    cliCatalogs.codex = { ...CODEX_CATALOG, source: 'cli-cache' }
+    cliRefreshResult = { error: 'Codex is not logged in.' }
+    render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna', effort: 'low' })} />)
+    const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
+    expect(checkbox).toHaveProperty('disabled', true)
+    expect(checkbox.closest('label')?.title).toBe('Couldn’t list Codex’s models: Codex is not logged in.')
+    expect(screen.getByText('Couldn’t list Codex’s models.').getAttribute('title')).toBe('Codex is not logged in.')
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(refreshRetry).toHaveBeenCalled()
+    expect(screen.queryByText(/Checking/)).toBeNull()
+  })
 })

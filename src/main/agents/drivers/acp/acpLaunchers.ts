@@ -147,6 +147,13 @@ export interface AcpSessionSetup {
    */
   model?: string
   /**
+   * The model this setup names (through {@link model} or a `model` config
+   * option) is one the **agent declares** (`runtime.model`), not a tier's
+   * alias, a chat mode's or a build session's. Only then does a model the
+   * session does not offer earn a notice in the chat; the user chose it.
+   */
+  modelDeclared?: boolean
+  /**
    * `session/set_config_option` calls, in order.
    *
    * `optional` marks one the turn may run without. It exists for exactly one
@@ -714,6 +721,14 @@ export interface ClaudeLauncherDeps {
    * settings name; absent means "chosen".
    */
   modelIsFloor?(userId: string, agentId: string): boolean
+  /**
+   * The reasoning effort the agent declares beside its model (`runtime.effort`),
+   * or null for the CLI's own. Set through the session's `effort` config option,
+   * optional: a value the session does not offer is logged and the turn runs.
+   */
+  effort?(userId: string, agentId: string): string | null
+  /** Whether {@link model} is the agent's own `runtime.model` (see `AcpSessionSetup.modelDeclared`). */
+  modelDeclared?(userId: string, agentId: string): boolean
   /** The desktop's approval choice for this agent, with the default already applied. */
   approval(userId: string, agentId: string): ClaudeApproval
   /**
@@ -829,6 +844,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
         ''
       )
       const model = safely(() => deps.model(ctx.userId, ctx.agentId), null)
+      const effort = model ? safely(() => deps.effort?.(ctx.userId, ctx.agentId) ?? null, null) : null
       const approval = safely(() => deps.approval(ctx.userId, ctx.agentId), 'ask' as ClaudeApproval)
       // Not even asked on the native branch: the folder's `.claude/agents` load
       // from the settings that branch keeps enabled, and passing them as well
@@ -954,7 +970,12 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           // A native folder runs on its user's own settings, so there only a
           // model the agent names (declared, or by tier) is re-asserted, never
           // the desktop's floor; a sealed session never reads them by design.
-          ...(model && !(native && safely(() => deps.modelIsFloor?.(ctx.userId, ctx.agentId) ?? false, false)) ? { model } : {})
+          ...(model && !(native && safely(() => deps.modelIsFloor?.(ctx.userId, ctx.agentId) ?? false, false)) ? { model } : {}),
+          ...(model && safely(() => deps.modelDeclared?.(ctx.userId, ctx.agentId) ?? false, false) ? { modelDeclared: true } : {}),
+          // The effort the agent declares beside its model, after the model so
+          // it is asked of the model the turn runs on. Optional: an effort the
+          // session does not offer is logged, never a refused turn.
+          ...(effort ? { configOptions: [{ configId: 'effort', value: effort, optional: true }] } : {})
         }
       }
     }

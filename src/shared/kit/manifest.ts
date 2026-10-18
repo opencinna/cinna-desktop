@@ -106,6 +106,14 @@ export interface AgentRuntimeRef {
    * `model`.
    */
   complexity?: string | null
+  /**
+   * Reasoning effort for {@link model} on a CLI runtime (Claude Code's `effort`,
+   * Codex's `reasoning_effort`), a value that runtime offers. A desktop-side key
+   * for now (the kit schema allows unknown `runtime` keys): meaningful only with
+   * `model`, which is why the desktop writes it only beside one and the
+   * validator warns about one without.
+   */
+  effort?: string | null
   credential?: string | null
   permissions?: Record<string, unknown>
   [key: string]: unknown

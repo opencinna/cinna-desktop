@@ -20,7 +20,10 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import type { AgentReadiness, AgentReadinessState } from '../../../../shared/agentDrivers'
-import { loginFailureLead, loginPendingText } from '../../../../shared/engine'
+import { DEFAULT_AGENT_ENGINE, effectiveEngine, ENGINE_LOGIN_NAMES, isEngineLoginId, loginFailureLead, loginPendingText, type EngineLoginId } from '../../../../shared/engine'
+import { isModelOffered, type RuntimeModelCatalog } from '../../../../shared/runtimeModelCatalog'
+import { useDefaultRuntime } from '../../hooks/useEngine'
+import { useRuntimeModelCatalog, useRuntimeModelCatalogRefresh } from '../../hooks/useRuntimeModelCatalog'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -399,6 +402,49 @@ export function aiCredentialNotice(folder: LocalAgentDto | null, issue: AiCreden
   }
 }
 
+/**
+ * A CLI agent whose declared model its runtime no longer offers, as a row; it
+ * does not block Send — the turn runs on the runtime's default and the chat
+ * says so. Only when the runtime's list is known and lacks the model (the
+ * driver's own matching, aliases included): an unknown list warns about nothing.
+ */
+export function staleModelNotice(
+  folder: LocalAgentDto | null,
+  engine: EngineLoginId | null,
+  catalog: RuntimeModelCatalog | undefined
+): ComposerNotice | null {
+  const model = typeof folder?.runtime?.model === 'string' ? folder.runtime.model.trim() : ''
+  if (!folder || !engine || model === '' || isModelOffered(catalog, model) !== false) return null
+  const text = `This agent’s model “${model}” is no longer offered by ${ENGINE_LOGIN_NAMES[engine]}.`
+  return {
+    key: 'stale-model',
+    tone: 'warning',
+    icon: AlertTriangle,
+    text,
+    title: text,
+    action: <NoticeButton onClick={() => {
+      // The panel focuses its Model select once it shows it.
+      useUIStore.getState().setPendingRuntimeModelFocusId(folder.id)
+      openAgentRuntimeSettings(folder.id)
+    }}>Choose model</NoticeButton>
+  }
+}
+
+/**
+ * {@link staleModelNotice} for the composer's folder agent: reads its CLI
+ * runtime's recorded list, and asks main for one when the agent names a model
+ * and none is known — the same request the Runs with panel makes, shared.
+ */
+export function useStaleModelNotice(folder: LocalAgentDto | null): ComposerNotice | null {
+  const { data: defaultRuntime } = useDefaultRuntime()
+  const engine = folder && defaultRuntime ? effectiveEngine(folder.runtime, defaultRuntime.engine ?? DEFAULT_AGENT_ENGINE) : null
+  const declaresModel = typeof folder?.runtime?.model === 'string' && folder.runtime.model.trim() !== ''
+  const cli = engine && isEngineLoginId(engine) && declaresModel ? engine : null
+  const { data: catalog } = useRuntimeModelCatalog(cli)
+  useRuntimeModelCatalogRefresh(cli, cli !== null && catalog !== undefined && isModelOffered(catalog, String(folder?.runtime?.model)) === null)
+  return staleModelNotice(folder, cli, catalog)
+}
+
 export interface ComposerNotices {
   notices: ComposerNotice[]
   /** Finish setup, opened from the credentials row; rendered by the composer (it portals). */
@@ -407,8 +453,8 @@ export interface ComposerNotices {
 
 /**
  * Every row of the composer's notice panel, in one order: the driver's
- * readiness answer, the folder's missing credentials, its AI credential, its
- * findings. A row the folder states itself replaces the readiness row that
+ * readiness answer, the folder's missing credentials, its AI credential, a
+ * declared model its CLI runtime no longer offers, its findings. A row the folder states itself replaces the readiness row that
  * says the same thing (`credentials_needed` by the credentials row, a
  * non-blocking `invalid` by the findings row), and takes over its id so Send's
  * `aria-describedby` still names a line on screen.
@@ -421,6 +467,7 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
   const findings = useFolderFindingsNotice(folder)
   const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false })
   const aiIssue = useAgentAiCredentialIssue(folder)
+  const staleModel = useStaleModelNotice(folder)
   const { data: providers } = useProviders()
   const credentials = folderCredentialsNotice(folder, finishSetup.open)
   const readinessItem = readinessNoticeItem(readiness, reasonId)
@@ -435,6 +482,7 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
     replacedBy ? null : readinessItem,
     credentials,
     aiCredentialNotice(folder, aiIssue, providers?.length === 0),
+    staleModel,
     findings
   ].filter((row): row is ComposerNotice => row !== null)
   return {

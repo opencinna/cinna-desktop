@@ -129,6 +129,12 @@ describe('Antigravity launcher plan', () => {
     expect(auto.setup).toEqual({ modeId: 'yolo', configOptions: [{ configId: 'model', value: 'gemini-3.6-flash-low', optional: true }] })
   })
 
+  it('marks a model the agent declares, so a stale one is noted in the chat', async () => {
+    const declared = await createAntigravityLauncher(deps({ settings: () => ({ model: 'gemini-3.6-flash-low', modelDeclared: true, approval: 'ask' }) })).plan(contexts(tempDir()).native)
+    if (isRefusal(declared)) throw new Error(declared.error)
+    expect(declared.setup.modelDeclared).toBe(true)
+  })
+
   it('puts the folder policy on the plan, with the folder, only for a folder agent on Ask', async () => {
     // Mutation: drop the plan field and no ask is ever settled by the policy.
     const folder = tempDir()

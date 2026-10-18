@@ -638,6 +638,28 @@ describe('resolve — work complexity', () => {
 })
 
 describe('applyToManifest — work complexity', () => {
+  it('writes an effort beside its model, and never without one', () => {
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'claude', complexity: 'complex', effort: 'low' } }
+    runtimeService.applyToManifest(manifest, { engine: KEEP_ENGINE, credential: null, modelId: 'opus', complexity: null, effort: 'high' })
+    expect(manifest.runtime).toEqual({ engine: 'claude', model: 'opus', effort: 'high' })
+    // A tier replaces the model, and the effort goes with it.
+    runtimeService.applyToManifest(manifest, { engine: KEEP_ENGINE, credential: null, modelId: null, complexity: 'medium', effort: 'high' })
+    expect(manifest.runtime).toEqual({ engine: 'claude', complexity: 'medium' })
+    // Absent effort beside a model clears an old one.
+    const pinned: CinnaAgentManifest = { runtime: { engine: 'codex', model: 'gpt-6-luna', effort: 'xhigh' } }
+    runtimeService.applyToManifest(pinned, { engine: KEEP_ENGINE, credential: null, modelId: 'gpt-6-luna', complexity: null })
+    expect(pinned.runtime).toEqual({ engine: 'codex', model: 'gpt-6-luna' })
+  })
+
+  it('carries an effort into a bare agent’s runtime ref only with a model', () => {
+    expect(runtimeService.toRuntimeRef({ engine: 'codex', credential: null, modelId: 'gpt-6-luna', complexity: null, effort: 'ultra' }))
+      .toEqual({ engine: 'codex', model: 'gpt-6-luna', effort: 'ultra' })
+    expect(runtimeService.toRuntimeRef({ engine: 'codex', credential: null, modelId: null, complexity: 'simple', effort: 'ultra' }))
+      .toEqual({ engine: 'codex', complexity: 'simple' })
+    expect(() => runtimeService.toRuntimeRef({ engine: 'codex', credential: null, modelId: 'm', complexity: null, effort: 'x'.repeat(41) }))
+      .toThrow(/too long/)
+  })
+
   it('writes a tier and clears the model it replaces', () => {
     const manifest: CinnaAgentManifest = { runtime: { engine: null, credential: 'Work', model: 'gpt-5' } }
     runtimeService.applyToManifest(manifest, {

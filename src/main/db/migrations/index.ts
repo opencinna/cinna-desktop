@@ -32,6 +32,7 @@ import { migrateDelegations } from './delegations'
 import { migrateNotes } from './notes'
 import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
 import { migrateInboxDismissals } from './inbox-dismissals'
+import { migrateRuntimeModelCatalogs } from './runtime-model-catalogs'
 import { migratePublishedArtifacts } from './published-artifacts'
 import { migrateArtifactSupport } from './artifact-support'
 import { runSyncMigrations } from './sync'
@@ -111,6 +112,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateAppSettings(sqlite)
   // Dismissed Inbox cards; creation only, no FK, no DML.
   migrateInboxDismissals(sqlite)
+  // CLI runtimes' last advertised model catalogues; creation only, no FK, no DML.
+  migrateRuntimeModelCatalogs(sqlite)
   // Published artifacts and their chat cards; FK → users, chats; creation only.
   migratePublishedArtifacts(sqlite)
   // The last supported artifacts answer per profile+server; FK → users; creation only.

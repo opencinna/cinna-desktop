@@ -264,6 +264,8 @@ export interface AntigravityLauncherDeps {
    */
   settings(userId: string, agentId: string): {
     model: string | null
+    /** `model` is the agent's own `runtime.model` (see `AcpSessionSetup.modelDeclared`). */
+    modelDeclared?: boolean
     approval: ClaudeApproval
     autoApprove?: { scriptRoots: string[] }
   }
@@ -383,7 +385,8 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           // does not (it comes back as the server's default).
           setup: {
             modeId: settings.approval === 'auto' ? 'yolo' : 'default',
-            ...(settings.model ? { configOptions: [{ configId: 'model', value: settings.model, optional: true }] } : {})
+            ...(settings.model ? { configOptions: [{ configId: 'model', value: settings.model, optional: true }] } : {}),
+            ...(settings.model && settings.modelDeclared ? { modelDeclared: true } : {})
           },
           // Read per ask by the driver's permission gate; under `yolo` nothing asks.
           ...(settings.approval === 'ask' && settings.autoApprove

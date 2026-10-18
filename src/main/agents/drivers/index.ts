@@ -1,5 +1,5 @@
 import { runtimeHost } from '../../host/runtimeHost'
-import { recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
+import { installRuntimeModelCatalogProbe, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
 import { chatConductorService, isChatConductor, conductorContext } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
@@ -19,7 +19,7 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
 import { prepareCodexConductorPolicy } from './acp/codexConductorPolicy'
 import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
@@ -45,8 +45,7 @@ import { antigravityIsolatedHome, antigravityPreamble, createAntigravityLauncher
 import { acpAuthenticateLogin } from './acp/acpLogin'
 import { buildCodexEnv } from './acp/codexEnv'
 import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from './acp/codexLauncher'
-import { codexEffortForComplexity, isAgentEngine, type EngineLoginId } from '../../../shared/engine'
-import { isWorkComplexity } from '../../../shared/modelFamilies'
+import { codexEffortForComplexity, codexEffortForRuntime, declaredEffort, ENGINE_LOGIN_NAMES, isAgentEngine, isEngineLoginId, type AgentEngine, type EngineLoginId } from '../../../shared/engine'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { EngineLogin } from './acp/engineLogin'
 import { pendingRequests } from './pendingRequests'
@@ -94,9 +93,12 @@ import {
   CLAUDE_NOT_INSTALLED,
   createClaudeLauncher,
   createOpencodeLauncher,
+  newSessionParams,
   type AcpLauncher,
   type AcpLaunchPlan
 } from './acp/acpLaunchers'
+import { startAcpConnection } from './acp/acpConnection'
+import type { AcpConnection } from './acp/types'
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
 import { unsupportedDriver } from './unsupportedDriver'
@@ -425,13 +427,155 @@ export const engineLogins: Record<EngineLoginId, EngineLogin> = {
   })
 }
 
-/** App shutdown: kill any login still waiting on a browser. */
+/** App shutdown: kill any login still waiting on a browser, and any model-catalogue probe still running. */
 export function shutdownEngineLogins(): Promise<void> {
+  // Synchronous: the abort reaches each probe's start (or its session wait) before the first await.
+  for (const abort of catalogProbes) abort.abort()
   return Promise.all(Object.values(engineLogins).map((login) => login.shutdown())).then(() => undefined)
 }
 
+/** Model-catalogue probes in flight, by the controller that stops them at shutdown. */
+const catalogProbes = new Set<AbortController>()
+
+/** How long a probe waits for `session/new` once the runtime has started. */
+const CATALOG_PROBE_SESSION_TIMEOUT_MS = 60_000
+/** The whole per-model walk after `session/new`, all sets together. */
+const CATALOG_PROBE_WALK_BUDGET_MS = 30_000
+/** At most this many models are set in turn to read their efforts. */
+const CATALOG_PROBE_MAX_MODELS = 24
+
+/**
+ * **Ask a CLI runtime for its models without a prompt.** The engine's own
+ * launcher plans the start — the same binary resolution, child environment and
+ * login check as a turn — for a promptless utility profile in its own
+ * folder; `startAcpConnection` spawns it and completes `initialize`, exactly as
+ * a turn's process pool does; `session/new` answers with the model and effort
+ * options; then the process is stopped. The folder is the engine's stable
+ * probe folder ({@link modelCatalogProbeDir}), kept between refreshes. Nothing is
+ * prompted, so nothing is billed. Single-flight and recording live in
+ * `runtimeModelCatalog.refreshRuntimeModelCatalog`.
+ *
+ * A failure is a sentence: the launcher's own (not installed, not logged in),
+ * or a fixed one for a start that failed — the connection's error carries the
+ * child's stderr, which is logged, never shown.
+ */
+async function probeModelCatalog(
+  userId: string,
+  engine: AgentEngine,
+  onAnswer: (answer: unknown, first: boolean) => void
+): Promise<{ ok: true } | { error: string }> {
+  const launcher = isEngineLoginId(engine) ? acpLaunchers[engine] : undefined
+  if (!launcher || !isEngineLoginId(engine)) return { error: 'This runtime cannot be asked for its models here.' }
+  const name = ENGINE_LOGIN_NAMES[engine]
+  let cwd: string
+  try {
+    cwd = modelCatalogProbeDir(engine)
+  } catch (err) {
+    logger.warn('a model catalog probe could not create its folder', { engine, error: err instanceof Error ? err.message : String(err) })
+    return { error: `${name} could not be started to list its models.` }
+  }
+  const probeKey = `model-catalog:${engine}:${randomUUID()}`
+  const abort = new AbortController()
+  catalogProbes.add(abort)
+  aiFunctionProfiles.set(probeKey, { userId, modelId: null, credentialId: null, systemPrompt: '', probe: true })
+  let connection: AcpConnection | undefined
+  try {
+    const plan = await launcher.plan({ userId, agentId: probeKey, folder: {
+      name: 'Model catalog', slug: 'model-catalog', description: 'Model catalog', path: cwd, kind: 'bare', runtimeMode: 'isolated'
+    } })
+    if ('error' in plan) return { error: plan.error }
+    if (abort.signal.aborted) return { error: 'The app is closing.' }
+    connection = await startAcpConnection(plan.spec, plan.init, { signal: abort.signal })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('session/new timed out')), CATALOG_PROBE_SESSION_TIMEOUT_MS)
+      timer.unref?.()
+    })
+    const closing = new Promise<never>((_resolve, reject) => abort.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+    // Both outlive the races they are used in; a late rejection must not be unhandled.
+    timeout.catch(() => undefined)
+    closing.catch(() => undefined)
+    try {
+      const created = await Promise.race([connection.newSession(newSessionParams(plan, plan.sessionCwd ?? cwd)), timeout, closing])
+      // The model list is recorded now; the efforts follow as they arrive.
+      onAnswer(created, true)
+      clearTimeout(timer)
+      // **Efforts are per model**: an answer describes only its current
+      // model's. So each other offered model is set in turn — a config change,
+      // never a prompt — and each answer recorded. Bounded in count and by its
+      // own total budget (measured: ~0.7 s a set on Claude Code, 13 models in
+      // 9 s); a set that fails or runs out of budget leaves that model unseen.
+      const walkDeadline = Date.now() + CATALOG_PROBE_WALK_BUDGET_MS
+      const option = Array.isArray(created.configOptions)
+        ? created.configOptions.find((o) => o.id === 'model' || o.category === 'model') : undefined
+      const values: string[] = []
+      const collect = (items: unknown): void => {
+        if (!Array.isArray(items)) return
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue
+          const entry = item as { value?: unknown; options?: unknown }
+          collect(entry.options)
+          if (typeof entry.value === 'string' && !values.includes(entry.value)) values.push(entry.value)
+        }
+      }
+      if (option && 'options' in option) collect(option.options)
+      const current = option && typeof option.currentValue === 'string' ? option.currentValue : null
+      for (const value of values.filter((v) => v !== current).slice(0, CATALOG_PROBE_MAX_MODELS)) {
+        const remaining = walkDeadline - Date.now()
+        if (abort.signal.aborted || remaining <= 0) break
+        let walkTimer: ReturnType<typeof setTimeout> | undefined
+        const outOfBudget = new Promise<never>((_resolve, reject) => {
+          walkTimer = setTimeout(() => reject(new Error('walk budget spent')), remaining)
+          walkTimer.unref?.()
+        })
+        outOfBudget.catch(() => undefined)
+        try {
+          onAnswer(await Promise.race([
+            connection.setSessionConfigOption({ sessionId: created.sessionId, configId: option!.id, value }), outOfBudget, closing
+          ]), false)
+        } catch (err) {
+          if (abort.signal.aborted || (err instanceof Error && err.message === 'walk budget spent')) break
+        } finally {
+          clearTimeout(walkTimer)
+        }
+      }
+      return { ok: true }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch (err) {
+    logger.warn('a model catalog probe could not start its runtime', { engine, error: err instanceof Error ? err.message : String(err) })
+    return { error: `${name} could not be started to list its models.` }
+  } finally {
+    aiFunctionProfiles.delete(probeKey)
+    catalogProbes.delete(abort)
+    await connection?.dispose().catch(() => undefined)
+    // The folder and Antigravity's `<folder>.agyhome` beside it are kept: see `modelCatalogProbeDir`.
+  }
+}
+
+/**
+ * The probe's folder for one engine, beside the chat runtimes' process folders.
+ * **Stable and never removed**: Claude Code makes a `~/.claude/projects/<cwd>/`
+ * entry for every folder a `session/new` runs in, even with no prompt, so a new
+ * folder per refresh would leave one behind in the user's home each time. One
+ * folder per engine means at most one such entry, ever. Antigravity's utility
+ * home beside it (`<folder>.agyhome`) is kept for the same reason and reused.
+ */
+function modelCatalogProbeDir(engine: EngineLoginId): string {
+  const path = join(runtimeHost.getPath('userData'), 'chat-conductors', 'model-catalog', engine)
+  mkdirSync(path, { recursive: true, mode: 0o700 })
+  return path
+}
+installRuntimeModelCatalogProbe(probeModelCatalog)
+
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
-const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string }>()
+/**
+ * `probe` marks a model-catalogue probe's profile ({@link probeModelCatalog}):
+ * it borrows this map so every launcher treats it as a promptless utility
+ * session, and is skipped where the map feeds OpenCode's shared config.
+ */
+const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string; probe?: true }>()
 
 /**
  * Whether an engine's utility and chat processes run in a profile-owned
@@ -588,9 +732,11 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       const development = desktopFeatures.developmentAgentContext(userId, agentId)
       if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
+      const model = typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null
       return {
-        model: typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null,
-        effort: codexEffortForComplexity(isWorkComplexity(agent.runtime?.complexity) ? agent.runtime.complexity : null),
+        model,
+        // A declared effort beside a declared model wins; otherwise the tier's.
+        effort: codexEffortForRuntime(agent.runtime),
         approval: desktopStateService.read(agent.path, agent.kind).codexApproval ?? 'ask'
       }
     }
@@ -641,10 +787,12 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       if (development) return { model: development.runtime.modelId, approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
       const approval = desktopStateService.read(agent.path, agent.kind).antigravityApproval ?? 'ask'
+      const resolved = runtimeService.resolve(agent.runtime, providerService.listMerged())
       return {
         // The declared model, else the work complexity's Flash level, else the
         // server's own default — `runtimeService` is the one place that decides.
-        model: runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId,
+        model: resolved.modelId,
+        modelDeclared: resolved.modelSource === 'declared',
         approval,
         // Only here, the folder agent's branch: every branch above asks about everything.
         ...(approval === 'ask' ? { autoApprove: { scriptRoots: antigravityScriptRoots(agent) } } : {})
@@ -673,7 +821,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'Chat title', prompt: TITLE_SYSTEM_PROMPT, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const [agentId, utility] of aiFunctionProfiles) {
-        if (utility.userId === userId) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: utility.systemPrompt, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+        if (utility.userId === userId && !utility.probe) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: utility.systemPrompt, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const row of agentRepo.list(userId).filter(isChatConductor)) {
         const context = conductorContext(row)
@@ -731,6 +879,30 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       try {
         const agent = localAgentService.get(userId, agentId)
         return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId
+      } catch {
+        return null
+      }
+    },
+    // Only a folder agent's own `runtime.model` is declared; tiers, chat modes and build sessions are not.
+    modelDeclared: (userId, agentId) => {
+      if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return false
+      const conductor = agentRepo.getOwned(userId, agentId)
+      if (conductor && isChatConductor(conductor)) return false
+      if (desktopFeatures.developmentAgentContext(userId, agentId)) return false
+      try {
+        return runtimeService.resolve(localAgentService.get(userId, agentId).runtime, providerService.listMerged()).modelSource === 'declared'
+      } catch {
+        return false
+      }
+    },
+    // Only a folder agent declares an effort; every other source above leaves the CLI's own.
+    effort: (userId, agentId) => {
+      if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return null
+      const conductor = agentRepo.getOwned(userId, agentId)
+      if (conductor && isChatConductor(conductor)) return null
+      if (desktopFeatures.developmentAgentContext(userId, agentId)) return null
+      try {
+        return declaredEffort(localAgentService.get(userId, agentId).runtime)
       } catch {
         return null
       }

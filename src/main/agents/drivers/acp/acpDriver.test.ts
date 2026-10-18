@@ -612,6 +612,183 @@ describe('a turn', () => {
       await w.run()
       expect(w.fake.received('session/set_config_option')).toHaveLength(0)
     })
+
+    const STALE = 'This agent’s model “mythos-9” is no longer offered by Claude Code, so this turn ran on “Opus (1M context)”. ' +
+      'Choose another model in the agent’s Runs with panel.'
+
+    it('says in the chat that a model no longer offered ran on the session’s own, once per chat', async () => {
+      // Mutation: return null from `assertModel` for an unoffered model and the turn runs silently on another model.
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true }
+      })
+      const first = await w.run()
+      expect(first.error).toBeUndefined()
+      expect(first.text).toContain('Hello.')
+      expect(first.notices.map((notice) => notice.text)).toEqual([STALE])
+      expect((await w.run()).notices).toEqual([])
+    })
+
+    it('moves a declared model the session does not offer onto the session’s own, before the prompt', async () => {
+      // The launcher also put the stale model in session/new's options, so the
+      // CLI was started on it; re-asserting the reported current value is what
+      // moves it off. Mutation: return the fallback without the set and no
+      // set_config_option reaches the session.
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(requests(w).map((entry) => entry.method)).toEqual([
+        'initialize', 'session/new', 'session/set_config_option', 'session/set_mode', 'session/prompt'
+      ])
+      expect(w.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ configId: 'model', value: 'opus[1m]' })
+      ])
+      expect(result.notices.map((notice) => notice.text)).toEqual([STALE])
+    })
+
+    it('moves off a stale model the session still reports as current, onto its default', async () => {
+      // A loaded session reports its transcript's model as current — the very
+      // model that is gone. Mutation: target `match.current` unconditionally and
+      // the stale model is set again.
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('mythos-9') } },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(w.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ configId: 'model', value: 'default' })
+      ])
+      expect(result.notices.map((notice) => notice.text)).toEqual([
+        'This agent’s model “mythos-9” is no longer offered by Claude Code, so this turn ran on “Default (recommended)”. ' +
+          'Choose another model in the agent’s Runs with panel.'
+      ])
+    })
+
+    it('does not claim a fallback when the session will not re-assert its own model', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: {
+          ...SAYS_HELLO,
+          newSession: { response: offered('opus[1m]') },
+          setConfigOption: { error: { code: -32603, message: 'Internal error' } }
+        },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(result.text).toContain('Hello.')
+      expect(result.notices.map((notice) => notice.text)).toEqual([
+        'This agent’s model “mythos-9” is no longer offered by Claude Code, and the session could not be moved to Claude Code’s default. ' +
+          'Choose another model in the agent’s Runs with panel.'
+      ])
+    })
+
+    it('leaves a declared effort to the session when the model it fell back to does not offer it', async () => {
+      // Mutation: drop the fallback guard in `applySetup` and `xhigh` is asked of a model without it.
+      const effortFor = (levels: string[]): Record<string, unknown> => ({
+        configOptions: [
+          ...(offered('default').configOptions as unknown[]),
+          { id: 'effort', category: 'thought_level', type: 'select', currentValue: 'default', options: levels.map((value) => ({ value, name: value })) }
+        ]
+      })
+      const stale = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: effortFor(['low', 'high']) }, setConfigOption: { response: effortFor(['low', 'high']) } },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true, configOptions: [{ configId: 'effort', value: 'xhigh', optional: true }] }
+      })
+      expect((await stale.run()).error).toBeUndefined()
+      expect(stale.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ configId: 'model', value: 'default' })
+      ])
+      // An effort the fallback offers is still set; a matched model's effort is never second-guessed.
+      const kept = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: effortFor(['low', 'high']) }, setConfigOption: { response: effortFor(['low', 'high']) } },
+        setup: { modeId: 'default', model: 'mythos-9', modelDeclared: true, configOptions: [{ configId: 'effort', value: 'high', optional: true }] }
+      })
+      await kept.run()
+      expect(kept.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ configId: 'model', value: 'default' }),
+        expect.objectContaining({ configId: 'effort', value: 'high' })
+      ])
+      const matched = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: effortFor(['low', 'high']) } },
+        setup: { modeId: 'default', model: 'haiku', modelDeclared: true, configOptions: [{ configId: 'effort', value: 'xhigh', optional: true }] }
+      })
+      await matched.run()
+      expect(matched.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+        expect.objectContaining({ configId: 'model', value: 'haiku' }),
+        expect.objectContaining({ configId: 'effort', value: 'xhigh' })
+      ])
+    })
+
+    it('says so when the session declines the model', async () => {
+      const w = world({
+        launcher: 'claude',
+        script: {
+          ...SAYS_HELLO,
+          newSession: { response: offered('opus[1m]') },
+          setConfigOption: { error: { code: -32602, message: 'Invalid value for config option model: haiku' } }
+        },
+        setup: { modeId: 'default', model: 'haiku', modelDeclared: true }
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      // Offered but refused: not a stale choice, so no "choose another".
+      expect(result.notices.map((notice) => notice.text)).toEqual(['Claude Code did not switch to “haiku”, so this turn ran on “Opus (1M context)”.'])
+    })
+
+    it('says nothing when the model is offered, under an alias or exactly', async () => {
+      for (const model of ['haiku', 'claude-haiku-4-5']) {
+        const w = world({
+          launcher: 'claude',
+          script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+          setup: { modeId: 'default', model, modelDeclared: true }
+        })
+        expect((await w.run()).notices).toEqual([])
+      }
+    })
+
+    it('says nothing about a model the agent did not declare: a tier alias, a chat mode, a build session', async () => {
+      // Mutation: drop the `modelDeclared` gate and a Haiku-tier agent gets a stale-model notice whenever haiku is missing.
+      const w = world({
+        launcher: 'claude',
+        script: { ...SAYS_HELLO, newSession: { response: offered('opus[1m]') } },
+        setup: { modeId: 'default', model: 'mythos-9' }
+      })
+      const result = await w.run()
+      expect(result.text).toContain('Hello.')
+      expect(result.notices).toEqual([])
+    })
+
+    it('says so for Antigravity’s model config option, and never for OpenCode’s', async () => {
+      const agy = world({
+        launcher: 'antigravity',
+        script: { ...SAYS_HELLO, newSession: { response: { configOptions: [{ id: 'model', type: 'select', currentValue: 'gemini-3.8-flash-high', options: [
+          { value: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' }
+        ] }] } } },
+        setup: { configOptions: [{ configId: 'model', value: 'gemini-3.1-pro-low', optional: true }], modelDeclared: true }
+      })
+      expect((await agy.run()).notices.map((notice) => notice.text)).toEqual([
+        'This agent’s model “gemini-3.1-pro-low” is no longer offered by Antigravity, so this turn ran on “Gemini 3.8 Flash (High)”. ' +
+          'Choose another model in the agent’s Runs with panel.'
+      ])
+      // OpenCode's catalogue fills in after session/new: an unlisted model there is a race, not a stale choice.
+      const opencode = world({
+        launcher: 'opencode',
+        script: { ...SAYS_HELLO, newSession: { response: { configOptions: [{ id: 'model', type: 'select', currentValue: 'a/b', options: [{ value: 'a/b', name: 'B' }] }] } } },
+        setup: { configOptions: [{ configId: 'model', value: 'anthropic/claude-sonnet-5', optional: true }], modelDeclared: true }
+      })
+      expect((await opencode.run()).notices).toEqual([])
+    })
   })
 
   it('reports a stop reason the user needs to know about', async () => {

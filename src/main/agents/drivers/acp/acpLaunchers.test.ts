@@ -598,6 +598,23 @@ describe('the Claude launcher', () => {
     expect(named.setup.model).toBe('haiku')
   })
 
+  it('marks the model as the agent’s own only when it declares one', async () => {
+    expect(plan(await createClaudeLauncher({ ...deps, model: () => 'opus', modelDeclared: () => true }).plan(CTX)).setup.modelDeclared).toBe(true)
+    expect('modelDeclared' in plan(await createClaudeLauncher({ ...deps, model: () => 'haiku', modelDeclared: () => false }).plan(CTX)).setup).toBe(false)
+    expect('modelDeclared' in plan(await createClaudeLauncher({ ...deps, model: () => null, modelDeclared: () => true }).plan(CTX)).setup).toBe(false)
+  })
+
+  it('sets a declared effort through the session’s optional effort option, after the model, and only beside one', async () => {
+    // Mutation: drop the effort configOption and an agent set to high effort runs on the CLI's default.
+    const p = plan(await createClaudeLauncher({ ...deps, model: () => 'opus', effort: () => 'high' }).plan(CTX))
+    expect(p.setup.model).toBe('opus')
+    expect(p.setup.configOptions).toEqual([{ configId: 'effort', value: 'high', optional: true }])
+    const none = plan(await createClaudeLauncher({ ...deps, model: () => 'opus', effort: () => null }).plan(CTX))
+    expect(none.setup.configOptions).toBeUndefined()
+    const noModel = plan(await createClaudeLauncher({ ...deps, model: () => null, effort: () => 'high' }).plan(CTX))
+    expect(noModel.setup.configOptions).toBeUndefined()
+  })
+
   it('leaves the session’s model alone when the desktop chose none', async () => {
     for (const ctx of [CTX, BARE_CTX]) {
       const p = plan(await createClaudeLauncher({ ...deps, model: () => null }).plan(ctx))

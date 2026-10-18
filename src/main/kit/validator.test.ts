@@ -293,6 +293,21 @@ describe('validateAgentFolder — manifest errors', () => {
     expect(codes(report.warnings)).not.toContain('manifest.runtime.engine')
   })
 
+  it('warns, never errors, about an effort with no model beside it, and is silent with one', () => {
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'claude', effort: 'high', complexity: 'complex' }
+    })
+    const alone = validateAgentFolder(agentDir, OPTIONS)
+    expect(alone.errors).toEqual([])
+    expect(alone.warnings.find((f) => f.code === 'manifest.runtime.effort')?.message).toMatch(/without `runtime.model`/)
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'claude', model: 'opus', effort: 'high' }
+    })
+    const paired = validateAgentFolder(agentDir, OPTIONS)
+    expect(paired.errors).toEqual([])
+    expect(codes(paired.warnings)).not.toContain('manifest.runtime.effort')
+  })
+
   it('rejects a non-string engine', () => {
     patchManifest(agentDir, (m) => {
       m.runtime = { engine: 7 as never }

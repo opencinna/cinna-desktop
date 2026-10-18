@@ -13,6 +13,7 @@ import type { ChatOrigin } from '../../shared/chatOrigin'
 import type { ArtifactKind, ArtifactVisibility } from '../../shared/artifacts'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { MessageTelemetry, SessionTelemetry } from '../../shared/sessionTelemetry'
+import type { RuntimeModelCatalog } from '../../shared/runtimeModelCatalog'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
 import type { RecordedHandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
 import type { RequestResolution } from '../../shared/localAgentRequests'
@@ -1154,6 +1155,22 @@ export const inboxDismissals = sqliteTable(
       .$defaultFn(() => new Date())
   },
   (table) => [primaryKey({ columns: [table.userId, table.kind, table.itemKey] })]
+)
+
+/**
+ * The models (and effort levels) a CLI runtime last advertised, per profile and
+ * runtime — one `shared/runtimeModelCatalog` document. See
+ * `migrations/runtime-model-catalogs.ts`.
+ */
+export const runtimeModelCatalogs = sqliteTable(
+  'runtime_model_catalogs',
+  {
+    userId: text('user_id').notNull(),
+    engine: text('engine').notNull(),
+    json: text('json', { mode: 'json' }).notNull().$type<RuntimeModelCatalog>(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.engine] })]
 )
 
 /**
