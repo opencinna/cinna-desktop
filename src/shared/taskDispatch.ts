@@ -9,9 +9,11 @@
 /**
  * How an agent's queue runs. `manual` (the default, stored as no row): nothing
  * starts on its own, Run next still works. `one`: Cinna starts the next Ready
- * task whenever the agent and its folder are free. `up_to`: Cinna keeps up to
- * N of the agent's tasks running at once ({@link TASK_DISPATCH_MAX_RUNS}),
- * without waiting for its folder to be free.
+ * task whenever the agent has no dispatched run. `up_to`: Cinna keeps up to N
+ * of the agent's tasks running at once ({@link TASK_DISPATCH_MAX_RUNS}). In
+ * every mode a start ignores the folder — other agents' runs there, chats on
+ * the agent — and the user's own starts (Run next, Approve and run) ignore the
+ * count as well.
  */
 export type TaskDispatchMode = 'manual' | 'one' | 'up_to'
 
@@ -43,18 +45,15 @@ export type TaskDispatchPauseReason = 'unreported' | 'error' | 'stopped' | 'inte
 export const TASK_DISPATCH_PAUSE_REASONS: readonly TaskDispatchPauseReason[] = ['unreported', 'error', 'stopped', 'interrupted']
 
 /**
- * Why a queue in `one` or `up_to` mode is not starting its next task right now.
+ * Why a queue is not starting its next task right now. Computed on each read,
+ * never stored.
  *
- *  - `folder_busy` — another dispatched run (this agent's or another agent's
- *    sharing the folder) is working there. Never for an `up_to` queue.
- *  - `live_turn` — a turn that is not the dispatcher's is running in the folder.
- *    Never for an `up_to` queue.
  *  - `slot` — waiting for a global task runner slot.
  *  - `gate` — every Ready task left waits on an Inbox approval of its content,
  *    and a card for one of them is open in the Inbox (in any mode). With no
  *    open card, `next` names the top one with `needsApproval` instead.
  */
-export type TaskDispatchWaiting = 'folder_busy' | 'live_turn' | 'slot' | 'gate'
+export type TaskDispatchWaiting = 'slot' | 'gate'
 
 /** One agent's queue, as the agent page and the Tasks view show it. */
 export interface AgentDispatchState {
@@ -69,7 +68,10 @@ export interface AgentDispatchState {
   }
   /** N while the mode is `up_to`; null in the other modes (they run one at most). */
   maxRuns: number | null
-  /** The dispatched turns running now, oldest first. One at most outside `up_to`. */
+  /**
+   * The dispatched turns running now, oldest first. The queue's own starts
+   * keep to the count (one outside `up_to`); Run next can add more.
+   */
   running: { taskId: string; chatId: string; title: string }[]
   /**
    * The task Run next would take. `needsApproval`: only tasks waiting on an
@@ -82,12 +84,12 @@ export interface AgentDispatchState {
 
 /**
  * Why Run next did not start a task. Returned as data: a thrown
- * `DomainError.code` does not survive the IPC bridge.
+ * `DomainError.code` does not survive the IPC bridge. Run next is the user's
+ * own start and ignores the agent's count and its folder; `live_turn` is the
+ * task's own chat (or a stored answer's) still running a turn.
  */
 export type TaskDispatchRefusalCode =
   | 'not_dispatchable'
-  | 'agent_busy'
-  | 'folder_busy'
   | 'live_turn'
   | 'slot'
   | 'not_eligible'

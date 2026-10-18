@@ -264,7 +264,7 @@ export function migrateTasks(sqlite: Database.Database): void {
     CREATE INDEX idx_task_input_requests_open ON task_input_requests(status, created_at);
     CREATE INDEX idx_task_input_requests_task ON task_input_requests(task_id);`))()
   }
-  // An Inbox answer the task dispatcher sends when the agent's folder is free
+  // An Inbox answer the task dispatcher sends when the agent has room in its queue
   // (a dispatch-owned task's `next_message` ask). After the rebuild above,
   // which would drop them. Null on every row before them.
   for (const column of ['queued_answer', 'queued_at', 'queued_error']) {

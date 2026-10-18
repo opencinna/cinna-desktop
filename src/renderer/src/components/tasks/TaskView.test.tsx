@@ -9,6 +9,7 @@ import type { TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 import type { AgentDispatchState, TaskDispatchRunResult, TaskDispatchUpdateResult } from '../../../../shared/taskDispatch'
+import type { AgentActiveSession, AgentActiveSessionsResult } from '../../../../shared/agentSessions'
 
 /**
  * The task page, driven.
@@ -49,6 +50,16 @@ const dispatchListeners = new Set<() => void>()
 const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
 const resumeQueue = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
 const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
+const activeSessions = vi.fn<() => Promise<AgentActiveSessionsResult>>(async () => ({ ok: true, sessions: [] }))
+const sessionListeners = new Set<() => void>()
+/** Main's `agentSessions:changed`: a run started or ended somewhere. */
+async function sessionsChanged(sessions: AgentActiveSession[]): Promise<void> {
+  activeSessions.mockResolvedValue({ ok: true, sessions })
+  const before = activeSessions.mock.calls.length
+  await act(async () => { for (const listener of sessionListeners) listener() })
+  await waitFor(() => expect(activeSessions.mock.calls.length).toBeGreaterThan(before))
+  await act(async () => {})
+}
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -78,7 +89,11 @@ const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
   jobs: { get: (jobId: string) => getJob(jobId) },
   delegations: { forTask: (taskId: string) => delegationLinks(taskId) },
   handovers: { forTask: (taskId: string) => forTask(taskId) },
-  chat: { get: (chatId: string) => getChat(chatId) },
+  chat: { get: (chatId: string) => getChat(chatId), onTitleUpdated: () => () => {} },
+  agentSessions: {
+    active: () => activeSessions(),
+    onChanged: (listener: () => void) => { sessionListeners.add(listener); return () => { sessionListeners.delete(listener) } }
+  },
   run: {
     start: runSend
   },
@@ -422,6 +437,47 @@ describe('a task whose conversation is gone', () => {
     expect(runSend).not.toHaveBeenCalled()
     expect(useChatStore.getState().activeChatId).toBe('new-chat')
     expect(useUIStore.getState().activeView).toBe('chat')
+  })
+
+  it('warns about the agent chosen in the picker, not the task’s assignee, and nothing for the chat model', async () => {
+    // Mutation: name `task.assignee` in the picker's notice → Invoice Checker's
+    // session is named before anything is chosen, and Ledger Folder's never is.
+    activeSessions.mockResolvedValue({ ok: true, sessions: [
+      { agentId: 'a1', chatId: 'c-inv', title: 'Invoices run' },
+      { agentId: 'folder:m1', chatId: 'c-ledger', title: 'Month end' }
+    ] })
+    try {
+      await renderTask({ chatId: null })
+      await screen.findByRole('option', { name: 'Ledger Folder' })
+      // Long enough for a notice reading the sessions to have shown them.
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+      const picker = screen.getByRole('region', { name: 'Continue this task' })
+      expect(picker.querySelector('[data-agent-active-session]')).toBeNull()
+      fireEvent.change(screen.getByRole('combobox', { name: 'Continue with' }), { target: { value: 'folder:m1' } })
+      const notice = await waitFor(() => {
+        const found = picker.querySelector('[data-agent-active-session]') as HTMLElement | null
+        expect(found).not.toBeNull()
+        return found!
+      })
+      expect(notice.textContent).toBe('Ledger Folder is already running in “Month end”. Make sure this request won’t conflict with it. Open')
+      // Last in the section, with no empty error slot above it.
+      expect(picker.lastElementChild).toBe(notice)
+      expect(within(picker).queryByRole('alert')).toBeNull()
+      fireEvent.change(screen.getByRole('combobox', { name: 'Continue with' }), { target: { value: 'model' } })
+      expect(picker.querySelector('[data-agent-active-session]')).toBeNull()
+    } finally {
+      activeSessions.mockResolvedValue({ ok: true, sessions: [] })
+    }
+  })
+
+  it('reserves no space for an error until there is one', async () => {
+    // Mutation: bring back the `min-h-8` slot → an empty div sits under the picker.
+    await renderTask({ chatId: null })
+    await screen.findByRole('option', { name: 'Ledger Folder' })
+    const picker = screen.getByRole('region', { name: 'Continue this task' })
+    expect(picker.lastElementChild?.querySelector('select, button')).not.toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) })
+    expect((await within(picker).findByRole('alert')).textContent).toBe('Choose who will continue this task.')
   })
 
   it('keeps the selection and control when main refuses to start', async () => {
@@ -1751,12 +1807,59 @@ describe('a task kept in its agent’s folder', () => {
 
     it('shows a refusal beside the button and stays', async () => {
       dispatchList.mockResolvedValue([QUEUE])
-      runNext.mockResolvedValue({ ok: false, code: 'folder_busy', message: 'Another task is running in this folder.' })
+      runNext.mockResolvedValue({ ok: false, code: 'slot', message: 'Every task runner slot is busy. Try again when a run finishes.' })
       await renderTask(READY)
       const section = await startSection()
       await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Start' })) })
-      expect(within(section).getByRole('alert').textContent).toBe('Another task is running in this folder.')
+      expect(within(section).getByRole('alert').textContent).toBe('Every task runner slot is busy. Try again when a run finishes.')
       expect(useUIStore.getState().activeView).toBe('task')
+    })
+
+    it('warns under Start when the task’s agent already runs a session, and Open goes to it', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      activeSessions.mockResolvedValue({ ok: true, sessions: [{ agentId: 'folder:m1', chatId: 'c-live', title: 'Month end' }] })
+      try {
+        await renderTask(READY)
+        const section = await startSection()
+        const notice = await within(section).findByRole('status')
+        expect(notice.textContent).toContain('is already running in “Month end”. Make sure this request won’t conflict with it.')
+        // Last in the section, below the Start button.
+        expect(section.lastElementChild?.hasAttribute('data-agent-active-session')).toBe(true)
+        fireEvent.click(within(notice).getByRole('button', { name: 'Open' }))
+        expect(useChatStore.getState().activeChatId).toBe('c-live')
+        expect(useUIStore.getState().activeView).toBe('chat')
+      } finally {
+        activeSessions.mockResolvedValue({ ok: true, sessions: [] })
+      }
+    })
+
+    it('keeps the notice as it stood when the page opened: a run starting or ending elsewhere neither adds nor removes it', async () => {
+      // Mutation: render the task page's notice live → the pushes below add
+      // and remove it, moving Goal and Details under the cursor.
+      dispatchList.mockResolvedValue([QUEUE])
+      try {
+        await renderTask(READY)
+        const section = await startSection()
+        await waitFor(() => expect(activeSessions).toHaveBeenCalled())
+        await act(async () => {})
+        expect(section.querySelector('[data-agent-active-session]')).toBeNull()
+        await sessionsChanged([{ agentId: 'folder:m1', chatId: 'c-live', title: 'Month end' }])
+        expect(section.querySelector('[data-agent-active-session]')).toBeNull()
+
+        cleanup()
+        client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
+        await renderTask(READY)
+        const reopened = await startSection()
+        const notice = await within(reopened).findByRole('status')
+        expect(notice.textContent).toContain('“Month end”')
+        await sessionsChanged([])
+        expect(within(reopened).getByRole('status')).toBe(notice)
+        // Open still goes to the chat it named.
+        fireEvent.click(within(notice).getByRole('button', { name: 'Open' }))
+        expect(useChatStore.getState().activeChatId).toBe('c-live')
+      } finally {
+        activeSessions.mockResolvedValue({ ok: true, sessions: [] })
+      }
     })
 
     it('says nothing standing beside Start', async () => {

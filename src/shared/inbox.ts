@@ -25,6 +25,12 @@ import type { TaskDispatchMode, TaskDispatchPauseReason } from './taskDispatch'
  */
 export type InboxSource = 'local' | 'remote'
 
+/** See {@link InboxEntry.queuedFor}. */
+export interface InboxQueuedFor {
+  agentName: string
+  maxRuns: number | null
+}
+
 /** One thing waiting for the user. */
 export interface InboxEntry {
   /** The address an answer is posted to. Unique across the inbox. */
@@ -53,12 +59,17 @@ export interface InboxEntry {
   /**
    * The answer the user gave, stored until the task's queue sends it — an ask
    * on a task the task dispatcher owns is answered as a dispatched run, when
-   * the agent's folder and a runner slot are free. Absent when nothing waits.
+   * the agent has room in its queue's count and a runner slot is free. Absent
+   * when nothing waits.
    */
   queuedAnswer?: string
   queuedAt?: Date
-  /** The agent folder's name, for "Sends when <folder> is free."; absent when unknown. */
-  queuedFolder?: string
+  /**
+   * The queue a stored answer waits on, for "Sends when …": the agent's name,
+   * and N when it runs Up to N (null in Manual and One at a time, where the
+   * answer waits for the agent's running task). Absent when unknown.
+   */
+  queuedFor?: InboxQueuedFor
   /** Why the last stored answer could not be sent; the ask can be answered again. */
   queuedError?: string
 }
@@ -255,19 +266,15 @@ export type TaskDispatchGateAction = 'approve' | 'skip'
 /**
  * Why an approved task did not start at once. Its content is trusted either
  * way: in `one` mode it starts when its turn comes, in `manual` it waits for
- * Run next.
+ * Run next. Approve starts beside whatever the agent already runs, so the
+ * agent's count and its folder are never the reason.
  *
- *  - `agent_busy` — the agent already has as many dispatched runs as its
- *    mode allows (one, or N in `up_to`).
- *  - `folder_busy` — another agent's dispatched run, or its turn being
- *    settled, works in the folder this agent must have to itself.
- *  - `live_turn` — a conversation is running in the folder, or in the task's
- *    own chat.
+ *  - `live_turn` — the task's own chat is running a turn.
  *  - `slot` — every task runner slot is busy.
  *  - `not_eligible` — anything else: the task stopped qualifying, or the
  *    agent cannot work a queue now.
  */
-export type TaskDispatchGateDeferral = 'agent_busy' | 'folder_busy' | 'live_turn' | 'slot' | 'not_eligible'
+export type TaskDispatchGateDeferral = 'live_turn' | 'slot' | 'not_eligible'
 
 /**
  * What answering a gate produced. Approve starts the task the way Run next
@@ -283,8 +290,6 @@ export type TaskDispatchGateResult =
       started: null | { taskId: string; chatId: string }
       reason?: TaskDispatchGateDeferral
       mode?: TaskDispatchMode
-      /** N in `up_to`, else null: how many runs `agent_busy` waits on. */
-      maxRuns?: number | null
     }
   | { ok: false; code: 'no_longer_waiting' | 'already_answered' | 'changed' | 'unavailable'; reason: string }
 
@@ -353,7 +358,7 @@ export interface InboxAnswerResult {
   remembered?: boolean
   /**
    * True when the answer was stored rather than sent: the task's queue sends
-   * it when the agent's folder is free (`InboxEntry.queuedAnswer`).
+   * it when the agent has room in its queue (`InboxEntry.queuedAnswer`).
    */
   queued?: boolean
 }

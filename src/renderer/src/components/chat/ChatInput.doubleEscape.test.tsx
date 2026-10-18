@@ -54,7 +54,7 @@ describe('double Esc in an active chat', () => {
   })
 
   it('stops a turn streaming over the port', () => {
-    useChatStore.setState({ isStreaming: true })
+    useChatStore.setState({ isStreaming: true, activeChatId: 'chat-1' })
     mount(null)
     esc()
     esc()

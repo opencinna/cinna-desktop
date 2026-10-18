@@ -52,7 +52,7 @@ import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
-import { useComposerNotices, useComposerReadiness } from './ComposerReadiness'
+import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
 import { ComposerNoticePanel } from './ComposerNoticePanel'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
@@ -408,7 +408,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [input, draftKey])
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming: hasPortStream, activeRequestId, activeChatId: storeChatId, streamingBlocks } = useChatStore()
-  const isStreaming = hasPortStream || !!chatData?.activeRunId
+  // The store holds one port stream: the chat last on screen's. It is this
+  // composer's only when it is this chat's — a new-chat composer (on the agent
+  // page, say) must not inherit another chat's running turn as its own.
+  const isStreaming = (chatId !== null && hasPortStream && storeChatId === chatId) || !!chatData?.activeRunId
 
   // A turn that ended without finishing (stopped, failed) leaves what was
   // queued behind it held rather than sending it into a conversation that just
@@ -917,9 +920,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // no way to stop but the keyboard.
   // The refusal, not `blocksSend`: that one follows the typed text (a catalog
   // command gets through), and the button must not flip while typing. A new
-  // chat has no Send to offer mid-stream, so it keeps Stop.
+  // chat has no turn of its own to stop: while its first send is in flight it
+  // keeps a disabled Send (`sending`).
   const hasSendableFiles = (targetSupportsAttachments && pendingAttachments.length > 0) || pendingNotes.length > 0
-  const showStop = isStreaming && (!chatId || (!editingId && ((!input.trim() && !hasSendableFiles) || readiness.refusal !== null)))
+  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles) || readiness.refusal !== null)
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
@@ -933,7 +937,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // The readiness answer, and what the folder agent's own state adds to it —
   // findings, missing credentials, its AI credential — with Finish setup
   // owned here, so a dialog opened from the panel outlives nothing it needs.
-  const { notices, dialog: finishSetupDialog } = useComposerNotices(directTarget, readiness, readinessReasonId)
+  const { notices: readinessNotices, dialog: finishSetupDialog } = useComposerNotices(directTarget, readiness, readinessReasonId)
+  // Only on the new-chat screen, before the session exists: each picked agent
+  // already running a session elsewhere gets a warning row, after the
+  // readiness rows. It never blocks Send.
+  const sessionNotices = useActiveSessionNotices(chatId === null
+    ? (pendingAgentIds ?? []).map((id) => ({ id, name: agents?.find((agent) => agent.id === id)?.name ?? 'This agent' }))
+    : [])
+  const notices = [...readinessNotices, ...sessionNotices]
   // Check again removes itself when its check clears the warning, and the focus
   // it held falls to the page body; hand it to the message box, where the user
   // goes next. Only from the body: a warning cleared in the background never
@@ -954,8 +965,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [dragOverDepth, setDragOverDepth] = useState(0)
   const isDraggingOver = dragOverDepth > 0
   // A running turn takes files too: they queue and go once it ends. The
-  // new-chat screen still takes none until its first send has landed.
-  const attachBlockedByStream = isStreaming && !chatId
+  // new-chat screen still takes none until its first send has landed: the
+  // files would be cleared with the draft that send consumes.
+  const attachBlockedByStream = !chatId && sending
   const canAcceptDrop = canShowAttachButton && !attachBlockedByStream
   const handleDragEnter = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -1297,7 +1309,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
-    if (isStreaming && !chatId) return
+    // A new chat's first send is in flight (`beginSend` below holds the draft
+    // until the chat exists and its turn has started). Read from the store, not
+    // `isStreaming`: this composer has no stream of its own to wait for.
+    if (!chatId && useComposerDraftStore.getState().drafts[draftKey]?.sending) return
 
     // A recalled queued message: Enter saves the edit, it does not send anew.
     if (chatId && editingId) {
@@ -1438,7 +1453,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [
     input,
     draftKey,
-    isStreaming,
     chatId,
     onNewChat,
     composer,

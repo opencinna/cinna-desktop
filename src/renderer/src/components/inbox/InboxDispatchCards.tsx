@@ -136,7 +136,7 @@ export function DispatchGateCard({
     try {
       const result = await answer(item.gateId, action)
       if (result.ok) {
-        setSettled(dispatchGateSettledText(action, result, agentLabel))
+        setSettled(dispatchGateSettledText(action, result))
       } else if (result.code === 'unavailable') {
         setError(result.reason)
       } else {

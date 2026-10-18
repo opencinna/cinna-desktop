@@ -1,6 +1,6 @@
 import { agentTaskDispatchRepo, taskDispatchGateRepo } from '../db/taskDispatch'
 import { taskRepo } from '../db/tasks'
-import type { TaskDispatchInboxItem } from '../../shared/inbox'
+import type { InboxQueuedFor, TaskDispatchInboxItem } from '../../shared/inbox'
 
 /**
  * The task dispatcher's half of the Inbox: approvals waiting on outside
@@ -40,19 +40,20 @@ export async function isDispatchableAgent(userId: string, agentId: string): Prom
 }
 
 /**
- * Each dispatchable agent's folder name, by agent id — what an answer waiting
- * for its queue says it waits on. Registered by the dispatcher's wiring.
+ * Each dispatchable agent's queue as an answer waiting on it names it — the
+ * agent's name, and N in Up to N — by agent id. Registered by the
+ * dispatcher's wiring.
  */
-type DispatchFolderNamesSource = (userId: string) => Promise<ReadonlyMap<string, string>>
-let dispatchFolderNames: DispatchFolderNamesSource | null = null
+type DispatchQueuesSource = (userId: string) => Promise<ReadonlyMap<string, InboxQueuedFor>>
+let dispatchQueues: DispatchQueuesSource | null = null
 
-export function setDispatchFolderNamesSource(source: DispatchFolderNamesSource | null): void {
-  dispatchFolderNames = source
+export function setDispatchQueuesSource(source: DispatchQueuesSource | null): void {
+  dispatchQueues = source
 }
 
-/** The folder names, or an empty map when unregistered or unreadable. */
-export async function dispatchFolderNamesFor(userId: string): Promise<ReadonlyMap<string, string>> {
-  try { return dispatchFolderNames ? await dispatchFolderNames(userId) : new Map() } catch { return new Map() }
+/** The queues, or an empty map when unregistered or unreadable. */
+export async function dispatchQueuesFor(userId: string): Promise<ReadonlyMap<string, InboxQueuedFor>> {
+  try { return dispatchQueues ? await dispatchQueues(userId) : new Map() } catch { return new Map() }
 }
 
 export async function taskDispatchInboxItems(userId: string): Promise<TaskDispatchInboxItem[]> {

@@ -45,6 +45,9 @@ const providerList = vi.hoisted(() => ({ current: [] as unknown[] }))
 /** One AI credential the agent's runtime does not resolve to, so there is something to choose. */
 const UNRELATED_PROVIDER = { id: 'other', name: 'Other', type: 'openai', enabled: true }
 const openPath = vi.hoisted(() => vi.fn(async (_input: unknown) => ({ success: true })))
+/** What `agentSessions.active` answers: the sessions already running. */
+const runningSessions = vi.hoisted(() => ({ current: [] as unknown[] }))
+const sessionsRead = vi.hoisted(() => vi.fn())
 
 // The dialog itself is FinishSetupDialog's own test; here only who owns it and when it opens.
 vi.mock('../agents/local/FinishSetupDialog', async () => {
@@ -89,6 +92,9 @@ const api: Record<string, unknown> = new Proxy(
         })
       }
       if (ns === 'chat') return namespace({ get: async () => chatDetail.current })
+      if (ns === 'agentSessions') {
+        return namespace({ active: async () => { sessionsRead(); return { ok: true, sessions: runningSessions.current } } })
+      }
       if (ns === 'llm') return namespace({ sendMessage: spies.llmSend })
       if (ns === 'auth') return namespace({ cinnaReauth: spies.cinnaReauth })
       if (ns === 'notes') return namespace({ list: spies.notesList, get: spies.notesGet })
@@ -115,6 +121,7 @@ Element.prototype.scrollIntoView = function scrollIntoView(): void {}
 
 const { ChatInput } = await import('./ChatInput')
 const { useUIStore } = await import('../../stores/ui.store')
+const { useChatStore } = await import('../../stores/chat.store')
 
 const DOWN = { state: 'unreachable', reason: 'Could not reach the agent.' }
 
@@ -219,6 +226,8 @@ beforeEach(() => {
   chatModes.list = async () => []
   providerList.current = []
   chatDetail.current = null
+  runningSessions.current = []
+  sessionsRead.mockClear()
   spies.list.mockClear()
   spies.agentSend.mockReset()
   spies.llmSend.mockReset()
@@ -786,5 +795,56 @@ describe('composer notice rows from the folder agent itself', () => {
     mountActive(catalogAgent({ state: 'ok', reason: null }))
     await screen.findByRole('button', { name: 'Finish setup' })
     expect(screen.queryByRole('button', { name: 'Choose credential' })).toBeNull()
+  })
+})
+
+describe('the new-chat warning about a picked agent already running a session', () => {
+  const READY = { state: 'ok', reason: null }
+  const panel = (): HTMLElement | null => screen.queryByRole('status', { name: 'Agent status' })
+  const SENTENCE = 'Invoices is already running in “Reconcile August”. Make sure this request won’t conflict with it.'
+
+  it('adds a row to the composer’s notice panel with Open, which goes to the newest session, and never holds Send', async () => {
+    // Mutation: drop `sessionNotices` from the panel's rows → no row.
+    runningSessions.current = [
+      { agentId: 'agent-1', chatId: 'c-new', title: 'Reconcile August', startedAt: 2 },
+      { agentId: 'agent-1', chatId: 'c-old', title: 'Older', startedAt: 1 }
+    ]
+    useChatStore.setState({ activeChatId: null } as never)
+    useUIStore.setState({ activeView: 'chat' })
+    mountNew(agent(READY), 'direct', vi.fn())
+    const open = await screen.findByRole('button', { name: 'Open' })
+    expect(panel()?.textContent).toContain('Invoices is already running in 2 sessions. Make sure this request won’t conflict with them.')
+    // The sentence describes its Open (ux_rules §10).
+    expect(document.getElementById(open.getAttribute('aria-describedby') ?? '')?.textContent)
+      .toBe('Invoices is already running in 2 sessions. Make sure this request won’t conflict with them.')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+    fireEvent.click(open)
+    expect(useChatStore.getState().activeChatId).toBe('c-new')
+    expect(useUIStore.getState().activeView).toBe('chat')
+  })
+
+  it('shows nothing while the agent is idle, or only another agent runs', async () => {
+    runningSessions.current = [{ agentId: 'agent-9', chatId: 'c-9', title: 'Elsewhere' }]
+    mountNew(agent(READY), 'direct', vi.fn())
+    await waitFor(() => expect(sessionsRead).toHaveBeenCalled())
+    await act(async () => { await tick() })
+    expect(panel()).toBeNull()
+  })
+
+  it('stays out of an existing chat’s composer, which does not even ask', async () => {
+    runningSessions.current = [{ agentId: 'agent-1', chatId: 'c-1', title: 'Reconcile August' }]
+    mountActive(agent(READY))
+    await act(async () => { await tick() })
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
+    expect(sessionsRead).not.toHaveBeenCalled()
+  })
+
+  it('sits after a readiness row in the same panel', async () => {
+    runningSessions.current = [{ agentId: 'agent-1', chatId: 'c-1', title: 'Reconcile August' }]
+    mountNew(agent(DOWN), 'direct', vi.fn())
+    await screen.findByRole('button', { name: 'Open' })
+    const rows = [...panel()!.querySelectorAll('li')].map((row) => row.querySelector('p')?.textContent)
+    expect(rows).toEqual([expect.stringContaining('Could not reach the agent.'), SENTENCE])
   })
 })

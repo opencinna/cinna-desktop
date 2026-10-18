@@ -10,6 +10,7 @@ import {
   useDispatchControls
 } from '../../../hooks/useTaskDispatch'
 import { unwrapIpcError } from '../../../utils/ipcError'
+import { AgentActiveSessionNotice } from '../AgentActiveSessionNotice'
 import {
   TASK_DISPATCH_MAX_RUNS,
   TASK_DISPATCH_MODES,
@@ -82,7 +83,8 @@ export function AgentTasksTab({ agent }: { agent: { id: string; name: string } }
       info={
         <SettingsInfoTip label="About the task queue">
           Cinna works this agent’s Ready tasks, highest priority first, then oldest. A task
-          blocked by another starts only once that one is done. Run next starts the next one now, in any mode.
+          blocked by another starts only once that one is done. Run next starts the next one now, in any mode,
+          beside whatever this agent is already running.
         </SettingsInfoTip>
       }
       action={
@@ -110,7 +112,7 @@ export function AgentTasksTab({ agent }: { agent: { id: string; name: string } }
             This agent is disabled, so it has no task queue. Enable it to run its tasks.
           </p>
         ) : (
-          <QueueBody agentId={agent.id} state={state} controls={controls} />
+          <QueueBody agent={agent} state={state} controls={controls} />
         )}
       </SettingsCard>
     </SettingsSection>
@@ -118,16 +120,16 @@ export function AgentTasksTab({ agent }: { agent: { id: string; name: string } }
 }
 
 function QueueBody({
-  agentId,
+  agent,
   state,
   controls
 }: {
-  agentId: string
+  agent: { id: string; name: string }
   state: AgentDispatchState
   controls: ReturnType<typeof useDispatchControls>
 }): React.JSX.Element {
   const openTask = useOpenTask()
-  const selectId = `task-queue-mode-${agentId}`
+  const selectId = `task-queue-mode-${agent.id}`
   const mode = controls.pendingMode ?? state.mode
   const maxRuns = controls.pendingMaxRuns ?? state.maxRuns ?? TASK_DISPATCH_MAX_RUNS.default
   const status = dispatchStatusParts(state)
@@ -142,12 +144,12 @@ function QueueBody({
             <>
               <p>Manual — nothing starts on its own; Run next starts the next Ready task.</p>
               <p className="mt-1.5">
-                One at a time — Cinna starts the next Ready task whenever the agent and its folder are free. Only
+                One at a time — Cinna starts the next Ready task whenever this agent has no task running. Only
                 while Cinna is open.
               </p>
               <p className="mt-1.5">
-                Up to N — Cinna keeps up to N of this agent’s tasks running at once, in the same folder, without
-                waiting for it to be free. Only for an agent whose tasks do not get in each other’s way.
+                Up to N — Cinna keeps up to N of this agent’s tasks running at once, in the same folder. Only for
+                an agent whose tasks do not get in each other’s way.
               </p>
             </>
           }
@@ -212,6 +214,15 @@ function QueueBody({
       {controls.error && (
         <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">{controls.error.message}</p>
       )}
+      {/* Only while the agent runs a session the status line does not name (a
+          chat, a task started elsewhere): Run next starts beside it. */}
+      <AgentActiveSessionNotice
+        agents={[agent]}
+        scale="settings"
+        advice="run-next"
+        excludeChatIds={state.running.map((run) => run.chatId)}
+        className="mt-2"
+      />
     </>
   )
 }

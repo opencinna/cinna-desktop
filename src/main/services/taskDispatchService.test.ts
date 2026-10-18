@@ -3,9 +3,9 @@ vi.mock('../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import type { RunOutcome } from './runExecutionService'
 
@@ -32,8 +32,8 @@ vi.mock('../db/client', () => ({
 }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 
-const { createTaskDispatchService, WAKE_DEBOUNCE_MS, NOT_DISPATCHABLE_ANSWER, dispatchableAgentIds } = await import('./taskDispatchService')
-const { setDispatchableAgentsSource, setDispatchFolderNamesSource } = await import('./taskDispatchInbox')
+const { createTaskDispatchService, WAKE_DEBOUNCE_MS, NOT_DISPATCHABLE_ANSWER, dispatchableAgentIds, dispatchQueueOf } = await import('./taskDispatchService')
+const { setDispatchableAgentsSource, setDispatchQueuesSource } = await import('./taskDispatchInbox')
 const { agentService } = await import('./agentService')
 const { setDispatchOwnedTurnSettler } = await import('../tasks/dispatchedTurns')
 const { installTaskRunnerHooks } = await import('./taskRunnerBridge')
@@ -235,7 +235,7 @@ beforeEach(() => {
   // The production module registered its own instance; these tests drive theirs.
   setDispatchOwnedTurnSettler((end) => service.settleOwnedTurn(end))
   setDispatchableAgentsSource(async () => new Set(world.agents.map((agent) => agent.id)))
-  setDispatchFolderNamesSource(async () => new Map(world.agents.map((agent) => [agent.id, basename(agent.path)])))
+  setDispatchQueuesSource(async () => new Map(world.agents.map((agent) => [agent.id, dispatchQueueOf(USER, agent)])))
   // An Inbox answer checks that the asking agent still exists.
   vi.spyOn(agentService, 'findAgent').mockReturnValue({ row: {} as never, userId: USER })
 })
@@ -422,84 +422,53 @@ describe('exclusivity', () => {
     expect(world.inUse).toBe(1)
   })
 
-  it('runs one dispatched task per folder, across agents that share it', async () => {
+  it('starts One at a time agents that share a folder side by side', async () => {
+    // Mutation: bring back the folder check in `pass` → only one agent starts.
     world.agents.push({ id: 'agent-b', name: 'Beta', path: join(dir, '.') })
-    ready('agent-a')
-    ready('agent-b')
+    const a = ready('agent-a')
+    const b = ready('agent-b')
     agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
     agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
     service.start(SCOPE)
     await drain()
-    expect(world.starts).toHaveLength(1)
-    const idle = world.starts[0].agentId === 'agent-a' ? 'agent-b' : 'agent-a'
-    expect((await service.get(SCOPE, idle))?.waiting).toBe('folder_busy')
-    expect(await service.runNext(SCOPE, idle)).toMatchObject({ ok: false, code: 'folder_busy' })
+    expect(world.starts.map((s) => s.taskId).sort()).toEqual([a.id, b.id].sort())
+    for (const agentId of ['agent-a', 'agent-b']) expect((await service.get(SCOPE, agentId))?.waiting).toBeNull()
   })
 
-  describe('a folder reached through a symlink', () => {
-    let linkHome: string
-    let link: string
-    beforeEach(() => {
-      linkHome = mkdtempSync(join(tmpdir(), 'cinna-dispatch-link-'))
-      link = join(linkHome, 'linked')
-      symlinkSync(dir, link, 'dir')
-    })
-    afterEach(() => { rmSync(linkHome, { recursive: true, force: true }) })
-
-    it('is one folder for two One at a time agents', async () => {
-      // Mutation: `folderOf` without realpath → both agents start in the one folder.
-      world.agents.push({ id: 'agent-b', name: 'Beta', path: link })
-      ready('agent-a')
-      ready('agent-b')
-      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
-      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
-      service.start(SCOPE)
-      await drain()
-      expect(world.starts).toHaveLength(1)
-      const idle = world.starts[0].agentId === 'agent-a' ? 'agent-b' : 'agent-a'
-      expect((await service.get(SCOPE, idle))?.waiting).toBe('folder_busy')
-    })
-
-    it('makes a One at a time agent wait for a live turn and for an Up to N agent’s runs there', async () => {
-      world.slots = 8
-      world.agents.push({ id: 'agent-b', name: 'Beta', path: link })
-      ready('agent-b')
-      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
-      world.live = ['agent-a']
-      service.start(SCOPE)
-      await drain()
-      expect(world.starts).toHaveLength(0)
-      expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('live_turn')
-
-      world.live = []
-      const a1 = ready('agent-a', { priority: 'high' })
-      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'manual')
-      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'up_to', 2)
-      service.wake()
-      await drain()
-      expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
-      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
-      service.wake()
-      await drain()
-      expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
-      expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('folder_busy')
-    })
-  })
-
-  it('never starts while any turn runs in the folder, and starts once it ends', async () => {
-    ready('agent-a')
+  it('starts beside a chat running on the same agent, and so does Run next', async () => {
+    // Mutation: bring back the live-turn check in `pass` → nothing starts while the chat runs.
+    const first = ready('agent-a', { priority: 'high' })
+    const second = ready('agent-a')
     world.live = ['agent-a']
     agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
     service.start(SCOPE)
     await drain()
-    expect(world.starts).toHaveLength(0)
-    expect((await service.get(SCOPE, 'agent-a'))?.waiting).toBe('live_turn')
-    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'live_turn' })
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
+    expect((await service.get(SCOPE, 'agent-a'))?.waiting).toBeNull()
 
-    world.live = []
-    service.wake()
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'manual')
+    taskService.setStatus(USER, first.id, 'completed')
+    world.starts[0].end('completed')
     await drain()
-    expect(world.starts).toHaveLength(1)
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: second.id })
+  })
+
+  it('lets a One at a time flight whose slot comes after another agent’s run got going in the folder start', async () => {
+    // Mutation: bring back the folder check at the slot grant → b1 ends quietly and waits.
+    world.slots = 0
+    world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
+    const a1 = ready('agent-a')
+    const b1 = ready('agent-b')
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts).toHaveLength(0)
+    world.grant()
+    await drain()
+    world.grant()
+    await drain()
+    expect(world.starts.map((s) => s.taskId).sort()).toEqual([a1.id, b1.id].sort())
   })
 
   it('waits for a global slot, showing why', async () => {
@@ -854,7 +823,7 @@ describe('the outside-content gate', () => {
     await drain()
     expect(await service.runNext(SCOPE, 'agent-a', outside.id)).toEqual({ ok: true, gate: card.gateId })
 
-    // Approve: trusted, and run at once since the folder is free.
+    // Approve: trusted, and run at once.
     const answer = await service.answerGate(SCOPE, card.gateId, 'approve')
     expect(answer).toMatchObject({ ok: true, started: { taskId: outside.id } })
     expect(taskRepo.getById(USER, outside.id)?.trustedDigest).toBe('d1')
@@ -893,7 +862,7 @@ describe('the outside-content gate', () => {
     const first = taskDispatchGateRepo.listOpen(USER)
     expect(first).toHaveLength(1)
     world.published = []
-    expect(await service.answerGate(SCOPE, first[0].id, 'skip')).toEqual({ ok: true, started: null, mode: 'one', maxRuns: null })
+    expect(await service.answerGate(SCOPE, first[0].id, 'skip')).toEqual({ ok: true, started: null, mode: 'one' })
     // Mutation: drop the skip's notification → other surfaces keep the card.
     expect(world.published).toContain('agent-a')
     service.wake()
@@ -918,16 +887,12 @@ describe('the outside-content gate', () => {
     expect(taskRepo.getById(USER, outside.id)?.trustedDigest).toBeNull()
   })
 
-  it('makes an approved task eligible when its agent is busy', async () => {
+  it('approves and runs beside the agent’s own run and a live chat, and defers only on the task’s own chat', async () => {
+    // Mutation: keep the count for Approve and run → it defers as the agent being busy.
     const plain = ready('agent-a', { priority: 'urgent' })
     const outside = ready('agent-a', { file: { key: 't-out', trusted: false, digest: 'd1' } })
     expect(await service.runNext(SCOPE, 'agent-a', plain.id)).toMatchObject({ ok: true, taskId: plain.id })
-    expect(await service.runNext(SCOPE, 'agent-a', outside.id)).toMatchObject({ ok: false, code: 'agent_busy' })
-    // In manual mode only Run next opens the card; approve it while a turn
-    // holds the folder.
-    world.starts[0].end('completed')
-    taskService.setStatus(USER, plain.id, 'completed')
-    await drain()
+    // In manual mode only Run next opens the card, while the agent's other run goes.
     const card = await service.runNext(SCOPE, 'agent-a', outside.id)
     expect(card).toMatchObject({ ok: true, gate: expect.any(String) })
     world.live = ['agent-a']
@@ -935,54 +900,54 @@ describe('the outside-content gate', () => {
     const changed: string[] = []
     installTaskRunnerHooks({ answer: () => null, taskChanged: (_u, taskId) => { changed.push(taskId) }, chatRemoved: () => {}, profileRemoved: () => {} }, 'dispatch-test')
     const answer = await service.answerGate(SCOPE, (card as { gate: string }).gate, 'approve')
-    expect(answer).toEqual({ ok: true, started: null, reason: 'live_turn', mode: 'manual', maxRuns: null })
+    expect(answer).toEqual({ ok: true, started: { taskId: outside.id, chatId: world.starts[1].chatId }, mode: 'manual' })
+    expect(world.starts.map((s) => s.taskId)).toEqual([plain.id, outside.id])
     expect(taskService.getById(USER, outside.id).fromOutside).toBe(false)
     // Mutation: drop the approval's notifications → nothing tells the task page or the queue.
     expect(world.published).toContain('agent-a')
     expect(changed).toContain(outside.id)
-    world.live = []
-    expect((await service.get(SCOPE, 'agent-a'))?.next).toEqual({ taskId: outside.id, title: outside.title, needsApproval: false })
+
+    // A task whose own chat is running a turn: trusted, and it waits for that turn.
+    const busy = ready('agent-a', { file: { key: 't-busy', trusted: false, digest: 'd4' } })
+    const chat = chatRepo.create(USER, { agentId: 'agent-a' })
+    taskRepo.update(USER, busy.id, { chatId: chat.id })
+    world.runningChats = [chat.id]
+    const busyGate = taskDispatchGateRepo.open(USER, { taskId: busy.id, agentId: 'agent-a', digest: 'd4', title: busy.title, filePath: null, body: 'b' })
+    expect(await service.answerGate(SCOPE, busyGate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'live_turn', mode: 'manual' })
+    expect(taskService.getById(USER, busy.id).fromOutside).toBe(false)
+    world.runningChats = []
+    expect((await service.get(SCOPE, 'agent-a'))?.next).toEqual({ taskId: busy.id, title: busy.title, needsApproval: false })
   })
 
   it('approves and runs in manual mode and while paused, without resuming, and says why when it cannot start', async () => {
     // Mutation: approve only trusting (no start) → `started` stays null.
+    world.slots = 8
     const outside = ready('agent-a', { file: { key: 't-out', trusted: false, digest: 'd1' } })
     agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
     agentTaskDispatchRepo.pause(USER, 'agent-a', 'error', null)
     const card = await service.runNext(SCOPE, 'agent-a', outside.id) as { gate: string }
     expect(await service.answerGate(SCOPE, card.gate, 'approve')).toEqual({
-      ok: true, started: { taskId: outside.id, chatId: world.starts[0].chatId }, mode: 'one', maxRuns: null
+      ok: true, started: { taskId: outside.id, chatId: world.starts[0].chatId }, mode: 'one'
     })
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBe('error')
 
-    // Another of agent-a's tasks, approved while its run goes: the agent is
-    // busy, not the folder (mutation: fold agent_busy into folder_busy).
-    const busy = ready('agent-a', { file: { key: 't-busy', trusted: false, digest: 'd4' } })
-    const busyGate = taskDispatchGateRepo.open(USER, { taskId: busy.id, agentId: 'agent-a', digest: 'd4', title: busy.title, filePath: null, body: 'b' })
-    expect(await service.answerGate(SCOPE, busyGate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'agent_busy', mode: 'one', maxRuns: null })
+    // Another of agent-a's tasks, approved while its run goes: it starts too,
+    // beyond the One at a time count (mutation: keep the count → agent busy).
+    const second = ready('agent-a', { file: { key: 't-second', trusted: false, digest: 'd4' } })
+    const secondGate = taskDispatchGateRepo.open(USER, { taskId: second.id, agentId: 'agent-a', digest: 'd4', title: second.title, filePath: null, body: 'b' })
+    expect(await service.answerGate(SCOPE, secondGate.id, 'approve')).toMatchObject({ ok: true, started: { taskId: second.id }, mode: 'one' })
 
-    // A second agent in another folder: its approval waits for a slot.
-    const other = mkdtempSync(join(tmpdir(), 'cinna-dispatch-b-'))
-    try {
-      world.agents.push({ id: 'agent-b', name: 'Beta', path: other })
-      const second = ready('agent-b', { file: { key: 't-b', trusted: false, digest: 'd2', folder: other } })
-      const secondCard = await service.runNext(SCOPE, 'agent-b', second.id) as { gate: string }
-      world.slotFree = false
-      expect(await service.answerGate(SCOPE, secondCard.gate, 'approve')).toEqual({ ok: true, started: null, reason: 'slot', mode: 'manual', maxRuns: null })
-      // And one sharing agent-a's busy folder reports the folder.
-      world.slotFree = true
-      world.agents.push({ id: 'agent-c', name: 'Gamma', path: dir })
-      const third = ready('agent-c', { file: { key: 't-c', trusted: false, digest: 'd3' } })
-      const thirdCard = await service.runNext(SCOPE, 'agent-c', third.id)
-      expect(thirdCard).toMatchObject({ ok: false, code: 'folder_busy' })
-      const gate = taskDispatchGateRepo.open(USER, {
-        taskId: third.id, agentId: 'agent-c', digest: 'd3', title: third.title, filePath: null, body: 'b'
-      })
-      expect(await service.answerGate(SCOPE, gate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'folder_busy', mode: 'manual', maxRuns: null })
-      expect(taskRepo.getById(USER, third.id)?.trustedDigest).toBe('d3')
-    } finally {
-      rmSync(other, { recursive: true, force: true })
-    }
+    // A second agent sharing the folder: its approval starts beside both, or
+    // waits for a slot when none is free.
+    world.agents.push({ id: 'agent-c', name: 'Gamma', path: dir })
+    const third = ready('agent-c', { file: { key: 't-c', trusted: false, digest: 'd3' } })
+    const thirdCard = await service.runNext(SCOPE, 'agent-c', third.id) as { gate: string }
+    world.slotFree = false
+    expect(await service.answerGate(SCOPE, thirdCard.gate, 'approve')).toEqual({ ok: true, started: null, reason: 'slot', mode: 'manual' })
+    expect(taskRepo.getById(USER, third.id)?.trustedDigest).toBe('d3')
+    world.slotFree = true
+    expect(await service.runNext(SCOPE, 'agent-c', third.id)).toMatchObject({ ok: true, taskId: third.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([outside.id, second.id, third.id])
   })
 })
 
@@ -1096,7 +1061,7 @@ describe('a turn resumed after a dispatched ask', () => {
   })
 
   it('starts no next task while the resumed turn is being settled, and moves on once its pause is written', async () => {
-    // Mutation: drop the settling checks (agent and folder) in `pass` → the slow re-read lets a pass start the next task first.
+    // Mutation: drop the settling check in `pass` → the slow re-read lets a pass start the next task first.
     const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned' } })
     const next = ready('agent-a', { priority: 'low' })
     let release!: () => void
@@ -1106,7 +1071,6 @@ describe('a turn resumed after a dispatched ask', () => {
     service.wake()
     await drain()
     expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
-    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'agent_busy' })
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
 
     release()
@@ -1118,8 +1082,7 @@ describe('a turn resumed after a dispatched ask', () => {
   })
 
   it.each(['one', 'up_to'] as const)('starts no %s flight whose slot comes while the resumed turn is being settled, and starts it once settled', async (mode) => {
-    // Mutations: drop the `settling` check at the slot grant → the up_to flight
-    // starts mid-settle; drop it and the `settlingIn` folder check → the one flight does.
+    // Mutation: drop the `settling` check at the slot grant → the flight starts mid-settle.
     const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-slot' } })
     if (mode === 'up_to') agentTaskDispatchRepo.setMode(USER, 'agent-a', 'up_to', 2)
     const next = ready('agent-a', { priority: 'low' })
@@ -1144,32 +1107,50 @@ describe('a turn resumed after a dispatched ask', () => {
     expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
   })
 
-  it('starts no flight of another One at a time agent in the folder whose slot comes mid-settle', async () => {
-    // Mutation: drop the `settlingIn` folder check at the slot grant → agent-b starts beside the settle.
-    world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
-    const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-b-slot' } })
-    const other = ready('agent-b')
-    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
-    world.slots = 0
-    service.wake()
-    await drain()
-    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('slot')
+  it('lets Run next start the agent’s next task while the resumed turn is being settled', async () => {
+    // Mutation: refuse Run next while settling → agent_busy.
+    const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-run' } })
+    const next = ready('agent-a', { priority: 'low' })
     let release!: () => void
     world.refresh = () => new Promise<void>((resolve) => { release = resolve })
     end({ type: 'done', stopReason: 'end_turn' })
-    world.grant()
     await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
-
-    taskService.setStatus(USER, task.id, 'completed')
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: next.id })
     release()
     await drain()
-    await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, other.id])
+    // The settle still pauses the queue on its own task; the Run next goes on.
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id })
+    expect(statusOf(next.id)).toBe('in_progress')
   })
 
-  it('treats the settling agent’s folder as busy for another agent there', async () => {
-    // Mutation: drop the settling-folder check in `pass` → the other agent starts in the folder mid-settle.
+  it('refuses Run next on the task itself while its resumed turn is being settled, and takes the next one instead', async () => {
+    // Mutation: drop the settling-task check in `refusal` → Run next takes the
+    // task back mid-settle, and the settle's flag lands on the run it started.
+    const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-self' } })
+    const next = ready('agent-a', { priority: 'low' })
+    let release!: () => void
+    // The re-read finds the task back in Ready (the word the agent wrote), and is slow.
+    world.refresh = (taskId) => new Promise<void>((resolve) => {
+      taskService.acceptRemoteStatus(USER, taskId, 'open')
+      release = resolve
+    })
+    end({ type: 'done', stopReason: 'end_turn' })
+    await drain()
+    expect(statusOf(task.id)).toBe('open')
+    expect(await service.runNext(SCOPE, 'agent-a', task.id)).toEqual({
+      ok: false, code: 'not_eligible', message: 'This task is still being wrapped up. Try again in a moment.'
+    })
+    // The top of the queue passes over it too: the next task runs instead.
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: next.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
+    release()
+    await drain()
+    expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED })
+    expect(statusOf(next.id)).toBe('in_progress')
+  })
+
+  it('does not hold another agent in the folder back while one settles there', async () => {
+    // Mutation: bring back the settling-folder check in `pass` → agent-b waits for the settle.
     world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
     const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-b' } })
     const other = ready('agent-b')
@@ -1179,14 +1160,10 @@ describe('a turn resumed after a dispatched ask', () => {
     end({ type: 'done', stopReason: 'end_turn' })
     service.wake()
     await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
-    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('folder_busy')
-    expect(await service.runNext(SCOPE, 'agent-b')).toMatchObject({ ok: false, code: 'folder_busy' })
-
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, other.id])
+    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBeNull()
     release()
     await drain()
-    await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, other.id])
   })
 
   it('is flagged at the next boot when Cinna quit under it, and its end on the way out completes nothing', async () => {
@@ -1230,16 +1207,17 @@ describe('a turn resumed after a dispatched ask', () => {
       world.slots = 0
       expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true, queued: true })
       expect(askRow()).toMatchObject({ status: 'open', queuedAnswer: 'This one.', queuedError: null })
-      // Still listed, with the answer and the folder it waits on.
+      // Still listed, with the answer and the queue it waits on (One at a time: the agent's running task).
       const { entries } = await inboxService.list(USER)
-      expect(entries).toEqual([expect.objectContaining({ requestId: 'ask-r', queuedAnswer: 'This one.', queuedFolder: basename(dir) })])
+      expect(entries).toEqual([expect.objectContaining({ requestId: 'ask-r', queuedAnswer: 'This one.', queuedFor: { agentName: 'Alpha', maxRuns: null } })])
       expect(entries[0].queuedAt).toBeInstanceOf(Date)
 
       service.wake()
       await drain()
       expect(world.answersSent).toEqual([])
       expect(await service.get(SCOPE, 'agent-a')).toMatchObject({ waiting: 'slot', next: { taskId: task.id } })
-      expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'agent_busy' })
+      // Run next does not send the answer a second time beside its waiting flight.
+      expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'nothing_eligible' })
 
       world.grant()
       await drain()
@@ -1300,25 +1278,15 @@ describe('a turn resumed after a dispatched ask', () => {
       expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBe('error')
     })
 
-    it('waits while another dispatched run works in the same folder, or a turn runs there', async () => {
+    it('goes out beside another agent’s run in the same folder and a turn running there', async () => {
+      // Mutation: bring back the folder check in `pass` → the answer waits for the other run and the turn.
       world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
       await dispatchedThenAsk(() => {})
       const other = ready('agent-b')
       const run = await service.runNext(SCOPE, 'agent-b')
       expect(run).toMatchObject({ ok: true, taskId: other.id })
+      world.live = ['agent-b', 'agent-a']
       await inboxService.answer(USER, 'ask-r', ANSWER)
-      service.wake()
-      await drain()
-      expect(world.answersSent).toEqual([])
-
-      // The other run reports; a turn is now running in the folder.
-      taskService.setStatus(USER, other.id, 'completed')
-      world.live = ['agent-b']
-      world.starts[1].end('completed')
-      await drain()
-      expect(world.answersSent).toEqual([])
-
-      world.live = []
       service.wake()
       await drain()
       expect(world.answersSent).toHaveLength(1)
@@ -1530,8 +1498,8 @@ describe('up to N', () => {
     expect(new Set(world.starts.map((s) => s.taskId)).size).toBe(4)
   })
 
-  it('starts beside another agent’s run in the folder, while a One at a time agent there still waits', async () => {
-    // Mutation: keep the folder check for `up_to` in `pass` → agent-a waits for agent-b's run.
+  it('starts beside another agent’s run in the folder, and so does a One at a time agent there', async () => {
+    // Mutation: bring back the folder rule for One at a time → b2 waits until agent-a's runs end.
     world.slots = 8
     world.agents = [{ id: 'agent-b', name: 'Beta', path: dir }, { id: 'agent-a', name: 'Alpha', path: dir }]
     const b1 = ready('agent-b', { createdAt: new Date('2026-01-01') })
@@ -1544,53 +1512,13 @@ describe('up to N', () => {
     await drain()
     expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id])
 
-    // agent-b's run reports; agent-a's runs still work in the folder, so the
-    // One at a time agent waits on them (mutation: lift the folder rule for
-    // every agent → b2 starts).
+    // agent-b's run reports; agent-a's runs still work in the folder, and agent-b goes on.
     taskService.setStatus(USER, b1.id, 'completed')
     world.starts[0].end('completed')
     await drain()
     await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id])
-    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('folder_busy')
-    expect(await service.runNext(SCOPE, 'agent-b')).toMatchObject({ ok: false, code: 'folder_busy' })
-
-    taskService.setStatus(USER, a1.id, 'completed')
-    world.starts[1].end('completed')
-    taskService.setStatus(USER, a2.id, 'completed')
-    world.starts[2].end('completed')
-    await drain()
-    await drain()
     expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id, b2.id])
-  })
-
-  it('makes a One at a time flight that gets its slot after an up_to run got going in the folder end quietly, and start later', async () => {
-    // Mutation: drop the folder check at the slot grant → b1 starts beside a1.
-    world.slots = 0
-    world.agents = [{ id: 'agent-b', name: 'Beta', path: dir }, { id: 'agent-a', name: 'Alpha', path: dir }]
-    const b1 = ready('agent-b')
-    const a1 = ready('agent-a')
-    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
-    upTo('agent-a', 2)
-    service.start(SCOPE)
-    await drain()
-    expect(world.starts).toHaveLength(0)
-    world.grantNewest = true
-    world.grant()
-    await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
-    world.grantNewest = false
-    world.grant()
-    await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
-    expect(rowOf('agent-b')).toMatchObject({ pausedReason: null, runs: [] })
-    expect(statusOf(b1.id)).toBe('open')
-
-    taskService.setStatus(USER, a1.id, 'completed')
-    world.starts[0].end('completed')
-    await drain()
-    await drain()
-    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id, b1.id])
+    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBeNull()
   })
 
   it('is not stopped by a live turn in its folder, and neither is its Run next', async () => {
@@ -1739,19 +1667,36 @@ describe('up to N', () => {
     expect([first.id, second.id]).toContain(rowOf('agent-a').pausedTaskId)
   })
 
-  it('refuses Run next as busy only once the agent has N runs', async () => {
-    // Mutation: refuse at one flight as before → the second Run next is agent_busy.
+  it('lets Run next start beyond N, and the queue waits until the agent is back under N', async () => {
+    // Mutations: refuse Run next at N runs → the third is agent_busy; count only
+    // the queue's own flights → the queue starts again as soon as one of them ends.
     const first = ready('agent-a', { priority: 'urgent' })
     const second = ready('agent-a', { priority: 'high' })
-    ready('agent-a')
+    const third = ready('agent-a', { priority: 'normal' })
+    const fourth = ready('agent-a', { priority: 'low' })
+    world.slots = 8
     upTo('agent-a', 2)
-    agentTaskDispatchRepo.pause(USER, 'agent-a', 'unreported', null)
     service.start(SCOPE)
     await drain()
-    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: first.id })
-    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: second.id })
-    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'agent_busy' })
-    expect(await service.runNext(SCOPE, 'agent-a', first.id)).toMatchObject({ ok: false, code: 'agent_busy' })
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: third.id })
+    expect((await service.get(SCOPE, 'agent-a'))?.running).toHaveLength(3)
+
+    // One of the queue's runs reports: three became two, still N — nothing starts.
+    taskService.setStatus(USER, first.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id, third.id])
+    expect(statusOf(fourth.id)).toBe('open')
+    expect(world.slotRequests).toBe(3)
+
+    // Back under N: the queue takes the next task.
+    taskService.setStatus(USER, third.id, 'completed')
+    world.starts[2].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id, third.id, fourth.id])
   })
 
   it('sends a stored answer beside the agent’s other runs once it has room, not waiting for the folder', async () => {
@@ -1795,6 +1740,61 @@ describe('Run next', () => {
     const task = ready('agent-a')
     expect((await service.get(SCOPE, 'agent-a'))?.mode).toBe('manual')
     expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: task.id })
+  })
+
+  it('starts beside the agent’s own running task in Manual, as often as the user asks', async () => {
+    // Mutation: bring back the count for Run next → the second is agent_busy.
+    const first = ready('agent-a', { priority: 'high' })
+    const second = ready('agent-a')
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: first.id })
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: second.id })
+    expect((await service.get(SCOPE, 'agent-a'))?.running.map((run) => run.taskId)).toEqual([first.id, second.id])
+  })
+
+  it('starts beyond One at a time, and the queue does not start again until the agent has no run', async () => {
+    // Mutations: refuse Run next at one run → agent_busy; let the queue count
+    // only its own flight → it starts the third task beside the Run next's.
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a', { priority: 'high' })
+    const third = ready('agent-a')
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: second.id })
+
+    taskService.setStatus(USER, first.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+    expect(statusOf(third.id)).toBe('open')
+    // Not even a slot taken for it, only to be refused at the grant.
+    expect(world.slotRequests).toBe(2)
+
+    taskService.setStatus(USER, second.id, 'completed')
+    world.starts[1].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id, third.id])
+  })
+
+  it('starts when its runner slot comes while the agent is already at its count', async () => {
+    // Mutation: keep the count check at the slot grant for every flight → the Run next ends as agent_busy.
+    const first = ready('agent-a', { priority: 'high' })
+    const second = ready('agent-a')
+    world.slots = 1
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
+    const pending = service.runNext(SCOPE, 'agent-a')
+    await drain()
+    expect(world.starts).toHaveLength(1)
+    world.grant()
+    await drain()
+    expect(await pending).toMatchObject({ ok: true, taskId: second.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
   })
 
   it('works while the queue is paused, and leaves it paused', async () => {
@@ -1845,13 +1845,12 @@ describe('mode and resume', () => {
     expect(world.published).toEqual(['agent-a'])
     expect((await service.get(SCOPE, 'agent-a'))?.next?.taskId).toBe(task.id)
 
-    // A turn in the folder is a state of its own ("waiting on a conversation").
-    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    // A chat running on the agent is no state of the queue's: nothing to announce.
     world.live = ['agent-a']
     world.published = []
     service.wake()
     await drain()
-    expect(world.published).toEqual(['agent-a'])
+    expect(world.published).toEqual([])
     expect(world.starts).toEqual([])
   })
 

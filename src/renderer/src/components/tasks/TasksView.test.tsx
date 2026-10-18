@@ -1353,9 +1353,9 @@ describe('the queue control, filtered to one folder agent', () => {
     expect(useUIStore.getState().activeView).toBe('tasks')
     expect(screen.queryByRole('alert')).toBeNull()
 
-    runNext.mockResolvedValueOnce({ ok: false, code: 'folder_busy', message: 'Another task is running in this folder.' })
+    runNext.mockResolvedValueOnce({ ok: false, code: 'slot', message: 'Every task runner slot is busy. Try again when a run finishes.' })
     await act(async () => { fireEvent.click(button) })
-    expect(screen.getByRole('alert').textContent).toBe('Another task is running in this folder.')
+    expect(screen.getByRole('alert').textContent).toBe('Every task runner slot is busy. Try again when a run finishes.')
     expect(useUIStore.getState().activeView).toBe('tasks')
     expect(screen.getByRole('button', { name: /Run next/ })).toBe(button)
   })

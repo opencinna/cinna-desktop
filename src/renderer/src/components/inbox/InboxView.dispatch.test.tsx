@@ -123,16 +123,11 @@ describe('the outside-content approval', () => {
   })
 
   it.each([
-    [{ reason: 'folder_busy', mode: 'one' }, 'Approved. It starts when the folder is free.'],
-    [{ reason: 'folder_busy', mode: 'manual' }, 'Approved. Use Run next when the folder is free.'],
-    // Mutation: fold agent_busy, live_turn and slot back into folder_busy → the folder sentence for each.
-    [{ reason: 'agent_busy', mode: 'up_to', maxRuns: 3 }, 'Approved. It starts when one of Writer’s 3 runs finishes.'],
-    [{ reason: 'agent_busy', mode: 'one', maxRuns: null }, 'Approved. It starts when Writer’s current run finishes.'],
-    [{ reason: 'agent_busy', mode: 'manual', maxRuns: null }, 'Approved. Use Run next when Writer’s current run finishes.'],
-    [{ reason: 'live_turn', mode: 'one' }, 'Approved. It starts when the conversation running there finishes.'],
-    [{ reason: 'live_turn', mode: 'manual' }, 'Approved. Use Run next when the conversation running there finishes.'],
+    // Approve starts beside whatever the agent runs: only the task's own chat or a runner slot holds it.
+    [{ reason: 'live_turn', mode: 'one' }, 'Approved. It starts when the task’s conversation finishes its turn.'],
+    [{ reason: 'live_turn', mode: 'manual' }, 'Approved. Use Run next when the task’s conversation finishes its turn.'],
     [{ reason: 'slot', mode: 'one' }, 'Approved. It starts when a task runner slot is free.'],
-    [{ reason: 'slot', mode: 'up_to', maxRuns: 2 }, 'Approved. It starts when a task runner slot is free.'],
+    [{ reason: 'slot', mode: 'up_to' }, 'Approved. It starts when a task runner slot is free.'],
     [{ reason: 'not_eligible', mode: 'one' }, 'Approved. It is not ready to run yet.'],
     [{ reason: 'not_eligible', mode: 'manual' }, 'Approved. It is not ready to run yet.']
   ] as const)('says when an approved task it could not start will run (%o)', async (deferral, text) => {

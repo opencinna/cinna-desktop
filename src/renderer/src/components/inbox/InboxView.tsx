@@ -18,6 +18,7 @@ import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
   InboxAnswerCode,
   InboxEntry,
+  InboxQueuedFor,
   SkillDisconnectedInboxItem,
   TaskDispatchInboxItem,
   UpdateAvailableInboxItem
@@ -510,6 +511,18 @@ function InboxRow({
   )
 }
 
+/**
+ * When the queue sends a stored answer: once the agent's running task
+ * finishes (Manual and One at a time), or once it has room under N (Up to N).
+ * Before main's first read after the answer, the agent is not known yet.
+ */
+export function queuedWhen(queue: InboxQueuedFor | undefined): string {
+  if (!queue) return 'Sends when the agent’s queue has room.'
+  return queue.maxRuns === null
+    ? `Sends when ${queue.agentName}’s running task finishes.`
+    : `Sends when ${queue.agentName} has room in its queue.`
+}
+
 /** The ask itself, in whichever block the transcript would have used. */
 function AskBody({
   entry,
@@ -569,7 +582,7 @@ function AskBody({
           <div data-inbox-queued className="mt-2 px-1 text-[12px]">
             <div className="text-[var(--color-text-secondary)] whitespace-pre-wrap break-words">{queuedAnswer}</div>
             <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
-              {entry.queuedFolder ? `Sends when ${entry.queuedFolder} is free.` : 'Sends when the agent’s folder is free.'}
+              {queuedWhen(entry.queuedFor)}
             </div>
           </div>
         </div>

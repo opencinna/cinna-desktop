@@ -18,6 +18,7 @@ import { registerJobHandlers } from './job.ipc'
 import { registerNoteHandlers } from './note.ipc'
 import { registerTaskHandlers } from './task.ipc'
 import { registerTaskDispatchHandlers } from './taskDispatch.ipc'
+import { registerAgentSessionHandlers } from './agent_sessions.ipc'
 import { registerLocalScheduleHandlers } from './localSchedule.ipc'
 import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
@@ -63,6 +64,8 @@ export function registerAllIpcHandlers(): void {
   registerTaskHandlers()
   // An agent's task queue: run mode, pause, Run next.
   registerTaskDispatchHandlers()
+  // Which agents already run a session, for the warning before starting one more.
+  registerAgentSessionHandlers()
   registerLocalScheduleHandlers()
   registerCinnaHandlers()
   registerCatalogHandlers()

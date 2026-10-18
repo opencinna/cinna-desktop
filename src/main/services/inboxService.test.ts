@@ -1114,7 +1114,7 @@ describe('next-message continuation', () => {
     expect(runStart).not.toHaveBeenCalled()
     const [listed] = await listEntries(USER)
     expect(listed).toMatchObject({ requestId: entry.requestId, queuedAnswer: 'main, dev' })
-    expect(listed.queuedFolder).toBeUndefined()
+    expect(listed.queuedFor).toBeUndefined()
     expect(taskInputRequestRepo.getById(entry.requestId)).toMatchObject({ status: 'open', queuedAnswer: 'main, dev' })
 
     inboxService.resumeChat(ctx(), 'typed instead')

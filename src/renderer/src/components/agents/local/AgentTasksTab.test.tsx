@@ -8,6 +8,7 @@ import type {
   TaskDispatchRunResult,
   TaskDispatchUpdateResult
 } from '../../../../../shared/taskDispatch'
+import type { AgentActiveSessionsResult } from '../../../../../shared/agentSessions'
 
 /**
  * A folder agent's Tasks tab: the run mode, Run next beside the section
@@ -20,6 +21,7 @@ const getQueue = vi.fn<(agentId: string) => Promise<AgentDispatchState | null>>(
 const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode, maxRuns?: number) => Promise<TaskDispatchUpdateResult>>()
 const resume = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
 const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
+const activeSessions = vi.fn<() => Promise<AgentActiveSessionsResult>>(async () => ({ ok: true, sessions: [] }))
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -29,7 +31,9 @@ const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatch
     resume: (agentId: string) => resume(agentId),
     runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
     onChanged: () => () => {}
-  }
+  },
+  agentSessions: { active: () => activeSessions(), onChanged: () => () => {} },
+  chat: { onTitleUpdated: () => () => {} }
 }
 
 const { AgentTasksTab } = await import('./AgentTasksTab')
@@ -93,8 +97,8 @@ describe('AgentTasksTab', () => {
     expect(statusLine()).toBe('Next: Close the books — needs approval')
     cleanup()
 
-    await renderTab(queue({ mode: 'one', next: { taskId: 't2', title: 'Close the books', needsApproval: false }, waiting: 'folder_busy' }))
-    expect(statusLine()).toBe('Waiting — folder busy')
+    await renderTab(queue({ mode: 'one', next: { taskId: 't2', title: 'Close the books', needsApproval: false }, waiting: 'slot' }))
+    expect(statusLine()).toBe('Waiting for a runner slot')
     cleanup()
 
     await renderTab(queue({ mode: 'one', waiting: 'gate' }))
@@ -167,6 +171,61 @@ describe('AgentTasksTab', () => {
 
     await renderTab(queue({ mode: 'up_to', maxRuns: 3, running: [run('t1', 'Reconcile August')], waiting: 'slot' }))
     expect(statusLine()).toBe('Running Reconcile August · 1 of 3 · waiting for a runner slot')
+    cleanup()
+
+    // Run next starts beyond the count: more than N, or more than one outside Up to N.
+    await renderTab(queue({ mode: 'up_to', maxRuns: 2, running: [run('t1', 'A'), run('t2', 'B'), run('t3', 'C')] }))
+    expect(statusLine()).toBe('Running 3 tasks')
+    cleanup()
+    await renderTab(queue({ mode: 'one', running: [run('t1', 'A'), run('t2', 'B')] }))
+    expect(statusLine()).toBe('Running 2 tasks')
+  })
+
+  it('warns under the queue when the agent already runs a session, and stays quiet when idle', async () => {
+    await renderTab(queue())
+    expect(document.querySelector('[data-agent-active-session]')).toBeNull()
+    cleanup()
+
+    activeSessions.mockResolvedValue({ ok: true, sessions: [{ agentId: AGENT.id, chatId: 'c-7', title: 'Month end' }] })
+    await renderTab(queue())
+    const notice = await screen.findByRole('status')
+    expect(notice.textContent).toBe('Ledger is also running in “Month end”. Run next starts beside it. Open')
+    // The settings scale, as the rest of the tab (§12).
+    expect(notice.className).toContain('text-[13px]')
+    // Last in the card, after the status line.
+    const card = document.querySelector('[data-queue-status]')!.parentElement!
+    expect(card.lastElementChild?.hasAttribute('data-agent-active-session')).toBe(true)
+    activeSessions.mockResolvedValue({ ok: true, sessions: [] })
+  })
+
+  it('names only the sessions the status line does not: a live chat beside the queue’s own runs', async () => {
+    // Mutation: drop `excludeChatIds` → the queue's running task is named twice, once in the status line and once here.
+    try {
+      activeSessions.mockResolvedValue({ ok: true, sessions: [{ agentId: AGENT.id, chatId: 'c-run', title: 'Reconcile August' }] })
+      await renderTab(queue({ mode: 'one', running: [{ taskId: 't1', chatId: 'c-run', title: 'Reconcile August' }] }))
+      expect(statusLine()).toBe('Running Reconcile August')
+      await waitFor(() => expect(activeSessions).toHaveBeenCalled())
+      await act(async () => {})
+      expect(document.querySelector('[data-agent-active-session]')).toBeNull()
+      cleanup()
+
+      activeSessions.mockResolvedValue({ ok: true, sessions: [
+        { agentId: AGENT.id, chatId: 'c-live', title: 'Ask about VAT' },
+        { agentId: AGENT.id, chatId: 'c-run', title: 'Reconcile August' }
+      ] })
+      await renderTab(queue({ mode: 'one', running: [{ taskId: 't1', chatId: 'c-run', title: 'Reconcile August' }] }))
+      expect((await screen.findByRole('status')).textContent).toBe('Ledger is also running in “Ask about VAT”. Run next starts beside it. Open')
+      cleanup()
+
+      activeSessions.mockResolvedValue({ ok: true, sessions: [
+        { agentId: AGENT.id, chatId: 'c-live', title: 'Ask about VAT' },
+        { agentId: AGENT.id, chatId: 'c-other', title: null }
+      ] })
+      await renderTab(queue())
+      expect((await screen.findByRole('status')).textContent).toBe('Ledger is also running in 2 sessions. Run next starts beside them. Open')
+    } finally {
+      activeSessions.mockResolvedValue({ ok: true, sessions: [] })
+    }
   })
 
   it('runs the next task and stays on the page', async () => {

@@ -130,7 +130,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 
 ### The composer notice panel
 
-The panel is drawn by every `ChatInput`: the main New chat screen, an existing chat, and the start-chat composer on an agent's page. It speaks only for the agent the message goes straight to: a direct chat's bound agent, or the agent a human-routed chat addresses.
+The panel is drawn by every `ChatInput`: the main New chat screen, an existing chat, and the start-chat composer on an agent's page. It speaks only for the agent the message goes straight to: a direct chat's bound agent, or the agent a human-routed chat addresses. The one exception is the running-session row, which is about the agents picked on a not-yet-created chat.
 
 1. The user picks or opens a chat with an agent that has something wrong with it. A frosted tab rises from behind the top edge of the message box, which overlaps its bottom. The tab is tinted amber, or red when any row is red, and a slow line travels its border
 2. Rows appear in this order, each with an icon, one line (two at most, the whole of it in the tooltip) and at most one action:
@@ -138,6 +138,7 @@ The panel is drawn by every `ChatInput`: the main New chat screen, an existing c
    2. **A folder agent's missing credentials.** The required slots nothing fills, named in the scanner's sentence. **Finish setup** opens **Finish setting up *Name*** over the chat ([Service Credentials](../../agents/service_credentials/README.md#finish-setup))
    3. **An OpenCode agent's AI credential.** "No AI credential is set for this agent." or "This agent's AI credential is switched off." **Choose credential** opens the agent's page in Settings, where Runs with is the first section. When this machine has no AI credential at all there is nothing to choose there, so the button reads **Add credential** and opens Settings → AI Credentials
    4. **The folder's validation findings**, for a folder whose findings do not stop it. The first error, with its file in muted text in front of it, and **Reveal** to show that file in Finder. Any further errors are listed under **N more**, opened in place
+   5. **An agent that is already running.** On the new-chat screen only, one row per picked agent with a running session: *<Agent> is already running in “<chat>”. Make sure this request won’t conflict with it.* with **Open**, which goes to the newest one. It comes last and never holds Send; see [The Active-Session Warning](../../agents/local_agents/active_session_warning.md)
    A login action (Log in, whose label becomes *Waiting for sign-in…* beside **Cancel**) sits on its own line under the sentence, not at the end of it. Its width changes while it runs; at the end of the line that would take width from the sentence and move the text, so under the sentence it widens into free space and nothing moves. Other actions stay at the end of the line.
 3. Each row goes away by itself once its cause is fixed. When the last one goes, the panel goes too
 

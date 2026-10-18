@@ -301,8 +301,6 @@ export function dispatchPausedText(paused: NonNullable<AgentDispatchState['pause
 }
 
 const WAITING_TEXT: Record<TaskDispatchWaiting, string> = {
-  folder_busy: 'Waiting — folder busy',
-  live_turn: 'Waiting — a turn is running in this folder',
   slot: 'Waiting for a runner slot',
   gate: 'Waiting for approval in the Inbox'
 }
@@ -321,10 +319,14 @@ export function dispatchStatusParts(state: AgentDispatchState): {
   const running = state.running
   if (running.length > 0) {
     // Up to N says how full it is, and still names a lone run; a wait for a
-    // slot beside the runs is said after them.
+    // slot beside the runs is said after them. Run next starts beyond the
+    // count, so a queue can run more than its N, or more than one.
     const slot = state.waiting === 'slot' ? ' · waiting for a runner slot' : ''
-    if (state.maxRuns != null && running.length > 1) {
-      return { text: `Running ${running.length} of ${state.maxRuns}${slot}`, task: null, tail: '' }
+    if (running.length > 1) {
+      const text = state.maxRuns != null && running.length <= state.maxRuns
+        ? `Running ${running.length} of ${state.maxRuns}`
+        : `Running ${running.length} tasks`
+      return { text: `${text}${slot}`, task: null, tail: '' }
     }
     const of = state.maxRuns != null ? ` · 1 of ${state.maxRuns}` : ''
     return { text: 'Running ', task: { id: running[0].taskId, title: running[0].title }, tail: `${of}${slot}` }
@@ -341,32 +343,26 @@ export function dispatchStatusParts(state: AgentDispatchState): {
 }
 
 /**
- * What an answered approval settled as, in the card that asked. An approved
- * task main could not start right away says when it will — on its own in
- * One at a time and Up to N, by Run next in Manual — and what it waits for:
- * the agent's own runs, the folder, a conversation, or a runner slot; or not
- * yet when it is not Ready. `agentLabel` names the agent, null while unknown.
+ * What an answered approval settled as, in the card that asked. Approve
+ * starts the task beside whatever its agent already runs; one main could not
+ * start right away says when it will — on its own in One at a time and Up to
+ * N, by Run next in Manual — and what it waits for: the task's own
+ * conversation finishing its turn, or a runner slot; or not yet when it is
+ * not Ready.
  */
 export function dispatchGateSettledText(
   action: TaskDispatchGateAction,
-  result: TaskDispatchGateResult & { ok: true },
-  agentLabel: string | null = null
+  result: TaskDispatchGateResult & { ok: true }
 ): string {
   if (action === 'skip') return 'Skipped. The queue passes over this task until its file changes.'
   if (result.started) return 'Approved. The task is running.'
-  if (result.reason === 'not_eligible') return 'Approved. It is not ready to run yet.'
   const when = result.mode === 'manual' ? 'Use Run next when' : 'It starts when'
-  const agent = agentLabel ?? 'the agent'
   switch (result.reason) {
-    case 'agent_busy':
-      return result.mode === 'up_to' && result.maxRuns
-        ? `Approved. ${when} one of ${agent}’s ${result.maxRuns} runs finishes.`
-        : `Approved. ${when} ${agent}’s current run finishes.`
     case 'live_turn':
-      return `Approved. ${when} the conversation running there finishes.`
+      return `Approved. ${when} the task’s conversation finishes its turn.`
     case 'slot':
       return `Approved. ${when} a task runner slot is free.`
     default:
-      return result.mode === 'manual' ? 'Approved. Use Run next when the folder is free.' : 'Approved. It starts when the folder is free.'
+      return 'Approved. It is not ready to run yet.'
   }
 }

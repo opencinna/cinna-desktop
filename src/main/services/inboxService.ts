@@ -1,6 +1,6 @@
 import { takeAgentStatusReport } from '../tasks/agentStatusReports'
 import { isDispatchedRun, settleDispatchOwnedTurn, wakeDispatcher } from '../tasks/dispatchedTurns'
-import { dispatchFolderNamesFor, isDispatchableAgent, taskDispatchInboxItems } from './taskDispatchInbox'
+import { dispatchQueuesFor, isDispatchableAgent, taskDispatchInboxItems } from './taskDispatchInbox'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
@@ -31,6 +31,7 @@ import { ASK_NO_LONGER_WAITING, disconnectedKey } from '../../shared/inbox'
 import type {
   InboxAnswerResult,
   InboxEntry,
+  InboxQueuedFor,
   InboxSnapshot,
   SkillDisconnectedDismissal,
   SkillDisconnectedInboxItem,
@@ -87,12 +88,12 @@ function settledStatus(resolution: RequestResolution): Exclude<TaskInputRequestS
   return 'answered'
 }
 
-function toEntry(row: TaskInputRequestRow, taskTitle: string, folders: ReadonlyMap<string, string>): InboxEntry {
+function toEntry(row: TaskInputRequestRow, taskTitle: string, queues: ReadonlyMap<string, InboxQueuedFor>): InboxEntry {
   const queued = row.queuedAnswer !== null && row.queuedAnswer !== undefined
-  const folder = queued && row.agentId ? folders.get(row.agentId) : undefined
+  const queue = queued && row.agentId ? queues.get(row.agentId) : undefined
   return {
     ...(queued ? { queuedAnswer: row.queuedAnswer!, ...(row.queuedAt ? { queuedAt: row.queuedAt } : {}) } : {}),
-    ...(folder ? { queuedFolder: folder } : {}),
+    ...(queue ? { queuedFor: queue } : {}),
     ...(row.queuedError ? { queuedError: row.queuedError } : {}),
     requestId: row.id,
     source: 'local',
@@ -628,10 +629,10 @@ export const inboxService = {
     */
     const pending = remoteInboxService.list(userId)
     const open = taskInputRequestRepo.listOpen(userId)
-    // Only an answer waiting for its queue names the agent's folder.
-    const folders = open.some(({ row }) => row.queuedAnswer != null)
-      ? await dispatchFolderNamesFor(userId)
-      : new Map<string, string>()
+    // Only an answer waiting for its queue names the queue it waits on.
+    const queues = open.some(({ row }) => row.queuedAnswer != null)
+      ? await dispatchQueuesFor(userId)
+      : new Map<string, InboxQueuedFor>()
     const local = open
       .filter(({ row }) => {
         // An allowlist, not `!== 'runner'`: a reply address the user can answer
@@ -643,7 +644,7 @@ export const inboxService = {
         const task = taskService.getById(userId, row.taskId)
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })
-      .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
+      .map(({ row, taskTitle }) => toEntry(row, taskTitle, queues))
     const dispatchPending = taskDispatchInboxItems(userId)
     const desktopUpdatesPending = desktopUpdateItems()
     const kitAgentsPending = kitAgentsForSkillCards()
@@ -748,8 +749,8 @@ export const inboxService = {
       const content = resolution.answers.map((answers) => answers.join(', ')).join('\n')
       // **A task a dispatcher queue owns is answered as a dispatched run.**
       // The answer is stored on the ask, which stays open and listed, and the
-      // queue sends it as a flight: with a runner slot, once the agent and its
-      // folder are free, in any mode and while paused (the answer is the
+      // queue sends it as a flight: with a runner slot, once the agent has
+      // room in its queue's count, in any mode and while paused (the answer is the
       // user's explicit act, like Run next). Its turn then ends by the report
       // rule. A message typed in the chat still goes at once, and supersedes it.
       // Not for an agent that can no longer work a queue (disabled, its folder

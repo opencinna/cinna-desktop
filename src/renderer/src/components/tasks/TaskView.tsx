@@ -16,6 +16,7 @@ import {
   User
 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
+import { AgentActiveSessionNotice } from '../agents/AgentActiveSessionNotice'
 import { useTaskDelegations } from '../../hooks/useDelegations'
 import { delegationNoteText, delegationStateLabel } from '../../utils/delegationText'
 import { useHandoverForTask } from '../../hooks/useHandovers'
@@ -889,17 +890,54 @@ function StartTaskControls({ task, lead }: { task: TaskDto; lead?: React.ReactNo
           Continue
         </button>
       </div>
-      <div role={error ? 'alert' : undefined} className="min-h-8 pt-1 text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>
+      {/* Only when there is one, last but for the notice: it moves nothing above it (§1). */}
+      {error && <div role="alert" className="pt-1 text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>}
+      {/* The agent chosen here, not the task's assignee: Continue starts that one. */}
+      <TaskSessionNotice
+        task={task}
+        agent={selected && selected !== 'model'
+          ? { id: selected, name: available.find((agent) => agent.id === selected)?.name ?? 'This agent' }
+          : null}
+        className="pt-1"
+      />
     </section>
   )
 }
 
 /**
+ * The warning, last under a task's Start, when the agent that Start would
+ * run already works in a session: starting this one goes beside it. Nothing
+ * for no agent (none chosen yet, the default chat model) or an idle one.
+ *
+ * A snapshot, not live (`live={false}`): Goal, Details and Add subtask sit
+ * below this section, so a notice popping in or out as runs start and end
+ * elsewhere would move them with no gesture (§1). It is taken when the page
+ * opens on this task and when the agent changes (the picker), and Open still
+ * goes to the chat it named.
+ */
+function TaskSessionNotice({ task, agent, className }: {
+  task: TaskDto
+  agent: { id: string; name: string } | null
+  className?: string
+}): React.JSX.Element | null {
+  if (!agent) return null
+  return <AgentActiveSessionNotice agents={[agent]} live={false} snapshotKey={task.id} className={className} />
+}
+
+/** The task's assigned agent, for a Start through its queue. */
+function assignedAgent(task: TaskDto): { id: string; name: string } | null {
+  return task.assignee.kind === 'agent' && task.assignee.agentId
+    ? { id: task.assignee.agentId, name: task.assignee.name ?? 'This agent' }
+    : null
+}
+
+/**
  * Which Start a task gets. A **Ready task assigned to an agent whose queue
  * Cinna works** (main's list: enabled folder agents, bare and kit) starts
- * through that queue (`taskDispatch.runNext` with this task), so the folder's
- * one-at-a-time rule and the outside-content approval apply to a start from
- * this page exactly as to one the queue makes.
+ * through that queue (`taskDispatch.runNext` with this task), so the
+ * outside-content approval applies to a start from this page exactly as to
+ * one the queue makes. Like any Run next it starts beside whatever the agent
+ * already runs; the notice under Start says when that is.
  *
  * The Continue-with picker stays for every other task, and as the fallback
  * for one the queue cannot take: blockers still open or missing ("Waits on
@@ -968,7 +1006,7 @@ function WaitsOn({ blockers }: { blockers: TaskDto['blockedBy'] }): React.JSX.El
 /**
  * Start through the agent's queue. A started task opens its chat, as the
  * picker's Continue does; a task whose file needs approval opens the Inbox on
- * that card; a refusal (the folder is busy, a turn is running there, every
+ * that card; a refusal (the task's chat is still running a turn, every
  * runner slot is taken) is shown beside the button, and nothing closes (§6).
  */
 function DispatchStartControls({ task, controls, ready }: {
@@ -988,6 +1026,7 @@ function DispatchStartControls({ task, controls, ready }: {
       </button>
       {/* Only when there is one, last in the section: it moves nothing above it (§1). */}
       {error && <div role="alert" className="pt-1 text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>}
+      <TaskSessionNotice task={task} agent={assignedAgent(task)} className="pt-1" />
     </section>
   )
 }

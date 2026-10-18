@@ -1,5 +1,3 @@
-import { realpathSync } from 'node:fs'
-import { basename, resolve as resolvePath } from 'node:path'
 import { agentTaskDispatchRepo, taskDispatchGateRepo, type TaskDispatchGateRow } from '../db/taskDispatch'
 import { taskRepo } from '../db/tasks'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
@@ -13,10 +11,10 @@ import { visibleChat } from '../auth/chatScope'
 import { taskService } from './taskService'
 import { taskContinuationPrompt, taskExecutionService } from './taskExecutionService'
 import { inboxService } from './inboxService'
-import { activeRunsByChat, onRunClosed, onRunOpened } from './runExecutionState'
-import { taskRunnersByChat } from './taskRunnerState'
+import { onRunClosed, onRunOpened } from './runExecutionState'
+import { liveAgentIds } from './activeAgentSessions'
 import { installTaskRunnerHooks, taskRunnerBridge } from './taskRunnerBridge'
-import { setDispatchableAgentsSource, setDispatchFolderNamesSource } from './taskDispatchInbox'
+import { setDispatchableAgentsSource, setDispatchQueuesSource } from './taskDispatchInbox'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { runtimeAgentSlotFree, withRuntimeAgent } from '../tasks/runtimeAdmission'
 import { clearDispatchedRun, markDispatchedRun, setDispatchOwnedTurnSettler, setDispatchWake, type DispatchOwnedTurnEnd } from '../tasks/dispatchedTurns'
@@ -27,7 +25,7 @@ import { DELEGATION_TERMINAL_STATES } from '../../shared/delegations'
 import { TASK_PRIORITIES, type TaskDto } from '../../shared/tasks'
 import { folderCategoryForStatus } from '../../shared/folderTasks'
 import { parseTaskStatus } from '../../shared/taskStatus'
-import type { TaskDispatchGateAction, TaskDispatchGateDeferral, TaskDispatchGateResult } from '../../shared/inbox'
+import type { InboxQueuedFor, TaskDispatchGateAction, TaskDispatchGateDeferral, TaskDispatchGateResult } from '../../shared/inbox'
 import {
   DISPATCH_NOTE_INTERRUPTED,
   DISPATCH_NOTE_UNREPORTED,
@@ -57,18 +55,25 @@ import { runExecutionService, type RunOutcome, type RunScope } from './runExecut
  * `blocked_by` id done (an id naming nothing blocks). Highest priority first,
  * then oldest. A task that already has a conversation continues in it.
  *
- * **When.** In `one` mode, whenever the agent has no dispatched run, no other
- * dispatched run works in its folder (agents sharing a folder count), and no
- * turn at all is running there. In `up_to` mode, whenever the agent has fewer
- * than N dispatched runs (its flights, of every origin): its starts ignore
- * the folder — its own other runs, another agent's run or settle there, a
- * live turn there — while a `one` or manual agent sharing the folder still
- * waits on all of them. No two flights ever hold the same task. Each
- * dispatched turn holds a global runner slot ({@link withRuntimeAgent}) until
- * it ends. Woken by a mode change, a
- * Resume, any task write (status, create, folder pull), any turn ending, the
- * profile becoming ready, and a {@link TICK_MS} tick; passes are debounced and
- * serialized, so two wakes cannot start two runs. Only while the app is open.
+ * **When.** The queue's own starts keep a count: in `one` mode, whenever the
+ * agent has no dispatched run; in `up_to` mode, whenever it has fewer than N
+ * (its flights, of every origin — a Run next beyond the count included, so
+ * the queue waits until the agent is back under it). Nothing else in the
+ * folder holds a start back: another agent's run or settle there, a chat
+ * typed there, a live turn on the same agent. Sessions side by side on one
+ * agent are the user's call; the surfaces that start one only warn
+ * (`activeAgentSessions`). A start still waits for the task's own chat (one
+ * turn per chat) and for a global runner slot ({@link withRuntimeAgent}),
+ * which each dispatched turn holds until it ends. No two flights ever hold
+ * the same task. Woken by a mode change, a Resume, any task write (status,
+ * create, folder pull), any turn ending, the profile becoming ready, and a
+ * {@link TICK_MS} tick; passes are debounced and serialized, so two wakes
+ * cannot start two runs. Only while the app is open.
+ *
+ * **Explicit starts.** Run next (the agent's Tasks tab, the Tasks view, Start
+ * on a task page), Approve and run, and Run next sending a stored answer are
+ * the user's own acts: they ignore the count and the pause, and start beside
+ * whatever the agent already runs.
  *
  * **The report rule.** A dispatched turn is not settled by how it ended
  * (`inboxService.endTurn` leaves that one run to {@link settle}). The agent
@@ -86,9 +91,9 @@ import { runExecutionService, type RunOutcome, type RunScope } from './runExecut
  * **Answers.** An Inbox answer to an ask on a task a queue owns is stored on
  * the ask (`queued_answer`), and the queue sends it as a flight of its own
  * (`origin: 'resume'`) before it picks a new task for that agent: the same
- * agent, folder, live-turn and slot rules as a launch, in any mode and while
- * paused, since the answer is the user's own act. Its turn ends by the report
- * rule like any dispatched turn.
+ * count, chat and slot rules as a launch, in any mode and while paused, since
+ * the answer is the user's own act. Its turn ends by the report rule like any
+ * dispatched turn.
  *
  * **Outside content.** A task whose file was written outside Cinna is not run
  * until the user approves that exact content in the Inbox (one card per
@@ -152,7 +157,7 @@ export interface TaskDispatchDeps {
    * ended and is not enough.
    */
   refreshTask(userId: string, taskId: string): Promise<void>
-  /** The agents of every turn running now, whoever started it. */
+  /** The agents of every turn running now, whoever started it (boot recovery reads it). */
   liveAgentIds(profileUserId: string): string[]
   publish(agentId: string | null): void
 }
@@ -160,7 +165,6 @@ export interface TaskDispatchDeps {
 interface Flight {
   userId: string
   agentId: string
-  folder: string
   taskId: string
   title: string
   chatId: string | null
@@ -173,6 +177,12 @@ interface Flight {
    * `resume`: it sends an answer stored on the task's ask ({@link Flight.answer}).
    */
   origin: 'queue' | 'manual' | 'resume'
+  /**
+   * The user asked for this start (Run next, Approve and run, Run next sending
+   * a stored answer): it ignores the agent's count and its pause. The queue's
+   * own starts, its stored answers included, keep the count.
+   */
+  explicit: boolean
   /** The ask whose stored answer a `resume` flight sends, and when it was stored. */
   answer: { requestId: string; queuedAt: number } | null
   /**
@@ -192,9 +202,8 @@ interface Candidate {
   gated: boolean
 }
 
+/** The task's own chat is running a turn (one turn per chat): end quietly, the turn's close wakes the queue. */
 class LiveTurnError extends Error {}
-/** Another dispatched run works in the folder of a flight that must run alone there: end quietly. */
-class FolderBusyError extends Error {}
 /** The agent already has as many runs as its mode allows (the mode changed during the wait): end quietly. */
 class AgentFullError extends Error {}
 /** The task stopped qualifying while its flight waited for a slot: end quietly. */
@@ -214,30 +223,12 @@ function reported(status: string): boolean {
 
 const PRIORITY_RANK = new Map(TASK_PRIORITIES.map((priority, index) => [priority, index]))
 
-/** How long a folder's real path is reused before it is read again. */
-const FOLDER_IDENTITY_TTL_MS = 2_000
-const folderIdentities = new Map<string, { real: string; at: number }>()
-
-/**
- * The folder an agent works in, with symlinks resolved: two agents adopted
- * through a link and its target share one folder. A folder that cannot be
- * resolved (it is gone) falls back to its absolute path. Cached briefly,
- * because a pass checks every agent's folder many times.
- */
-function folderOf(agent: DispatchAgent): string {
-  const absolute = resolvePath(agent.path)
-  const now = Date.now()
-  const cached = folderIdentities.get(absolute)
-  if (cached && now - cached.at < FOLDER_IDENTITY_TTL_MS) return cached.real
-  let real = absolute
-  try { real = realpathSync(absolute) } catch { /* gone or unreadable: the path itself */ }
-  if (folderIdentities.size > 256) folderIdentities.clear()
-  folderIdentities.set(absolute, { real, at: now })
-  return real
-}
-
 function flightKey(userId: string, agentId: string): string {
   return JSON.stringify([userId, agentId])
+}
+
+function taskSettleKey(userId: string, taskId: string): string {
+  return JSON.stringify([userId, taskId])
 }
 
 /** A flight is held per task: two flights never take the same task. */
@@ -251,9 +242,13 @@ function limitOf(row: { mode: TaskDispatchMode; maxRuns: number | null }): numbe
   return isTaskDispatchMaxRuns(row.maxRuns) ? row.maxRuns : TASK_DISPATCH_MAX_RUNS.default
 }
 
-/** Whether this agent's starts ignore the folder (`up_to`): its own runs, other agents' and live turns there. */
-function wide(row: { mode: TaskDispatchMode }): boolean {
-  return row.mode === 'up_to'
+/**
+ * What an answer stored for this agent's queue waits on, as the Inbox names
+ * it: the agent, and N in `up_to` (room under N); otherwise its running task.
+ */
+export function dispatchQueueOf(userId: string, agent: { name: string; id: string }): InboxQueuedFor {
+  const row = agentTaskDispatchRepo.get(userId, agent.id)
+  return { agentName: agent.name, maxRuns: row.mode === 'up_to' ? limitOf(row) : null }
 }
 
 export function createTaskDispatchService(deps: TaskDispatchDeps) {
@@ -262,16 +257,24 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
   /**
    * Agents whose owned (resumed) turn is being settled now, by
    * {@link flightKey}, with how many settles are under way. Until the settle
-   * lands — it reads the task file again first — the agent and its folder are
-   * busy, or a pass woken by the turn closing could start the next task
-   * before the pause is written.
+   * lands — it reads the task file again first — the agent is busy to its
+   * queue's own starts, or a pass woken by the turn closing could start the
+   * next task before the pause is written. The user's own starts ignore it.
    */
   const settlingOwned = new Map<string, number>()
   /**
+   * The tasks those owned turns belong to, by {@link taskSettleKey}, with how
+   * many settles are under way. The user's own starts ignore the agent's
+   * settle, but not the task's: a Run next or an approval that took the task
+   * itself mid-settle (its file re-read back to Ready) would have the settle's
+   * release and unreported flag land on the run it just started.
+   */
+  const settlingTasks = new Map<string, number>()
+  /**
    * Each agent's state as last announced, by {@link flightKey}. A pass compares
    * and publishes what moved, so a surface showing a queue needs no poll: a
-   * task made Ready, a file saved, a turn opening or closing in the folder all
-   * wake a pass, and the pass says when "Next" or "Waiting" changed.
+   * task made Ready, a file saved, a turn opening or closing all wake a pass,
+   * and the pass says when "Next" or "Waiting" changed.
    */
   const announced = new Map<string, string>()
   let scope: RunScope | null = null
@@ -288,6 +291,9 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
   /** Why this task cannot be dispatched to this agent now, or null when it can. */
   function refusal(userId: string, task: TaskDto, agentId: string): string | null {
     if (task.assignee.kind !== 'agent' || task.assignee.agentId !== agentId) return 'This task is not assigned to this agent.'
+    // Its last turn is still being settled ({@link settlingTasks}): no start
+    // of any kind takes it until that lands. The settle's end wakes the queue.
+    if (settlingTask(userId, task.id)) return 'This task is still being wrapped up. Try again in a moment.'
     if (task.status !== 'open') return 'Only a Ready task can be run.'
     if (task.executor !== 'desktop' || !task.runsHere) return 'This task is running elsewhere. Take it over first.'
     if (task.router === 'script' || task.script != null) return 'This task needs its script runner.'
@@ -318,11 +324,6 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       .map((task) => ({ task, gated: task.fromOutside }))
   }
 
-  function folderBusy(folder: string): boolean {
-    for (const flight of flights.values()) if (flight.folder === folder) return true
-    return false
-  }
-
   /** This agent's flights, of every origin and phase, oldest first. */
   function flightsOf(userId: string, agentId: string): Flight[] {
     return [...flights.values()].filter((flight) => flight.userId === userId && flight.agentId === agentId)
@@ -335,14 +336,14 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     return false
   }
 
+  /** Whether an owned turn on this task is being settled ({@link settlingTasks}). */
+  function settlingTask(userId: string, taskId: string): boolean {
+    return settlingTasks.has(taskSettleKey(userId, taskId))
+  }
+
   /** Whether an owned turn of this agent is being settled ({@link settlingOwned}). */
   function settling(userId: string, agentId: string): boolean {
     return settlingOwned.has(flightKey(userId, agentId))
-  }
-
-  /** Whether an owned turn of any agent working in this folder is being settled. */
-  function settlingIn(userId: string, folder: string, agents: DispatchAgent[]): boolean {
-    return agents.some((agent) => folderOf(agent) === folder && settling(userId, agent.id))
   }
 
   /** Whether a turn holds this task's own chat now: starting it would only refuse. */
@@ -350,25 +351,14 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     return !!task.chatId && deps.chatRunning(task.chatId)
   }
 
-  function liveTurnIn(userId: string, folder: string, agents: DispatchAgent[]): boolean {
-    const inFolder = new Set(agents.filter((agent) => folderOf(agent) === folder).map((agent) => agent.id))
-    return deps.liveAgentIds(userId).some((id) => inFolder.has(id))
-  }
-
-  function stateFor(userId: string, agent: DispatchAgent, agents: DispatchAgent[]): AgentDispatchState {
+  function stateFor(userId: string, agent: DispatchAgent): AgentDispatchState {
     const row = agentTaskDispatchRepo.get(userId, agent.id)
     const own = flightsOf(userId, agent.id)
     const waitingFlight = own.find((flight) => flight.phase === 'slot')
     const pausedTask = row.pausedTaskId ? taskRepo.getById(userId, row.pausedTaskId) : undefined
     const list = candidates(userId, agent.id)
     const runnable = list.find((candidate) => !candidate.gated)
-    const folder = folderOf(agent)
-    let waiting: TaskDispatchWaiting | null = null
-    if (waitingFlight) waiting = 'slot'
-    else if (own.length === 0 && row.mode === 'one' && !row.pausedReason) {
-      if (folderBusy(folder) || settlingIn(userId, folder, agents)) waiting = 'folder_busy'
-      else if (liveTurnIn(userId, folder, agents)) waiting = 'live_turn'
-    }
+    let waiting: TaskDispatchWaiting | null = waitingFlight ? 'slot' : null
     // Only gated tasks left. Waiting on the gate means a card is actually in
     // the Inbox for one of them; with none (Manual, a paused queue, a skipped
     // card) the top one is the next task, and Run next asks for its approval.
@@ -544,7 +534,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
   /** A start that never got going. The queue pauses on it, so it is not retried every tick. */
   function startFailed(flight: Flight, error: unknown): void {
     agentTaskDispatchRepo.clearActive(flight.userId, flight.agentId, flight.taskId)
-    if (error instanceof LiveTurnError || error instanceof FolderBusyError || error instanceof AgentFullError ||
+    if (error instanceof LiveTurnError || error instanceof AgentFullError ||
       error instanceof NoLongerEligibleError || error instanceof AbandonedError ||
       flight.controller.signal.aborted || quitting) return
     logger.warn('a dispatched task could not be started', { taskId: flight.taskId, agentId: flight.agentId, error: String(error) })
@@ -597,8 +587,8 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     // hand, finished, reassigned, deleted or rewritten outside Cinna since
     // it was chosen. Choose it again, as a pass would.
     const current = recheck(flight)
-    // A run beside others (`up_to`) can find the task's own chat busy with a
-    // turn the folder check would have caught: wait for it, quietly.
+    // The task's own chat may have taken a turn during the wait (one typed
+    // there): one turn per chat, so wait for it, quietly.
     if (current.chatId && deps.chatRunning(current.chatId)) throw new LiveTurnError('This task’s conversation is still running a turn.')
     flight.title = current.title
     agentTaskDispatchRepo.setActive(flight.userId, flight.agentId, flight.taskId, null)
@@ -650,29 +640,29 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
   }
 
   /**
-   * Reserve the agent and its folder now (synchronously, so a second wake
-   * sees them taken), then take a slot, start the turn (`begin`: a task, or
-   * a stored answer) and follow it to the end. Resolves once the turn is
-   * accepted; rejects when it never starts. `begin` checks again what it was
-   * chosen for; one that no longer qualifies ends the flight quietly — no
-   * pause — and the queue moves on.
+   * Reserve the task (and a place in the agent's count) now, synchronously,
+   * so a second wake sees it taken, then take a slot, start the turn (`begin`:
+   * a task, or a stored answer) and follow it to the end. Resolves once the
+   * turn is accepted; rejects when it never starts. `begin` checks again what
+   * it was chosen for; one that no longer qualifies ends the flight quietly —
+   * no pause — and the queue moves on.
    */
   function launch(
     runScope: RunScope, agent: DispatchAgent, task: { id: string; title: string }, origin: Flight['origin'],
-    answer: Flight['answer'] = null, startedByUser = false
+    options: { answer?: Flight['answer']; startedByUser?: boolean; explicit?: boolean } = {}
   ): Promise<DispatchStart> {
     const flight: Flight = {
       userId: runScope.profileUserId,
       agentId: agent.id,
-      folder: folderOf(agent),
       taskId: task.id,
       title: task.title,
       chatId: null,
       phase: 'slot',
       launchedAt: nextLaunch++,
       origin,
-      answer,
-      startedByUser,
+      explicit: options.explicit ?? false,
+      answer: options.answer ?? null,
+      startedByUser: options.startedByUser ?? false,
       controller: new AbortController(),
       run: null
     }
@@ -686,32 +676,25 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     void deps.withSlot(agent.id, flight.controller.signal, async () => {
       flight.phase = 'starting'
       if (quitting || flight.controller.signal.aborted) throw new AbandonedError('The dispatch was abandoned.')
-      // The rules of the agent's mode now: it may have changed during the wait.
-      const row = agentTaskDispatchRepo.get(flight.userId, agent.id)
-      const working = (other: Flight): boolean => other !== flight && other.phase !== 'slot'
-      if (flightsOf(flight.userId, agent.id).filter(working).length >= limitOf(row)) {
-        throw new AgentFullError('This agent is already running as many tasks as its queue allows.')
-      }
-      // The queue paused during the wait (another of its runs was flagged):
-      // its own flights stop here. A Run next and a stored answer are the
-      // user's acts, and go on while paused.
-      if (flight.origin === 'queue' && row.pausedReason) throw new AbandonedError('The queue paused while this run waited.')
-      // An owned turn of this agent is being settled: its pause may be about
-      // to be written. The settle's end wakes the queue again.
-      if (settling(flight.userId, agent.id)) throw new AgentFullError('This agent is still settling its last turn.')
-      if (!wide(row)) {
-        // Alone in the folder: another run that got going there meanwhile (an
-        // `up_to` agent's, which does not wait for the folder) comes first.
-        if ([...flights.values()].some((other) => working(other) && other.folder === flight.folder)) {
-          throw new FolderBusyError('Another task is running in this agent’s folder.')
+      // The user's own start goes beside whatever the agent runs, in any mode
+      // and while paused. The queue's own keeps the rules of the agent's mode
+      // as they are now: they may have changed during the wait.
+      if (!flight.explicit) {
+        const row = agentTaskDispatchRepo.get(flight.userId, agent.id)
+        // Every other flight that got going counts, an explicit one beyond the
+        // count included: the queue waits until the agent is back under it.
+        const working = (other: Flight): boolean => other !== flight && other.phase !== 'slot'
+        if (flightsOf(flight.userId, agent.id).filter(working).length >= limitOf(row)) {
+          throw new AgentFullError('This agent is already running as many tasks as its queue allows.')
         }
-        if (deps.liveAgentIds(flight.userId).length > 0 || settlingOwned.size > 0) {
-          const agents = await deps.agents(runScope)
-          if (settlingIn(flight.userId, flight.folder, agents)) throw new FolderBusyError('Another task in this agent’s folder is still being settled.')
-          if (liveTurnIn(flight.userId, flight.folder, agents)) throw new LiveTurnError('A turn is running in this agent’s folder.')
-        }
+        // The queue paused during the wait (another of its runs was flagged):
+        // its own flights stop here. A stored answer is the user's act, and
+        // goes on while paused.
+        if (flight.origin === 'queue' && row.pausedReason) throw new AbandonedError('The queue paused while this run waited.')
+        // An owned turn of this agent is being settled: its pause may be about
+        // to be written. The settle's end wakes the queue again.
+        if (settling(flight.userId, agent.id)) throw new AgentFullError('This agent is still settling its last turn.')
       }
-      if (quitting || flight.controller.signal.aborted) throw new AbandonedError('The dispatch was abandoned.')
       const start = await (flight.answer ? sendAnswer(runScope, flight) : startTask(runScope, flight))
       isAccepted = true
       flight.chatId = start.chatId
@@ -740,11 +723,11 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     return started
   }
 
-  /** A `resume` flight for this stored answer. */
-  function launchAnswer(runScope: RunScope, agent: DispatchAgent, answer: TaskInputRequestRow): Promise<DispatchStart> {
+  /** A `resume` flight for this stored answer; `explicit` when Run next sends it. */
+  function launchAnswer(runScope: RunScope, agent: DispatchAgent, answer: TaskInputRequestRow, explicit = false): Promise<DispatchStart> {
     const task = taskRepo.getById(runScope.profileUserId, answer.taskId)
     return launch(runScope, agent, { id: answer.taskId, title: task?.title ?? '' }, 'resume',
-      { requestId: answer.id, queuedAt: answer.queuedAt!.getTime() })
+      { answer: { requestId: answer.id, queuedAt: answer.queuedAt!.getTime() }, explicit })
   }
 
   /**
@@ -775,7 +758,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     for (const agent of agents) {
       const key = flightKey(userId, agent.id)
       let state: string
-      try { state = JSON.stringify(stateFor(userId, agent, agents)) } catch (error) {
+      try { state = JSON.stringify(stateFor(userId, agent)) } catch (error) {
         logger.warn('a queue’s state could not be read', { agentId: agent.id, error: String(error) })
         continue
       }
@@ -852,20 +835,19 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       if (passEpoch !== epoch || quitting) return
       if (settling(userId, agent.id)) continue
       const row = agentTaskDispatchRepo.get(userId, agent.id)
-      if (wide(row)) {
+      if (row.mode === 'up_to') {
         await passWide(passScope, agent, row, answers.get(agent.id) ?? [])
         continue
       }
+      // One run at most (Manual and One at a time): any flight counts, a Run
+      // next's included. Nothing else in the folder holds the start back.
       if (flightsOf(userId, agent.id).length > 0) continue
-      const folder = folderOf(agent)
-      if (folderBusy(folder) || settlingIn(userId, folder, agents) || liveTurnIn(userId, folder, agents)) continue
       // A stored answer first, in any mode and while paused: the user gave it.
       const answer = answers.get(agent.id)?.[0]
       if (answer) {
-        // Its chat still running (a turn there the folder check does not see,
-        // such as a nested agent's): wait for it rather than take a slot and
-        // fail; the turn closing wakes the next pass. Nothing else starts for
-        // this agent meanwhile — the answer is the head of its queue.
+        // Its chat still running a turn: wait for it rather than take a slot
+        // and fail; the turn closing wakes the next pass. Nothing else starts
+        // for this agent meanwhile — the answer is the head of its queue.
         if (!deps.chatRunning(answer.chatId)) void launchAnswer(passScope, agent, answer).catch(() => {})
         continue
       }
@@ -907,11 +889,10 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     }
   }
 
-  async function dispatchable(runScope: RunScope, agentId: unknown): Promise<{ agent: DispatchAgent; agents: DispatchAgent[] } | null> {
+  async function dispatchable(runScope: RunScope, agentId: unknown): Promise<DispatchAgent | null> {
     if (typeof agentId !== 'string' || !agentId) return null
     const agents = await deps.agents(runScope)
-    const agent = agents.find((candidate) => candidate.id === agentId)
-    return agent ? { agent, agents } : null
+    return agents.find((candidate) => candidate.id === agentId) ?? null
   }
 
   /** A gate was answered: the queue's state and the task (now trusted, or not) changed. */
@@ -926,10 +907,6 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
   function deferral(result: TaskDispatchRunResult): TaskDispatchGateDeferral {
     if (result.ok) return 'not_eligible'
     switch (result.code) {
-      case 'agent_busy':
-        return 'agent_busy'
-      case 'folder_busy':
-        return 'folder_busy'
       case 'live_turn':
         return 'live_turn'
       case 'slot':
@@ -1035,13 +1012,14 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
      * Settled by the same report rule, and the queue pauses the same way. An
      * Inbox answer is not one of these: it is stored and sent as a flight.
      *
-     * While it is being settled the agent and its folder count as busy to a
-     * pass, Run next and an approval's start.
+     * While it is being settled the agent counts as busy to its queue's own
+     * starts; Run next and an approval's start go ahead, as they would on a
+     * paused queue — on any task but this one, which no start takes until
+     * its settle lands.
      *
      * A typed message is the user's own turn: it holds no runner slot and is
-     * not a flight, so it can start while another dispatched run works in the
-     * same folder, as any typed message can. Any live turn in the folder still
-     * stops a pass from starting there.
+     * not a flight, so it can start beside any dispatched run, as any typed
+     * message can.
      */
     settleOwnedTurn(end: DispatchOwnedTurnEnd): void {
       if (quitting) return
@@ -1049,14 +1027,20 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       if (!row || row.deletedAt || row.dispatchAgentId !== end.agentId) return
       // Busy until settled, synchronously: the wake the turn's close sends
       // must not start the next task before this one's pause is written.
+      // The task too: a Run next or an approval may not take it meanwhile.
       const key = flightKey(end.userId, end.agentId)
+      const taskKey = taskSettleKey(end.userId, end.taskId)
       settlingOwned.set(key, (settlingOwned.get(key) ?? 0) + 1)
+      settlingTasks.set(taskKey, (settlingTasks.get(taskKey) ?? 0) + 1)
       void settleTask(end.userId, end.agentId, end.taskId, { state: end.state, error: end.error })
         .catch((error) => logger.warn('a resumed dispatched turn could not be settled', { taskId: end.taskId, error: String(error) }))
         .finally(() => {
           const left = (settlingOwned.get(key) ?? 1) - 1
           if (left > 0) settlingOwned.set(key, left)
           else settlingOwned.delete(key)
+          const leftOnTask = (settlingTasks.get(taskKey) ?? 1) - 1
+          if (leftOnTask > 0) settlingTasks.set(taskKey, leftOnTask)
+          else settlingTasks.delete(taskKey)
           deps.publish(end.agentId)
           wake()
         })
@@ -1064,12 +1048,12 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
 
     async list(runScope: RunScope): Promise<AgentDispatchState[]> {
       const agents = await deps.agents(runScope)
-      return agents.map((agent) => stateFor(runScope.profileUserId, agent, agents))
+      return agents.map((agent) => stateFor(runScope.profileUserId, agent))
     },
 
     async get(runScope: RunScope, agentId: unknown): Promise<AgentDispatchState | null> {
       const found = await dispatchable(runScope, agentId)
-      return found ? stateFor(runScope.profileUserId, found.agent, found.agents) : null
+      return found ? stateFor(runScope.profileUserId, found) : null
     },
 
     /** `maxRuns` is N for `up_to` (2–8; `invalid_input` otherwise) and ignored for the other modes. */
@@ -1079,28 +1063,28 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       }
       const found = await dispatchable(runScope, agentId)
       if (!found) return NOT_DISPATCHABLE
-      const before = agentTaskDispatchRepo.get(runScope.profileUserId, found.agent.id)
-      const after = agentTaskDispatchRepo.setMode(runScope.profileUserId, found.agent.id, mode, mode === 'up_to' ? maxRuns as number : null)
+      const before = agentTaskDispatchRepo.get(runScope.profileUserId, found.id)
+      const after = agentTaskDispatchRepo.setMode(runScope.profileUserId, found.id, mode, mode === 'up_to' ? maxRuns as number : null)
       // The queue's own waits for a slot that the new mode no longer wants:
-      // all of them for Manual, and any beyond a tighter limit (fewer runs, or
-      // alone in the folder again). The next pass starts what it should.
-      const tighter = mode === 'manual' || limitOf(after) < limitOf(before) || (wide(before) && !wide(after))
+      // all of them for Manual, and any beyond a tighter limit (fewer runs).
+      // The next pass starts what it should.
+      const tighter = mode === 'manual' || limitOf(after) < limitOf(before)
       if (tighter) {
-        abortQueued((flight) => flight.origin === 'queue' && flight.userId === runScope.profileUserId && flight.agentId === found.agent.id)
+        abortQueued((flight) => flight.origin === 'queue' && flight.userId === runScope.profileUserId && flight.agentId === found.id)
       }
-      deps.publish(found.agent.id)
+      deps.publish(found.id)
       wake()
-      return { ok: true, state: stateFor(runScope.profileUserId, found.agent, found.agents) }
+      return { ok: true, state: stateFor(runScope.profileUserId, found) }
     },
 
     /** Clear the pause; the flagged task stays where it is until the user moves it. */
     async resume(runScope: RunScope, agentId: unknown): Promise<TaskDispatchUpdateResult> {
       const found = await dispatchable(runScope, agentId)
       if (!found) return NOT_DISPATCHABLE
-      agentTaskDispatchRepo.resume(runScope.profileUserId, found.agent.id)
-      deps.publish(found.agent.id)
+      agentTaskDispatchRepo.resume(runScope.profileUserId, found.id)
+      deps.publish(found.id)
       wake()
-      return { ok: true, state: stateFor(runScope.profileUserId, found.agent, found.agents) }
+      return { ok: true, state: stateFor(runScope.profileUserId, found) }
     },
 
     /**
@@ -1108,6 +1092,13 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
      * clear): `taskId` when it is eligible, else the top of the queue — an
      * answer stored for this queue first, which it sends. A task waiting on
      * approval answers with its card instead of running.
+     *
+     * The user's own start: it ignores the agent's count and goes beside
+     * whatever the agent already runs — its other tasks, a chat, an owned
+     * turn being settled on another task (whose pause it would ignore
+     * anyway). It still waits for nothing: a task already starting, a task
+     * whose own last turn is still being settled, the task's own chat running
+     * a turn, or no free runner slot is a refusal.
      */
     async runNext(runScope: RunScope, agentId: unknown, taskId?: unknown, options: { startedBy?: 'user' } = {}): Promise<TaskDispatchRunResult> {
       if (taskId !== undefined && taskId !== null && (typeof taskId !== 'string' || !taskId)) {
@@ -1115,34 +1106,15 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       }
       const found = await dispatchable(runScope, agentId)
       if (!found) return NOT_DISPATCHABLE
-      const { agent, agents } = found
+      const agent = found
       const userId = runScope.profileUserId
-      const row = agentTaskDispatchRepo.get(userId, agent.id)
-      const limit = limitOf(row)
-      if (flightsOf(userId, agent.id).length >= limit || settling(userId, agent.id)) {
-        return {
-          ok: false,
-          code: 'agent_busy',
-          message: limit > 1
-            ? `This agent is already running ${limit} tasks from its queue. Try again when one finishes.`
-            : 'This agent is already working on a task from its queue.'
-        }
-      }
-      const folder = folderOf(agent)
-      // `up_to` starts beside whatever works in the folder; the others run alone there.
-      if (!wide(row) && (folderBusy(folder) || settlingIn(userId, folder, agents))) {
-        return { ok: false, code: 'folder_busy', message: 'Another task is running in this agent’s folder. Try again when it finishes.' }
-      }
-      if (!wide(row) && liveTurnIn(userId, folder, agents)) {
-        return { ok: false, code: 'live_turn', message: 'A conversation is running in this agent’s folder. Try again when it finishes.' }
-      }
       if (typeof taskId === 'string' && held(userId, taskId)) {
         return { ok: false, code: 'not_eligible', message: 'This task is already starting.' }
       }
       // An answer stored for this queue is its head: Run next sends it rather
       // than start a new task. One that is no longer waiting falls through.
       const answer = typeof taskId === 'string' ? undefined
-        : storedAnswers(userId).get(agent.id)?.find((stored) => !held(userId, stored.taskId))
+        : storedAnswers(userId).get(agent.id)?.find((stored) => !held(userId, stored.taskId) && !settlingTask(userId, stored.taskId))
       if (answer) {
         if (deps.chatRunning(answer.chatId)) {
           return { ok: false, code: 'live_turn', message: 'This task’s conversation is still finishing its turn. Try again when it finishes.' }
@@ -1151,12 +1123,10 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
           return { ok: false, code: 'slot', message: 'Every task runner slot is busy. Try again when a run finishes.' }
         }
         try {
-          const start = await launchAnswer(runScope, agent, answer)
+          const start = await launchAnswer(runScope, agent, answer, true)
           return { ok: true, taskId: answer.taskId, chatId: start.chatId }
         } catch (error) {
           if (error instanceof LiveTurnError) return { ok: false, code: 'live_turn', message: error.message }
-          if (error instanceof FolderBusyError) return { ok: false, code: 'folder_busy', message: error.message }
-          if (error instanceof AgentFullError) return { ok: false, code: 'agent_busy', message: error.message }
           if (!(error instanceof NoLongerEligibleError)) {
             return { ok: false, code: 'start_failed', message: error instanceof Error ? error.message : 'The answer could not be sent.' }
           }
@@ -1188,12 +1158,10 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
         return { ok: false, code: 'slot', message: 'Every task runner slot is busy. Try again when a run finishes.' }
       }
       try {
-        const start = await launch(runScope, agent, choice.task, 'manual', null, options.startedBy === 'user')
+        const start = await launch(runScope, agent, choice.task, 'manual', { startedByUser: options.startedBy === 'user', explicit: true })
         return { ok: true, taskId: choice.task.id, chatId: start.chatId }
       } catch (error) {
         if (error instanceof LiveTurnError) return { ok: false, code: 'live_turn', message: error.message }
-        if (error instanceof FolderBusyError) return { ok: false, code: 'folder_busy', message: error.message }
-        if (error instanceof AgentFullError) return { ok: false, code: 'agent_busy', message: error.message }
         if (error instanceof NoLongerEligibleError) return { ok: false, code: 'not_eligible', message: error.message }
         return { ok: false, code: 'start_failed', message: error instanceof Error ? error.message : 'The task could not be started.' }
       }
@@ -1201,9 +1169,10 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
 
     /**
      * The Inbox answer to an outside-content approval. Approve trusts exactly
-     * the content the card showed and runs the task when its agent and folder
-     * are free (otherwise it is simply eligible now); Skip leaves it
-     * untrusted, and no card is asked again for the same content.
+     * the content the card showed and runs the task at once, as Run next does
+     * (beside whatever the agent already runs), unless its chat is running a
+     * turn or no runner slot is free — then it is simply eligible now; Skip
+     * leaves it untrusted, and no card is asked again for the same content.
      */
     async answerGate(runScope: RunScope, gateId: unknown, action: TaskDispatchGateAction): Promise<TaskDispatchGateResult> {
       const userId = runScope.profileUserId
@@ -1221,13 +1190,11 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
         wake()
         return { ok: false, code: 'changed', reason: 'The task file changed since this was asked. A new approval will show what it says now.' }
       }
-      const dispatchRow = agentTaskDispatchRepo.get(userId, gate.agentId)
-      const mode = dispatchRow.mode
-      const maxRuns = mode === 'up_to' ? limitOf(dispatchRow) : null
+      const mode = agentTaskDispatchRepo.get(userId, gate.agentId).mode
       if (action === 'skip') {
         taskDispatchGateRepo.settle(userId, gate.id, 'skipped')
         announce(userId, gate)
-        return { ok: true, started: null, mode, maxRuns }
+        return { ok: true, started: null, mode }
       }
       if (!taskDispatchGateRepo.settle(userId, gate.id, 'approved')) {
         return { ok: false, code: 'already_answered', reason: 'This approval has already been answered.' }
@@ -1243,10 +1210,10 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       const result = await this.runNext(runScope, gate.agentId, gate.taskId)
       announce(userId, gate)
       wake()
-      if (result.ok && 'chatId' in result) return { ok: true, started: { taskId: result.taskId, chatId: result.chatId }, mode, maxRuns }
+      if (result.ok && 'chatId' in result) return { ok: true, started: { taskId: result.taskId, chatId: result.chatId }, mode }
       const reason = deferral(result)
       logger.info('an approved task did not start at once', { taskId: gate.taskId, reason })
-      return { ok: true, started: null, reason, mode, maxRuns }
+      return { ok: true, started: null, reason, mode }
     }
   }
 }
@@ -1293,17 +1260,7 @@ function productionDeps(): TaskDispatchDeps {
       const { taskSyncService } = await import('./taskSyncService')
       await taskSyncService.pullFresh(userId, taskId)
     },
-    liveAgentIds(profileUserId) {
-      const ids: string[] = []
-      const chats = new Set<string>([...activeRunsByChat.keys()])
-      for (const [chatId, runner] of taskRunnersByChat) if (runner.working) chats.add(chatId)
-      for (const chatId of chats) {
-        const handle = activeRunsByChat.get(chatId)
-        const agentId = handle?.agentId ?? visibleChat(profileUserId, chatId)?.agentId ?? null
-        if (agentId) ids.push(agentId)
-      }
-      return ids
-    },
+    liveAgentIds,
     publish(agentId) {
       publishEvent(TASK_DISPATCH_CHANGED_CHANNEL, { agentId })
     }
@@ -1312,7 +1269,7 @@ function productionDeps(): TaskDispatchDeps {
 
 export const taskDispatchService = createTaskDispatchService(productionDeps())
 
-/** Any task write may make a task Ready, finish a blocker or free a folder. */
+/** Any task write may make a task Ready or finish a blocker. */
 installTaskRunnerHooks(
   {
     answer: () => null,
@@ -1341,13 +1298,13 @@ export async function dispatchableAgentIds(userId: string): Promise<ReadonlySet<
 /** The Inbox lists a paused queue only for an agent that can still work one. */
 setDispatchableAgentsSource(dispatchableAgentIds)
 
-/** An answer waiting for its queue names the folder it waits on. */
-setDispatchFolderNamesSource(async (userId) => {
+/** An answer waiting for its queue names the agent, and N when it runs Up to N. */
+setDispatchQueuesSource(async (userId) => {
   const agents = await productionDeps().agents({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
-  return new Map(agents.map((agent) => [agent.id, basename(resolvePath(agent.path))]))
+  return new Map(agents.map((agent) => [agent.id, dispatchQueueOf(userId, agent)]))
 })
 
-/** A turn letting go of its chat may free the folder the queue was waiting on. */
+/** A turn letting go of its chat may free a task's chat, or an answer's, the queue was waiting on. */
 onRunClosed(() => taskDispatchService.wake())
-/** A turn taking a chat may busy a folder: the queues there now wait on it. */
+/** A turn taking a chat may take a Ready task's chat: the queue's announced state moves. */
 onRunOpened(() => taskDispatchService.wake())

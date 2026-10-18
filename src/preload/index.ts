@@ -170,6 +170,7 @@ import {
   type TaskDispatchRunResult,
   type TaskDispatchUpdateResult
 } from '../shared/taskDispatch'
+import { AGENT_SESSIONS_CHANGED_CHANNEL, type AgentActiveSessionsResult } from '../shared/agentSessions'
 import type { TaskDelegationsDto } from '../shared/delegations'
 import type { HandoverDto, HandoverIgnoreCheck, HandoverSetting } from '../shared/handovers'
 import type {
@@ -1511,6 +1512,21 @@ const api = {
       const listener = (_event: IpcRendererEvent, payload: TaskDispatchChangedPayload): void => handler(payload)
       ipcRenderer.on(TASK_DISPATCH_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(TASK_DISPATCH_CHANGED_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * Which agents are already running a session (a chat whose turn is running,
+   * typed or dispatched), for the warning before starting one more on the
+   * same agent. `ok: false` before a profile is active.
+   */
+  agentSessions: {
+    active: (): Promise<AgentActiveSessionsResult> => ipcRenderer.invoke('agentSessions:active'),
+    /** Told whenever a turn takes or lets go of a chat; re-read on it. Returns an unsubscribe function. */
+    onChanged: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(AGENT_SESSIONS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(AGENT_SESSIONS_CHANGED_CHANNEL, listener)
     }
   },
 

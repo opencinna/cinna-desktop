@@ -41,7 +41,7 @@ function snapshot(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = [
 const { HANDOVER_GATE_OPTIONS, handoverGateQuestion, handoverGateRequestId } = await import(
   '../../../../shared/handovers'
 )
-const { InboxView } = await import('./InboxView')
+const { InboxView, queuedWhen } = await import('./InboxView')
 const { useUIStore } = await import('../../stores/ui.store')
 const { useChatStore } = await import('../../stores/chat.store')
 
@@ -253,7 +253,7 @@ describe('InboxView', () => {
     // Mutation: ignore `result.queued` → the row says "Answered" for an answer nothing has sent yet.
     listMock.mockResolvedValueOnce(snapshot([{ ...QUESTION, resume: 'next_message' }]))
       .mockResolvedValue(snapshot([{
-        ...QUESTION, resume: 'next_message', queuedAnswer: 'The first', queuedAt: new Date('2026-09-11T09:05:00Z'), queuedFolder: 'ledger'
+        ...QUESTION, resume: 'next_message', queuedAnswer: 'The first', queuedAt: new Date('2026-09-11T09:05:00Z'), queuedFor: { agentName: 'Ledger', maxRuns: null }
       }]))
     answerMock.mockResolvedValue({ ok: true, queued: true })
     // Mutation: resolve the ask in the chat store on any ok → an open chat would show it answered.
@@ -269,10 +269,16 @@ describe('InboxView', () => {
     await waitFor(() => expect(document.querySelector('[data-inbox-queued]')).not.toBeNull())
     expect(screen.queryByText('Answered: The first.')).toBeNull()
     expect(screen.queryByRole('button', { name: /^Answer$/ })).toBeNull()
-    // Once main's read lands, its folder names when it goes.
-    await waitFor(() => expect(document.querySelector('[data-inbox-queued]')?.textContent).toBe('The firstSends when ledger is free.'))
+    // Once main's read lands, its queue names when it goes.
+    await waitFor(() => expect(document.querySelector('[data-inbox-queued]')?.textContent).toBe('The firstSends when Ledger’s running task finishes.'))
     expect(resolveInputRequest).not.toHaveBeenCalled()
     expect(screen.getByText('Weekly digest')).toBeTruthy()
+  })
+
+  it('says what a stored answer waits for: the running task, room under N, or the queue before main names it', () => {
+    expect(queuedWhen({ agentName: 'Ledger', maxRuns: null })).toBe('Sends when Ledger’s running task finishes.')
+    expect(queuedWhen({ agentName: 'Ledger', maxRuns: 3 })).toBe('Sends when Ledger has room in its queue.')
+    expect(queuedWhen(undefined)).toBe('Sends when the agent’s queue has room.')
   })
 
   it('drops the waiting answer at the first read after it, so a send that fails twice with the same error shows it both times', async () => {

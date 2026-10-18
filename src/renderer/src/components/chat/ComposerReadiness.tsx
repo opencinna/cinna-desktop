@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Download, FileWarning, FolderOpen, KeyRound, Loader2, RefreshCw, WifiOff } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton } from './ComposerNoticePanel'
@@ -12,6 +12,8 @@ import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto
 import { useFinishSetup } from '../agents/local/FinishSetupDialog'
 import { useAgentAiCredentialIssue, type AiCredentialIssue } from '../../hooks/useAgentAiCredential'
 import { useUIStore } from '../../stores/ui.store'
+import { useAgentActiveSessions } from '../../hooks/useAgentSessions'
+import { activeSessionSentence, openSessionTitle, runningSessionsOf, useOpenSession } from '../agents/AgentActiveSessionNotice'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -439,6 +441,36 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
     notices: rows.map((row) => (row === replacedBy ? { ...row, textId: reasonId } : row)),
     dialog: finishSetup.dialog
   }
+}
+
+/**
+ * The new-chat screen's warning, one row per picked agent that is already
+ * running a session (a chat, a task): "<Agent> is already running in
+ * “<chat>”. Make sure this request won’t conflict with it." with Open, which
+ * goes to the newest one. The composer puts these after its readiness rows.
+ * A warning only: it never blocks Send. Pass no agents (an existing chat's
+ * composer) and nothing is read.
+ */
+export function useActiveSessionNotices(agents: readonly { id: string; name: string }[]): ComposerNotice[] {
+  const { data } = useAgentActiveSessions({ enabled: agents.length > 0 })
+  const openSession = useOpenSession()
+  const baseId = useId()
+  return runningSessionsOf(agents, data).map(({ agent, sessions }, index) => {
+    const latest = sessions[0]
+    const sentence = activeSessionSentence(agent.name, sessions)
+    const textId = `${baseId}-session-${index}`
+    return {
+      key: `active-session:${agent.id}`,
+      tone: 'warning',
+      icon: AlertTriangle,
+      text: sentence,
+      textId,
+      title: sentence,
+      // Named "Open" as it reads; the sentence it acts on describes it, so
+      // several rows' Opens are told apart (ux_rules §10).
+      action: <NoticeButton aria-describedby={textId} title={openSessionTitle(latest)} onClick={() => openSession(latest)}>Open</NoticeButton>
+    }
+  })
 }
 
 interface RefusableExamplePromptsProps {
