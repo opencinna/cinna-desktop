@@ -290,6 +290,8 @@ export function readinessNoticeItem(readiness: ComposerReadiness, reasonId: stri
     text,
     textId: reasonId,
     title: title ?? undefined,
+    // A login's button grows into "Waiting for sign-in…" and Cancel.
+    actionBelow: action.cancel !== undefined,
     action: <ReadinessActionButton key={reasonId + action.label} action={action} tip={tip} />
   }
 }

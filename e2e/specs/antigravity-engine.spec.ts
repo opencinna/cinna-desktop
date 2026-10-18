@@ -173,6 +173,8 @@ test('an Antigravity folder agent shows its runtime, Flash tiers and an in-place
   const logIn = page.getByRole('button', { name: 'Log in', exact: true })
   await expect(tip).toBeVisible()
   const watched = { warning, tip, composer, logIn }
+  // Measured once the notice panel has finished rising into place (280 ms), not mid-animation.
+  await page.locator('.composer-notice-panel').evaluate((panel) => Promise.all(panel.getAnimations().map((a) => a.finished)))
   const before = await boxes(watched)
   await logIn.click()
   await expect.poll(() => fake.received().map((request) => request.method)).toEqual(['initialize', 'authenticate'])

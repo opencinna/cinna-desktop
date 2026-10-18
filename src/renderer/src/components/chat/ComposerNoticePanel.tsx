@@ -18,6 +18,13 @@ export interface ComposerNotice {
   /** The full account, for the tooltip on the line. */
   title?: string
   action?: ReactNode
+  /**
+   * The action on its own line under the text, for one whose width changes
+   * while it runs (a login's pending label, then Cancel): beside the text it
+   * would take that width from the line and move everything left of it
+   * (ux_rules rule 1); below, it widens into free space.
+   */
+  actionBelow?: boolean
   /** Behind a toggle, opened in place: more findings, the rest of a long story. */
   details?: ReactNode
   detailsLabel?: string
@@ -66,8 +73,9 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
             <ChevronDown size={11} aria-hidden="true" className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
           </button>
         )}
-        {notice.action && <div className="shrink-0">{notice.action}</div>}
+        {notice.action && !notice.actionBelow && <div className="shrink-0">{notice.action}</div>}
       </div>
+      {notice.action && notice.actionBelow && <div className="flex pl-[21px] pt-1.5">{notice.action}</div>}
       {notice.details && (
         <AnimatedCollapse open={open}>
           <div className="pl-[21px] pt-1.5">{notice.details}</div>

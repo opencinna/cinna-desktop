@@ -160,6 +160,18 @@ describe('Antigravity’s first login', () => {
     expect(screen.getByRole('button', { name: 'About Antigravity’s terms' })).toBeTruthy()
   })
 
+  it('puts a login’s action on its own line, so its widening label never takes width from the sentence', () => {
+    const view = render(<ReadinessRow readiness={login('codex')} />)
+    const line = screen.getByText('codex is not logged in.')
+    // Not in the sentence's flex row: the pending label and Cancel widen into free space below it.
+    expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(false)
+    view.rerender(<ReadinessRow readiness={login('codex', true)} />)
+    expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Cancel' }))).toBe(false)
+    // An action without a Cancel stays beside the sentence.
+    view.rerender(<ReadinessRow readiness={{ ...login('codex'), action: { label: 'Check again', pendingLabel: 'Checking…', pending: false, run: vi.fn() } }} />)
+    expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Check again' }))).toBe(true)
+  })
+
   it('says nothing of the kind for another engine’s login', () => {
     render(<ReadinessRow readiness={login('codex')} />)
     expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
