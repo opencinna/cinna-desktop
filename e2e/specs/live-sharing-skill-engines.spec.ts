@@ -285,7 +285,7 @@ test('T2.1 B adds A’s shared skill to B’s agent: linked in the plugin, in Op
     expect(readdirSync(links)).toEqual([skill])
     expect(readlinkSync(join(links, skill))).toBe(cached)
     expect(config.skills.paths).toContain(links)
-    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', [skill]: 'allow' })
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', [skill]: 'allow' })
     expect(entry.permission.external_directory).toMatchObject({ '*': 'ask', [`${links}/*`]: 'allow', [cacheReadAllow(b)]: 'allow' })
     // The cache is read-allowed, never a skills path.
     expect(config.skills.paths.some((path: string) => path.startsWith(join(b.sandbox.userData, 'catalog-skills')))).toBe(false)
@@ -330,7 +330,7 @@ test('T2.2 a pin B cannot see and a pin not yet downloaded reach no engine, and 
   writeCatalogPins(agent.path, [catalogPinOf(hiddenItem), catalogPinOf(seenItem)])
   await b.page.evaluate(() => window.api.localAgents.rescan())
 
-  await test.step('both rows read Not on this computer yet., with Try again', async () => {
+  await test.step('before any turn, both rows read Not on this computer yet., with Try again', async () => {
     await openSkills(b, mine)
     for (const name of [hidden, seen]) {
       const row = skillRow(b, name, 'From the catalog')
@@ -346,16 +346,17 @@ test('T2.2 a pin B cannot see and a pin not yet downloaded reach no engine, and 
     const { config, entry } = await fakeOpenCodeTurn(b, fake, agent, 'Hello before any download.')
     expect(readdirSync(links)).toEqual([own])
     expect(config.skills.paths).toContain(links)
-    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', [own]: 'allow' })
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', [own]: 'allow' })
     expect(entry.permission.external_directory).not.toHaveProperty(cacheReadAllow(b))
     expect(entry.prompt).toContain(PROMPT_OWN_ONLY)
     expect(entry.prompt).not.toContain(hidden)
     expect(entry.prompt).not.toContain(seen)
   })
 
-  await test.step('Try again: the hidden pin fails in words, the visible one downloads', async () => {
+  // The first turn's skill build starts a background fetch of the missing pins
+  // (`pinnedSkillAutoFetch.ts`); that turn's config was already written without them.
+  await test.step('without a click, the hidden pin fails in words and the visible one downloads', async () => {
     await openSkills(b, mine)
-    await skillRow(b, hidden, 'From the catalog').getByRole('button', { name: `Download ${hidden} again`, exact: true }).click()
     const hiddenRow = skillRow(b, hidden, 'From the catalog')
     // Core answers 404 to someone with no access. On B's own agent, which no team tracks and which has no
     // copy, that is Disconnected: the row says the agent can't download it, and offers Check again (not
@@ -375,7 +376,7 @@ test('T2.2 a pin B cannot see and a pin not yet downloaded reach no engine, and 
     const { entry } = await fakeOpenCodeTurn(b, fake, agent, 'Hello after the download.')
     expect(readdirSync(links).sort()).toEqual([own, seen].sort())
     expect(readlinkSync(join(links, seen))).toBe(cachedSeen)
-    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', [own]: 'allow', [seen]: 'allow' })
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', [own]: 'allow', [seen]: 'allow' })
     expect(entry.prompt).toContain(PROMPT_WITH_CATALOG)
     expect(existsSync(join(links, hidden))).toBe(false)
   })

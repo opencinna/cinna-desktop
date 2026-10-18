@@ -273,7 +273,7 @@ async function withdrawnWhileHeld(
     expect(readlinkSync(join(links, skill))).toBe(cached)
     const written = openCodeConfigOf(b, agent.id)
     expect(written?.config.skills.paths).toContain(links)
-    expect(written?.entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', [skill]: 'allow' })
+    expect(written?.entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', [skill]: 'allow' })
   })
 
   await test.step('B’s Inbox has the Disconnected card: the agent, Remove, Dismiss', async () => {
@@ -342,14 +342,13 @@ async function withdrawnWhileHeld(
     return
   }
 
-  await test.step('a new download is refused: with the copy gone, Try again turns the row Disconnected — Check again instead of Try again, Remove stays', async () => {
+  await test.step('a new download is refused: with the copy gone, the next start’s background fetch turns the row Disconnected — Check again instead of Try again, Remove stays', async () => {
     dropCachedRevision(b, item.uuid, 1, skill)
     // A copy gone behind the app's back reaches an agent page only on a fresh read: a later start.
     await b.relaunch()
     await openSkills(b, mine)
     const row = skillRow(b, skill, 'From the catalog')
-    await expect(row.getByRole('img', { name: NOT_HERE, exact: true })).toBeVisible()
-    await row.getByRole('button', { name: `Download ${skill} again`, exact: true }).click()
+    // No click: the start's profile-ready sweep fetches the missing pin in the background (`pinnedSkillAutoFetch.ts`).
     // B's own agent, no team behind it: the 404 is B's access gone — the card's state, not WITHDRAWN with a Try again.
     await expect(row.getByRole('img', { name: DISCONNECTED_NOT_CACHED, exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(row.getByRole('listitem')).toHaveText([DISCONNECTED_NOT_CACHED])
@@ -484,15 +483,14 @@ test('T3.4 U7 behind: C, whose clone of A’s agent still pins Version 1, cannot
     expect(await skillDownloadStatus(fixture, personC.token, item.uuid, 2)).toBe(200)
   })
 
-  await test.step('C, behind, with Version 1 gone from this computer: Try again says to update the agent first', async () => {
+  await test.step('C, behind, with Version 1 gone from this computer: the next start’s background fetch says to update the agent first', async () => {
     expect(catalogPins(got.path)).toEqual([expect.objectContaining({ name: skill, revision_number: 1 })])
     dropCachedRevision(c, item.uuid, 1, skill)
     // A copy gone behind the app's back reaches an agent page only on a fresh read: a later start.
     await c.relaunch()
     await openSkills(c, name)
     const row = skillRow(c, skill, 'From the catalog')
-    await expect(row.getByRole('img', { name: NOT_HERE, exact: true })).toBeVisible()
-    await row.getByRole('button', { name: `Download ${skill} again`, exact: true }).click()
+    // No click: the start's profile-ready sweep fetches the missing pin in the background (`pinnedSkillAutoFetch.ts`).
     await expect(row.getByRole('img', { name: NOT_AVAILABLE, exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(row.getByRole('listitem')).toHaveText([NOT_AVAILABLE])
     expect(cachedSkillDir(c, item.uuid, 1, skill)).toBeNull()

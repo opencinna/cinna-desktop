@@ -1,5 +1,6 @@
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import electronPath from 'electron'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -310,6 +311,14 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       }
     }
     if (testInfo.status === testInfo.expectedStatus) {
+      // The pinned-skill caches under userData (`catalog-skills/`,
+      // `marketplace-skills/`) are read-only by design (files 0444, folders
+      // 0555), and `rmSync` cannot empty a folder it may not write: EACCES.
+      try {
+        execFileSync('chmod', ['-R', 'u+w', sandbox.root], { stdio: 'ignore' })
+      } catch {
+        // nothing read-only, or already gone
+      }
       rmSync(sandbox.root, { recursive: true, force: true })
     } else {
       testInfo.annotations.push({ type: 'sandbox', description: sandbox.root })
