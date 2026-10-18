@@ -410,6 +410,8 @@ describe('PermissionsCard — an agent on Antigravity', () => {
     renderCard(antigravityAgent)
     expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('ask')
     expect(screen.getByText(/Antigravity runs commands and edits files/)).toBeTruthy()
+    // What Cinna settles itself on Ask, so the sentence does not promise an ask per command.
+    expect(screen.getByText(/runs this agent's own scripts, a few read-only commands and edits inside its folder\s+without asking \(hidden and credential files still ask\)/)).toBeTruthy()
     expect(screen.queryByText(/sandbox enabled/)).toBeNull()
     expect(screen.queryByText(/approved everything it was shown/)).toBeNull()
   })

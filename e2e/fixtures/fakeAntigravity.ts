@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { FakeAcpLogEntry, FakeAcpScript } from '../../src/main/agents/drivers/acp/testSupport/fakeAcp'
+import { repoRoot } from '../playwright.config'
 import type { CinnaApp } from './app'
 
 /**
@@ -72,4 +74,76 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line', (line)
       return method ? all.filter((entry) => entry.method === method) : all
     }
   }
+}
+
+const FAKE_AGENT = join(repoRoot, 'src', 'main', 'agents', 'drivers', 'acp', 'testSupport', 'fakeAcpAgent.mjs')
+
+/**
+ * A **signed-in** stand-in: the scriptable fake ACP agent (`fakeAcpAgent.mjs`,
+ * the one the driver's contract suite drives) behind a `/bin/sh` shim named
+ * like the server, so a spec can run whole turns on the Antigravity launcher —
+ * its isolated home, its `default` mode, its permission asks.
+ *
+ * Only the server is faked. The login the launcher checks before spawning is
+ * the user home's, so a spec pairs this with {@link signInAntigravityHome}
+ * before the app reads it, and on macOS with {@link writeFakeSecurity} on the
+ * app's `PATH`.
+ */
+export interface ScriptedAntigravity {
+  /** The executable to set as `localAgentsAntigravityPath`. */
+  path: string
+  /** What the server was sent, per ACP method. */
+  received(method: string): FakeAcpLogEntry[]
+  /** What the app answered a request the server sent (`session/request_permission`). */
+  answers(method: string): FakeAcpLogEntry[]
+}
+
+export function writeScriptedAntigravity(cinna: CinnaApp, script: FakeAcpScript): ScriptedAntigravity {
+  const dir = join(cinna.sandbox.root, 'scripted-antigravity')
+  mkdirSync(dir, { recursive: true })
+  const scriptPath = join(dir, 'script.json')
+  const logPath = join(dir, 'log.jsonl')
+  const path = join(dir, 'agy_acp_server.par')
+  writeFileSync(scriptPath, JSON.stringify(script, null, 2))
+  // The child gets the launcher's own environment, so the shim names node and the script itself.
+  writeFileSync(path, [
+    '#!/bin/sh',
+    `FAKE_ACP_SCRIPT='${scriptPath}'`,
+    `FAKE_ACP_LOG='${logPath}'`,
+    'export FAKE_ACP_SCRIPT FAKE_ACP_LOG',
+    `exec '${process.execPath}' '${FAKE_AGENT}' "$@"`,
+    ''
+  ].join('\n'), { mode: 0o755 })
+  writeFileSync(join(dir, 'localharness_external'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const log = (): FakeAcpLogEntry[] => existsSync(logPath)
+    ? readFileSync(logPath, 'utf8').split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as FakeAcpLogEntry)
+    : []
+  return {
+    path,
+    received: (method) => log().filter((entry) => entry.dir === 'in' && entry.method === method),
+    answers: (method) => log().filter((entry) => entry.dir === 'answer' && entry.method === method)
+  }
+}
+
+/**
+ * Make the sandbox home's Antigravity login read as signed in: the home's
+ * `settings.json` names the personal Google login, and (Linux) its token file
+ * exists. On macOS the token is a keychain item; see {@link writeFakeSecurity}.
+ */
+export function signInAntigravityHome(home: string): void {
+  const dir = join(home, '.gemini', 'antigravity-acp')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'settings.json'), `${JSON.stringify({ auth: { type: 'oauth-personal' } })}\n`)
+  writeFileSync(join(dir, 'acp_token.json'), '{}\n', { mode: 0o600 })
+}
+
+/**
+ * A `security` that finds every item (exit 0, no output), written into `dir`.
+ * The macOS login probe asks `security find-generic-password` by name on the
+ * main process's `PATH`, so a spec that puts `dir` first there (`test.use({ env })`)
+ * reads as signed in without touching any real keychain.
+ */
+export function writeFakeSecurity(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'security'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
 }

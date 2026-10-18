@@ -106,7 +106,7 @@ import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
 import { ARTIFACTS_SKILL_NAME, artifactsSkillInfo, ensureArtifactsSkillPlugin } from '../../services/artifacts/artifactsSkill'
-import { ensureKitAgentSkillsPlugin } from '../../services/agentSkillsPlugin'
+import { ensureKitAgentSkillsPlugin, kitAgentPinnedSkillFolders } from '../../services/agentSkillsPlugin'
 import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
@@ -535,6 +535,20 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   return { poolKey, plan, cwd: engine === 'antigravity' ? plan.spec.cwd : cwd }
 }
 
+/**
+ * Where an Antigravity folder agent's pinned skills live, for the permission
+ * rule that runs their scripts without asking. None for a bare folder, and
+ * none when the manifest or the caches cannot be read — the safe direction.
+ */
+function antigravityScriptRoots(agent: { path: string; kind: string; manifest?: unknown }): string[] {
+  if (agent.kind !== 'kit') return []
+  try {
+    return kitAgentPinnedSkillFolders(agent.path, agent.manifest)
+  } catch {
+    return []
+  }
+}
+
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   codex: createCodexLauncher({
     // Through the service, like OpenCode's `binary` below: memoised per
@@ -626,11 +640,14 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       const development = desktopFeatures.developmentAgentContext(userId, agentId)
       if (development) return { model: development.runtime.modelId, approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
+      const approval = desktopStateService.read(agent.path, agent.kind).antigravityApproval ?? 'ask'
       return {
         // The declared model, else the work complexity's Flash level, else the
         // server's own default — `runtimeService` is the one place that decides.
         model: runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId,
-        approval: desktopStateService.read(agent.path, agent.kind).antigravityApproval ?? 'ask'
+        approval,
+        // Only here, the folder agent's branch: every branch above asks about everything.
+        ...(approval === 'ask' ? { autoApprove: { scriptRoots: antigravityScriptRoots(agent) } } : {})
       }
     }
   }),

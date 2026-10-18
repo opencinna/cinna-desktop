@@ -98,6 +98,7 @@ import {
 } from './acpTelemetry'
 import { CONTEXT_CATEGORIES_KNOWN, type ContextMeasurement, type SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
+import { antigravityAutoApproves } from './antigravityAutoApproval'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, toInputQuestions, type AcpPermissionQuestion } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
@@ -2701,6 +2702,16 @@ async function answerPermission(
   const cinnaTool = world.stream.cinnaTool(params.toolCall.toolCallId) ??
     (ctx.launcherId === 'antigravity' ? cinnaToolName(undefined, undefined, undefined, params.toolCall._meta) : null)
   if (cinnaTool !== null && ctx.offersCinnaTool?.(cinnaTool) === true) return selected('allow')
+  // An Antigravity folder agent on Ask: an edit inside its folder, its own
+  // script or a read-only command there is settled like a standing grant —
+  // silently, with nothing written. Only where the launcher put the policy on
+  // the plan; the rule fails closed, so anything else falls through to the
+  // grants and then to the user.
+  if (ctx.launcherId === 'antigravity' && ctx.plan.autoApprove &&
+    antigravityAutoApproves(ctx.plan.autoApprove, params.toolCall)) {
+    logger.debug('settled an Antigravity ask from the folder policy', { agentId: agent.id, kind: params.toolCall.kind ?? null })
+    return selected('allow')
+  }
   let granted = false
   try {
     runtime.validate(input.chatId)

@@ -69,6 +69,12 @@ const state = vi.hoisted(() => ({
   skillsPluginFails: false,
   promptContexts: [] as { ownSkills?: string; tasksSkill?: unknown }[],
   agySystemPrompt: null as null | ((userId: string, agentId: string, mode: 'isolated' | 'native') => string),
+  agySettings: null as null | ((userId: string, agentId: string) => unknown),
+  /** The agent id each Antigravity `plan` was asked for, in order. */
+  agyPlanned: [] as string[],
+  pinnedFolders: [] as string[],
+  pinnedThrows: false,
+  pinnedAsked: 0,
   /** Each launcher `plan` call's `warmOnly`, in order. */
   warmOnlyPlans: [] as boolean[]
 }))
@@ -104,8 +110,9 @@ vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { setting
 } } }))
 vi.mock('./acp/antigravityLauncher', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./acp/antigravityLauncher')>()
-  return { ...actual, createAntigravityLauncher: (options: { systemPrompt: (userId: string, agentId: string, mode: 'isolated' | 'native') => string; home?: (userId: string, agentId: string, path: string) => string }) => (state.agySystemPrompt = options.systemPrompt, { id: 'antigravity',
+  return { ...actual, createAntigravityLauncher: (options: { systemPrompt: (userId: string, agentId: string, mode: 'isolated' | 'native') => string; home?: (userId: string, agentId: string, path: string) => string; settings: (userId: string, agentId: string) => unknown }) => (state.agySystemPrompt = options.systemPrompt, state.agySettings = options.settings, { id: 'antigravity',
     plan: async (context: { userId: string; agentId: string; folder: { path: string; runtimeMode: 'isolated' | 'native' } }) => {
+      state.agyPlanned.push(context.agentId)
       if (!state.utilityPlans) return { error: 'refused by the antigravity launcher' }
       const instructions = options.systemPrompt(context.userId, context.agentId, context.folder.runtimeMode)
       const home = options.home?.(context.userId, context.agentId, context.folder.path) ?? actual.antigravityIsolatedHome(context.folder.path)
@@ -147,6 +154,11 @@ vi.mock('../../services/agentSkillsPlugin', () => ({
   ensureKitAgentSkillsPlugin: (agent: { id: string; path: string }) => {
     state.skillsPluginAsked.push(agent)
     return state.skillsPluginFails ? null : { dir: '/userData/cinna-plugins/agents/key', skills: ['pdf-tools'] }
+  },
+  kitAgentPinnedSkillFolders: () => {
+    state.pinnedAsked++
+    if (state.pinnedThrows) throw new Error('the cache could not be read')
+    return state.pinnedFolders
   }
 }))
 vi.mock('../../services/localAgents/localAgentService', () => ({
@@ -258,6 +270,7 @@ vi.mock('../../logger/logger', () => ({
 
 const { driverFor, prepareAiFunctionRuntime, acpProcessPool, acpLauncherFor } = await import('./index')
 const { TITLE_SYSTEM_PROMPT } = await import('../../services/aiFunctionPrompts')
+const { desktopStateService } = await import('../../services/localAgents/desktopStateService')
 
 const folderRow = (launcher: string | null): AgentRow =>
   ({
@@ -529,6 +542,52 @@ describe('the cinna-tasks skill on Antigravity', () => {
     expect(state.promptContexts.map((context) => context.tasksSkill)).toEqual([
       { kind: 'skill' }, { kind: 'pointer', path: '/kit/skills/cinna-tasks/SKILL.md' }
     ])
+  })
+})
+
+describe('the Antigravity folder policy’s inputs', () => {
+  beforeEach(() => {
+    state.pinnedFolders = ['/cache/catalog/word-count']; state.pinnedThrows = false; state.pinnedAsked = 0; state.agyPlanned = []
+    vi.mocked(desktopStateService.read).mockReturnValue({ antigravityApproval: 'ask' } as never)
+  })
+  const settings = (agentId = 'folder:aaa'): unknown => state.agySettings!('user-1', agentId)
+
+  it('gives a kit agent on Ask its pinned skills’ folders, and a bare one none', () => {
+    // Mutation: drop `autoApprove` from the folder branch and no ask is settled.
+    expect(settings()).toEqual({ model: 'sonnet', approval: 'ask', autoApprove: { scriptRoots: ['/cache/catalog/word-count'] } })
+    state.kind = 'bare'
+    expect(settings()).toEqual({ model: 'sonnet', approval: 'ask', autoApprove: { scriptRoots: [] } })
+    expect(state.pinnedAsked).toBe(1)
+  })
+
+  it('gives no folders when they cannot be read, and no policy on Automatic', () => {
+    state.pinnedThrows = true
+    expect(settings()).toMatchObject({ autoApprove: { scriptRoots: [] } })
+    vi.mocked(desktopStateService.read).mockReturnValue({ antigravityApproval: 'auto' } as never)
+    expect(settings()).not.toHaveProperty('autoApprove')
+  })
+
+  it('gives none to a conductor or a build session', () => {
+    state.liveRows = [{ id: 'conductor:agy', driver: 'acp', driverConfig: { conductorChatId: 'chat', conductorEngine: 'antigravity',
+      conductorModel: 'flash', conductorPrompt: 'Chat', cwd: '/owned/chat' } } as unknown as AgentRow]
+    expect(settings('conductor:agy')).not.toHaveProperty('autoApprove')
+    state.liveRows = []
+    state.development = true
+    expect(settings()).not.toHaveProperty('autoApprove')
+  })
+
+  it('gives none to a chat runtime or an AI function', async () => {
+    state.utilityPlans = true
+    const agent: AgentRow = { ...folderRow('antigravity'), id: 'conductor:agy', source: 'local', enabled: true,
+      driverConfig: { launcher: 'antigravity', conductorChatId: 'chat-agy', conductorEngine: 'antigravity', cwd: '/owned/chat-agy', conductorPrompt: 'Chat' } }
+    state.liveRows = [agent]
+    await acpLauncherFor('antigravity')!.plan({ userId: 'user-1', agentId: agent.id, folder: {
+      name: 'Chat', slug: 'chat', description: '', path: '/owned/chat-agy', kind: 'bare', runtimeMode: 'isolated' } })
+    expect(state.agySettings!('user-1', state.agyPlanned.at(-1)!)).not.toHaveProperty('autoApprove')
+    state.liveRows = []
+    state.utilityEngine = 'antigravity'
+    const utility = await prepareAiFunctionRuntime('user-1', 'Summarize.', false)
+    expect(state.agySettings!('user-1', utility.poolKey)).not.toHaveProperty('autoApprove')
   })
 })
 

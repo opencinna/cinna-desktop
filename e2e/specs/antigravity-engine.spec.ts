@@ -1,9 +1,10 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { writeFakeAntigravity } from '../fixtures/fakeAntigravity'
+import { signInAntigravityHome, writeFakeAntigravity, writeFakeSecurity, writeScriptedAntigravity } from '../fixtures/fakeAntigravity'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
@@ -214,4 +215,69 @@ test('an Antigravity folder agent shows its runtime, Flash tiers and an in-place
 
   // Logged out, the server was only ever asked to sign in — never for a session.
   expect(fake.received().map((request) => request.method)).toEqual(['initialize', 'authenticate'])
+})
+
+test.describe('signed in, on Ask for approval', () => {
+  // The macOS login probe asks `security` on main's PATH; a shim first there
+  // reads as signed in without touching any real keychain (Linux reads the
+  // home's token file, which `signInAntigravityHome` writes).
+  const ENV: Record<string, string> = {}
+  let shims = ''
+  test.use({ env: ENV })
+  test.beforeAll(() => {
+    shims = mkdtempSync(join(tmpdir(), 'cinna-e2e-security-'))
+    writeFakeSecurity(shims)
+    ENV.PATH = `${shims}:${process.env.PATH ?? ''}`
+  })
+  test.afterAll(() => { if (shims) rmSync(shims, { recursive: true, force: true }) })
+
+  test('an edit inside the agent’s folder runs without asking; a command outside the rule still asks', async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+    const root = await addAgentRoot(cinna)
+    const agent = await createFolderAgent(cinna, root, 'Gemini Policy', 'Gemini Policy')
+    const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
+      agentId: input.agentId,
+      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium' } },
+      expectedStamp: input.stamp
+    }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
+    expect(saved.ok).toBe(true)
+    const OPTIONS = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }]
+    // The real 1.3.0 shapes: an edit names its absolute location, a command its line and cwd.
+    const fake = writeScriptedAntigravity(cinna, { prompt: { emit: [
+      { kind: 'permission', options: OPTIONS, toolCall: { toolCallId: 'edit-1', kind: 'edit', status: 'pending', title: 'create_file',
+        locations: [{ path: join(agent.path, 'notes', 'probe.txt') }] } },
+      { kind: 'permission', options: OPTIONS, toolCall: { toolCallId: 'cmd-1', kind: 'execute', status: 'pending', title: 'rm notes/probe.txt',
+        rawInput: { CommandLine: 'rm notes/probe.txt', Cwd: agent.path, WaitMsBeforeAsync: 500 } } },
+      { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Policy turn done.' } } }
+    ] } })
+    await cinna.page.evaluate((path) => window.api.settings.set('localAgentsAntigravityPath', path), fake.path)
+    signInAntigravityHome(cinna.sandbox.home)
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    const page = cinna.page
+    await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await answerAgentsFolder(cinna)
+    await page.getByRole('button', { name: agent.name, exact: true }).click()
+    const composer = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+    await composer.fill('Edit a note, then remove it')
+    await composer.press('Enter')
+
+    // The command parks — so the edit before it was already answered, and by Cinna: nobody clicked.
+    const deny = page.getByRole('button', { name: 'Deny', exact: true })
+    await expect(deny).toHaveCount(1)
+    expect(fake.answers('session/request_permission').map((entry) => entry.result))
+      .toEqual([{ outcome: { outcome: 'selected', optionId: 'allow' } }])
+    await deny.click()
+    await expect(page.getByText('Policy turn done.', { exact: true })).toBeVisible()
+    expect(fake.answers('session/request_permission').map((entry) => entry.result)).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'allow' } },
+      { outcome: { outcome: 'selected', optionId: 'deny' } }
+    ])
+    // Ask for approval is the server's `default` mode; the policy is Cinna's alone.
+    expect(fake.received('session/set_mode').map((entry) => entry.params?.modeId)).toEqual(['default'])
+    // Nothing remembered: the policy writes no grant.
+    expect(await page.evaluate((id) => window.api.localAgents.grantsList(id), agent.id)).toEqual([])
+  })
 })

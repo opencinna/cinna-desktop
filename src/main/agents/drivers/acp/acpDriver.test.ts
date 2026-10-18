@@ -15,7 +15,10 @@
  * it replaces.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
@@ -142,6 +145,8 @@ interface WorldOptions {
   preamble?: string
   /** The plan's `sessionCwd`. */
   sessionCwd?: string
+  /** The plan's `autoApprove` (Antigravity folder agents on Ask). */
+  autoApprove?: AcpLaunchPlan['autoApprove']
 }
 
 function makeWorld(options: WorldOptions = {}): World {
@@ -170,7 +175,8 @@ function makeWorld(options: WorldOptions = {}): World {
             session: { mcpServers: [] },
             setup: options.setup ?? {},
             ...(options.preamble ? { firstPromptPreamble: options.preamble } : {}),
-            ...(options.sessionCwd ? { sessionCwd: options.sessionCwd } : {})
+            ...(options.sessionCwd ? { sessionCwd: options.sessionCwd } : {}),
+            ...(options.autoApprove ? { autoApprove: options.autoApprove } : {})
           },
     ...options.launcherExtra,
     ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {}),
@@ -4393,5 +4399,55 @@ describe('an Antigravity session', () => {
     await running
     // The desktop's *Always allow* is a plain allow to the engine.
     expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } })
+  })
+})
+
+describe('an Antigravity folder agent’s asks under its folder policy', () => {
+  let folder: string
+  beforeEach(() => {
+    folder = realpathSync(mkdtempSync(join(tmpdir(), 'agy-policy-')))
+    mkdirSync(join(folder, 'notes'))
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  const OPTIONS = [
+    { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+    { optionId: 'deny', name: 'Deny', kind: 'reject_once' }
+  ]
+  /** The real 1.3.0 shapes: an edit names absolute locations, a command its line and cwd. */
+  const editAsk = (path: string): FakeAcpScript => ({ prompt: { emit: [{ kind: 'permission', options: OPTIONS,
+    toolCall: { toolCallId: 'e1', kind: 'edit', status: 'pending', title: 'create_file', locations: [{ path }] } }] } })
+  const commandAsk = (CommandLine: string): FakeAcpScript => ({ prompt: { emit: [{ kind: 'permission', options: OPTIONS,
+    toolCall: { toolCallId: 'c1', kind: 'execute', status: 'pending', title: CommandLine, rawInput: { CommandLine, Cwd: folder, WaitMsBeforeAsync: 500 } } }] } })
+  const parks = async (w: World): Promise<void> => {
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(asked.request).toMatchObject({ kind: 'permission' })
+    pendingRequests.resolve(asked.requestId, { kind: 'permission', reply: 'reject' })
+    await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'deny' } })
+  }
+
+  it('allows an in-folder edit silently: no block, no grant, nothing in the transcript', async () => {
+    // Mutation: drop the policy check in `answerPermission` and this edit parks.
+    const w = world({ launcher: 'antigravity', script: editAsk(join(folder, 'notes', 'probe.txt')), autoApprove: { folder, scriptRoots: [] } })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.events.filter((event) => event.type === 'needs_input')).toEqual([])
+    expect(w.grants).toEqual([])
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } })
+    expect(JSON.stringify(result.parts)).not.toContain('probe.txt')
+  })
+
+  it('still parks a command the policy does not cover', async () => {
+    await parks(world({ launcher: 'antigravity', script: commandAsk('rm notes/a.txt'), autoApprove: { folder, scriptRoots: [] } }))
+  })
+
+  it('still parks an in-folder edit when the plan carries no policy (a chat runtime, Automatic, a build session)', async () => {
+    await parks(world({ launcher: 'antigravity', script: editAsk(join(folder, 'notes', 'probe.txt')) }))
+  })
+
+  it('reads the policy only for Antigravity', async () => {
+    await parks(world({ launcher: 'codex', script: editAsk(join(folder, 'notes', 'probe.txt')), autoApprove: { folder, scriptRoots: [] } }))
   })
 })

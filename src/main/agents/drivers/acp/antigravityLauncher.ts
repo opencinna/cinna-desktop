@@ -255,7 +255,18 @@ export interface AntigravityLauncherDeps {
    * directory, because the server's own command directory can be elsewhere).
    */
   systemPrompt(userId: string, agentId: string, mode: AcpRuntimeMode): string
-  settings(userId: string, agentId: string): { model: string | null; approval: ClaudeApproval }
+  /**
+   * `autoApprove` is set only for a folder agent (kit or bare) on `ask`: the
+   * folders of its pinned catalog and marketplace skills, whose scripts run
+   * without asking like its own (`antigravityAutoApproval.ts`). Every other
+   * session — a chat runtime, an AI function, a conductor, a build session —
+   * leaves it out and asks about everything.
+   */
+  settings(userId: string, agentId: string): {
+    model: string | null
+    approval: ClaudeApproval
+    autoApprove?: { scriptRoots: string[] }
+  }
   /**
    * The isolated home for this session, when it is not the folder's own
    * (`<folder>/.cinna/antigravity`). A chat runtime or an AI function, which
@@ -373,7 +384,11 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           setup: {
             modeId: settings.approval === 'auto' ? 'yolo' : 'default',
             ...(settings.model ? { configOptions: [{ configId: 'model', value: settings.model, optional: true }] } : {})
-          }
+          },
+          // Read per ask by the driver's permission gate; under `yolo` nothing asks.
+          ...(settings.approval === 'ask' && settings.autoApprove
+            ? { autoApprove: { folder: ctx.folder.path, scriptRoots: [...settings.autoApprove.scriptRoots] } }
+            : {})
         }
       } catch {
         // Errors from readers can carry instructions or paths; the phase is enough.

@@ -536,8 +536,10 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
 
 /**
  * Codex's control, for Antigravity: `ask` runs it in its `default` mode, where
- * every command and edit is a permission ask in this chat; `auto` in `yolo`,
- * where it asks nothing. Unlike Codex's, the copy promises no sandbox: Cinna
+ * every command and edit is a permission ask — of which Cinna settles an
+ * in-folder edit, the agent's own script and a read-only command itself
+ * (`antigravityAutoApproval.ts`) and sends the rest to this chat; `auto` in
+ * `yolo`, where it asks nothing. Unlike Codex's, the copy promises no sandbox: Cinna
  * does not configure one. No choice made reads as `ask`, Codex's default.
  */
 function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
@@ -545,8 +547,10 @@ function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.El
   const [error, setError] = useState<string | null>(null)
   return <>
     <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-      Antigravity runs commands and edits files under your Google login. Ask for approval sends
-      each command and edit to this chat first; Automatic runs them without asking.
+      Antigravity runs commands and edits files under your Google login, with no sandbox. Ask for
+      approval runs this agent's own scripts, a few read-only commands and edits inside its folder
+      without asking (hidden and credential files still ask), and sends anything else to this chat
+      first. Automatic runs everything without asking.
     </p>
     <div className="mt-3">
       <label htmlFor="antigravity-approval" className={LABEL}>Approvals</label>

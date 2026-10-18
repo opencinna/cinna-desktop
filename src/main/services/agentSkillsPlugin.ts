@@ -168,6 +168,18 @@ export function kitAgentDeliverableSkills(agentDir: string, manifest: unknown): 
   return deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve))
 }
 
+/**
+ * The folders of a kit agent's pinned (catalog, marketplace) deliverable
+ * skills, in the shared read-only caches: where Antigravity's permission rule
+ * lets the agent run a skill's script without asking, like one in its own
+ * folder (`antigravityAutoApproval.ts`).
+ */
+export function kitAgentPinnedSkillFolders(agentDir: string, manifest: unknown): string[] {
+  return kitAgentDeliverableSkills(agentDir, manifest)
+    .filter((skill) => isPinnedSkill(skill) && isAbsolute(skill.path))
+    .map((skill) => dirname(skill.path))
+}
+
 /** Where a deliverable skill's folder is: the agent's own, or the catalog or marketplace cache's. */
 function skillFolder(agentDir: string, skill: LocalAgentSkill): string {
   return isPinnedSkill(skill) && isAbsolute(skill.path)

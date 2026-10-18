@@ -129,6 +129,25 @@ describe('Antigravity launcher plan', () => {
     expect(auto.setup).toEqual({ modeId: 'yolo', configOptions: [{ configId: 'model', value: 'gemini-3.6-flash-low', optional: true }] })
   })
 
+  it('puts the folder policy on the plan, with the folder, only for a folder agent on Ask', async () => {
+    // Mutation: drop the plan field and no ask is ever settled by the policy.
+    const folder = tempDir()
+    const roots = ['/cache/catalog/word-count']
+    const ask = await createAntigravityLauncher(deps({ settings: () => ({ model: null, approval: 'ask', autoApprove: { scriptRoots: roots } }) })).plan(contexts(folder).isolated)
+    if (isRefusal(ask)) throw new Error(ask.error)
+    expect(ask.autoApprove).toEqual({ folder, scriptRoots: roots })
+    const native = await createAntigravityLauncher(deps({ settings: () => ({ model: null, approval: 'ask', autoApprove: { scriptRoots: [] } }) })).plan(contexts(folder).native)
+    if (isRefusal(native)) throw new Error(native.error)
+    expect(native.autoApprove).toEqual({ folder, scriptRoots: [] })
+    // Automatic (yolo) asks nothing; a branch that returns no policy keeps none.
+    const auto = await createAntigravityLauncher(deps({ settings: () => ({ model: null, approval: 'auto', autoApprove: { scriptRoots: roots } }) })).plan(contexts(folder).isolated)
+    if (isRefusal(auto)) throw new Error(auto.error)
+    expect(auto).not.toHaveProperty('autoApprove')
+    const none = await createAntigravityLauncher(deps()).plan(contexts(folder).isolated)
+    if (isRefusal(none)) throw new Error(none.error)
+    expect(none).not.toHaveProperty('autoApprove')
+  })
+
   it('carries the instructions as the first prompt’s preamble, chosen by the folder’s mode', async () => {
     const systemPrompt = vi.fn((_u: string, _a: string, mode: string) => (mode === 'native' ? 'Desktop context.' : 'Whole document.'))
     const { native, isolated } = contexts(tempDir())

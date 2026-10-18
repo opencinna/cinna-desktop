@@ -39,10 +39,12 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  *
  * ## Turns
  *
- * Four short turns in one chat: the marker rule (a), a command and a relative
- * file write behind Ask approvals (b), one Cinna tool call that must not ask
- * (c), and after a restart of the app — a new server process — the marker
- * again (d).
+ * Short turns in one chat, all on Ask approvals: the marker rule (a), a
+ * read-only command and a relative file write and edit inside the folder that
+ * Cinna allows without an ask (b), the agent's own skill script run with no
+ * ask (b2), a command outside that rule which still asks (b3), one Cinna tool
+ * call that must not ask (c), and after a restart of the app — a new server
+ * process — the marker again (d).
  */
 
 const REAL_HOME = process.env.CINNA_E2E_ANTIGRAVITY_REAL_HOME === '1'
@@ -223,7 +225,7 @@ async function sendAndSettle(app: RealHomeApp, chatId: string | null, text: stri
   }
 }
 
-test('live Antigravity: instructions, an approved command and file, a Cinna tool with no ask, and a restart', async () => {
+test('live Antigravity: instructions, in-folder edits and own scripts with no ask, an asked command, a Cinna tool with no ask, and a restart', async () => {
   test.skip(!REAL_HOME, 'Opt-in: set CINNA_E2E_ANTIGRAVITY_REAL_HOME=1 to run real Gemini Flash turns on your own Antigravity login (the app gets your real HOME; see the file header)')
   test.skip(!LIVE_REQUESTED, 'live specs run only through make e2e-live or make e2e-one SPEC=<live spec>')
   const server = pinnedServerPath()
@@ -259,6 +261,14 @@ test('live Antigravity: instructions, an approved command and file, a Cinna tool
       rootId: roots[0].id, name: AGENT, description: 'Probes Antigravity for the E2E suite.'
     })
     expect(agent.path.startsWith(`${agentsHome}/`)).toBe(true)
+    // An authored skill whose script the agent runs with fresh arguments (b2).
+    const skillDir = join(agent.path, 'skills', 'word-count')
+    mkdirSync(join(skillDir, 'scripts'), { recursive: true })
+    writeFileSync(join(skillDir, 'SKILL.md'), [
+      '---', 'name: word-count', 'description: Counts the words of a text. Use whenever asked to count words.', '---', '',
+      'Run `uv run python skills/word-count/scripts/count.py "<text>"` from the agent folder and report the number it prints.', ''
+    ].join('\n'))
+    writeFileSync(join(skillDir, 'scripts', 'count.py'), 'import sys\nprint(len(" ".join(sys.argv[1:]).split()))\n')
     for (const prompt of ['workflow', 'entrypoint'] as const) {
       const outcome = await page.evaluate(async ({ agentId, prompt, value }) => {
         const doc = await window.api.localAgents.readDoc({ agentId, prompt })
@@ -298,14 +308,12 @@ test('live Antigravity: instructions, an approved command and file, a Cinna tool
     })
     const chatId = evidence.chatId as string
 
-    await test.step('(b) a command and a relative file write ask first, and the file lands in the agent folder', async () => {
+    await test.step('(b) a read-only command and a file write and edit in the agent folder run with no ask', async () => {
       const turn = await sendAndSettle(app, chatId,
-        'Run the shell command pwd. Then create a file named probe.txt, using exactly that relative path, whose only content is the output of pwd. Then reply with the word done.')
+        'Run the shell command pwd. Then create a file named probe.txt, using exactly that relative path, whose only content is the word draft. Then edit probe.txt so that its only content is the output of pwd. Write and edit the file with your file tools, never with a shell command. Then reply with the word done.')
       evidence.b = turn
       expect(turn.errors).toEqual([])
-      expect(turn.asks.length, 'Ask approval raised at least one ask').toBeGreaterThan(0)
-      // Each ask is worded as a verb phrase, never the raw `antigravity:<kind>` action.
-      for (const ask of turn.asks) expect(ask).not.toMatch(/antigravity:/)
+      expect(turn.asks, 'in-folder edits and read-only commands are allowed by Cinna').toEqual([])
       const probe = join(agent.path, 'probe.txt')
       expect(existsSync(probe), `probe.txt in ${agent.path}`).toBe(true)
       const everywhere = findNamed(agentsHome, 'probe.txt')
@@ -315,6 +323,29 @@ test('live Antigravity: instructions, an approved command and file, a Cinna tool
       const written = readFileSync(probe, 'utf8').trim()
       evidence.probeContent = written
       expect([agent.path, realpathSync(agent.path)]).toContain(written)
+    })
+
+    await test.step('(b2) the agent’s own skill script runs with no ask', async () => {
+      const turn = await sendAndSettle(app, chatId,
+        'Use your word-count skill to count the words in "seven blue herons crossed the quiet lake". Reply with only the number.')
+      evidence.b2 = turn
+      expect(turn.errors).toEqual([])
+      expect(turn.asks, 'a script under the agent folder is allowed by Cinna').toEqual([])
+      expect(turn.reply).toMatch(/\b7\b/)
+      const chat = await app.page.evaluate((id) => window.api.chat.get(id), chatId)
+      const commands = (chat?.messages ?? []).flatMap((message: any) => (message.parts ?? []).filter((part: any) => part.kind === 'tool'))
+        .map((part: any) => String(part.toolInput?.command_line ?? '')).filter((line: string) => line.includes('count.py'))
+      evidence.scriptCommands = commands
+      expect(commands.length, 'the turn ran count.py').toBeGreaterThan(0)
+    })
+
+    await test.step('(b3) a command outside the rule still asks', async () => {
+      const turn = await sendAndSettle(app, chatId, 'Run the shell command date, then reply with the word done.')
+      evidence.b3 = turn
+      expect(turn.errors).toEqual([])
+      expect(turn.asks.length, 'date is neither a read-only basic nor the agent’s script').toBeGreaterThan(0)
+      // Each ask is worded as a verb phrase, never the raw `antigravity:<kind>` action.
+      for (const ask of turn.asks) expect(ask).not.toMatch(/antigravity:/)
     })
 
     await test.step('(c) a Cinna tool call completes with no ask to the user', async () => {

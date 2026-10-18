@@ -89,6 +89,7 @@ import {
   type AcpRuntimeMode
 } from './types'
 import { airClientMeta } from './acpActivity'
+import type { AntigravityAutoApprovalPolicy } from './antigravityAutoApproval'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
 import { ACP_TOOL_STALL_MS } from './acpToolStall'
@@ -209,6 +210,14 @@ export interface AcpLaunchPlan {
    * folder. The server lets `view_file` read the cwd and the whole home.
    */
   sessionCwd?: string
+  /**
+   * Antigravity only, and only for a folder agent on **Ask for approval**: the
+   * folder and the pinned skills' folders the driver's permission gate reads
+   * to settle an in-folder edit, the agent's own script or a read-only command
+   * without asking (`antigravityAutoApproval.ts`). Absent everywhere else, so
+   * a chat runtime, an AI function, a conductor or a build session asks.
+   */
+  autoApprove?: AntigravityAutoApprovalPolicy
 }
 
 /** A refusal, in the sentence the user reads instead of a turn. */
