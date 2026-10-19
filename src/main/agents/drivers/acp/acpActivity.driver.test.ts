@@ -22,6 +22,7 @@ import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SDKBackgroundTasksChangedMessage } from '@anthropic-ai/claude-agent-sdk'
 import { beforeCapability, loadActivityFixture, loadOpencodeFixture, type ActivityFixture, type OpencodeFrame } from './testSupport/subagentFixtures'
 import { ACP_PROTOCOL_VERSION, type AcpProcessPool } from './types'
+import { codexNickname } from './codexNicknames'
 import { clearLogEntries, getLogEntries } from '../../../logger/logger'
 
 const AGENT_ID = 'folder:activity'
@@ -487,29 +488,33 @@ describe('nested Claude subagents', () => {
 
 describe('a Codex subagent turn (V1 collaboration calls)', () => {
   const CHILD = '01a15429-b7f3-7f80-b352-ef963ba9f782'
-  const items = (hub: SessionActivityHub): [string, string, string | null][] =>
-    hub.snapshot(CHAT_ID).items.map((item) => [item.id.slice(item.id.indexOf(':') + 1), item.state, item.detail])
+  const CANCELLED = '01a15433-7509-7f03-bcde-608ffc9fa85e'
+  /** Each item's id, title, state and detail: a Codex item is named from its thread id (`codexNickname`). */
+  const items = (hub: SessionActivityHub): [string, string, string, string | null][] =>
+    hub.snapshot(CHAT_ID).items.map((item) => [item.id.slice(item.id.indexOf(':') + 1), item.title, item.state, item.detail])
 
   it('one item per spawn, ended with its report, and the report as the wait call’s output', async () => {
     const fixture = loadActivityFixture('codex', 'subagent_collab')
     const w = world({ sessionId: fixture.notifications[0].sessionId, emit: steps(fixture.notifications), launcher: 'codex' })
     const result = await w.run()
     expect(result.error).toBeUndefined()
-    expect(items(w.hub)).toEqual([[CHILD, 'completed', 'ORCH FINAL']])
+    expect(items(w.hub)).toEqual([[CHILD, codexNickname(CHILD), 'completed', 'ORCH FINAL']])
     const parts = result.parts as unknown as SavedPart[]
     const wait = parts.find((part) => part.kind === 'tool' && part.toolName === 'wait')!
     expect(parts.find((part) => part.kind === 'tool_result' && part.toolId === wait.toolId)?.text).toBe('ORCH FINAL')
   })
 
-  it('a resumed agent is a second item, ended by the second turn’s wait', async () => {
+  it('a resumed agent is a second item under the same name, ended by the second turn’s wait', async () => {
     const fixture = loadActivityFixture('codex', 'subagent_collab_resume') as ActivityFixture & { nextTurn: SessionNotification[] }
     const w = world({
       sessionId: fixture.notifications[0].sessionId, emit: [], launcher: 'codex',
       prompts: [{ emit: steps(fixture.notifications) }, { emit: steps(fixture.nextTurn) }]
     })
+    const resumed = '01a15433-72d6-7d31-a125-23dfa346e088'
     expect((await w.run()).error).toBeUndefined()
+    expect(items(w.hub).map(([id, title]) => [id, title])).toEqual([[resumed, codexNickname(resumed)]])
     expect((await w.run()).error).toBeUndefined()
-    expect(items(w.hub)).toEqual([['01a15433-72d6-7d31-a125-23dfa346e088#2', 'completed', 'ORCH FINAL']])
+    expect(items(w.hub)).toEqual([[`${resumed}#2`, codexNickname(resumed), 'completed', 'ORCH FINAL']])
   })
 
   it('on a Stop: the child the wire never ends again is ended stopped', async () => {
@@ -524,7 +529,7 @@ describe('a Codex subagent turn (V1 collaboration calls)', () => {
     stop.abort()
     await running
     expect(w.fake.received('session/cancel')).toHaveLength(1)
-    expect(items(w.hub)).toEqual([['01a15433-7509-7f03-bcde-608ffc9fa85e', 'stopped', null]])
+    expect(items(w.hub)).toEqual([[CANCELLED, codexNickname(CANCELLED), 'stopped', 'MODE=LONG']])
   })
 
   it('a turn Codex starts on its own for a late mid-turn message is cancelled, and its children end stopped', async () => {
@@ -550,14 +555,14 @@ describe('a Codex subagent turn (V1 collaboration calls)', () => {
     await waitFor(() => offered.length > 0, 'the turn to take messages')
     const late = offered[0]('next')
     expect((await running).error).toBeUndefined()
-    expect(items(w.hub)).toEqual([['01a15433-7509-7f03-bcde-608ffc9fa85e', 'running', null]])
+    expect(items(w.hub)).toEqual([[CANCELLED, codexNickname(CANCELLED), 'running', 'MODE=LONG']])
     // The next turn holds the process: it is left up, so nothing else would end the item.
     const release = w.pool.hold(AGENT_ID)
     expect(await late).toBe('unavailable')
     await waitFor(() => w.fake.received('session/cancel').length > 0, 'the unowned turn to be cancelled')
     await settle()
     expect(w.pool.status(AGENT_ID).state).toBe('running')
-    expect(items(w.hub)).toEqual([['01a15433-7509-7f03-bcde-608ffc9fa85e', 'stopped', null]])
+    expect(items(w.hub)).toEqual([[CANCELLED, codexNickname(CANCELLED), 'stopped', 'MODE=LONG']])
     release()
     // Under 1 s alone; real delays and two turns overrun the default 5 s under full-suite load.
   }, 15_000)
@@ -569,7 +574,7 @@ describe('a Codex subagent turn (V1 collaboration calls)', () => {
       emit: steps(fixture.notifications), response: { stopReason: 'cancelled' }
     })
     await w.run()
-    expect(items(w.hub)).toEqual([['01a15433-7509-7f03-bcde-608ffc9fa85e', 'running', null]])
+    expect(items(w.hub)).toEqual([[CANCELLED, codexNickname(CANCELLED), 'running', 'MODE=LONG']])
   })
 })
 

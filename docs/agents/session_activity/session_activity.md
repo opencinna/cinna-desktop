@@ -91,7 +91,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 ## Known limits
 - **Activity is memory-only.** It is lost on restart, and a background process that outlives the app is not rediscovered
 - **A Claude background subagent's launch text is not in the transcript.** The CLI writes "launched in the background" itself, and it is not on the wire. The synthesized `Agent` call closes as completed without it
-- **A Codex subagent has no name.** No role or nickname reaches the wire; its item is titled by the first line of the prompt it was spawned with. Codex keeps its default of one level (a subagent cannot spawn its own), which Cinna does not raise; nesting is shown for Claude and OpenCode only
+- **A Codex subagent gets a made-up name.** No role or nickname reaches the wire, so Cinna names its item like Codex's own nicknames, "Adjective Colour Animal" ("Brave Teal Otter"), derived from its thread id: the same name live, on every later run and after a restart. The prompt it was spawned with is the item's detail until its report replaces it. Codex keeps its default of one level (a subagent cannot spawn its own), which Cinna does not raise; nesting is shown for Claude and OpenCode only
 - **OpenCode's own `.opencode/agent` or global permission rules are not Cinna's.** See [permissions](../local_agents/permissions.md#opencode-subagents-run-under-the-agents-policy)
 - **The output path is shown, not opened**
 

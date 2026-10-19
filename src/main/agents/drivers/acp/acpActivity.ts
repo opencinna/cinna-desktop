@@ -59,6 +59,7 @@ import { createLogger } from '../../../logger/logger'
 import type { AcpConnection } from './types'
 import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import { OPENCODE_CHILD_STATUS, opencodeChildActivity } from './opencodeChildren'
+import { codexNickname } from './codexNicknames'
 
 const logger = createLogger('acp-activity')
 
@@ -97,12 +98,10 @@ export interface AcpActivityState {
   subagentRuns: Map<string, number>
   /** Codex collaboration call id → its tool (`spawnAgent`, `wait`, …), from the `tool_call` that titled it. */
   collabTools: Map<string, string>
-  /** Codex subagent → the title its spawn gave its item, for its later runs. */
-  subagentTitles: Map<string, string>
 }
 
 export function createAcpActivityState(): AcpActivityState {
-  return { tasks: new Set(), subagents: new Set(), endedSubagents: new Set(), subagentRuns: new Map(), collabTools: new Map(), subagentTitles: new Map() }
+  return { tasks: new Set(), subagents: new Set(), endedSubagents: new Set(), subagentRuns: new Map(), collabTools: new Map() }
 }
 
 /**
@@ -330,22 +329,20 @@ function codexSubagents(
   // tool, so the title is remembered by call id. `spawnAgent` names its
   // children on the untitled update; every call carries the states of the
   // agents it touched, and a finished agent's report is its state's `message`
-  // (on `wait`). No role or nickname reaches the wire: the spawn prompt is
-  // all there is to name the item by.
+  // (on `wait`). No role or nickname reaches the wire, so the item is named
+  // from the child's thread id (`codexNickname`) and the spawn prompt is its detail.
   if (!isCodexCollaboration(input)) return []
   const toolCallId = str(update.toolCallId)
   const known = toolCallId ? state.collabTools.get(toolCallId) : undefined
   const tool = known ?? str(update.title)
   if (toolCallId && tool && !known) state.collabTools.set(toolCallId, tool)
   if (tool === CODEX_SPAWN_TOOL && update.status !== 'failed') {
-    const prompt = str(input.prompt)
-    const title = prompt ? subagentTitle(prompt) : 'Subagent'
+    const prompt = str(input.prompt) ?? null
     for (const receiver of input.receiverThreadIds as unknown[]) {
       const threadId = str(receiver)
       if (!threadId || state.subagents.has(threadId)) continue
       state.subagents.add(threadId)
-      state.subagentTitles.set(threadId, title)
-      changes.push({ type: 'upsert', id: id(threadId), kind: 'subagent', title, detail: prompt && prompt !== title ? prompt : null })
+      changes.push({ type: 'upsert', id: id(threadId), kind: 'subagent', title: codexNickname(threadId), detail: prompt })
     }
   }
   if (tool === CODEX_SEND_TOOL) {
@@ -358,7 +355,7 @@ function codexSubagents(
         const threadId = str(receiver)
         if (!threadId || !state.endedSubagents.delete(threadId)) continue
         state.subagentRuns.set(threadId, (state.subagentRuns.get(threadId) ?? 1) + 1)
-        changes.push({ type: 'upsert', id: id(subagentRun(state, threadId)), kind: 'subagent', title: state.subagentTitles.get(threadId) ?? 'Subagent', detail: str(input.prompt) ?? null })
+        changes.push({ type: 'upsert', id: id(subagentRun(state, threadId)), kind: 'subagent', title: codexNickname(threadId), detail: str(input.prompt) ?? null })
       }
     }
     return changes
@@ -375,14 +372,6 @@ function codexSubagents(
 
 /** The tool that sends a running or finished agent more input (`send_input`). */
 const CODEX_SEND_TOOL = 'sendInput'
-/** How much of a spawn prompt's first line titles its item. */
-const SUBAGENT_TITLE_MAX = 80
-
-/** An item title from a spawn prompt: its first line, cut short. */
-function subagentTitle(prompt: string): string {
-  const line = prompt.trim().split('\n')[0].trim()
-  return line.length > SUBAGENT_TITLE_MAX ? `${line.slice(0, SUBAGENT_TITLE_MAX - 1).trimEnd()}…` : line
-}
 
 /** The end of a Codex subagent's current run, with its report when the wire carried one. */
 function endSubagent(

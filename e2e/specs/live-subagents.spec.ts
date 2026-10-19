@@ -277,7 +277,7 @@ interface ChatState {
   activeRunId: string | null
   assistant: string[]
   parts: { kind: string; toolName?: string; toolId?: string; text: string; parentToolId?: string }[]
-  items: { title: string; state: string }[]
+  items: { title: string; state: string; detail: string | null }[]
 }
 
 async function chatState(cinna: CinnaApp, chatId: string): Promise<ChatState> {
@@ -289,7 +289,7 @@ async function chatState(cinna: CinnaApp, chatId: string): Promise<ChatState> {
       activeRunId: chat?.activeRunId ?? null,
       assistant: assistant.map((m) => m.content),
       parts: assistant.flatMap((m) => (m.parts ?? []).map((p) => ({ kind: p.kind, toolName: p.toolName, toolId: p.toolId, text: p.text, parentToolId: p.parentToolId }))),
-      items: activity.ok ? activity.snapshot.items.map((item) => ({ title: item.title, state: item.state })) : []
+      items: activity.ok ? activity.snapshot.items.map((item) => ({ title: item.title, state: item.state, detail: item.detail })) : []
     }
   }, chatId)
 }
@@ -370,6 +370,9 @@ const saidWord = (state: ChatState, word: string): boolean =>
 const itemTitle = (description: string, agent: string): string => (ENGINE === 'opencode' ? agent : description)
 const expectedTitles = (...spawns: [string, string][]): string[] => spawns.map(([d, a]) => itemTitle(d, a)).sort()
 
+/** A Codex subagent's title: the name Cinna makes up from its thread id, as Codex sends none ("Brave Teal Otter"). */
+const CODEX_NAME = /^[A-Z][a-z]+ [A-Z][a-z]+ [A-Z][a-z]+$/
+
 const titles = (state: ChatState): string[] => state.items.map((item) => item.title).sort()
 const states = (state: ChatState): string[] => [...new Set(state.items.map((item) => item.state))]
 
@@ -404,7 +407,8 @@ test('@live A foreground nesting: orch → worker → echo L2, every level repor
     })
   } else if (ENGINE === 'codex') {
     await test.step('degraded-clean: one level-1 item completed, its report in the wait output, no second level', async () => {
-      expect(state.items).toEqual([{ title: 'MODE=NESTED', state: 'completed' }])
+      // Named, not titled by the prompt; the ended item's detail is its report.
+      expect(state.items).toEqual([{ title: expect.stringMatching(CODEX_NAME), state: 'completed', detail: expect.anything() }])
       const waits = new Set(state.parts.filter((p) => p.kind === 'tool' && p.toolName === 'wait').map((p) => p.toolId))
       const report = state.parts.filter((p) => p.kind === 'tool_result' && waits.has(p.toolId)).map((p) => p.text.trim()).join('\n')
       console.log(`live-subagents A codex: wait output ${JSON.stringify(report)}`)
@@ -485,7 +489,8 @@ test('@live C Stop while the worker runs a long command ends the whole tree as s
     await expect(subagentBadge(cinna)).toHaveCount(0, { timeout: 30_000 })
     const state = await settled(cinna, chatId)
     console.log(`live-subagents C ${ENGINE}: stopped in ${Date.now() - stoppedAt} ms, items ${JSON.stringify(state.items)}`)
-    if (ENGINE === 'codex') expect(state.items).toEqual([{ title: 'LONG=60', state: 'stopped' }])
+    // A stopped Codex item has no report: its detail is still the spawn prompt.
+    if (ENGINE === 'codex') expect(state.items).toEqual([{ title: expect.stringMatching(CODEX_NAME), state: 'stopped', detail: 'LONG=60' }])
     else {
       expect(titles(state)).toEqual(expectedTitles(['C orch', 'orch'], ['long worker', 'worker']))
       expect(states(state)).toEqual(['stopped'])
