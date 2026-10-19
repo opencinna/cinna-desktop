@@ -178,7 +178,7 @@ test.use({
  * made). An entry that names its model keeps it; a bare engine takes
  * `CINNA_E2E_LIVE_MODEL`, else its default (`liveEngine.ts`: Claude `haiku`
  * here, OpenCode `gpt-5.6-luna` through the `.env` key, Codex `gpt-5.6-luna`,
- * Antigravity `gemini-3.6-flash-low`). An unknown entry throws at import.
+ * Antigravity `gemini-3.8-flash-low`). An unknown entry throws at import.
  */
 interface ArtifactEngine {
   entry: string

@@ -5,6 +5,7 @@ import { join, relative } from 'node:path'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { launch, test, expect, type Sandbox } from '../fixtures/app'
 import { LIVE_REQUESTED } from '../fixtures/live'
+import { ANTIGRAVITY_LIVE_MODEL } from '../fixtures/liveEngine'
 import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 
 /**
@@ -35,7 +36,8 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  *   (`~/.cache/cinna-runtimes/antigravity-<pin>/`, filled by
  *   `scripts/install-runtime.mjs`, or the installed app's runtimes folder), set
  *   as the Antigravity Path; the test skips when neither exists.
- * - **A model that is not Flash.** The agent names `gemini-3.6-flash-low`.
+ * - **A model that is not Flash.** The agent names `gemini-3.8-flash-low`
+ *   (`ANTIGRAVITY_LIVE_MODEL`).
  *
  * ## Turns
  *
@@ -48,7 +50,7 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  */
 
 const REAL_HOME = process.env.CINNA_E2E_ANTIGRAVITY_REAL_HOME === '1'
-const MODEL = 'gemini-3.6-flash-low'
+const MODEL = ANTIGRAVITY_LIVE_MODEL
 const AGENT = 'Antigravity Probe'
 /** Only in the agent's instructions, never in a prompt: a reply that carries it followed them. */
 const MARKER = `ORCHID-${Math.floor(1000 + Math.random() * 9000)}`
