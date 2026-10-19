@@ -566,6 +566,7 @@ What the desktop does with this — the observer, which traffic opens a follow-u
 `subagent_spawned {subagentSessionId, name, task, capabilities: {}}` and `subagent_state_update {subagentSessionId, state}` arrive on the parent session.
 
 - **Subagent states.** Claude's, *from its code*: `completed | failed | disconnected | cancelled`. Codex was watched sending `completed`
+- **A nested child's announcement comes on its spawner's session**, not the root's, and says nothing of the Agent call it runs under. The patched adapter adds that call as `_meta.claudeCode.toolUseId` on `subagent_spawned` (for a resumed generation, the first Agent call, which its frames name), and the desktop nests the child's lane under its spawner's by it. A spawner often sends no frame of its own before it spawns, so the field is the only link. The announcements a `session/load` replay makes (child sessions named `<session>:replay-subagent:<Agent call>`) do not carry it, and are not subagent traffic
 - **Codex's `task` is a placeholder** (*"Delegated task for Echo probe"*), not the prompt
 
 **Claude: the child can be linked to its call.** The child's own frames arrive under `sessionId = subagentSessionId`. The two sides are linked in two independent ways:
@@ -596,7 +597,14 @@ The launch text a terminal shows for a background subagent is the CLI's own and 
 - instead, the root session gets tool calls titled *"Start subagent <name>"* and *"Complete subagent <name>"*, each with `rawInput {agentThreadId, agentPath: "/root/<name>", activityKind}` and **no `_meta`**. An activity call's `tool_call_update` carries only `{toolCallId, status}`
 - the model's `spawn_agent` arrives as that activity, not as a `spawnAgent` collaboration call. Only `wait` came through as a collaboration call, its `rawInput` carrying `senderThreadId`, `receiverThreadIds` and `agentsStates`
 
-That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls also carried `_meta.codex.subagent {threadId, path, activity}` and `_meta.codex.collaboration`, and the desktop read those; 2.x dropped both, and the `subagent` flag it has instead is AIR meta, which the patched adapter never sends to Cinna. A `spawnAgent` collaboration call naming its receivers is **derived from `codex-acp` 2.2.2's code** (`CollabAgentReporter`), not watched. Its fixture, `codex/subagent_collab.json`, says so.
+That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls also carried `_meta.codex.subagent {threadId, path, activity}` and `_meta.codex.collaboration`, and the desktop read those; 2.x dropped both, and the `subagent` flag it has instead is AIR meta, which the patched adapter never sends to Cinna. **Codex on the V1 collaboration tools** (contract entry `codex.activity.collab-v1-shape`; fixtures `codex/subagent_collab{,_cancel,_resume}.json`, recorded on CLI 0.162.1 with `gpt-5.6-luna`). The model catalog's `multi_agent_version: "v1"` decides which of the two shapes above a model gets, and V1 is what was watched:
+
+- `spawn_agent` is a collaboration call, not *Start subagent*: a `tool_call` titled `spawnAgent` with `receiverThreadIds: []`, then an update with **no title** naming the child in `receiverThreadIds` and `agentsStates` (`pendingInit`). **Only the first `tool_call` carries the tool's title**; every later update of the call is untitled, so the title has to be remembered by call id
+- No role or nickname reaches the wire. The spawn prompt is all there is to name the child by
+- `wait` completes with no `content` and no `rawOutput`. The child's final answer is `agentsStates[<child>].message` and nowhere else
+- `sendInput` to a finished child starts a new turn on its thread. `resumeAgent` and `sendInput` both report the child's previous `completed` state and message again, so those states are not a new end; the next `wait` carries the new report
+- **`session/cancel` stops only the root thread.** Watched: a child's 60 s sleep outlived the Stop, and neither the `wait` nor the child is ever updated again. The patched adapter therefore interrupts every thread it discovered under the session, at any depth, and terminates their background terminals (an interrupted turn leaves its commands running, and a subagent's are not reported at all); Cinna ends the items `stopped` itself
+- Codex's default `agents.max_depth` is 1: a subagent cannot spawn. The depth-3 recordings were made with it raised; Cinna does not raise it
 
 **Claude subagents, watched live (CLI 2.1.296, adapter 0.89.1):**
 
@@ -606,6 +614,15 @@ That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls
 - Subagents are not async tasks: no `async_task_*` rows, so no Stop; only `session/cancel` ends them, leaf first
 - The prompt is held open for subagents spawned or resumed *during it*, not for ones an earlier prompt started. The desktop's turn-end safety net relies on this ([Session Activity (tech)](../session_activity/session_activity_tech.md#the-claude-turn-end-safety-net))
 
+**OpenCode 2.0.27 subagents** (contract entry `opencode.session.child-updates`; fixtures `opencode/subagent_{nested,nested_fanout,nested_cancel,background}.json`):
+
+- A `subagent` tool call (`kind: "think"`, input `{agent, description, prompt, background?}`) opens a child session, which may spawn its own. `initialize` answers `agentCapabilities._meta["opencode/child-session-updates"]: true`; a client that declares the same key in `clientCapabilities._meta` gets every child's traffic, at any depth, as `opencode/session/child_update {rootSessionId, childSessionId, parentSessionId, depth, title}` carrying a `status` (`created | running | completed | interrupted | failed`) or an `update` body whose tool call ids are `<child>:<call>`. A client that does not declare it gets the same bodies flattened onto the root session, with no start and no end
+- **Nothing names the call that spawned a child while it runs but the child's `title`**, which equals the call's `description`. The call's final update names the child in `rawOutput.metadata.sessionID`
+- A background call completes at once with `metadata.status: "running"`; the child reports on after the prompt answered
+- The stream is cut by the next prompt on the root, and a resumed child streams nothing
+- A cancel ends the tree in one go, every level `interrupted`
+- **Depth.** The `subagent` tool refuses when the caller session's ancestors number `>= experimental.subagent_depth ?? 1`. Cinna writes 3 (the rule is read from the binary), so root → orchestrator → worker → leaf runs
+
 **Does the prompt wait for a subagent?** On Claude, yes, for background and synchronous subagents alike (those spawned or resumed during that prompt). On Codex it did in the one run, because the model called `wait`. Codex has no background-spawn flag, so a non-waiting spawn was not tested.
 
 ### What each launcher advertises
@@ -614,9 +631,9 @@ That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls
 |---|---|---|
 | Claude | `asyncTasks`, `nativeSubagentSessions` | Both can be routed back to the chat |
 | Codex | `asyncTasks` | Native subagent sessions would lose the spawn call with nothing to link the child |
-| Antigravity | none | No AIR extension is advertised to it, and it advertises no steering; its own subagents are switched off in an isolated folder |
+| Antigravity | none | No AIR extension is advertised to it, and it advertises no steering; its own subagents (`start_subagent`) are switched off in every folder, isolated or native |
 | Command-line (custom) | `asyncTasks` | Only the Claude adapter's shape of native subagent sessions is routed back |
-| OpenCode | none | `clientCapabilities: {}`, unchanged |
+| OpenCode | `_meta["opencode/child-session-updates"]` | Not AIR. Without it a child's traffic is flattened onto the root session with no start and no end; with it, `opencode/session/child_update` ([Session Activity (tech)](../session_activity/session_activity_tech.md#opencode-subagents-opencodechildrents)) |
 
 ## 5. Corrections, and what a fake could not have caught
 
@@ -667,7 +684,7 @@ Three corrections from this phase, all found by the real binaries after the fake
 - **How each engine behaves on a session id it has forgotten** has been watched on OpenCode only
 - **An ask between turns.** No probe produced a `session/request_permission` or an elicitation after the prompt returned, on either engine. A follow-up turn's asks run only against the fake agent
 - **A Codex turn started on its own.** Never seen. The ten-second quiet rule that ends a follow-up on an engine with no end marker has not met a real one
-- **The Codex `spawnAgent` collaboration call** (its receivers naming the children) is read from the adapter's code. The pinned CLI reported a spawn as subagent activity; only `wait` was watched as a collaboration call
+- **Codex subagents at depth above 1, and on a V2 model** (which would send *Start subagent* calls): only the depth-1 V1 shape is watched on the current pin
 - **Subagent states other than `completed`**, and a Claude background task of a type other than `shell`, are read from code
 - **Background work that runs past 30 minutes** without a state change: the reaper's ceiling is not exercised against a real process
 - **Steering against a real CLI.** Both adapters' support, and the Claude adapter's `now` priority, are read from source. The aborted command was a real turn in the app, not a recorded probe. No wire log of a live steer exists. Still unwatched: where a real engine places an injected message relative to the output the desktop recorded before it; how either engine behaves when a steer races the end of a turn; and whether a steer that arrives after the model has begun a tool call, but before the adapter reports that call, still aborts it

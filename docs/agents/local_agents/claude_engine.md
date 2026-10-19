@@ -298,11 +298,12 @@ The desktop puts both back:
 - the child session is routed to whoever hears the parent
 - the missing `Agent` call is written into the stream from what `subagent_spawned` said, ahead of the
   first frame that needs it, and closed from the subagent's own end
+- a subagent that spawns subagents of its own has them drawn inside its lane, not beside it. The patched adapter names the Agent call on each `subagent_spawned`; an orchestrator that spawns before it has sent a single frame gets its own `Agent` call written first
 
 A transcript therefore reads as it did before the capability, with one exception. **A background
 subagent's launch text is missing**, because the CLI writes it and it is not on the wire. A subagent
 that ends with its call still open is closed with a line saying how it ended ("Subagent failed.",
-"Subagent stopped.", "Subagent disconnected.").
+"Subagent stopped.", "Subagent disconnected."), and so is every tool call that subagent left running when it was stopped: the engine sends such a call nothing more, and it would otherwise read as running for ever.
 
 **Inline means under its call, not mixed into the agent's words.** The child's frames carry
 `_meta.claudeCode.parentToolUseId`, and the translator files them as a *lane* of that `Agent` call

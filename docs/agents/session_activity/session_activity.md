@@ -33,7 +33,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 
 ### Watching subagents
 1. A Claude agent hands work to a subagent. A **Subagents** badge appears, and its popover lists the subagent's name and task
-2. The subagent's own tool calls and text appear **in the chat**, in a nested sub-thread under the agent's `Agent` tool call, while the agent's own words continue around it ([Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)). Advertising the capability changed nothing here: the desktop writes the `Agent` call back into the stream
+2. The subagent's own tool calls and text appear **in the chat**, in a nested sub-thread under the agent's `Agent` tool call, while the agent's own words continue around it. A subagent that hands work on to subagents of its own shows them nested inside its sub-thread, not beside it ([Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)). Advertising the capability changed nothing here: the desktop writes the `Agent` call back into the stream
 3. The badge leaves when the last subagent has ended and its popover is closed
 
 ### Seeing the chat's tasks
@@ -59,7 +59,8 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 - **Running items come first, oldest start first. Ended items follow, most recently ended first**
 - **At most five ended items per kind are kept per chat.** When an item of a kind starts while nothing of that kind is running, the ended items of that kind are dropped: they belonged to the previous round, whose badge has already gone
 - **A later end replaces an earlier one.** Claude was watched sending `stopped` and then `completed` for the same task, and the hub takes the correction. Nothing moves an ended item back to running, and an end for an unknown item creates nothing
-- **A new run of a Codex subagent is a new item** (`<thread>#2`, `#3`…), because an ended item never runs again
+- **A new run of a Codex subagent is a new item** (`<thread>#2`, `#3`…), because an ended item never runs again. Input sent to a Codex subagent that had finished is such a run; the first run's item stays ended
+- **A subagent's report is on its item's end** where the engine sends one (Codex's `wait` carries it), and it is also the output of the agent's `wait` call in the transcript
 
 ### Stop
 - **Only a running background process whose agent said it can be stopped offers Stop.** Subagents have no Stop control: they are not async tasks, and only stopping the turn ends them
@@ -81,14 +82,17 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 
 ### What each engine reports
 - **Claude** is sent both capabilities. Its background shells and background or synchronous subagents are all reported
+- **Stop ends every subagent of the turn.** Claude and OpenCode end the whole tree on a cancel themselves. Codex's adapter would leave a subagent thread running (and its commands with it), so the patched adapter interrupts those threads too, and Cinna shows their items as *Stopped* at once, because none of them reports again
 - **Codex** is sent `asyncTasks` only. Advertising `nativeSubagentSessions` would make `codex-acp` drop the spawn call from the parent, and nothing on the wire would link the child to the chat. So Codex subagents are read from the tool calls it sends on the root session instead
 - **Command-line (custom) agents** are sent `asyncTasks` only. Only the Claude adapter's shape of native subagent sessions is routed back to the parent, so an agent that implemented them its own way would lose its spawn calls
-- **OpenCode** is sent neither and reports nothing
+- **OpenCode** is sent neither AIR capability. It declares its own `opencode/child-session-updates` instead, and each subagent it runs, at any depth, is an item and a nested sub-thread under the `subagent` call that started it. A child that no call can be matched to is shown under a group of its own, "Subagent", rather than in the agent's words. OpenCode stops reporting a child when the next prompt goes out, so one still running then is marked lost
+- **Antigravity** reports no subagents: its own are switched off in a native folder as in a sealed one, because the server streams nothing of a child's text or report and nests no deeper than one level
 
 ## Known limits
 - **Activity is memory-only.** It is lost on restart, and a background process that outlives the app is not rediscovered
 - **A Claude background subagent's launch text is not in the transcript.** The CLI writes "launched in the background" itself, and it is not on the wire. The synthesized `Agent` call closes as completed without it
-- **The Codex collaboration path is derived from the adapter's code, not watched.** A `spawnAgent` call naming its children, and the `agentsStates` of a collaboration call, are read from the call's `rawInput` as `codex-acp` 2.2.2's code would send it. The pinned CLI reported a spawn as "Start subagent" activity instead, and only `wait` arrived as a collaboration call
+- **A Codex subagent has no name.** No role or nickname reaches the wire; its item is titled by the first line of the prompt it was spawned with. Codex keeps its default of one level (a subagent cannot spawn its own), which Cinna does not raise; nesting is shown for Claude and OpenCode only
+- **OpenCode's own `.opencode/agent` or global permission rules are not Cinna's.** See [permissions](../local_agents/permissions.md#opencode-subagents-run-under-the-agents-policy)
 - **The output path is shown, not opened**
 
 ## Architecture Overview

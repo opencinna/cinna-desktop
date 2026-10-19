@@ -163,6 +163,15 @@ This is the trade `bash: allow` makes, and it is stated here rather than left to
 
 The desktop says this on the Permissions card in the user's own words — a command is like a terminal left open in that folder — rather than describing the profile as a fence it is not. **Anyone tempted to call this profile a sandbox should read this rule again.**
 
+### OpenCode subagents run under the agent's policy
+
+A subagent an OpenCode agent starts is a different agent to the engine: its own session, run as the agent it names, under *that* agent's rules, with nothing inherited from the one that called it. The profile above is written on the agent's own entry, so left like that it would govern the root and none of its subagents, and the built-in ones (`general`, `explore`, the latter allowed to run shell commands outside the folder) would run on the engine's own defaults. A nested subagent's call was seen not asking where the root's did.
+
+So the generated config also carries the same policy at its top level, which the engine pushes onto every agent: the built-ins take it in place of their own rules, and a folder's `.opencode/agent/*.md` subagent without a `permission` of its own gets exactly it. Subagents may now nest three levels deep (`experimental.subagent_depth: 3`; the engine's default is 1, which refuses a subagent's own `subagent` call), and every level asks under the same policy as the root, so the depth opens no way around it.
+
+- **One config can hold several agents' policies** (a chat runtime with its title utility), and the top level cannot tell which one spawned a subagent. When they all agree, that policy is used; when they differ, the top level denies everything, which no agent's own policy is looser than. Today that costs nothing: every multi-entry config consists of replace policies, under which the `subagent` call is itself refused
+- **Known gap, not closed:** a subagent definition in the folder with its own `permission` frontmatter is applied after the top level and wins, and so can a user's global or project OpenCode config. The root's `subagent` call still asks before it runs, which is the only check on such a subagent
+
 ### `always` never reaches the engine
 
 OpenCode's own *Always* writes `{projectID: "global", action, resource: "*"}` into the engine's session database: no directory, no session, no agent, surviving restarts. On 1.x, where it was measured, that database was the user's own `~/.local/share/opencode/opencode.db`, shared with their personal OpenCode; Cinna's processes now run on a database of their own (`OPENCODE_DB`, [The Local Engine](engine.md#cinnas-opencode-keeps-its-own-database)), shared by every Cinna OpenCode agent. A grant made in one agent folder was watched authorising a *different* folder agent with no prompt at all. The full observation is [the OpenCode contract](opencode_contract.md) §4, and it was re-taken over ACP — see [the ACP contract](acp_contract.md).
