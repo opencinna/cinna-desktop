@@ -15,7 +15,6 @@ import {
   type ArtifactLinkInfo,
   type ArtifactsDetailOutcome,
   type ArtifactVisibility,
-  type CreatedArtifactLink,
   type PublishedArtifact
 } from '../../../../shared/artifacts'
 
@@ -140,73 +139,63 @@ function CopyIconAction({ text, label, onFailed }: { text: string; label: string
   )
 }
 
-/** The card's mark for a link made at publish that Share… still holds. */
-const FRESH_LINK_MARK = 'New public link — open Share… to copy it'
-
-/** A link created this once: its URL with Copy, and a dismiss. Never stored, so never shown again. */
-function FreshLink({ link, onDismiss, onFailed, first = false }: { link: CreatedArtifactLink; onDismiss?: () => void; onFailed: (message: string) => void; first?: boolean }): React.JSX.Element {
-  return (
-    <span className={`${first ? '' : 'mt-2 '}block rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5`} data-artifact-fresh-link>
-      <span className="flex items-center gap-2">
-        <Link2 size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
-        <code className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-text)]" title={link.url}>{link.url}</code>
-        <CopyButton text={link.url} label="Copy" onFailed={onFailed} minWidth="min-w-[4.25rem]" />
-        {onDismiss && (
-          <button type="button" onClick={onDismiss} aria-label="Hide this link" title="Hide this link"
-            className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
-            <X size={12} />
-          </button>
-        )}
-      </span>
-      <span className="mt-0.5 block text-[10px] text-[var(--color-text-muted)]">
-        Shown once — copy it now.{link.code ? ` Code: ${link.code}` : ''}
-      </span>
-    </span>
-  )
-}
-
 function dateText(iso: string | null): string {
   if (!iso) return ''
   const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+/** How long a copy button says it copied. */
+const COPIED_MS = 1500
+
+/** The clipboard refused: the sentence the popover says. */
+const CLIPBOARD_REFUSED = 'Couldn’t copy the link — the clipboard refused it.'
+
+/** A link row's icon buttons (copy, trash): one size and style. */
+const LINK_ROW_ICON = 'rounded p-1 text-[var(--color-text-muted)] transition-colors aria-disabled:cursor-not-allowed aria-disabled:opacity-50'
+
+/** The card's instant tip under an icon button (as `IconAction` draws it). */
+const ICON_TIP =
+  'pointer-events-none absolute left-1/2 top-full z-20 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-text)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100'
+
 /**
  * Share…: who can see it, and the public links — two independent facts.
- * Reads core's current state each time it opens (the local row follows); a
- * new link's URL is shown here once. Portaled and labelled; errors are said
- * inside and close nothing. The checked choice takes the focus once core has
- * answered; Escape closes it and gives the focus back to Share….
+ * Reads core's current state each time it opens (the local row follows).
+ * Create public link makes one and copies it in one click; every live link
+ * whose URL is known (core's, or the one this app created this session) has
+ * a copy icon. Portaled (into `container`, else the body) and labelled;
+ * errors are said inside and close nothing. The checked choice takes the
+ * focus once core has answered; Escape closes it and gives the focus back to
+ * its trigger. Used by the card and the artifact preview's header.
  *
  * Revoking asks inline, in the link's own row (Cancel where the pointer was);
  * a revoked link stays in its place, inert and marked, until the popover
  * closes, so no row moves under the pointer.
  */
-function SharePopover({
+export function SharePopover({
   artifact,
   instanceName,
   popover,
-  warning,
-  onDismissWarning,
-  freshLink,
-  onDismissFreshLink
+  container
 }: {
   artifact: PublishedArtifact
   instanceName?: string
   popover: ReturnType<typeof usePopover<HTMLButtonElement, HTMLDivElement>>
-  /** A publish whose sharing step failed: said here, at the top, until dismissed. */
-  warning?: string
-  onDismissWarning: () => void
-  /** The public link made at publish, shown once: here, at the top, until dismissed. */
-  freshLink?: CreatedArtifactLink
-  onDismissFreshLink: () => void
+  /** Where it is portaled: inside a modal dialog, so it counts as inside it. Defaults to the body. */
+  container?: HTMLElement | null
 }): React.JSX.Element | null {
   const queryClient = useQueryClient()
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   const detailQuery = useArtifactDetail(artifact.id, popover.open)
+  /** A publish whose sharing step failed: said here, at the top, until dismissed. */
+  const warning = useArtifactPublishStore((s) => s.warnings[artifact.id])
+  const dismissWarning = useArtifactPublishStore((s) => s.dismissWarning)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [created, setCreated] = useState<CreatedArtifactLink | null>(null)
+  /** Create public link copied its link a moment ago: the button says so. */
+  const [createdCopied, setCreatedCopied] = useState(false)
+  /** The link row whose copy icon says it copied. */
+  const [copiedLink, setCopiedLink] = useState<string | null>(null)
   /** The link whose revoke is being confirmed. */
   const [confirming, setConfirming] = useState<string | null>(null)
   /** Links revoked while open: kept in place, marked, until it closes. */
@@ -220,7 +209,8 @@ function SharePopover({
   useEffect(() => {
     if (!popover.open) return
     setError(null)
-    setCreated(null)
+    setCreatedCopied(false)
+    setCopiedLink(null)
     setConfirming(null)
     setRevoked({})
     order.current = []
@@ -241,6 +231,21 @@ function SharePopover({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [popover.open, setOpen, triggerRef])
+
+  useEffect(() => {
+    if (!createdCopied) return
+    const timer = setTimeout(() => setCreatedCopied(false), COPIED_MS)
+    return () => clearTimeout(timer)
+  }, [createdCopied])
+  useEffect(() => {
+    if (copiedLink === null) return
+    const timer = setTimeout(() => setCopiedLink(null), COPIED_MS)
+    return () => clearTimeout(timer)
+  }, [copiedLink])
+  // A failed copy (or any error) takes back a row's "copied" check.
+  useEffect(() => {
+    if (error) setCopiedLink(null)
+  }, [error])
 
   const outcome = detailQuery.data
   const detail: ArtifactDetail | null = outcome?.ok ? outcome.detail : null
@@ -297,16 +302,10 @@ function SharePopover({
         <div data-artifact-share-warning className="flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-warning)]">
           <TriangleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1">{warning}</span>
-          <button type="button" aria-label="Hide this note" title="Hide this note" onClick={onDismissWarning}
+          <button type="button" aria-label="Hide this note" title="Hide this note" onClick={() => dismissWarning(artifact.id)}
             className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
             <X size={11} />
           </button>
-        </div>
-      )}
-      {freshLink && (
-        <div data-artifact-share-fresh-link>
-          <div className={sectionLabel}>New public link</div>
-          <FreshLink link={freshLink} onDismiss={onDismissFreshLink} onFailed={setError} first />
         </div>
       )}
       <div role="radiogroup" aria-label="Who can see it">
@@ -332,14 +331,49 @@ function SharePopover({
         ))}
       </div>
       <div>
-        <div className={sectionLabel}>Public links</div>
+        {/* The heading's row holds Create public link: a new link's row grows below, moving nothing under the pointer. */}
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className={sectionLabel.replace('mb-1 ', '')}>Public links</div>
+          {/* One click: create, then copy. Wide enough for both labels, so "Copied" moves nothing. Inert while busy or
+              while it says Copied (a second click would make a second link), via aria-disabled so the focus stays on it. */}
+          <button
+            type="button"
+            className={`${CARD_ACTION} min-w-[8.75rem] ${busy !== null || !detail ? 'cursor-not-allowed opacity-50' : ''}`}
+            aria-disabled={busy !== null || !detail || createdCopied || undefined}
+            onClick={() => {
+              if (busy !== null || !detail || createdCopied) return
+              const known = new Set(detail.links.map((link) => link.id))
+              void act('create', async () => {
+                const result = await window.api.artifacts.createLink(artifact.id)
+                if (result.ok) {
+                  if (await copyText(result.link.url)) {
+                    setCreatedCopied(true)
+                    // The new row's icon says it was copied too, so it is plain which link is new.
+                    const added = result.detail?.links.find((link) => !known.has(link.id))
+                    if (added) setCopiedLink(added.id)
+                  } else setError('The link was created, but the clipboard refused it — copy it from the list.')
+                }
+                return result
+              })
+            }}
+          >
+            {busy === 'create' ? (
+              <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : createdCopied ? (
+              <Check size={12} aria-hidden />
+            ) : (
+              <Link2 size={12} aria-hidden />
+            )}
+            {createdCopied && busy !== 'create' ? 'Copied' : 'Create public link'}
+          </button>
+        </div>
         {!detail && !loadError && (
           <div className="flex items-center gap-1.5 py-0.5 text-[var(--color-text-muted)]">
             <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden />
             Reading…
           </div>
         )}
-        {detail && shown.length === 0 && !created && <div className="py-0.5 text-[var(--color-text-muted)]">Anyone with a link can open it. None yet.</div>}
+        {detail && shown.length === 0 && <div className="py-0.5 text-[var(--color-text-muted)]">Anyone with a link can open it. None yet.</div>}
         {shown.length > 0 && (
           <ul aria-label="Public links" className="space-y-0.5">
             {shown.map((link) => {
@@ -382,19 +416,43 @@ function SharePopover({
                         </button>
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        aria-label={`Revoke link ${link.tokenPrefix}`}
-                        title="Revoke this link"
-                        disabled={busy !== null}
-                        onClick={() => {
-                          setError(null)
-                          setConfirming(link.id)
-                        }}
-                        className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-danger)]/20 hover:text-[var(--color-danger)] disabled:opacity-50"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      <>
+                        {link.url && (
+                          <span className="group/tip relative inline-flex">
+                            <button
+                              type="button"
+                              aria-label={`Copy public link ${link.tokenPrefix}`}
+                              onClick={async () => {
+                                const url = link.url
+                                if (!url) return
+                                setError(null)
+                                if (await copyText(url)) setCopiedLink(link.id)
+                                else setError(CLIPBOARD_REFUSED)
+                              }}
+                              className={`${LINK_ROW_ICON} hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]`}
+                            >
+                              {copiedLink === link.id ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
+                            </button>
+                            <span aria-hidden data-artifact-link-tip className={ICON_TIP}>
+                              {copiedLink === link.id ? 'Copied' : 'Copy public link'}
+                            </span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          aria-label={`Revoke link ${link.tokenPrefix}`}
+                          title="Revoke this link"
+                          aria-disabled={busy !== null || undefined}
+                          onClick={() => {
+                            if (busy !== null) return
+                            setError(null)
+                            setConfirming(link.id)
+                          }}
+                          className={`${LINK_ROW_ICON} hover:bg-[var(--color-danger)]/20 hover:text-[var(--color-danger)]`}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
                     )}
                   </span>
                   {asking && <span className="mt-0.5 block text-[10px] text-[var(--color-text-muted)]">People with this link lose access.</span>}
@@ -403,28 +461,12 @@ function SharePopover({
             })}
           </ul>
         )}
-        {created && <FreshLink link={created} onFailed={setError} />}
-        <button
-          type="button"
-          className={`${CARD_ACTION} mt-2`}
-          disabled={busy !== null || !detail}
-          onClick={() =>
-            void act('create', async () => {
-              const result = await window.api.artifacts.createLink(artifact.id)
-              if (result.ok) setCreated(result.link)
-              return result
-            })
-          }
-        >
-          {busy === 'create' ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Link2 size={12} aria-hidden />}
-          Create link
-        </button>
       </div>
       {(error || loadError) && (
         <p role="alert" className="text-[11px] leading-relaxed text-[var(--color-danger)]">{error ?? loadError}</p>
       )}
     </div>,
-    document.body
+    container ?? document.body
   )
 }
 
@@ -455,10 +497,7 @@ export function ArtifactCard({
   // hang an above-popover off the top edge, one near the composer the bottom.
   const [placement, setPlacement] = useState<'above-left' | 'below-left'>('above-left')
   const popover = usePopover<HTMLButtonElement, HTMLDivElement>(placement, { keepTopWhileOpen: true })
-  const freshLink = useArtifactPublishStore((s) => s.freshLinks[artifact.id])
   const warning = useArtifactPublishStore((s) => s.warnings[artifact.id])
-  const dismissFreshLink = useArtifactPublishStore((s) => s.dismissFreshLink)
-  const dismissWarning = useArtifactPublishStore((s) => s.dismissWarning)
   const openPreview = useArtifactPreviewStore((s) => s.open)
   const [message, setMessage] = useState<string | null>(null)
   const [hovered, setHovered] = useState(false)
@@ -522,17 +561,6 @@ export function ArtifactCard({
                   <TriangleAlert size={11} aria-hidden />
                 </span>
               )}
-              {freshLink && shareable && (
-                <span
-                  role="img"
-                  data-artifact-fresh-link-mark
-                  aria-label={FRESH_LINK_MARK}
-                  title={FRESH_LINK_MARK}
-                  className="inline-flex shrink-0 text-[var(--color-accent)]"
-                >
-                  <Link2 size={11} aria-hidden />
-                </span>
-              )}
               {/* Open or Copy link failed: a mark whose tooltip (and alert) is the sentence, so the card keeps its one row. */}
               {message && (
                 <span role="alert" data-artifact-error-mark title={message} className="inline-flex shrink-0 text-[var(--color-danger)]">
@@ -588,10 +616,6 @@ export function ArtifactCard({
           artifact={artifact}
           instanceName={instanceName}
           popover={popover}
-          warning={warning}
-          onDismissWarning={() => dismissWarning(artifact.id)}
-          freshLink={freshLink}
-          onDismissFreshLink={() => dismissFreshLink(artifact.id)}
         />
       )}
     </span>

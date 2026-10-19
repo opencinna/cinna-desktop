@@ -559,7 +559,7 @@ describe('publish', () => {
     expect(events.filter((event) => event.channel !== 'artifacts:support-changed').map((event) => (event.payload as { phase?: string }).phase)).toEqual(['packing', 'uploading', 'sharing', undefined])
   })
 
-  it('Anyone with a link: creates a link and returns its URL once, never stored', async () => {
+  it('Anyone with a link: creates a link, returns its URL, and keeps it out of the database', async () => {
     const { service, calls, rows } = setup({
       answers: [{ status: 200, ok: true, body: published() }, { status: 200, ok: true, body: { id: LINK_ID, token: 'tok', url: 'http://localhost:5173/s/tok', token_prefix: 'tok' } }]
     })
@@ -675,6 +675,46 @@ describe('share', () => {
     expect(events.filter((event) => event.channel === 'artifacts:changed')).toHaveLength(3)
     expect(await service.setVisibility(ID, 'public')).toMatchObject({ ok: false, code: 'invalid_input' })
     expect(await service.revokeLink(ID, '../../x')).toMatchObject({ ok: false, code: 'invalid_input' })
+  })
+
+  it('a link’s URL comes from core when it sends one, else from the links this session created', async () => {
+    const link = (id: string, prefix: string, url?: string) => ({ id, token_prefix: prefix, created_at: '2026-10-16T10:00:00Z', revoked_at: null, ...(url ? { url } : {}) })
+    let links: unknown[] = []
+    const { service } = setup({
+      fetchJson: async (_p, path) => (path.endsWith('capabilities') ? {} : published({ links })),
+      answers: [
+        { status: 200, ok: true, body: { id: LINK_ID, token: 'tok', url: 'http://localhost:5173/s/tok', token_prefix: 'tok' } },
+        { status: 200, ok: true, body: published() },
+        { status: 200, ok: true, body: { id: 'pub-link', url: 'http://localhost:5173/s/pub', token_prefix: 'pub' } }
+      ]
+    })
+    links = [link(LINK_ID, 'tok')]
+    const created = await service.createLink(ID)
+    expect(created).toMatchObject({ ok: true, detail: { links: [{ id: LINK_ID, url: 'http://localhost:5173/s/tok' }] } })
+    // Publish with "Anyone with a link" remembers its link too.
+    expect(await service.publish({ agentId: 'folder:analyst', path: q3(), title: 'x', visibility: 'link' })).toMatchObject({ ok: true })
+    links = [link(LINK_ID, 'tok'), link('pub-link', 'pub'), link('elsewhere', 'els'), link('from-core', 'cor', 'http://core/s/cor')]
+    const detail = await service.detail(ID)
+    expect(detail.ok && detail.detail.links.map((item) => [item.id, item.url])).toEqual([
+      [LINK_ID, 'http://localhost:5173/s/tok'],
+      ['pub-link', 'http://localhost:5173/s/pub'],
+      ['elsewhere', null],
+      ['from-core', 'http://core/s/cor']
+    ])
+    // Core's value wins over the remembered one.
+    links = [link(LINK_ID, 'tok', 'http://core/s/tok')]
+    const again = await service.detail(ID)
+    expect(again.ok && again.detail.links[0].url).toBe('http://core/s/tok')
+  })
+
+  it('a link remembered under one profile does not fill another profile’s detail', async () => {
+    const { service } = setup({
+      fetchJson: async (_p, path) => (path.endsWith('capabilities') ? {} : published({ links: [{ id: LINK_ID, token_prefix: 'tok', revoked_at: null }] })),
+      answers: [{ status: 200, ok: true, body: { id: LINK_ID, url: 'http://localhost:5173/s/tok' } }]
+    })
+    await service.createLink(ID)
+    const other = await service.detail(ID, { profileUserId: 'profile-2' })
+    expect(other.ok && other.detail.links[0].url).toBeNull()
   })
 
   it('cards come from the local memory of the active profile and server', async () => {

@@ -8,12 +8,16 @@
  *   activated app, the profile it was opened under, a chat that answers to
  *   this agent, an enabled agent. The agent's folder comes from that check,
  *   never from the call.
- * * **The gate.** `cinna` tools are allowed silently by every engine, so the
- *   card is the gate. {@link agentArtifactPolicy} is the one place that
- *   decides whether a call may publish without asking (A8).
- * * **Private only.** The tool takes no visibility; a new artifact is
- *   private, and a republish leaves who can see it as the user left it — the
- *   card says so before anything is sent.
+ * * **No card for its own artifacts.** `cinna` tools are allowed silently by
+ *   every engine, so the provider decides; {@link agentArtifactPolicy} is the
+ *   one place that does (A8). A new artifact is published private, reaching
+ *   only its owner; republishing an artifact this agent published updates it
+ *   for whoever the owner already shared it with — the user chose that over a
+ *   card on every update. Anything the call cannot be sure of asks, on the
+ *   approval card.
+ * * **Never shares.** The tool takes no visibility and no links; a new
+ *   artifact is private, and a republish leaves who can see it as the user
+ *   left it. Sharing stays the person's.
  * * **The result** is exactly the schema's object; a refusal is a sentence
  *   the agent can act on, and the row also carries a note in the user's
  *   words (`artifactRefusalNote`) for the transcript.
@@ -91,36 +95,41 @@ export interface ArtifactToolSession {
   agentId: string
 }
 
-/** Core's current sharing of an artifact, as the skip rule needs it. */
+/** Core's current sharing of an artifact, as the policy and the card need it. */
 export type ArtifactSharingNow = Pick<ArtifactDetail, 'isOwner' | 'visibility' | 'liveLinkCount' | 'grantCount'>
 
 /**
  * A8, in one place: may this call publish without asking the user?
  *
- * Only a republish of the same path into an artifact the user approved this
- * agent to publish, and which core says right now is still the user's own,
- * private, with no live link and shared with no one — new content there
- * reaches nobody but its owner. The local row cannot tell: grants, links and
- * visibility set on core's web page never reach it, so the state is read
- * fresh (`readNow`), and any failure to read it asks. Anything else asks: a
- * new artifact, another agent's, one never approved, or one now shared.
+ * * No local row: a new artifact, published private — it reaches nobody but
+ *   its owner.
+ * * A row this agent published (by its own call, or by the person's Publish…
+ *   from this agent's chat — `row.agentId` is the folder it came from): core
+ *   is read fresh (`readNow`). Still the user's own → publish, keeping who
+ *   can see it, whatever that is: the user chose that a republish updates the
+ *   artifact for whoever they already shared it with. Deleted on core
+ *   (`'gone'`) → publish as a new private artifact. A failed read, nothing,
+ *   or not the owner → ask.
+ * * Another agent's row (reachable only by `artifact_id`) → ask.
+ *
+ * Sharing itself stays the person's: the tool cannot set visibility or links.
  */
 export async function agentArtifactPolicy(input: {
-  row: Pick<PublishedArtifactRow, 'approvedAgentId' | 'sourcePath'> | null
+  row: Pick<PublishedArtifactRow, 'agentId'> | null
   agentId: string
-  sourcePath: string
-  readNow: () => Promise<ArtifactSharingNow | null>
+  readNow: () => Promise<ArtifactSharingNow | 'gone' | null>
 }): Promise<'publish' | 'ask'> {
   const { row } = input
-  if (!row || row.approvedAgentId !== input.agentId || row.sourcePath !== input.sourcePath) return 'ask'
-  let now: ArtifactSharingNow | null
+  if (!row) return 'publish'
+  if (row.agentId !== input.agentId) return 'ask'
+  let now: ArtifactSharingNow | 'gone' | null
   try {
     now = await input.readNow()
   } catch {
     return 'ask'
   }
-  if (!now) return 'ask'
-  return now.isOwner && now.visibility === 'private' && now.liveLinkCount === 0 && now.grantCount === 0 ? 'publish' : 'ask'
+  if (now === 'gone') return 'publish'
+  return now?.isOwner === true ? 'publish' : 'ask'
 }
 
 export interface ArtifactToolDeps {
@@ -130,7 +139,6 @@ export interface ArtifactToolDeps {
   repo: {
     get(profileUserId: string, serverUrl: string, artifactId: string): PublishedArtifactRow | null
     findBySource(profileUserId: string, serverUrl: string, sourcePath: string): PublishedArtifactRow | null
-    setApprovedAgent(profileUserId: string, serverUrl: string, artifactId: string, agentId: string): void
   }
   approvals: ArtifactApprovals
 }
@@ -288,20 +296,22 @@ export class ArtifactToolProvider implements ToolProvider {
     const decision = await agentArtifactPolicy({
       row: known,
       agentId,
-      sourcePath: inspection.path,
       readNow: async () => {
         if (!known) return null
         const read = await this.deps.service.detail(known.artifactId, call)
         if (read.ok) fresh = read.detail
         else if (read.code === 'gone') gone = true
-        return read.ok ? read.detail : null
+        return read.ok ? read.detail : gone ? 'gone' : null
       }
     })
     signal?.throwIfAborted()
     if (gone) target = null
     if (decision === 'publish') {
+      // `target` is read inside `publish`: a gone artifact goes out as a new private one.
       const result = await publish()
       if (!result.ok) throw new Refusal(`${ARTIFACT_AGENT_SENTENCE.failed}${result.message}`, asArtifactClause(result.message))
+      // A republish says so in the transcript; a new artifact's card speaks for itself.
+      if (!target) return { content: toolResult(result) }
       const note: MessagePart = { kind: 'notice', text: `${ARTIFACT_SKIPPED_NOTE_PREFIX}${result.artifact.revision}` }
       return { content: toolResult(result), parts: [note] }
     }
@@ -334,7 +344,6 @@ export class ArtifactToolProvider implements ToolProvider {
     })
     switch (outcome.kind) {
       case 'published':
-        this.deps.repo.setApprovedAgent(profile, server, outcome.result.artifact.id, agentId)
         return { content: toolResult(outcome.result) }
       case 'denied':
         throw new Refusal(`${ARTIFACT_AGENT_SENTENCE.declined}${path}; do not retry unless they ask.`, 'you declined', 'declined')

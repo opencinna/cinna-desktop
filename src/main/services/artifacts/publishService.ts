@@ -13,7 +13,9 @@
  * * **Publish**: a fresh {@link inspectArtifactPath} (the folder may have
  *   changed since the dialog showed it), a zip of exactly those files, the
  *   upload, then the follow-up the user chose — `instance` visibility, or a
- *   public link whose URL is returned once and never stored.
+ *   public link. Core keeps only a link's hash until it returns `url` to the
+ *   owner itself, so the URLs this app created are remembered in memory for
+ *   the session (never on disk) to fill a detail's links.
  * * **Memory** (A12): `published_artifacts` keeps `(profile, server, path) →
  *   artifact` for *Update*, kept in sync after every publish and Share
  *   action; `chat_artifact_cards` anchors the chat's card.
@@ -219,7 +221,8 @@ function toLink(value: unknown): ArtifactLinkInfo | null {
     createdAt: text(link.created_at),
     expiresAt: typeof link.expires_at === 'string' ? link.expires_at : null,
     live: !revoked && link.expired !== true && link.blocked !== true,
-    needsCode: link.needs_code === true
+    needsCode: link.needs_code === true,
+    url: typeof link.url === 'string' ? link.url : null
   }
 }
 
@@ -363,6 +366,17 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
   let retry: { profile: string; attempt: number; cancel: (() => void) | null } | null = null
 
   const UNSUPPORTED: ArtifactsSupport = { supported: false, limits: FALLBACK_ARTIFACT_LIMITS }
+
+  /**
+   * The public link URLs this app created this session, by profile, server
+   * and link id: core returns a link's URL only once (until it returns `url`
+   * to the owner), so a detail's link is filled from here. Memory only.
+   */
+  const createdLinkUrls = new Map<string, string>()
+  const linkKey = (who: Account, linkId: string): string => `${who.profile}\n${who.serverUrl}\n${linkId}`
+  function rememberLink(who: Account, body: Record<string, unknown>): void {
+    if (typeof body.id === 'string' && typeof body.url === 'string') createdLinkUrls.set(linkKey(who, body.id), body.url)
+  }
 
   function rememberedRow(profile: string, serverUrl: string): { instanceName?: string; limits: ArtifactLimits } | null {
     try {
@@ -652,8 +666,10 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
       }
       throw err
     }
-    const detail = toDetail(body)
-    if (!detail) return fail('request_failed', 'Cinna answered with something that is not an artifact.')
+    const parsed = toDetail(body)
+    if (!parsed) return fail('request_failed', 'Cinna answered with something that is not an artifact.')
+    // Core's URL wins; else the one this session created the link with.
+    const detail = { ...parsed, links: parsed.links.map((link) => (link.url !== null ? link : { ...link, url: createdLinkUrls.get(linkKey(who, link.id)) ?? null })) }
     learnOrigin(who, detail.url)
     if (detail.isOwner) deps.repo.sync(who.profile, who.serverUrl, stateOf(detail))
     return detail
@@ -804,6 +820,7 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
           const created = await deps.send(who.profile, `${ARTIFACTS_PATH}/${artifact.id}/links`, { method: 'POST', json: {} })
           const body = record(created.body)
           if (created.ok && body && typeof body.url === 'string') {
+            rememberLink(who, body)
             link = { url: body.url, ...(typeof body.code === 'string' ? { code: body.code } : {}) }
             artifact = { ...artifact, liveLinkCount: artifact.liveLinkCount + 1 }
           } else {
@@ -860,7 +877,7 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
       })
     },
 
-    /** A public link; its URL (and code) are returned this once and never stored. */
+    /** A public link; its URL is remembered for this session (core returns it once), its code is not. */
     async createLink(artifactId: unknown, options?: unknown): Promise<ArtifactsLinkOutcome> {
       return guarded(async () => {
         if (!isArtifactId(artifactId)) return fail('invalid_input')
@@ -872,6 +889,7 @@ export function createArtifactService(deps: ArtifactServiceDeps) {
         if (!answer.ok) return refusal(answer, true)
         const body = record(answer.body)
         if (!body || typeof body.url !== 'string') return fail('request_failed', 'Cinna answered with something that is not a link.')
+        rememberLink(who, body)
         const link: CreatedArtifactLink = { url: body.url, ...(typeof body.code === 'string' ? { code: body.code } : {}) }
         const detail = await readDetail(who, id).catch(() => null)
         changed(id)

@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FileText, Globe, Loader2, X } from 'lucide-react'
+import { ExternalLink, FileText, Globe, Loader2, Share2, X } from 'lucide-react'
 import { HTML_PREVIEW_SANDBOX } from '../../../../shared/htmlPreview'
 import { agentFilePreviewKindFor } from '../../../../shared/agentFiles'
 import { previewKindFor, type PreviewRenderKind } from '../../../../shared/filePreview'
 import type { ArtifactPreviewOpenResult, ArtifactViewFile, PublishedArtifact } from '../../../../shared/artifacts'
 import { useArtifactPreviewStore } from '../../stores/artifactPreview.store'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { CopyButton } from './ArtifactCard'
+import { CopyButton, SharePopover } from './ArtifactCard'
+import { useArtifactDetail } from '../../hooks/useArtifacts'
+import { usePopover } from '../ui/usePopover'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { parseXml } from '../../utils/xmlDocument'
 import type { XmlReveal } from '../chat/XmlTree'
@@ -90,8 +92,10 @@ function formatSize(bytes: number): string {
  * page in the sandboxed frame; files list on the left with the chosen one on
  * the right. Built like the file preview (expands from the click, pinned to
  * the top, fixed height so nothing moves as it loads). Loading, a failure and
- * a deleted artifact are said inside; nothing closes on an error. Mounted
- * once, in the artifacts host.
+ * a deleted artifact are said inside; nothing closes on an error. The owner
+ * also gets Share… in the header, the card's popover, portaled into the
+ * dialog: Escape or a press outside closes that popover first, the preview
+ * only on the next one. Mounted once, in the artifacts host.
  */
 export function ArtifactPreviewModal(): React.JSX.Element | null {
   const artifact = useArtifactPreviewStore((s) => s.artifact)
@@ -107,6 +111,19 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
   const [selected, setSelected] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  /** The card as state too: Share…'s popover is portaled into it once it exists. */
+  const [cardElement, setCardElement] = useState<HTMLDivElement | null>(null)
+  const setCard = useCallback((element: HTMLDivElement | null) => {
+    cardRef.current = element
+    setCardElement(element)
+  }, [])
+  // Share… is the owner's: core says who that is (hidden until it answers).
+  const detailQuery = useArtifactDetail(artifact.id)
+  const isOwner = detailQuery.data?.ok === true && detailQuery.data.detail.isOwner
+  const share = usePopover<HTMLButtonElement, HTMLDivElement>('below-right')
+  /** Read by the window listeners below: while Share… is open, Escape and an outside press are its. */
+  const shareOpen = useRef(false)
+  shareOpen.current = share.open
   const backdropRef = useRef<HTMLDivElement>(null)
   const openedAt = useRef(Date.now())
   const Icon = artifact.kind === 'site' ? Globe : FileText
@@ -166,13 +183,16 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
     }
   }, [])
 
-  // Escape and a press outside close it.
+  // Escape and a press outside close it — unless Share… is open, whose own
+  // listeners close it first (its popover lives inside the card, so a press
+  // in it is inside).
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && !shareOpen.current) onClose()
     }
     const onMouse = (event: MouseEvent): void => {
       if (!cardRef.current || cardRef.current.contains(event.target as Node)) return
+      if (shareOpen.current) return
       if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
       event.preventDefault()
       onClose()
@@ -202,7 +222,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
     <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]">
       <div ref={backdropRef} aria-hidden className="absolute inset-0 bg-black/25" />
       <div
-        ref={cardRef}
+        ref={setCard}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
@@ -217,6 +237,20 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
             <span className="shrink-0 text-xs text-[var(--color-text-muted)]">rev {revision}</span>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {/* First in the right-aligned row: appearing when core answers moves none of the others. */}
+            {isOwner && (
+              <button
+                ref={share.triggerRef}
+                type="button"
+                onClick={() => share.setOpen(!share.open)}
+                className={HEADER_ACTION_CLASS}
+                aria-haspopup="dialog"
+                aria-expanded={share.open}
+              >
+                <Share2 size={12} aria-hidden />
+                Share…
+              </button>
+            )}
             <button type="button" onClick={() => void openInBrowser()} className={HEADER_ACTION_CLASS} aria-label={`Open ${artifact.title} in the browser`}>
               <ExternalLink size={12} aria-hidden />
               Open in browser
@@ -283,6 +317,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
             />
           ) : null}
         </div>
+        {isOwner && <SharePopover artifact={artifact} instanceName={instanceName} popover={share} container={cardElement} />}
       </div>
     </div>,
     document.body

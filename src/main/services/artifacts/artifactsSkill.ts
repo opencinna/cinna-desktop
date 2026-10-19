@@ -105,7 +105,7 @@ export function cinnaArtifactsSection(delivery: ArtifactsSkillDelivery | null): 
     [
       '## Cinna artifacts',
       '',
-      'To give your owner a report, a set of files or a small dashboard they open in Cinna, publish it with `artifacts_publish` on the `cinna` tool server. It is private to them; they share it. They may be asked to approve it first.',
+      'To give your owner a report, a set of files or a small dashboard they open in Cinna, publish it with `artifacts_publish` on the `cinna` tool server. Publishing does not wait for them: a new artifact is private to them, and publishing the same path again updates it for whoever they already shared it with. Only they share it.',
       open
     ].join('\n')
   ]

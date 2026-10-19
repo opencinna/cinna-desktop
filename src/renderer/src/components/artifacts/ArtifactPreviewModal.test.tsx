@@ -1,26 +1,38 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArtifactPreviewModal, artifactFileView } from './ArtifactPreviewModal'
 import { useArtifactPreviewStore } from '../../stores/artifactPreview.store'
-import type { PublishedArtifact } from '../../../../shared/artifacts'
+import { useAuthStore } from '../../stores/auth.store'
+import type { ArtifactDetail, PublishedArtifact } from '../../../../shared/artifacts'
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const BASE = 'cinna-preview://art-tok/'
 const site: PublishedArtifact = { id: ID, title: 'Q3 at a glance', kind: 'site', revision: 2, visibility: 'private', liveLinkCount: 0, url: `http://core.test/artifact/${ID}` }
 const files: PublishedArtifact = { ...site, title: 'Q3 numbers', kind: 'files' }
+const owned: ArtifactDetail = { ...site, isOwner: true, ownerName: 'Ann', grantCount: 0, links: [] }
 
 const openArtifact = vi.fn()
 const release = vi.fn()
 const readArtifactText = vi.fn()
 const openExternal = vi.fn()
+const detailCall = vi.fn()
+
+function renderModal() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}><ArtifactPreviewModal /></QueryClientProvider>)
+}
 
 beforeEach(() => {
   openArtifact.mockReset()
   readArtifactText.mockReset().mockResolvedValue({ ok: true, text: '# Summary\n\nAll good.', truncated: false })
   release.mockReset().mockResolvedValue({ success: true })
   openExternal.mockReset().mockResolvedValue({ success: true })
+  detailCall.mockReset().mockResolvedValue({ ok: true, detail: { ...site, isOwner: false, ownerName: 'Bob', grantCount: 0, links: [] } })
+  useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   window.api = {
     htmlPreview: { openArtifact, release, readArtifactText },
+    artifacts: { detail: detailCall, createLink: vi.fn(), revokeLink: vi.fn(), setVisibility: vi.fn() },
     system: { openExternal },
     clipboard: { writeText: vi.fn().mockResolvedValue({ success: true }) }
   } as never
@@ -36,7 +48,7 @@ async function open(artifact: PublishedArtifact): Promise<void> {
 describe('the artifact preview', () => {
   it('shows a site’s start page in the sandboxed frame, and releases its token on close', async () => {
     openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'pages/index.html', files: [], revision: 4 })
-    render(<ArtifactPreviewModal />)
+    renderModal()
     await open(site)
     expect(openArtifact).toHaveBeenCalledWith(ID)
     const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement
@@ -62,7 +74,7 @@ describe('the artifact preview', () => {
         { path: 'data.zip', size: 10, mime: 'application/zip' }
       ]
     })
-    render(<ArtifactPreviewModal />)
+    renderModal()
     await open(files)
     const frame = (): HTMLIFrameElement => screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement
     // Markdown is rendered from the text main read through the token, not framed raw.
@@ -84,7 +96,7 @@ describe('the artifact preview', () => {
 
   it('says a deleted artifact is gone, and a failure offers the browser, closing nothing', async () => {
     openArtifact.mockResolvedValue({ ok: false, code: 'gone', message: 'gone' })
-    render(<ArtifactPreviewModal />)
+    renderModal()
     await open(site)
     expect(screen.getByText('This artifact was deleted on Acme.')).toBeTruthy()
     openArtifact.mockResolvedValue({ ok: false, code: 'request_failed', message: 'Cinna couldn’t be reached.' })
@@ -122,7 +134,7 @@ describe('the artifact preview', () => {
           ? Promise.resolve({ ok: true, text: '# New', truncated: false })
           : Promise.resolve({ ok: false, code: 'not_found', message: 'This file is no longer in the artifact.' })
     )
-    render(<ArtifactPreviewModal />)
+    renderModal()
     await open(files)
     expect(screen.getByText('Loading file…')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /new\.md/ }))
@@ -135,6 +147,67 @@ describe('the artifact preview', () => {
     fireEvent.click(screen.getByRole('button', { name: /broken\.json/ }))
     expect(await screen.findByText('This file is no longer in the artifact.')).toBeTruthy()
     expect(screen.getByRole('dialog', { name: 'Preview of Q3 numbers' })).toBeTruthy()
+  })
+
+  it('offers Share… to the owner only, first in the header so its arrival moves nothing', async () => {
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    const viewer = renderModal()
+    await open(site)
+    await waitFor(() => expect(detailCall).toHaveBeenCalledWith(ID))
+    await act(async () => {})
+    expect(screen.queryByRole('button', { name: 'Share…' })).toBeNull()
+    viewer.unmount()
+
+    detailCall.mockResolvedValue({ ok: true, detail: owned })
+    renderModal()
+    await open(site)
+    const share = await screen.findByRole('button', { name: 'Share…' })
+    const actions = share.parentElement as HTMLElement
+    expect(actions.firstElementChild).toBe(share)
+    expect(share.getAttribute('aria-haspopup')).toBe('dialog')
+  })
+
+  it('Share… opens the card’s popover inside the preview: a press in it keeps both open, Escape closes it first and the preview next', async () => {
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    detailCall.mockResolvedValue({ ok: true, detail: owned })
+    const now = vi.spyOn(Date, 'now')
+    renderModal()
+    await open(site)
+    // Past the guard against the second half of the double-click that opened it.
+    now.mockReturnValue(Date.now() + 10_000)
+    fireEvent.click(await screen.findByRole('button', { name: 'Share…' }))
+    const popover = await screen.findByRole('dialog', { name: 'Share Q3 at a glance' })
+    const preview = screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })
+    // Portaled into the preview, so the modal dialog contains it.
+    expect(preview.contains(popover)).toBe(true)
+    await waitFor(() => expect((within(popover).getByRole('radio', { name: 'Only me' }) as HTMLInputElement).disabled).toBe(false))
+    fireEvent.mouseDown(within(popover).getByRole('radio', { name: 'Only me' }))
+    expect(screen.getByRole('dialog', { name: 'Share Q3 at a glance' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Share Q3 at a glance' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeNull()
+    now.mockRestore()
+  })
+
+  it('a press outside the preview while Share… is open closes only Share…', async () => {
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    detailCall.mockResolvedValue({ ok: true, detail: owned })
+    const now = vi.spyOn(Date, 'now')
+    renderModal()
+    await open(site)
+    now.mockReturnValue(Date.now() + 10_000)
+    fireEvent.click(await screen.findByRole('button', { name: 'Share…' }))
+    await screen.findByRole('dialog', { name: 'Share Q3 at a glance' })
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Share Q3 at a glance' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeTruthy()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeNull()
+    now.mockRestore()
   })
 
   it('picks how a file is shown by its name, then its type', () => {

@@ -49,7 +49,7 @@ beforeEach(() => {
   } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   useArtifactsSupportStore.setState({ profileId: 'alice', support: { supported: true, instanceName: 'Acme', limits: LIMITS, linkOrigins: ORIGINS } })
-  useArtifactPublishStore.setState({ freshLinks: {}, warnings: {} })
+  useArtifactPublishStore.setState({ warnings: {} })
   useArtifactPreviewStore.setState({ artifact: null, origin: null })
 })
 
@@ -290,29 +290,51 @@ describe('the card', () => {
     }
   })
 
-  it('a link created at publish is a mark on the card and the URL at the top of Share…, until hidden', async () => {
-    useArtifactPublishStore.setState({ freshLinks: { [ID]: { url: 'http://core.test/s/tok', code: '1234' } } })
-    const { container } = wrap(<ArtifactCard artifact={{ ...artifact, liveLinkCount: 1 }} />)
-    // Nothing hangs under the card: only a mark on its audience line.
-    expect(screen.queryByText('http://core.test/s/tok')).toBeNull()
-    expect(container.querySelector('[data-artifact-fresh-link]')).toBeNull()
-    expect(screen.getByRole('img', { name: 'New public link — open Share… to copy it' })).toBeTruthy()
-    expect(screen.getByText('rev 3 · only you · 1 public link')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
-    const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
-    expect(popover.querySelector('[data-artifact-share-fresh-link]')?.textContent).toContain('http://core.test/s/tok')
-    expect(popover.textContent).toContain('Code: 1234')
-    // Closing and opening Share… again keeps it: it stays until hidden.
-    fireEvent.keyDown(window, { key: 'Escape' })
-    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
-    const again = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
-    fireEvent.click(within(again).getByRole('button', { name: 'Hide this link' }))
-    expect(screen.queryByText('http://core.test/s/tok')).toBeNull()
-    expect(screen.queryByRole('img', { name: 'New public link — open Share… to copy it' })).toBeNull()
+  it('every live link whose URL is known has a copy icon that says it copied; revoked and URL-less ones have none', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const links = [
+        { id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false, url: 'http://core.test/s/ab12' },
+        { id: 'l2', tokenPrefix: 'cd34', label: null, createdAt: '2026-10-16T11:00:00Z', expiresAt: null, live: true, needsCode: false, url: null }
+      ]
+      detailCall.mockResolvedValue({ ok: true, detail: { ...detail, liveLinkCount: 2, links } })
+      revokeLink.mockResolvedValue({ ok: true, detail: { ...detail, liveLinkCount: 1, links: [links[1], { ...links[0], live: false }] } })
+      wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+      fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+      const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+      await screen.findByText('ab12…')
+      expect(screen.queryByRole('button', { name: 'Copy public link cd34' })).toBeNull()
+      const copy = screen.getByRole('button', { name: 'Copy public link ab12' })
+      expect(copy.className).toBe(screen.getByRole('button', { name: 'Revoke link ab12' }).className.replace('hover:bg-[var(--color-danger)]/20 hover:text-[var(--color-danger)]', 'hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'))
+      await act(async () => { fireEvent.click(copy) })
+      expect(writeText).toHaveBeenCalledWith('http://core.test/s/ab12')
+      const tip = (): string | null | undefined => copy.parentElement?.querySelector('[data-artifact-link-tip]')?.textContent
+      expect(copy.hasAttribute('title')).toBe(false)
+      expect(tip()).toBe('Copied')
+      await act(async () => { vi.advanceTimersByTime(1600) })
+      expect(tip()).toBe('Copy public link')
+      // A copy that fails takes the check back.
+      await act(async () => { fireEvent.click(copy) })
+      expect(tip()).toBe('Copied')
+      writeText.mockResolvedValueOnce({ success: false })
+      await act(async () => { fireEvent.click(copy) })
+      expect(tip()).toBe('Copy public link')
+      writeText.mockResolvedValue({ success: true })
+      // A refusal is said in the popover's error line.
+      writeText.mockResolvedValue({ success: false })
+      await act(async () => { fireEvent.click(copy) })
+      expect(within(popover).getByRole('alert').textContent).toBe('Couldn’t copy the link — the clipboard refused it.')
+      // Revoked: no copy icon.
+      fireEvent.click(screen.getByRole('button', { name: 'Revoke link ab12' }))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Revoke' })) })
+      expect(screen.queryByRole('button', { name: 'Copy public link ab12' })).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('at rest the card is one row: no block under it in any state', () => {
-    useArtifactPublishStore.setState({ freshLinks: { [ID]: { url: 'http://core.test/s/tok' } }, warnings: { [ID]: 'Published, but…' } })
+    useArtifactPublishStore.setState({ warnings: { [ID]: 'Published, but…' } })
     const { container } = wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
     const main = container.querySelector('[data-artifact-card-main]') as HTMLElement
     // The card holds its body row and nothing else.
@@ -332,8 +354,8 @@ describe('the card', () => {
 
   it('revoking asks in the row; a revoked link stays in place, marked, until the popover closes', async () => {
     const links = [
-      { id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false },
-      { id: 'l2', tokenPrefix: 'cd34', label: null, createdAt: '2026-10-16T11:00:00Z', expiresAt: null, live: true, needsCode: false }
+      { id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false, url: null },
+      { id: 'l2', tokenPrefix: 'cd34', label: null, createdAt: '2026-10-16T11:00:00Z', expiresAt: null, live: true, needsCode: false, url: null }
     ]
     detailCall.mockResolvedValue({ ok: true, detail: { ...detail, liveLinkCount: 2, links } })
     // Core answers with the first link revoked, sorted after the live one.
@@ -366,11 +388,11 @@ describe('the card', () => {
     expect(screen.queryByText('ab12…')).toBeNull()
   })
 
-  it('Share… reads core, switches visibility, creates a link shown once, and revokes one', async () => {
+  it('Share… reads core, switches visibility, creates a public link and copies it in one click, and revokes one', async () => {
     const linked: ArtifactDetail = {
       ...detail,
       liveLinkCount: 1,
-      links: [{ id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false }]
+      links: [{ id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false, url: 'http://core.test/s/new' }]
     }
     setVisibility.mockResolvedValue({ ok: true, detail: { ...detail, visibility: 'instance' } })
     createLink.mockResolvedValue({ ok: true, link: { url: 'http://core.test/s/new' }, detail: linked })
@@ -385,11 +407,39 @@ describe('the card', () => {
     })
     expect(setVisibility).toHaveBeenCalledWith(ID, 'instance')
     expect((screen.getByRole('radio', { name: 'Everyone on Acme' }) as HTMLInputElement).checked).toBe(true)
+    const create = screen.getByRole('button', { name: 'Create public link' })
+    // Wide enough for "Copied" too: the label swap moves nothing.
+    expect(create.className).toContain('min-w-[8.75rem]')
+    // Beside the section heading, above the rows: a new row grows below it.
+    expect(create.parentElement?.textContent?.startsWith('Public links')).toBe(true)
+    expect(create.compareDocumentPosition(screen.getByText(/None yet/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    create.focus()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Create link' }))
+      fireEvent.click(create)
     })
-    expect(screen.getByText('http://core.test/s/new')).toBeTruthy()
+    // Never `disabled` (which would drop the focus to the body): inert by aria-disabled while it says Copied.
+    expect(create.hasAttribute('disabled')).toBe(false)
+    expect(create.getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(create)
+    // A second click while it says Copied makes no second link.
+    await act(async () => {
+      fireEvent.click(create)
+    })
+    expect(createLink).toHaveBeenCalledTimes(1)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(createLink).toHaveBeenCalledWith(ID)
+    expect(writeText).toHaveBeenCalledWith('http://core.test/s/new')
+    expect(create.textContent).toBe('Copied')
+    // Not shown as a URL: it is in the list, with its own copy icon.
+    expect(screen.queryByText('http://core.test/s/new')).toBeNull()
+    expect(popover.textContent).not.toContain('Shown once')
     expect(screen.getByText('ab12…')).toBeTruthy()
+    // The new row says it was copied too, for as long as the button does.
+    const newRow = screen.getByRole('button', { name: 'Copy public link ab12' })
+    expect(newRow.parentElement?.querySelector('[data-artifact-link-tip]')?.textContent).toBe('Copied')
+    await waitFor(() => expect(create.textContent).toBe('Create public link'), { timeout: 2500 })
+    expect(newRow.parentElement?.querySelector('[data-artifact-link-tip]')?.textContent).toBe('Copy public link')
+    expect(create.getAttribute('aria-disabled')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Revoke link ab12' }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
@@ -398,5 +448,24 @@ describe('the card', () => {
     expect(screen.getByRole('alert').textContent).toBe('Could not reach Cinna.')
     // The popover stays open on a refusal.
     expect(screen.getByRole('dialog', { name: 'Share Q3 churn' })).toBeTruthy()
+  })
+
+  it('Create public link says when the clipboard refused; the link still exists and is listed', async () => {
+    writeText.mockResolvedValue({ success: false })
+    createLink.mockResolvedValue({
+      ok: true,
+      link: { url: 'http://core.test/s/new' },
+      detail: { ...detail, liveLinkCount: 1, links: [{ id: 'l1', tokenPrefix: 'ab12', label: null, createdAt: '2026-10-16T10:00:00Z', expiresAt: null, live: true, needsCode: false, url: 'http://core.test/s/new' }] }
+    })
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+    const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create public link' }).getAttribute('aria-disabled')).toBeNull())
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create public link' }))
+    })
+    expect(within(popover).getByRole('alert').textContent).toBe('The link was created, but the clipboard refused it — copy it from the list.')
+    expect(screen.getByRole('button', { name: 'Create public link' }).textContent).toBe('Create public link')
+    expect(screen.getByText('ab12…')).toBeTruthy()
   })
 })

@@ -48,7 +48,7 @@ beforeEach(() => {
   window.api = { artifacts: { inspect, publish, answerApproval } } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   useArtifactsSupportStore.setState({ profileId: 'alice', support: { supported: true, instanceName: 'Acme', limits: LIMITS } })
-  useArtifactPublishStore.setState({ request: null, publishing: false, error: null, phase: null, operationId: null, freshLinks: {}, warnings: {} })
+  useArtifactPublishStore.setState({ request: null, publishing: false, error: null, phase: null, operationId: null, warnings: {} })
 })
 
 describe('the Publish dialog', () => {
@@ -100,7 +100,8 @@ describe('the Publish dialog', () => {
       resolve({ ok: true, artifact: { id: ID, title: 'Q3 churn', kind: 'site', revision: 4, visibility: 'instance', liveLinkCount: 1, url: 'u' }, excluded: [], link: { url: 'http://core.test/s/tok' } })
     })
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(useArtifactPublishStore.getState().freshLinks[ID]).toEqual({ url: 'http://core.test/s/tok' })
+    // The link is Share…'s to list now; nothing about it is held for the card.
+    expect(useArtifactPublishStore.getState().warnings[ID]).toBeUndefined()
   })
 
   it('keeps Publish disabled over the limits, saying why with the size in the total line', async () => {
@@ -220,7 +221,7 @@ describe('the Publish dialog', () => {
       edits: { title: 'Agent title', description: 'Agent words', entry: null, artifactId: null, visibility: 'instance' }
     })
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(useArtifactPublishStore.getState().freshLinks[ID]).toEqual({ url: 'http://core/s/t' })
+    expect(useArtifactPublishStore.getState().warnings[ID]).toBeUndefined()
   })
 
   it('titles a file without its extension and a folder by its name', () => {

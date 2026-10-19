@@ -45,7 +45,7 @@ function setup(opts: {
   const active = { profile: opts.activeProfile ?? 'p1' }
   /** Hold the next upload until released (a slow publish). */
   const gate: { hold: Promise<void> | null } = { hold: null }
-  const repo: ArtifactServiceDeps['repo'] & { setApprovedAgent(p: string, s: string, a: string, agent: string): void } = {
+  const repo: ArtifactServiceDeps['repo'] = {
     findBySource: (p, s, src) => rows.filter((row) => row.profileUserId === p && row.serverUrl === s && row.sourcePath === src).at(-1) ?? null,
     get: (p, s, id) => rows.find((row) => row.profileUserId === p && row.serverUrl === s && row.artifactId === id) ?? null,
     recordPublish: (p, s, source, state) => {
@@ -57,7 +57,6 @@ function setup(opts: {
     forget: () => {},
     addCard: () => {},
     cards: () => [],
-    setApprovedAgent: (p, s, id, agent) => { const row = repo.get(p, s, id); if (row) row.approvedAgentId = agent },
     urls: () => []
   }
   const service = createArtifactService({
@@ -99,12 +98,18 @@ function setup(opts: {
   return { provider, approvals, service, rows, sends, reads, events, repo, core, gate, active }
 }
 
-/** Publish once through the card, so the artifact is approved for this agent. */
-async function approvedOnce(ctx: ReturnType<typeof setup>): Promise<void> {
+/** Publish once: a new artifact, which goes out without a card. */
+async function publishedOnce(ctx: ReturnType<typeof setup>): Promise<void> {
   const first = call(ctx.provider, { path: 'reports/q3', title: 'Q3' })
-  await until(() => ctx.approvals.has('art_tc1'))
-  await ctx.approvals.answer('p1', 'art_tc1', 'publish')
-  await first.result
+  expect(await first.result).toMatchObject({ content: { artifact_id: ID } })
+  expect(first.runEvents).toEqual([])
+}
+
+/** `reports/q3` already published by another agent: a call into it asks (the card). */
+function publishedByOther(ctx: ReturnType<typeof setup>): void {
+  ctx.repo.recordPublish('p1', SERVER, { sourcePath: join(agentDir, 'reports', 'q3'), agentId: 'folder:other' }, {
+    artifactId: ID, title: 'Q3', kind: 'site', revision: 1, visibility: 'private', url: `http://core/artifact/${ID}`, liveLinkCount: 0
+  })
 }
 
 /** Call the tool, collecting its events; resolves with the result. */
@@ -133,26 +138,39 @@ afterEach(() => {
 })
 
 describe('agentArtifactPolicy (A8)', () => {
-  const row = { approvedAgentId: 'folder:analyst', sourcePath: '/a/q3' }
+  const own = { agentId: 'folder:analyst' }
   const now = { isOwner: true, visibility: 'private' as const, liveLinkCount: 0, grantCount: 0 }
-  const decide = (over: { row?: typeof row | null; agentId?: string; sourcePath?: string; readNow?: () => Promise<typeof now | null> } = {}) =>
-    agentArtifactPolicy({ row: row, agentId: 'folder:analyst', sourcePath: '/a/q3', readNow: async () => now, ...over })
+  type Now = typeof now | { isOwner: boolean; visibility: string; liveLinkCount: number; grantCount: number }
+  const decide = (over: { row?: typeof own | null; readNow?: () => Promise<Now | 'gone' | null> } = {}) =>
+    agentArtifactPolicy({ row: own, agentId: 'folder:analyst', readNow: async () => now, ...over } as Parameters<typeof agentArtifactPolicy>[0])
 
-  it('publishes without asking only an approved, same-path republish that core says is still private and unshared', async () => {
-    expect(await decide()).toBe('publish')
-    expect(await decide({ row: null })).toBe('ask')
-    expect(await decide({ row: { ...row, approvedAgentId: null as unknown as string } })).toBe('ask')
-    expect(await decide({ agentId: 'folder:other' })).toBe('ask')
-    expect(await decide({ sourcePath: '/a/q4' })).toBe('ask')
+  it('publishes a new artifact without asking or reading core', async () => {
+    const readNow = vi.fn(async () => now)
+    expect(await decide({ row: null, readNow })).toBe('publish')
+    expect(readNow).not.toHaveBeenCalled()
   })
 
-  it('asks when core shows it shared, not owned, or cannot be read — whatever the local row says', async () => {
-    expect(await decide({ readNow: async () => ({ ...now, visibility: 'instance' as never }) })).toBe('ask')
-    expect(await decide({ readNow: async () => ({ ...now, liveLinkCount: 1 }) })).toBe('ask')
-    expect(await decide({ readNow: async () => ({ ...now, grantCount: 1 }) })).toBe('ask')
-    expect(await decide({ readNow: async () => ({ ...now, isOwner: false }) })).toBe('ask')
-    expect(await decide({ readNow: async () => null })).toBe('ask')
+  it('republishes its own artifact without asking while core says the user still owns it, however it is shared', async () => {
+    expect(await decide()).toBe('publish')
+    expect(await decide({ readNow: async () => ({ ...now, visibility: 'instance' }) })).toBe('publish')
+    expect(await decide({ readNow: async () => ({ ...now, liveLinkCount: 1 }) })).toBe('publish')
+    expect(await decide({ readNow: async () => ({ ...now, grantCount: 2 }) })).toBe('publish')
+  })
+
+  it('publishes anew when core says its artifact was deleted', async () => {
+    expect(await decide({ readNow: async () => 'gone' })).toBe('publish')
+  })
+
+  it('asks when core cannot be read, answers nothing, or says the user is not the owner', async () => {
     expect(await decide({ readNow: async () => { throw new Error('offline') } })).toBe('ask')
+    expect(await decide({ readNow: async () => null })).toBe('ask')
+    expect(await decide({ readNow: async () => ({ ...now, isOwner: false }) })).toBe('ask')
+  })
+
+  it('asks for another agent’s artifact without reading core', async () => {
+    const readNow = vi.fn(async () => now)
+    expect(await decide({ row: { agentId: 'folder:other' }, readNow })).toBe('ask')
+    expect(readNow).not.toHaveBeenCalled()
   })
 })
 
@@ -195,21 +213,38 @@ describe('artifacts_publish', () => {
     expect(await call(unsupported.provider, { path: 'reports/q3', title: 'x' }).result).toMatchObject({ isError: true, content: expect.stringMatching(/not available/) })
   })
 
-  it('asks, then publishes privately on approval and returns exactly the schema result', async () => {
+  it('publishes a new artifact privately without asking and returns exactly the schema result, with no note', async () => {
     const { provider, approvals, service, sends, rows } = setup()
     await service.support()
+    const { result, runEvents } = call(provider, { path: 'reports/q3', title: 'Q3 churn', description: 'By plan' })
+    expect(await result).toEqual({
+      content: { artifact_id: ID, revision: 1, url: `http://core/artifact/${ID}`, kind: 'site', file_count: 1, size_bytes: 11, excluded: ['.env'] }
+    })
+    expect(runEvents).toEqual([])
+    expect(approvals.list('p1', 'chat-1')).toEqual([])
+    expect(sends.map((send) => [send.method, send.path])).toEqual([['POST', '/api/v1/artifacts']])
+    expect(rows[0]).toMatchObject({ agentId: 'folder:analyst', visibility: 'private' })
+  })
+
+  it('asks for another agent’s artifact, then publishes on approval and returns exactly the schema result', async () => {
+    const ctx = setup()
+    const { provider, approvals, service, sends } = ctx
+    await service.support()
+    publishedByOther(ctx)
     const { result, runEvents } = call(provider, { path: 'reports/q3', title: 'Q3 churn', description: 'By plan' })
     await until(() => approvals.list('p1', 'chat-1').length === 1)
     const [summary] = approvals.list('p1', 'chat-1')
     expect(summary).toMatchObject({
       requestId: 'art_tc1', relativePath: 'reports/q3', title: 'Q3 churn', kindLine: 'Mini-site · opens index.html',
-      files: [{ path: 'index.html', size: 11 }], excluded: [{ path: '.env', reason: 'secret file' }], audience: 'only you', update: null
+      files: [{ path: 'index.html', size: 11 }], excluded: [{ path: '.env', reason: 'secret file' }], audience: 'only you', update: { artifactId: ID }
     })
     expect(runEvents[0]).toMatchObject({
       type: 'needs_input', requestId: 'art_tc1', resume: 'reply',
       request: { kind: 'question', questions: [{ header: 'Publish artifact', options: [{ label: 'Publish' }, { label: 'Deny' }] }] }
     })
     expect(sends).toEqual([])
+    // Another agent's artifact is not this call's to judge: core is not even read.
+    expect(ctx.reads.map((read) => read.path)).not.toContain(`/api/v1/artifacts/${ID}`)
     expect(await approvals.answer('someone-else', 'art_tc1', 'publish')).toMatchObject({ ok: false, code: 'forbidden' })
     expect(await approvals.answer('p1', 'art_tc1', 'publish')).toMatchObject({ ok: true, artifact: { id: ID } })
     expect(await result).toEqual({
@@ -217,45 +252,60 @@ describe('artifacts_publish', () => {
     })
     expect(runEvents[1]).toEqual({ type: 'input_resolved', requestId: 'art_tc1', resolution: { kind: 'question', answers: [['Publish']] } })
     expect(sends.map((send) => send.method)).toEqual(['POST'])
-    expect(rows[0]).toMatchObject({ approvedAgentId: 'folder:analyst', visibility: 'private' })
   })
 
-  it('republishes an approved private artifact without a card, noting the revision', async () => {
+  it('republishes its own private artifact without a card, noting the revision', async () => {
     const ctx = setup()
     await ctx.service.support()
-    await approvedOnce(ctx)
+    await publishedOnce(ctx)
     const again = call(ctx.provider, { path: 'reports/q3/', title: 'Q3' }, { toolCallId: 'tc2' })
     expect(await again.result).toMatchObject({ content: { artifact_id: ID, revision: 2 }, parts: [{ kind: 'notice', text: 'Updated rev 2' }] })
     expect(again.runEvents).toEqual([])
     expect(ctx.sends.map((send) => send.path)).toEqual(['/api/v1/artifacts', `/api/v1/artifacts/${ID}/revisions`])
-    // Core was asked first: the local row is not trusted for who can see it.
+    // Core was asked first: the local row is not trusted for who owns it.
     expect(ctx.reads.map((read) => read.path)).toContain(`/api/v1/artifacts/${ID}`)
   })
 
-  it('asks again when core shows sharing the local row never saw (a grant, a link, a read that fails)', async () => {
+  it('republishes its own artifact without a card however the user shared it, and never changes the sharing', async () => {
     for (const change of [
       (core: ReturnType<typeof setup>['core']) => { core.grants = 1 },
       (core: ReturnType<typeof setup>['core']) => { core.liveLinks = 1 },
-      (core: ReturnType<typeof setup>['core']) => { core.visibility = 'instance' },
-      (core: ReturnType<typeof setup>['core']) => { core.readFails = true }
+      (core: ReturnType<typeof setup>['core']) => { core.visibility = 'instance' }
     ]) {
       const ctx = setup()
       await ctx.service.support()
-      await approvedOnce(ctx)
-      expect(ctx.rows[0]).toMatchObject({ visibility: 'private', liveLinkCount: 0 })
+      await publishedOnce(ctx)
+      change(ctx.core)
+      const again = call(ctx.provider, { path: 'reports/q3', title: 'Q3', artifact_id: ID }, { toolCallId: 'tc2' })
+      expect(await again.result).toMatchObject({ content: { artifact_id: ID, revision: 2 }, parts: [{ kind: 'notice', text: 'Updated rev 2' }] })
+      expect(again.runEvents).toEqual([])
+      // No PATCH: an agent's republish never changes who can see it.
+      expect(ctx.sends.map((send) => send.method)).toEqual(['POST', 'POST'])
+    }
+  })
+
+  it('asks before republishing its own artifact when core cannot be read or says the user no longer owns it', async () => {
+    for (const change of [
+      (core: ReturnType<typeof setup>['core']) => { core.readFails = true },
+      (core: ReturnType<typeof setup>['core']) => { core.owner = false }
+    ]) {
+      const ctx = setup()
+      await ctx.service.support()
+      await publishedOnce(ctx)
       change(ctx.core)
       const again = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { toolCallId: 'tc2' })
       await until(() => ctx.approvals.has('art_tc2'))
       expect(ctx.sends).toHaveLength(1)
       await ctx.approvals.answer('p1', 'art_tc2', 'deny')
-      await again.result
+      expect(await again.result).toMatchObject({ isError: true })
     }
   })
 
   it('the card names the audience core reports now, grants included, not the stale local row', async () => {
     const ctx = setup()
     await ctx.service.support()
-    await approvedOnce(ctx)
+    await publishedOnce(ctx)
+    ctx.core.owner = false
     ctx.core.grants = 2
     ctx.core.liveLinks = 1
     const again = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { toolCallId: 'tc2' })
@@ -267,26 +317,25 @@ describe('artifacts_publish', () => {
     await again.result
   })
 
-  it('an artifact deleted on core becomes a new private artifact, not an update that fails as gone', async () => {
+  it('an artifact deleted on core becomes a new private artifact without a card, not an update that fails as gone', async () => {
     const ctx = setup()
     await ctx.service.support()
-    await approvedOnce(ctx)
+    await publishedOnce(ctx)
     ctx.core.deleted = true
     const again = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { toolCallId: 'tc2' })
-    await until(() => ctx.approvals.has('art_tc2'))
-    const [summary] = ctx.approvals.list('p1', 'chat-1')
-    expect(summary.update).toBeNull()
-    expect(summary.audience).toBe('only you')
-    ctx.core.deleted = false
-    expect(await ctx.approvals.answer('p1', 'art_tc2', 'publish')).toMatchObject({ ok: true })
-    expect(await again.result).toMatchObject({ content: { artifact_id: ID } })
+    const result = await again.result
+    expect(result).toMatchObject({ content: { artifact_id: ID } })
+    expect(result.parts).toBeUndefined()
+    expect(again.runEvents).toEqual([])
     // The second upload created rather than posting a revision of the deleted id.
     expect(ctx.sends.map((send) => send.path)).toEqual(['/api/v1/artifacts', '/api/v1/artifacts'])
+    expect(ctx.sends[1].json).toBeUndefined()
   })
 
   it('a stop waits for an approved upload only so long; a core that never answers cannot hold the call', async () => {
     const ctx = setup({ uploadGraceMs: 30 })
     await ctx.service.support()
+    publishedByOther(ctx)
     const controller = new AbortController()
     const { result } = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { signal: controller.signal })
     await until(() => ctx.approvals.has('art_tc1'))
@@ -303,7 +352,7 @@ describe('artifacts_publish', () => {
     await ctx.service.support()
     // The user switched profiles while the agent's session (opened under p1) goes on.
     ctx.active.profile = 'p-other'
-    await approvedOnce(ctx)
+    await publishedOnce(ctx)
     expect(ctx.sends.map((send) => send.profile)).toEqual(['p1'])
     expect(ctx.rows.map((row) => row.profileUserId)).toEqual(['p1'])
     const again = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { toolCallId: 'tc2' })
@@ -312,28 +361,11 @@ describe('artifacts_publish', () => {
     expect(ctx.sends.map((send) => send.profile)).toEqual(['p1', 'p1'])
   })
 
-  it('asks again once the artifact is shared, and keeps the sharing as the user left it', async () => {
-    const { provider, approvals, service, sends, rows, core } = setup()
-    await service.support()
-    const first = call(provider, { path: 'reports/q3', title: 'Q3' })
-    await until(() => approvals.has('art_tc1'))
-    await approvals.answer('p1', 'art_tc1', 'publish')
-    await first.result
-    // The user shared it since.
-    rows[0].visibility = 'instance'
-    core.visibility = 'instance'
-    const again = call(provider, { path: 'reports/q3', title: 'Q3', artifact_id: ID }, { toolCallId: 'tc2' })
-    await until(() => approvals.has('art_tc2'))
-    expect(approvals.list('p1', 'chat-1')[0]).toMatchObject({ audience: 'everyone on Acme', update: { artifactId: ID, title: 'Q3' } })
-    await approvals.answer('p1', 'art_tc2', 'publish')
-    await again.result
-    // No PATCH: an agent's republish never changes who can see it.
-    expect(sends.map((send) => send.method)).toEqual(['POST', 'POST'])
-  })
-
   it('a deny is an error the agent reads, and nothing is sent', async () => {
-    const { provider, approvals, service, sends } = setup()
+    const cardCtx = setup()
+    const { provider, approvals, service, sends } = cardCtx
     await service.support()
+    publishedByOther(cardCtx)
     const { result, runEvents } = call(provider, { path: 'reports/q3', title: 'Q3' })
     await until(() => approvals.has('art_tc1'))
     await approvals.answer('p1', 'art_tc1', 'deny')
@@ -349,12 +381,15 @@ describe('artifacts_publish', () => {
   it('times out and cancels with clear sentences, settling the ask as expired', async () => {
     const timed = setup({ timeoutMs: 20 })
     await timed.service.support()
+    publishedByOther(timed)
     const late = call(timed.provider, { path: 'reports/q3', title: 'Q3' })
     expect(await late.result).toMatchObject({ isError: true, content: expect.stringMatching(/Nobody answered/), parts: [{ text: 'artifact-refusal:timeout:no answer within an hour' }] })
     expect(late.runEvents.at(-1)).toMatchObject({ type: 'input_resolved', resolution: { kind: 'rejected' } })
 
-    const { provider, approvals, service } = setup()
+    const cardCtx = setup()
+    const { provider, approvals, service } = cardCtx
     await service.support()
+    publishedByOther(cardCtx)
     const controller = new AbortController()
     const stopped = call(provider, { path: 'reports/q3', title: 'Q3' }, { signal: controller.signal })
     await until(() => approvals.has('art_tc1'))
@@ -366,6 +401,7 @@ describe('artifacts_publish', () => {
   it('a stop during an approved upload waits for it and reports the publish that happened', async () => {
     const ctx = setup()
     await ctx.service.support()
+    publishedByOther(ctx)
     const controller = new AbortController()
     const { result, runEvents } = call(ctx.provider, { path: 'reports/q3', title: 'Q3' }, { signal: controller.signal })
     await until(() => ctx.approvals.has('art_tc1'))
@@ -380,12 +416,12 @@ describe('artifacts_publish', () => {
     expect(await answered).toMatchObject({ ok: true, artifact: { id: ID } })
     expect(await result).toEqual({ content: expect.objectContaining({ artifact_id: ID, revision: 1 }) })
     expect(runEvents.at(-1)).toEqual({ type: 'input_resolved', requestId: 'art_tc1', resolution: { kind: 'question', answers: [['Publish']] } })
-    expect(ctx.rows[0]).toMatchObject({ approvedAgentId: 'folder:analyst' })
   })
 
   it('a timeout during an approved upload waits for it too; a failed upload then settles as the timeout', async () => {
     const ctx = setup({ timeoutMs: 30 })
     await ctx.service.support()
+    publishedByOther(ctx)
     const first = call(ctx.provider, { path: 'reports/q3', title: 'Q3' })
     await until(() => ctx.approvals.has('art_tc1'))
     let release!: () => void
@@ -400,6 +436,7 @@ describe('artifacts_publish', () => {
     // The publish fails after the timeout: the call ends as the timeout, nobody waits for a retry.
     const failing = setup({ timeoutMs: 30 })
     await failing.service.support()
+    publishedByOther(failing)
     const second = call(failing.provider, { path: 'reports/q3', title: 'Q3' })
     await until(() => failing.approvals.has('art_tc1'))
     let releaseFail!: () => void
@@ -415,8 +452,10 @@ describe('artifacts_publish', () => {
   })
 
   it('Edit… publishes with the user’s choices, which may share it', async () => {
-    const { provider, approvals, service, sends } = setup()
+    const cardCtx = setup()
+    const { provider, approvals, service, sends } = cardCtx
     await service.support()
+    publishedByOther(cardCtx)
     const { result } = call(provider, { path: 'reports/q3', title: 'Q3' })
     await until(() => approvals.has('art_tc1'))
     expect(await approvals.answer('p1', 'art_tc1', 'publish', { title: 'Renamed', artifactId: null, visibility: 'instance' })).toMatchObject({ ok: true })
@@ -427,8 +466,10 @@ describe('artifacts_publish', () => {
 
 describe('the Inbox way back', () => {
   it('claims only art_ ids, publishes or denies, and refuses what is not waiting', async () => {
-    const { provider, approvals, service } = setup()
+    const cardCtx = setup()
+    const { provider, approvals, service } = cardCtx
     await service.support()
+    publishedByOther(cardCtx)
     const hook = approvalInboxHook(approvals)
     expect(hook.answer('p1', 'per_x', { kind: 'question', answers: [['Publish']] })).toBeNull()
     expect(await hook.answer('p1', 'art_gone', { kind: 'question', answers: [['Publish']] })).toMatchObject({ ok: false, code: 'no_longer_waiting' })

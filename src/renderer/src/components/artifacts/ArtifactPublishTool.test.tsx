@@ -43,7 +43,7 @@ beforeEach(() => {
   window.api = { artifacts: { approvals, answerApproval, local } } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   useArtifactsSupportStore.setState({ profileId: 'alice', support: { supported: true, instanceName: 'Acme', limits: LIMITS } })
-  useArtifactPublishStore.setState({ request: null, publishing: false, freshLinks: {}, warnings: {} })
+  useArtifactPublishStore.setState({ request: null, publishing: false, warnings: {} })
 })
 
 describe('an agent’s artifacts_publish in the transcript', () => {
@@ -89,10 +89,17 @@ describe('an agent’s artifacts_publish in the transcript', () => {
     mount({ status: 'done', result: resultJson, parts: [{ kind: 'notice', text: 'Updated rev 4' }] })
     expect(await screen.findByText('rev 4 · everyone on Acme')).toBeTruthy()
     // Said once: the card already says the revision.
-    expect(screen.getByText('Updated — approved before')).toBeTruthy()
+    expect(screen.getByText('Updated without asking')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Share Q3 churn' })).toBeTruthy()
     expect(local).toHaveBeenCalledWith(ID)
     expect(approvals).not.toHaveBeenCalled()
+  })
+
+  it('a new artifact published without a card shows its card and no note', async () => {
+    mount({ status: 'done', result: resultJson })
+    expect(await screen.findByText('rev 4 · everyone on Acme')).toBeTruthy()
+    expect(screen.queryByText('Updated without asking')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Share Q3 churn' })).toBeTruthy()
   })
 
   it('says a refusal in the user’s words from the row’s note, never the agent’s sentence', () => {

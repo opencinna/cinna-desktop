@@ -137,7 +137,7 @@ export interface PublishedArtifact {
   url: string
 }
 
-/** A public link, shown once: its token is never stored. */
+/** A public link just created: its URL, and the code when it needs one. */
 export interface CreatedArtifactLink {
   url: string
   code?: string
@@ -188,7 +188,7 @@ export type ArtifactsPublishOutcome =
       artifact: PublishedArtifact
       /** What core dropped (A10), beside what the desktop never sent. */
       excluded: string[]
-      /** Created after publish for "Anyone with a link"; shown once, not stored. */
+      /** Created after publish for "Anyone with a link"; Share… lists it afterwards. */
       link?: CreatedArtifactLink
       /** Published, but the follow-up (visibility, link) failed: said once, not an error. */
       warning?: string
@@ -208,6 +208,12 @@ export interface ArtifactLinkInfo {
   /** Live: not revoked, not expired, not blocked. */
   live: boolean
   needsCode: boolean
+  /**
+   * The link's address, to copy: core's when it returns one to the owner,
+   * else the one this app created it with during this session; null when
+   * neither is known (a link made elsewhere, or before a restart).
+   */
+  url: string | null
 }
 
 export interface ArtifactDetail extends PublishedArtifact {

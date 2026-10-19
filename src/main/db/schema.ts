@@ -1315,8 +1315,10 @@ export const serviceCredentials = sqliteTable('service_credentials', { id: text(
  * Artifacts this profile published from a path on this machine (artifacts
  * A12): the memory behind *Update "<title>" (rev N)*, kept in sync with core
  * after every publish and Share action. Unique per (profile, server,
- * artifact). `approved_agent_id` is the agent whose own publish of this path
- * the user approved (D2). See `migrations/published-artifacts.ts`.
+ * artifact). `approved_agent_id` once named the agent whose publish of this
+ * path the user approved (D2); it is no longer read or written — an agent's
+ * republish is decided by `agent_id` and core's answer (A8) — and stays only
+ * to spare a migration. See `migrations/published-artifacts.ts`.
  */
 export const publishedArtifacts = sqliteTable('published_artifacts', {
   id: text('id').primaryKey(),

@@ -92,24 +92,6 @@ export const publishedArtifactRepo = {
       .run()
   },
 
-  /**
-   * The user approved `agentId` publishing this artifact (D2): its later
-   * republish of the same path, while the artifact stays private, needs no card.
-   */
-  setApprovedAgent(profileUserId: string, serverUrl: string, artifactId: string, agentId: string): void {
-    getDb()
-      .update(publishedArtifacts)
-      .set({ approvedAgentId: agentId })
-      .where(
-        and(
-          eq(publishedArtifacts.profileUserId, profileUserId),
-          eq(publishedArtifacts.serverUrl, serverUrl),
-          eq(publishedArtifacts.artifactId, artifactId)
-        )
-      )
-      .run()
-  },
-
   /** The distinct page URLs core gave this profile's artifacts on this server: where its frontend lives. */
   urls(profileUserId: string, serverUrl: string): string[] {
     return getDb()

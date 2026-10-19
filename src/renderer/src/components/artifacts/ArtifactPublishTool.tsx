@@ -129,8 +129,8 @@ export function parsePublishResult(content: unknown): ArtifactPublishToolResult 
 /**
  * `artifacts_publish` in the transcript, live and after a reload: the
  * approval card while it waits, the artifact's card once published (read
- * from the local memory, so Share… reflects later changes), a line when it
- * was declined or failed.
+ * from the local memory, so Share… reflects later changes) — a republish that
+ * needed no card says so above it — a line when it was declined or failed.
  */
 export function ArtifactPublishToolBlock({
   chatId,
@@ -189,7 +189,7 @@ export function ArtifactPublishToolBlock({
   }
   return (
     <div data-artifact-tool="published">
-      {skipped && <div className={line}>Updated — approved before</div>}
+      {skipped && <div className={line}>Updated without asking</div>}
       <ArtifactCard artifact={artifact} instanceName={instanceName} canShare={local.data != null} />
     </div>
   )

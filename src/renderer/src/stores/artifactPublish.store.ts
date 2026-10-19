@@ -1,9 +1,5 @@
 import { create } from 'zustand'
-import type {
-  ArtifactsProgressPhase,
-  CreatedArtifactLink,
-  PublishArtifactInput
-} from '../../../shared/artifacts'
+import type { ArtifactsProgressPhase, PublishArtifactInput } from '../../../shared/artifacts'
 import { unwrapIpcError } from '../utils/ipcError'
 
 /** What the Publish dialog was opened on: a file or folder reference in a chat. */
@@ -35,8 +31,6 @@ interface ArtifactPublishState {
   error: string | null
   /** The artifact the last publish refused to update because it is gone. */
   goneArtifactId: string | null
-  /** Public links created at publish, shown once on the card: never stored. */
-  freshLinks: Record<string, CreatedArtifactLink>
   /** A publish that worked whose follow-up did not, said once on the card. */
   warnings: Record<string, string>
   open: (request: PublishRequest) => void
@@ -44,7 +38,6 @@ interface ArtifactPublishState {
   close: () => void
   publish: (input: Omit<PublishArtifactInput, 'operationId' | 'anchor' | 'agentId' | 'path'>) => Promise<void>
   setPhase: (operationId: string, phase: ArtifactsProgressPhase) => void
-  dismissFreshLink: (artifactId: string) => void
   dismissWarning: (artifactId: string) => void
 }
 
@@ -64,7 +57,6 @@ export const useArtifactPublishStore = create<ArtifactPublishState>((set, get) =
   operationId: null,
   error: null,
   goneArtifactId: null,
-  freshLinks: {},
   warnings: {},
   open: (request) => {
     if (get().publishing) return
@@ -99,7 +91,6 @@ export const useArtifactPublishStore = create<ArtifactPublishState>((set, get) =
             phase: null,
             operationId: null,
             request: null,
-            freshLinks: id && answer.link ? { ...state.freshLinks, [id]: answer.link } : state.freshLinks,
             warnings: id && answer.warning ? { ...state.warnings, [id]: answer.warning } : state.warnings
           }))
         } else {
@@ -121,7 +112,6 @@ export const useArtifactPublishStore = create<ArtifactPublishState>((set, get) =
           phase: null,
           operationId: null,
           request: null,
-          freshLinks: result.link ? { ...state.freshLinks, [id]: result.link } : state.freshLinks,
           warnings: result.warning ? { ...state.warnings, [id]: result.warning } : state.warnings
         }))
       } else {
@@ -140,11 +130,6 @@ export const useArtifactPublishStore = create<ArtifactPublishState>((set, get) =
   setPhase: (operationId, phase) => {
     if (get().operationId === operationId) set({ phase })
   },
-  dismissFreshLink: (artifactId) =>
-    set((state) => {
-      const { [artifactId]: _gone, ...rest } = state.freshLinks
-      return { freshLinks: rest }
-    }),
   dismissWarning: (artifactId) =>
     set((state) => {
       const { [artifactId]: _gone, ...rest } = state.warnings
