@@ -73,6 +73,20 @@ export const ANTIGRAVITY_FILTER_TOOLS: readonly string[] = [
  */
 export const ANTIGRAVITY_ISOLATED_DISABLED_TOOLS: readonly string[] = ['schedule', 'start_subagent']
 
+/**
+ * The built-ins a native folder runs without: the subagent family alone
+ * (`start_subagent`, which also takes `send_message`, the subagents' message
+ * channel and nothing else). Not for ownership, as in a sealed folder, but
+ * because Cinna cannot show that work: over ACP 1.3.0 a child's calls arrive
+ * flat on the root session with nothing but an id prefix, its text and its
+ * report are never sent, a resume fails, and a `session/load` on the next
+ * turn kills the children. `schedule` stays: in a native folder it is the
+ * user's own Antigravity scheduler, its runs happen outside this session and
+ * are no transcript Cinna owes anyone, and the sealed-folder reason for
+ * removing it (Cinna owns scheduling there) does not apply.
+ */
+export const ANTIGRAVITY_NATIVE_DISABLED_TOOLS: readonly string[] = ['start_subagent']
+
 /** The auth method an isolated home is told to use: the user's personal Google login. */
 const ISOLATED_SETTINGS = `${JSON.stringify({ auth: { type: 'oauth-personal' } })}\n`
 
@@ -378,7 +392,7 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           init: { protocolVersion: ACP_PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: 'cinna-desktop', version: '1' } },
           session: {
             mcpServers: [],
-            ...(native ? {} : { meta: { agy: { disabledTools: [...ANTIGRAVITY_ISOLATED_DISABLED_TOOLS] } } })
+            meta: { agy: { disabledTools: [...(native ? ANTIGRAVITY_NATIVE_DISABLED_TOOLS : ANTIGRAVITY_ISOLATED_DISABLED_TOOLS)] } }
           },
           ...(instructions.trim() ? { firstPromptPreamble: antigravityPreamble(instructions) } : {}),
           // After **new and load**: the mode persists across a load, the model

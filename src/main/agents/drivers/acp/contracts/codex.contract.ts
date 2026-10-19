@@ -229,6 +229,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'no step has the model spawn a subagent' }
   },
   {
+    id: 'codex.activity.collab-v1-shape', area: 'session lifecycle', surface: 'ACP field', name: 'collaboration tool_call title / rawInput.agentsStates[id].message',
+    expectation: 'For a model on the V1 collaboration tools (catalog `multi_agent_version: "v1"`, which `gpt-5.6-luna` carries), a `spawn_agent` call sends no `Start subagent` call and no `subagent_spawned`: the root session gets a `tool_call` titled `spawnAgent` with `receiverThreadIds: []`, then a `tool_call_update` with **no title** that names the child in `receiverThreadIds` and `agentsStates` (`pendingInit`); `wait` likewise, whose completing untitled update carries the child’s final answer as `agentsStates[<child>].message` and no `content` or `rawOutput`. None of them carries `_meta`.',
+    owners: ['src/main/agents/drivers/acp/acpActivity.ts#collabTools', 'src/main/agents/drivers/acp/acpActivity.ts#codexWaitReports', 'src/main/agents/drivers/acp/acpMessages.ts#codexWaitOutput'],
+    feature: 'A Codex subagent on a V1 model shows in the activity row beside the composer, ends with its report, and the report is the `wait` call’s output in the transcript. A title on the update, or the report anywhere else, means the reader is looking in the wrong place; a `Start subagent` call means the model moved to V2.',
+    flow: { steps: ['none'], note: 'no step has the model spawn a subagent' }
+  },
+  {
     id: 'codex.session.silent-updates', area: 'session lifecycle', surface: 'ACP field', name: 'notice / compaction_update',
     expectation: 'A turn that compacts (a model change) sends neither `notice` nor `compaction_update` — the adapter sends them only to a client declaring `session.notices` / `session.compaction`, which the launcher does not. As under 1.11.0, the compaction arrives as a `tool_call` `kind: "think"`, title `Compact conversation`, completed within the turn, and the CLI’s warning as agent text `Warning: …` ahead of the answer.',
     owners: ['src/main/agents/drivers/acp/acpMessages.ts#compaction_'],

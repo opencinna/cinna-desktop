@@ -1,0 +1,136 @@
+{
+  "recording": "subagent_e2e/codex-C-depth3.ndjson",
+  "note": "Codex CLI 0.162.1 (V1 collaboration tools, its default), codex-acp 2.2.2 patched, gpt-5.6-luna low, Cinna launch (asyncTasks only, no native subagent sessions). Distilled to session/update; usage, command and session-info updates dropped. Recorded with agents.max_depth 3 (the root session carries the same calls at the default depth). The root spawns orch and waits; session/cancel arrives while the wait is open, the prompt answers cancelled, and neither the wait nor the child is ever updated again. Turn 1 of the recording, up to the cancel.",
+  "notifications": [
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad61141d0488191b692beaa5c0f1228",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad61141d0488191b692beaa5c0f1228",
+        "content": {
+          "type": "text",
+          "text": "**Searching for spawn_agent tool**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad6114343008191843b87aeee27b1f2",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad6114343008191843b87aeee27b1f2",
+        "content": {
+          "type": "text",
+          "text": "**Finding wait_agent tool**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad611447f9881919187f4c1a70c68d6",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0fcdfa7eb3d9f33a016ad611447f9881919187f4c1a70c68d6",
+        "content": {
+          "type": "text",
+          "text": "**Implementing single spawn and wait**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-a64b0df3-4ce5-43d1-ac9d-8acf8656f7f8",
+        "kind": "other",
+        "title": "spawnAgent",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": "MODE=LONG",
+          "senderThreadId": "01a15433-6004-7712-9774-c2f88ee14162",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": "",
+          "reasoningEffort": "medium",
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-a64b0df3-4ce5-43d1-ac9d-8acf8656f7f8",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "MODE=LONG",
+          "senderThreadId": "01a15433-6004-7712-9774-c2f88ee14162",
+          "receiverThreadIds": [
+            "01a15433-7509-7f03-bcde-608ffc9fa85e"
+          ],
+          "agentsStates": {
+            "01a15433-7509-7f03-bcde-608ffc9fa85e": {
+              "status": "pendingInit",
+              "message": null
+            }
+          },
+          "model": "gpt-5.6-luna",
+          "reasoningEffort": "low",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6004-7712-9774-c2f88ee14162",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-8d9f9819-8776-4afc-80a2-99b841f63ad5",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6004-7712-9774-c2f88ee14162",
+          "receiverThreadIds": [
+            "01a15433-7509-7f03-bcde-608ffc9fa85e"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        }
+      }
+    }
+  ]
+}

@@ -1005,6 +1005,29 @@ describe('a command, as codex-acp 2.2.2 sends it to a client that is not AIR', (
   })
 })
 
+describe('collaboration calls, as codex-acp 2.2.2 sends them (CLI 0.162.1, V1 tools)', () => {
+  const resultsOf = (fixture: AcpFixture): [unknown, unknown, string | undefined][] => {
+    const { messages } = foldAll(new AcpMessageStream({ launcher: 'codex' }), fixture)
+    const parts = [...messages.values()].flat()
+    const names = new Map(parts.filter((part) => kindOf(part) === 'tool').map((part) => [toolIdOf(part), toolNameOf(part)]))
+    return parts.filter((part) => kindOf(part) === 'tool_result').map((part) => [names.get(toolIdOf(part)), part.metadata?.[TOOL_STREAM_METADATA_KEY], part.text])
+  }
+
+  it('a wait call’s output is the report in its agentsStates, the only place the wire carries it', () => {
+    expect(resultsOf(load('codex', 'subagent_collab'))).toEqual([['wait', 'stdout', 'ORCH FINAL']])
+  })
+
+  it('sendInput and resumeAgent repeat the previous run’s message, which is not their output', () => {
+    const fixture = load('codex', 'subagent_collab_resume') as AcpFixture & { nextTurn: SessionNotification[] }
+    expect(resultsOf({ ...fixture, notifications: fixture.nextTurn })).toEqual([['wait', 'stdout', 'ORCH FINAL']])
+  })
+
+  it('another engine’s call with the same input and title has no such output', () => {
+    const { messages } = foldAll(new AcpMessageStream({ launcher: 'opencode' }), load('codex', 'subagent_collab'))
+    expect([...messages.values()].flat().filter((part) => kindOf(part) === 'tool_result')).toEqual([])
+  })
+})
+
 describe('an MCP call, as codex-acp sends it (1.11.0 and 2.2.2 alike)', () => {
   // Watched in `make contract ENGINE=codex` (codex.tool.mcp-output): the
   // app-server item passes through as `rawOutput: { result, error }`.

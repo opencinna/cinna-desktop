@@ -57,6 +57,15 @@ export type AcpRuntimeMode = 'isolated' | 'native'
 /** ACP protocol version this build speaks. Declares no `fs` and no `terminal` (v2-forward). */
 export const ACP_PROTOCOL_VERSION = 1
 
+/**
+ * `_meta` key of the facts the driver writes onto a frame it rebuilt from an
+ * engine extension (never on the wire): `parentToolCallId` is the subagent
+ * call the frame's lane sits under, as `_meta.claudeCode.parentToolUseId` is
+ * for Claude; `childSessionId` the child session that sent it (OpenCode's
+ * child sessions, `opencodeChildren.ts`).
+ */
+export const CINNA_FRAME_META = 'cinna'
+
 /** How long a started process may take to answer `initialize` before the start is a failure. */
 export const ACP_START_TIMEOUT_MS = 30_000
 

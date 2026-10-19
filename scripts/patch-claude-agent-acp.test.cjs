@@ -7,7 +7,8 @@ const { tmpdir } = require('node:os')
 const { createHash } = require('node:crypto')
 const {
   patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD, contextUsageHandlerSource, contextUsageRoute, contextUsageRouteAnchor,
-  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish
+  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish,
+  spawnCallAnchor, spawnCall
 } = require('./patch-claude-agent-acp.cjs')
 const policy = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
 
@@ -30,6 +31,7 @@ function fixture(t) {
   const subagentsPath = join(directory, 'dist/native-subagents.js')
   const subagentsOriginal = readFileSync(join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist/native-subagents.js'), 'utf8')
     .replace(resumeKey, () => resumeKeyAnchor).replace(resumeAlias, () => resumeAliasAnchor).replace(resumeFinish, () => resumeFinishAnchor)
+    .replace(spawnCall, () => spawnCallAnchor)
   assert.equal(sha(subagentsOriginal), policy.subagentsOriginalSha256)
   writeFileSync(subagentsPath, subagentsOriginal)
   return { root, path, manifest, original, subagentsPath, subagentsOriginal }
@@ -62,13 +64,16 @@ test('patches the exact pinned adapter once and packaging rejects the pristine a
   assert.equal(subagentsText.split('parentToolUseId: previous?.parentToolUseId ?? task.toolUseId ?? undefined,').length, 2)
   assert.equal(subagentsText.split('if (child.resumeToolUseId) {').length, 2)
   assert.equal(subagentsText.split('if (child?.resumeToolUseId && toolUseId === child.parentToolUseId)').length, 2)
+  // The spawn call: once, on the live announcement in announceNativeSubagent.
+  assert.equal(subagentsText.split('_meta: { claudeCode: { toolUseId: child.parentToolUseId } }').length, 2)
+  assert.match(subagentsText, /export async function announceNativeSubagent\(child, publish\) \{[\s\S]*?capabilities: \{\},\n[^\n]*Cinna Desktop[^\n]*\n\s+\.\.\.\(child\.parentToolUseId \? \{ _meta: \{ claudeCode: \{ toolUseId: child\.parentToolUseId \} \} \} : \{\}\),\n\s+\},\n\s+\}\);\n\s+child\.announced = true;/)
 })
 
 test('packaging rejects either file unpatched, and a refusal of one file leaves the other unwritten', (t) => {
   const f = fixture(t)
   patchClaudeAgentAcp(f.root)
   writeFileSync(f.subagentsPath, f.subagentsOriginal)
-  assert.throws(() => verifyClaudeAgentAcpPatch(f.root), /resumed subagent routing\) is missing or changed/)
+  assert.throws(() => verifyClaudeAgentAcpPatch(f.root), /subagent routing\) is missing or changed/)
   writeFileSync(f.path, f.original)
   const changed = `${f.subagentsOriginal}\n// different distribution\n`
   writeFileSync(f.subagentsPath, changed)
@@ -86,6 +91,23 @@ test('rejects unexpected source and version without modifying the package', (t) 
   writeFileSync(f.manifest, JSON.stringify({ version: '0.77.0' }))
   assert.throws(() => patchClaudeAgentAcp(f.root), /version/)
   assert.throws(() => verifyClaudeAgentAcpPatch(f.root), /version/)
+})
+
+test('a native-subagents.js carrying the previous reviewed patch is restored and patched again', (t) => {
+  const f = fixture(t)
+  patchClaudeAgentAcp(f.root)
+  const previous = f.subagentsOriginal.replace(resumeKeyAnchor, () => resumeKey).replace(resumeAliasAnchor, () => resumeAlias)
+    .replace(resumeFinishAnchor, () => resumeFinish)
+  assert.equal(sha(previous), 'ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4')
+  writeFileSync(f.subagentsPath, previous)
+  patchClaudeAgentAcp(f.root)
+  assert.equal(sha(readFileSync(f.subagentsPath)), policy.subagentsPatchedSha256)
+  assert.equal(sha(readFileSync(f.path)), policy.patchedSha256)
+  // Part of that patch is neither the original nor a reviewed result: refused and left as it is.
+  const partial = f.subagentsOriginal.replace(resumeKeyAnchor, () => resumeKey)
+  writeFileSync(f.subagentsPath, partial)
+  assert.throws(() => patchClaudeAgentAcp(f.root), /native-subagents\.js\) differs/)
+  assert.equal(readFileSync(f.subagentsPath, 'utf8'), partial)
 })
 
 /* The inserted `air.client` statement, run on the adapter's own capability and renderer classes. */
@@ -213,7 +235,11 @@ test('a resumed subagent is routed by the Agent call its frames name, outlives t
   await runtime.taskStarted({ taskId: 'a1', toolUseId: 'send', subagentType: 'worker', description: 'orchestrator', prompt: 'more' }, deliver)
   assert.deepEqual(published.at(-1), {
     sessionId: 'root',
-    update: { sessionUpdate: 'subagent_spawned', subagentSessionId: 'a1:generation:2', name: published.at(-1).update.name, task: published.at(-1).update.task, prompt: 'more', capabilities: {} }
+    update: {
+      sessionUpdate: 'subagent_spawned', subagentSessionId: 'a1:generation:2', name: published.at(-1).update.name, task: published.at(-1).update.task, prompt: 'more', capabilities: {},
+      // The Agent call it runs under: the first one, which its frames name, not the SendMessage call.
+      _meta: { claudeCode: { toolUseId: 'orig' } }
+    }
   })
 
   // A late task_notification of generation 1 names the original Agent call: generation 2 runs on.
@@ -229,6 +255,8 @@ test('a resumed subagent is routed by the Agent call its frames name, outlives t
   await runtime.route(agentCall('nested', 'orig'), deliver)
   await runtime.taskStarted({ taskId: 'b1', toolUseId: 'nested', subagentType: 'leaf', description: 'leaf', prompt: 'x' }, deliver)
   assert.deepEqual(published.filter((n) => n.update.subagentSessionId === 'b1').map((n) => n.sessionId), ['a1:generation:2'])
+  // …naming its own Agent call, so the client can nest its lane under the spawner's.
+  assert.deepEqual(published.find((n) => n.update.sessionUpdate === 'subagent_spawned' && n.update.subagentSessionId === 'b1').update._meta, { claudeCode: { toolUseId: 'nested' } })
   await runtime.finishTask('b1', 'completed', deliver, 'nested')
 
   // Its task_notification names the SendMessage call, and ends generation 2.

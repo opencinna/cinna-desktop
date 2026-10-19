@@ -120,6 +120,18 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
     feature: 'Thinking is filed under message keys of its own; the turn’s parts are flattened in arrival order, so a change here shows as split or reordered thinking in the transcript.',
     flow: NO_FLOW
   },
+  {
+    id: 'opencode.session.child-updates', area: 'session lifecycle', surface: '_meta key', name: 'clientCapabilities._meta["opencode/child-session-updates"] / opencode/session/child_update',
+    expectation: '`initialize` answers `agentCapabilities._meta["opencode/child-session-updates"]: true`. With the launcher’s declaration, a `subagent` call (`rawInput {agent, description, prompt}`) opens a child session whose traffic arrives only as `opencode/session/child_update` {rootSessionId = the prompted session, childSessionId, parentSessionId, depth 1, title = the call’s `description`}: `type: "status"` `created`, `running`, then `completed`, and `type: "update"` with the child’s own `session/update` bodies (its reply as `agent_message_chunk`). Nothing of the child is flattened onto the root session, and the call’s final update names the child in `rawOutput.metadata.sessionID` and carries its report.',
+    owners: [
+      'src/main/agents/drivers/acp/opencodeChildren.ts#opencodeClientMeta',
+      'src/main/agents/drivers/acp/opencodeChildren.ts#OPENCODE_CHILD_UPDATE_METHOD',
+      'src/main/agents/drivers/acp/opencodeChildren.ts#callOf',
+      'src/main/agents/drivers/acp/acpClient.ts#rootSessionId'
+    ],
+    feature: 'Subagents get no activity item and no lane: their tool calls and replies land in the root agent’s own words, or vanish, and nothing shows a subagent running or ending.',
+    flow: NO_FLOW
+  },
 
   /* ------------------------------------------------------------ tools & MCP */
   {

@@ -1,0 +1,730 @@
+{
+  "recording": "subagent_e2e/claude-D-fanout.ndjson",
+  "note": "Claude CLI 2.1.296, adapter 0.89.1. Three levels, fan-out: the root spawns orch, orch spawns worker one and worker two, each worker spawns a leaf; all interleaved. orch sends no frame before it spawns, and the leaves' first frames precede their workers'. Distilled to session/update; usage, command and config updates dropped. Each subagent_spawned carries _meta.claudeCode.toolUseId as the patched adapter sends it (recorded before that patch; the calls are the ones the children's frames and the load replay name). Turn 1 of the recording.",
+  "notifications": [
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "ab3f07f0e3962fb36",
+        "name": "D orch",
+        "task": "MODE=FANOUT",
+        "prompt": "MODE=FANOUT",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a2723d472fa6885f4",
+        "name": "worker one",
+        "task": "LEAF=1",
+        "prompt": "LEAF=1",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "ade1490cd84e4679c",
+        "name": "worker two",
+        "task": "LEAF=1",
+        "prompt": "LEAF=1",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ade1490cd84e4679c",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a280aaba0521dd761",
+        "name": "leaf",
+        "task": "leaf",
+        "prompt": "leaf",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "a2723d472fa6885f4",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a26f3c35afa502318",
+        "name": "leaf",
+        "task": "leaf",
+        "prompt": "leaf",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_01TQ2TmdeiXx9WFsB3NkYdtF",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "echo leaf",
+          "description": "Echo leaf to stdout"
+        },
+        "status": "pending",
+        "title": "echo leaf",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Echo leaf to stdout"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a26f3c35afa502318",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01A54DZ945SAMpJ5secBY5jp",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "echo leaf",
+          "description": "Echo leaf"
+        },
+        "status": "pending",
+        "title": "echo leaf",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Echo leaf"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "leaf",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false
+            },
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_01TQ2TmdeiXx9WFsB3NkYdtF",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "a26f3c35afa502318",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "leaf",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false
+            },
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01A54DZ945SAMpJ5secBY5jp",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_01TQ2TmdeiXx9WFsB3NkYdtF",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "leaf",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nleaf\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a26f3c35afa502318",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01A54DZ945SAMpJ5secBY5jp",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "leaf",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nleaf\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a26f3c35afa502318",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01KJo28itePakHJR7SfkERc5",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "LEAF DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_016sWuB7Ak5qCMemCH7xFAS6",
+        "sessionUpdate": "tool_call",
+        "name": "ToolSearch",
+        "rawInput": {
+          "query": "select:SendMessage",
+          "max_results": 1
+        },
+        "status": "pending",
+        "title": "ToolSearch",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_016sWuB7Ak5qCMemCH7xFAS6",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "tool_reference",
+            "tool_name": "SendMessage"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Tool: SendMessage"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a26f3c35afa502318",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "success": true,
+              "message": "Report delivered to your caller."
+            },
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01KJo28itePakHJR7SfkERc5",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "a2723d472fa6885f4",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a26f3c35afa502318",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "a2723d472fa6885f4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        },
+        "toolCallId": "toolu_015112JLQew8TuEbTNPYNHHv",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "WORKER DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_018JK1ejPPxY7HfwyBsjsRxP",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "LEAF DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "a2723d472fa6885f4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "success": true,
+              "message": "Report delivered to your caller."
+            },
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        },
+        "toolCallId": "toolu_015112JLQew8TuEbTNPYNHHv",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "a2723d472fa6885f4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        },
+        "toolCallId": "toolu_015112JLQew8TuEbTNPYNHHv",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a2723d472fa6885f4",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "success": true,
+              "message": "Report delivered to your caller."
+            },
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_018JK1ejPPxY7HfwyBsjsRxP",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "a280aaba0521dd761",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_018JK1ejPPxY7HfwyBsjsRxP",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "ade1490cd84e4679c",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a280aaba0521dd761",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "ade1490cd84e4679c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        },
+        "toolCallId": "toolu_016TFJ5Q5U7GsVk4Xx5xrFbs",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "WORKER DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "ade1490cd84e4679c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "success": true,
+              "message": "Report delivered to your caller."
+            },
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        },
+        "toolCallId": "toolu_016TFJ5Q5U7GsVk4Xx5xrFbs",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "ade1490cd84e4679c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        },
+        "toolCallId": "toolu_016TFJ5Q5U7GsVk4Xx5xrFbs",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "ade1490cd84e4679c",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        },
+        "toolCallId": "toolu_013QVsHqKwyw8cgByjsk15uc",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "ORCH FINAL"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "success": true,
+              "message": "Report delivered to your caller."
+            },
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        },
+        "toolCallId": "toolu_013QVsHqKwyw8cgByjsk15uc",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "ab3f07f0e3962fb36",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        },
+        "toolCallId": "toolu_013QVsHqKwyw8cgByjsk15uc",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "ab3f07f0e3962fb36",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "status": "completed",
+              "prompt": "MODE=FANOUT",
+              "agentId": "ab3f07f0e3962fb36",
+              "agentType": "orch",
+              "handback": "send",
+              "handbackReport": {
+                "text": "ORCH FINAL"
+              },
+              "harnessNoteCount": 1,
+              "harnessTailCount": 0,
+              "harnessSectionHash": "1e0993e2c1748e10",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "This agent's report was delivered to you as a message from \"ab3f07f0e3962fb36\" (its SubagentHandback call). Read it there; it is not repeated here.\n"
+                }
+              ],
+              "resolvedModel": "claude-haiku-5-5",
+              "totalDurationMs": 13999,
+              "totalTokens": 14061,
+              "totalToolUseCount": 3,
+              "usage": {
+                "output_tokens_details": {
+                  "thinking_tokens": 111
+                },
+                "input_tokens": 2,
+                "cache_creation_input_tokens": 2365,
+                "cache_read_input_tokens": 11524,
+                "output_tokens": 170,
+                "server_tool_use": {
+                  "web_search_requests": 0,
+                  "web_fetch_requests": 0
+                },
+                "service_tier": "standard",
+                "cache_creation": {
+                  "ephemeral_1h_input_tokens": 0,
+                  "ephemeral_5m_input_tokens": 2365
+                },
+                "inference_geo": "global",
+                "iterations": [
+                  {
+                    "input_tokens": 2,
+                    "output_tokens": 170,
+                    "cache_read_input_tokens": 11524,
+                    "cache_creation_input_tokens": 2365,
+                    "cache_creation": {
+                      "ephemeral_5m_input_tokens": 2365,
+                      "ephemeral_1h_input_tokens": 0
+                    },
+                    "type": "message"
+                  }
+                ],
+                "speed": "standard",
+                "fallback_credit": null
+              },
+              "toolStats": {
+                "readCount": 0,
+                "searchCount": 0,
+                "bashCount": 0,
+                "editFileCount": 0,
+                "linesAdded": 0,
+                "linesRemoved": 0,
+                "otherToolCount": 1
+              },
+              "canContinueAgent": true
+            },
+            "toolName": "Agent"
+          }
+        },
+        "toolCallId": "toolu_01K7ETPweabzp1P4giQYufoQ",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "done"
+        },
+        "messageId": "msg_011CgBc5BqgaiRNqdM6fYBvF"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Agent tool protocol probe",
+        "updatedAt": "2026-10-19T12:35:48.728Z"
+      }
+    }
+  ],
+  "promptReturnedAtIndex": 34
+}

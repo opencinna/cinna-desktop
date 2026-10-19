@@ -1,0 +1,1257 @@
+{
+  "recording": "subagent_e2e/opencode-D-o3.ndjson",
+  "note": "OpenCode 2.0.27 with child-session updates, gpt-5.6-luna. Three levels, fanned out: orch spawns worker one and worker two in parallel, each spawns a leaf; the children's frames interleave. Matching a child to its call by title (description) is the only link until each call completes with rawOutput.metadata.sessionID. Turn 1 only; thought chunks, usage and command updates dropped; session ids renamed, paths scrubbed.",
+  "notifications": [],
+  "frames": [
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_36NQQA1sRH5DThjZwGb51w5U",
+        "name": "subagent",
+        "title": "subagent",
+        "kind": "think",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_36NQQA1sRH5DThjZwGb51w5U",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Fanout probe",
+          "prompt": "MODE=FANOUT"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_36NQQA1sRH5DThjZwGb51w5U",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Fanout probe",
+          "prompt": "MODE=FANOUT"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_orch:call_G90OKQqlkAfetQLfbtPUvU2X",
+          "name": "subagent",
+          "title": "Fanout probe: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_G90OKQqlkAfetQLfbtPUvU2X",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Fanout probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "worker one",
+            "prompt": "LEAF=1"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_orch:call_hSyw6PbxvsOqjkb0UeSH08FC",
+          "name": "subagent",
+          "title": "Fanout probe: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_G90OKQqlkAfetQLfbtPUvU2X",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Fanout probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "worker one",
+            "prompt": "LEAF=1"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_hSyw6PbxvsOqjkb0UeSH08FC",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Fanout probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "worker two",
+            "prompt": "LEAF=1"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_hSyw6PbxvsOqjkb0UeSH08FC",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Fanout probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "worker two",
+            "prompt": "LEAF=1"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_worker_two:call_BlZim4ZJMulyxPfFO3ng0f93",
+          "name": "subagent",
+          "title": "worker two: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_two",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker two"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_two:call_BlZim4ZJMulyxPfFO3ng0f93",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "worker two: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "leaf",
+            "description": "Leaf protocol probe",
+            "prompt": "leaf"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_two",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker two"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_worker_one:call_hH6H9daZZAJd3X2o8VEkMY1H",
+          "name": "subagent",
+          "title": "worker one: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_one",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker one"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_two:call_BlZim4ZJMulyxPfFO3ng0f93",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "worker two: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "leaf",
+            "description": "Leaf protocol probe",
+            "prompt": "leaf"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_two",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker two"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_one:call_hH6H9daZZAJd3X2o8VEkMY1H",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "worker one: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "leaf",
+            "description": "Leaf protocol",
+            "prompt": "leaf"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_one",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker one"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_one:call_hH6H9daZZAJd3X2o8VEkMY1H",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "worker one: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "leaf",
+            "description": "Leaf protocol",
+            "prompt": "leaf"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_one",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker one"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_leaf_two:call_K3GfHPCoAvJv5Qnb4IelXUHi",
+          "name": "execute",
+          "title": "Leaf protocol probe: execute",
+          "kind": "other",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_leaf_one:call_MlJsfBaDOkz5Q0B2Hkjlb0EM",
+          "name": "shell",
+          "title": "Leaf protocol: shell",
+          "kind": "execute",
+          "status": "pending",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_one",
+              "parentID": "ses_worker_one",
+              "depth": 3,
+              "title": "Leaf protocol"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_one:call_MlJsfBaDOkz5Q0B2Hkjlb0EM",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "Leaf protocol: echo leaf",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "echo leaf",
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_one",
+              "parentID": "ses_worker_one",
+              "depth": 3,
+              "title": "Leaf protocol"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_one:call_MlJsfBaDOkz5Q0B2Hkjlb0EM",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "Leaf protocol: echo leaf",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "echo leaf",
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_one",
+              "parentID": "ses_worker_one",
+              "depth": 3,
+              "title": "Leaf protocol"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_one:call_MlJsfBaDOkz5Q0B2Hkjlb0EM",
+          "status": "completed",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "leaf\n"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_one",
+              "parentID": "ses_worker_one",
+              "depth": 3,
+              "title": "Leaf protocol"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_two:call_K3GfHPCoAvJv5Qnb4IelXUHi",
+          "status": "in_progress",
+          "kind": "other",
+          "title": "Leaf protocol probe: execute",
+          "locations": [],
+          "rawInput": {
+            "code": "const r = await fetch('http://localhost:0').catch(() => null); return 'cannot run bash';"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_two:call_K3GfHPCoAvJv5Qnb4IelXUHi",
+          "status": "in_progress",
+          "kind": "other",
+          "title": "Leaf protocol probe: execute",
+          "locations": [],
+          "rawInput": {
+            "code": "const r = await fetch('http://localhost:0').catch(() => null); return 'cannot run bash';"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_two:call_K3GfHPCoAvJv5Qnb4IelXUHi",
+          "status": "in_progress",
+          "kind": "other",
+          "title": "Leaf protocol probe: execute",
+          "locations": [],
+          "rawInput": {
+            "code": "const r = await fetch('http://localhost:0').catch(() => null); return 'cannot run bash';"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_leaf_two:call_K3GfHPCoAvJv5Qnb4IelXUHi",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "cannot run bash"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "toolCalls": [
+                {
+                  "tool": "fetch",
+                  "status": "error",
+                  "input": {
+                    "method": "GET",
+                    "url": "http://localhost:0"
+                  }
+                }
+              ],
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547b636300122NPk7Gb4iG1iz",
+          "content": {
+            "type": "text",
+            "text": "LEAF DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_one",
+              "parentID": "ses_worker_one",
+              "depth": 3,
+              "title": "Leaf protocol"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_one",
+        "parentSessionId": "ses_worker_one",
+        "depth": 3,
+        "title": "Leaf protocol",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_one:call_hH6H9daZZAJd3X2o8VEkMY1H",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_leaf_one\" state=\"completed\">\nLEAF DONE\n</subagent>"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_leaf_one",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_one",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker one"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547b66ce0012EMql2PSY5YDLd",
+          "content": {
+            "type": "text",
+            "text": "WORKER DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_one",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker one"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_one",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker one",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_G90OKQqlkAfetQLfbtPUvU2X",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_worker_one\" state=\"completed\">\nWORKER DONE\n</subagent>"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_worker_one",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547b646e001BgP8sp3vSSMT6s",
+          "content": {
+            "type": "text",
+            "text": "LEAF DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_leaf_two",
+              "parentID": "ses_worker_two",
+              "depth": 3,
+              "title": "Leaf protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_leaf_two",
+        "parentSessionId": "ses_worker_two",
+        "depth": 3,
+        "title": "Leaf protocol probe",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker_two:call_BlZim4ZJMulyxPfFO3ng0f93",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_leaf_two\" state=\"completed\">\nLEAF DONE\n</subagent>"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_leaf_two",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_two",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker two"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547b72d9001GwiMWtHM1QWevp",
+          "content": {
+            "type": "text",
+            "text": "WORKER DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker_two",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "worker two"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker_two",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "worker two",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_hSyw6PbxvsOqjkb0UeSH08FC",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_worker_two\" state=\"completed\">\nWORKER DONE\n</subagent>"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_worker_two",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547b7546001vrGV14c5MeLQXA",
+          "content": {
+            "type": "text",
+            "text": "ORCH FINAL"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Fanout probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Fanout probe",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_36NQQA1sRH5DThjZwGb51w5U",
+        "status": "completed",
+        "locations": [],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "<subagent sessionID=\"ses_orch\" state=\"completed\">\nORCH FINAL\n</subagent>"
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "sessionID": "ses_orch",
+            "status": "completed",
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_1547b77720013vvQtpEda1m0S0",
+        "content": {
+          "type": "text",
+          "text": "done"
+        }
+      }
+    }
+  ]
+}

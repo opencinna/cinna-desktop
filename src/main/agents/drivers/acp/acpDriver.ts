@@ -104,6 +104,7 @@ import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, t
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
 import { backgroundTaskIds, createSessionActivityRegistry, spawnedSubagent, subagentTaskId, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
 import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
+import { childUpdateOf, opencodeChildrenFor, trackedOpencodeChildren } from './opencodeChildren'
 import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
 import type { SessionActivityHub } from '../../../services/sessionActivityHub'
 import { createAcpActivityStopper } from './acpActivityStop'
@@ -466,7 +467,13 @@ function createSessionObservers(
         },
         permission: (params) => sink.permission(params),
         elicitation: (params) => sink.elicitation(params),
-        ext: (method, params) => sink.ext?.(method, params)
+        ext: (method, params) => {
+          // A background OpenCode subagent reports after the prompt answered:
+          // its items follow it here, its transcript does not (no turn is open).
+          const child = childUpdateOf(method, params)
+          if (!child) { sink.ext?.(method, params); return }
+          for (const frame of opencodeChildrenFor(activitySessions, connection, child.rootSessionId, { chatId: scope.chatId, agentId: scope.agentId }).expand(child)) feed.observe(frame)
+        }
       }
       const observation = createSessionObservation(scope, heard)
       const unobserve = connection.observeSession(scope.sessionId, observation.observer)
@@ -1157,6 +1164,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         chatId
       })
       void to.cancel(session).catch(() => {})
+      // The patched adapter interrupts every child on that cancel, and none
+      // reports again: end their items as an owned turn's Stop does, now,
+      // since no prompt of ours answers for this one.
+      stopCodexSubagents(ctx.activity, ctx.launcherId, to, session)
       if (holdingProcess || !deps.pool.held(agent.id)) {
         // Retired too, as an unacknowledged cancel retires it: nothing confirms
         // the orphan has stopped, and the next prompt on this session would run
@@ -1227,6 +1238,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let cancelRequested = new Promise<void>((resolve) => {
     requestCancel = resolve
   })
+  /** A `session/cancel` went out for the prompt in flight; read, and reset, when it answers. */
+  let cancelSent = false
   /**
    * Tell the agent to stop, in the order that lets it stop cleanly.
    *
@@ -1259,7 +1272,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (!hitCeiling) turn.stopping = true
     for (const [, cancel] of turn.parked) cancel()
     turn.parked.clear()
-    if (sessionId) void connection?.cancel(sessionId).catch(() => {})
+    if (sessionId) {
+      cancelSent = true
+      void connection?.cancel(sessionId).catch(() => {})
+    }
     startupController.abort()
     if (startingSession) {
       // This turn's own hold is not another owner; a sibling turn's is.
@@ -1410,6 +1426,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   /** From the first `session/prompt` on: what arrives is this turn's prompt's, not the load's or the held traffic's. */
   let promptInFlight = false
   /**
+   * Sends what unmatched OpenCode children still hold; set once the prompt is
+   * about to go out. `answered`: only those no running child's calls may name yet.
+   */
+  let drainOpencodeChildren = (_answered?: boolean): void => {}
+  /**
    * The hub items (`<root session>:<child session>`) of the subagents a
    * `subagent_spawned` announced while this turn's prompt was in flight, at any
    * depth and resumed generations included: the only ones the Claude turn-end
@@ -1470,6 +1491,23 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     const live = connection
     const frames = new SubagentFrames((id) => ctx.activity.lookup(live, id))
+    /**
+     * The load replay's own subagent sessions (Claude names them
+     * `<session>:replay-subagent:<call>`), routed to the bound session for the
+     * replay only: their traffic is then dropped with the rest of the replay,
+     * instead of waiting in the pre-bind pen and being reported as traffic
+     * nobody bound. No activity item is made for them.
+     */
+    const replayAliases: (() => void)[] = []
+    const aliasReplayChild = (notification: SessionNotification): void => {
+      const child = spawnedSubagent(notification)
+      if (!child || child.sessionId === notification.sessionId) return
+      try {
+        replayAliases.push(live.aliasSession(child.sessionId, notification.sessionId))
+      } catch (err) {
+        logger.warn('a replayed subagent session could not be routed to its parent', { error: String(err) })
+      }
+    }
     const handlers = {
       onUpdate: (notification: SessionNotification): void => {
         deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, notification.update)
@@ -1479,8 +1517,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // and the setup that follows overwrites it before the first prompt, so
         // reading it here would only give the fallback notice a stale value to
         // compare against.
-        if (turn.replaying) return
+        if (turn.replaying) { aliasReplayChild(notification); return }
         stallWatch.heard()
+        // OpenCode child frames held for want of a lane, released by this one: folded after it.
+        const released = ctx.launcherId === 'opencode'
+          ? opencodeChildrenFor(ctx.activity, live, notification.sessionId, { chatId, agentId: agent.id }).observe(notification)
+          : []
         observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
         if (promptInFlight) noteSpawned(ctx.activity, live, notification, spawnedThisTurn)
         ctx.titles?.observe(titleScope(), notification)
@@ -1502,6 +1544,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           // opens its window withdrawn rather than offering and withdrawing.
           if (TURN_CONTENT.has(frame.update.sessionUpdate)) { primeSession(ctx); openSteering() }
         }
+        for (const frame of released) handlers.onUpdate(frame)
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
         stallWatch.heard()
@@ -1513,6 +1556,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       },
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
+        // An OpenCode subagent's traffic: folded as the root session's own frames, in the spawning call's lane.
+        const child = childUpdateOf(method, params)
+        if (child) {
+          for (const frame of opencodeChildrenFor(ctx.activity, live, child.rootSessionId, { chatId, agentId: agent.id }).expand(child)) handlers.onUpdate(frame)
+          return
+        }
         if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
         if (sessionId && params.sessionId === sessionId) liveBackground = backgroundTaskIds(method, params) ?? liveBackground
         const update = stream.applyExt(method, params)
@@ -1596,6 +1645,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         unbind = undefined
       } finally {
         turn.replaying = false
+        for (const unalias of replayAliases.splice(0)) unalias()
       }
     }
 
@@ -1750,6 +1800,23 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (freshSession && plan.firstPromptPreamble) prompt.unshift({ type: 'text', text: plan.firstPromptPreamble })
       ctx.titles?.prompted(titleScope(), prompt)
       void reportLauncherAuth(deps, ctx)
+      if (ctx.launcherId === 'opencode') endOpencodeChildrenLeftRunning(deps, ctx.activity, connection, { chatId, agentId: agent.id, sessionId })
+      // Taken now, not when the prompt ends: a process that exits closes its
+      // feed, and the lookup would find nothing to drain.
+      const opencodeChildren = ctx.launcherId === 'opencode'
+        ? opencodeChildrenFor(ctx.activity, connection, sessionId, { chatId, agentId: agent.id })
+        : undefined
+      // No call names an OpenCode child any more: what one still holds goes out
+      // in a lane of its own. On every end of the prompt — an answer, a cancel
+      // the agent never acknowledged, a failure — while the transcript can
+      // still take it; a repeat drains nothing.
+      drainOpencodeChildren = (answered = false) => {
+        try {
+          for (const frame of opencodeChildren?.drain(answered) ?? []) handlers.onUpdate(frame)
+        } catch (err) {
+          logger.warn('the held updates of an OpenCode subagent could not be written', { agentId: agent.id, chatId, error: String(err) })
+        }
+      }
       promptInFlight = true
       let answer = await promptWithCancelGrace(
         deps,
@@ -1760,6 +1827,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         () => { ctx.telemetry?.started(); armSteering() }
       ).finally(settleSteering)
       const answered = (reply: NonNullable<typeof answer>, on: AcpConnection, session: string): void => {
+        if (cancelSent) {
+          cancelSent = false
+          stopCodexSubagents(ctx.activity, ctx.launcherId, on, session)
+        }
+        // A background child still running may yet name its own children: those stay held.
+        drainOpencodeChildren(true)
         ctx.telemetry?.answered(reply)
         noteSessionLive(on, session, fingerprint)
         ctx.measurable?.set(chatId, {
@@ -1848,6 +1921,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         if (answer) answered(answer, connection, sessionId)
       }
       if (!answer) {
+        drainOpencodeChildren()
         // The grace expired: the agent never acknowledged the cancel. What was
         // streamed is kept, and a stop the user asked for is not an error — but
         // a *ceiling* that had to give up this way is, because nobody asked.
@@ -1897,6 +1971,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       const ending = turnEnding({ aborted: input.signal.aborted, hitCeiling, stopError, stopReason: answer.stopReason })
       return finish(ctx, accumulator, sessionId, ending.error, undefined, ending.completed, ending.canceled)
     } catch (err) {
+      drainOpencodeChildren()
       const message = err instanceof Error ? err.message : String(err)
       // Abort first, and the order is the point: a stop that lands mid-turn
       // takes the connection down with it, and reporting that as an error would
@@ -2048,6 +2123,59 @@ function endSubagentsLeftRunning(
 }
 
 /**
+ * A cancelled Codex prompt ends the session's subagents as `stopped`. Our
+ * codex-acp patch passes `session/cancel` on to every subagent thread of the
+ * session, at any depth, and none of them reports again on the wire — the
+ * root's `wait` call is left without an update — so nothing else would end
+ * them. Only after a cancel Cinna sent: a prompt Codex ends `cancelled` on a
+ * refused ask stopped none of them.
+ */
+function stopCodexSubagents(
+  registry: SessionActivityRegistry,
+  launcherId: AcpLauncherId,
+  connection: AcpConnection,
+  sessionId: string
+): void {
+  if (launcherId !== 'codex') return
+  try {
+    registry.lookup(connection, sessionId)?.stopCodexSubagents()
+  } catch (err) {
+    logger.warn('the Codex subagents of a stopped turn could not be ended', { sessionId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * The safety net for OpenCode subagents. OpenCode reports a child session
+ * (`opencode/session/child_update`) only until the next prompt on its root:
+ * the new prompt replaces the watcher that sent them, so a child still open
+ * then — a background one, or one whose end a Stop never brought — would show
+ * running for good, and keep the idle reaper off the process. Each is ended
+ * `lost` as the prompt goes out, and the warn is how that gets noticed. A
+ * late end that does still arrive corrects it.
+ */
+function endOpencodeChildrenLeftRunning(
+  deps: Pick<AcpDriverDeps, 'activity'>,
+  registry: SessionActivityRegistry,
+  connection: AcpConnection,
+  scope: { chatId: string; agentId: string; sessionId: string }
+): void {
+  const children = trackedOpencodeChildren(registry, connection, scope.sessionId)
+  const running = children?.running() ?? []
+  if (!children || running.length === 0) return
+  children.forget(running)
+  if (!deps.activity?.endAll) return
+  try {
+    const ids = new Set(running.map((child) => `${children.rootSessionId}:${child}`))
+    const ended = deps.activity.endAll({ chatId: scope.chatId, agentId: scope.agentId, kind: 'subagent', ids }, 'lost')
+    if (ended > 0) {
+      logger.warn('OpenCode subagents still shown running when a new prompt started; ended as lost', { ...scope, count: ended })
+    }
+  } catch (err) {
+    logger.warn('the OpenCode subagents left running could not be ended', { ...scope, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
  * Note the hub item of the subagent a `subagent_spawned` announces, under the
  * feed that owns the session it arrived on (a nested child's is its root
  * session's, as in {@link observeActivity}).
@@ -2188,8 +2316,27 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   let unbind: (() => void) | undefined
   let signalEnd!: () => void
   const over = new Promise<void>((resolve) => { signalEnd = resolve })
+  // Taken now: a process that exits closes its feed before the end is heard.
+  const opencodeChildren = world.launcherId === 'opencode'
+    ? opencodeChildrenFor(world.activity, connection, sessionId, { chatId, agentId: agent.id })
+    : undefined
+  let draining = false
   const end = (why: EndedBy): void => {
     if (ended) return
+    // What an unmatched OpenCode child still holds goes out in a lane of its
+    // own, while the turn still takes it — as a prompt's end does. Not when
+    // the traffic went elsewhere: a user turn's calls may yet name a child.
+    if (opencodeChildren && why !== 'closed' && !draining) {
+      draining = true
+      try {
+        for (const frame of opencodeChildren.drain()) handlers.onUpdate(frame)
+      } catch (err) {
+        logger.warn('the held updates of an OpenCode subagent could not be written', { agentId: agent.id, chatId, error: String(err) })
+      } finally {
+        draining = false
+      }
+      if (ended) return
+    }
     ended = true
     endedBy = why
     // Now, not in the `finally`: what the agent sends from here on is the
@@ -2214,8 +2361,10 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   }
 
   let grace: NodeJS.Timeout | undefined
+  let cancelSent = false
   const askAgentToStop = (ceiling: boolean): void => {
     if (ended) return
+    cancelSent = true
     if (ceiling) hitCeiling = true
     else turn.stopping = true
     turn.open = false
@@ -2273,6 +2422,9 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
       armQuiet()
       stallWatch.heard()
       conductor?.observe?.(notification)
+      const released = world.launcherId === 'opencode'
+        ? opencodeChildrenFor(world.activity, connection, notification.sessionId, { chatId, agentId: agent.id }).observe(notification)
+        : []
       observeActivity(world.activity, connection, notification, { chatId, agentId: agent.id })
       ctx.titles?.observe({ launcherId: world.launcherId, chatId, agentId: agent.id, sessionId,
         ...(world.runScope ? { profileUserId: world.runScope.profileUserId } : {}) }, notification)
@@ -2296,6 +2448,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
         if (folded.telemetry && frame.sessionId === sessionId) ctx.telemetry?.frame(connection, sessionId, folded.telemetry)
         emit(folded.message)
       }
+      for (const frame of released) handlers.onUpdate(frame)
       if (endsFollowUp(notification)) end('marker')
     },
     onPermission: (params) => {
@@ -2312,6 +2465,11 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     },
     onExtNotification: (method, params) => {
       if (ended) return
+      const child = childUpdateOf(method, params)
+      if (child) {
+        for (const frame of opencodeChildrenFor(world.activity, connection, child.rootSessionId, { chatId, agentId: agent.id }).expand(child)) handlers.onUpdate(frame)
+        return
+      }
       const folded = stream.applyExt(method, params)
       // The raw result is where a follow-up's tokens come from.
       if (folded.sdk && folded.sdk.sessionId === sessionId) ctx.telemetry?.sdk(connection, sessionId, folded.sdk)
@@ -2399,6 +2557,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     and a stall or the ceiling still fails a turn the agent ended cleanly.
   */
   const stopReason = endedBy === 'exited' ? 'exited' : turn.stopping ? 'cancelled' : 'end_turn'
+  if (cancelSent && endedBy !== 'exited') stopCodexSubagents(world.activity, world.launcherId, connection, sessionId)
   const ending = turnEnding({
     aborted: canceled,
     hitCeiling,

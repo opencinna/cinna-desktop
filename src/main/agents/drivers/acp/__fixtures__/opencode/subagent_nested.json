@@ -1,0 +1,498 @@
+{
+  "recording": "subagent_e2e/opencode-A-o3.ndjson",
+  "note": "OpenCode 2.0.27 with child-session updates declared, gpt-5.6-luna. Two levels: the root's subagent call spawns orch, whose own subagent call spawns worker, which runs echo L2. Child traffic arrives as opencode/session/child_update (status created/running/completed, and update bodies with <child>:call ids). Turn 1 only; thought chunks, usage and command updates dropped; session ids renamed, paths scrubbed.",
+  "notifications": [],
+  "frames": [
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_aurIBEh8qyg6hFQyDv8LE66q",
+        "name": "subagent",
+        "title": "subagent",
+        "kind": "think",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_aurIBEh8qyg6hFQyDv8LE66q",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Nested mode probe",
+          "prompt": "MODE=NESTED"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_aurIBEh8qyg6hFQyDv8LE66q",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Nested mode probe",
+          "prompt": "MODE=NESTED"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_orch:call_gUxHu1aj4b7P78xnSr0D6lK2",
+          "name": "subagent",
+          "title": "Nested mode probe: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Nested mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_gUxHu1aj4b7P78xnSr0D6lK2",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Nested mode probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "nested worker",
+            "prompt": "ECHO=L2"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Nested mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_gUxHu1aj4b7P78xnSr0D6lK2",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Nested mode probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "nested worker",
+            "prompt": "ECHO=L2"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Nested mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_worker:call_pGHqFGNyuEcxMXJWI5WfoEaZ",
+          "name": "shell",
+          "title": "nested worker: shell",
+          "kind": "execute",
+          "status": "pending",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "nested worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_pGHqFGNyuEcxMXJWI5WfoEaZ",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "nested worker: echo L2",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "echo L2",
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "nested worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_pGHqFGNyuEcxMXJWI5WfoEaZ",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "nested worker: echo L2",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "echo L2",
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "nested worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_pGHqFGNyuEcxMXJWI5WfoEaZ",
+          "status": "completed",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "L2\n"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "nested worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547a619c00110ngmoafIiTgN6",
+          "content": {
+            "type": "text",
+            "text": "WORKER DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "nested worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "nested worker",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_gUxHu1aj4b7P78xnSr0D6lK2",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_worker\" state=\"completed\">\nWORKER DONE\n</subagent>"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_worker",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Nested mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_1547a64180017bkXP93Mjyp6dM",
+          "content": {
+            "type": "text",
+            "text": "ORCH FINAL"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Nested mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Nested mode probe",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_aurIBEh8qyg6hFQyDv8LE66q",
+        "status": "completed",
+        "locations": [],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "<subagent sessionID=\"ses_orch\" state=\"completed\">\nORCH FINAL\n</subagent>"
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "sessionID": "ses_orch",
+            "status": "completed",
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_1547a66ec001KVN5xEWEOr469V",
+        "content": {
+          "type": "text",
+          "text": "done"
+        }
+      }
+    }
+  ]
+}

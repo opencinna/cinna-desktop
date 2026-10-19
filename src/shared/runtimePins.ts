@@ -186,8 +186,8 @@ export const RUNTIME_PINS = {
     adapterPatchedSha256: 'd9d4d9ac13623f29745c8a3e1e790dd7ce04000714794a01d820e905ce11c4aa',
     /** `dist/native-subagents.js` as published, from the same tarball. */
     adapterSubagentsOriginalSha256: 'b4e65a57eacd03509f49fb91fe3b27f132fa6e2509e3ecb91d84e22e62eed306',
-    /** The same file after `scripts/patch-claude-agent-acp.cjs` (a SendMessage-resumed subagent keyed by the Agent call its frames name, and not ended by that call's late notification). */
-    adapterSubagentsPatchedSha256: 'ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4',
+    /** The same file after `scripts/patch-claude-agent-acp.cjs` (a SendMessage-resumed subagent keyed by the Agent call its frames name, and not ended by that call's late notification; `subagent_spawned` names the Agent call the child runs under). */
+    adapterSubagentsPatchedSha256: '43483d031396e84da119ccaae4807330a1ca43dafd9bea2b20588f06c2776bfb',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
@@ -216,8 +216,8 @@ export const RUNTIME_PINS = {
     adapter: '2.2.2',
     /** `@agentclientprotocol/codex-acp/dist/index.js` as published (checked against the locked npm tarball). */
     adapterOriginalSha256: '6b1bb4e7e9caaf4aeca1042ae4aec2dc2433b0b0e4b1614b38a4d41699902aaa',
-    /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, and the whole command output on the completing update). */
-    adapterPatchedSha256: 'ca1f79d5ea308f092753a24140ac182dac5af0c8f52e43132ca265f8fa5922fa',
+    /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, the whole command output on the completing update, and a cancel that interrupts the subagent threads too). */
+    adapterPatchedSha256: '0dc1769a1137b1eedda294f68528f9657efe91a175e58ff5c97e8ae383f455f9',
     /**
      * The vendor's unmodified GitHub release archives for `rust-v0.162.1`: the
      * `codex` archive, and beside it the `codex-code-mode-host` archive of the

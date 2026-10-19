@@ -206,6 +206,40 @@
         "usage_update"
       ]
     },
+    "subagentPrompt": {
+      "callInputKeys": [
+        "agent",
+        "description",
+        "prompt"
+      ],
+      "childFramesOnRoot": 0,
+      "childUpdateKeys": [
+        "childSessionId",
+        "depth",
+        "parentSessionId",
+        "rootSessionId",
+        "status",
+        "title",
+        "type",
+        "update"
+      ],
+      "completionMetadataKeys": [
+        "sessionID",
+        "status",
+        "truncated"
+      ],
+      "completionStatus": "completed",
+      "offered": true,
+      "statuses": [
+        "created",
+        "running",
+        "completed"
+      ],
+      "stopReason": "end_turn",
+      "updateKinds": [
+        "agent_message_chunk"
+      ]
+    },
     "thought": {
       "chunks": 1,
       "messageIdShapes": [

@@ -1,0 +1,374 @@
+{
+  "recording": "subagent_e2e/codex-B-depth3.ndjson",
+  "note": "Codex CLI 0.162.1 (V1 collaboration tools, its default), codex-acp 2.2.2 patched, gpt-5.6-luna low, Cinna launch (asyncTasks only, no native subagent sessions). Distilled to session/update; usage, command and session-info updates dropped. Recorded with agents.max_depth 3; the root session carries the same calls at the default depth. Turn 1: spawn orch, wait, report \"INTERIM: worker launched\". Turn 2 (nextTurn): resumeAgent then sendInput to the finished orch — both updates repeat its previous completed state and message — then wait with the new report \"ORCH FINAL\".",
+  "notifications": [
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad61141fa4c81918d62c9c749f1df7f",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad61141fa4c81918d62c9c749f1df7f",
+        "content": {
+          "type": "text",
+          "text": "**Searching for missing spawn_agent tool**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad61143fe408191b93cecee15d6f5db",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad61143fe408191b93cecee15d6f5db",
+        "content": {
+          "type": "text",
+          "text": "**Planning single-call asynchronous execution**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-e584c6bb-915c-41f9-b578-678d16d68f68",
+        "kind": "other",
+        "title": "spawnAgent",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": "MODE=EARLY",
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": "",
+          "reasoningEffort": "medium",
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-e584c6bb-915c-41f9-b578-678d16d68f68",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "MODE=EARLY",
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {
+            "01a15433-72d6-7d31-a125-23dfa346e088": {
+              "status": "pendingInit",
+              "message": null
+            }
+          },
+          "model": "gpt-5.6-luna",
+          "reasoningEffort": "low",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-99d5484c-6230-4162-96ec-fcc2a9ee0e66",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-99d5484c-6230-4162-96ec-fcc2a9ee0e66",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {
+            "01a15433-72d6-7d31-a125-23dfa346e088": {
+              "status": "completed",
+              "message": "INTERIM: worker launched"
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0d000f5bf420b033016ad6114a870c8191b83b139b3220f27e",
+        "content": {
+          "type": "text",
+          "text": "la"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0d000f5bf420b033016ad6114a870c8191b83b139b3220f27e",
+        "content": {
+          "type": "text",
+          "text": "unched"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0d000f5bf420b033016ad6114a870c8191b83b139b3220f27e",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    }
+  ],
+  "nextTurn": [
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad6115d8524819186f5b0ebaf1534b7",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad6115d8524819186f5b0ebaf1534b7",
+        "content": {
+          "type": "text",
+          "text": "**Searching for send_input and resume functions**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad6115ebab081918f3c04e99a617d21",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0d000f5bf420b033016ad6115ebab081918f3c04e99a617d21",
+        "content": {
+          "type": "text",
+          "text": "**Resuming and sending input**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-a1791c06-b426-4559-8f33-c50ee6ff132d",
+        "kind": "other",
+        "title": "resumeAgent",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-a1791c06-b426-4559-8f33-c50ee6ff132d",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {
+            "01a15433-72d6-7d31-a125-23dfa346e088": {
+              "status": "completed",
+              "message": "INTERIM: worker launched"
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-0f836756-861f-4da9-a32f-5e28a5d54bb8",
+        "kind": "other",
+        "title": "sendInput",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": "MODE=CONTINUE",
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-0f836756-861f-4da9-a32f-5e28a5d54bb8",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "MODE=CONTINUE",
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {
+            "01a15433-72d6-7d31-a125-23dfa346e088": {
+              "status": "completed",
+              "message": "INTERIM: worker launched"
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-9e0704d4-a70e-429f-8470-b0b7aab85749",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-9e0704d4-a70e-429f-8470-b0b7aab85749",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+          "receiverThreadIds": [
+            "01a15433-72d6-7d31-a125-23dfa346e088"
+          ],
+          "agentsStates": {
+            "01a15433-72d6-7d31-a125-23dfa346e088": {
+              "status": "completed",
+              "message": "ORCH FINAL"
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0d000f5bf420b033016ad611679b9c819197691bcf9b362222",
+        "content": {
+          "type": "text",
+          "text": "done"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15433-6038-7811-8e2a-3637de12a6fd",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0d000f5bf420b033016ad611679b9c819197691bcf9b362222",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    }
+  ]
+}

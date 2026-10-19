@@ -1,0 +1,455 @@
+{
+  "recording": "subagent_e2e/opencode-C-o3.ndjson",
+  "note": "OpenCode 2.0.27 with child-session updates, gpt-5.6-luna. Two levels, then Stop at 25 s: orch spawns worker, whose 60 s python sleep runs; session/cancel ends the tree in one millisecond: every subagent call and the shell fail, each child reports status interrupted, the prompt answers cancelled. Turn 1 only; thought chunks, usage and command updates dropped; session ids renamed, paths scrubbed.",
+  "notifications": [],
+  "frames": [
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_B47wQwc6O7OO4hOCFeSByqz3",
+        "name": "subagent",
+        "title": "subagent",
+        "kind": "think",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_B47wQwc6O7OO4hOCFeSByqz3",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Protocol probe",
+          "prompt": "MODE=LONG"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_B47wQwc6O7OO4hOCFeSByqz3",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Protocol probe",
+          "prompt": "MODE=LONG"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_orch:call_fAnrig0yPfvgJ84LmVxTcTxP",
+          "name": "subagent",
+          "title": "Protocol probe: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_fAnrig0yPfvgJ84LmVxTcTxP",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Protocol probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "run long probe",
+            "prompt": "LONG=60"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_fAnrig0yPfvgJ84LmVxTcTxP",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Protocol probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "run long probe",
+            "prompt": "LONG=60"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_worker:call_5hY44D6zZ4OHkaYL3YVjexQl",
+          "name": "shell",
+          "title": "run long probe: shell",
+          "kind": "execute",
+          "status": "pending",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "run long probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_5hY44D6zZ4OHkaYL3YVjexQl",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "run long probe: python3 -c 'import time; time.sleep(60)'",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "python3 -c 'import time; time.sleep(60)'",
+            "timeout": 0,
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "run long probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_5hY44D6zZ4OHkaYL3YVjexQl",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "run long probe: python3 -c 'import time; time.sleep(60)'",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "python3 -c 'import time; time.sleep(60)'",
+            "timeout": 0,
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "run long probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_fAnrig0yPfvgJ84LmVxTcTxP",
+          "status": "failed",
+          "kind": "think",
+          "title": "Protocol probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "run long probe",
+            "prompt": "LONG=60"
+          },
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Tool execution interrupted (sessionID: ses_worker)"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_worker",
+              "status": "running"
+            },
+            "error": "Tool execution interrupted (sessionID: ses_worker)"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Protocol probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Protocol probe",
+        "type": "status",
+        "status": "interrupted"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_B47wQwc6O7OO4hOCFeSByqz3",
+        "status": "failed",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Protocol probe",
+          "prompt": "MODE=LONG"
+        },
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Tool execution interrupted (sessionID: ses_orch)"
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "sessionID": "ses_orch",
+            "status": "running"
+          },
+          "error": "Tool execution interrupted (sessionID: ses_orch)"
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_5hY44D6zZ4OHkaYL3YVjexQl",
+          "status": "failed",
+          "kind": "execute",
+          "title": "run long probe: python3 -c 'import time; time.sleep(60)'",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "python3 -c 'import time; time.sleep(60)'",
+            "timeout": 0,
+            "cwd": "/tmp/agent"
+          },
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Tool execution interrupted"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "shellID": "sh_1547c851b0011DkOSzA9pLfuMj"
+            },
+            "error": "Tool execution interrupted"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "run long probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "run long probe",
+        "type": "status",
+        "status": "interrupted"
+      }
+    }
+  ]
+}

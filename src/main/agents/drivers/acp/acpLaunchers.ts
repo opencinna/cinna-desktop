@@ -89,6 +89,7 @@ import {
   type AcpRuntimeMode
 } from './types'
 import { airClientMeta } from './acpActivity'
+import { opencodeClientMeta } from './opencodeChildren'
 import type { AntigravityAutoApprovalPolicy } from './antigravityAutoApproval'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
@@ -477,8 +478,11 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
         protocolVersion: ACP_PROTOCOL_VERSION,
         // No `fs`, no `terminal` — both are removed in the draft v2, and a
         // client that never declared them is forward-compatible. Form
-        // elicitation: see the question note above.
-        clientCapabilities: { elicitation: { form: {} } },
+        // elicitation: see the question note above. Child-session updates: a
+        // subagent's traffic arrives as `opencode/session/child_update` with
+        // its start and end, instead of flattened onto the root session with
+        // neither (`opencodeChildren.ts`).
+        clientCapabilities: { elicitation: { form: {} }, _meta: opencodeClientMeta() },
         clientInfo: CLIENT_INFO
       }
       const spec: AcpLaunchSpec = {

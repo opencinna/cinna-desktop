@@ -105,6 +105,14 @@ describe('the OpenCode launcher', () => {
     expect(launcher().toolStallMs).toBe(10 * 60 * 1000)
   })
 
+  it('declares form elicitation and child-session updates, so subagents report their start and end', async () => {
+    const p = plan(await launcher().plan(CTX))
+    expect(p.init.clientCapabilities).toEqual({
+      elicitation: { form: {} },
+      _meta: { 'opencode/child-session-updates': true }
+    })
+  })
+
   it('spawns `opencode acp` in the agent’s folder', async () => {
     const p = plan(await launcher().plan(CTX))
     expect(p.spec.command).toBe('/usr/local/bin/opencode')
@@ -148,6 +156,9 @@ describe('the OpenCode launcher', () => {
     expect(entry.mode).toBe('primary')
     // The conversation permission profile, merged in by `buildEngineConfig`.
     expect(entry.permission).toMatchObject({ webfetch: 'ask' })
+    // OpenCode's subagents run under the top-level permission, not this entry.
+    expect(config.permission).toEqual(entry.permission)
+    expect(config.experimental).toEqual({ subagent_depth: 3 })
     const provider = config.provider.anthropic as Record<string, unknown>
     expect(provider.env).toEqual([expect.stringMatching(/^CINNA_ENGINE_KEY_/)])
   })

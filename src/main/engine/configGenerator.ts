@@ -584,6 +584,66 @@ export function engineAgentKey(agentId: string, slug: string): string {
 }
 
 /**
+ * How deep an OpenCode subagent may spawn subagents of its own:
+ * `experimental.subagent_depth`.
+ *
+ * Read out of the 2.0.27 binary (`opencode.tool.subagent`): the tool counts
+ * the caller session's ancestors and refuses when that count is `>=
+ * experimental.subagent_depth ?? 1`. So the default 1 lets the root spawn and
+ * stops every subagent from spawning ("Subagent depth limit reached (1)"),
+ * and 3 lets root → orchestrator → worker → leaf run: two levels of nesting
+ * below the root's own child, which is what an orchestrating subagent that
+ * hands work to a worker that delegates once more needs. A deeper tree is a
+ * fan-out nobody sees the end of, and every level is a model call. Every
+ * level asks under the same policy as the root ({@link subagentPermission}),
+ * so raising this does not open a path around the profile.
+ */
+const OPENCODE_SUBAGENT_DEPTH = 3
+
+/**
+ * The top-level `permission`, which is what governs OpenCode's **subagents**.
+ *
+ * Read out of the 2.0.27 binary, because the per-agent entries alone left a
+ * hole (observed live: the root's `subagent` call asked, the subagent's own
+ * nested call did not):
+ *
+ * - A subagent session runs as the agent it names, under **that agent's**
+ *   rule list. Nothing is inherited from the caller; the caller's list decides
+ *   only whether it may spawn (`subagent` with the agent's name). Only
+ *   `mode: "subagent"`/`"all"` agents can be spawned, so our `primary` entries
+ *   never run as one: what runs is OpenCode's built-in `general` and `explore`
+ *   (on its own defaults, `explore` with `shell` and `external_directory`
+ *   allowed) and any `.opencode/agent/*.md` the folder holds.
+ * - `opencode.config.agent` pushes every config document's top-level
+ *   `permission` onto **every** agent: after the built-in rules of `general`
+ *   and `explore`, and before the own rules of an agent a document defines.
+ *   Matching is last-match-wins, so for the built-ins this profile, which
+ *   opens with `'*'`, replaces their rules outright, and a folder subagent
+ *   without its own `permission` frontmatter gets exactly this.
+ *
+ * So the subagents get the policy of the primary that spawns them, written
+ * once here. Its own entry still carries the same policy, which comes after
+ * this one and so decides alone for the primary.
+ *
+ * **One config can hold several primaries** (a chat runtime with its title
+ * utility), and the top level cannot tell which one spawned a subagent. One
+ * distinct policy across the entries is used as is; anything else gets
+ * deny-all, which no primary's policy is looser than. That case is safe and
+ * costs nothing today: every multi-entry config is made of replace policies,
+ * under whose `'*': 'deny'` the `subagent` call itself is refused, and a
+ * folder agent's config holds that agent alone (`createOpencodeLauncher`).
+ *
+ * What this does not reach, stated so nobody infers it: a folder subagent's
+ * own `permission` frontmatter is pushed after this and wins (the root's
+ * `subagent` call still asks before it runs), and a user's global or project
+ * OpenCode config can add top-level rules of its own.
+ */
+function subagentPermission(policies: Map<string, Record<string, unknown>>): Record<string, unknown> {
+  if (policies.size === 1) return [...policies.values()][0]
+  return { '*': 'deny' }
+}
+
+/**
  * Build the config, the credential environment and the key maps.
  *
  * Pure: no filesystem, no clock, no `app`. Everything that decides what the
@@ -722,6 +782,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
   // order: the bytes feed `digestEngineConfig`, so a change in the skill set
   // restarts the warm process and an unchanged one never does.
   const skillPaths = [...(input.skillPaths ?? [])]
+  /** Every distinct entry policy, by its serialised bytes — see {@link subagentPermission}. */
+  const policies = new Map<string, Record<string, unknown>>()
 
   for (const agent of [...input.agents].sort((a, b) => a.agentId.localeCompare(b.agentId))) {
     const providerKey = providerKeys.get(agent.providerId)
@@ -740,6 +802,10 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     agentKeys.set(agent.agentId, key)
     agentModels.set(agent.agentId, { providerID: providerKey, id: agent.modelId })
     prompts.set(key, agent.prompt)
+    const permission = agent.permissionMode === 'replace'
+      ? { '*': 'deny', ...agent.permissions }
+      : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? [])]))
+    policies.set(JSON.stringify(permission), permission)
     agents[key] = {
       description: agent.description || `The ${agent.slug} agent.`,
       mode: 'primary',
@@ -748,9 +814,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       // reference, and the placeholder itself is what the model receives as its
       // system prompt. See the header.
       prompt: agent.prompt,
-      permission: agent.permissionMode === 'replace'
-        ? { '*': 'deny', ...agent.permissions }
-        : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? [])]))
+      permission
     }
     for (const path of agent.skillPaths ?? []) if (!skillPaths.includes(path)) skillPaths.push(path)
   }
@@ -760,6 +824,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       $schema: 'https://opencode.ai/config.json',
       provider: providers,
       agent: agents,
+      permission: subagentPermission(policies),
+      experimental: { subagent_depth: OPENCODE_SUBAGENT_DEPTH },
       ...(skillPaths.length ? { skills: { paths: skillPaths } } : {})
     },
     env,

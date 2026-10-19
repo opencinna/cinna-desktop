@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
-import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
+import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
 import { ANTIGRAVITY_CONDUCTOR_TOOLS, applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { AcpMessageStream } from '../acpMessages'
 import { permissionAsQuestion, permissionQuestionAnswer } from '../acpQuestions'
@@ -129,6 +129,8 @@ const seen = {
     cwd: '', home: '', envHasHome: true,
     sessionNew: null as AdapterMessage | null,
     firstTurn: null as GatewayTurn | null,
+    /** A session with no `_meta` at all: the server's whole built-in set, which the native plan no longer is. */
+    unfilteredTurn: null as GatewayTurn | null,
     filters: {} as Record<string, string[] | null>,
     unauthenticated: null as AdapterMessage | null
   },
@@ -315,6 +317,13 @@ async function nativeScenario(binary: string): Promise<void> {
     const sessionId = String(log.sessionNew.result?.sessionId ?? '')
     if (sessionId) await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: FIRST_PROMPT }] })
     log.firstTurn = gateway.turns[0] ?? null
+    {
+      const before = gateway.turns.length
+      const bare = await connection.rpc('session/new', { cwd, mcpServers: [] })
+      const id = String(bare.result?.sessionId ?? '')
+      if (id) await connection.rpc('session/prompt', { sessionId: id, prompt: [{ type: 'text', text: FIRST_PROMPT }] })
+      log.unfilteredTurn = gateway.turns[before] ?? null
+    }
     // The tool filter, one session per name set.
     for (const names of [['start_subagent'], ['create_file', 'edit_file'], ['send_message', 'define_subagent'], [...ANTIGRAVITY_FILTER_TOOLS]]) {
       const before = gateway.turns.length
@@ -469,11 +478,11 @@ function snapshot(): Json {
       promptResultKeys: keys(folderStep('first')?.result.result)
     },
     tools: {
-      builtins: declared(seen.native.firstTurn),
+      builtins: declared(seen.native.unfilteredTurn),
       sealedFolder: declared(folderStep('first')?.turns[0]),
       chatPolicy: [...new Set(seen.chat.turns.flatMap((turn) => turn.tools))].sort(),
       filters: Object.fromEntries(Object.entries(seen.native.filters).map(([names, tools]) =>
-        [names, seen.native.firstTurn ? (seen.native.firstTurn.tools.filter((tool) => !(tools ?? []).includes(tool))).sort() : null])),
+        [names, seen.native.unfilteredTurn ? (seen.native.unfilteredTurn.tools.filter((tool) => !(tools ?? []).includes(tool))).sort() : null])),
       addedMidSessionCallable: (chatStep('added')?.calls ?? []).includes('probe_added'),
       addedSchemaWritten: seen.chat.addedSchemaWritten
     },
@@ -773,11 +782,11 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
   })
 
   it(entry('antigravity.policy.builtin-tools'), () => {
-    expect(declared(seen.native.firstTurn)).toEqual([...ANTIGRAVITY_BUILTIN_TOOLS].sort())
+    expect(declared(seen.native.unfilteredTurn)).toEqual([...ANTIGRAVITY_BUILTIN_TOOLS].sort())
   })
 
   it(entry('antigravity.policy.filter-names'), () => {
-    const builtins = seen.native.firstTurn?.tools ?? []
+    const builtins = seen.native.unfilteredTurn?.tools ?? []
     expect(builtins.length).toBeGreaterThan(0)
     const removed = (names: string): string[] => builtins.filter((tool) => !(seen.native.filters[names] ?? builtins).includes(tool)).sort()
     expect(removed('start_subagent')).toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'send_message'])
@@ -791,6 +800,11 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     const sealed = folderStep('first')?.turns[0]?.tools ?? []
     expect(builtins.filter((tool) => !sealed.includes(tool)).sort())
       .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'schedule', 'send_message'])
+    // A native folder's session, as the launcher opens it, loses the subagent family and keeps `schedule`.
+    const native = seen.native.firstTurn?.tools ?? []
+    expect(builtins.filter((tool) => !native.includes(tool)).sort())
+      .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'send_message'])
+    expect(ANTIGRAVITY_NATIVE_DISABLED_TOOLS).toEqual(['start_subagent'])
   })
 
   it(entry('antigravity.policy.conductor-tools'), () => {

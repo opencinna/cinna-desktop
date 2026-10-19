@@ -5,7 +5,8 @@ const { join } = require('node:path')
 const { tmpdir } = require('node:os')
 const { createHash } = require('node:crypto')
 const {
-  patchCodexAcp, verifyCodexAcpPatch, original: mcpOriginal, replacement: mcpReplacement, instructions, instructionAnchors, airClientAnchor, airClientOff, commandEndAnchor, commandEndWhole
+  patchCodexAcp, verifyCodexAcpPatch, original: mcpOriginal, replacement: mcpReplacement, instructions, instructionAnchors, airClientAnchor, airClientOff, commandEndAnchor, commandEndWhole,
+  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren, sharedTryInterruptChildren
 } = require('./patch-codex-acp.cjs')
 const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 
@@ -20,7 +21,7 @@ function fixture(t) {
   // The installed copy is patched by postinstall; take the patch back out.
   const installed = readFileSync(join(__dirname, '../node_modules/@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
   const original = installed.replaceAll(instructions, '').replace(mcpReplacement, () => mcpOriginal).replace(airClientOff, () => airClientAnchor)
-    .replace(commandEndWhole, () => commandEndAnchor)
+    .replace(commandEndWhole, () => commandEndAnchor).replace(interruptChildren, () => '').replace(cancelChildren, () => cancelAnchor)
   assert.equal(createHash('sha256').update(original).digest('hex'), policy.originalSha256)
   writeFileSync(path, original)
   return { root, path, manifest, original }
@@ -86,6 +87,83 @@ test('the completing update of every command carries its whole output', (t) => {
   for (const terminal of [true, false]) {
     assert.deepEqual(method.commandEndRawOutput({ terminal, exitCode: 0, output: 'head\ntail\n', streamed: true }), { exit_code: 0, formatted_output: 'head\ntail\n' })
   }
+})
+
+/*
+ * `session/cancel` interrupts the root thread's turn only; the patched cancel
+ * goes on to the in-progress turn of every subagent thread the subscriptions
+ * discovered under the session, and to nothing else.
+ */
+test('cancel interrupts the in-progress turn of every subagent thread under the session, and ends its commands', async (t) => {
+  const f = fixture(t)
+  patchCodexAcp(f.root)
+  const applied = readFileSync(f.path, 'utf8')
+  assert.equal(applied.split(interruptChildren + childrenAnchor).length, 2)
+  assert.equal(applied.split(cancelChildren).length, 2)
+  // The method sits in the class that owns the discovered children, which CodexAcpClient holds as `subagents`.
+  assert.match(applied, /var CodexSubagentSubscriptions = class \{[\s\S]*?async interruptChildren\(rootSessionId\)[\s\S]*?\n\};\n/)
+  assert.match(applied, /this\.subagents = new CodexSubagentSubscriptions\(codexClient\);/)
+  assert.match(applied, /async cancel\(params\) \{\n\s+this\.activePrompts\.get\(params\.sessionId\)\?\.requestClientCancel\(\);/)
+
+  const calls = []
+  const turns = { busy: { id: 'turn-b', status: 'inProgress' }, idle: { id: 'turn-i', status: 'completed' } }
+  const client = {
+    threadTurnsList: async (params) => { calls.push(['list', params]); return { data: params.threadId === 'gone' ? [] : [turns[params.threadId]] } },
+    turnInterrupt: async (params) => { calls.push(['interrupt', params]); if (params.threadId === 'flaky') throw new Error('no turn') },
+    threadBackgroundTerminalsList: async (params) => {
+      calls.push(['terminals', params])
+      if (params.threadId === 'idle' && params.cursor === null) return { data: [{ processId: 'p1' }], nextCursor: 'next' }
+      if (params.threadId === 'idle') return { data: [{ processId: 'p2' }], nextCursor: null }
+      if (params.threadId === 'flaky') return { data: [{ processId: 'pf' }], nextCursor: null }
+      return { data: params.threadId === 'busy' ? [{ processId: 'p0' }] : [], nextCursor: null }
+    },
+    threadBackgroundTerminalsTerminate: async (params) => { calls.push(['terminate', params]); return { terminated: true } }
+  }
+  turns.flaky = { id: 'turn-f', status: 'inProgress' }
+  const logged = []
+  const Subscriptions = new Function('logger', `return class { ${interruptChildren} }`)({ error: (...args) => logged.push(args) })
+  const subscriptions = Object.assign(new Subscriptions(), {
+    client,
+    sessions: new Map([['root', { children: new Set(['busy', 'idle', 'gone', 'flaky']) }], ['other', { children: new Set(['elsewhere']) }]])
+  })
+  await subscriptions.interruptChildren('root')
+  assert.deepEqual(calls.filter(([kind]) => kind === 'interrupt').map(([, params]) => params), [
+    { threadId: 'busy', turnId: 'turn-b' }, { threadId: 'flaky', turnId: 'turn-f' }
+  ])
+  assert.deepEqual(calls.find(([kind]) => kind === 'list')[1], { threadId: 'busy', cursor: null, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' })
+  // An interrupted turn leaves its commands running: every page of each thread's background terminals is terminated, a finished
+  // thread's too, and a thread whose interrupt threw (a closed thread) still has its commands ended.
+  assert.deepEqual(calls.filter(([kind]) => kind === 'terminate').map(([, params]) => params).sort((a, b) => a.processId.localeCompare(b.processId)), [
+    { threadId: 'busy', processId: 'p0' }, { threadId: 'idle', processId: 'p1' }, { threadId: 'idle', processId: 'p2' }, { threadId: 'flaky', processId: 'pf' }
+  ])
+  assert.ok(calls.findIndex(([kind, params]) => kind === 'interrupt' && params.threadId === 'busy') < calls.findIndex(([kind, params]) => kind === 'terminals' && params.threadId === 'busy'))
+  assert.equal(logged.length, 1)
+  const before = calls.length
+  await subscriptions.interruptChildren('unknown')
+  assert.equal(calls.length, before)
+})
+
+test('an adapter carrying the previous reviewed patch is restored and patched again', (t) => {
+  const f = fixture(t)
+  let previous = f.original.replace(mcpOriginal, () => mcpReplacement)
+  for (const [anchor] of instructionAnchors) previous = previous.replaceAll(anchor, () => anchor + instructions)
+  previous = previous.replace(airClientAnchor, () => airClientOff).replace(commandEndAnchor, () => commandEndWhole)
+  assert.equal(createHash('sha256').update(previous).digest('hex'), 'ca1f79d5ea308f092753a24140ac182dac5af0c8f52e43132ca265f8fa5922fa')
+  writeFileSync(f.path, previous)
+  patchCodexAcp(f.root)
+  assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'), policy.patchedSha256)
+})
+
+test('an adapter carrying the first reviewed subagent cancel, its interrupt and kill in one try, is restored and patched again', (t) => {
+  const f = fixture(t)
+  let previous = f.original.replace(mcpOriginal, () => mcpReplacement)
+  for (const [anchor] of instructionAnchors) previous = previous.replaceAll(anchor, () => anchor + instructions)
+  previous = previous.replace(airClientAnchor, () => airClientOff).replace(commandEndAnchor, () => commandEndWhole)
+    .replace(childrenAnchor, () => sharedTryInterruptChildren + childrenAnchor).replace(cancelAnchor, () => cancelChildren)
+  assert.equal(createHash('sha256').update(previous).digest('hex'), 'e37c968c758bad2e3b0e8c6d4762dd04824b941deca2a2d871b1e2a2854f63fd')
+  writeFileSync(f.path, previous)
+  patchCodexAcp(f.root)
+  assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'), policy.patchedSha256)
 })
 
 test('refuses an adapter carrying only part of a reviewed patch', (t) => {

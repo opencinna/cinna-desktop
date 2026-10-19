@@ -117,7 +117,7 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   assert.throws(() => afterPack(context), /Claude ACP patch \(context usage, AIR client off\) is missing or changed/)
   copyClaudeAdapter(shippedClaude)
   writeFileSync(join(shippedClaude, 'dist/native-subagents.js'), '// pristine adapter\n')
-  assert.throws(() => afterPack(context), /Claude ACP patch \(resumed subagent routing\) is missing or changed/)
+  assert.throws(() => afterPack(context), /Claude ACP patch \(subagent routing\) is missing or changed/)
   copyClaudeAdapter(shippedClaude)
   assert.throws(() => afterPack(context), /Missing packaged Canvas payload/)
   const shipped = pkg(canvasName, { main: 'skia.darwin-x64.node' }, unpacked)

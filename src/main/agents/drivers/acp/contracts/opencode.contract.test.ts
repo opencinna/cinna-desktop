@@ -72,6 +72,11 @@ const SHELL_PROMPT = 'CONTRACT_SHELL_PROMPT: list the folder, then read .env.'
 const CINNA_PROMPT = 'CONTRACT_CINNA_PROMPT: call the Cinna probe tool.'
 const QUESTION_PROMPT = 'CONTRACT_QUESTION_PROMPT: ask me which one.'
 const THINK_PROMPT = 'CONTRACT_THINK_PROMPT: think, then answer.'
+const SUBAGENT_PROMPT = 'CONTRACT_SUBAGENT_PROMPT: hand it to a subagent.'
+/** The child session's own prompt, the `subagent` call's description (the child's title), and its report. */
+const CHILD_PROMPT = 'CONTRACT_CHILD_PROMPT: report back.'
+const CHILD_DESCRIPTION = 'Contract child'
+const CHILD_REPORT = 'CONTRACT_CHILD_REPORT'
 const READ_PROMPT = 'CONTRACT_READ_PROMPT: read .env with the read tool.'
 /** The control for {@link READ_PROMPT}: the same `read`, of a file no pattern names. */
 const PLAIN_READ_PROMPT = 'CONTRACT_PLAIN_READ_PROMPT: read readme.txt with the read tool.'
@@ -102,10 +107,12 @@ interface PromptObservation {
   requests: AcpMessage[]
   /** Its `session/update`s. */
   updates: Json[]
+  /** Its other notifications (extensions). */
+  ext: AcpMessage[]
   /** Its conversation requests to the provider. */
   turns: OpenAiTurn[]
 }
-const emptyPrompt = (): PromptObservation => ({ answer: null, requests: [], updates: [], turns: [] })
+const emptyPrompt = (): PromptObservation => ({ answer: null, requests: [], updates: [], ext: [], turns: [] })
 
 /** Everything the scenario observed. Filled by `beforeAll`. */
 const seen = {
@@ -116,7 +123,7 @@ const seen = {
   /** Whether Cinna's server answered the session's `tools/list` within 10 s of `session/new`, and the probe calls of the eager prompt. */
   mcp: { listedAfter: false, eagerCalls: 0, calls: [] as string[] },
   setConfig: [] as { configId: string; message: AcpMessage }[],
-  shell: emptyPrompt(), cinna: emptyPrompt(), question: emptyPrompt(), think: emptyPrompt(), eager: emptyPrompt(), read: emptyPrompt(), plainRead: emptyPrompt(),
+  shell: emptyPrompt(), cinna: emptyPrompt(), question: emptyPrompt(), think: emptyPrompt(), subagent: emptyPrompt(), eager: emptyPrompt(), read: emptyPrompt(), plainRead: emptyPrompt(),
   /** A session on the generated config with `plugins: []`: the personal-skills control. */
   control: emptyPrompt(),
   /** Per round of concurrent first starts on a fresh database, each process's outcome (`ok` once `session/new` answered). */
@@ -160,6 +167,12 @@ function decide(turn: OpenAiTurn): OpenAiReply {
     if (step > 0 || !turn.tools.includes('question')) return { kind: 'text', text: 'QUESTION_DONE' }
     return { kind: 'tool', name: 'question', args: { questions: [{ question: 'Which one?', header: 'Pick',
       options: [{ label: 'Alpha', description: 'the first' }, { label: ANSWER_LABEL, description: 'the second' }] }] } }
+  }
+  // The child's request carries its own prompt, so it is told apart before its parent's.
+  if (about.includes('CONTRACT_CHILD_PROMPT')) return { kind: 'text', text: CHILD_REPORT }
+  if (about.includes('CONTRACT_SUBAGENT_PROMPT')) {
+    if (step > 0 || !turn.tools.includes('subagent')) return { kind: 'text', text: 'SUBAGENT_DONE' }
+    return { kind: 'tool', name: 'subagent', args: { agent: 'general', description: CHILD_DESCRIPTION, prompt: CHILD_PROMPT } }
   }
   if (about.includes('CONTRACT_THINK_PROMPT')) return { kind: 'text', text: 'THOUGHT_DONE', reasoning: REASONING_TEXT }
   const readOf = about.includes('CONTRACT_READ_PROMPT') ? '.env' : about.includes('CONTRACT_PLAIN_READ_PROMPT') ? 'readme.txt' : null
@@ -264,11 +277,12 @@ async function scenario(binary: string): Promise<void> {
     seen.setConfig = await setup(connection, sessionId)
 
     const prompt = async (conn: AcpConnection, text: string, into: PromptObservation, settleMs = 300, session = sessionId): Promise<void> => {
-      const requestsAt = conn.clientRequests.length, updatesAt = conn.updates.length, turnsAt = provider!.turns.length
+      const requestsAt = conn.clientRequests.length, updatesAt = conn.updates.length, extAt = conn.notifications.length, turnsAt = provider!.turns.length
       into.answer = await conn.rpc('session/prompt', { sessionId: session, prompt: [{ type: 'text', text }] }, 90_000)
       await sleep(settleMs)
       into.requests = conn.clientRequests.slice(requestsAt)
       into.updates = conn.updates.slice(updatesAt)
+      into.ext = conn.notifications.slice(extAt)
       into.turns = provider!.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
     }
     phase = 'shell'
@@ -277,6 +291,7 @@ async function scenario(binary: string): Promise<void> {
     await prompt(connection, CINNA_PROMPT, seen.cinna)
     await prompt(connection, QUESTION_PROMPT, seen.question)
     await prompt(connection, THINK_PROMPT, seen.think)
+    await prompt(connection, SUBAGENT_PROMPT, seen.subagent, 1000)
     // The secret read again, through `read` rather than the shell; any ask is
     // refused the way Cinna's Deny answers it.
     // First its control: the same call of a file no pattern names, under the
@@ -439,6 +454,18 @@ const askCommand = (request: AcpMessage): string => {
   return String(((toolCall.rawInput ?? {}) as Json).command ?? toolCall.title ?? '')
 }
 const messageIdShape = (id: unknown): string => typeof id !== 'string' ? 'none' : (/^([a-z]+)_/.exec(id)?.[1] ?? 'other')
+/** The prompt's `opencode/session/child_update` params, in order. */
+const childUpdates = (observation: PromptObservation): Json[] =>
+  observation.ext.filter((message) => message.method === 'opencode/session/child_update').map((message) => (message.params ?? {}) as Json)
+/** The root's `subagent` call: its first frame, its last (the completion carries no input), and its input. */
+const subagentCall = (observation: PromptObservation): { start?: Json; last?: Json; input?: Json } => {
+  const start = observation.updates.find((update) => update.sessionUpdate === 'tool_call' && update.name === 'subagent')
+  const frames = start ? observation.updates.filter((update) => update.toolCallId === start.toolCallId) : []
+  const input = frames.map((update) => update.rawInput as Json | undefined).filter((raw) => raw && Object.keys(raw).length > 0).at(-1)
+  return { start, last: frames.at(-1), input }
+}
+const childMetaOnRoot = (observation: PromptObservation): number =>
+  observation.updates.filter((update) => ((update._meta ?? {}) as Json)['opencode/child-session'] !== undefined).length
 
 /** Shapes only: no paths, ids, ports or timestamps, keys sorted, so two versions diff cleanly. */
 function snapshot(): Json {
@@ -476,6 +503,17 @@ function snapshot(): Json {
       },
       mcpTiming: { listedAfter: seen.mcp.listedAfter, eagerPromptReachedProbe: seen.mcp.eagerCalls > 0,
         eagerToolResult: (seen.eager.turns[1]?.pendingToolResults[0] ?? null)?.replace(/\s+/g, ' ').slice(0, 120) ?? null },
+      subagentPrompt: {
+        stopReason: seen.subagent.answer?.result?.stopReason ?? null,
+        offered: (seen.subagent.turns[0]?.tools ?? []).includes('subagent'),
+        childUpdateKeys: [...new Set(childUpdates(seen.subagent).flatMap((params) => keys(params)))].sort(),
+        statuses: childUpdates(seen.subagent).filter((params) => params.type === 'status').map((params) => params.status),
+        updateKinds: updateKinds(childUpdates(seen.subagent).filter((params) => params.type === 'update').map((params) => (params.update ?? {}) as Json)),
+        childFramesOnRoot: childMetaOnRoot(seen.subagent),
+        callInputKeys: keys(subagentCall(seen.subagent).input),
+        completionStatus: subagentCall(seen.subagent).last?.status ?? null,
+        completionMetadataKeys: keys(((subagentCall(seen.subagent).last?.rawOutput ?? {}) as Json).metadata)
+      },
       question: {
         offered: (seen.question.turns[0]?.tools ?? []).includes('question'),
         elicitationFields: keys(((elicitation?.params?.requestedSchema ?? {}) as Json).properties),
@@ -726,6 +764,32 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     expect(form?.questions[0]?.options.map((option) => option.label)).toEqual(['Alpha', ANSWER_LABEL])
     expect(seen.question.turns.some((turn) => turn.pendingToolResults.some((result) => result.includes(ANSWER_LABEL)))).toBe(true)
     expect(seen.question.answer?.result?.stopReason).toBe('end_turn')
+  })
+
+  it(entry('opencode.session.child-updates'), () => {
+    const init = (seen.initialize?.result ?? {}) as Json
+    expect(((init.agentCapabilities as Json | undefined)?._meta as Json | undefined)?.['opencode/child-session-updates']).toBe(true)
+    expect((seen.plan?.init.clientCapabilities?._meta as Json | undefined)?.['opencode/child-session-updates']).toBe(true)
+    expect(seen.subagent.answer?.result?.stopReason).toBe('end_turn')
+    const { start, last, input } = subagentCall(seen.subagent)
+    expect(start, 'the root made no subagent call').toBeDefined()
+    expect(input).toMatchObject({ agent: 'general', description: CHILD_DESCRIPTION, prompt: CHILD_PROMPT })
+    const updates = childUpdates(seen.subagent)
+    const children = [...new Set(updates.map((params) => params.childSessionId))]
+    expect(children).toHaveLength(1)
+    const root = String(seen.sessionNew?.result?.sessionId ?? '')
+    for (const params of updates) {
+      expect(params).toMatchObject({ rootSessionId: root, childSessionId: children[0], parentSessionId: root, depth: 1, title: CHILD_DESCRIPTION })
+    }
+    expect(children[0]).not.toBe(root)
+    expect(updates.filter((params) => params.type === 'status').map((params) => params.status)).toEqual(['created', 'running', 'completed'])
+    const report = updates.filter((params) => params.type === 'update').map((params) => (params.update ?? {}) as Json)
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk').map((update) => String(((update.content ?? {}) as Json).text ?? '')).join('')
+    expect(report).toContain(CHILD_REPORT)
+    expect(childMetaOnRoot(seen.subagent), 'child frames flattened onto the root session').toBe(0)
+    expect(last?.status).toBe('completed')
+    expect(((last?.rawOutput as Json | undefined)?.metadata as Json | undefined)?.sessionID).toBe(children[0])
+    expect(JSON.stringify(last?.content ?? [])).toContain(CHILD_REPORT)
   })
 
   it(entry('opencode.provider.egress'), () => {

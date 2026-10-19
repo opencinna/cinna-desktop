@@ -20,6 +20,21 @@ export function loadActivityFixture(engine: 'claude' | 'codex', name: string): A
   return JSON.parse(readFileSync(join(FIXTURES, engine, `${name}.json`), 'utf8')) as ActivityFixture
 }
 
+/** One recorded OpenCode frame: a `session/update`, or an extension notification (`opencode/session/child_update`). */
+export type OpencodeFrame =
+  | { sessionId: string; update: Record<string, unknown> }
+  | { method: string; params: Record<string, unknown> }
+
+export interface OpencodeFixture {
+  frames: OpencodeFrame[]
+  /** Frames at or after this index arrived after `session/prompt` answered. */
+  promptReturnedAtIndex?: number
+}
+
+export function loadOpencodeFixture(name: string): OpencodeFixture {
+  return JSON.parse(readFileSync(join(FIXTURES, 'opencode', `${name}.json`), 'utf8')) as OpencodeFixture
+}
+
 /**
  * The parent stream a Claude turn produced before `nativeSubagentSessions`,
  * derived from `claude-agent-acp` 0.76.0: the Agent `tool_call` from

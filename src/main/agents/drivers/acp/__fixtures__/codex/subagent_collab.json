@@ -1,43 +1,153 @@
 {
-  "recording": null,
-  "note": "SYNTHESIZED — derived from adapter code, not recorded. codex-acp 2.2.2 CollabAgentReporter (dist/index.js ~29801-29836) rendered for a client that is not AIR (AcpToolCallRenderer.render + applyStandardFields): title = the tool, rawInput = {prompt, senderThreadId, receiverThreadIds, agentsStates, model, reasoningEffort, status}, no content and no _meta (the spawnAgent `subagent` flag is AIR meta only). A spawnAgent call naming its receiver thread, then a wait call whose agentsStates report the child completed. Under 1.11.0 the same calls also carried _meta.codex.collaboration. The installed codex-cli emitted subAgentActivity items instead (see subagent_nocaps.json).",
+  "recording": "subagent_e2e/codex-A.ndjson",
+  "note": "Codex CLI 0.162.1 (V1 collaboration tools, its default), codex-acp 2.2.2 patched, gpt-5.6-luna low, Cinna launch (asyncTasks only, no native subagent sessions). Distilled to session/update; usage, command and session-info updates dropped. The root spawns orch (spawn_agent from a code-mode exec cell) and waits: the spawnAgent tool_call is titled with receiverThreadIds [], its untitled update names the child (pendingInit); the wait update carries the report only as agentsStates[child].message. Turn 1 of the recording.",
   "notifications": [
     {
-      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec33b68819191d3f4c8d0e1b099",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec33b68819191d3f4c8d0e1b099",
+        "content": {
+          "type": "text",
+          "text": "**Searching for hidden spawn_agent tool**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec4fa5c81918ea47481664851b7",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec4fa5c81918ea47481664851b7",
+        "content": {
+          "type": "text",
+          "text": "**Planning single spawn and wait usage**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec606cc8191847da59a410e2033",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_0cdb34bc24c72dad016ad60ec606cc8191847da59a410e2033",
+        "content": {
+          "type": "text",
+          "text": "**Implementing single spawn with wait**"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
       "update": {
         "sessionUpdate": "tool_call",
-        "toolCallId": "call_spawn",
+        "toolCallId": "exec-e7e7872e-e6e8-4c6a-976a-2f1562bd91fb",
+        "kind": "other",
         "title": "spawnAgent",
         "status": "in_progress",
         "rawInput": {
-          "prompt": "Run the tests",
-          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "prompt": "MODE=NESTED",
+          "senderThreadId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
           "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": "",
+          "reasoningEffort": "medium",
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-e7e7872e-e6e8-4c6a-976a-2f1562bd91fb",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "MODE=NESTED",
+          "senderThreadId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+          "receiverThreadIds": [
+            "01a15429-b7f3-7f80-b352-ef963ba9f782"
+          ],
+          "agentsStates": {
+            "01a15429-b7f3-7f80-b352-ef963ba9f782": {
+              "status": "pendingInit",
+              "message": null
+            }
+          },
+          "model": "gpt-5.6-luna",
+          "reasoningEffort": "low",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-3b6216bb-3043-4854-ba87-70f2280561e5",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
+          "receiverThreadIds": [
+            "01a15429-b7f3-7f80-b352-ef963ba9f782"
+          ],
           "agentsStates": {},
           "model": null,
           "reasoningEffort": null,
           "status": "inProgress"
-        },
-        "kind": "other"
+        }
       }
     },
     {
-      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
       "update": {
         "sessionUpdate": "tool_call_update",
-        "toolCallId": "call_spawn",
-        "title": "spawnAgent",
+        "toolCallId": "exec-3b6216bb-3043-4854-ba87-70f2280561e5",
         "status": "completed",
         "rawInput": {
-          "prompt": "Run the tests",
-          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "prompt": null,
+          "senderThreadId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
           "receiverThreadIds": [
-            "01a0ac6b-c0de-7000-8000-000000000001"
+            "01a15429-b7f3-7f80-b352-ef963ba9f782"
           ],
           "agentsStates": {
-            "01a0ac6b-c0de-7000-8000-000000000001": {
-              "status": "pendingInit",
-              "message": null
+            "01a15429-b7f3-7f80-b352-ef963ba9f782": {
+              "status": "completed",
+              "message": "ORCH FINAL"
             }
           },
           "model": null,
@@ -47,53 +157,13 @@
       }
     },
     {
-      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "sessionId": "01a15429-9ef4-72e2-b162-ebbacf7f964e",
       "update": {
-        "sessionUpdate": "tool_call",
-        "toolCallId": "call_wait",
-        "title": "wait",
-        "status": "in_progress",
-        "rawInput": {
-          "prompt": null,
-          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-          "receiverThreadIds": [
-            "01a0ac6b-c0de-7000-8000-000000000001"
-          ],
-          "agentsStates": {
-            "01a0ac6b-c0de-7000-8000-000000000001": {
-              "status": "running",
-              "message": null
-            }
-          },
-          "model": null,
-          "reasoningEffort": null,
-          "status": "inProgress"
-        },
-        "kind": "other"
-      }
-    },
-    {
-      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-      "update": {
-        "sessionUpdate": "tool_call_update",
-        "toolCallId": "call_wait",
-        "title": "wait",
-        "status": "completed",
-        "rawInput": {
-          "prompt": null,
-          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
-          "receiverThreadIds": [
-            "01a0ac6b-c0de-7000-8000-000000000001"
-          ],
-          "agentsStates": {
-            "01a0ac6b-c0de-7000-8000-000000000001": {
-              "status": "completed",
-              "message": "done"
-            }
-          },
-          "model": null,
-          "reasoningEffort": null,
-          "status": "completed"
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0cdb34bc24c72dad016ad60ece128081919c67404eec2ee7f4",
+        "content": {
+          "type": "text",
+          "text": "done"
         }
       }
     }

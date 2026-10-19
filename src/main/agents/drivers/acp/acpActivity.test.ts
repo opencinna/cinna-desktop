@@ -10,6 +10,7 @@ import { createSessionActivityHub } from '../../../services/sessionActivityHub'
 import {
   createAcpActivityState,
   createSessionActivityRegistry,
+  stopCodexSubagents,
   SubagentFrames,
   translateActivity
 } from './acpActivity'
@@ -159,12 +160,54 @@ describe('subagents', () => {
     expect(run.items.map((item) => [item.title, item.state])).toEqual([['shell_probe', 'completed']])
   })
 
-  it('Codex collaboration calls (derived from adapter code): spawn names the child, agentsStates end it', () => {
+  it('Codex collaboration calls (recorded, V1): the untitled spawn update names the child, wait ends it with its report', () => {
     const fixture = load('codex', 'subagent_collab')
+    const root = fixture.notifications[0].sessionId
+    const at = (title: string, status: string): number => fixture.notifications.findIndex((n) => {
+      const u = n.update as { sessionUpdate: string; title?: string; status?: string; toolCallId?: string }
+      return u.status === status && fixture.notifications.some((m) => (m.update as { title?: string; toolCallId?: string }).title === title &&
+        (m.update as { toolCallId?: string }).toolCallId === u.toolCallId)
+    })
     const run = replay(fixture)
-    expect(run.at(1).map((item) => [item.title, item.detail, item.state])).toEqual([['Subagent', 'Run the tests', 'running']])
-    expect(run.at(2)[0].state).toBe('running')
-    expect(run.items.map((item) => item.state)).toEqual(['completed'])
+    expect(run.at(at('spawnAgent', 'in_progress'))).toEqual([])
+    expect(run.at(at('spawnAgent', 'completed')).map(pick)).toEqual([{
+      id: `${root}:01a15429-b7f3-7f80-b352-ef963ba9f782`, kind: 'subagent', title: 'MODE=NESTED', detail: null,
+      state: 'running', outputPath: null, canStop: false, agentId: AGENT
+    }])
+    expect(run.at(at('wait', 'in_progress'))[0].state).toBe('running')
+    expect(run.items.map((item) => [item.state, item.detail])).toEqual([['completed', 'ORCH FINAL']])
+  })
+
+  it('Codex collaboration resume (recorded): input to a finished agent is a new run, ended by the next wait, not by the stale states', () => {
+    const fixture = load('codex', 'subagent_collab_resume') as Fixture & { nextTurn: SessionNotification[] }
+    const root = fixture.notifications[0].sessionId
+    const child = `${root}:01a15433-72d6-7d31-a125-23dfa346e088`
+    const both = { ...fixture, notifications: [...fixture.notifications, ...fixture.nextTurn] }
+    const run = replay(both)
+    const index = (title: string, status: string): number => both.notifications.findIndex((n) => {
+      const u = n.update as { toolCallId?: string; status?: string }
+      return u.status === status && both.notifications.some((m) => (m.update as { title?: string; toolCallId?: string }).title === title &&
+        (m.update as { toolCallId?: string }).toolCallId === u.toolCallId)
+    })
+    expect(run.at(fixture.notifications.length - 1).map((item) => [item.id, item.state, item.detail]))
+      .toEqual([[child, 'completed', 'INTERIM: worker launched']])
+    // resumeAgent starts nothing and its repeated `completed` ends nothing again.
+    expect(run.at(index('resumeAgent', 'completed')).map((item) => [item.id, item.state])).toEqual([[child, 'completed']])
+    // sendInput starts the second run (the hub drops the ended first one as it
+    // starts: none of the kind was running); its own update repeats the first run's end.
+    expect(run.at(index('sendInput', 'in_progress')).map((item) => [item.id, item.title, item.detail, item.state]))
+      .toEqual([[`${child}#2`, 'MODE=EARLY', 'MODE=CONTINUE', 'running']])
+    expect(run.at(index('sendInput', 'completed'))[0].state).toBe('running')
+    expect(run.items.map((item) => [item.id, item.state, item.detail])).toEqual([[`${child}#2`, 'completed', 'ORCH FINAL']])
+  })
+
+  it('Codex collaboration cancel (recorded): nothing ends the child on the wire; stopCodexSubagents ends it stopped, once', () => {
+    const fixture = load('codex', 'subagent_collab_cancel')
+    const root = fixture.notifications[0].sessionId
+    const state = createAcpActivityState()
+    for (const n of fixture.notifications) translateActivity(n, state, root)
+    expect(stopCodexSubagents(state, root)).toEqual([{ type: 'end', id: `${root}:01a15433-7509-7f03-bcde-608ffc9fa85e`, state: 'stopped' }])
+    expect(stopCodexSubagents(state, root)).toEqual([])
   })
 
   it('Codex collaboration calls are known by their input, and only spawnAgent names children', () => {
@@ -178,9 +221,24 @@ describe('subagents', () => {
     // A failed spawn and a call of another tool name no child.
     expect(translateActivity(call('spawnAgent', collab, 'failed'), state, 'r')).toEqual([])
     expect(translateActivity(call('wait', collab), state, 'r')).toEqual([])
-    expect(translateActivity(call('spawnAgent', collab), state, 'r')).toEqual([{ type: 'upsert', id: 'r:t', kind: 'subagent', title: 'Subagent', detail: 'p' }])
+    expect(translateActivity(call('spawnAgent', collab), state, 'r')).toEqual([{ type: 'upsert', id: 'r:t', kind: 'subagent', title: 'p', detail: null }])
     expect(translateActivity(call('closeAgent', { ...collab, agentsStates: { t: { status: 'shutdown', message: null } } }), state, 'r'))
       .toEqual([{ type: 'end', id: 'r:t', state: 'failed' }])
+    // Already ended: a later call's state for it is the same end again.
+    expect(translateActivity(call('wait', { ...collab, agentsStates: { t: { status: 'completed', message: 'late' } } }), state, 'r')).toEqual([])
+  })
+
+  it('a Codex spawn prompt titles its item by its first line, cut short; the whole prompt is the detail', () => {
+    const state = createAcpActivityState()
+    const prompt = `${'Review the parser and list every place that reads a token twice '.repeat(2)}\nthen report.`
+    const changes = translateActivity({
+      sessionId: 'r',
+      update: { sessionUpdate: 'tool_call', toolCallId: 's', title: 'spawnAgent', status: 'completed', rawInput: { prompt, senderThreadId: 'r', receiverThreadIds: ['t'], agentsStates: {} } }
+    } as unknown as SessionNotification, state, 'r')
+    const title = (changes[0] as { title: string }).title
+    expect(title).toHaveLength(80)
+    expect(title.endsWith('…')).toBe(true)
+    expect(changes[0]).toMatchObject({ detail: prompt })
   })
 
   it('a Codex subagent of the root path, or an unknown thread, is nothing', () => {
@@ -247,7 +305,7 @@ describe('the session activity registry', () => {
     expect(connection.aliases).toEqual(new Map([['child', 'parent']]))
     expect(registry.lookup(connection, 'child')).toBe(feed)
     expect(registry.lookup(connection, 'parent')).toBe(feed)
-    expect(feed.subagent('child')).toEqual({ name: 'helper', task: 'look around' })
+    expect(feed.subagent('child')).toEqual({ name: 'helper', task: 'look around', spawnedOn: 'parent' })
 
     registry.forgetChat('other-chat')
     expect(connection.aliases.size).toBe(1)

@@ -58,6 +58,7 @@ import type {
 import { createLogger } from '../../../logger/logger'
 import type { AcpConnection } from './types'
 import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
+import { OPENCODE_CHILD_STATUS, opencodeChildActivity } from './opencodeChildren'
 
 const logger = createLogger('acp-activity')
 
@@ -94,10 +95,14 @@ export interface AcpActivityState {
   endedSubagents: Set<string>
   /** Codex subagent → its run number, when it ran more than once. */
   subagentRuns: Map<string, number>
+  /** Codex collaboration call id → its tool (`spawnAgent`, `wait`, …), from the `tool_call` that titled it. */
+  collabTools: Map<string, string>
+  /** Codex subagent → the title its spawn gave its item, for its later runs. */
+  subagentTitles: Map<string, string>
 }
 
 export function createAcpActivityState(): AcpActivityState {
-  return { tasks: new Set(), subagents: new Set(), endedSubagents: new Set(), subagentRuns: new Map() }
+  return { tasks: new Set(), subagents: new Set(), endedSubagents: new Set(), subagentRuns: new Map(), collabTools: new Map(), subagentTitles: new Map() }
 }
 
 /**
@@ -245,6 +250,9 @@ export function translateActivity(
       const ended = subagentState(str(update.state))
       return ended === null ? [] : [{ type: 'end', id: id(childId), state: ended }]
     }
+    case OPENCODE_CHILD_STATUS:
+      // An OpenCode child session's status, rebuilt from its extension (`opencodeChildren.ts`).
+      return opencodeChildActivity(update, state, id)
     case 'tool_call':
     case 'tool_call_update':
       return codexSubagents(update, state, id)
@@ -317,44 +325,125 @@ function codexSubagents(
     return changes
   }
 
-  // Derived from codex-acp's code (`CollabAgentReporter`), not watched: a
-  // `spawnAgent` call names its children, and every collaboration call
-  // carries the states of the agents it touched.
+  // A collaboration call (`CollabAgentReporter`; recorded on CLI 0.162.1 with
+  // codex-acp 2.2.2, the V1 tools): only its `tool_call` is titled with the
+  // tool, so the title is remembered by call id. `spawnAgent` names its
+  // children on the untitled update; every call carries the states of the
+  // agents it touched, and a finished agent's report is its state's `message`
+  // (on `wait`). No role or nickname reaches the wire: the spawn prompt is
+  // all there is to name the item by.
   if (!isCodexCollaboration(input)) return []
-  if (update.title === CODEX_SPAWN_TOOL && update.status !== 'failed') {
+  const toolCallId = str(update.toolCallId)
+  const known = toolCallId ? state.collabTools.get(toolCallId) : undefined
+  const tool = known ?? str(update.title)
+  if (toolCallId && tool && !known) state.collabTools.set(toolCallId, tool)
+  if (tool === CODEX_SPAWN_TOOL && update.status !== 'failed') {
+    const prompt = str(input.prompt)
+    const title = prompt ? subagentTitle(prompt) : 'Subagent'
     for (const receiver of input.receiverThreadIds as unknown[]) {
       const threadId = str(receiver)
       if (!threadId || state.subagents.has(threadId)) continue
       state.subagents.add(threadId)
-      changes.push({ type: 'upsert', id: id(threadId), kind: 'subagent', title: 'Subagent', detail: str(input.prompt) ?? null })
+      state.subagentTitles.set(threadId, title)
+      changes.push({ type: 'upsert', id: id(threadId), kind: 'subagent', title, detail: prompt && prompt !== title ? prompt : null })
     }
   }
+  if (tool === CODEX_SEND_TOOL) {
+    // Input to an agent whose run ended starts a new turn on its thread: a new
+    // run, seen first on the call's start. The call's own states are the ones
+    // the agents had when the input was sent — an ended run's `completed`
+    // again — so they end nothing; the next `wait` does.
+    if (!known) {
+      for (const receiver of input.receiverThreadIds as unknown[]) {
+        const threadId = str(receiver)
+        if (!threadId || !state.endedSubagents.delete(threadId)) continue
+        state.subagentRuns.set(threadId, (state.subagentRuns.get(threadId) ?? 1) + 1)
+        changes.push({ type: 'upsert', id: id(subagentRun(state, threadId)), kind: 'subagent', title: state.subagentTitles.get(threadId) ?? 'Subagent', detail: str(input.prompt) ?? null })
+      }
+    }
+    return changes
+  }
   for (const [threadId, agent] of Object.entries(record(input.agentsStates) ?? {})) {
-    if (!state.subagents.has(threadId)) continue
+    // An agent whose run already ended is reported again by `resumeAgent`,
+    // `closeAgent` and a repeated `wait`: the same end, not a new one.
+    if (!state.subagents.has(threadId) || state.endedSubagents.has(threadId)) continue
     const ended = codexAgentState(str(record(agent)?.status))
-    if (ended) changes.push(endSubagent(state, threadId, ended, id))
+    if (ended) changes.push(endSubagent(state, threadId, ended, id, str(record(agent)?.message)))
   }
   return changes
 }
 
-/** The end of a Codex subagent's current run. */
+/** The tool that sends a running or finished agent more input (`send_input`). */
+const CODEX_SEND_TOOL = 'sendInput'
+/** How much of a spawn prompt's first line titles its item. */
+const SUBAGENT_TITLE_MAX = 80
+
+/** An item title from a spawn prompt: its first line, cut short. */
+function subagentTitle(prompt: string): string {
+  const line = prompt.trim().split('\n')[0].trim()
+  return line.length > SUBAGENT_TITLE_MAX ? `${line.slice(0, SUBAGENT_TITLE_MAX - 1).trimEnd()}…` : line
+}
+
+/** The end of a Codex subagent's current run, with its report when the wire carried one. */
 function endSubagent(
   state: AcpActivityState,
   threadId: string,
   ended: SessionActivityTerminalState,
-  id: (wire: string) => string
+  id: (wire: string) => string,
+  summary?: string
 ): SessionActivityChange {
   state.endedSubagents.add(threadId)
-  return { type: 'end', id: id(subagentRun(state, threadId)), state: ended }
+  return { type: 'end', id: id(subagentRun(state, threadId)), state: ended, ...(summary ? { summary } : {}) }
 }
 
-/** The child session a `subagent_spawned` announces, if this is one. */
-export function spawnedSubagent(notification: SessionNotification): { sessionId: string; name?: string; task?: string } | undefined {
+/**
+ * The end of every Codex subagent still running, as `stopped`: a Stop the
+ * adapter passed on to the subagent threads too (our codex-acp patch), after
+ * which none of them reports again — the root's `wait` is left without an
+ * update.
+ */
+export function stopCodexSubagents(state: AcpActivityState, owner: string): SessionActivityChange[] {
+  const id = (wire: string): string => `${owner}:${wire}`
+  return [...state.subagents]
+    .filter((threadId) => !state.endedSubagents.has(threadId))
+    .map((threadId) => endSubagent(state, threadId, 'stopped', id))
+}
+
+/**
+ * The reports a Codex `wait` call carries: each finished agent's last
+ * message, from its `agentsStates` entry. Empty for any other input.
+ */
+export function codexWaitReports(rawInput: unknown): string[] {
+  const input = record(rawInput)
+  if (!input || !isCodexCollaboration(input)) return []
+  return Object.values(record(input.agentsStates) ?? {}).flatMap((agent) => {
+    const message = str(record(agent)?.message)
+    return message ? [message] : []
+  })
+}
+
+/**
+ * The child session a `subagent_spawned` announces, if this is one, and the
+ * Agent call it runs under when the adapter names it (our Claude adapter patch
+ * adds `_meta.claudeCode.toolUseId`; the load replay's announcements do not).
+ */
+export function spawnedSubagent(notification: SessionNotification): { sessionId: string; name?: string; task?: string; toolUseId?: string } | undefined {
   const update = updateOf(notification)
   if (update.sessionUpdate !== 'subagent_spawned') return undefined
   const sessionId = str(update.subagentSessionId)
   if (!sessionId) return undefined
-  return { sessionId, name: str(update.name), task: str(update.task) }
+  const toolUseId = str(claudeMeta(update)?.toolUseId)
+  return { sessionId, name: str(update.name), task: str(update.task), ...(toolUseId ? { toolUseId } : {}) }
+}
+
+/** What `subagent_spawned` said about a child session, and the session it arrived on. */
+export interface SpawnedSubagent {
+  name?: string
+  task?: string
+  /** The Agent call the child runs under, when the announcement named it. */
+  toolUseId?: string
+  /** The session that announced it: the root's for a direct child, its spawner's for a nested one. */
+  spawnedOn: string
 }
 
 /**
@@ -400,9 +489,11 @@ export interface SessionActivity {
    */
   observe(notification: SessionNotification): void
   /** What `subagent_spawned` said about a child session. */
-  subagent(childSessionId: string): { name?: string; task?: string } | undefined
+  subagent(childSessionId: string): SpawnedSubagent | undefined
   /** What {@link SubagentFrames} knows about this session's Agent calls, across its turns. */
   readonly agentCalls: AgentCallMemory
+  /** End every Codex subagent still running as `stopped` ({@link stopCodexSubagents}); Codex sessions only. */
+  stopCodexSubagents(): void
   /**
    * Drop the aliases, every child's, ended or not: the only place a route is
    * dropped. The hub items stay; they end on their own messages or with the process.
@@ -490,7 +581,7 @@ export function createSessionActivityRegistry(reporter?: SessionActivityReporter
     const { sessions, children } = tables(connection)
     const state = createAcpActivityState()
     const seen = new WeakSet<SessionNotification>()
-    const spawned = new Map<string, { name?: string; task?: string }>()
+    const spawned = new Map<string, SpawnedSubagent>()
     const unalias = new Map<string, () => void>()
     const agentCalls = createAgentCallMemory()
     let closed = false
@@ -498,6 +589,16 @@ export function createSessionActivityRegistry(reporter?: SessionActivityReporter
       unalias.get(childId)?.()
       unalias.delete(childId)
       if (children.get(childId) === entry) children.delete(childId)
+    }
+    const report = (changes: SessionActivityChange[]): void => {
+      if (!reporter) return
+      for (const change of changes) {
+        try {
+          reporter.report(entry.scope.chatId, entry.scope.agentId, change)
+        } catch (err) {
+          logger.warn('the activity reporter failed', { sessionId, error: String(err) })
+        }
+      }
     }
     const entry: Entry = {
       scope,
@@ -512,7 +613,12 @@ export function createSessionActivityRegistry(reporter?: SessionActivityReporter
           seen.add(notification)
           const child = spawnedSubagent(notification)
           if (child && child.sessionId !== sessionId) {
-            spawned.set(child.sessionId, { name: child.name, task: child.task })
+            spawned.set(child.sessionId, {
+              name: child.name,
+              task: child.task,
+              ...(child.toolUseId ? { toolUseId: child.toolUseId } : {}),
+              spawnedOn: notification.sessionId
+            })
             if (!unalias.has(child.sessionId)) {
               children.set(child.sessionId, entry)
               try {
@@ -529,17 +635,13 @@ export function createSessionActivityRegistry(reporter?: SessionActivityReporter
             logger.warn('an activity update could not be read', { sessionId, error: String(err) })
             return
           }
-          if (!reporter) return
-          for (const change of changes) {
-            try {
-              reporter.report(entry.scope.chatId, entry.scope.agentId, change)
-            } catch (err) {
-              logger.warn('the activity reporter failed', { sessionId, error: String(err) })
-            }
-          }
+          report(changes)
         },
         subagent: (childSessionId) => spawned.get(childSessionId),
         agentCalls,
+        stopCodexSubagents: () => {
+          if (!closed) report(stopCodexSubagents(state, sessionId))
+        },
         close: () => {
           if (closed) return
           closed = true
@@ -590,6 +692,8 @@ export function createSessionActivityRegistry(reporter?: SessionActivityReporter
 /* ---------------------------------------------------- the Agent tool call */
 
 const SUBAGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
+/** How many spawners up a synthesized start walks; a guard against a cycle in what the wire said. */
+const MAX_SUBAGENT_DEPTH = 32
 
 function claudeMeta(update: Record<string, unknown>): Record<string, unknown> | undefined {
   return record(record(update._meta)?.claudeCode)
@@ -620,9 +724,20 @@ function claudeMeta(update: Record<string, unknown>): Record<string, unknown> | 
  *   own failed update once a child exists, and the hook never runs for a
  *   failed tool, so this is the only end such a call gets;
  * - a subagent that ends before any Agent call was linked to it (its first
- *   request failed, so it sent nothing) gets a start and that end under
- *   `subagent:<child session id>`. Not for `completed`: a synchronous
- *   subagent's hook update follows its end and names the real call.
+ *   request failed, so it sent nothing) gets a start and that end under the
+ *   call its announcement named, else under `subagent:<child session id>`.
+ *   Not for `completed`: a synchronous subagent's hook update follows its end
+ *   and names the real call;
+ * - a subagent that ends any way but `completed` closes the tool calls it
+ *   left open (`failed`, with the same line): the engine sends them nothing
+ *   more, and a call still running inside a cancelled subagent would have no
+ *   outcome;
+ * - when the announcement named the child's Agent call (our Claude adapter
+ *   patch), a synthesized start carries `parentToolUseId` = the Agent call its
+ *   spawner runs under, so a nested subagent's lane sits inside its spawner's;
+ *   a spawner whose own call nothing has started yet (it sends no frame before
+ *   it spawns) is started first. Without that field every level stays at the
+ *   root, as before.
  *
  * A call the agent did announce is passed through untouched. One per turn:
  * the stream it feeds is. Which Agent calls exist, and which child runs
@@ -634,6 +749,8 @@ export class SubagentFrames {
   private readonly announced = new Set<string>()
   private readonly synthesized = new Set<string>()
   private readonly open = new Set<string>()
+  /** Agent call → the tool calls under it (not Agent calls) still open. */
+  private readonly openTools = new Map<string, Set<string>>()
   /** For frames no session feed claims. */
   private readonly unowned = createAgentCallMemory()
 
@@ -671,15 +788,17 @@ export class SubagentFrames {
       const ending = subagentEnding(wire)
       const call = memory.callOfChild.get(child)
       if (call) {
+        if (ending.status === 'failed') out.push(...this.closeTools(notification, call, ending.note))
         if (this.open.has(call)) out.push(this.end(notification, call, ending.status, undefined, ending.note))
       } else if (ending.status === 'failed') {
         const activity = this.activityOf(notification.sessionId)
         const info = activity?.subagent(child)
         if (activity && info) {
-          const placeholder = `subagent:${child}`
+          const placeholder = info.toolUseId ?? `subagent:${child}`
           memory.callOfChild.set(child, placeholder)
           if (!this.isAnnounced(placeholder, memory)) {
-            out.push(this.start(notification, placeholder, info))
+            const spawner = this.spawnerCall(activity, child, { ...notification, sessionId: activity.sessionId }, out)
+            out.push(this.start(notification, placeholder, info, spawner))
             out.push(this.end(notification, placeholder, ending.status, undefined, ending.note))
           }
         }
@@ -694,7 +813,9 @@ export class SubagentFrames {
       const info = activity && activity.sessionId !== notification.sessionId ? activity.subagent(notification.sessionId) : undefined
       if (activity && info) {
         activity.agentCalls.callOfChild.set(notification.sessionId, parentCall)
-        out.push(this.start({ ...notification, sessionId: activity.sessionId }, parentCall, info))
+        const from = { ...notification, sessionId: activity.sessionId }
+        const spawner = this.spawnerCall(activity, notification.sessionId, from, out)
+        out.push(this.start(from, parentCall, info, spawner))
       }
     }
 
@@ -711,7 +832,16 @@ export class SubagentFrames {
           task: str(response?.prompt)
         }
         if (child) memory.callOfChild.set(child, toolCallId)
-        out.push(this.start(notification, toolCallId, info))
+        const activity = child ? this.activityOf(notification.sessionId) : undefined
+        const spawner = activity && child ? this.spawnerCall(activity, child, { ...notification, sessionId: activity.sessionId }, out) : undefined
+        out.push(this.start(notification, toolCallId, info, spawner))
+      }
+      // A subagent's own tool call, closed for it if the subagent stops first.
+      const lane = str(meta?.parentToolUseId)
+      if (kind === 'tool_call' && !isSubagentTool && lane && update.status !== 'completed' && update.status !== 'failed') {
+        const tools = this.openTools.get(lane) ?? new Set<string>()
+        tools.add(toolCallId)
+        this.openTools.set(lane, tools)
       }
       out.push(notification)
       if (kind === 'tool_call_update' && isSubagentTool && this.synthesized.has(toolCallId)) {
@@ -723,7 +853,10 @@ export class SubagentFrames {
           }
         }
       }
-      if (update.status === 'completed' || update.status === 'failed') this.open.delete(toolCallId)
+      if (update.status === 'completed' || update.status === 'failed') {
+        this.open.delete(toolCallId)
+        for (const tools of this.openTools.values()) tools.delete(toolCallId)
+      }
       return out
     }
 
@@ -731,7 +864,47 @@ export class SubagentFrames {
     return out
   }
 
-  private start(from: SessionNotification, toolCallId: string, info: { name?: string; task?: string }): SessionNotification {
+  /**
+   * The Agent call `child`'s spawner runs under, for its start's
+   * `parentToolUseId`; the spawner's own start is pushed onto `out` first
+   * when nothing has started that call yet (and so on up). Undefined for a
+   * direct child of the root, or when the announcement named no call.
+   */
+  private spawnerCall(activity: SessionActivity, child: string, from: SessionNotification, out: SessionNotification[], depth = 0): string | undefined {
+    const info = activity.subagent(child)
+    if (!info?.toolUseId || info.spawnedOn === activity.sessionId || depth > MAX_SUBAGENT_DEPTH) return undefined
+    const spawner = info.spawnedOn
+    const spawnerInfo = activity.subagent(spawner)
+    const memory = activity.agentCalls
+    const call = memory.callOfChild.get(spawner) ?? spawnerInfo?.toolUseId
+    if (!call) return undefined
+    if (!this.isAnnounced(call, memory)) {
+      if (!spawnerInfo) return undefined
+      memory.callOfChild.set(spawner, call)
+      const parent = this.spawnerCall(activity, spawner, from, out, depth + 1)
+      out.push(this.start(from, call, spawnerInfo, parent))
+    }
+    return call
+  }
+
+  /** `failed` with `note` for each tool call still open under the Agent call. */
+  private closeTools(from: SessionNotification, call: string, note: string | undefined): SessionNotification[] {
+    const tools = this.openTools.get(call)
+    if (!tools) return []
+    this.openTools.delete(call)
+    const sessionId = this.activityOf(from.sessionId)?.sessionId ?? from.sessionId
+    return [...tools].map((toolCallId) => ({
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId,
+        status: 'failed',
+        ...(note ? { content: [{ type: 'content', content: { type: 'text', text: note } }] } : {})
+      }
+    }) as SessionNotification)
+  }
+
+  private start(from: SessionNotification, toolCallId: string, info: { name?: string; task?: string }, parentToolUseId?: string): SessionNotification {
     this.announced.add(toolCallId)
     this.memory(from.sessionId).announced.add(toolCallId)
     this.synthesized.add(toolCallId)
@@ -749,7 +922,7 @@ export class SubagentFrames {
         status: 'pending',
         rawInput,
         content: info.task ? [{ type: 'content', content: { type: 'text', text: info.task } }] : [],
-        _meta: { claudeCode: { toolName: 'Agent' } }
+        _meta: { claudeCode: { toolName: 'Agent', ...(parentToolUseId ? { parentToolUseId } : {}) } }
       }
     } as SessionNotification
   }

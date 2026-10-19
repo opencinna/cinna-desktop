@@ -22,6 +22,18 @@ function sessionIdOf(params: unknown): string | undefined {
   return typeof id === 'string' ? id : undefined
 }
 
+/**
+ * The session an extension notification belongs to: its `sessionId`, else the
+ * `rootSessionId` an extension that speaks for a child session names (OpenCode's
+ * `opencode/session/child_update`: the child's traffic is its root's turn).
+ */
+function extSessionIdOf(params: unknown): string | undefined {
+  const own = sessionIdOf(params)
+  if (own !== undefined || typeof params !== 'object' || params === null) return own
+  const root = (params as { rootSessionId?: unknown }).rootSessionId
+  return typeof root === 'string' ? root : undefined
+}
+
 function paramsRecord(params: unknown): Record<string, unknown> {
   return typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {}
 }
@@ -321,7 +333,7 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
       // `$/cancel_request` is the JSON-RPC layer's own. Everything else is an
       // extension, and the ones that name a session belong to that turn.
       if (method.startsWith('$/')) return false
-      const sessionId = sessionIdOf(params)
+      const sessionId = extSessionIdOf(params)
       if (!sessionId) {
         // `_auth/status_update` is the one we know arrives this way — twice per
         // start, before `session/new` has even answered

@@ -7,6 +7,7 @@ import {
   ANTIGRAVITY_BUILTIN_TOOLS,
   ANTIGRAVITY_FILTER_TOOLS,
   ANTIGRAVITY_ISOLATED_DISABLED_TOOLS,
+  ANTIGRAVITY_NATIVE_DISABLED_TOOLS,
   ANTIGRAVITY_LOGIN_UNCHECKED,
   ANTIGRAVITY_LOGOUT_REFUSED,
   ANTIGRAVITY_NOT_LOGGED_IN,
@@ -97,8 +98,12 @@ describe('Antigravity launcher plan', () => {
     if (isRefusal(mac)) throw new Error(mac.error)
     expect(mac.spec).toMatchObject({ command: '/runtimes/antigravity-1.3.0/agy_acp_server.par', args: [], cwd: folder })
     expect(mac.spec.env.GEMINI_HOME).toBeUndefined()
-    // No `_meta`: a native folder keeps every built-in its user has.
-    expect(mac.session).toEqual({ mcpServers: [] })
+    // A native folder keeps every built-in its user has but the subagent
+    // family, whose work Cinna cannot show. Mutation: drop the native filter
+    // and the model is offered `invoke_subagent` again; name `schedule` too
+    // and the user's own scheduler goes with it.
+    expect(mac.session).toEqual({ mcpServers: [], meta: { agy: { disabledTools: ['start_subagent'] } } })
+    expect(ANTIGRAVITY_NATIVE_DISABLED_TOOLS.every((name) => ANTIGRAVITY_FILTER_TOOLS.includes(name))).toBe(true)
     expect(mac.init.clientCapabilities).toEqual({})
     const linux = await createAntigravityLauncher(deps({ platform: 'linux' })).plan(contexts(folder).native)
     if (isRefusal(linux)) throw new Error(linux.error)

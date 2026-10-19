@@ -1,0 +1,505 @@
+{
+  "recording": "subagent_e2e/opencode-B3cu.ndjson",
+  "note": "OpenCode 2.0.27 with child-session updates, gpt-5.6-luna. Background: the root's subagent call (background true) completes at once with rawOutput.metadata.status running; orch then spawns a background worker (sleep 5) and ends; the prompt answers end_turn while both run, and their statuses (orch completed, then worker completed) arrive after it, from promptReturnedAtIndex on. Turn 1 only; thought chunks, usage and command updates dropped; session ids renamed, paths scrubbed.",
+  "notifications": [],
+  "frames": [
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_NhUoDo6qk1riPMRp8FTOYj6N",
+        "name": "subagent",
+        "title": "subagent",
+        "kind": "think",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_NhUoDo6qk1riPMRp8FTOYj6N",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Early mode probe",
+          "prompt": "MODE=EARLY",
+          "background": true
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_NhUoDo6qk1riPMRp8FTOYj6N",
+        "status": "in_progress",
+        "kind": "think",
+        "title": "subagent",
+        "locations": [],
+        "rawInput": {
+          "agent": "orch",
+          "description": "Early mode probe",
+          "prompt": "MODE=EARLY",
+          "background": true
+        }
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_NhUoDo6qk1riPMRp8FTOYj6N",
+        "status": "completed",
+        "locations": [],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "The subagent is working in the background (sessionID: ses_orch). You will be notified automatically when it finishes.\nDO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.\nWork on non-overlapping tasks, or briefly tell the user what you launched and end your response."
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "sessionID": "ses_orch",
+            "status": "running",
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "sessionId": "ses_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_154324964001w7lL0Qj431ttZl",
+        "content": {
+          "type": "text",
+          "text": "launched."
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_orch:call_6hXKFErwNeD6GUVc2bCM4MgO",
+          "name": "subagent",
+          "title": "Early mode probe: subagent",
+          "kind": "think",
+          "status": "pending",
+          "locations": [],
+          "rawInput": {},
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Early mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_6hXKFErwNeD6GUVc2bCM4MgO",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Early mode probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "Launch worker",
+            "prompt": "SLEEP=5",
+            "background": true
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Early mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "status",
+        "status": "created"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_6hXKFErwNeD6GUVc2bCM4MgO",
+          "status": "in_progress",
+          "kind": "think",
+          "title": "Early mode probe: subagent",
+          "locations": [],
+          "rawInput": {
+            "agent": "worker",
+            "description": "Launch worker",
+            "prompt": "SLEEP=5",
+            "background": true
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Early mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_orch:call_6hXKFErwNeD6GUVc2bCM4MgO",
+          "status": "completed",
+          "locations": [],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "The subagent is working in the background (sessionID: ses_worker). You will be notified automatically when it finishes.\nDO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.\nWork on non-overlapping tasks, or briefly tell the user what you launched and end your response."
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "sessionID": "ses_worker",
+              "status": "running",
+              "truncated": false
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Early mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "status",
+        "status": "running"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_15432507a001acJX0X1EzqjTUv",
+          "content": {
+            "type": "text",
+            "text": "INTERIM: worker launched"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_orch",
+              "parentID": "ses_root",
+              "depth": 1,
+              "title": "Early mode probe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_orch",
+        "parentSessionId": "ses_root",
+        "depth": 1,
+        "title": "Early mode probe",
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "ses_worker:call_zO601HJH7A6WPcr8iZqDXvfB",
+          "name": "shell",
+          "title": "Launch worker: shell",
+          "kind": "execute",
+          "status": "pending",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "Launch worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_zO601HJH7A6WPcr8iZqDXvfB",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "Launch worker: python3 -c 'import time; time.sleep(5)'",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "python3 -c 'import time; time.sleep(5)'",
+            "timeout": 10000,
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "Launch worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_zO601HJH7A6WPcr8iZqDXvfB",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "Launch worker: python3 -c 'import time; time.sleep(5)'",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "rawInput": {
+            "command": "python3 -c 'import time; time.sleep(5)'",
+            "timeout": 10000,
+            "cwd": "/tmp/agent"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "Launch worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "ses_worker:call_zO601HJH7A6WPcr8iZqDXvfB",
+          "status": "completed",
+          "locations": [
+            {
+              "path": "/tmp/agent"
+            }
+          ],
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "(no output)"
+              }
+            }
+          ],
+          "rawOutput": {
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "Launch worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "update",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_154326dea001YmD5tTcxcgZRR6",
+          "content": {
+            "type": "text",
+            "text": "WORKER DONE"
+          },
+          "_meta": {
+            "opencode/child-session": {
+              "id": "ses_worker",
+              "parentID": "ses_orch",
+              "depth": 2,
+              "title": "Launch worker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "opencode/session/child_update",
+      "params": {
+        "rootSessionId": "ses_root",
+        "childSessionId": "ses_worker",
+        "parentSessionId": "ses_orch",
+        "depth": 2,
+        "title": "Launch worker",
+        "type": "status",
+        "status": "completed"
+      }
+    }
+  ],
+  "promptReturnedAtIndex": 7
+}

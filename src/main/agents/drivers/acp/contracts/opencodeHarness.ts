@@ -262,6 +262,8 @@ export interface AcpConnection {
   notify(method: string, params: Json): void
   /** Every `session/update` notification, in arrival order. */
   updates: Json[]
+  /** Every other notification (extensions such as `opencode/session/child_update`), in arrival order. */
+  notifications: AcpMessage[]
   /** Every request the agent made of the client (permission, elicitation…), in order. */
   clientRequests: AcpMessage[]
   stderr(): string
@@ -295,6 +297,7 @@ export function spawnAcp(input: {
   child.stdin.on('error', () => undefined)
   const pending = new Map<number, { resolve(message: AcpMessage): void; timer: NodeJS.Timeout }>()
   const updates: Json[] = []
+  const notifications: AcpMessage[] = []
   const clientRequests: AcpMessage[] = []
   child.stderr.on('data', (data) => { stderr = (stderr + String(data)).slice(-8000) })
   const lines = createInterface({ input: child.stdout })
@@ -307,7 +310,9 @@ export function spawnAcp(input: {
       if (entry) { clearTimeout(entry.timer); pending.delete(Number(message.id)); entry.resolve(message) }
     } else if (message.method === 'session/update') {
       updates.push((message.params?.update ?? {}) as Json)
-    } else if (message.id !== undefined) {
+    } else if (message.id === undefined) {
+      if (message.method !== undefined) notifications.push(message)
+    } else {
       clientRequests.push(message)
       const result = input.answer?.(message)
       write(result === undefined
@@ -317,7 +322,7 @@ export function spawnAcp(input: {
   })
   return {
     pid: child.pid ?? -1,
-    updates, clientRequests,
+    updates, notifications, clientRequests,
     stderr: () => stderr,
     exited: () => exited,
     kill: (signal) => { try { child.kill(signal) } catch { /* gone */ } },

@@ -1,0 +1,94 @@
+{
+  "recording": "subagent_e2e/claude-C-cancel.ndjson",
+  "note": "Claude CLI 2.1.296, adapter 0.89.1. Two levels, then Stop: the root spawns orch, orch spawns long worker, whose Bash (a 60 s sleep) is still pending when session/cancel arrives; both subagents end cancelled and the Bash gets no update. The prompt answers cancelled. orch never sends a frame. Distilled to session/update; usage, command and config updates dropped. Each subagent_spawned carries _meta.claudeCode.toolUseId as the patched adapter sends it (recorded before that patch; the calls are the ones the load replay names). Turn 1 of the recording.",
+  "notifications": [
+    {
+      "sessionId": "ce3a02d5-debd-4ffd-ab5d-c7de271a07f2",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a096a53fb0a91689a",
+        "name": "C orch",
+        "task": "MODE=LONG",
+        "prompt": "MODE=LONG",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_017K6xg8qG5Fi111RFGXamJc"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "a096a53fb0a91689a",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "ae855176abe72afb2",
+        "name": "long worker",
+        "task": "LONG=60",
+        "prompt": "LONG=60",
+        "capabilities": {},
+        "_meta": {
+          "claudeCode": {
+            "toolUseId": "toolu_01KPmNohM64K8BfdH5oxoyKg"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ae855176abe72afb2",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01KPmNohM64K8BfdH5oxoyKg"
+          }
+        },
+        "toolCallId": "toolu_018Jys3WZYn7RwsVEB5fJ17p",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "python3 -c 'import time; time.sleep(60)'",
+          "description": "Sleep 60 seconds",
+          "timeout": 120000
+        },
+        "status": "pending",
+        "title": "python3 -c 'import time; time.sleep(60)'",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Sleep 60 seconds"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "a096a53fb0a91689a",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "ae855176abe72afb2",
+        "state": "cancelled"
+      }
+    },
+    {
+      "sessionId": "ce3a02d5-debd-4ffd-ab5d-c7de271a07f2",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a096a53fb0a91689a",
+        "state": "cancelled"
+      }
+    },
+    {
+      "sessionId": "ce3a02d5-debd-4ffd-ab5d-c7de271a07f2",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Protocol probe Agent call",
+        "updatedAt": "2026-10-19T12:35:49.094Z"
+      }
+    }
+  ],
+  "promptReturnedAtIndex": 5
+}

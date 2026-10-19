@@ -139,7 +139,35 @@ const resumeFinish = `${resumeFinishAnchor}        // Cinna Desktop (scripts/pat
             return;
 `
 
+// `dist/native-subagents.js`: `subagent_spawned` names the child's session but
+// not the Agent call it runs under, and a nested child's spawner (itself a
+// subagent) often sends no frame before it spawns — so the client cannot tell
+// which Agent call a grandchild's lane belongs under, and every level lands at
+// the transcript root. The announcement carries the call in
+// `_meta.claudeCode.toolUseId` (for a resumed generation, the first Agent call,
+// which its frames name). The load replay announces its children elsewhere and
+// is not changed. Watched live on CLI 2.1.296 with adapter 0.89.1.
+const spawnCallAnchor = `                ...promptField(child.prompt),
+                capabilities: {},
+            },
+`
+const spawnCall = `                ...promptField(child.prompt),
+                capabilities: {},
+                // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): the Agent call this child runs under.
+                ...(child.parentToolUseId ? { _meta: { claudeCode: { toolUseId: child.parentToolUseId } } } : {}),
+            },
+`
+
 const digest = (content) => createHash('sha256').update(content).digest('hex')
+
+/**
+ * Undoes edits (anchor → replacement) when each replacement occurs exactly
+ * once, or answers null.
+ */
+const undo = (edits) => (content) => {
+  if (edits.some(([, replacement]) => content.split(replacement).length !== 2)) return null
+  return edits.reduceRight((text, [anchor, replacement]) => text.replace(replacement, () => anchor), content)
+}
 
 /** The patched files: where each is, its reviewed digests, and its edits (anchor → replacement). */
 const FILES = [
@@ -152,10 +180,16 @@ const FILES = [
   },
   {
     file: 'dist/native-subagents.js',
-    label: 'resumed subagent routing',
+    label: 'subagent routing',
     originalSha256: policy.subagentsOriginalSha256,
     patchedSha256: policy.subagentsPatchedSha256,
-    edits: [[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish]]
+    edits: [[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish], [spawnCallAnchor, spawnCall]],
+    // Earlier reviewed patches of this file, by the digest of the file they produced, each with the exact reversal
+    // of its edits. A checkout carrying one is restored to the original (verified by digest) and patched again.
+    earlierPatches: {
+      // The resume routing, before `subagent_spawned` named the Agent call.
+      ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4: undo([[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish]])
+    }
   }
 ]
 
@@ -181,8 +215,16 @@ function patchClaudeAgentAcp(root) {
   const writes = []
   for (const target of FILES) {
     const path = join(directory, target.file)
-    const content = readFileSync(path, 'utf8')
+    let content = readFileSync(path, 'utf8')
     if (digest(content) === target.patchedSha256) continue
+    const unpatch = target.earlierPatches?.[digest(content)]
+    if (unpatch) {
+      const restored = unpatch(content)
+      if (restored === null || digest(restored) !== target.originalSha256) {
+        throw new Error(`Claude ACP earlier patch (${target.file}) could not be reversed to the reviewed pinned adapter; refusing to patch`)
+      }
+      content = restored
+    }
     if (digest(content) !== target.originalSha256) {
       throw new Error(`Claude ACP source (${target.file}) differs from the reviewed pinned adapter; refusing to patch`)
     }
@@ -202,5 +244,5 @@ function patchClaudeAgentAcp(root) {
 }
 
 module.exports = { patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD: METHOD, contextUsageHandlerSource: handler, contextUsageRouteAnchor: routeAnchor, contextUsageRoute: route,
-  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish }
+  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish, spawnCallAnchor, spawnCall }
 if (require.main === module) patchClaudeAgentAcp(resolve(__dirname, '..'))

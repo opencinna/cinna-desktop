@@ -102,11 +102,12 @@ import {
   TOOL_STREAM_METADATA_KEY,
   type PartLike
 } from '../../streamPartsAccumulator'
-import type { AcpLauncherId, AcpStreamUpdate, AcpTelemetryFrame } from './types'
+import { CINNA_FRAME_META, type AcpLauncherId, type AcpStreamUpdate, type AcpTelemetryFrame } from './types'
 import { readSdkMessage, SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 import { BARE_MCP_TITLE, codeModeCinnaTools, isCodeModeCall, mcpCallOf } from './conductorToolPolicy'
 import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS } from './antigravityLauncher'
+import { codexWaitReports } from './acpActivity'
 
 /** What Antigravity says on an approved ask whose work ran under another id (or was cancelled). */
 export const ANTIGRAVITY_UNEXECUTED = 'Tool call was approved but never executed.'
@@ -784,7 +785,7 @@ export class AcpMessageStream {
     // `toolSummary` (contract `antigravity.mcp.result-not-delivered`), which
     // is not what the tool returned. Such a call completes with no output.
     if (status === 'completed' && this.isAntigravityMcpCall(toolCallId)) return false
-    const given = toolOutputText(update.content) || toolOutputText(update.rawOutput)
+    const given = toolOutputText(update.content) || toolOutputText(update.rawOutput) || this.codexWaitOutput(update, toolCallId)
     const text = given ? capToolResult(given) : streamedCommandText(streamed, update)
     if (!text) return false
 
@@ -804,6 +805,18 @@ export class AcpMessageStream {
     if ((state.parts[idx].text ?? '').length >= text.length) return false
     state.parts[idx] = { ...state.parts[idx], text }
     return true
+  }
+
+  /**
+   * A Codex `wait` call's output: the reports of the agents it waited on.
+   * codex-acp sends no `content` or `rawOutput` for a collaboration call; a
+   * finished agent's last message is only in `rawInput.agentsStates[id].message`
+   * (recorded, CLI 0.162.1 / codex-acp 2.2.2). Not for `sendInput` or
+   * `resumeAgent`, whose states repeat the previous run's message.
+   */
+  private codexWaitOutput(update: Record<string, unknown>, toolCallId: string): string {
+    if (this.launcher !== 'codex' || this.toolNames.get(toolCallId) !== 'wait') return ''
+    return codexWaitReports(update.rawInput).join('\n\n')
   }
 
   /**
@@ -949,7 +962,8 @@ export class AcpMessageStream {
 
 /** The Agent call a child-session frame runs under, when it is one. */
 function laneOf(update: Record<string, unknown>): string | undefined {
-  return str(record(record(update._meta)?.claudeCode)?.parentToolUseId)
+  const meta = record(update._meta)
+  return str(record(meta?.claudeCode)?.parentToolUseId) ?? str(record(meta?.[CINNA_FRAME_META])?.parentToolCallId)
 }
 
 /** The rest of `name` after `prefix`, or null. */

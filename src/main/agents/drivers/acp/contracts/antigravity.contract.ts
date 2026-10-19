@@ -212,16 +212,16 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   /* -------------------------------------------------- restricted chat policy */
   {
     id: 'antigravity.policy.builtin-tools', area: 'restricted chat policy', surface: 'provider request', name: 'functionDeclarations',
-    expectation: 'With no filter and no MCP server, the functions declared to the model are exactly `ANTIGRAVITY_BUILTIN_TOOLS`.',
+    expectation: 'With no filter and no MCP server (a session opened with no `_meta`), the functions declared to the model are exactly `ANTIGRAVITY_BUILTIN_TOOLS`.',
     owners: [`${LAUNCHER}#ANTIGRAVITY_BUILTIN_TOOLS`],
     feature: 'A built-in a later server adds is invisible to the list the policy and the docs are written from.',
     flow: NO_FLOW
   },
   {
     id: 'antigravity.policy.filter-names', area: 'restricted chat policy', surface: '_meta key', name: '_meta.agy.disabledTools',
-    expectation: 'The filter names are the server’s `BuiltinTools` values (`ANTIGRAVITY_FILTER_TOOLS`), not the declared function names: `start_subagent` removes `define_subagent`, `invoke_subagent`, `manage_subagents` and `send_message`; `create_file` + `edit_file` remove `write_to_file` and `replace_file_content`; a declared name such as `send_message` is rejected (logged) and removes nothing; all of `ANTIGRAVITY_FILTER_TOOLS` together leave no built-in declared. The launcher’s sealed-folder denylist (`schedule`, `start_subagent`) removes exactly `schedule` and the subagent and messaging functions.',
-    owners: [`${LAUNCHER}#ANTIGRAVITY_FILTER_TOOLS`, `${LAUNCHER}#ANTIGRAVITY_ISOLATED_DISABLED_TOOLS`, `${POLICY}#applyConductorToolPolicy`],
-    feature: 'A sealed folder keeps the engine’s own scheduler, subagents and messaging beside Cinna’s, or a plain chat’s denylist names tools the server ignores.',
+    expectation: 'The filter names are the server’s `BuiltinTools` values (`ANTIGRAVITY_FILTER_TOOLS`), not the declared function names: `start_subagent` removes `define_subagent`, `invoke_subagent`, `manage_subagents` and `send_message`; `create_file` + `edit_file` remove `write_to_file` and `replace_file_content`; a declared name such as `send_message` is rejected (logged) and removes nothing; all of `ANTIGRAVITY_FILTER_TOOLS` together leave no built-in declared. The launcher’s sealed-folder denylist (`schedule`, `start_subagent`) removes exactly `schedule` and the subagent and messaging functions; its native-folder denylist (`start_subagent`) removes exactly the subagent and messaging functions and keeps `schedule`.',
+    owners: [`${LAUNCHER}#ANTIGRAVITY_FILTER_TOOLS`, `${LAUNCHER}#ANTIGRAVITY_ISOLATED_DISABLED_TOOLS`, `${LAUNCHER}#ANTIGRAVITY_NATIVE_DISABLED_TOOLS`, `${POLICY}#applyConductorToolPolicy`],
+    feature: 'A sealed folder keeps the engine’s own scheduler, subagents and messaging beside Cinna’s, a native folder runs subagents whose work never reaches the chat, or a plain chat’s denylist names tools the server ignores.',
     flow: NO_FLOW
   },
   {

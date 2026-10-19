@@ -129,6 +129,8 @@ const seen = {
    * the first request offered, and the provider's outputs for the parent.
    */
   subagent: { updates: [] as Json[], offered: [] as string[], spawnOutputs: [] as string[] },
+  /** The same with the model on the V1 collaboration tools (`multi_agent_version: "v1"`, as `gpt-5.6-luna`). */
+  subagentV1: { updates: [] as Json[], offered: [] as string[], spawnOutputs: [] as string[] },
   /** Every update of the prompt after the model change, which compacts. */
   modelChangeUpdates: [] as Json[],
   /**
@@ -437,36 +439,65 @@ async function policyScenario(binary: string, versionOutput: string): Promise<vo
 /** The subagent the fake model spawns, and the root path the CLI gives it. */
 const SUBAGENT_NAME = 'helper'
 
+/** What the V1 subagent answers, which only its `wait` carries to the client. */
+const SUBAGENT_REPORT = 'HELPER REPORT'
+
 /**
  * A folder session whose model spawns a subagent, waits for it, and answers.
  * The fake model's catalog entry names no `multi_agent_version`, so the CLI
- * would offer it no agent tool; it is given `v2`, which every bundled real
- * model carries. The child's own request is answered with text at once.
+ * would offer it no agent tool; it is given `v2`, which most bundled real
+ * models carry, or `v1`, which `gpt-5.6-luna` carries. The child's own
+ * request is answered with text at once (V1: with {@link SUBAGENT_REPORT}).
+ * V1's agent tools are deferred behind `tool_search`, as the real model found
+ * them (by searching its code-mode `ALL_TOOLS`).
  */
-async function subagentScenario(binary: string): Promise<void> {
+async function subagentScenario(binary: string, version: 'v1' | 'v2' = 'v2'): Promise<void> {
+  const into = version === 'v1' ? seen.subagentV1 : seen.subagent
   const scratch = makeScratch('cinna-contract-subagent-')
   let provider: FakeProvider | undefined
   let connection: AdapterConnection | undefined
   try {
     let spawned = false
     let waited = false
+    let searched = false
     provider = await startFakeProvider((turn): ProviderReply => {
       if (turn.kind !== 'conversation') return ownRequestReply(turn)
+      if (version === 'v1') {
+        // V1's agent tools are deferred: the parent finds them with tool_search,
+        // then spawns and waits on the id; the child, which has no spawn tool, answers.
+        if (!searched) {
+          searched = true
+          return { kind: 'tool-search', args: { query: 'spawn agent', limit: 5 } }
+        }
+        if (!turn.tools.some((name) => name.endsWith('spawn_agent'))) return { kind: 'text', text: SUBAGENT_REPORT }
+        if (!spawned) {
+          spawned = true
+          into.offered = turn.tools
+          return { kind: 'tool', name: 'spawn_agent', args: JSON.stringify({ message: 'Answer done.' }) }
+        }
+        if (!waited) {
+          waited = true
+          into.spawnOutputs = turn.outputs
+          const spawn = JSON.parse(turn.outputs.at(-1) ?? '{}') as Json
+          return { kind: 'tool', name: 'wait_agent', args: JSON.stringify({ targets: [spawn.agent_id], timeout_ms: 15_000 }) }
+        }
+        return { kind: 'text', text: 'OK' }
+      }
       // The parent's first request spawns; the child's (no output yet, after the spawn) answers.
       if (!spawned) {
         spawned = true
-        seen.subagent.offered = turn.tools
+        into.offered = turn.tools
         return { kind: 'tool', name: 'spawn_agent', args: JSON.stringify({ task_name: SUBAGENT_NAME, message: 'Answer done.' }) }
       }
       if (turn.pendingOutputs === 1 && !waited) {
         waited = true
-        seen.subagent.spawnOutputs = turn.outputs
+        into.spawnOutputs = turn.outputs
         return { kind: 'tool', name: 'wait_agent', args: JSON.stringify({ timeout_ms: 15_000 }) }
       }
       return { kind: 'text', text: turn.pendingOutputs === 0 ? 'done' : 'OK' }
     })
     const catalog = JSON.parse(runCli(binary, ['debug', 'models', '--bundled'], scratch.env, scratch.cwd).stdout) as { models: Json[] }
-    for (const model of catalog.models) if (model.slug === MODEL) model.multi_agent_version = 'v2'
+    for (const model of catalog.models) if (model.slug === MODEL) model.multi_agent_version = version
     const catalogPath = join(scratch.home, 'catalog.json')
     writeFileSync(catalogPath, JSON.stringify(catalog))
     writeProviderConfig(scratch.codexHome, provider.port, MODEL, [`model_catalog_json = ${JSON.stringify(catalogPath)}`])
@@ -481,11 +512,13 @@ async function subagentScenario(binary: string): Promise<void> {
     const sessionId = String(created.result?.sessionId ?? '')
     if (!sessionId) return
     await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Spawn a helper, wait for it, then answer OK.' }] }, 45_000)
-    // The subagent's completion is its own item, and may follow the turn.
-    await until(() => connection!.updates.some((update) => update.sessionUpdate === 'tool_call'
-      && (update.rawInput as Json | undefined)?.activityKind === 'completed'), 15_000)
+    // The subagent's completion is its own item, and may follow the turn. V1 has no such item: its wait ends with the prompt.
+    if (version === 'v2') {
+      await until(() => connection!.updates.some((update) => update.sessionUpdate === 'tool_call'
+        && (update.rawInput as Json | undefined)?.activityKind === 'completed'), 15_000)
+    }
     await sleep(300)
-    seen.subagent.updates = [...connection.updates]
+    into.updates = [...connection.updates]
   } finally {
     await connection?.close()
     await provider?.close()
@@ -724,6 +757,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     await folderScenario(binary)
     await policyScenario(binary, seen.versionOutput)
     await subagentScenario(binary)
+    await subagentScenario(binary, 'v1')
     await denyScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 300_000)
@@ -845,6 +879,39 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
       { type: 'upsert', id: `root:${thread}`, kind: 'subagent', title: SUBAGENT_NAME },
       { type: 'end', id: `root:${thread}`, state: 'completed' }
     ])
+  })
+
+  it(entry('codex.activity.collab-v1-shape'), () => {
+    const updates = seen.subagentV1.updates
+    expect(seen.subagentV1.offered.some((name) => name.endsWith('spawn_agent')), JSON.stringify(seen.subagentV1.offered)).toBe(true)
+    const kinds = updates.map((update) => String(update.sessionUpdate))
+    expect(kinds).not.toContain('subagent_spawned')
+    expect(kinds).not.toContain('subagent_state_update')
+    const calls = toolCalls(updates)
+    expect(calls.filter((update) => String(update.title ?? '').startsWith('Start subagent')), JSON.stringify(calls)).toEqual([])
+    const opened = (title: string): Json | undefined => calls.find((update) => update.sessionUpdate === 'tool_call' && update.title === title)
+    const spawn = opened('spawnAgent')
+    expect(spawn, JSON.stringify(calls)).toMatchObject({ rawInput: { receiverThreadIds: [] } })
+    const spawnEnd = calls.find((update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === spawn?.toolCallId && update.status === 'completed')
+    expect(spawnEnd?.title).toBeUndefined()
+    const child = String(((spawnEnd?.rawInput as Json | undefined)?.receiverThreadIds as unknown[] | undefined)?.[0] ?? '')
+    expect(child).not.toBe('')
+    expect(spawnEnd).toMatchObject({ rawInput: { agentsStates: { [child]: { status: 'pendingInit' } } } })
+    const wait = opened('wait')
+    const waitEnd = calls.find((update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === wait?.toolCallId && update.status === 'completed')
+    expect(waitEnd?.title).toBeUndefined()
+    expect(waitEnd, JSON.stringify(calls)).toMatchObject({ rawInput: { agentsStates: { [child]: { status: 'completed', message: SUBAGENT_REPORT } } } })
+    expect(waitEnd?.content ?? []).toEqual([])
+    expect(waitEnd?.rawOutput).toBeUndefined()
+    expect(calls.filter((update) => update._meta !== undefined)).toEqual([])
+    // Read by the owners: one subagent, ended with its report, and the report as the wait call's output.
+    const state = createAcpActivityState()
+    const changes = updates.flatMap((update) => translateActivity({ sessionId: 'root', update } as unknown as SessionNotification, state, 'root'))
+    expect(changes).toEqual([
+      { type: 'upsert', id: `root:${child}`, kind: 'subagent', title: 'Answer done.', detail: null },
+      { type: 'end', id: `root:${child}`, state: 'completed', summary: SUBAGENT_REPORT }
+    ])
+    expect(foldParts(updates).filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result').map((part) => part.text)).toContain(SUBAGENT_REPORT)
   })
 
   it(entry('codex.session.silent-updates'), () => {

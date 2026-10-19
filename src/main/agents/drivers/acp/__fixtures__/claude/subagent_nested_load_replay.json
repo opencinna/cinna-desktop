@@ -1,0 +1,620 @@
+{
+  "recording": "subagent_e2e/claude-D-fanout.ndjson",
+  "note": "Claude CLI 2.1.296, adapter 0.89.1. The session/load before the second turn of subagent_nested_fanout, in a process that ran turn 1: replay is what the load streams (every subagent comes back as <session>:replay-subagent:<Agent call>, its own children announced on that session), notifications is the second turn's prompt. Distilled to session/update; usage, command and config updates dropped. Only turn 1's subagent_spawned were given toolUseId, so the replay is as recorded. Turn 2 of the recording.",
+  "replay": [
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Protocol probe. Call the Agent tool exactly once: subagent_type \"orch\", run_in_background: false, description \"D orch\", prompt \"MODE=FANOUT\". When it returns, reply: done. Nothing else."
+        },
+        "messageId": "b00b2cd0-ce05-41be-8136-3931e0f54718"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+        "name": "D orch",
+        "task": "MODE=FANOUT",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "MODE=FANOUT"
+        },
+        "messageId": "870235cf-13de-4207-8875-a8a6f51f1c6c",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+        "name": "worker one",
+        "task": "LEAF=1",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "LEAF=1"
+        },
+        "messageId": "955e7a45-9324-44ab-ab29-53453e871eff",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+        "name": "leaf",
+        "task": "leaf",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "leaf"
+        },
+        "messageId": "bf7b96ca-385b-4231-b9fb-c92c84b2c7b1",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01A54DZ945SAMpJ5secBY5jp",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "echo leaf",
+          "description": "Echo leaf"
+        },
+        "status": "pending",
+        "title": "echo leaf",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Echo leaf"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01A54DZ945SAMpJ5secBY5jp",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "leaf",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nleaf\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01KJo28itePakHJR7SfkERc5",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "LEAF DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_014usqjb5eNGeg8tUjiiW54E"
+          }
+        },
+        "toolCallId": "toolu_01KJo28itePakHJR7SfkERc5",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        },
+        "toolCallId": "toolu_015112JLQew8TuEbTNPYNHHv",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "WORKER DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01Az3ts4STRT1HeVA8w9Wfi1"
+          }
+        },
+        "toolCallId": "toolu_015112JLQew8TuEbTNPYNHHv",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+        "name": "worker two",
+        "task": "LEAF=1",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "LEAF=1"
+        },
+        "messageId": "693cbfa2-ef9d-4efe-8029-0d11bc46555a",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+        "name": "leaf",
+        "task": "leaf",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "leaf"
+        },
+        "messageId": "a5af48b6-1d6b-4b51-93e1-7762048fe98a",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_01TQ2TmdeiXx9WFsB3NkYdtF",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "echo leaf",
+          "description": "Echo leaf to stdout"
+        },
+        "status": "pending",
+        "title": "echo leaf",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Echo leaf to stdout"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_01TQ2TmdeiXx9WFsB3NkYdtF",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "leaf",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nleaf\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_016sWuB7Ak5qCMemCH7xFAS6",
+        "sessionUpdate": "tool_call",
+        "name": "ToolSearch",
+        "rawInput": {
+          "query": "select:SendMessage",
+          "max_results": 1
+        },
+        "status": "pending",
+        "title": "ToolSearch",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_016sWuB7Ak5qCMemCH7xFAS6",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "tool_reference",
+            "tool_name": "SendMessage"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Tool: SendMessage"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_018JK1ejPPxY7HfwyBsjsRxP",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "LEAF DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01XDdWzMvWzULab5HzFPkcGX"
+          }
+        },
+        "toolCallId": "toolu_018JK1ejPPxY7HfwyBsjsRxP",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        },
+        "toolCallId": "toolu_016TFJ5Q5U7GsVk4Xx5xrFbs",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "WORKER DONE"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_013m91ztirvNrtLumSVTpxeH"
+          }
+        },
+        "toolCallId": "toolu_016TFJ5Q5U7GsVk4Xx5xrFbs",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        },
+        "toolCallId": "toolu_013QVsHqKwyw8cgByjsk15uc",
+        "sessionUpdate": "tool_call",
+        "name": "SubagentHandback",
+        "rawInput": {
+          "message": "ORCH FINAL"
+        },
+        "status": "pending",
+        "title": "SubagentHandback",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "SubagentHandback",
+            "parentToolUseId": "toolu_01K7ETPweabzp1P4giQYufoQ"
+          }
+        },
+        "toolCallId": "toolu_013QVsHqKwyw8cgByjsk15uc",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "done"
+        },
+        "messageId": "msg_011CgBc5BqgaiRNqdM6fYBvF"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01XDdWzMvWzULab5HzFPkcGX",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_014usqjb5eNGeg8tUjiiW54E",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_013m91ztirvNrtLumSVTpxeH",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01Az3ts4STRT1HeVA8w9Wfi1",
+        "state": "disconnected"
+      }
+    },
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df:replay-subagent:toolu_01K7ETPweabzp1P4giQYufoQ",
+        "state": "completed"
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "sessionId": "f4feea31-cd19-4633-88e9-42f5f64d43df",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ok"
+        },
+        "messageId": "msg_011CgBc7hctEmaMSrifiCvHT"
+      }
+    }
+  ]
+}

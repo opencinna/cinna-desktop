@@ -876,3 +876,69 @@ describe('Code Mode: Cinna’s tools through `execute`', () => {
     expect(chat(chatRuntimePermissions(false))).toEqual([['*', 'deny']])
   })
 })
+
+describe('OpenCode subagents', () => {
+  const entries = (built: ReturnType<typeof buildEngineConfig>) =>
+    Object.values(built.config.agent as Record<string, { permission: Record<string, unknown> }>)
+
+  it('writes the primary’s own policy as the top-level permission its subagents run under', () => {
+    // 2.0.27 pushes the top-level `permission` onto every agent, built-in
+    // `general`/`explore` included, after their own rules; a subagent never
+    // inherits its caller's entry. Mutation: drop the key and a subagent's
+    // nested call runs on OpenCode's defaults without an ask.
+    for (const extra of [{}, { skillPaths: ['/app/kit/skills'] }]) {
+      const built = buildEngineConfig(input(extra))
+      const [entry] = entries(built)
+      expect(built.config.permission).toEqual(entry.permission)
+      // Last match wins: the catch-all must lead, or the built-ins' own rules
+      // before it would still decide every tool the profile does not name.
+      expect(Object.keys(built.config.permission as object)[0]).toBe('*')
+      expect((built.config.permission as Record<string, unknown>)['*']).toBe('ask')
+    }
+    const own = input()
+    own.agents[0] = { ...own.agents[0], permissions: { webfetch: 'deny' } }
+    expect((buildEngineConfig(own).config.permission as Record<string, unknown>).webfetch).toBe('deny')
+  })
+
+  it('keeps a replace policy as the subagents’ policy, deny-all and all', () => {
+    const chat = input()
+    chat.agents[0] = { ...chat.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions(true) }
+    expect(Object.entries(buildEngineConfig(chat).config.permission as object)).toEqual([
+      ['*', 'deny'], ['cinna_*', 'allow'], ['execute', 'allow'], ['question', 'allow']
+    ])
+  })
+
+  it('denies everything to subagents when the primaries in one config disagree, or there are none', () => {
+    // A chat runtime and its title utility share a process; the top level
+    // cannot tell which one spawned a subagent, so it gets what neither is
+    // looser than. Mutation: take either entry's policy and the other's
+    // subagents run looser than their primary.
+    const mixed = input()
+    mixed.agents = [
+      { ...mixed.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions(true) },
+      { ...mixed.agents[0], agentId: 'utility:chat', slug: 'ai-function', permissionMode: 'replace', permissions: { '*': 'deny' } }
+    ]
+    expect(buildEngineConfig(mixed).config.permission).toEqual({ '*': 'deny' })
+    // A folder agent and a replace runtime in one config: the folder profile
+    // would loosen the runtime's subagents, the runtime's would starve the
+    // folder's. Deny-all is the only answer that loosens nothing.
+    const folderAndChat = input()
+    folderAndChat.agents = [
+      folderAndChat.agents[0],
+      { ...folderAndChat.agents[0], agentId: 'chat:x', slug: 'chat', permissionMode: 'replace', permissions: chatRuntimePermissions(false) }
+    ]
+    expect(buildEngineConfig(folderAndChat).config.permission).toEqual({ '*': 'deny' })
+    // Two entries with the same policy are one policy.
+    const twins = input()
+    twins.agents = [twins.agents[0], { ...twins.agents[0], agentId: 'folder:twin', slug: 'twin' }]
+    expect(buildEngineConfig(twins).config.permission).toEqual(entries(buildEngineConfig(twins))[0].permission)
+    expect(buildEngineConfig(input({ agents: [] })).config.permission).toEqual({ '*': 'deny' })
+  })
+
+  it('lets subagents nest three deep below the root', () => {
+    // 2.0.27 refuses a `subagent` call once the caller has
+    // `experimental.subagent_depth ?? 1` ancestors; 3 runs root → orchestrator
+    // → worker → leaf. Mutation: drop it and every subagent's own call fails.
+    expect(buildEngineConfig(input()).config.experimental).toEqual({ subagent_depth: 3 })
+  })
+})
