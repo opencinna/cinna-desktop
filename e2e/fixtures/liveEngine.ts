@@ -44,8 +44,8 @@ import type { RealLogin } from './realLogin'
  *   on an ask nobody answers. An override names a model alias (`haiku`).
  * - Codex: `gpt-5.6-luna`, the cheapest slug in the pinned CLI's catalog
  *   (contract snapshot `codex-0.162.1.json`), as T2.3c uses.
- * - Antigravity: `gemini-3.6-flash-low` (`ANTIGRAVITY_LIVE_MODEL`), as
- *   `live-antigravity.spec.ts` uses. Its server is the pinned copy the
+ * - Antigravity: `gemini-3.8-flash-low` (`ANTIGRAVITY_LIVE_MODEL`); the logins this was
+ *   run on no longer offer `gemini-3.6-*`. Its server is the pinned copy the
  *   developer already has (`CINNA_E2E_ANTIGRAVITY_PATH`, else the installed
  *   app's `runtimes/antigravity-<pin>/agy_acp_server.par`, else
  *   `~/.cache/cinna-runtimes/antigravity-<pin>/`), its login the keychain item
@@ -74,8 +74,8 @@ export interface LiveEngine {
 /** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.162.1.json`). */
 export const CODEX_LIVE_MODEL = 'gpt-5.6-luna'
 
-/** Gemini Flash, as `live-antigravity.spec.ts` names it. */
-export const ANTIGRAVITY_LIVE_MODEL = 'gemini-3.6-flash-low'
+/** Gemini Flash, the cheapest model the Antigravity login lists (3.6 is refused since 2026-10). */
+export const ANTIGRAVITY_LIVE_MODEL = 'gemini-3.8-flash-low'
 
 const RAW = (process.env.CINNA_E2E_LIVE_ENGINE ?? '').trim() || 'opencode'
 if (RAW !== 'opencode' && RAW !== 'claude' && RAW !== 'codex' && RAW !== 'antigravity') {
