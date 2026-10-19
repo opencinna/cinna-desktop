@@ -12,8 +12,9 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld
 
 /**
  * Artifacts against a fake cinna-core: a person publishes a folder an agent
- * mentioned (A), an agent publishes through `artifacts_publish` behind the
- * approval card (B), an instance that does not keep artifacts offers no
+ * mentioned (A), an agent publishes through `artifacts_publish` without a
+ * card into a new or its own artifact, and waits on the approval card only
+ * when core cannot say the artifact is still the person's (B, D), an instance that does not keep artifacts offers no
  * Publish… at all (C), and Publish… arrives without a window focus when core's
  * discovery is unreachable at launch, and at once on the next launch (E).
  *
@@ -24,7 +25,7 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld
  * `published_artifacts` / `chat_artifact_cards`, the Publish dialog, the card
  * and its Share popover, main's clipboard, the session's `cinna` loopback MCP
  * server offering `artifacts_publish`, the approval registry and its card, the
- * skip rule's fresh read of core. Faked: cinna-core itself — a loopback HTTP
+ * policy's fresh read of core, the preview's Share…. Faked: cinna-core itself — a loopback HTTP
  * server answering the discovery document, `/artifacts/capabilities`, create,
  * revisions, detail, PATCH and links, and recording each upload's fields and
  * zip entry names — and the agent, `scriptAcpAgent.mjs`, whose turns say only
@@ -35,8 +36,8 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld
  * ## What it does not prove
  *
  * Core's own handling (it re-applies the exclusions, decides the kind, serves
- * content sandboxed) — `live-artifacts.spec.ts` against a real core. Edit… on
- * an approval, the Inbox answering an approval, the over-limit and start-page
+ * content sandboxed) — `live-artifacts.spec.ts` against a real core. The
+ * over-limit and start-page
  * paths, the file preview's Publish… — unit-tested in
  * `PublishArtifactDialog.test.tsx`, `ArtifactPublishTool.test.tsx`,
  * `artifactToolProvider.test.ts`, `publishService.test.ts`.
@@ -128,6 +129,8 @@ async function fakeCore(options: { artifacts: boolean }) {
   const uploads: Upload[] = []
   const requests: string[] = []
   const patches: Array<{ id: string; body: unknown }> = []
+  /** `failDetail`: an artifact's detail read answers 500 (core cannot say who owns it, so an agent's call asks). */
+  const flags = { failDetail: false }
   /** Discovery answers 503 until this time (an instance not reachable yet); see `discoveryDown`. */
   let discoveryDownUntil = 0
   const discovery = { failed: 0, served: 0 }
@@ -225,7 +228,7 @@ async function fakeCore(options: { artifacts: boolean }) {
         send({ ...summary(artifact), excluded: [] }, 201)
         return
       }
-      if (req.method === 'GET' && !sub) return send(detail(artifact))
+      if (req.method === 'GET' && !sub) return flags.failDetail ? send({ detail: 'Detail is down.' }, 500) : send(detail(artifact))
       if (req.method === 'PATCH' && !sub) {
         const patch = JSON.parse(body.toString('utf8')) as { visibility?: 'private' | 'instance' }
         patches.push({ id: artifact.id, body: patch })
@@ -261,6 +264,7 @@ async function fakeCore(options: { artifacts: boolean }) {
     patches,
     pageUrl,
     discovery,
+    flags,
     /** Answer discovery with 503 for the next `ms` (0 ends an outage). */
     discoveryDown(ms: number): void {
       discoveryDownUntil = Date.now() + ms
@@ -445,7 +449,7 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
       await expect(card(page, 'q3').getByText('Copied', { exact: true })).toBeVisible()
     })
 
-    await test.step('Share… changes who can see it, and creates and revokes a public link', async () => {
+    await test.step('Share… changes who can see it, creates a public link and copies it in one click, and revokes it', async () => {
       const page = cinna.page
       await (await cardAction(page, 'q3', 'Share q3')).click()
       const share = page.getByRole('dialog', { name: 'Share q3', exact: true })
@@ -455,18 +459,38 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
       await expect(share.getByRole('radio', { name: `Everyone on ${INSTANCE}`, exact: true })).toBeChecked()
       await expect(card(page, 'q3')).toContainText(`rev 1 · everyone on ${INSTANCE}`)
 
-      await share.getByRole('button', { name: 'Create link', exact: true }).click()
+      await writeClipboard(cinna, 'e2e clipboard sentinel')
+      // Its name changes to "Copied" for a moment: matched either way.
+      const create = share.getByRole('button', { name: /^(Create public link|Copied)$/ })
+      const width = (await create.boundingBox())!.width
+      await create.click()
+      await expect(share.getByRole('alert')).toHaveCount(0)
+      await expect(create).toHaveText('Copied')
+      // A second click while it says Copied makes no second link; the focus stays on the button.
+      // Forced: Playwright itself waits out aria-disabled, which would click after "Copied" ends.
+      await create.click({ force: true })
+      expect(core.artifacts.get(artifactId)!.links).toHaveLength(1)
+      expect(await create.evaluate((button) => document.activeElement === button)).toBe(true)
+      // The label swap moves nothing.
+      expect((await create.boundingBox())!.width).toBe(width)
       const link = core.artifacts.get(artifactId)!.links[0]
-      const fresh = share.locator('[data-artifact-fresh-link]')
-      await expect(fresh.locator('code')).toHaveText(`${core.host}/a/${link.token}`)
-      await expect(fresh).toContainText('Shown once — copy it now.')
+      const linkUrl = `${core.host}/a/${link.token}`
+      await expect.poll(() => readClipboard(cinna)).toBe(linkUrl)
+      await expect(share.getByText(linkUrl, { exact: true })).toHaveCount(0)
       await expect(card(page, 'q3')).toContainText(`rev 1 · everyone on ${INSTANCE} · 1 public link`)
+      await expect(create).toHaveText('Create public link', { timeout: 5_000 })
 
+      // Listed with a copy icon: core sends no URL, so main's memory of the link it created fills it.
       const prefix = link.token.slice(0, 6)
+      await writeClipboard(cinna, 'e2e clipboard sentinel')
+      await share.getByRole('button', { name: `Copy public link ${prefix}`, exact: true }).click()
+      await expect.poll(() => readClipboard(cinna)).toBe(linkUrl)
+
       await share.getByRole('button', { name: `Revoke link ${prefix}`, exact: true }).click()
       await expect(share.getByText('Revoke?', { exact: true })).toBeVisible()
       await share.getByRole('button', { name: 'Revoke', exact: true }).click()
       await expect(share.locator('[data-artifact-link="revoked"]')).toContainText('Revoked')
+      await expect(share.getByRole('button', { name: `Copy public link ${prefix}`, exact: true })).toHaveCount(0)
       expect(core.artifacts.get(artifactId)!.links[0].revoked).toBe(true)
       await page.keyboard.press('Escape')
       await expect(share).toHaveCount(0)
@@ -478,6 +502,25 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
       await expect(share.getByRole('radio', { name: 'Only me', exact: true })).toBeChecked()
       await expect(card(page, 'q3')).toContainText('rev 1 · only you')
       await page.keyboard.press('Escape')
+    })
+
+    await test.step('the preview’s Share… opens the same popover; Escape closes it, then the preview', async () => {
+      const page = cinna.page
+      await card(page, 'q3').locator('[data-artifact-card-body]').click()
+      const preview = page.getByRole('dialog', { name: 'Preview of q3', exact: true })
+      await expect(preview).toBeVisible()
+      await preview.getByRole('button', { name: 'Share…', exact: true }).click()
+      const share = page.getByRole('dialog', { name: 'Share q3', exact: true })
+      await expect(share.getByRole('radio', { name: 'Only me', exact: true })).toBeChecked()
+      // A press inside the popover keeps both open.
+      await share.getByText('Who can see it', { exact: true }).click()
+      await expect(share).toBeVisible()
+      await expect(preview).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(share).toHaveCount(0)
+      await expect(preview).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(preview).toHaveCount(0)
     })
 
     await test.step('the card survives a restart', async () => {
@@ -518,72 +561,91 @@ test('A a person publishes a folder the agent named, copies its link, shares it,
   }
 })
 
-test('B an agent’s artifacts_publish waits on the card, skips it on a private republish, and hears a Deny', async ({ cinna }) => {
-  test.setTimeout(180_000)
+test('B an agent publishes a new artifact without a card, republishes into it once shared without one, and asks when core cannot answer', async ({ cinna }) => {
+  test.setTimeout(240_000)
   const fake = await scriptAcpEngine()
   const core = await fakeCore({ artifacts: true })
   try {
     const { chatId } = await arrange(cinna, fake, core, {
-      'out/summary.md': SUMMARY_TEXT,
-      'out/other.md': '# Other\n'
+      'out/summary.md': SUMMARY_TEXT
     })
+    let id = ''
 
-    await test.step('the call raises an approval card; Publish returns the artifact to the agent', async () => {
+    await test.step('a new artifact is published private at once, and its card is in the transcript', async () => {
       const page = cinna.page
       expect(fake.calls[0].text).toContain(CHAT)
       fake.calls[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Q3 summary' } }] })
-      const approval = page.getByRole('group', { name: 'Publish request: Q3 summary', exact: true })
+      // Nothing is clicked: the result arriving is the proof that nothing waited on a card.
+      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(1)
+      const result = toolResult(fake.tools[0])
+      expect(result.isError, JSON.stringify(result)).not.toBe(true)
+      id = [...core.artifacts.keys()][0]
+      expect(JSON.parse(toolText(result))).toEqual({ artifact_id: id, revision: 1, url: core.pageUrl(id), kind: 'files', file_count: 1, size_bytes: SUMMARY_TEXT.length, excluded: [] })
+      expect(core.uploads[0].entries).toEqual(['summary.md'])
+      expect(core.uploads[0].fields).toMatchObject({ title: 'Q3 summary', source_kind: 'desktop' })
+      expect(core.artifacts.get(id)!.visibility).toBe('private')
+      expect(core.patches).toEqual([])
+      await expect(card(page, 'Q3 summary')).toBeVisible()
+      await expect(card(page, 'Q3 summary')).toContainText('rev 1 · only you')
+      await expect(page.locator('[data-artifact-approval]')).toHaveCount(0)
+      expect(await page.evaluate((chat) => window.api.artifacts.approvals(chat), chatId)).toEqual([])
+      expect((await page.evaluate(() => window.api.inbox.list())).entries.map((entry) => entry.requestId)).not.toContainEqual(expect.stringMatching(/^art_/))
+    })
+
+    await test.step('after the person shares it, the agent’s republish is rev 2 with no card, and the sharing stays', async () => {
+      const page = cinna.page
+      // Shared on core's own page: everyone on the instance.
+      core.artifacts.get(id)!.visibility = 'instance'
+      fake.tools[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Q3 summary' } }] })
+      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(2)
+      const result = toolResult(fake.tools[1])
+      expect(result.isError, JSON.stringify(result)).not.toBe(true)
+      expect(JSON.parse(toolText(result))).toMatchObject({ artifact_id: id, revision: 2, url: core.pageUrl(id) })
+      expect(core.uploads.map((upload) => upload.path)).toEqual(['/api/v1/artifacts', `/api/v1/artifacts/${id}/revisions`])
+      // No PATCH: an agent's republish never changes who can see it.
+      expect(core.patches).toEqual([])
+      expect(core.artifacts.get(id)!.visibility).toBe('instance')
+      expect(await page.evaluate((chat) => window.api.artifacts.approvals(chat), chatId)).toEqual([])
+    })
+
+    await test.step('when core cannot be read, the republish waits on the card; a Deny comes back as a refusal', async () => {
+      const page = cinna.page
+      core.flags.failDetail = true
+      fake.tools[1].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Q3 summary v3' } }] })
+      const approval = page.getByRole('group', { name: 'Publish request: Q3 summary v3', exact: true })
       await expect(approval).toBeVisible({ timeout: 30_000 })
-      await expect(approval).toContainText(`${AGENT} wants to publish “Q3 summary”`)
+      await expect(approval).toContainText(`${AGENT} wants to publish “Q3 summary v3”`)
       await expect(approval).toContainText('Markdown document · out/summary.md')
-      await expect(approval).toContainText('new artifact · visible to only you')
+      await expect(approval).toContainText('updates “Q3 summary” (rev 2)')
       await expect(approval.getByRole('button')).toHaveText(['Deny', 'Edit…', 'Publish'])
       // The same request is an Inbox row while it waits.
       await expect.poll(async () => (await page.evaluate(() => window.api.inbox.list())).entries.map((entry) => entry.requestId), { timeout: 20_000 })
         .toContainEqual(expect.stringMatching(/^art_/))
-      expect(core.uploads).toEqual([])
-
-      await approval.getByRole('button', { name: 'Publish', exact: true }).click()
-      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(1)
-      const result = toolResult(fake.tools[0])
-      expect(result.isError, JSON.stringify(result)).not.toBe(true)
-      const published = JSON.parse(toolText(result))
-      const id = [...core.artifacts.keys()][0]
-      expect(published).toEqual({ artifact_id: id, revision: 1, url: core.pageUrl(id), kind: 'files', file_count: 1, size_bytes: SUMMARY_TEXT.length, excluded: [] })
-      expect(core.uploads[0].entries).toEqual(['summary.md'])
-      expect(core.uploads[0].fields).toMatchObject({ title: 'Q3 summary', source_kind: 'desktop' })
-      await expect(approval).toHaveCount(0)
-      await expect(card(page, 'Q3 summary')).toBeVisible()
-    })
-
-    await test.step('a second call for the same private path publishes rev 2 with no card', async () => {
-      fake.tools[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Q3 summary' } }] })
-      // Nothing is clicked: the result arriving is the proof that nothing waited on a card.
-      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(2)
-      const result = toolResult(fake.tools[1])
-      expect(result.isError, JSON.stringify(result)).not.toBe(true)
-      const id = [...core.artifacts.keys()][0]
-      expect(JSON.parse(toolText(result))).toMatchObject({ artifact_id: id, revision: 2, url: core.pageUrl(id) })
-      expect(core.uploads.map((upload) => upload.path)).toEqual(['/api/v1/artifacts', `/api/v1/artifacts/${id}/revisions`])
-      expect(await cinna.page.evaluate((chat) => window.api.artifacts.approvals(chat), chatId)).toEqual([])
-    })
-
-    await test.step('a call for another path, denied, comes back to the agent as a refusal', async () => {
-      const page = cinna.page
-      fake.tools[1].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/other.md', title: 'Other notes' } }] })
-      const approval = page.getByRole('group', { name: 'Publish request: Other notes', exact: true })
-      await expect(approval).toBeVisible({ timeout: 30_000 })
       await approval.getByRole('button', { name: 'Deny', exact: true }).click()
       await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(3)
       const result = toolResult(fake.tools[2])
       expect(result.isError).toBe(true)
-      expect(toolText(result)).toBe('The user declined to publish out/other.md; do not retry unless they ask.')
+      expect(toolText(result)).toBe('The user declined to publish out/summary.md; do not retry unless they ask.')
       expect(core.uploads).toHaveLength(2)
       expect(core.artifacts.size).toBe(1)
-      fake.tools[2].release({ text: 'Published the summary; left the other notes alone.' })
-      await expect(page.getByText('Published the summary; left the other notes alone.', { exact: true })).toBeVisible({ timeout: 30_000 })
+      fake.tools[2].release({ text: 'Published the summary; left the third version alone.' })
+      await expect(page.getByText('Published the summary; left the third version alone.', { exact: true })).toBeVisible({ timeout: 30_000 })
       await expect(approval).toHaveCount(0)
       await expect(page.getByText('Not published — you declined', { exact: true })).toBeVisible()
+      // The turn is over, so its rows are the stored ones: the republish says it needed no card.
+      await expect(page.getByText('Updated without asking', { exact: true })).toBeVisible()
+      core.flags.failDetail = false
+    })
+
+    await test.step('after a restart the transcript still shows the auto-published artifact’s card', async () => {
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      const page = cinna.page
+      await page.getByText(CHAT, { exact: true }).first().click()
+      await expect(page.getByText('Published the summary; left the third version alone.', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(card(page, 'Q3 summary').first()).toBeVisible()
+      await expect(page.getByText('Updated without asking', { exact: true })).toBeVisible()
+      await expect(page.locator('[data-artifact-approval]')).toHaveCount(0)
     })
     expect(fake.unexpected).toEqual([])
   } finally {
@@ -598,13 +660,21 @@ test('D an approval answered from the Inbox publishes; Edit… publishes under t
   const core = await fakeCore({ artifacts: true })
   try {
     await arrange(cinna, fake, core, {
-      'out/summary.md': SUMMARY_TEXT,
-      'out/other.md': '# Other\n'
+      'out/summary.md': SUMMARY_TEXT
+    })
+    let id = ''
+
+    await test.step('the agent publishes once without a card; core then cannot be read, so its next call asks', async () => {
+      fake.calls[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Inbox summary' } }] })
+      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(1)
+      expect(toolResult(fake.tools[0]).isError).not.toBe(true)
+      id = [...core.artifacts.keys()][0]
+      core.flags.failDetail = true
     })
 
     await test.step('Publish from the Inbox reaches the agent, and the transcript card settles', async () => {
       const page = cinna.page
-      fake.calls[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Inbox summary' } }] })
+      fake.tools[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Inbox summary' } }] })
       const approval = page.getByRole('group', { name: 'Publish request: Inbox summary', exact: true })
       await expect(approval).toBeVisible({ timeout: 30_000 })
 
@@ -618,23 +688,22 @@ test('D an approval answered from the Inbox publishes; Edit… publishes under t
       await modal.getByRole('button', { name: /^Publish/ }).click()
       await modal.getByRole('button', { name: 'Send answer', exact: true }).click()
 
-      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(1)
-      const result = toolResult(fake.tools[0])
+      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(2)
+      const result = toolResult(fake.tools[1])
       expect(result.isError, JSON.stringify(result)).not.toBe(true)
-      const id = [...core.artifacts.keys()][0]
-      expect(JSON.parse(toolText(result))).toEqual({ artifact_id: id, revision: 1, url: core.pageUrl(id), kind: 'files', file_count: 1, size_bytes: SUMMARY_TEXT.length, excluded: [] })
-      expect(core.uploads.map((upload) => upload.fields.title)).toEqual(['Inbox summary'])
+      expect(JSON.parse(toolText(result))).toEqual({ artifact_id: id, revision: 2, url: core.pageUrl(id), kind: 'files', file_count: 1, size_bytes: SUMMARY_TEXT.length, excluded: [] })
+      expect(core.uploads.map((upload) => upload.path)).toEqual(['/api/v1/artifacts', `/api/v1/artifacts/${id}/revisions`])
       expect(await page.evaluate((chat) => window.api.artifacts.approvals(chat), (await page.evaluate(() => window.api.chat.list()))[0].id)).toEqual([])
 
       // Back in the chat: the request became the artifact's card.
       await page.getByRole('button', { name: 'Chats', exact: true }).click()
       await expect(page.getByRole('group', { name: 'Publish request: Inbox summary', exact: true })).toHaveCount(0)
-      await expect(card(page, 'Inbox summary')).toBeVisible({ timeout: 15_000 })
+      await expect(card(page, 'Inbox summary')).toHaveCount(2, { timeout: 15_000 })
     })
 
     await test.step('Edit… opens the dialog for the agent; the edited title is what is published and returned', async () => {
       const page = cinna.page
-      fake.tools[0].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/other.md', title: 'Agent title' } }] })
+      fake.tools[1].release({ tools: [{ name: 'artifacts_publish', args: { path: 'out/summary.md', title: 'Agent title' } }] })
       const approval = page.getByRole('group', { name: 'Publish request: Agent title', exact: true })
       await expect(approval).toBeVisible({ timeout: 30_000 })
       await approval.getByRole('button', { name: 'Edit…', exact: true }).click()
@@ -642,25 +711,26 @@ test('D an approval answered from the Inbox publishes; Edit… publishes under t
       await expect(dialog).toBeVisible()
       const title = dialog.getByLabel('Title', { exact: true })
       await expect(title).toHaveValue('Agent title')
-      await expect(dialog.getByRole('list', { name: 'Files to publish' }).getByRole('listitem')).toHaveText(['other.md8 B'])
+      await expect(dialog.getByRole('list', { name: 'Files to publish' }).getByRole('listitem')).toHaveText([`summary.md${SUMMARY_TEXT.length} B`])
       await title.fill('Edited by me')
+      await dialog.getByRole('radio', { name: 'Publish as new', exact: true }).check()
       await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
       await expect(dialog).toHaveCount(0)
 
-      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(2)
-      const result = toolResult(fake.tools[1])
+      await expect.poll(() => fake.tools.length, { timeout: 30_000 }).toBe(3)
+      const result = toolResult(fake.tools[2])
       expect(result.isError, JSON.stringify(result)).not.toBe(true)
       const published = JSON.parse(toolText(result))
       const edited = [...core.artifacts.values()].find((artifact) => artifact.title === 'Edited by me')
       expect(edited, JSON.stringify([...core.artifacts.values()])).toBeTruthy()
       // The schema's result has no title: it names the artifact that was uploaded under the edited one.
       expect(published).toMatchObject({ artifact_id: edited!.id, revision: 1, url: core.pageUrl(edited!.id), file_count: 1 })
-      expect(core.uploads.map((upload) => upload.fields.title)).toEqual(['Inbox summary', 'Edited by me'])
-      expect(core.uploads[1].entries).toEqual(['other.md'])
+      expect(core.uploads).toHaveLength(3)
+      expect(core.uploads[2].fields.title).toBe('Edited by me')
       await expect(approval).toHaveCount(0)
       await expect(card(page, 'Edited by me')).toBeVisible()
       await expect(card(page, 'Agent title')).toHaveCount(0)
-      fake.tools[1].release({ text: 'Both are published.' })
+      fake.tools[2].release({ text: 'Both are published.' })
       await expect(page.getByText('Both are published.', { exact: true })).toBeVisible({ timeout: 30_000 })
     })
     expect(fake.unexpected).toEqual([])
