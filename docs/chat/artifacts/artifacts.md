@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A folder agent leaves files: a report, a CSV, a folder with a small dashboard in it. An **artifact** is a copy of such a file or folder published to the signed-in Cinna instance as a frozen, versioned page its owner (and whoever they choose) opens in a browser, without the agent folder, the desktop or the agent being involved. The person publishes from the chat; the agent can also ask to, and the person decides ([Agent Publish](agent_publish.md)).
+A folder agent leaves files: a report, a CSV, a folder with a small dashboard in it. An **artifact** is a copy of such a file or folder published to the signed-in Cinna instance as a frozen, versioned page its owner (and whoever they choose) opens in a browser, without the agent folder, the desktop or the agent being involved. The person publishes from the chat; the agent can also publish, privately, and the person shares ([Agent Publish](agent_publish.md)).
 
 ## Core Concepts
 
@@ -10,11 +10,11 @@ A folder agent leaves files: a report, a CSV, a folder with a small dashboard in
 - **Kind** — decided by core from the files sent: a **site** has an HTML entry and runs in a sandbox on core's page; **files** are browsed. A folder with a root `index.html` is a site; a lone `.html` file is a site; a folder with other `.html` files but no root `index.html` is files until the user picks a **start page**.
 - **Revision** — publishing the same path again adds a revision to the same artifact (**Update**). The artifact's page, links and audience stay.
 - **Artifact card** — the chat's own rendering of an artifact: one compact bordered target with an icon by kind, the title, and one line of revision and audience. Pressing it opens the in-app **Preview**. Under it sits a row kept for its actions — **Open** (core's page in the browser), **Copy link** and, for the owner, **Share…** — as icon buttons that fade in on hover or keyboard focus (and stay while Share… is open), each with a tooltip that appears at once. At rest only the card shows, and revealing the row moves nothing. It sits right after the message the publish came from. A link to an artifact in an agent's text renders as the same card.
-- **Audience line marks** — the card has no room for sentences, so a small mark ends the audience line and its tooltip says the rest: a warning triangle (the publish worked but sharing did not finish), a link mark (a public link made at publish is still held in Share…) and a red circle (Open or Copy link failed). The content behind the first two lives in the Share popover.
+- **Audience line marks** — the card has no room for sentences, so a small mark ends the audience line and its tooltip says the rest: a warning triangle (the publish worked but sharing did not finish) and a red circle (Open or Copy link failed). The sentence behind the triangle lives in the Share popover.
 - **Preview** — the in-app view of the artifact's *published revision* (not the folder on disk): a site shows its start page, a files artifact lists its files and shows the chosen one. See the flow below.
 - **Audience** — two independent facts: *who can see it* (**only you** or **everyone on the instance**) and *how many public links are live*; core's web page can also share it with named people, which the card shows ("shared with 2 people") and the desktop never edits. The owner's card asks core for this rather than trusting what was stored at publish, because a grant made on core's page never reaches the local row; until core answers, or if it cannot be read, the card shows the stored audience. "Public" is never a visibility. It is a link.
-- **Public link** — an unguessable URL (optionally with a code) anyone can open. Its URL and code are shown once when created and are never stored on this machine.
-- **Publish approval** — the card an agent's publish request waits on. See [Agent Publish](agent_publish.md).
+- **Public link** — an unguessable URL (optionally with a code) anyone can open. Core keeps only a hash of it, so the desktop can copy a link only while it knows the URL: core's, when core returns it to the owner (`ArtifactLinkInfo.url`; core's change is pending), otherwise the one this app created during this session, held in main's memory and never on disk. A link made elsewhere, or before a restart, is listed without a copy icon until core sends the URL. A code is never stored.
+- **Publish approval** — the card an agent's publish request waits on, shown only when the policy cannot be sure. See [Agent Publish](agent_publish.md).
 - **Published memory** — the desktop's own record of which artifact a path on this machine was published as, per profile and server. It is what turns *Publish* into *Update*. There is no marker file in the agent's folder.
 
 ## Support
@@ -34,18 +34,18 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 2. The **Publish** dialog opens with the path already inspected: a title (the name, a file's without the extension), an optional description, the kind line ("Mini-site · opens index.html", "3 files", "Markdown document"), the files with what is left out struck through and why, the total, and **Who can see it**: *Only you* (the default), *Everyone on the instance*, *Anyone with a link*.
 3. A folder with HTML files but no `index.html` also shows a **Start page** picker; without a choice it is published as files.
 4. If this path was published before the dialog offers **Update "<title>" (rev N)** — the default, taking that artifact's title and audience as its starting point — or **Publish as new**.
-5. **Publish** packs, uploads and (when the user chose more than private) applies the audience; the button says the phase. On success the dialog closes and the card appears in the chat after the message the reference came from. A link created for "Anyone with a link" is held for **Share…**, which shows it once; the card carries only a link mark.
+5. **Publish** packs, uploads and (when the user chose more than private) applies the audience; the button says the phase. On success the dialog closes and the card appears in the chat after the message the reference came from. A link created for "Anyone with a link" is listed in **Share…** like any other, with its copy icon.
 6. A publish that worked while its follow-up did not (the audience, the link) is not an error: the card's audience line gets a warning mark, and **Share…** opens with the sentence — "Published, but it is still visible only to you: …" — which can be dismissed.
 
 ### Share, copy and revoke from the card
 
-1. Hover or focus the card and press **Share…**. The popover reads core's current state: *Who can see it* and the **Public links** (live ones first, each revocable), and carries the publish warning and the just-made link when there are any. Creating a link shows its URL once. Revoking asks inline in the link's own row ("People with this link lose access.").
+1. Hover or focus the card and press **Share…**. The popover reads core's current state: *Who can see it* and the **Public links** (live ones first, each revocable), and carries the publish warning when there is one. **Create public link**, on the Public links heading row, creates a link, copies it and says "Copied", and the new row is marked too so it is plain which is new; its row grows below the button, so nothing moves under the pointer. Every live link whose URL is known has a copy icon ("Copy public link") for later. Revoking asks inline in the link's own row ("People with this link lose access.").
 2. Anything changed here, or on core's web page, shows on the card the next time it is read.
 3. **Copy link** shows "Copied" for a moment; **Open** sends core's page to the browser. If either fails, a red mark on the audience line carries the reason as its tooltip.
 
 ### Preview an artifact
 
-1. Press the card (or an artifact-link card). A modal grows from the click, like the [file preview](../file_preview/file_preview.md), with the title, revision, **Open in browser** and **Copy link**.
+1. Press the card (or an artifact-link card). A modal grows from the click, like the [file preview](../file_preview/file_preview.md), with the title, revision, and in the header **Share…** (owner only, first in the row, appears when core says who owns it), **Open in browser** and **Copy link**. **Share…** opens the card's popover, portaled inside the dialog: Escape or a press outside closes the popover first and the preview only on the next one.
 2. A **site** shows its start page in the same sandboxed frame an HTML file preview uses; its own relative files load from the published revision. **Files** list on the left, the chosen one on the right: markdown, CSV, JSON, XML, Python and plain text render with the file preview's own renderers, pages and images in the frame, anything else (an archive, a PDF) is listed but not shown.
 3. Loading, a failure and "deleted on <instance>" are said inside the modal; none of them closes it. A failure offers **Open in browser** instead.
 

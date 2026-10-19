@@ -21,19 +21,19 @@ Behaviour and rules: [Agent Publish](agent_publish.md). The publish itself, the 
 
 ## Services & Key Methods
 
-- `ArtifactToolProvider.callTool` → `publishCall`: unknown arguments are refused first (the sentence names `path, title, description, entry, artifact_id`); then `validate` (a thrown sentence becomes a refusal), support and server from the session's own profile, `inspect` with `{agentDir, profileUserId}`, the entry/empty/over-limit checks, target lookup (`repo.get` for an `artifact_id`, else `findBySource`), the policy, then either `publish()` or the approval.
-- `agentArtifactPolicy({row, agentId, sourcePath, readNow})` — the single place that decides ask or publish: `approvedAgentId` equals the agent, `sourcePath` equals the inspected realpath, and `readNow()` (a `detail` read) says `isOwner && visibility === 'private' && liveLinkCount === 0 && grantCount === 0`. A throw, a null or a 404 asks (a 404 additionally turns the target into a new artifact).
+- `ArtifactToolProvider.callTool` → `publishCall`: unknown arguments are refused first (the sentence names `path, title, description, entry, artifact_id`); then `validate` (a thrown sentence becomes a refusal), support and server from the session's own profile, `inspect` with `{agentDir, profileUserId}`, the entry/empty/over-limit checks, target lookup (`repo.get` for an `artifact_id`, else `findBySource`), the policy, then either `publish()` or the approval. A gone target is cleared so `publish()` goes out as a new private artifact.
+- `agentArtifactPolicy({row, agentId, readNow})` — the single place that decides ask or publish. No row → publish. `row.agentId` differs → ask. Otherwise `readNow()` (a `detail` read, which may answer `'gone'`): `'gone'` → publish, `isOwner` → publish, anything else (a throw, null, not owner) → ask. Visibility, links and grants are not consulted. `ArtifactToolDeps.repo` no longer has `setApprovedAgent` (removed from `publishedArtifactRepo`); `approvedAgentId` is not read or written.
 - Approval: `onEvent({type: 'needs_input', requestId: 'art_<toolCallId>', resume: 'reply', request: question 'Publish artifact' [Publish, Deny]})`, then `approvals.open(...)`, then `input_resolved` with the answer (`rejected` for timeout/cancel). `eventSink` publishes to the root turn so the Inbox records it.
 - `createArtifactApprovals`
   - `open(request, signal)` — resolves once, never rejects; a duplicate id or an already-aborted signal is `cancelled`. Settles on answer, `REQUEST_PARK_TIMEOUT_MS` (an hour) or abort.
   - `answer(profile, requestId, decision, edits?)` — `not_found`, `forbidden` (another profile), `invalid_input` (busy); `deny` settles at once; `publish` runs the provider's `publish(edits)` and settles only on success. A failed publish leaves the request pending and returns the reason.
   - A stop or timeout while `busy` is held in `deferred`; a grace timer (`UPLOAD_GRACE_MS`, 2 minutes) settles it if the upload never answers (`cinnaSend` takes no signal); a failed publish settles `deferred` immediately.
 - `approvalInboxHook` — installed as `installTaskRunnerHooks(hook, 'artifacts')`, so `inboxService.answer` / `answerFromTranscript` reach it through `taskRunnerBridge.answer`. It claims only `art_` ids, validates the answer is `Publish` or `Deny`, and maps `not_found` → `no_longer_waiting`, `forbidden` → `not_owned`, busy → `answer_in_progress`, anything else → `unavailable`. The settling `input_resolved` event closes the Inbox row.
-- Results: `toolResult` returns exactly the schema's result object; `excluded` merges what the desktop left out with what core dropped. A skipped republish also carries a notice part `Updated rev N`. A refusal is `isError` with a `notice` part `artifact-refusal:<code>[:<reason>]` (`artifactRefusalNote`) that the transcript turns into "Not published — …" (`artifactRefusalLine`).
+- Results: `toolResult` returns exactly the schema's result object; `excluded` merges what the desktop left out with what core dropped. A republish that skipped the card also carries a notice part `Updated rev N`, shown as "Updated without asking"; a new artifact publishes with no notice. A refusal is `isError` with a `notice` part `artifact-refusal:<code>[:<reason>]` (`artifactRefusalNote`) that the transcript turns into "Not published — …" (`artifactRefusalLine`).
 
 ## Renderer Components
 
-- `MessageStream` renders the tool by `toolName === 'artifacts_publish' && toolProvider === 'Cinna artifacts'`: a persisted row through `ArtifactPublishToolBlock` (result card, "Updated rev N", or the refusal line), a live block through the same component, which shows the pending `ArtifactApprovalCard` from `useArtifactApprovals(chatId)`.
+- `MessageStream` renders the tool by `toolName === 'artifacts_publish' && toolProvider === 'Cinna artifacts'`: a persisted row through `ArtifactPublishToolBlock` (result card, the "Updated without asking" line, or the refusal line), a live block through the same component, which shows the pending `ArtifactApprovalCard` from `useArtifactApprovals(chatId)`.
 - `ArtifactApprovalCard` — the same summary rows as the Publish dialog (files, struck-through exclusions, size, audience); **Edit…** opens the dialog with `approval` set; an answer's failure is said in the card.
 
 ## Skill delivery (code)
@@ -50,10 +50,10 @@ Behaviour and rules: [Agent Publish](agent_publish.md). The publish itself, the 
 
 ## Security
 
-- The policy never trusts the local row for sharing state: it is read from core for each skip decision.
+- The policy never trusts the local row for ownership: core is read for each republish. Sharing is never an input: the tool cannot set it and a republish keeps it.
 - The agent's `path` is confined as any reference is (see [Artifacts (tech)](artifacts_tech.md#security)); unknown arguments (a visibility, a share) are refused rather than ignored.
 - The approval is addressed per profile; another profile's request cannot be answered from the active one.
 
 ## Tests
 
-`src/main/services/artifacts/artifactToolProvider.test.ts`, `artifactsSkill.test.ts`, `src/main/services/artifactsProtocolParity.test.ts` (the registered tool equals `artifacts.schema.json`; skipped when the bundle lacks it), `src/main/engine/engineConfigSource.test.ts`, `configGenerator.test.ts`, `acpLaunchers.test.ts`, `antigravityLauncher.test.ts`, `kit/skills.test.ts`, `components/artifacts/ArtifactPublishTool.test.tsx`, `e2e/specs/artifacts.spec.ts` (fake core), and against the real core `e2e/specs/live-artifacts.spec.ts` (an agent publishing on Claude, OpenCode, Codex and Antigravity; Edit… and the Inbox answer).
+`src/main/services/artifacts/artifactToolProvider.test.ts`, `artifactsSkill.test.ts`, `src/main/services/artifactsProtocolParity.test.ts` (the registered tool equals `artifacts.schema.json`; skipped when the bundle lacks it), `src/main/engine/engineConfigSource.test.ts`, `configGenerator.test.ts`, `acpLaunchers.test.ts`, `antigravityLauncher.test.ts`, `kit/skills.test.ts`, `components/artifacts/ArtifactPublishTool.test.tsx`, `e2e/specs/artifacts.spec.ts` (fake core), and against the real core `e2e/specs/live-artifacts.spec.ts` (an agent publishing on Claude, OpenCode, Codex and Antigravity; the no-card publish and republish).

@@ -1,25 +1,26 @@
-# Agent Publish — an agent asks, the person decides
+# Agent Publish — an agent publishes, the person shares
 
 ## Purpose
 
-A folder agent can publish a file or folder from its own folder as an [artifact](artifacts.md) with one tool call, `artifacts_publish`. Every `cinna` tool is allowed silently by every engine, so the tool itself asks nothing: **the desktop's approval card is the gate**, and the call does not return until the person has answered it. An agent can hand over a report; it cannot decide who reads it.
+A folder agent can publish a file or folder from its own folder as an [artifact](artifacts.md) with one tool call, `artifacts_publish`. Every `cinna` tool is allowed silently by every engine, so the provider decides, in one place (the policy, below). By default **the call does not wait**: a new artifact is published private, and a republish into an artifact this agent published updates it for whoever the owner already shared it with. The approval card appears only when the call cannot be sure. An agent can hand over a report; it cannot decide who reads it, because the tool takes no visibility or link and sharing stays the person's.
 
 ## Core Concepts
 
 - **`artifacts_publish`** — the one tool, on the same `cinna` MCP server as the eight `tasks_*` tools. Arguments: `path` (relative to the agent's folder), `title`, optional `description`, `entry` (the HTML page to open first) and `artifact_id` (republish into an artifact this machine published before). Nothing else is accepted: an agent that sends a visibility or a share argument is refused with "An agent publishes privately; the user shares." The contract is cinna-core's `artifacts.schema.json`, held equal to the registered tool by a parity test ([Kit Contract](../../agents/local_agents/kit_contract_tech.md)).
-- **Publish approval** — the card in the transcript where the call waits: the agent's name, the title, kind, the files (with what is left out struck through), the size, who would see it, and **Deny**, **Edit…**, **Publish**. The same request is a row in the [Inbox](../../jobs/tasks/inbox.md) whose address begins `art_` (then the tool call's id), so it can be answered when the chat is not on screen. A chat that had no task gains one for the row, as it does for an engine's permission ask.
-- **Edit…** — opens the Publish dialog on the agent's request. The person can change title, description, start page, Update versus Publish as new, and the audience, then publish. This is the only way an agent's request reaches more than its owner.
-- **Skip rule** — the one case where no card is shown. See below.
+- **Publish approval** — the card in the transcript where the call waits, in the few cases the policy asks: the agent's name, the title, kind, the files (with what is left out struck through), the size, who would see it, and **Deny**, **Edit…**, **Publish**. The same request is a row in the [Inbox](../../jobs/tasks/inbox.md) whose address begins `art_` (then the tool call's id), so it can be answered when the chat is not on screen. A chat that had no task gains one for the row, as it does for an engine's permission ask.
+- **Edit…** — opens the Publish dialog on the agent's request. The person can change title, description, start page, Update versus Publish as new, and the audience, then publish. Through the card this is the way a request reaches an audience other than the one it would keep.
+- **The policy** (`agentArtifactPolicy`) — decides publish or ask. See [The gate](#the-gate).
 - **The `cinna-artifacts` skill** — the platform skill that teaches an agent when to publish and how to build a site that works in the sandbox. See [Skill delivery](#skill-delivery).
 
 ## User Stories / Flows
 
-1. An agent calls `artifacts_publish` on `reports/q3`. The chat shows the approval card with `Deny`, `Edit…`, `Publish`; the Inbox shows a row "Publish artifact" with **Publish** and **Deny**. The agent's call is blocked.
-2. The person presses **Publish** on either surface. Main publishes with the agent's arguments, the card becomes the [artifact card](artifacts.md) of the result, the row settles, and the agent gets `{artifact_id, revision, url, kind, file_count, size_bytes, excluded}`.
-3. The person presses **Deny**: the agent gets "The user declined to publish `reports/q3`; do not retry unless they ask." The transcript says "Not published — you declined".
-4. The person presses **Edit…**, changes the title and picks *Everyone on the instance*, then publishes: the artifact is published as edited and the agent's result describes what really happened.
-5. A failure on **Publish** (the instance unreachable, the folder over the limits) is said in the card, which stays; the request is still pending, so the person can retry, edit or deny.
-6. The agent republishes the same path later. If the skip rule holds, no card appears: the transcript shows a one-line "Updated rev 4" with the card of the artifact.
+1. An agent calls `artifacts_publish` on `reports/q3` for the first time. No card: the artifact is published private, the transcript shows its [artifact card](artifacts.md), and the agent gets the result at once. The person shares it from **Share…** if they want.
+2. The agent republishes the same path later. Core is read; the person is still the owner, so it publishes with the audience kept, even if shared. The transcript shows a line "Updated without asking" above the card.
+3. The agent names an `artifact_id` that another agent published, or core cannot be read for the artifact, or the person is no longer its owner. The chat shows the approval card with `Deny`, `Edit…`, `Publish`; the Inbox shows a row "Publish artifact" with **Publish** and **Deny**. The agent's call is blocked.
+4. The person presses **Publish** on either surface. Main publishes with the agent's arguments, the card becomes the [artifact card](artifacts.md) of the result, the row settles, and the agent gets `{artifact_id, revision, url, kind, file_count, size_bytes, excluded}`.
+5. The person presses **Deny**: the agent gets "The user declined to publish `reports/q3`; do not retry unless they ask." The transcript says "Not published — you declined".
+6. The person presses **Edit…**, changes the title and picks *Everyone on the instance*, then publishes: the artifact is published as edited and the agent's result describes what really happened.
+7. A failure on **Publish** (the instance unreachable, the folder over the limits) is said in the card, which stays; the request is still pending, so the person can retry, edit or deny.
 
 ## Business Rules
 
@@ -31,16 +32,17 @@ A folder agent can publish a file or folder from its own folder as an [artifact]
 
 ### The gate
 
-- **A new artifact always asks.** So does an artifact another agent published, one never approved for this agent, or one at a different path.
-- **The skip rule** (`agentArtifactPolicy`): a republish of the same path into an artifact **this same agent was approved to publish**, on the same core, which core says **right now** is owned by the user, private, with **0 live links and 0 grants**. New content there reaches nobody but its owner. Any failure to read that state asks.
-- **The state is read fresh, never from the local row.** Grants, links and visibility set on core's web page never reach this machine's memory, so a row that says "private" can be a shared artifact. Skipping the card on that would have sent new content to people the owner shared it with.
-- **An agent publishes privately.** A new artifact is private; a republish leaves the audience as the person set it (`keep`). The card says who would see the new content (for an artifact already shared, it says so) before anything is sent.
-- **A deleted artifact becomes a new one.** If core no longer has the artifact the agent asked to update, the request is treated as a new private artifact.
-- **A decision names its agent.** After an approved publish the artifact is recorded as approved for that agent; that is the only thing the skip rule trusts.
+- **A new artifact publishes without asking**, private: it reaches nobody but its owner.
+- **A republish into this agent's own artifact publishes without asking** (`agentArtifactPolicy`). "Its own" is the local row's `agentId` equal to the agent: by the agent's own call, or by the person's Publish… from that agent's chat. The path need not match when `artifact_id` is given. Core is read **right now**: still the user's, it publishes and **keeps the audience, shared or not**. This is a product decision: republishing updates the artifact for whoever the owner already shared it with, rather than asking on every update. The agent still cannot widen it.
+- **It asks (the card) when** core cannot be read for an existing artifact, the user is no longer the owner, or `artifact_id` names another agent's artifact.
+- **The state is read fresh, never from the local row.** Ownership set on core never reaches this machine's memory, so a stale row could name an artifact the person no longer owns. Publishing on that would have written into someone else's artifact.
+- **An agent never shares.** The tool takes no visibility and no link; a new artifact is private and a republish leaves the audience as the person set it (`keep`). When a card is shown it says who would see the new content (for an artifact already shared, it says so) before anything is sent.
+- **A deleted artifact becomes a new one.** If core no longer has the artifact the agent asked to update, it is published as a new private artifact, without a card.
+- The old per-agent "approved" record is gone: `approved_agent_id` is no longer read or written (the column stays to spare a migration).
 
 ### Waiting, and ending the wait
 
-- The call waits for the park timeout (an hour, the same as every parked ask). Nobody answering is "Nobody answered the request to publish … within an hour"; the transcript says "Not published — no answer within an hour".
+- Only a call that raised the card waits. It waits for the park timeout (an hour, the same as every parked ask). Nobody answering is "Nobody answered the request to publish … within an hour"; the transcript says "Not published — no answer within an hour".
 - **Stop** (the chat is stopped, the turn aborted) cancels the wait: "The request to publish … was cancelled before the user answered". The transcript says the chat stopped before the person answered.
 - **A stop or timeout during an approved upload waits for it**, up to two minutes. An upload cannot be called back; the call settles with what really happened (published, or the stop/timeout if the upload failed), not with a cancel that hides an artifact now on the instance.
 - One answer runs at a time. A second **Publish** while one is uploading is refused ("already being answered").
@@ -48,7 +50,7 @@ A folder agent can publish a file or folder from its own folder as an [artifact]
 
 ### What the agent is told when the tool refuses
 
-A path outside the workspace, a missing path, an excluded path (the sentence names the reason), a folder where every file is excluded, an `entry` that is not an HTML file in the folder (with the pages that are), an over-limit folder, an unknown `artifact_id`, and a profile without support are all refused before any card is shown.
+A path outside the workspace, a missing path, an excluded path (the sentence names the reason), a folder where every file is excluded, an `entry` that is not an HTML file in the folder (with the pages that are), an over-limit folder, an unknown `artifact_id`, and a profile without support are all refused before anything is published or any card is shown.
 
 ## Skill delivery
 
@@ -65,15 +67,15 @@ The `cinna-artifacts` skill is platform-owned: it arrives in the kit bundle (`sk
 
 ## Known limits
 
-- **Codex's 60 second tool timeout.** codex-acp times an MCP tool call out after 60 seconds by default, which is shorter than any approval a person will answer. A Codex agent's `artifacts_publish` is therefore cut short while the card is still waiting. Fixing it needs a change to the pinned adapter's patch, which is not made here ([Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md)).
-- **The skip rule needs a prior approval on this machine.** It is remembered by the realpath on this computer, so the first publish of any path asks.
+- **Codex's 60 second tool timeout.** codex-acp times an MCP tool call out after 60 seconds by default, which is shorter than any approval a person will answer. It now matters only for the remaining card cases (an unreadable core, a lost ownership, another agent's artifact): a Codex agent's call is cut short while the card is still waiting. Ordinary publishes no longer wait. Fixing it needs a change to the pinned adapter's patch, which is not made here ([Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md)).
+- **Own-artifact memory is local.** "This agent published it" is the row on this computer; an artifact published from another machine is not recognised, so an `artifact_id` naming it asks.
 
 ## Architecture Overview
 
 ```
 Agent (engine) -> cinna MCP (conductorBridge) -> ArtifactToolProvider.callTool
-   -> validate session -> inspect -> policy (fresh detail read)
-        skip -> publishService.publish (keep audience) -> result
+   -> validate session -> inspect -> policy (fresh detail read for an existing row)
+        publish -> publishService.publish (new: private; own republish: keep audience) -> result
         ask  -> needs_input(art_<id>) -> approvals.open (blocks)
                   transcript card / Inbox row / Edit… -> approvals.answer -> publish -> settle
    <- artifact_id, revision, url, kind, file_count, size_bytes, excluded
