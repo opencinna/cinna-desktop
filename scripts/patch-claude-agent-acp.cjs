@@ -96,42 +96,111 @@ function cinnaTrimContextUsage(usage) {
     return trimmed;
 }
 `
+
+// `dist/native-subagents.js`: a subagent resumed by SendMessage. Its new
+// `task_started` names the SendMessage call (`tool_use_id`), but every frame of
+// the resumed agent still names the Agent call that first spawned it
+// (`parent_tool_use_id`), and so does nothing else. The adapter keyed the new
+// generation by the SendMessage call (its comment assumes the resume reuses the
+// first call's id; on CLI 2.1.296 it does not), so the first call still led to
+// the finished generation: the resumed agent's frames were dropped as late
+// updates, and the agents it spawned were announced on the finished
+// generation's session. The new generation is keyed by the call its frames
+// name, and the SendMessage call is mapped to it as well, because the resume's
+// `task_notification` names that call (`finishTask` resolves the child by it).
+// Watched live on CLI 2.1.296 with adapter 0.89.1.
+const resumeKeyAnchor = '            parentToolUseId: task.toolUseId ?? undefined,\n'
+const resumeKey = `            // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): a resume keeps the Agent call its frames name; its own SendMessage call is an alias.
+            parentToolUseId: previous?.parentToolUseId ?? task.toolUseId ?? undefined,
+            ...(previous?.parentToolUseId && task.toolUseId && task.toolUseId !== previous.parentToolUseId ? { resumeToolUseId: task.toolUseId } : {}),
+`
+const resumeAliasAnchor = `        if (toolUseId) {
+            this.taskByToolUse.set(toolUseId, taskId);
+            this.childByParentToolUse.set(toolUseId, child);
+            this.controlByToolUse.delete(toolUseId);
+        }
+`
+const resumeAlias = `${resumeAliasAnchor}        // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): the resume's SendMessage call leads to the same generation.
+        if (child.resumeToolUseId) {
+            this.taskByToolUse.set(child.resumeToolUseId, taskId);
+            this.childByParentToolUse.set(child.resumeToolUseId, child);
+        }
+`
+// A resumed generation answers to the first Agent call too (above), so a late
+// `task_notification` of the generation before it — which names that call —
+// resolved to the resumed generation and ended it while it ran. A generation
+// that was resumed is ended only by its own SendMessage call's notification,
+// or by a `task_updated` that names no call.
+const resumeFinishAnchor = `        if (child && toolUseId && this.taskByToolUse.get(toolUseId) !== taskId)
+            return;
+`
+const resumeFinish = `${resumeFinishAnchor}        // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): the Agent call's notification belongs to the generation before a resume.
+        if (child?.resumeToolUseId && toolUseId === child.parentToolUseId)
+            return;
+`
+
 const digest = (content) => createHash('sha256').update(content).digest('hex')
+
+/** The patched files: where each is, its reviewed digests, and its edits (anchor → replacement). */
+const FILES = [
+  {
+    file: 'dist/acp-agent.js',
+    label: 'context usage, AIR client off',
+    originalSha256: policy.originalSha256,
+    patchedSha256: policy.patchedSha256,
+    edits: [[routeAnchor, route], [handlerAnchor, handler + handlerAnchor], [airClientAnchor, airClientOff]]
+  },
+  {
+    file: 'dist/native-subagents.js',
+    label: 'resumed subagent routing',
+    originalSha256: policy.subagentsOriginalSha256,
+    patchedSha256: policy.subagentsPatchedSha256,
+    edits: [[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish]]
+  }
+]
 
 function adapter(root) {
   const directory = join(root, 'node_modules/@agentclientprotocol/claude-agent-acp')
   const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
   if (manifest.version !== policy.version) throw new Error('Claude ACP patch needs review for this adapter version')
-  return join(directory, 'dist/acp-agent.js')
+  return directory
 }
 
 function verifyClaudeAgentAcpPatch(root) {
-  if (digest(readFileSync(adapter(root))) !== policy.patchedSha256) {
-    throw new Error('Claude ACP patch (context usage, AIR client off) is missing or changed')
+  const directory = adapter(root)
+  for (const target of FILES) {
+    if (digest(readFileSync(join(directory, target.file))) !== target.patchedSha256) {
+      throw new Error(`Claude ACP patch (${target.label}) is missing or changed`)
+    }
   }
 }
 
 function patchClaudeAgentAcp(root) {
-  const path = adapter(root)
-  const content = readFileSync(path, 'utf8')
-  if (digest(content) === policy.patchedSha256) return
-  if (digest(content) !== policy.originalSha256) {
-    throw new Error('Claude ACP source differs from the reviewed pinned adapter; refusing to patch')
+  const directory = adapter(root)
+  // Every file is checked before any is written, so a refusal leaves the package as it was.
+  const writes = []
+  for (const target of FILES) {
+    const path = join(directory, target.file)
+    const content = readFileSync(path, 'utf8')
+    if (digest(content) === target.patchedSha256) continue
+    if (digest(content) !== target.originalSha256) {
+      throw new Error(`Claude ACP source (${target.file}) differs from the reviewed pinned adapter; refusing to patch`)
+    }
+    for (const [anchor] of target.edits) {
+      if (content.split(anchor).length !== 2) throw new Error(`Claude ACP patch target changed (${target.file})`)
+    }
+    const patched = target.edits.reduce((text, [anchor, replacement]) => text.replace(anchor, () => replacement), content)
+    if (digest(patched) !== target.patchedSha256) throw new Error(`Claude ACP patch output does not match reviewed content (${target.file})`)
+    writes.push([path, patched])
   }
-  for (const anchor of [routeAnchor, handlerAnchor, airClientAnchor]) {
-    if (content.split(anchor).length !== 2) throw new Error('Claude ACP patch target changed')
+  for (const [path, patched] of writes) {
+    const temporary = `${path}.${process.pid}.tmp`
+    writeFileSync(temporary, patched, { mode: 0o644 })
+    renameSync(temporary, path)
   }
-  const patched = content
-    .replace(routeAnchor, () => route)
-    .replace(handlerAnchor, () => handler + handlerAnchor)
-    .replace(airClientAnchor, () => airClientOff)
-  if (digest(patched) !== policy.patchedSha256) throw new Error('Claude ACP patch output does not match reviewed content')
-  const temporary = `${path}.${process.pid}.tmp`
-  writeFileSync(temporary, patched, { mode: 0o644 })
-  renameSync(temporary, path)
   verifyClaudeAgentAcpPatch(root)
 }
 
 module.exports = { patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD: METHOD, contextUsageHandlerSource: handler, contextUsageRouteAnchor: routeAnchor, contextUsageRoute: route,
-  airClientAnchor, airClientOff }
+  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish }
 if (require.main === module) patchClaudeAgentAcp(resolve(__dirname, '..'))

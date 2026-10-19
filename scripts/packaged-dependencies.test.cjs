@@ -20,6 +20,7 @@ function copyClaudeAdapter(directory) {
   mkdirSync(join(directory, 'dist'), { recursive: true })
   writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/claude-agent-acp', version: claudePatch.version, dependencies: { shared: '*' } }))
   copyFileSync(join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js'), join(directory, 'dist/acp-agent.js'))
+  copyFileSync(join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist/native-subagents.js'), join(directory, 'dist/native-subagents.js'))
 }
 
 function fixture(t) {
@@ -114,6 +115,9 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   copyClaudeAdapter(shippedClaude)
   writeFileSync(join(shippedClaude, 'dist/acp-agent.js'), '// pristine adapter\n')
   assert.throws(() => afterPack(context), /Claude ACP patch \(context usage, AIR client off\) is missing or changed/)
+  copyClaudeAdapter(shippedClaude)
+  writeFileSync(join(shippedClaude, 'dist/native-subagents.js'), '// pristine adapter\n')
+  assert.throws(() => afterPack(context), /Claude ACP patch \(resumed subagent routing\) is missing or changed/)
   copyClaudeAdapter(shippedClaude)
   assert.throws(() => afterPack(context), /Missing packaged Canvas payload/)
   const shipped = pkg(canvasName, { main: 'skia.darwin-x64.node' }, unpacked)

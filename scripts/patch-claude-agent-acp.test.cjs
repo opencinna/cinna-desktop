@@ -7,7 +7,7 @@ const { tmpdir } = require('node:os')
 const { createHash } = require('node:crypto')
 const {
   patchClaudeAgentAcp, verifyClaudeAgentAcpPatch, CONTEXT_USAGE_METHOD, contextUsageHandlerSource, contextUsageRoute, contextUsageRouteAnchor,
-  airClientAnchor, airClientOff
+  airClientAnchor, airClientOff, resumeKeyAnchor, resumeKey, resumeAliasAnchor, resumeAlias, resumeFinishAnchor, resumeFinish
 } = require('./patch-claude-agent-acp.cjs')
 const policy = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
 
@@ -27,7 +27,12 @@ function fixture(t) {
     .replace(airClientOff, () => airClientAnchor)
   assert.equal(sha(original), policy.originalSha256)
   writeFileSync(path, original)
-  return { root, path, manifest, original }
+  const subagentsPath = join(directory, 'dist/native-subagents.js')
+  const subagentsOriginal = readFileSync(join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist/native-subagents.js'), 'utf8')
+    .replace(resumeKey, () => resumeKeyAnchor).replace(resumeAlias, () => resumeAliasAnchor).replace(resumeFinish, () => resumeFinishAnchor)
+  assert.equal(sha(subagentsOriginal), policy.subagentsOriginalSha256)
+  writeFileSync(subagentsPath, subagentsOriginal)
+  return { root, path, manifest, original, subagentsPath, subagentsOriginal }
 }
 
 test('patches the exact pinned adapter once and packaging rejects the pristine adapter', (t) => {
@@ -50,6 +55,26 @@ test('patches the exact pinned adapter once and packaging rejects the pristine a
   assert.equal(text.split('this.toolCallCapabilities.air = { ...this.toolCallCapabilities.air, client: false };').length, 2)
   assert.match(text, /this\.toolCallCapabilities = ToolCallClientCapabilities\.from\(request\.clientCapabilities, \{\n\s+v2: this\.v2,\n\s+\}\);\n\s+\/\/ Cinna Desktop[^\n]*\n\s+this\.toolCallCapabilities\.air = \{ \.\.\.this\.toolCallCapabilities\.air, client: false \};\n\s+this\.sessionIndex\.negotiate\(/)
   assert.equal(text.match(/this\.toolCallCapabilities(\.air)? = /g)?.length, 2)
+  // The resume routing: keyed once in taskStarted, aliased once in openGeneration, guarded once in finishTask.
+  const subagents = readFileSync(f.subagentsPath)
+  assert.equal(sha(subagents), policy.subagentsPatchedSha256)
+  const subagentsText = subagents.toString('utf8')
+  assert.equal(subagentsText.split('parentToolUseId: previous?.parentToolUseId ?? task.toolUseId ?? undefined,').length, 2)
+  assert.equal(subagentsText.split('if (child.resumeToolUseId) {').length, 2)
+  assert.equal(subagentsText.split('if (child?.resumeToolUseId && toolUseId === child.parentToolUseId)').length, 2)
+})
+
+test('packaging rejects either file unpatched, and a refusal of one file leaves the other unwritten', (t) => {
+  const f = fixture(t)
+  patchClaudeAgentAcp(f.root)
+  writeFileSync(f.subagentsPath, f.subagentsOriginal)
+  assert.throws(() => verifyClaudeAgentAcpPatch(f.root), /resumed subagent routing\) is missing or changed/)
+  writeFileSync(f.path, f.original)
+  const changed = `${f.subagentsOriginal}\n// different distribution\n`
+  writeFileSync(f.subagentsPath, changed)
+  assert.throws(() => patchClaudeAgentAcp(f.root), /native-subagents\.js\) differs/)
+  assert.equal(readFileSync(f.path, 'utf8'), f.original)
+  assert.equal(readFileSync(f.subagentsPath, 'utf8'), changed)
 })
 
 test('rejects unexpected source and version without modifying the package', (t) => {
@@ -156,4 +181,61 @@ test('the handler refuses a prompt queued before activation as busy, and an ende
   // A queue of settled turns is between turns.
   await injected.cinnaContextUsage(agent, { sessionId: 'settled' })
   assert.equal(asked, 1)
+})
+
+/*
+ * The resume routing, on the adapter's own NativeSubagentRuntime as patched in
+ * node_modules. Recorded live on CLI 2.1.296: a
+ * SendMessage resume's task_started names the SendMessage call, while the
+ * resumed agent's frames still name the Agent call that spawned it.
+ */
+test('a resumed subagent is routed by the Agent call its frames name, outlives that call\'s late notification, and ends by its SendMessage call', async () => {
+  const dist = join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist')
+  const { NativeSubagentRuntime } = await import(pathToFileURL(join(dist, 'native-subagents.js')).href)
+  const published = []
+  const logs = []
+  const runtime = new NativeSubagentRuntime(true, 'root', {}, async (n) => { published.push(n) }, { log: (line) => logs.push(line) })
+  const deliver = async () => {}
+  const agentCall = (id, parentToolUseId) => ({
+    sessionId: 'root',
+    update: {
+      sessionUpdate: 'tool_call', toolCallId: id, rawInput: { description: id, prompt: 'go', subagent_type: 'worker' },
+      _meta: { claudeCode: { toolName: 'Agent', ...(parentToolUseId ? { parentToolUseId } : {}) } }
+    }
+  })
+  const states = () => published.filter((n) => n.update.sessionUpdate !== 'subagent_spawned')
+    .map((n) => [n.sessionId, n.update.subagentSessionId, n.update.state])
+
+  await runtime.route(agentCall('orig'), deliver)
+  await runtime.taskStarted({ taskId: 'a1', toolUseId: 'orig', subagentType: 'worker', description: 'orchestrator', prompt: 'go' }, deliver)
+  await runtime.finishTask('a1', 'completed', deliver, 'orig')
+  // SendMessage resumes it: a new task_started for the same agent, under the SendMessage call.
+  await runtime.taskStarted({ taskId: 'a1', toolUseId: 'send', subagentType: 'worker', description: 'orchestrator', prompt: 'more' }, deliver)
+  assert.deepEqual(published.at(-1), {
+    sessionId: 'root',
+    update: { sessionUpdate: 'subagent_spawned', subagentSessionId: 'a1:generation:2', name: published.at(-1).update.name, task: published.at(-1).update.task, prompt: 'more', capabilities: {} }
+  })
+
+  // A late task_notification of generation 1 names the original Agent call: generation 2 runs on.
+  await runtime.finishTask('a1', 'completed', deliver, 'orig')
+  assert.deepEqual(states(), [['root', 'a1', 'completed']])
+
+  // The resumed agent's frame names the original Agent call and reaches generation 2.
+  const chunk = { sessionId: 'root', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' }, _meta: { claudeCode: { parentToolUseId: 'orig' } } } }
+  assert.equal((await runtime.route(chunk, deliver))?.sessionId, 'a1:generation:2')
+  assert.deepEqual(logs.filter((line) => line.includes('late update')), [])
+
+  // A child it spawns is announced on generation 2's session.
+  await runtime.route(agentCall('nested', 'orig'), deliver)
+  await runtime.taskStarted({ taskId: 'b1', toolUseId: 'nested', subagentType: 'leaf', description: 'leaf', prompt: 'x' }, deliver)
+  assert.deepEqual(published.filter((n) => n.update.subagentSessionId === 'b1').map((n) => n.sessionId), ['a1:generation:2'])
+  await runtime.finishTask('b1', 'completed', deliver, 'nested')
+
+  // Its task_notification names the SendMessage call, and ends generation 2.
+  await runtime.finishTask('a1', 'completed', deliver, 'send')
+  assert.deepEqual(states(), [
+    ['root', 'a1', 'completed'],
+    ['a1:generation:2', 'b1', 'completed'],
+    ['root', 'a1:generation:2', 'completed']
+  ])
 })

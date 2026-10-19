@@ -480,6 +480,7 @@ describe('the Claude launcher', () => {
     const filter = [
       { type: 'system', subtype: 'init' },
       { type: 'system', subtype: 'compact_boundary' },
+      { type: 'system', subtype: 'background_tasks_changed' },
       { type: 'assistant' },
       { type: 'result' }
     ]

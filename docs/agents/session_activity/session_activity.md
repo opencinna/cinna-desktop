@@ -62,7 +62,8 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 - **A new run of a Codex subagent is a new item** (`<thread>#2`, `#3`…), because an ended item never runs again
 
 ### Stop
-- **Only a running background process whose agent said it can be stopped offers Stop.** Subagents have no Stop control
+- **Only a running background process whose agent said it can be stopped offers Stop.** Subagents have no Stop control: they are not async tasks, and only stopping the turn ends them
+- **A Claude subagent never stays "running" after its turn.** When Claude ends a turn, any subagent that turn started and the CLI no longer lists as live is marked lost, with a warning in the log. A subagent still running in the background is left alone, as is one an earlier turn started
 - **Every refusal is data with a sentence, never a thrown error:** `already_ended`, `not_stoppable`, `unavailable` (the agent did not answer within five seconds, or its process is gone), `chat_not_found` (not this profile's chat, or it is in the trash). A stop that timed out while the item ended meanwhile reads "already ended", not "no answer"
 - **The stop state lives above the popover**, because a popover row unmounts while its stop is still in flight
 - **"Stopping…" lasts until the item is seen to stop.** It stays until the pushed state leaves `running` or a refusal comes back. After an accepted stop that no push confirms, it gives up after ten seconds. The engines send the stopped state before they answer, so the fallback rarely matters

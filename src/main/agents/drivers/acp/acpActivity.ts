@@ -57,6 +57,7 @@ import type {
 } from '../../../../shared/sessionActivity'
 import { createLogger } from '../../../logger/logger'
 import type { AcpConnection } from './types'
+import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 
 const logger = createLogger('acp-activity')
 
@@ -356,13 +357,26 @@ export function spawnedSubagent(notification: SessionNotification): { sessionId:
   return { sessionId, name: str(update.name), task: str(update.task) }
 }
 
-/** The subagent a terminal `subagent_state_update` ends, if this is one. */
-function endedSubagent(notification: SessionNotification): string | undefined {
-  const update = updateOf(notification)
-  if (update.sessionUpdate !== 'subagent_state_update') return undefined
-  // Every state but `running` ends it, as in `subagentState`.
-  if (str(update.state) === 'running') return undefined
-  return str(update.subagentSessionId)
+/**
+ * The task ids a Claude `_claude/sdkMessage` `system/background_tasks_changed`
+ * lists — the session's whole live background set, REPLACE semantics — or
+ * undefined when the notification is not one.
+ */
+export function backgroundTaskIds(method: string, params: Record<string, unknown>): ReadonlySet<string> | undefined {
+  if (method !== SDK_MESSAGE_METHOD) return undefined
+  const message = record(params.message)
+  if (message?.type !== 'system' || message.subtype !== 'background_tasks_changed' || !Array.isArray(message.tasks)) return undefined
+  const ids = new Set<string>()
+  for (const task of message.tasks) {
+    const id = str(record(task)?.task_id)
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+/** The task id behind a Claude child session: a resumed run's is `<task id>:generation:N`. */
+export function subagentTaskId(childSessionId: string): string {
+  return childSessionId.replace(/:generation:\d+$/, '')
 }
 
 /* ------------------------------------------------------- per session feed */
@@ -389,7 +403,10 @@ export interface SessionActivity {
   subagent(childSessionId: string): { name?: string; task?: string } | undefined
   /** What {@link SubagentFrames} knows about this session's Agent calls, across its turns. */
   readonly agentCalls: AgentCallMemory
-  /** Drop the aliases. The hub items stay; they end on their own messages or with the process. */
+  /**
+   * Drop the aliases, every child's, ended or not: the only place a route is
+   * dropped. The hub items stay; they end on their own messages or with the process.
+   */
   close(): void
 }
 
@@ -407,24 +424,6 @@ export interface AgentCallMemory {
 
 function createAgentCallMemory(): AgentCallMemory {
   return { announced: new Set(), callOfChild: new Map() }
-}
-
-/**
- * How long a subagent's route and what `subagent_spawned` said about it are
- * kept after its terminal state: long enough for the parent's hook update
- * that follows it (Q3: 2 ms later) and a corrected state (C5).
- */
-export const ACP_SUBAGENT_FORGET_MS = 30_000
-
-/** An opaque handle for whatever `setTimer` returned. */
-export type ActivityTimerHandle = unknown
-
-export interface SessionActivityRegistryOptions {
-  /** Schedules the forgetting of an ended subagent. Production uses `setTimeout`. */
-  setTimer?: (fn: () => void, ms: number) => ActivityTimerHandle
-  clearTimer?: (handle: ActivityTimerHandle) => void
-  /** Overrides {@link ACP_SUBAGENT_FORGET_MS}. Tests only. */
-  subagentForgetMs?: number
 }
 
 /**
@@ -461,19 +460,14 @@ interface Entry {
   children: Map<string, Entry>
 }
 
-export function createSessionActivityRegistry(
-  reporter?: SessionActivityReporter,
-  options: SessionActivityRegistryOptions = {}
-): SessionActivityRegistry {
-  const setTimer = options.setTimer ?? ((fn, ms) => {
-    const timer = setTimeout(fn, ms)
-    // Forgetting must never be the reason the app stays awake.
-    timer.unref?.()
-    return timer
-  })
-  const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
-  const forgetMs = options.subagentForgetMs ?? ACP_SUBAGENT_FORGET_MS
-
+/**
+ * An ended subagent's route, spawn info and call link are kept until its
+ * feed closes (the connection exits, or the chat is forgotten), never on a
+ * timer: a subagent's children announce their spawn and end on its session,
+ * and the CLI accepts a handback while those children still run, so a nested
+ * end can arrive minutes after its parent's (watched live on CLI 2.1.296).
+ */
+export function createSessionActivityRegistry(reporter?: SessionActivityReporter): SessionActivityRegistry {
   /** Per connection: session id → entry, and child session id → the parent's entry. */
   const byConnection = new WeakMap<AcpConnection, { sessions: Map<string, Entry>; children: Map<string, Entry> }>()
   const entries = new Set<Entry>()
@@ -499,28 +493,11 @@ export function createSessionActivityRegistry(
     const spawned = new Map<string, { name?: string; task?: string }>()
     const unalias = new Map<string, () => void>()
     const agentCalls = createAgentCallMemory()
-    const forgetTimers = new Map<string, ActivityTimerHandle>()
     let closed = false
     const dropRoute = (childId: string): void => {
       unalias.get(childId)?.()
       unalias.delete(childId)
       if (children.get(childId) === entry) children.delete(childId)
-    }
-    /**
-     * An ended subagent's route, spawn info and call link, a grace period
-     * after its end. The announced call id stays: a late hook must not
-     * announce the call again.
-     */
-    const scheduleForget = (childId: string): void => {
-      if (forgetTimers.has(childId)) return
-      forgetTimers.set(childId, setTimer(() => {
-        forgetTimers.delete(childId)
-        if (closed) return
-        dropRoute(childId)
-        spawned.delete(childId)
-        state.subagents.delete(childId)
-        agentCalls.callOfChild.delete(childId)
-      }, forgetMs))
     }
     const entry: Entry = {
       scope,
@@ -536,11 +513,6 @@ export function createSessionActivityRegistry(
           const child = spawnedSubagent(notification)
           if (child && child.sessionId !== sessionId) {
             spawned.set(child.sessionId, { name: child.name, task: child.task })
-            const pending = forgetTimers.get(child.sessionId)
-            if (pending !== undefined) {
-              clearTimer(pending)
-              forgetTimers.delete(child.sessionId)
-            }
             if (!unalias.has(child.sessionId)) {
               children.set(child.sessionId, entry)
               try {
@@ -557,8 +529,6 @@ export function createSessionActivityRegistry(
             logger.warn('an activity update could not be read', { sessionId, error: String(err) })
             return
           }
-          const ended = endedSubagent(notification)
-          if (ended && spawned.has(ended)) scheduleForget(ended)
           if (!reporter) return
           for (const change of changes) {
             try {
@@ -573,8 +543,6 @@ export function createSessionActivityRegistry(
         close: () => {
           if (closed) return
           closed = true
-          for (const timer of forgetTimers.values()) clearTimer(timer)
-          forgetTimers.clear()
           for (const childId of [...unalias.keys()]) dropRoute(childId)
           if (sessions.get(sessionId) === entry) sessions.delete(sessionId)
           entries.delete(entry)

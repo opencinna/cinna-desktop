@@ -19,6 +19,12 @@ export interface SessionActivityFilter {
   agentId?: string
 }
 
+/** What {@link SessionActivityHub.endAll} may narrow further: one kind, these item ids only. */
+export interface SessionActivityEndFilter extends SessionActivityFilter {
+  kind?: SessionActivityKind
+  ids?: ReadonlySet<string>
+}
+
 const copy = (item: SessionActivityItem): SessionActivityItem => ({
   ...item,
   startedAt: new Date(item.startedAt.getTime()),
@@ -137,20 +143,28 @@ export function createSessionActivityHub(now: () => Date = () => new Date()) {
       emit(chatId)
     },
 
-    /** Ends every running item that matches, `lost` unless told otherwise. Ended items keep their state. */
-    endAll(filter: SessionActivityFilter, state: SessionActivityTerminalState = 'lost'): void {
+    /**
+     * Ends every running item that matches, `lost` unless told otherwise, and
+     * answers how many. Ended items keep their state.
+     */
+    endAll(filter: SessionActivityEndFilter, state: SessionActivityTerminalState = 'lost'): number {
       const at = now()
+      let count = 0
       for (const [chatId, items] of [...chats]) {
         if (filter.chatId !== undefined && chatId !== filter.chatId) continue
         let changed = false
         for (const item of [...items.values()]) {
           if (item.state !== 'running' || (filter.agentId !== undefined && item.agentId !== filter.agentId)) continue
+          if (filter.kind !== undefined && item.kind !== filter.kind) continue
+          if (filter.ids !== undefined && !filter.ids.has(item.id)) continue
           apply(chatId, item.agentId, { type: 'end', id: item.id, state }, at)
           touch(item.agentId, at)
           changed = true
+          count++
         }
         if (changed) emit(chatId)
       }
+      return count
     },
 
     snapshot(chatId: string): SessionActivitySnapshot {

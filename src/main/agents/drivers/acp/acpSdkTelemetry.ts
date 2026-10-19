@@ -1,5 +1,6 @@
 /**
- * Claude's raw SDK stream, read for session telemetry and nothing else.
+ * Claude's raw SDK stream, read for session telemetry (and, in the driver,
+ * the live background-task set: see {@link RAW_SDK_MESSAGE_FILTER}).
  *
  * `claude-agent-acp` forwards the SDK messages a session asks for in
  * `_meta.claudeCode.emitRawSDKMessages` as `_claude/sdkMessage
@@ -34,10 +35,15 @@ export const SDK_MESSAGE_METHOD = '_claude/sdkMessage'
  * only source of the cache TTL and the exact per-request timing. Dropping it
  * is a one-line change here: the TTL then stays `assumed` and the cache clock
  * falls back to the `usage_update` readings.
+ *
+ * `system/background_tasks_changed` is not telemetry's: the driver reads it
+ * for the Claude turn-end safety net (`backgroundTaskIds` in
+ * `acpActivity.ts`); here it is only counted, as an `other` frame.
  */
 export const RAW_SDK_MESSAGE_FILTER: ReadonlyArray<{ type: string; subtype?: string }> = Object.freeze([
   { type: 'system', subtype: 'init' },
   { type: 'system', subtype: 'compact_boundary' },
+  { type: 'system', subtype: 'background_tasks_changed' },
   { type: 'assistant' },
   { type: 'result' }
 ])

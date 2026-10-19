@@ -37,7 +37,9 @@ describe('runtime pins', () => {
     expect(readJson('src/main/agents/drivers/acp/claudeAdapterPatch.json')).toEqual({
       version: RUNTIME_PINS.claude.adapter,
       originalSha256: RUNTIME_PINS.claude.adapterOriginalSha256,
-      patchedSha256: RUNTIME_PINS.claude.adapterPatchedSha256
+      patchedSha256: RUNTIME_PINS.claude.adapterPatchedSha256,
+      subagentsOriginalSha256: RUNTIME_PINS.claude.adapterSubagentsOriginalSha256,
+      subagentsPatchedSha256: RUNTIME_PINS.claude.adapterSubagentsPatchedSha256
     })
   })
 

@@ -184,6 +184,10 @@ export const RUNTIME_PINS = {
     adapterOriginalSha256: 'f00fea811d7144360a6e70bc87e38e36d00a807d15825a8179e2458520b71784',
     /** The same file after `scripts/patch-claude-agent-acp.cjs` (the `_cinna/contextUsage` request, and `air.client` forced off). */
     adapterPatchedSha256: 'd9d4d9ac13623f29745c8a3e1e790dd7ce04000714794a01d820e905ce11c4aa',
+    /** `dist/native-subagents.js` as published, from the same tarball. */
+    adapterSubagentsOriginalSha256: 'b4e65a57eacd03509f49fb91fe3b27f132fa6e2509e3ecb91d84e22e62eed306',
+    /** The same file after `scripts/patch-claude-agent-acp.cjs` (a SendMessage-resumed subagent keyed by the Agent call its frames name, and not ended by that call's late notification). */
+    adapterSubagentsPatchedSha256: 'ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,

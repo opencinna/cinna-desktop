@@ -133,6 +133,29 @@ describe('session activity hub', () => {
     expect(events).toEqual([])
   })
 
+  it('ends only the running items of one kind among the ids named, and answers how many', () => {
+    const { hub, events } = setup()
+    hub.report('c1', 'a1', start('s1:bg'))
+    hub.report('c1', 'a1', start('s1:sub', 'subagent'))
+    hub.report('c1', 'a1', start('s1:done', 'subagent'))
+    hub.report('c1', 'a1', end('s1:done', 'completed'))
+    hub.report('c1', 'a1', start('s2:sub', 'subagent'))
+    hub.report('c1', 'a2', start('s1:other', 'subagent'))
+    hub.report('c1', 'a1', start('s1:earlier', 'subagent'))
+    events.length = 0
+    const ids = new Set(['s1:bg', 's1:sub', 's1:done', 's2:sub', 's1:other'])
+
+    expect(hub.endAll({ chatId: 'c1', agentId: 'a1', kind: 'subagent', ids })).toBe(2)
+    expect(Object.fromEntries(hub.snapshot('c1').items.map((i) => [i.id, i.state]))).toEqual({
+      's1:bg': 'running', 's1:sub': 'lost', 's1:done': 'completed', 's2:sub': 'lost', 's1:other': 'running', 's1:earlier': 'running'
+    })
+    expect(events).toHaveLength(1)
+
+    events.length = 0
+    expect(hub.endAll({ chatId: 'c1', agentId: 'a1', kind: 'subagent', ids })).toBe(0)
+    expect(events).toEqual([])
+  })
+
   it('answers hasRunning by agent, by chat, and overall', () => {
     const { hub } = setup()
     expect(hub.hasRunning()).toBe(false)

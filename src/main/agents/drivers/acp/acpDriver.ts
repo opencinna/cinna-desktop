@@ -102,9 +102,10 @@ import { antigravityAutoApproves } from './antigravityAutoApproval'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, toInputQuestions, type AcpPermissionQuestion } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
-import { createSessionActivityRegistry, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
+import { backgroundTaskIds, createSessionActivityRegistry, spawnedSubagent, subagentTaskId, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
 import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
 import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
+import type { SessionActivityHub } from '../../../services/sessionActivityHub'
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
@@ -227,8 +228,10 @@ export interface AcpDriverDeps {
    * Where the subagents and background processes a session reports go (the
    * session activity hub). Fed from turns and from between them alike.
    * Absent: nothing is reported, and subagent frames are still routed.
+   * Its `endAll`, when there, is the Claude turn-end safety net
+   * ({@link endSubagentsLeftRunning}).
    */
-  activity?: SessionActivityReporter
+  activity?: SessionActivityReporter & Partial<Pick<SessionActivityHub, 'endAll'>>
   /**
    * Where a session's usage goes (the session telemetry service): context
    * readings as they arrive, each turn's tokens and cost once, the login.
@@ -1404,6 +1407,21 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   }
   /** The remembered session whose between-turn observer this turn took down. */
   let suspended: string | null = null
+  /** From the first `session/prompt` on: what arrives is this turn's prompt's, not the load's or the held traffic's. */
+  let promptInFlight = false
+  /**
+   * The hub items (`<root session>:<child session>`) of the subagents a
+   * `subagent_spawned` announced while this turn's prompt was in flight, at any
+   * depth and resumed generations included: the only ones the Claude turn-end
+   * safety net may end ({@link endSubagentsLeftRunning}).
+   */
+  const spawnedThisTurn = new Set<string>()
+  /**
+   * The session's live background tasks as the last `background_tasks_changed`
+   * this turn saw (held ones replayed into it included) listed them; null when
+   * none came. The safety net never ends a subagent still listed.
+   */
+  let liveBackground: ReadonlySet<string> | null = null
   /**
    * What that observer held for a follow-up turn that had not opened yet.
    * It is this turn's: replayed once the session is this turn's again (after
@@ -1464,6 +1482,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         if (turn.replaying) return
         stallWatch.heard()
         observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
+        if (promptInFlight) noteSpawned(ctx.activity, live, notification, spawnedThisTurn)
         ctx.titles?.observe(titleScope(), notification)
         // A subagent's call the agent no longer announces is written in first.
         conductor?.observe?.(notification)
@@ -1495,6 +1514,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
         if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
+        if (sessionId && params.sessionId === sessionId) liveBackground = backgroundTaskIds(method, params) ?? liveBackground
         const update = stream.applyExt(method, params)
         // Claude's raw stream: the session's own frames only (a subagent's
         // arrive under the parent's id and say so themselves).
@@ -1730,6 +1750,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (freshSession && plan.firstPromptPreamble) prompt.unshift({ type: 'text', text: plan.firstPromptPreamble })
       ctx.titles?.prompted(titleScope(), prompt)
       void reportLauncherAuth(deps, ctx)
+      promptInFlight = true
       let answer = await promptWithCancelGrace(
         deps,
         connection,
@@ -1870,6 +1891,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         sessionId,
         stopReason: answer.stopReason
       })
+      if (answer.stopReason === 'end_turn' && !turn.stopping && sessionId) {
+        endSubagentsLeftRunning(deps, ctx.launcherId, { chatId, agentId: agent.id, sessionId }, spawnedThisTurn, liveBackground)
+      }
       const ending = turnEnding({ aborted: input.signal.aborted, hitCeiling, stopError, stopReason: answer.stopReason })
       return finish(ctx, accumulator, sessionId, ending.error, undefined, ending.completed, ending.canceled)
     } catch (err) {
@@ -1979,6 +2003,66 @@ export function exitListenerCount(connection: AcpConnection): number {
 /** The observers a follow-up turn's context carries: it arms and suspends nothing. */
 const NO_OBSERVERS: SessionObservers = {
   wake: () => false, suspend: () => null, arm: () => {}, giveBack: () => false, forgetChat: () => {} }
+
+/**
+ * The turn-end safety net for Claude subagents. claude-agent-acp holds a
+ * prompt open until the subagents spawned or resumed during that prompt have
+ * settled — a turn only waits on its own subagents — so when it answers
+ * `end_turn` none of those can still run. Any of them the hub still shows
+ * running missed its end on the wire: it is ended `lost`, and the warn is how
+ * that gets noticed. Only the subagents this turn saw spawned (`spawned`:
+ * `<root session>:<child session>`, nested children and resumed generations
+ * included); one an earlier prompt or a follow-up turn started may well still
+ * run, and ending it would also let the idle reaper take the process. Never a
+ * background shell, which legitimately outlives the turn. Never one the CLI
+ * still lists live (`liveBackground`, the turn's last `background_tasks_changed`):
+ * a cycle the adapter had not yet made this turn's can spawn a background
+ * subagent the prompt does not wait on. Not for a Stop,
+ * whose cancel the adapter answers by ending the tree itself, and not for the
+ * other engines, whose prompts do not wait for their subagents.
+ */
+function endSubagentsLeftRunning(
+  deps: Pick<AcpDriverDeps, 'activity'>,
+  launcherId: AcpLauncherId,
+  scope: { chatId: string; agentId: string; sessionId: string },
+  spawned: ReadonlySet<string>,
+  liveBackground: ReadonlySet<string> | null
+): void {
+  if (launcherId !== 'claude' || !deps.activity?.endAll) return
+  // The item id is `<root session>:<child session>`; the child session is the task id, or a resumed run of it.
+  const ids = liveBackground
+    ? new Set([...spawned].filter((id) => !liveBackground.has(subagentTaskId(id.slice(id.indexOf(':') + 1)))))
+    : spawned
+  if (ids.size === 0) return
+  try {
+    const ended = deps.activity.endAll(
+      { chatId: scope.chatId, agentId: scope.agentId, kind: 'subagent', ids },
+      'lost'
+    )
+    if (ended > 0) {
+      logger.warn('subagents still shown running when Claude ended its turn; ended as lost', { ...scope, count: ended })
+    }
+  } catch (err) {
+    logger.warn('the subagents left running could not be ended', { ...scope, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * Note the hub item of the subagent a `subagent_spawned` announces, under the
+ * feed that owns the session it arrived on (a nested child's is its root
+ * session's, as in {@link observeActivity}).
+ */
+function noteSpawned(
+  registry: SessionActivityRegistry,
+  connection: AcpConnection,
+  notification: SessionNotification,
+  into: Set<string>
+): void {
+  const child = spawnedSubagent(notification)
+  if (!child) return
+  const owner = registry.lookup(connection, notification.sessionId)
+  if (owner) into.add(`${owner.sessionId}:${child.sessionId}`)
+}
 
 /** Hand one update to the activity feed of the session it belongs to (a child's goes to its parent's). */
 function observeActivity(

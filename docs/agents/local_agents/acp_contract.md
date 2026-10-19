@@ -598,7 +598,15 @@ The launch text a terminal shows for a background subagent is the CLI's own and 
 
 That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls also carried `_meta.codex.subagent {threadId, path, activity}` and `_meta.codex.collaboration`, and the desktop read those; 2.x dropped both, and the `subagent` flag it has instead is AIR meta, which the patched adapter never sends to Cinna. A `spawnAgent` collaboration call naming its receivers is **derived from `codex-acp` 2.2.2's code** (`CollabAgentReporter`), not watched. Its fixture, `codex/subagent_collab.json`, says so.
 
-**Does the prompt wait for a subagent?** On Claude, yes, for background and synchronous subagents alike. On Codex it did in the one run, because the model called `wait`. Codex has no background-spawn flag, so a non-waiting spawn was not tested.
+**Claude subagents, watched live (CLI 2.1.296, adapter 0.89.1):**
+
+- Subagents nest to any depth; frames carry `parent_task_id` / `spawn_depth`. A nested child's `subagent_spawned` and end arrive on its **parent's** session, possibly long after the parent itself ended, so the desktop keeps every route until the feed closes
+- `SubagentHandback` ends a run (success text "Report delivered to your caller."), may be called while the agent's own background agents run (they continue), and kills its background shells
+- `SendMessage` to a finished subagent resumes it as child session `<id>:generation:N`. The resume's `task_started` names the SendMessage call while the resumed agent's frames name the original Agent call; the reviewed adapter patch reconciles that ([Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md))
+- Subagents are not async tasks: no `async_task_*` rows, so no Stop; only `session/cancel` ends them, leaf first
+- The prompt is held open for subagents spawned or resumed *during it*, not for ones an earlier prompt started. The desktop's turn-end safety net relies on this ([Session Activity (tech)](../session_activity/session_activity_tech.md#the-claude-turn-end-safety-net))
+
+**Does the prompt wait for a subagent?** On Claude, yes, for background and synchronous subagents alike (those spawned or resumed during that prompt). On Codex it did in the one run, because the model called `wait`. Codex has no background-spawn flag, so a non-waiting spawn was not tested.
 
 ### What each launcher advertises
 

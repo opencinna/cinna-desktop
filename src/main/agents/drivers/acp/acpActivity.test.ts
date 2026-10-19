@@ -376,33 +376,6 @@ describe('the Agent tool call a Claude parent no longer receives', () => {
 const n = (sessionId: string, update: Record<string, unknown>): SessionNotification =>
   ({ sessionId, update }) as unknown as SessionNotification
 
-/** A `setTimer` that never fires on its own, so a test decides when time passes. */
-function fakeTimers(): {
-  setTimer: (fn: () => void, ms: number) => unknown
-  clearTimer: (handle: unknown) => void
-  pending: { fn: () => void; ms: number; cleared: boolean }[]
-  fire(): void
-} {
-  const pending: { fn: () => void; ms: number; cleared: boolean }[] = []
-  return {
-    pending,
-    setTimer: (fn, ms) => {
-      const entry = { fn, ms, cleared: false }
-      pending.push(entry)
-      return entry
-    },
-    clearTimer: (handle) => {
-      ;(handle as { cleared: boolean }).cleared = true
-    },
-    fire: () => {
-      for (const entry of pending.filter((e) => !e.cleared)) {
-        entry.cleared = true
-        entry.fn()
-      }
-    }
-  }
-}
-
 /** A parent `p` that spawned child `c`, and one turn's frames over it. */
 function parentWithChild(): {
   registry: ReturnType<typeof createSessionActivityRegistry>
@@ -516,45 +489,72 @@ describe('a Codex subagent that runs again (review fix 2)', () => {
   })
 })
 
-describe('an ended subagent is forgotten (review fix 3)', () => {
+describe('an ended subagent keeps its route until its feed closes', () => {
+  // Watched live on CLI 2.1.296: an orchestrator hands back while its own
+  // child runs; the child's end (and a later spawn) arrives on the
+  // orchestrator's session minutes later.
   function setup(): {
+    hub: ReturnType<typeof createSessionActivityHub>
     registry: ReturnType<typeof createSessionActivityRegistry>
     connection: ReturnType<typeof fakeConnection>
     feed: ReturnType<ReturnType<typeof createSessionActivityRegistry>['session']>
-    timers: ReturnType<typeof fakeTimers>
+    deliver(notification: SessionNotification): void
   } {
-    const timers = fakeTimers()
-    const registry = createSessionActivityRegistry(undefined, { setTimer: timers.setTimer, clearTimer: timers.clearTimer })
+    const hub = createSessionActivityHub()
+    const registry = createSessionActivityRegistry(hub)
     const connection = fakeConnection()
     const feed = registry.session(connection, 'p', { chatId: CHAT, agentId: AGENT })
-    feed.observe(n('p', { sessionUpdate: 'subagent_spawned', subagentSessionId: 'c', name: 'helper', task: 'x' }))
-    return { registry, connection, feed, timers }
+    // As the driver does: a frame goes to the feed that owns its session id.
+    const deliver = (notification: SessionNotification): void => {
+      registry.lookup(connection, notification.sessionId)?.observe(notification)
+    }
+    deliver(n('p', { sessionUpdate: 'subagent_spawned', subagentSessionId: 'c', name: 'orchestrator', task: 'x' }))
+    deliver(n('c', { sessionUpdate: 'subagent_spawned', subagentSessionId: 'g', name: 'worker', task: 'y' }))
+    deliver(n('p', { sessionUpdate: 'subagent_state_update', subagentSessionId: 'c', state: 'completed' }))
+    return { hub, registry, connection, feed, deliver }
   }
+  const stateOf = (hub: ReturnType<typeof createSessionActivityHub>, id: string): string | undefined =>
+    hub.snapshot(CHAT).items.find((item) => item.id === id)?.state
 
-  it('drops its route, spawn info and call link 30 s after its terminal state', () => {
-    const { registry, connection, feed, timers } = setup()
-    feed.agentCalls.callOfChild.set('c', 'call')
-    feed.observe(stateUpdate('running'))
-    expect(timers.pending).toHaveLength(0)
-    feed.observe(stateUpdate('completed'))
-    expect(timers.pending.map((t) => t.ms)).toEqual([30_000])
-    // Still there during the grace: the hook update follows the end.
-    expect(registry.lookup(connection, 'c')).toBe(feed)
-    expect(feed.subagent('c')).toBeDefined()
-
-    timers.fire()
-    expect(connection.aliases.size).toBe(0)
-    expect(registry.lookup(connection, 'c')).toBeUndefined()
-    expect(registry.lookup(connection, 'p')).toBe(feed)
-    expect(feed.subagent('c')).toBeUndefined()
-    expect(feed.agentCalls.callOfChild.size).toBe(0)
+  it('a nested child that ends long after its parent still ends its item', () => {
+    vi.useFakeTimers()
+    try {
+      const { hub, registry, connection, feed, deliver } = setup()
+      expect(stateOf(hub, 'p:c')).toBe('completed')
+      expect(stateOf(hub, 'p:g')).toBe('running')
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(registry.lookup(connection, 'c')).toBe(feed)
+      expect(feed.subagent('c')).toBeDefined()
+      deliver(n('c', { sessionUpdate: 'subagent_state_update', subagentSessionId: 'g', state: 'completed' }))
+      expect(stateOf(hub, 'p:g')).toBe('completed')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('close clears the pending timers', () => {
-    const { registry, feed, timers } = setup()
-    feed.observe(stateUpdate('failed'))
+  it('a nested child spawned after its parent ended is routed', () => {
+    vi.useFakeTimers()
+    try {
+      const { hub, registry, connection, feed, deliver } = setup()
+      vi.advanceTimersByTime(10 * 60_000)
+      deliver(n('c', { sessionUpdate: 'subagent_spawned', subagentSessionId: 'h', name: 'tester', task: 'z' }))
+      expect(connection.aliases.get('h')).toBe('p')
+      expect(registry.lookup(connection, 'h')).toBe(feed)
+      expect(stateOf(hub, 'p:h')).toBe('running')
+      deliver(n('c', { sessionUpdate: 'subagent_state_update', subagentSessionId: 'h', state: 'failed' }))
+      expect(stateOf(hub, 'p:h')).toBe('failed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('closing the feed drops every route, ended or not', () => {
+    const { registry, connection } = setup()
+    expect(connection.aliases.size).toBe(2)
     registry.forgetChat(CHAT)
-    expect(timers.pending.every((t) => t.cleared)).toBe(true)
+    expect(connection.aliases.size).toBe(0)
+    expect(registry.lookup(connection, 'c')).toBeUndefined()
+    expect(registry.lookup(connection, 'p')).toBeUndefined()
   })
 })
 

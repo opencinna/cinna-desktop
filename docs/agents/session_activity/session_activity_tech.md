@@ -26,7 +26,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 - `src/main/db/tasks.ts`, `src/main/ipc/task.ipc.ts` — the `chatId` filter on `task:list`
 
 ### Main process — ACP provider (`src/main/agents/drivers/acp/`)
-- `acpActivity.ts` — `AirCapability`, `airClientMeta(capabilities)`, `translateActivity(notification, state, owner)`, `spawnedSubagent()`, `createSessionActivityRegistry(reporter?, options?)`, `ACP_SUBAGENT_FORGET_MS` (30 s), `SubagentFrames`
+- `acpActivity.ts` — `AirCapability`, `airClientMeta(capabilities)`, `translateActivity(notification, state, owner)`, `spawnedSubagent()`, `backgroundTaskIds(method, params)` (the live set a Claude `system/background_tasks_changed` lists), `subagentTaskId(childSessionId)` (strips `:generation:N`), `createSessionActivityRegistry(reporter?)`, `SubagentFrames`
 - `acpActivityStop.ts` — `stopAcpAsyncTask(target, timeoutMs?)`, `createAcpActivityStopper(registry)`, `ACP_ASYNC_TASK_STOP_TIMEOUT_MS` (5 s)
 - `acpClient.ts` — the alias table (`aliases`, `ownerOf`) and `aliasSession(childId, parentId)`
 - `acpConnection.ts`, `acpWebSocketConnection.ts` — `stopAsyncTask` and `aliasSession` on the connection
@@ -75,7 +75,7 @@ The push listener (`registerSessionActivityHandlers`) reads `chatRepo.isTrashed`
 | Method | Behaviour |
 |---|---|
 | `report(chatId, agentId, change)` | Applies one change. The first upsert for an id creates the item; if no item of that kind is running, the ended items of that kind are deleted first. Later upserts merge only fields they carry (`undefined` and `null` never overwrite), and `canStop` is forced false for an ended item. An end sets state, `endedAt`, `canStop: false`, and the summary when given; a repeated identical end is not a change. The ended items of the kind are trimmed to `ENDED_PER_KIND`. Emits only on an effective change, and records `lastChange` for the agent |
-| `endAll(filter, state = 'lost')` | Ends every running item matching `{chatId?, agentId?}`, one emit per chat |
+| `endAll(filter, state = 'lost')` | Ends every running item matching `{chatId?, agentId?, kind?, ids?}` (`ids`: item ids only), one emit per chat, and answers how many it ended. The count is what lets the Claude turn-end safety net warn only when it ended something |
 | `snapshot(chatId)` | Ordered copies (dates cloned) |
 | `hasRunning(filter)` / `lastChangeAt(agentId)` | What the reaper reads |
 | `onChange(listener)` | A throwing listener is logged and skipped |
@@ -97,7 +97,7 @@ The push listener (`registerSessionActivityHandlers`) reads `chatRepo.isTrashed`
 
 The two Codex rows are recognised by the standard `rawInput` alone, never by `_meta`. `codex-acp` 2.x sends these calls with no `_meta` at all: the `_meta.codex.subagent` / `_meta.codex.collaboration` keys 1.11.0 sent are gone, and the `subagent` flag 2.x has is AIR meta, which a client kept out of AIR never gets. A reader keyed on `_meta` would see no Codex subagent at all under 2.x. The activity call's `tool_call_update` carries only `{toolCallId, status}` (watched on codex-cli 0.162.1), so it changes nothing here; the run ends on the separate "Complete subagent" call. Contract entry `codex.activity.subagent-shape` pins the shape against the real CLI.
 
-`createSessionActivityRegistry(reporter)` holds one `SessionActivity` feed per `(connection, sessionId)`. A later scope replaces the earlier one. On `subagent_spawned` the feed calls `connection.aliasSession(child, parent)` and records the child's name and task. On a terminal subagent state it schedules forgetting the route, the spawn info and the call link after `ACP_SUBAGENT_FORGET_MS`, which is long enough for the parent's PostToolUse update that follows (watched 2 ms later) and for a corrected state. `lookup` answers the parent's feed for a child session id. `forgetChat` closes feeds; the hub items stay and end on their own messages or with the process. `asyncTask(chatId, agentId, itemId)` finds the connection, session and wire id for Stop, across every open session of the chat, not only the latest turn's. A connection's exit closes all of its feeds.
+`createSessionActivityRegistry(reporter)` holds one `SessionActivity` feed per `(connection, sessionId)`. A later scope replaces the earlier one. On `subagent_spawned` the feed calls `connection.aliasSession(child, parent)` and records the child's name and task. A subagent's route, spawn info and call link are **never forgotten on a timer**: they live until the feed closes. A 30 s forget once ended them after a terminal state, and it lost events: Claude publishes a nested child's spawn and end on its *parent's* session, and the CLI accepts a handback while that parent's own background agents still run, so a nested end (or a resumed generation's frames) can arrive minutes after the parent's. With the route gone those events were dropped, so items stayed "running" and children were never routed. The cost of keeping them is a few map entries per subagent for the life of the connection or chat. `lookup` answers the parent's feed for a child session id. `forgetChat` closes feeds; the hub items stay and end on their own messages or with the process. `asyncTask(chatId, agentId, itemId)` finds the connection, session and wire id for Stop, across every open session of the chat, not only the latest turn's. A connection's exit closes all of its feeds.
 
 ### Child-session routing (`acpClient.ts`)
 
@@ -113,6 +113,22 @@ One per turn (prompted or follow-up). `expand(notification)` returns the frames 
 - A subagent ending while its call is still open closes it: completed, or failed with "Subagent failed." / "Subagent stopped." / "Subagent disconnected."
 - A subagent that **fails** before any call was linked gets a start and that end under `subagent:<child session id>`. A completed one does not, because a synchronous subagent's hook update follows its end and names the real call
 - A call the agent did announce passes through untouched. Any exception returns the notification alone
+
+### The Claude turn-end safety net
+
+`claude-agent-acp` holds a `session/prompt` open until the subagents spawned or resumed *during that prompt* have settled. So when Claude answers the user's prompt with `end_turn`, none of those can still be running; one the hub still shows running missed its end on the wire, and would otherwise stay "running" for ever.
+
+- **What it ends:** items in `spawnedThisTurn` — the `<root session>:<child session>` ids that `noteSpawned` collected from `subagent_spawned` while the prompt was in flight, nested children and resumed generations (`<id>:generation:N`) included — that are still running, through `hub.endAll({chatId, agentId, kind: 'subagent', ids}, 'lost')`, with a `warn` and the count. The warn is how a missed end gets noticed
+- **Never a subagent the CLI still lists live.** The driver keeps the last `background_tasks_changed` frame it saw (`backgroundTaskIds`, read from `onExtNotification` for this session only, held frames replayed into it included), and skips any item whose `subagentTaskId` is in it. The adapter holds a prompt only for subagents spawned or resumed during it; a background subagent started by a cycle the adapter had not yet made this turn's is not waited for, and it legitimately runs on. That is why `RAW_SDK_MESSAGE_FILTER` (`acpSdkTelemetry.ts`) now lets `system/background_tasks_changed` through: telemetry only counts it as an `other` frame
+- **Never a subagent an earlier prompt or a follow-up turn started**: it may well still run, and ending it would also let the idle reaper take the process. Never a background shell, which outlives the turn by design
+- **Not on Stop** (`turn.stopping`): the adapter answers a cancel by ending the tree itself. Not for other engines, whose prompts do not wait for their subagents. `activity.endAll` is optional on the driver's dependency; absent, nothing happens
+
+Facts watched live (Claude CLI 2.1.296, adapter 0.89.1) that the routing and the net rest on:
+
+- **Subagents nest to any depth.** Their frames carry `parent_task_id` and `spawn_depth`; the nested child's `subagent_spawned` and end arrive on the *parent's* session, which the root's `aliasSession` table resolves
+- **`SubagentHandback` ends a run** ("Report delivered to your caller." is its success result). It may be called while the agent's own background agents run, and they continue; it kills the agent's background *shells*
+- **`SendMessage` to a finished subagent resumes it** as a new child session `<id>:generation:N`. The adapter patch keys that generation by the original `Agent` call (see [Claude engine (tech)](../local_agents/claude_engine_tech.md)); `subagentTaskId` maps it back to the task
+- **Subagents are not async tasks.** They have no `async_task_*` row and so no Stop in the activity popover; only `session/cancel` ends them, leaf first
 
 ### Stop (`sessionActivityStop.ts`, `acpActivityStop.ts`)
 
@@ -143,7 +159,6 @@ The ACP stopper handles only `background` items it can find in its registry. `st
 | `ENDED_PER_KIND` | `sessionActivityHub.ts` | 5 | Enough for "2 finished, 1 running" without growing without bound |
 | `ACP_BUSY_REAP_CEILING_MS` | `acp/types.ts` | 30 min | A background process that never reports again must not hold its process for ever |
 | `ACP_ASYNC_TASK_STOP_TIMEOUT_MS` | `acpActivityStop.ts` | 5 s | Both engines answered in the same millisecond. Past five seconds the user is told to try again |
-| `ACP_SUBAGENT_FORGET_MS` | `acpActivity.ts` | 30 s | Grace for the PostToolUse update and a corrected state after a subagent's end |
 | `HOVER_CLOSE_DELAY_MS` | `useHoverPopover.ts` | 200 ms | Time for the pointer to cross from the badge into the popover |
 | Composer split | `SessionMetaBadges.tsx` | 40rem | Measured: 473 px at the 800 px minimum window with the sidebar open, 780 px and more otherwise |
 
@@ -160,8 +175,8 @@ The ACP stopper handles only `background` items it can find in its registry. `st
 | `src/main/services/sessionActivityHub.test.ts` | Merge rules, retention per kind, corrections, ordering, `endAll`, `clear`, one emit per change |
 | `src/main/services/sessionActivityStop.test.ts`, `acp/acpActivityStop.test.ts` | Every refusal, the timeout, exit during a stop, ended-meanwhile |
 | `src/main/ipc/session_activity.ipc.test.ts` | Ownership, activation, the trashed-chat drop, stop refusals as data |
-| `acp/acpActivity.test.ts` | The translation against the recorded Claude and Codex fixtures, Codex runs, the registry, aliasing, forgetting, `SubagentFrames` |
-| `acp/acpActivity.driver.test.ts` | Through the driver: a Claude subagent turn's transcript equals the one before the capability (`testSupport/subagentFixtures.ts:beforeCapability`) |
+| `acp/acpActivity.test.ts` | The translation against the recorded Claude and Codex fixtures, Codex runs, the registry, aliasing, routes that survive an ended subagent until the feed closes, `SubagentFrames` |
+| `acp/acpActivity.driver.test.ts` | Through the driver: a Claude subagent turn's transcript equals the one before the capability (`testSupport/subagentFixtures.ts:beforeCapability`); the turn-end safety net (what it ends, what it spares) |
 | `acp/acpConnection.test.ts` | Alias routing, including requests and pre-alias traffic |
 | `acp/acpProcessPool.test.ts`, `acp/acpPool.test.ts` | The busy deferral, the ceiling measured from the later of activity and idle, `lost` on exit |
 | `acp/acpLaunchers.test.ts`, `codexLauncher.test.ts`, `customLauncher.contract.test.ts` | Which capabilities each launcher advertises |

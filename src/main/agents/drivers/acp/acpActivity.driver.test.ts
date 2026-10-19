@@ -16,7 +16,10 @@ import { activityReapDeps, wirePoolToActivity } from './acpPool'
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher } from './acpLaunchers'
-import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpStep } from './testSupport/fakeAcp'
+import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpHandlerScript, type FakeAcpStep } from './testSupport/fakeAcp'
+import { sdkParams } from './testSupport/sdkMessageFixtures'
+import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
+import type { SDKBackgroundTasksChangedMessage } from '@anthropic-ai/claude-agent-sdk'
 import { beforeCapability, loadActivityFixture, type ActivityFixture } from './testSupport/subagentFixtures'
 import { ACP_PROTOCOL_VERSION, type AcpProcessPool } from './types'
 
@@ -48,11 +51,21 @@ function world(options: {
   after?: FakeAcpStep[]
   reapMs?: number
   followUps?: boolean
+  /** Merged over the prompt's `end_turn` answer. */
+  response?: Record<string, unknown>
+  /** One script per successive prompt (the last repeats); replaces `emit`, `after` and `response`. */
+  prompts?: FakeAcpHandlerScript[]
+  launcher?: 'claude' | 'codex'
 }): World {
   const hub = createSessionActivityHub()
+  const launcherId = options.launcher ?? 'claude'
   const fake = createFakeAcp({
     newSession: { sessionId: options.sessionId },
-    prompt: { emit: options.emit, ...(options.after ? { after: options.after } : {}) }
+    prompt: options.prompts ? { sequence: options.prompts } : {
+      emit: options.emit,
+      ...(options.after ? { after: options.after } : {}),
+      ...(options.response ? { response: options.response } : {})
+    }
   })
   const pool = createAcpProcessPool({
     start: startAcpConnection,
@@ -61,7 +74,7 @@ function world(options: {
   })
   const unwire = wirePoolToActivity(pool, hub)
   const launcher: AcpLauncher = {
-    id: 'claude',
+    id: launcherId,
     endsTurnsWithCostedUsage: true,
     plan: async () => ({
       spec: fake.spec,
@@ -74,12 +87,12 @@ function world(options: {
   const followUps: FollowUpRequest[] = []
   const deps: AcpDriverDeps = {
     pool,
-    launcher: (id) => (id === 'claude' ? launcher : undefined),
+    launcher: (id) => (id === launcherId ? launcher : undefined),
     readRuntime: () => ({
       type: 'folder',
       folder: {
         name: 'Activity', slug: 'activity', description: '', path: '/tmp/agents/activity', kind: 'kit',
-        runtimeMode: 'isolated', enabled: true, readiness: 'ok', readinessReason: null, runtime: { engine: 'claude' }
+        runtimeMode: 'isolated', enabled: true, readiness: 'ok', readinessReason: null, runtime: { engine: launcherId }
       },
       validate() {},
       readSession: (chatId) => sessions.get(chatId) ?? null,
@@ -102,7 +115,7 @@ function world(options: {
   })
   return {
     hub, pool, fake, followUps,
-    run: () => driver.run('__default__', ROW, {
+    run: () => driver.run('__default__', launcherId === 'claude' ? ROW : { ...ROW, driverConfig: { launcher: launcherId } }, {
       chatId: CHAT_ID,
       wireContent: 'go',
       signal: new AbortController().signal,
@@ -216,5 +229,121 @@ describe('a background task that outlives its turn', () => {
     expect(w.hub.hasRunning({ agentId: AGENT_ID })).toBe(true)
     w.pool.retire(AGENT_ID)
     await waitFor(() => w.hub.snapshot(CHAT_ID).items[0]?.state === 'lost', 'the task to be lost')
+  })
+})
+
+describe('the Claude turn-end safety net', () => {
+  const SESSION = 'ses-net'
+  const spawn = (child: string): FakeAcpStep =>
+    ({ kind: 'update', sessionId: SESSION, update: { sessionUpdate: 'subagent_spawned', subagentSessionId: child, name: 'worker', task: 'work' } })
+  const task: FakeAcpStep = {
+    kind: 'update', sessionId: SESSION,
+    update: { sessionUpdate: 'async_task_spawned', asyncTaskId: 'bash-1', name: 'sleep 60', canStop: true }
+  }
+  const states = (hub: SessionActivityHub): [string, string, string][] =>
+    hub.snapshot(CHAT_ID).items.map((item) => [item.id, item.kind, item.state])
+
+  it('ends a subagent still running at end_turn as lost', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('c1'), spawn('c2'), { kind: 'update', sessionId: SESSION, update: { sessionUpdate: 'subagent_state_update', subagentSessionId: 'c2', state: 'completed' } }] })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(Object.fromEntries(states(w.hub).map(([id, , state]) => [id, state]))).toEqual({
+      [`${SESSION}:c1`]: 'lost', [`${SESSION}:c2`]: 'completed'
+    })
+  })
+
+  it('ends a nested child spawned in this turn and left running as lost', async () => {
+    const nested: FakeAcpStep = { kind: 'update', sessionId: 'c1', update: { sessionUpdate: 'subagent_spawned', subagentSessionId: 'g1', name: 'grandchild', task: 'dig' } }
+    const w = world({ sessionId: SESSION, emit: [spawn('c1'), nested, { kind: 'update', sessionId: SESSION, update: { sessionUpdate: 'subagent_state_update', subagentSessionId: 'c1', state: 'completed' } }] })
+    expect((await w.run()).error).toBeUndefined()
+    expect(Object.fromEntries(states(w.hub).map(([id, , state]) => [id, state]))).toEqual({
+      [`${SESSION}:c1`]: 'completed', [`${SESSION}:g1`]: 'lost'
+    })
+  })
+
+  it('leaves a subagent an earlier turn spawned running when a later turn answers end_turn', async () => {
+    const w = world({
+      sessionId: SESSION, emit: [],
+      prompts: [{ emit: [spawn('old')], response: { stopReason: 'cancelled' } }, { emit: [spawn('new')] }]
+    })
+    await w.run()
+    expect(states(w.hub)).toEqual([[`${SESSION}:old`, 'subagent', 'running']])
+    expect((await w.run()).error).toBeUndefined()
+    expect(Object.fromEntries(states(w.hub).map(([id, , state]) => [id, state]))).toEqual({
+      [`${SESSION}:old`]: 'running', [`${SESSION}:new`]: 'lost'
+    })
+  })
+
+  it('leaves a subagent reported between turns running when the next turn answers end_turn', async () => {
+    const w = world({ sessionId: SESSION, emit: [], prompts: [{ after: [spawn('between')] }, {}] })
+    expect((await w.run()).error).toBeUndefined()
+    await waitFor(() => w.hub.snapshot(CHAT_ID).items.length === 1, 'the subagent reported between turns')
+    expect((await w.run()).error).toBeUndefined()
+    expect(states(w.hub)).toEqual([[`${SESSION}:between`, 'subagent', 'running']])
+  })
+
+  const opener: FakeAcpStep = {
+    kind: 'update', sessionId: SESSION, update: { sessionUpdate: 'agent_message_chunk', messageId: 'm-follow', content: { type: 'text', text: 'on my own' } }
+  }
+
+  it('leaves a subagent held between turns for a follow-up running when the next turn replays it and answers end_turn', async () => {
+    const w = world({ sessionId: SESSION, emit: [], prompts: [{ after: [opener, spawn('held')] }, {}], followUps: true })
+    expect((await w.run()).error).toBeUndefined()
+    await waitFor(() => w.followUps.length === 1, 'the follow-up the agent opens')
+    // The spawn is held behind the opener for the turn that takes the session, which replays it.
+    await settle(100)
+    expect((await w.run()).error).toBeUndefined()
+    expect(states(w.hub)).toEqual([[`${SESSION}:held`, 'subagent', 'running']])
+  })
+
+  /** Claude's raw `background_tasks_changed`: the session's whole live background set. */
+  const background = (...taskIds: string[]): FakeAcpStep => ({
+    kind: 'notify',
+    method: SDK_MESSAGE_METHOD,
+    params: sdkParams({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks: taskIds.map((task_id) => ({ task_id, task_type: 'local_agent', subagent_type: 'general-purpose', description: 'work' })),
+      uuid: '00000000-0000-4000-8000-000000000001',
+      session_id: SESSION
+    } satisfies SDKBackgroundTasksChangedMessage, SESSION)
+  })
+
+  it('leaves a subagent the turn spawned running at end_turn while the CLI still lists it as a live background task', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('bg1'), spawn('c2'), background('bg1')] })
+    expect((await w.run()).error).toBeUndefined()
+    expect(Object.fromEntries(states(w.hub).map(([id, , state]) => [id, state]))).toEqual({
+      [`${SESSION}:bg1`]: 'running', [`${SESSION}:c2`]: 'lost'
+    })
+  })
+
+  it('ends it as lost when a later background_tasks_changed of the turn no longer lists it', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('bg1'), background('bg1'), background()] })
+    expect((await w.run()).error).toBeUndefined()
+    expect(states(w.hub)).toEqual([[`${SESSION}:bg1`, 'subagent', 'lost']])
+  })
+
+  it('leaves a resumed run running while its task id is listed live', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('bg1:generation:2'), background('bg1')] })
+    expect((await w.run()).error).toBeUndefined()
+    expect(states(w.hub)).toEqual([[`${SESSION}:bg1:generation:2`, 'subagent', 'running']])
+  })
+
+  it('leaves a background task running at end_turn alone', async () => {
+    const w = world({ sessionId: SESSION, emit: [task] })
+    await w.run()
+    expect(states(w.hub)).toEqual([[`${SESSION}:bash-1`, 'background', 'running']])
+  })
+
+  it('leaves a subagent running when the prompt ended cancelled', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('c1')], response: { stopReason: 'cancelled' } })
+    await w.run()
+    expect(states(w.hub)).toEqual([[`${SESSION}:c1`, 'subagent', 'running']])
+  })
+
+  it('leaves a subagent running on another engine', async () => {
+    const w = world({ sessionId: SESSION, emit: [spawn('c1')], launcher: 'codex' })
+    expect((await w.run()).error).toBeUndefined()
+    expect(states(w.hub)).toEqual([[`${SESSION}:c1`, 'subagent', 'running']])
   })
 })

@@ -15,10 +15,11 @@ import {
 beforeEach(() => setDebugEnabled(false))
 
 describe('Claude’s raw SDK frames', () => {
-  it('asks for init, compaction, assistant and result frames, in one constant', () => {
+  it('asks for init, compaction, background-task, assistant and result frames, in one constant', () => {
     expect(RAW_SDK_MESSAGE_FILTER).toEqual([
       { type: 'system', subtype: 'init' },
       { type: 'system', subtype: 'compact_boundary' },
+      { type: 'system', subtype: 'background_tasks_changed' },
       { type: 'assistant' },
       { type: 'result' }
     ])
