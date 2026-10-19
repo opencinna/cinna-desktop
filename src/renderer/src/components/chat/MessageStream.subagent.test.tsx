@@ -5,6 +5,7 @@ import type { MessagePart } from '../../../../shared/messageParts'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { MessageStream } from './MessageStream'
+import { presetForAgentId } from '../../utils/agentColors'
 
 const data = vi.hoisted(() => ({ messages: [] as unknown[], pending: [] as string[] }))
 vi.mock('../../hooks/useChat', () => ({ useChatDetail: () => ({ data: { messages: data.messages } }) }))
@@ -208,5 +209,108 @@ describe('a delegated agent’s own subagent', () => {
     expect(inner.textContent).toContain('Confirmed pg for the subagent.')
     expect(inner.textContent).not.toContain('Delegating.')
     expect(screen.getAllByText('Confirmed pg for the subagent.')).toHaveLength(1)
+  })
+})
+
+describe('a subagent’s own subagent', () => {
+  const tree: MessagePart[] = [
+    { kind: 'tool', text: 'Agent: outer', toolName: 'Agent', toolId: 'a1', toolInput: { description: 'outer', prompt: 'Do outer' } },
+    { kind: 'text', text: 'Outer starts.', parentToolId: 'a1' },
+    { kind: 'tool', text: 'Agent: inner', toolName: 'Agent', toolId: 'a2', toolInput: { description: 'inner', prompt: 'Do inner' }, parentToolId: 'a1' },
+    { kind: 'text', text: 'Inner report.', parentToolId: 'a2' },
+    { kind: 'tool_result', text: 'Inner result.', toolId: 'a2', toolStream: 'stdout', parentToolId: 'a1' },
+    { kind: 'text', text: 'Outer report.', parentToolId: 'a1' },
+    { kind: 'tool_result', text: 'Outer result.', toolId: 'a1', toolStream: 'stdout' },
+    { kind: 'text', text: 'All done.' }
+  ]
+  const asBlocks = (list: MessagePart[]) => list.map(({ text, ...part }) => ({ type: 'text' as const, content: text, ...part }))
+  const thread = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(name) }).closest('.text-xs') as HTMLElement
+  /** The thread tree: each header's name with the names of the threads drawn inside it. */
+  const structure = (): string[] =>
+    screen.getAllByRole('button', { name: /outer|inner/ }).map((header) => {
+      const chain: string[] = []
+      for (let el = header.closest('.text-xs'); el; el = el.parentElement?.closest('.text-xs') ?? null) {
+        chain.unshift(el.querySelector('button')?.textContent?.match(/outer|inner/)?.[0] ?? '?')
+      }
+      return chain.join(' > ')
+    })
+
+  it.each([false, true])('draws the inner thread inside the outer one, verbose=%s', (verboseMode) => {
+    // Mutation: drop `renderNested` from `renderSubagentGroup` → the inner spawn call is a plain row and its work flat in the outer thread.
+    useUIStore.setState({ verboseMode })
+    data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: tree }]
+    render(<MessageStream chatId="chat" />)
+    expect(structure()).toEqual(['outer', 'outer > inner'])
+    expect(thread('inner').textContent).toContain('Inner report.')
+    expect(thread('inner').textContent).not.toContain('Outer report.')
+    expect(thread('outer').textContent).toContain('Outer report.')
+    expect(screen.queryByText('Agent: inner')).toBeNull()
+    expect(screen.queryByText('Inner result.')).toBeNull()
+    expect(screen.getAllByText('Inner report.')).toHaveLength(1)
+  })
+
+  it.each([false, true])('is the same tree from the inner call’s first frame to the saved row, verbose=%s', (verboseMode) => {
+    useUIStore.setState({ verboseMode })
+    useChatStore.setState({ streamingBlocks: asBlocks(tree.slice(0, 3)), isStreaming: true })
+    const view = render(<MessageStream chatId="chat" />)
+    expect(structure()).toEqual(['outer', 'outer > inner'])
+    for (const n of [4, 6, 8]) {
+      useChatStore.setState({ streamingBlocks: asBlocks(tree.slice(0, n)) })
+      view.rerender(<MessageStream chatId="chat" />)
+      expect(structure()).toEqual(['outer', 'outer > inner'])
+    }
+    expect(thread('inner').textContent).toContain('Inner report.')
+    data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: tree }]
+    useChatStore.setState({ streamingBlocks: [], isStreaming: false })
+    view.rerender(<MessageStream chatId="chat" />)
+    expect(structure()).toEqual(['outer', 'outer > inner'])
+    expect(thread('inner').textContent).toContain('Inner report.')
+  })
+
+  it.each([false, true])('keeps the outer thread open and running while a background inner one still runs, verbose=%s', (verboseMode) => {
+    // Mutation: drop `hasPendingDescendant` → the outer folds away (compact) or says "done" over a running inner (verbose).
+    useUIStore.setState({ verboseMode })
+    const background: MessagePart[] = [...tree.slice(0, 4), tree[5], tree[6]]
+    const body = (name: string): string => (thread(name).querySelector('.grid') as HTMLElement).style.gridTemplateRows
+    useChatStore.setState({ streamingBlocks: asBlocks(tree.slice(0, 4)), isStreaming: true })
+    const view = render(<MessageStream chatId="chat" />)
+    // The outer spawn call gets its result; the inner subagent runs on.
+    useChatStore.setState({ streamingBlocks: asBlocks(background) })
+    view.rerender(<MessageStream chatId="chat" />)
+    expect(structure()).toEqual(['outer', 'outer > inner'])
+    expect(body('outer')).toBe('1fr')
+    expect(body('inner')).toBe('1fr')
+    if (verboseMode) expect(screen.getByRole('button', { name: /outer/ }).textContent).toContain('running')
+    // The inner one ends: the outer one ends with it.
+    useChatStore.setState({ streamingBlocks: asBlocks([...background, tree[4]]) })
+    view.rerender(<MessageStream chatId="chat" />)
+    expect(body('outer')).toBe(verboseMode ? '1fr' : '0fr')
+    if (verboseMode) expect(screen.getByRole('button', { name: /outer/ }).textContent).toContain('done')
+  })
+
+  it('never draws an inner thread in its outer thread’s color', () => {
+    // Mutation: drop the `enclosing` check in AgentToolSubThread → both borders are the same preset.
+    expect(presetForAgentId('inner 1').border).toBe(presetForAgentId('outer').border)
+    useUIStore.setState({ verboseMode: true })
+    const named = tree.map((part) => (part.toolId === 'a2' && part.kind === 'tool' ? { ...part, toolInput: { description: 'inner 1', prompt: 'Do inner' } } : part))
+    data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: named }]
+    render(<MessageStream chatId="chat" />)
+    const border = (name: string): string => (thread(name).querySelector('.grid .rounded-lg') as HTMLElement).style.borderLeft
+    expect(structure()).toEqual(['outer', 'outer > inner'])
+    expect(border('inner 1')).not.toBe(border('outer'))
+  })
+
+  it('holds the outer thread open on an ask the inner subagent is parked on', () => {
+    useUIStore.setState({ verboseMode: false })
+    data.pending = ['per_inner']
+    const ask: MessagePart = {
+      kind: 'tool', text: 'Permission requested', toolName: 'cinna_permission_request', toolId: 'per_inner',
+      toolInput: { action: 'bash', resources: ['ls'], savable: [] }, parentToolId: 'a2'
+    }
+    useChatStore.setState({ streamingBlocks: asBlocks([...tree.slice(0, 3), ask]), isStreaming: true })
+    render(<MessageStream chatId="chat" />)
+    expect(thread('inner').contains(screen.getByRole('button', { name: 'Allow once' }))).toBe(true)
+    fireEvent.click(screen.getByText('outer'))
+    expect((thread('outer').querySelector('.grid') as HTMLElement).style.gridTemplateRows).toBe('1fr')
   })
 })

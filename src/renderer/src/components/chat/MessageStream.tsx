@@ -76,34 +76,58 @@ interface SubagentGroupRender {
   isOpenRequest: (toolId?: string) => boolean
 }
 
+/** Whether any subagent drawn inside this one, at any depth, is still pending. */
+function hasPendingDescendant(group: SubagentGroup<LiveBlockView>): boolean {
+  for (const inner of group.nested.groups.values()) {
+    if (inner.status === 'pending' || hasPendingDescendant(inner)) return true
+  }
+  return false
+}
+
 /**
- * A Claude subagent's work, nested under the Agent call that launched it
+ * A subagent's work, nested under the spawn call that launched it
  * (`subagentParts.ts`). One node for all three render paths; plain, never
  * folded into a dots group, and with no Stop — the subagent is the agent's to
- * stop, not a nested turn of the desktop's.
+ * stop, not a nested turn of the desktop's. A subagent's own subagent is the
+ * same node inside it, where its spawn call sits, to any depth.
  */
-function renderSubagentGroup(
-  group: Omit<SubagentGroup<unknown>, 'tool' | 'parts'> & { parts: MessagePart[] },
-  { verbose, live = false, renderRequest, isOpenRequest }: SubagentGroupRender
-): React.JSX.Element {
-  // An ask the subagent is parked on keeps its thread open until it is answered.
+function renderSubagentGroup(group: SubagentGroup<LiveBlockView>, opts: SubagentGroupRender): React.JSX.Element {
+  const { verbose, live = false, renderRequest, isOpenRequest } = opts
+  // An ask the subagent — or one of its own subagents — is parked on keeps
+  // its thread open until it is answered.
   const holdOpen = group.parts.some(
     (part) =>
+      isLivePart(part) &&
       part.kind === 'tool' &&
       (isPermissionRequestTool(part.toolName) || isAskUserQuestionTool(part.toolName)) &&
       isOpenRequest(part.toolId)
   )
+  // Live placeholders never run in a lane, so nothing is dropped here; the
+  // index map keeps `renderNested` on the right item if one ever did.
+  const kept: number[] = []
+  group.nested.items.forEach((part, i) => {
+    if (isLivePart(part)) kept.push(i)
+  })
+  const parts = kept.map((i) => group.nested.items[i] as MessagePart)
+  // While the turn is live, a thread whose own spawn call has its result but
+  // whose subagent still has one of its own running (a background child) is
+  // still running: it stays open and says so, until its last descendant ends.
+  const status = live && group.status === 'done' && hasPendingDescendant(group) ? 'pending' : group.status
   return (
     <AgentToolSubThread
       agentName={group.agentName}
-      parts={group.parts}
+      parts={parts}
       askMessage={group.askMessage}
-      status={group.status}
-      isStreaming={live && group.status === 'pending'}
+      status={status}
+      isStreaming={live && status === 'pending'}
       errorText={group.errorText}
       verbose={verbose}
       renderRequest={renderRequest}
       holdOpen={holdOpen}
+      renderNested={(index) => {
+        const inner = group.nested.groups.get(kept[index])
+        return inner ? renderSubagentGroup(inner, opts) : null
+      }}
     />
   )
 }
@@ -1269,7 +1293,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 slot: 'plain',
                 // A lane split by a steer is two groups: keyed by where each starts.
                 key: `stream-subagent-${group.parentToolId}-${liveNested.origin[i]}`,
-                node: renderSubagentGroup({ ...group, parts: group.parts.filter(isLivePart) }, subagentRender(verboseMode, isStreaming))
+                node: renderSubagentGroup(group, subagentRender(verboseMode, isStreaming))
               })
               return
             }

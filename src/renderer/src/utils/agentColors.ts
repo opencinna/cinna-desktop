@@ -13,12 +13,15 @@ export interface AgentChipColors {
  * it appears (message-bubble label, switch-back banner, etc.). The fallback
  * for an agent the user has not given a color preset; see {@link useAgentColor}.
  */
-export function presetForAgentId(agentId: string): AgentChipColors {
+export function presetForAgentId(agentId: string, avoid?: AgentChipColors): AgentChipColors {
   let hash = 0
   for (let i = 0; i < agentId.length; i++) {
     hash = (hash * 31 + agentId.charCodeAt(i)) | 0
   }
-  const idx = Math.abs(hash) % COLOR_PRESETS.length
+  let idx = Math.abs(hash) % COLOR_PRESETS.length
+  // `avoid` (the enclosing thread's color): the next preset instead, so a
+  // thread drawn inside another never shares its border with it.
+  if (avoid && COLOR_PRESETS[idx].border === avoid.border) idx = (idx + 1) % COLOR_PRESETS.length
   const preset = COLOR_PRESETS[idx]
   return { border: preset.border, bg: preset.bg }
 }

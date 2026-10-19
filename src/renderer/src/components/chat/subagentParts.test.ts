@@ -69,6 +69,143 @@ describe('nestSubagentParts', () => {
     expect(nested.groups.get(0)!.parts).toEqual([parts[1], parts[2], parts[3]])
   })
 
+  describe('a subagent’s own subagents', () => {
+    // a1 (outer) launches a2 inside its lane; a2 launches a3 inside its lane.
+    const twoLevel = [
+      text('Launching.'),
+      agent('a1', { description: 'outer', prompt: 'Do outer' }),
+      text('Outer starts.', 'a1'),
+      agent('a2', { description: 'inner', prompt: 'Do inner' }, 'a1'),
+      bash('b2', 'a2'),
+      result('b2', 'ok', 'stdout', 'a2'),
+      text('Inner report.', 'a2'),
+      result('a2', 'Inner report.', 'stdout', 'a1'),
+      text('Outer report.', 'a1'),
+      result('a1', 'Outer report.'),
+      text('Done.')
+    ]
+
+    it('makes the inner spawn call a group inside its parent’s, at the call’s position', () => {
+      // Mutation: group lanes by the outermost call only (no `nested`) → a2's work drawn flat in a1.
+      const outer = nestSubagentParts(twoLevel).groups.get(1)!
+      expect(outer).toMatchObject({ parentToolId: 'a1', agentName: 'outer', status: 'done' })
+      expect(outer.parts).toEqual(twoLevel.slice(2, 9))
+      expect(outer.nested.items).toEqual([twoLevel[2], twoLevel[3], twoLevel[8]])
+      expect([...outer.nested.groups.keys()]).toEqual([1])
+      const inner = outer.nested.groups.get(1)!
+      expect(inner).toMatchObject({ parentToolId: 'a2', tool: twoLevel[3], agentName: 'inner', askMessage: 'Do inner', status: 'done' })
+      // Its result, in the parent's lane, is consumed by the inner group.
+      expect(inner.parts).toEqual([twoLevel[4], twoLevel[5], twoLevel[6]])
+      expect(inner.nested.items).toEqual(inner.parts)
+      expect(inner.nested.groups.size).toBe(0)
+    })
+
+    it('nests three levels deep, and reads each level’s status from its own result', () => {
+      const parts = [
+        agent('a1', { description: 'L1' }),
+        agent('a2', { description: 'L2' }, 'a1'),
+        agent('a3', { description: 'L3' }, 'a2'),
+        text('deepest', 'a3'),
+        result('a3', 'L3 broke', 'stderr', 'a2')
+      ]
+      const l1 = nestSubagentParts(parts, { live: true }).groups.get(0)!
+      const l2 = l1.nested.groups.get(0)!
+      const l3 = l2.nested.groups.get(0)!
+      expect([l1.status, l2.status, l3.status]).toEqual(['pending', 'pending', 'error'])
+      expect(l3).toMatchObject({ agentName: 'L3', errorText: 'L3 broke', parts: [parts[3]] })
+      expect(l2.nested.items).toEqual([parts[2]])
+    })
+
+    it('opens the inner group from its spawn call’s first frame, and keeps it there as work arrives', () => {
+      // UX rule 1: the inner thread neither appears late nor moves.
+      const shape = (n: number) => {
+        const outer = nestSubagentParts(twoLevel.slice(0, n), { live: true }).groups.get(1)!
+        return { at: [...outer.nested.groups.keys()], name: outer.nested.groups.get(1)?.agentName }
+      }
+      for (const n of [4, 5, 7, 9, 11]) expect(shape(n)).toEqual({ at: [1], name: 'inner' })
+    })
+
+    it('renders live and saved alike', () => {
+      expect(nestSubagentParts(twoLevel, { live: true })).toEqual(nestSubagentParts(twoLevel))
+    })
+
+    it('takes inner work that arrives before its spawn call, and the call once it comes', () => {
+      // Interleaved arrival: a2's work lands between a1's own parts, a1's report after.
+      const parts = [agent('a1'), agent('a2', { description: 'inner' }, 'a1'), text('a1 mid', 'a1'), bash('b2', 'a2'), text('a1 end', 'a1')]
+      const outer = nestSubagentParts(parts).groups.get(0)!
+      expect(outer.nested.items).toEqual([parts[1], parts[2], parts[4]])
+      expect(outer.nested.groups.get(0)!.parts).toEqual([parts[3]])
+    })
+
+    it('groups a lane whose spawn call is missing as "Subagent" at its first part, beside the known group', () => {
+      // With no call, nothing says which subagent a9 runs under: it cannot be placed deeper.
+      const parts = [agent('a1'), text('mine', 'a1'), bash('b9', 'a9'), text('mine too', 'a1')]
+      const nested = nestSubagentParts(parts)
+      expect(nested.items).toEqual([parts[0], parts[2]])
+      expect(nested.groups.get(0)!.parts).toEqual([parts[1], parts[3]])
+      expect(nested.groups.get(1)).toMatchObject({ parentToolId: 'a9', agentName: 'Subagent', parts: [parts[2]] })
+    })
+
+    it('puts the work of a missing outer call under its nested call, inside a "Subagent" group', () => {
+      // a1's call is not in this list (an earlier turn); a2, launched in a1's lane, is.
+      const parts = [text('mine'), agent('a2', { description: 'inner' }, 'a1'), bash('b2', 'a2'), text('a1 says', 'a1')]
+      const nested = nestSubagentParts(parts)
+      expect(nested.items).toEqual([parts[0], parts[1]])
+      const outer = nested.groups.get(1)!
+      expect(outer).toMatchObject({ parentToolId: 'a1', agentName: 'Subagent' })
+      expect(outer.nested.items).toEqual([parts[1], parts[3]])
+      expect(outer.nested.groups.get(0)).toMatchObject({ parentToolId: 'a2', agentName: 'inner', parts: [parts[2]] })
+    })
+
+    it('terminates on a cycle in parentToolId', () => {
+      // Mutation: drop the ancestors guard → the recursion never ends.
+      const parts = [agent('a1', { description: 'one' }, 'a2'), agent('a2', { description: 'two' }, 'a1'), text('x', 'a1'), text('y', 'a2')]
+      const nested = nestSubagentParts(parts)
+      const all = (n: ReturnType<typeof nestSubagentParts<MessagePart>>, depth = 0): number =>
+        depth > 10 ? Infinity : [...n.groups.values()].reduce((sum, g) => sum + 1 + all(g.nested, depth + 1), 0)
+      expect(all(nested)).toBeLessThan(10)
+      // Every part is drawn somewhere exactly once.
+      const drawn = (n: ReturnType<typeof nestSubagentParts<MessagePart>>): MessagePart[] =>
+        n.items.flatMap((item, i) => { const g = n.groups.get(i); return g ? (g.tool ? [g.tool] : []).concat(drawn(g.nested)) : [item] })
+      expect(drawn(nested).sort((a, b) => parts.indexOf(a) - parts.indexOf(b))).toEqual(parts)
+    })
+  })
+
+  describe('OpenCode’s subagent tool', () => {
+    const spawn = (id: string, input: Record<string, unknown>, parentToolId?: string): MessagePart =>
+      ({ kind: 'tool', text: 'subagent', toolName: 'subagent', toolId: id, toolInput: input, ...(parentToolId ? { parentToolId } : {}) })
+
+    it('is a spawn call named by `description`, asking `prompt`', () => {
+      // Mutation: leave `subagent` out of the spawn names → an unnamed "Subagent" group and a plain call row.
+      const parts = [spawn('s1', { agent: 'explore', description: 'look around', prompt: 'Find the config' }), bash('b1', 's1'), result('s1', 'found')]
+      const nested = nestSubagentParts(parts)
+      expect(nested.items).toEqual([parts[0]])
+      expect(nested.groups.get(0)).toMatchObject({ tool: parts[0], agentName: 'look around', askMessage: 'Find the config', status: 'done', parts: [parts[1]] })
+    })
+
+    it('names two parallel spawns of one agent type apart', () => {
+      // Mutation: `agent` before `description` → both are "general", one name and one colour.
+      const parts = [spawn('s1', { agent: 'general', description: 'read docs' }), spawn('s2', { agent: 'general', description: 'run tests' })]
+      const nested = nestSubagentParts(parts)
+      expect([nested.groups.get(0)!.agentName, nested.groups.get(1)!.agentName]).toEqual(['read docs', 'run tests'])
+    })
+
+    it('falls back to `agent`, then "Subagent"', () => {
+      expect(nestSubagentParts([spawn('s1', { agent: 'explore' })]).groups.get(0)!.agentName).toBe('explore')
+      expect(nestSubagentParts([spawn('s1', {})]).groups.get(0)!.agentName).toBe('Subagent')
+    })
+
+    it('nests an OpenCode child’s own subagent', () => {
+      const parts = [spawn('s1', { agent: 'general' }), spawn('s2', { agent: 'explore' }, 's1'), bash('b2', 's2')]
+      const outer = nestSubagentParts(parts).groups.get(0)!
+      expect(outer.nested.groups.get(0)).toMatchObject({ agentName: 'explore', parts: [parts[2]] })
+    })
+
+    it('keeps Claude naming on description', () => {
+      expect(nestSubagentParts([agent('a1', { description: 'check pg', agent: 'x' })]).groups.get(0)!.agentName).toBe('check pg')
+    })
+  })
+
   it('makes every Agent call a group, saved too, even with no subagent parts', () => {
     // Mutation: groups for calls without lane parts only while live → a saved call is a plain row.
     const parts = [agent('a1'), result('a1', 'report'), agent('a2'), text('x', 'a2')]

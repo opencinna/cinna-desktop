@@ -1,7 +1,7 @@
-import { useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
-import { useAgentColor } from '../../utils/agentColors'
+import { presetForAgentId, useAgentColor, type AgentChipColors } from '../../utils/agentColors'
 import { AgentContribution, AskLine } from './AgentContribution'
 import { isPermissionRequestTool } from '../../../../shared/localAgentRequests'
 import { isAskUserQuestionTool } from '../../utils/askUserQuestion'
@@ -31,6 +31,9 @@ interface AgentToolSubThreadProps {
   renderNested?: (index: number) => React.JSX.Element | null
   onStop?: () => Promise<unknown>
 }
+
+/** The color of the sub-thread this one is drawn inside, if any. */
+const EnclosingThreadColor = createContext<AgentChipColors | null>(null)
 
 /**
  * What the header counts as a step: calls and what the agent said or thought —
@@ -100,7 +103,11 @@ export function AgentToolSubThread({
   // Color by stable agent id when known so a given agent shows the same color
   // whether the model called it (here) or the user addressed it directly
   // (switchboard); fall back to the display name for legacy rows.
-  const color = colorOf(agentId ?? agentName)
+  // A thread inside another (a subagent's own subagent) never takes its
+  // parent's color: the next hash color instead, so the two borders differ.
+  const enclosing = useContext(EnclosingThreadColor)
+  const own = colorOf(agentId ?? agentName)
+  const color = enclosing && own.border === enclosing.border ? presetForAgentId(agentId ?? agentName, enclosing) : own
   const steps = countSteps(parts)
   const statusLabel =
     status === 'pending' ? 'running' : status === 'error' ? 'error' : 'done'
@@ -188,6 +195,7 @@ export function AgentToolSubThread({
       >
         <div className="overflow-hidden">
           <TranscriptVisibleContext.Provider value={visible && expanded}>
+          <EnclosingThreadColor.Provider value={color}>
           <div
             className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 pl-3"
             style={{ borderLeft: `2px solid ${color.border}` }}
@@ -217,6 +225,7 @@ export function AgentToolSubThread({
               </pre>
             )}
           </div>
+          </EnclosingThreadColor.Provider>
           </TranscriptVisibleContext.Provider>
         </div>
       </div>
