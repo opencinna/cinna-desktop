@@ -25,7 +25,9 @@ import { repoRoot } from '../playwright.config'
  *
  * - L1 — a person publishes a site folder from the desktop, republishes it,
  *   shares it with the instance, creates a public link (copied in the same
- *   click, then listed with a copy icon) and revokes it.
+ *   click, then listed with a copy icon; core returns the same URL to the
+ *   owner on the artifact's detail and never on the public info route) and
+ *   revokes it.
  * - L2 — a **kit agent** on the developer's own `claude` (their login, on
  *   `haiku`) is asked in plain words, with no path, to build a summary and
  *   publish it. Its conversation prompt (contract 1.13.0's `artifacts` role)
@@ -45,13 +47,17 @@ import { repoRoot } from '../playwright.config'
  *   the account's JWT. A link with a 4-digit code pinned to rev 1 (made over
  *   core's API: the desktop's Share offers neither) refuses a wrong code and
  *   shows rev 1, not rev 2, for the right one; the plain link shows rev 2.
+ *   After a relaunch (main's map of links it made is empty, and the pinned
+ *   link was never made by the desktop) Share lists both links with a copy
+ *   icon that copies the URL core returns.
  * - L4 — the `cinna` CLI publishes a folder to the same account; an
  *   assistant message in a desktop chat that holds the artifact's URL draws
  *   its card; Everyone on the instance from the card's Share is what
  *   `cinna artifacts show` then reports. The profile is fresh, so it has never
  *   seen core's frontend origin: the card proves a link on it is read from
  *   core and drawn because core's own `url` is on that origin.
- * - L5 — the same kit agent on `haiku` publishes a note (no card, private);
+ * - L5 — the same kit agent, on the engine list's first entry (`haiku`
+ *   unless the list is set), publishes a note (no card, private);
  *   the person shares it with the instance from the card's Share…; asked to
  *   update it, the agent republishes with no card and core holds rev 2,
  *   still shared with the instance (the agent never changes who sees it).
@@ -104,9 +110,10 @@ import { repoRoot } from '../playwright.config'
  * ## What it does not prove
  *
  * Named-people grants, link expiry, the code's lock-out after three wrong
- * tries, a `files` artifact's viewers on core's page; L5 on any engine but
- * Claude `haiku`. The engine list's `opencode`, `codex` and `antigravity`
- * entries are wired but have never been run. The owner page is opened
+ * tries, a `files` artifact's viewers on core's page, that a non-owner never
+ * gets a link's `url` (core's own tests cover it); L2 and L5 on engines other
+ * than Claude `haiku` and OpenCode `gpt-5.6-luna` (both run 2026-10-20). The
+ * `codex` and `antigravity` entries are wired but have never been run. The owner page is opened
  * with a JWT put where core's frontend keeps it, not through its login form.
  */
 
@@ -207,6 +214,9 @@ function artifactEngine(entry: string): ArtifactEngine {
   throw new Error(`CINNA_E2E_LIVE_ARTIFACT_ENGINES: unknown entry "${entry}" (claude-haiku, claude-sonnet, claude-opus, claude, opencode, codex, antigravity)`)
 }
 
+/** L5 runs on the first entry of the engine list (`claude-haiku` unless the list is set). */
+const L5_ENGINE = ARTIFACT_ENGINES[0]
+
 /** Titles of the per-engine L2 tests start with this; their engine's own prerequisites are checked in the test. */
 const ENGINE_TEST_PREFIX = 'L2 ['
 
@@ -218,6 +228,7 @@ test.beforeEach(async ({}, testInfo) => {
   test.skip((ready as { discovery: { artifacts?: number } }).discovery.artifacts === undefined, `${live.serverUrl} does not advertise artifacts`)
   // L2 checks its own engine; L6's model runs on core, not on this machine.
   if (testInfo.title.startsWith(ENGINE_TEST_PREFIX) || testInfo.title.startsWith(CORE_AGENT_TEST_PREFIX)) return
+  if (testInfo.title.startsWith('L5 ') && L5_ENGINE.engine.name !== 'claude') return
   test.skip(BINARY === null, 'no Claude Code binary (set CINNA_E2E_CLAUDE_PATH, or install ~/.local/bin/claude)')
   const login = claudeLoginProblem(BINARY!)
   test.skip(login !== null, login ?? '')
@@ -555,10 +566,13 @@ test('L1 a person publishes a site folder, republishes it, and shares it with th
     expect(info.body).toMatchObject({ title: L1_TITLE, source_kind: 'desktop', expired: false, blocked: false })
     await expect(card(page, L1_TITLE)).toContainText('1 public link')
 
-    const links = (await core(`/artifacts/${artifactId}`)).body.links as Array<{ id: string; token_prefix: string; revoked_at: string | null }>
+    const links = (await core(`/artifacts/${artifactId}`)).body.links as Array<{ id: string; token_prefix: string; revoked_at: string | null; url: string | null }>
     expect(links.filter((link) => link.revoked_at === null)).toHaveLength(1)
     createdLinks.push({ artifactId, linkId: links[0].id })
-    await expect(share.getByRole('button', { name: `Copy link ${links[0].token_prefix}`, exact: true })).toBeVisible()
+    // Core returns the link's URL to its owner on every read, and never on the public info route.
+    expect(links[0].url).toBe(url)
+    expect(info.body.url ?? null).toBeNull()
+    await expect(share.getByRole('button', { name: `Copy public link ${links[0].token_prefix}`, exact: true })).toBeVisible()
     await share.getByRole('button', { name: `Revoke link ${links[0].token_prefix}`, exact: true }).click()
     await share.getByRole('button', { name: 'Revoke', exact: true }).click()
     await expect(share.locator('[data-artifact-link="revoked"]')).toContainText('Revoked', { timeout: 30_000 })
@@ -793,13 +807,24 @@ async function publishedResults(cinna: CinnaApp, chatId: string): Promise<Array<
     .map((call) => ({ path: call.path, ...call.result }))
 }
 
+test.describe(`L5 on ${L5_ENGINE.entry}`, () => {
+  test.use({
+    engine: true,
+    realLogin: L5_ENGINE.engine.realLogin,
+    liveEngineCheck: { engine: L5_ENGINE.engine.name, binary: L5_ENGINE.engine.realLogin?.binary ?? null }
+  })
+
 test('L5 a real agent republishes into an artifact the person shared: no card, rev 2, still shared', async ({ cinna }) => {
   l5Ran = true
   test.setTimeout(600_000)
+  const { engine, model: expectedModel } = L5_ENGINE
+  if (engine.name === 'opencode') requireLiveKey()
+  test.skip(engine.skipReason !== null, engine.skipReason ?? '')
   const config = live!
   await cinna.skipOnboarding()
   await signInDesktop(cinna, config)
-  await kitAgent(cinna)
+  if (engine.name === 'opencode') console.log(`live-artifacts L5 OpenCode default mode on ${await seedOpenAiDefaultMode(cinna)}`)
+  await kitAgent(cinna, engine.runtime)
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
@@ -855,15 +880,17 @@ test('L5 a real agent republishes into an artifact the person shared: no card, r
     expect(body).toMatchObject({ id: artifactId, current_revision_number: 2, visibility: 'instance' })
   })
 
-  await test.step('every turn ran on haiku', async () => {
+  await test.step(`every turn ran on ${engine.label}`, async () => {
     const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
     const assistant = (chat?.messages ?? []).filter((message) => message.role === 'assistant')
     const models = assistant.map((message: any) => message.telemetry?.model).filter(Boolean) as string[]
     const cost = assistant.reduce((sum: number, message: any) => sum + (message.telemetry?.costUsd ?? 0), 0)
     console.log(`live-artifacts L5 models ${JSON.stringify([...new Set(models)])}, estimated $${cost.toFixed(3)}`)
+    if (!expectedModel) return
     expect(models.length, 'the turns report their model').toBeGreaterThan(0)
-    for (const model of models) expect(model).toMatch(/haiku/i)
+    for (const model of models) expect(model).toMatch(expectedModel)
   })
+})
 })
 
 /** The framed artifact document on a core page: the frame whose URL is on the content route. */
@@ -1004,6 +1031,34 @@ test('L3 core’s web page shows what the desktop published: a public link, the 
       await enter(pinned.code)
       await expectSite(web, L3_TITLE, `Q3 ${TAG}`)
       await context.close()
+    })
+
+    await test.step('after a relaunch, Share lists both links with a copy icon that copies the URL core returns', async () => {
+      // A relaunch empties main's map of links it made, and the pinned link was never made here: both URLs come from core.
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      const page = cinna.page
+      await page.getByText('Where is the web report?', { exact: true }).first().click()
+      await expect(card(page, L3_TITLE)).toBeVisible({ timeout: 30_000 })
+      const links = (await core(`/artifacts/${artifactId}`)).body.links as Array<{ id: string; token_prefix: string; url: string | null }>
+      expect(links.map((link) => link.url).sort()).toEqual([linkUrl, pinned.url].sort())
+      await expect.poll(() => page.evaluate(() => window.api.artifacts.support()).then((s) => s.supported), { timeout: 30_000 }).toBe(true)
+      await card(page, L3_TITLE).locator('[data-artifact-card-body]').hover()
+      await card(page, L3_TITLE).getByRole('button', { name: `Share ${L3_TITLE}`, exact: true }).click()
+      const share = page.getByRole('dialog', { name: `Share ${L3_TITLE}`, exact: true })
+      const saved = await readClipboard(cinna)
+      try {
+        for (const link of links) {
+          await writeClipboard(cinna, 'e2e clipboard sentinel')
+          const copy = share.getByRole('button', { name: `Copy public link ${link.token_prefix}`, exact: true })
+          await expect(copy).toBeVisible({ timeout: 30_000 })
+          await copy.click()
+          await expect.poll(() => readClipboard(cinna)).toBe(link.url)
+        }
+      } finally {
+        await writeClipboard(cinna, saved).catch(() => undefined)
+      }
+      await page.keyboard.press('Escape')
     })
 
     await test.step('the plain link follows the artifact to rev 2', async () => {
@@ -1315,7 +1370,7 @@ test('L6 a cinna-core cloud agent publishes and updates an artifact; the desktop
       await context.addInitScript((token) => window.localStorage.setItem('access_token', token), jwt)
       const web = await context.newPage()
       await web.goto(url)
-      await expect(web.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(web.locator('header').getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible({ timeout: 30_000 })
       await expect(web.getByText(L6_MARKER).first()).toBeVisible({ timeout: 30_000 })
       await context.close()
     } finally {
