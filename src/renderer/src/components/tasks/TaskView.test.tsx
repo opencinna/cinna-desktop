@@ -127,6 +127,8 @@ const BASE: TaskDto = {
   executorDevice: null,
   runsHere: true,
   chatId: 'c1',
+  chat: null,
+  sessionOwned: false,
   assignee: { agentId: 'a1', name: 'Invoice Checker', kind: 'agent' },
   parentTaskId: null,
   subtaskCount: 0,
@@ -2226,5 +2228,57 @@ describe('Add subtask', () => {
     expect(within(dialog).getByRole('alert').textContent).toContain('parent’s assignee')
     expect(createTask).toHaveBeenCalledWith({ title: 'Child', assignee: null, parentTaskId: 't1' })
     expect(screen.getByRole('dialog', { name: 'New subtask' })).toBeTruthy()
+  })
+})
+
+describe('the Chat row in Details', () => {
+  afterEach(cleanup)
+
+  function details(): HTMLElement {
+    return screen.getByRole('complementary', { name: 'Details' })
+  }
+
+  it('names the chat and says Running while a turn is live there', async () => {
+    await renderTask({ chat: { id: 'c1', title: 'August invoices', running: true } })
+    const box = details()
+    expect(within(box).getByText('Chat')).toBeTruthy()
+    expect(within(box).queryByText('Session')).toBeNull()
+    const link = within(box).getByRole('button', { name: 'August invoices' })
+    // Wraps to two lines beside the fixed state slot rather than cutting short.
+    // Clamped on an inner span: Chromium does not reliably clamp a button's own box.
+    expect(link.className).not.toContain('line-clamp-2')
+    expect(link.className).not.toContain('truncate')
+    expect(link.querySelector('span.line-clamp-2.break-words')?.textContent).toBe('August invoices')
+    expect(box.querySelector('[data-task-session-state]')?.textContent).toBe('Running')
+  })
+
+  it('says Idle when nothing is running', async () => {
+    await renderTask({ chat: { id: 'c1', title: 'August invoices', running: false } })
+    expect(details().querySelector('[data-task-session-state]')?.textContent).toBe('Idle')
+  })
+
+  it('calls a chat with a blank title New Chat, as the sidebar does, so the link is never empty', async () => {
+    await renderTask({ chat: { id: 'c1', title: '  ', running: false } })
+    // The words themselves, not only the tooltip a nameless button would borrow its name from.
+    expect(within(details()).getByRole('button', { name: 'New Chat' }).textContent).toBe('New Chat')
+  })
+
+  it('is not there for a task without a chat', async () => {
+    await renderTask({ chat: null })
+    expect(within(details()).queryByText('Chat')).toBeNull()
+  })
+
+  it('opens the chat the way the header’s Open the chat does', async () => {
+    await renderTask({ chat: { id: 'c1', title: 'August invoices', running: false } })
+    await act(async () => { screen.getByRole('button', { name: 'Open the chat' }).click() })
+    const viaHeader = { chat: useChatStore.getState().activeChatId, view: useUIStore.getState().activeView }
+    cleanup()
+    useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
+    useChatStore.setState({ activeChatId: null } as never)
+
+    await renderTask({ chat: { id: 'c1', title: 'August invoices', running: false } })
+    await act(async () => { within(details()).getByRole('button', { name: 'August invoices' }).click() })
+    expect({ chat: useChatStore.getState().activeChatId, view: useUIStore.getState().activeView }).toEqual(viaHeader)
+    expect(viaHeader).toEqual({ chat: 'c1', view: 'chat' })
   })
 })

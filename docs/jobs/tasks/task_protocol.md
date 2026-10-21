@@ -12,7 +12,8 @@ An agent that works on Cinna tasks — reporting how its work went, adding work 
   - **Files** — `.cinna/tasks/*.md` as an agent's own queue ([Folder Tasks](folder_tasks.md)) and `.cinna/handovers/<id>/` as a request for work ([File Handovers](file_handovers.md)), for a terminal, a script, `git` or a person, with no tool server at all.
   - **cinna-core** — cinna-core's own agent environments serve the same eight tools on their own `cinna` server; the desktop reaches cinna-core's tasks through its [task adapter](cinna_adapter.md) and delegates to its agents through the [Handover Bus](handover_bus.md)'s cloud channel.
 - **The `cinna-tasks` skill** — the platform-owned text that teaches the protocol: what a Cinna task is and is not, the two rules, a verb table, the lifecycle, how to delegate, and the file binding (`SKILL.md` and `references/file-protocol.md`). Versioned with the protocol and shipped in the same bundle (`skills/cinna-tasks/`).
-- **Ref** — a task reference as the host shows it (`t-3f9a2b1c`, `TASK-5`, a folder task's id). The agent copies it from a tool result or the turn context and never builds one.
+- **Ref** — a task reference as the host shows it (`t-3f9a2b1c`, `TASK-5`, a folder task's id). The agent copies it from a tool result or the turn context and never builds one. A file task's `id` is a valid `ref` for the agent whose folder holds it, which the desktop resolves ([Agent Task Tools](agent_task_tools.md#refs-by-file-id)).
+- **Session-owned task** — contract 1.16.0: a task the agent says its conversation is working on, by `tasks_create` with `category: active` or an `in_progress` / `blocked` `tasks_report` from a conversation with no task. It is closed by reports and a person's moves alone, never by a turn's end ([Agent Task Tools](agent_task_tools.md#taking-a-task-on-attach)).
 - **Target** — the opaque string `tasks_targets` hands out and `tasks_create.assignee` takes back: `folder:<agentId>`, `kit:<agentId>` or `cinna:<adapter>:<agentId>`.
 - **Category and report status** — two vocabularies on purpose. `category` (`backlog`, `ready`, `active`, `waiting`, `done`) is where a task sits; `done` covers completed, failed and cancelled work. A report's `status` (`in_progress`, `blocked`, `done`, `failed`) is the executor's statement about its work. The desktop writes `done` as `completed` and `failed` as `error` on its own status column.
 - **Result packet** — what a requester reads when delegated work comes back: a desktop-authored message in its own chat, never a tool return, whose first line is always `Task result from <agent> on <ref>: <status> — <summary>`.
@@ -22,7 +23,7 @@ An agent that works on Cinna tasks — reporting how its work went, adding work 
 
 1. **A turn starts on a task.** The agent's message arrives behind the context block, for example `- current task: \`t-3f9a2b1c\` "Add retry" (report required: yes)` and `- tasks skill: cinna-tasks v1`. The system prompt's short Cinna tasks section has already told it the two rules and how to open the skill.
 2. **The agent opens the skill** before its first `tasks_*` call — by name on Claude and OpenCode, or by reading `SKILL.md` at the absolute path its prompt names on Codex and on a native Antigravity folder. An isolated Antigravity folder has it copied into its own home's `config/skills/` and opens it by name.
-3. **It works and reports.** It may comment on the way (`tasks_comment`), and ends with `tasks_report` `done` or `failed` and a one-line summary, or `blocked` with a question. The desktop records the report on the task, and the [dispatcher](task_dispatcher.md), a job run or the [Handover Bus](handover_bus.md) reads it.
+3. **It works and reports.** It may comment on the way (`tasks_comment`), and ends with `tasks_report` `done` or `failed` and a one-line summary, or `blocked` with a question. The desktop records the report on the task, and the [dispatcher](task_dispatcher.md), a job run or the [Handover Bus](handover_bus.md) reads it. An agent working in a hand-opened conversation may instead say the conversation itself is working on a task (`category: active` on a new one, or an `in_progress` report on one it already has); that task then waits for the agent's own report.
 4. **It hands work on.** It calls `tasks_targets`, passes one entry's `target` verbatim as `assignee` to `tasks_create` with an `id` and the whole brief as `description`, and ends its turn. Later its chat gets a system turn starting `Task result from …`, and it answers a question for it with `tasks_reply`.
 5. **Somebody without a tool server takes part.** A terminal session writes a brief, a report or a task file, following the same skill's file reference. The desktop treats the file exactly as it treats the tool call it corresponds to.
 
@@ -52,12 +53,13 @@ An agent that works on Cinna tasks — reporting how its work went, adding work 
 
 - **Facts only.** It says what is true this turn; what those facts mean is taught in one versioned place, the skill, with the prompt's stub as the reminder.
 - **Only for agents in a folder on this machine**, and never persisted: the transcript keeps the user's text alone.
-- **`report required: yes`** means someone is waiting on an outcome: the agent's own queue dispatched the task, another agent delegated it, or it is a job run's task. `no` is a hand-opened chat's task, where the turn's end may still settle it.
+- **`report required: yes`** means someone is waiting on an outcome: the agent's own queue dispatched the task, another agent delegated it, or it is a job run's task. `no` is a hand-opened chat's task, where the turn's end may still settle it — and a session-owned one, where it never does and the report is the only way the task closes. The skill, not the flag, tells the agent to report on it.
 - **The counts line shows only its nonzero parts**, and is left out when all are zero. A zero is not news: the counts exist so an agent knows there is something to look at without polling `tasks_list`.
 
 ### Reporting has one verb
 
 - **`tasks_report` is the only way an agent says how work went.** Closing a task that has been worked on through `tasks_update` is refused, and the refusal names `tasks_report`. A manual close writes no summary and no handoff note, so the task would read as closed with nothing said about how the work went.
+- **`done` and `failed` close from wherever the task is.** Where the transition table has no direct step (from Waiting, Backlog or Ready) the desktop moves the task through In progress first, because the skill promises that those two close the task; a promise the table could not keep was a defect.
 - **Repeating a report changes nothing.** The agent may not remember whether its last call landed, so repeating it has to be safe.
 - **A report's first line is what every list shows.** The summary is required and must be one line.
 
@@ -67,6 +69,7 @@ An agent that works on Cinna tasks — reporting how its work went, adding work 
 - **The files cannot discover targets.** There is no file form of `tasks_targets`; a file requester must already know the project path.
 - **No tools for nested or remote-launched sessions**: those sessions do not get the `cinna` tools.
 - **The desktop does not edit the protocol or the skill.** Both are bundle files that only `make kit-sync` writes.
+- **A host built before 1.16.0 refuses `category: active`** with its existing "Choose category backlog or ready" message rather than misreading it; the protocol stays at `protocol_version` 1 because the change is additive. The desktop's own build answers it.
 - **Nothing at runtime reads `tasks.schema.json`.** The parity test is what keeps the desktop's copy equal to it.
 
 ## Architecture Overview

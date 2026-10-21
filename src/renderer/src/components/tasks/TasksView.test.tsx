@@ -39,7 +39,7 @@ const { useUIStore } = await import('../../stores/ui.store')
 function task(id: string, overrides: Partial<TaskDto> = {}): TaskDto {
   return {
     id, title: `Task ${id}`, goal: 'g', description: null, status: 'new', priority: 'normal', router: 'direct',
-    origin: 'local', executor: 'desktop', executorDevice: null, runsHere: true, chatId: null,
+    origin: 'local', executor: 'desktop', executorDevice: null, runsHere: true, chatId: null, chat: null, sessionOwned: false,
     assignee: { kind: 'model', agentId: null, name: null }, parentTaskId: null, subtaskCount: 0,
     subtaskCompletedCount: 0, remote: null, handoffNote: null, artifacts: [], budget: null, errorMessage: null,
     customFields: null, statusLabel: null, file: null, fromOutside: false, blockedBy: [], dispatchNote: null, jobId: null, jobRunId: null, createdAt: new Date('2026-10-01T09:00:00Z'),
@@ -728,6 +728,30 @@ describe('board', () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Bound/ })
     expect(card('k1').getAttribute('draggable')).toBe('false')
+  })
+
+  it('shows a card’s live dot as a badge on its status icon, opening no meta line of its own', async () => {
+    listTasks.mockResolvedValue([
+      task('c1', { title: 'Idle chat', status: 'in_progress', chatId: 'x1', chat: { id: 'x1', title: 'August', running: false } }),
+      task('c2', { title: 'Live chat', status: 'in_progress', chatId: 'x2', chat: { id: 'x2', title: 'September', running: true } })
+    ])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: 'Live chat — In progress, running' })
+    expect(screen.getByRole('button', { name: 'Idle chat — In progress' })).toBeTruthy()
+
+    const idle = card('c1').querySelector('[data-task-live-dot]') as HTMLElement
+    const live = card('c2').querySelector('[data-task-live-dot]') as HTMLElement
+    expect(idle.getAttribute('data-task-live-dot')).toBe('idle')
+    expect(idle.className).toContain('invisible')
+    expect(live.getAttribute('data-task-live-dot')).toBe('running')
+    expect(live.className).toContain('motion-safe:animate-pulse')
+    expect(live.getAttribute('title')).toBe('Running in September')
+    // Out of the flow, on the corner of the status icon's own box.
+    expect(live.className).toMatch(/\babsolute\b/)
+    expect(live.parentElement?.className).toMatch(/\brelative\b/)
+    expect(live.parentElement?.querySelector('[data-task-status-icon], svg')).not.toBeNull()
+    // No assignee, normal priority: the chat alone opens no meta line under the title.
+    for (const id of ['c1', 'c2']) expect(card(id).querySelector('.pl-\\[22px\\]')).toBeNull()
   })
 
   it('a refused earlier move does not undo a later move of the same card', async () => {

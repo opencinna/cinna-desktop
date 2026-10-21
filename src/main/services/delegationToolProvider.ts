@@ -92,7 +92,7 @@ export const TASKS_TOOL_SCHEMAS: Record<string, ToolSchema> = {
       title: { type: 'string', minLength: 1, maxLength: 500 },
       description: { type: 'string', minLength: 1, maxLength: 100000, description: 'Markdown. For a delegation, everything the executor needs; it may not see this conversation.' },
       priority,
-      category: { type: 'string', enum: ['backlog', 'ready', 'draft'], description: '`backlog` (default) or `ready`. `draft` is only for a delegation to a folder target: the brief is written but not picked up until made ready.' },
+      category: { type: 'string', enum: ['backlog', 'ready', 'active', 'draft'], description: '`backlog` (default) or `ready`. `active` is for your own queue only: the task is created In progress and this conversation becomes the one working on it; the turn context then names it, and only your reports or a person close it. `draft` is only for a delegation to a folder target: the brief is written but not picked up until made ready.' },
       parent: ref,
       assignee: { type: 'string', maxLength: 256, description: 'A `target` from `tasks_targets`, verbatim. Omit for your own queue.' },
       id: { type: 'string', pattern: slug, description: 'Delegations only. Your idempotency key for this request; `YYYYMMDD-HHMM-<slug>` is the recommended shape.' },
@@ -123,7 +123,7 @@ export const TASKS_TOOL_SCHEMAS: Record<string, ToolSchema> = {
   tasks_report: {
     description: 'Say how your work on a task is going or how it ended. The only way to close work you were given: `done` or `failed` with a one-line summary before you end your turn; `blocked` with a `question` when you cannot continue (audience `requester` wakes the agent that asked, `user` waits for a person); `in_progress` for a progress note. A dispatched or delegated task that ends without a report is left Waiting with “Ended without reporting”. Idempotent: repeating the same report changes nothing.',
     inputSchema: object({
-      ref: { ...ref, description: 'Defaults to the task this conversation is working on.' },
+      ref: { ...ref, description: 'Defaults to the task this conversation is working on. With `in_progress` or `blocked` from a conversation that has none, binds this conversation to the task named.' },
       status: { type: 'string', enum: ['in_progress', 'blocked', 'done', 'failed'] },
       summary: { type: 'string', minLength: 1, maxLength: 1000, description: 'One line. It is what every list shows.' },
       question: { type: 'string', maxLength: 4000, description: 'Required when `status` is `blocked`.' },
@@ -200,7 +200,7 @@ export class DelegationToolProvider implements ToolProvider {
       case 'tasks_comment':
         return { content: await taskToolService.tasksComment(this.session, input) }
       case 'tasks_report':
-        return { content: await taskToolService.tasksReport(this.session, input) }
+        return { content: await taskToolService.tasksReport(this.session, input, signal) }
       default:
         return { content: await taskToolService.tasksReply(this.session, input) }
     }

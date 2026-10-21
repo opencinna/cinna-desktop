@@ -72,6 +72,8 @@ export interface TaskCreateInput {
   createdByAgentId?: string | null
   createdByChatId?: string | null
   chainDepth?: number
+  /** Made to hold a chat's first ask (`inboxService.taskForChat`). Device-local, set at creation only. */
+  askBorn?: boolean
 
   createdAt?: Date
   updatedAt?: Date
@@ -201,6 +203,8 @@ export interface TaskSyncValues {
    * than wiped by a peer that never knew it existed; an explicit null clears.
    */
   customFields?: TaskCustomFields | null
+  /** Undefined when an older peer's payload had no `sessionOwned`: this device's value stays. */
+  sessionOwned?: boolean
   errorMessage: string | null
   createdAt: Date
   updatedAt: Date
@@ -384,6 +388,20 @@ const rawTaskRepo = {
   },
 
   /**
+   * Mark (or clear) the task as owned by the conversation bound in `chatId`
+   * (`session_owned`). Leaves `updatedAt` alone: the bind that sets it moves
+   * the status in the same breath, and that write carries the timestamp the
+   * sync push reads.
+   */
+  setSessionOwned(userId: string, taskId: string, sessionOwned: boolean): void {
+    getDb()
+      .update(tasks)
+      .set({ sessionOwned })
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
+      .run()
+  },
+
+  /**
    * Every live task a dispatcher still owns (`dispatch_agent_id`), across
    * profiles. Boot recovery: a resumed turn on one may have died with Cinna.
    */
@@ -412,13 +430,22 @@ const rawTaskRepo = {
       .all()
   },
 
-  /** The task running in a chat, if one is. How a stream event finds its task. */
+  /**
+   * The task running in a chat, if one is. How a stream event finds its task.
+   * A chat can hold a settled task and, after it, one it took on itself
+   * (`session_owned`): the unsettled one is the chat's — whatever touched the
+   * settled one since, and on an `updated_at` tie within the same second —
+   * then the newest-updated.
+   */
   getByChatId(userId: string, chatId: string): TaskRow | undefined {
     return getDb()
       .select()
       .from(tasks)
       .where(and(eq(tasks.userId, userId), eq(tasks.chatId, chatId), isNull(tasks.deletedAt)))
-      .orderBy(desc(tasks.updatedAt))
+      .orderBy(
+        sql`CASE WHEN ${tasks.status} IN ('completed', 'error', 'cancelled', 'archived') THEN 1 ELSE 0 END`,
+        desc(tasks.updatedAt)
+      )
       .get()
   },
 
@@ -460,6 +487,8 @@ const rawTaskRepo = {
       dispatchNote: null,
       dispatchAgentId: null,
       startedByUser: false,
+      sessionOwned: false,
+      askBorn: input.askBorn ?? false,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',
@@ -652,7 +681,8 @@ const rawTaskRepo = {
       chatId: null,
       remoteSyncedAt: null,
       remoteDirty: null,
-      customFields: values.customFields ?? null
+      customFields: values.customFields ?? null,
+      sessionOwned: values.sessionOwned ?? false
     }
     db.insert(tasks)
       .values(row)
@@ -686,6 +716,7 @@ const rawTaskRepo = {
           budget: values.budget,
           // Absent from an older peer's payload: keep what this device has.
           ...(values.customFields !== undefined ? { customFields: values.customFields } : {}),
+          ...(values.sessionOwned !== undefined ? { sessionOwned: values.sessionOwned } : {}),
           errorMessage: values.errorMessage,
           createdAt: values.createdAt,
           updatedAt: values.updatedAt,

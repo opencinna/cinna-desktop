@@ -91,7 +91,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
   return {
     id: 'tsk_1', title: 'Fix the login bug', goal: 'Fix the login bug', description: 'It rejects valid passwords.',
     status: 'new', priority: 'normal', router: 'direct', origin: 'local', executor: 'desktop', executorDevice: null,
-    runsHere: true, chatId: null, assignee: { kind: 'agent', agentId: agent.id, name: agent.name }, parentTaskId: null,
+    runsHere: true, chatId: null, chat: null, sessionOwned: false, assignee: { kind: 'agent', agentId: agent.id, name: agent.name }, parentTaskId: null,
     subtaskCount: 0, subtaskCompletedCount: 0, remote: null, handoffNote: null, artifacts: [], budget: null,
     errorMessage: null, customFields: null, statusLabel: null, file: null, fromOutside: false, blockedBy: [], dispatchNote: null, jobId: null, jobRunId: null,
     createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, ...overrides

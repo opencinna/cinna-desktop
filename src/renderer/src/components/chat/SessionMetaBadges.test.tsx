@@ -602,6 +602,16 @@ describe('the tasks badge', () => {
     expect(screen.queryByRole('dialog', { name: 'Tasks in this chat' })).toBeNull()
   })
 
+  it('draws no live dot on its rows, and their names leave out ", running": they sit under that very chat', async () => {
+    spies.listTasks.mockResolvedValue([{ ...task(1), chat: { id: 'chat-1', title: 'This chat', running: true } }])
+    await mount()
+    fireEvent.mouseEnter(await screen.findByRole('button', { name: '1 task in this chat' }))
+    const dialog = screen.getByRole('dialog', { name: 'Tasks in this chat' })
+    // Mutation: drop `hideChat` from the popover's rows and both come back.
+    expect(within(dialog).getByRole('button', { name: 'Task 1 — Done' })).toBeTruthy()
+    expect(dialog.querySelector('[data-task-live-dot]')).toBeNull()
+  })
+
   it('shows ten rows and Open Tasks when there are more', async () => {
     spies.listTasks.mockResolvedValue(Array.from({ length: 12 }, (_v, i) => task(i)))
     useUIStore.setState({ activeView: 'chat', tasksViewMode: 'board' })

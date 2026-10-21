@@ -219,7 +219,7 @@ describe('a finished run finishes its task', () => {
     async function agentReports(userTaskId: string, chatId: string, status: 'completed' | 'blocked' | 'error'): Promise<void> {
       const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
       taskService.setStatus(USER, userTaskId, status, status === 'error' ? { errorMessage: 'The build is red.' } : {})
-      noteAgentStatusReport(userTaskId, chatId, 'turn-1')
+      noteAgentStatusReport(userTaskId, chatId, 'turn-1', status)
     }
 
     it('keeps a task the agent reported blocked blocked, and leaves its attempt running', async () => {
@@ -252,7 +252,7 @@ describe('a finished run finishes its task', () => {
     it('ignores a report made in another chat', async () => {
       const { chatId, taskId } = startedRunWithTask()
       const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
-      noteAgentStatusReport(taskId, 'some-other-chat', 'turn-1')
+      noteAgentStatusReport(taskId, 'some-other-chat', 'turn-1', 'completed')
       jobService.reportRunCompletion(chatId, 'succeeded')
       expect(taskService.getById(USER, taskId).status).toBe('completed')
     })

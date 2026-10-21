@@ -48,6 +48,7 @@ import {
   taskRunsHere,
   validateTaskCustomFields,
   type TaskAssignee,
+  type TaskChatRef,
   type TaskCustomFields,
   type TaskDto,
   type TaskExecutor,
@@ -296,6 +297,18 @@ function dirtied(task: TaskRow, patch: TaskPatch, fields: readonly RemoteDirtyFi
 }
 
 /**
+ * The bound chat's title and whether a turn is live in it; null with no chat,
+ * one this profile cannot see, or one in the trash (as `turnNoticeFor` treats
+ * it). `chatId` stays as it is either way.
+ */
+function chatRefOf(row: TaskRow): TaskChatRef | null {
+  if (!row.chatId) return null
+  const chat = visibleChat(row.userId, row.chatId)
+  if (!chat || chat.deletedAt) return null
+  return { id: chat.id, title: chat.title, running: activeChatRunId(chat.id) !== null }
+}
+
+/**
  * The row as every surface sees it.
  *
  * `subtaskCount` / `subtaskCompletedCount` are passed in rather than queried,
@@ -346,6 +359,8 @@ export function toTaskDto(
       thisDevice
     ),
     chatId: row.chatId,
+    chat: chatRefOf(row),
+    sessionOwned: row.sessionOwned === true,
     assignee,
     parentTaskId: row.parentTaskId,
     subtaskCount: counts.total,

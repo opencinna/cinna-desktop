@@ -971,6 +971,60 @@ describe('chats.origin and tasks.started_by_user on an install that predates the
   })
 })
 
+describe('tasks.session_owned on an install that predates it', () => {
+  it('adds it false on every existing task, and a replay keeps a value written since', () => {
+    const raw = freshDatabase()
+    // An install that predates the column has no trigger on it either.
+    raw.exec('DROP TRIGGER tasks_session_owned_follows_chat')
+    raw.exec('ALTER TABLE tasks DROP COLUMN session_owned')
+    raw.exec(`INSERT INTO tasks (id, user_id, title, goal, created_at, updated_at) VALUES ('t-1', 'u', 'T', 'goal', 1, 1)`)
+    const sqlite = adaptDatabase(raw)
+    runAllMigrations(sqlite)
+    const col = (raw.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string; notnull: number; dflt_value: string }>)
+      .find((column) => column.name === 'session_owned')
+    expect(col).toMatchObject({ notnull: 1, dflt_value: '0' })
+    expect(raw.prepare("SELECT session_owned AS v FROM tasks WHERE id = 't-1'").get()).toEqual({ v: 0 })
+    raw.exec("UPDATE tasks SET session_owned = 1 WHERE id = 't-1'")
+    runAllMigrations(sqlite)
+    expect(raw.prepare("SELECT session_owned AS v FROM tasks WHERE id = 't-1'").get()).toEqual({ v: 1 })
+    raw.close()
+  })
+
+  it('is cleared with the chat binding when the chat is hard-deleted, and left alone on a task whose chat stays', () => {
+    const raw = freshDatabase()
+    raw.exec(`INSERT INTO chats (id, user_id, title, router, hidden_from_list, created_at, updated_at)
+      VALUES ('c-gone', '__default__', 'Gone', 'direct', 0, 1, 1), ('c-kept', '__default__', 'Kept', 'direct', 0, 1, 1)`)
+    raw.exec(`INSERT INTO tasks (id, user_id, title, goal, chat_id, session_owned, created_at, updated_at)
+      VALUES ('t-gone', 'u', 'T', 'goal', 'c-gone', 1, 1, 7), ('t-kept', 'u', 'T', 'goal', 'c-kept', 1, 1, 7)`)
+    // The migration replays on every boot; the trigger is created once.
+    runAllMigrations(adaptDatabase(raw))
+    raw.exec("DELETE FROM chats WHERE id = 'c-gone'")
+    expect(raw.prepare("SELECT chat_id, session_owned, updated_at FROM tasks WHERE id = 't-gone'").get())
+      .toEqual({ chat_id: null, session_owned: 0, updated_at: 7 })
+    expect(raw.prepare("SELECT chat_id, session_owned FROM tasks WHERE id = 't-kept'").get())
+      .toEqual({ chat_id: 'c-kept', session_owned: 1 })
+    raw.close()
+  })
+})
+
+describe('tasks.ask_born on an install that predates it', () => {
+  it('adds it false on every existing task, and a replay keeps a value written since', () => {
+    const raw = freshDatabase()
+    raw.exec('ALTER TABLE tasks DROP COLUMN ask_born')
+    raw.exec(`INSERT INTO tasks (id, user_id, title, goal, created_at, updated_at) VALUES ('t-1', 'u', 'T', 'goal', 1, 1)`)
+    const sqlite = adaptDatabase(raw)
+    runAllMigrations(sqlite)
+    const col = (raw.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string; notnull: number; dflt_value: string }>)
+      .find((column) => column.name === 'ask_born')
+    expect(col).toMatchObject({ notnull: 1, dflt_value: '0' })
+    expect(raw.prepare("SELECT ask_born AS v FROM tasks WHERE id = 't-1'").get()).toEqual({ v: 0 })
+    raw.exec("UPDATE tasks SET ask_born = 1 WHERE id = 't-1'")
+    runAllMigrations(sqlite)
+    expect(raw.prepare("SELECT ask_born AS v FROM tasks WHERE id = 't-1'").get()).toEqual({ v: 1 })
+    raw.close()
+  })
+})
+
 describe('kept artifacts support on an install that predates it', () => {
   it('creates the table, replays as a no-op, keeps rows across boots and goes with the profile', () => {
     const raw = freshDatabase()

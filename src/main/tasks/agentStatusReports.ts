@@ -1,3 +1,5 @@
+import type { TaskStatus } from '../../shared/taskStatus'
+
 /**
  * Tasks whose status the agent working on them set itself during its turn
  * (`tasks_report` on the chat's own task: done, blocked, failed or in progress).
@@ -13,21 +15,23 @@
  * such leftover. In memory: a restart mid-turn loses it, and that turn's end
  * then settles the task as before.
  */
-const reported = new Map<string, { chatId: string; runId: string }>()
+const reported = new Map<string, { chatId: string; runId: string; status: TaskStatus }>()
 
-export function noteAgentStatusReport(taskId: string, chatId: string, runId: string): void {
-  reported.set(taskId, { chatId, runId })
+/** `status` is the one the report set (`completed`, `error`, `blocked`, `in_progress`). */
+export function noteAgentStatusReport(taskId: string, chatId: string, runId: string, status: TaskStatus): void {
+  reported.set(taskId, { chatId, runId, status })
 }
 
 /**
- * Whether the agent reported this task's status during the run now ending.
- * Clears the mark whichever run it belonged to.
+ * The status the agent reported for this task during the run now ending;
+ * undefined when it reported none in that run. Clears the mark whichever run
+ * it belonged to.
  */
-export function takeAgentStatusReport(taskId: string, runId: string | undefined): boolean {
+export function takeAgentStatusReport(taskId: string, runId: string | undefined): TaskStatus | undefined {
   const mark = reported.get(taskId)
-  if (!mark) return false
+  if (!mark) return undefined
   reported.delete(taskId)
-  return runId !== undefined && mark.runId === runId
+  return runId !== undefined && mark.runId === runId ? mark.status : undefined
 }
 
 /** A new turn in this chat: no earlier run's mark may outlive it. */

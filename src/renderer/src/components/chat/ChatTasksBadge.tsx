@@ -86,7 +86,7 @@ export function ChatTasksBadge({ chatId }: { chatId: string }): React.JSX.Elemen
               {ordered.slice(0, MAX_ROWS).map((task) => (
                 <li key={task.id}>
                   {/* A row opens its task and leaves the chat; the popover goes with it. */}
-                  <TaskRow task={task} size="compact" onOpened={popover.close} />
+                  <TaskRow task={task} size="compact" hideChat onOpened={popover.close} />
                 </li>
               ))}
             </ul>

@@ -506,7 +506,7 @@ describe('a turn ending in a chat that owns its own task', () => {
     const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
     const task = makeChatTask()
     taskService.setStatus(USER, task.id, status)
-    noteAgentStatusReport(task.id, CHAT, 'run-1')
+    noteAgentStatusReport(task.id, CHAT, 'run-1', status)
     inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
     expect(taskService.getById(USER, task.id).status).toBe(status)
     // The mark is spent: the next turn's ending settles the task as before.
@@ -521,17 +521,17 @@ describe('a turn ending in a chat that owns its own task', () => {
     const { noteAgentStatusReport, takeAgentStatusReport, forgetAgentStatusReports } = await import('../tasks/agentStatusReports')
     const task = makeChatTask()
     // Run 1 reported, and its end returned before reading the mark.
-    noteAgentStatusReport(task.id, CHAT, 'run-1')
+    noteAgentStatusReport(task.id, CHAT, 'run-1', 'blocked')
     taskService.setStatus(USER, task.id, 'blocked')
     // Run 2 ends: its outcome settles the task; the leftover mark does not stop it.
     inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'error', error: 'boom' })
     expect(taskService.getById(USER, task.id).status).toBe('error')
     // A turn start in the chat drops a leftover mark; another chat's is kept.
-    noteAgentStatusReport(task.id, CHAT, 'run-3')
-    noteAgentStatusReport('other-task', 'other-chat', 'run-9')
+    noteAgentStatusReport(task.id, CHAT, 'run-3', 'blocked')
+    noteAgentStatusReport('other-task', 'other-chat', 'run-9', 'completed')
     forgetAgentStatusReports(CHAT)
-    expect(takeAgentStatusReport(task.id, 'run-3')).toBe(false)
-    expect(takeAgentStatusReport('other-task', 'run-9')).toBe(true)
+    expect(takeAgentStatusReport(task.id, 'run-3')).toBeUndefined()
+    expect(takeAgentStatusReport('other-task', 'run-9')).toBe('completed')
   })
 
   it('is not ended by a nested agent finishing', () => {
@@ -546,6 +546,120 @@ describe('a turn ending in a chat that owns its own task', () => {
     })
 
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+})
+
+/**
+ * A task the conversation took on itself (`session_owned`: an `active` create
+ * or an attaching report) is settled by reports, an answered ask or a
+ * person's move — never by how a turn ended, and never by a typed message.
+ */
+describe('a turn ending in a chat that owns a session-owned task', () => {
+  function makeSessionTask(): ReturnType<typeof makeChatTask> {
+    const task = makeChatTask()
+    taskRepo.setSessionOwned(USER, task.id, true)
+    return task
+  }
+
+  it('leaves it In progress on a normal end, an error and a stop', () => {
+    const task = makeSessionTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'error', error: 'the agent died' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-3' }), { type: 'done', stopReason: 'canceled' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('is closed by a later `done` report, and the turn end keeps it closed', async () => {
+    const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
+    const task = makeSessionTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    // The next turn: the agent reports done (`tasks_report` writes the status and the mark).
+    taskService.setStatus(USER, task.id, 'completed')
+    noteAgentStatusReport(task.id, CHAT, 'run-2', 'completed')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'error', error: 'late failure' })
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('stays blocked across a typed message and its turn, and a person’s message does not reopen a closed one', () => {
+    const task = makeSessionTask()
+    taskService.setStatus(USER, task.id, 'blocked')
+    inboxService.resumeChat(ctx({ turnId: 'run-2' }), 'any news?')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+
+    taskService.setStatus(USER, task.id, 'in_progress')
+    taskService.setStatus(USER, task.id, 'completed')
+    inboxService.resumeChat(ctx({ turnId: 'run-3' }), 'one more thing')
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('goes back to In progress when its question is answered, and stays there at the end of that turn', () => {
+    const task = makeSessionTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { ...permission, resume: 'next_message' })
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.resumeChat(ctx({ turnId: 'run-2' }), 'Yes, go ahead')
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('lets an expired ask out of Waiting, unless the agent reported blocked in that run', async () => {
+    const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
+    const task = makeSessionTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), permission)
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'canceled' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+
+    // An `in_progress` note earlier in the run does not hold the task in Waiting.
+    noteAgentStatusReport(task.id, CHAT, 'run-2', 'in_progress')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { ...permission, requestId: 'per_2' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'done', stopReason: 'canceled' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+
+    // A `blocked` report in the run does.
+    inboxService.recordRunEvent(ctx({ turnId: 'run-3' }), { ...permission, requestId: 'per_3' })
+    noteAgentStatusReport(task.id, CHAT, 'run-3', 'blocked')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-3' }), { type: 'done', stopReason: 'canceled' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it('puts a question asked after it is done on a new task, which the typed answer reaches', () => {
+    const task = makeSessionTask()
+    // Turn 1: the agent reports done.
+    taskService.setStatus(USER, task.id, 'completed')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    // Turn 2: the next message, and a question to answer by the next one.
+    inboxService.resumeChat(ctx({ turnId: 'run-2' }), 'one more thing')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { ...permission, resume: 'next_message' })
+    const asked = taskRepo.getByChatId(USER, CHAT)!
+    expect(asked.id).not.toBe(task.id)
+    expect(asked).toMatchObject({ chatId: CHAT, sessionOwned: false, askBorn: true, status: 'blocked' })
+    expect(taskRepo.getById(USER, task.id)?.askBorn).toBe(false)
+    expect(asked.startedAt).not.toBeNull()
+    expect(taskInputRequestRepo.listOpenForTask(asked.id)).toHaveLength(1)
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, asked.id).status).toBe('blocked')
+    // Turn 3: the typed answer is accepted and settles the ask.
+    expect(() => inboxService.resumeChat(ctx({ turnId: 'run-3' }), 'Yes')).not.toThrow()
+    expect(taskInputRequestRepo.listOpenForTask(asked.id)).toHaveLength(0)
+    expect(taskService.getById(USER, asked.id).status).toBe('in_progress')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-3' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, asked.id).status).toBe('completed')
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+    // A later message is accepted too.
+    expect(() => inboxService.resumeChat(ctx({ turnId: 'run-4' }), 'thanks')).not.toThrow()
+  })
+
+  it('still completes a chat task the conversation does not own on a normal end', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
   })
 })
 

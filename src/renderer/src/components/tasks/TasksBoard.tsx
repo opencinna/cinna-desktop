@@ -26,6 +26,7 @@ import {
   taskStatusText
 } from './tasksViewModel'
 import { useTaskRowsInPlace } from './useTaskRowsInPlace'
+import { TaskLiveDot } from './TaskRow'
 
 const DRAG_TYPE = 'application/x-cinna-task'
 /** As in the list: Done shows ten, then more on request. */
@@ -399,11 +400,22 @@ function BoardCard({ task, status, statusText, targets, agents, onDragState, onM
       <button
         type="button"
         onClick={() => openTask(task.id)}
-        aria-label={`${task.title} — ${statusText}`}
+        // As TaskRow: the live dot is decorative, the name says it.
+        aria-label={`${task.title} — ${statusText}${task.chat?.running ? ', running' : ''}`}
         className="min-w-0 flex-1 px-2.5 py-2 text-left"
       >
         <span className="flex items-start gap-2">
-          <span className="mt-[3px]"><TaskStatusIcon status={status} /></span>
+          {/*
+            The live dot is a badge on the status icon's corner, out of the
+            flow (the `SessionActivityBadges` shape): it opens no line of its
+            own, and is there for every card with a chat, so a flip moves nothing.
+          */}
+          <span className="relative mt-[3px]">
+            <TaskStatusIcon status={status} />
+            {task.chat && (
+              <TaskLiveDot running={task.chat.running} chatTitle={task.chat.title} className="absolute -top-0.5 -right-0.5" />
+            )}
+          </span>
           <span className="min-w-0 flex-1 text-[13px] leading-5 text-[var(--color-text)] line-clamp-2" title={task.title}>
             {task.title}
           </span>

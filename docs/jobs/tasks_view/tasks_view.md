@@ -89,6 +89,15 @@ One place to see every root task the profile has — whoever runs it, wherever i
 - **A refusal belongs to the filter it was made under.** Changing the agent or the period clears a refused move's or the queue's sentence, so a stale reason never outlives the board it was about.
 - **The view polls, like the Inbox.** The root list re-reads every five seconds, and opening the view nudges device sync as the Inbox and task page do — the rows read local SQLite, so without it a task another device finished would read In progress until the next sync cycle. A failed read keeps the rows and shows **Try again** below them. A failed **first** read draws no cards and no empty line, only that line: nothing is known yet, and *No tasks yet.* would be a claim.
 
+### Where the work is happening
+
+- **A task with a chat says so on its row.** A task bound to a conversation visible here shows, on a regular row (the Tasks view's lists and Agents cards, and the agent page's task list), "in <chat name>" after the title in the muted small size. The title wins the width: the name gives way, down to nothing, before the title loses a character. A chat with no name worth showing — blank, or the default "New Chat" — adds nothing, and a compact row (a task page's Subtasks) has no room for the name at all.
+- **A pulsing dot says a turn is live in that chat.** It is the accent colour and pulses like the app's other live dots (the sidebar's session status). It is drawn for every task that has a chat and made invisible while the chat is idle, so a poll that flips it moves nothing beside it (`ux_rules.md` rule 1). It is decorative; the row's accessible name says ", running" and the chat's name, since a screen reader should hear what a sighted user sees. A compact row keeps the dot even where the name is dropped.
+- **On the board the dot is a badge on the status icon,** pinned to its corner and out of the flow, so a card never gains a line and a flip moves nothing. The card's accessible name says ", running" too.
+- **The chat's own Tasks popover hides both.** The popover under the composer lists the chat's tasks inside the chat that already shows its own turn live; a dot and a name there would repeat the surface they sit on. (`hideChat` on the row. A task page's Subtasks, each in a chat of its own, keep the dot.)
+- **A task without a visible chat shows nothing.** No chat, a chat this profile cannot see, or one in the Trash: the row is as it was. The task page's **Chat** row follows the same rule ([Tasks and the Inbox](../tasks/tasks.md)).
+- **Why it is there.** An agent can take a task on in its own conversation ([Agent Task Tools](../tasks/agent_task_tools.md#taking-a-task-on-attach)), and such a task is not settled by a turn ending. "In progress" alone would not tell the user whether anything is happening or where; the name and the dot do.
+
 ## Architecture Overview
 
 ```

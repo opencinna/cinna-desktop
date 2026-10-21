@@ -3,7 +3,7 @@ vi.mock('../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
@@ -551,8 +551,8 @@ describe('tasks_report', () => {
     expect(result).toEqual({ ref: task.id, status: 'blocked', taskStatus: 'blocked', category: 'waiting' })
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', handoffNote: 'Need the key\n\nQuestion: Which API key?\n\nTried env.' })
     // Marked for the run that reported it: only that run's end reads it.
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(true)
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(false)
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBe('blocked')
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBeUndefined()
   })
 
   it('maps done to completed and failed to error, keeps artifacts, and answers an identical repeat without writing', async () => {
@@ -593,10 +593,10 @@ describe('tasks_report', () => {
     const report = { status: 'blocked', summary: 'Need the key', question: 'Which API key?' }
     await taskToolService.tasksReport(kit, report)
     // The first turn's end took its mark; the next turn repeats the report with the status unchanged.
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(true)
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBe('blocked')
     expect(taskRepo.getById(USER, task.id)?.status).toBe('blocked')
     await taskToolService.tasksReport(kit, report)
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(true)
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBe('blocked')
   })
 
   it('takes a bare executor’s report on a folder brief with no delegation behind it, through the handover', async () => {
@@ -644,7 +644,7 @@ describe('tasks_report', () => {
     holder.current!.sqlite.prepare('UPDATE tasks SET job_run_id = ? WHERE id = ?').run('job-run-1', task.id)
     await taskToolService.tasksReport(kit, { status: 'blocked', summary: 'Waiting', question: 'Go on?' })
     expect(taskRepo.getById(USER, task.id)?.status).toBe('blocked')
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(true)
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBe('blocked')
 
     holder.current!.sqlite.prepare("UPDATE tasks SET job_run_id = NULL, status = 'in_progress' WHERE id = ?").run(task.id)
     taskRunnersByChat.set(kit.chatId, { userId: USER, taskId: task.id, id: 'runner-1', working: true, cancel: () => {} })
@@ -711,5 +711,441 @@ describe('the turn header count', () => {
     taskService.create('profile-2', { title: 'E', goal: 'x', assigneeAgentId: 'kit-1', status: 'open' })
     taskRepo.softDelete(USER, gone.id)
     expect(taskRepo.countReadyFor(USER, 'kit-1')).toBe(1)
+  })
+})
+
+describe('a conversation taking a task on itself (session-owned)', () => {
+  const ALREADY = (ref: string): string => `This conversation is already working on ${ref}`
+
+  it('creates an `active` task in its own queue In progress, bound to this chat and owned by it', async () => {
+    const kit = session('kit-1')
+    const created = await taskToolService.tasksCreate(kit, { title: 'Ship it', description: 'Now.', category: 'active' }) as Record<string, unknown>
+    expect(created).toMatchObject({ status: 'in_progress', category: 'active', attached: true })
+    const row = taskRepo.getById(USER, created.ref as string)!
+    expect(row).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: 'in_progress', assigneeAgentId: 'kit-1', createdByChatId: kit.chatId })
+    expect(row.startedAt).not.toBeNull()
+    expect(taskService.getById(USER, row.id)).toMatchObject({ sessionOwned: true, chat: { id: kit.chatId, title: 'New Chat', running: false } })
+    holder.live.add(kit.chatId)
+    expect(taskService.list(USER).find((task) => task.id === row.id)?.chat).toEqual({ id: kit.chatId, title: 'New Chat', running: true })
+    // A task with no chat names none.
+    const later = await taskToolService.tasksCreate(kit, { title: 'Later', description: 'x' }) as { ref: string }
+    expect(taskService.getById(USER, later.ref)).toMatchObject({ chat: null, sessionOwned: false })
+  })
+
+  it('writes a bare agent’s `active` task to its file with the folder’s active word', async () => {
+    const bare = session('bare-1')
+    const created = await taskToolService.tasksCreate(bare, { title: 'Fix it now', description: 'x', category: 'active' }) as { ref: string; file: string }
+    expect(taskRepo.getById(USER, created.ref)).toMatchObject({ chatId: bare.chatId, sessionOwned: true, status: 'in_progress', deviceLocal: true })
+    await settle()
+    expect(readFileSync(join(holder.agentPath, created.file), 'utf8')).toContain('status: in_progress')
+  })
+
+  it('refuses `active` with an assignee, and from a chat that already has a task, creating nothing', async () => {
+    const kit = session('kit-1')
+    await expect(taskToolService.tasksCreate(kit, { title: 'X', description: 'Y', category: 'active', assignee: 'kit:kit-2' }))
+      .rejects.toThrow('`category: active` is for your own queue; a delegation starts at once')
+    expect(holder.delegate).not.toHaveBeenCalled()
+    const first = await taskToolService.tasksCreate(kit, { title: 'First', description: 'Y', category: 'active' }) as { ref: string }
+    const before = taskRepo.list(USER).length
+    await expect(taskToolService.tasksCreate(kit, { title: 'Second', description: 'Y', category: 'active' })).rejects.toThrow(ALREADY(first.ref))
+    expect(taskRepo.list(USER)).toHaveLength(before)
+    // A plain create from the bound chat still goes to the queue.
+    const plainCreate = await taskToolService.tasksCreate(kit, { title: 'Later', description: 'Y' }) as Record<string, unknown>
+    expect(plainCreate).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, plainCreate.ref as string)).toMatchObject({ status: 'new', chatId: null, sessionOwned: false })
+  })
+
+  it('binds a chat with no task to a task the agent created, by an `in_progress` report', async () => {
+    const created = await taskToolService.tasksCreate(session('kit-1'), { title: 'Queued', description: 'x', category: 'ready' }) as { ref: string }
+    const kit = session('kit-1')
+    holder.live.add(kit.chatId)
+    const result = await taskToolService.tasksReport(kit, { ref: created.ref, status: 'in_progress', summary: 'Starting' })
+    expect(result).toEqual({ ref: created.ref, status: 'in_progress', taskStatus: 'in_progress', category: 'active', attached: true })
+    expect(taskRepo.getById(USER, created.ref)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: 'in_progress', handoffNote: 'Starting' })
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(created.ref)
+    // Marked like the chat's own task.
+    expect(takeAgentStatusReport(created.ref, 'run-1')).toBe('in_progress')
+  })
+
+  it('binds to a task a person assigned it, and `blocked` lands Waiting with the question', async () => {
+    const assigned = taskService.create(USER, { title: 'From a person', goal: 'x', assigneeAgentId: 'kit-1' })
+    const kit = session('kit-1')
+    const result = await taskToolService.tasksReport(kit, { ref: assigned.id, status: 'blocked', summary: 'Need input', question: 'Which branch?' })
+    expect(result).toMatchObject({ ref: assigned.id, status: 'blocked', taskStatus: 'blocked', attached: true })
+    expect(taskRepo.getById(USER, assigned.id)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: 'blocked', handoffNote: 'Need input\n\nQuestion: Which branch?' })
+  })
+
+  it('assigns an unassigned task it created to the caller on bind', async () => {
+    const mine = taskService.create(USER, { title: 'Unassigned', goal: 'x', createdByAgentId: 'kit-1' })
+    const kit = session('kit-1')
+    await taskToolService.tasksReport(kit, { ref: mine.id, status: 'in_progress', summary: 'On it' })
+    expect(taskRepo.getById(USER, mine.id)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, assigneeAgentId: 'kit-1', assigneeKind: 'agent', assigneeName: 'Kit' })
+  })
+
+  it('takes a folder task’s file id as its ref, for the agent whose folder it is, and answers the row id', async () => {
+    mkdirSync(join(holder.agentPath, '.cinna', 'tasks'), { recursive: true })
+    writeFileSync(join(holder.agentPath, '.cinna', 'tasks', 'ITAN-2026-0019.md'), '---\ncinna_task: 1\nid: ITAN-2026-0019\ntitle: Ticket\nstatus: todo\n---\nThe ticket.\n')
+    await taskSyncService.pull(USER)
+    const row = taskRepo.list(USER).find((candidate) => candidate.title === 'Ticket')!
+    expect(row.remoteId).toBe('bare-1:ITAN-2026-0019')
+    // Another agent's chat does not see this folder's ids.
+    await expect(taskToolService.tasksGet(session('kit-1'), { ref: 'ITAN-2026-0019' })).rejects.toThrow('No task with that ref.')
+    const bare = session('bare-1')
+    expect(await taskToolService.tasksGet(bare, { ref: 'ITAN-2026-0019' })).toMatchObject({ ref: row.id, title: 'Ticket' })
+    const result = await taskToolService.tasksReport(bare, { ref: 'ITAN-2026-0019', status: 'in_progress', summary: 'Picked up' })
+    expect(result).toMatchObject({ ref: row.id, attached: true })
+    expect(taskRepo.getById(USER, row.id)).toMatchObject({ chatId: bare.chatId, sessionOwned: true, status: 'in_progress' })
+  })
+
+  it('finds a file id written a moment ago after one index pass', async () => {
+    const { taskSyncScheduler } = await import('./taskSyncScheduler')
+    const refresh = vi.spyOn(taskSyncScheduler, 'refresh').mockImplementation(() => taskSyncService.pull(USER))
+    try {
+      mkdirSync(join(holder.agentPath, '.cinna', 'tasks'), { recursive: true })
+      writeFileSync(join(holder.agentPath, '.cinna', 'tasks', 'fresh.md'), '---\ncinna_task: 1\nid: ITAN-2026-0020\ntitle: Fresh\nstatus: todo\n---\n')
+      const bare = session('bare-1')
+      const result = await taskToolService.tasksReport(bare, { ref: 'ITAN-2026-0020', status: 'in_progress', summary: 'Go' }) as { ref: string }
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(taskRepo.getById(USER, result.ref)).toMatchObject({ title: 'Fresh', chatId: bare.chatId, sessionOwned: true })
+      await expect(taskToolService.tasksGet(bare, { ref: 'ITAN-2026-9999' })).rejects.toThrow('No task with that ref.')
+      expect(refresh).toHaveBeenCalledTimes(2)
+    } finally {
+      refresh.mockRestore()
+    }
+  })
+
+  it('refuses a report on a task another conversation took on itself, in cinna-core’s words, until that one is in the trash', async () => {
+    const other = session('kit-1')
+    const owned = await taskToolService.tasksCreate(other, { title: 'Elsewhere', description: 'x', category: 'active' }) as { ref: string }
+    const kit = session('kit-1')
+    for (const status of ['in_progress', 'done']) {
+      await expect(taskToolService.tasksReport(kit, { ref: owned.ref, status, summary: 'Mine now' }))
+        .rejects.toThrow(`${owned.ref} is being worked on in another conversation; only that conversation can report on it`)
+    }
+    expect(taskRepo.getById(USER, owned.ref)).toMatchObject({ chatId: other.chatId, sessionOwned: true, status: 'in_progress' })
+    // In the trash: the row names no chat, though `chatId` keeps it; another conversation may close it.
+    chatRepo.softDelete(USER, other.chatId)
+    expect(taskService.getById(USER, owned.ref)).toMatchObject({ chatId: other.chatId, chat: null })
+    const result = await taskToolService.tasksReport(kit, { ref: owned.ref, status: 'done', summary: 'Finished it' })
+    expect(result).toEqual({ ref: owned.ref, status: 'done', taskStatus: 'completed', category: 'done' })
+  })
+
+  it('closes from another conversation a dispatched task one left “Ended without reporting”, unless a turn runs there', async () => {
+    const other = session('kit-1')
+    const dispatched = taskService.create(USER, { title: 'Dispatched', goal: 'x', assigneeAgentId: 'kit-1' })
+    taskService.start(USER, dispatched.id, { chatId: other.chatId })
+    taskService.setStatus(USER, dispatched.id, 'blocked')
+    const kit = session('kit-1')
+    holder.live.add(other.chatId)
+    await expect(taskToolService.tasksReport(kit, { ref: dispatched.id, status: 'done', summary: 'Done' }))
+      .rejects.toThrow('This task has a turn running in another conversation; try again once it ends.')
+    holder.live.delete(other.chatId)
+    const result = await taskToolService.tasksReport(kit, { ref: dispatched.id, status: 'done', summary: 'Done' })
+    expect(result).toEqual({ ref: dispatched.id, status: 'done', taskStatus: 'completed', category: 'done' })
+    expect(taskRepo.getById(USER, dispatched.id)).toMatchObject({ chatId: other.chatId, sessionOwned: false, status: 'completed' })
+  })
+
+  /** A chat's lazy task as an ask makes it (`inboxService.taskForChat`), Done at that turn's end. */
+  function lazyDoneTask(chatId: string) {
+    const lazy = taskService.create(USER, { title: 'Chat', goal: 'Hello', origin: 'local', executor: 'desktop', chatId, assigneeAgentId: 'kit-1', assigneeKind: 'agent', askBorn: true })
+    taskService.start(USER, lazy.id, { chatId })
+    taskService.setStatus(USER, lazy.id, 'completed')
+    return lazy
+  }
+
+  /** The next typed message, through the real acceptance path: it reopens a lazy task. */
+  async function typeMessage(chatId: string, turnId: string): Promise<void> {
+    const { inboxService } = await import('./inboxService')
+    inboxService.resumeChat({ userId: USER, chatId, agentId: 'kit-1', turnId }, 'one more thing')
+  }
+
+  it('takes an `active` create in a chat whose lazy task a typed message reopened, settling that one Done, and the new task stays the chat’s', async () => {
+    const kit = session('kit-1')
+    const lazy = lazyDoneTask(kit.chatId)
+    await typeMessage(kit.chatId, 'run-2')
+    expect(taskRepo.getById(USER, lazy.id)?.status).toBe('in_progress')
+    const created = await taskToolService.tasksCreate(kit, { title: 'Next', description: 'x', category: 'active' }) as { ref: string }
+    expect(created).toMatchObject({ status: 'in_progress', attached: true })
+    expect(taskRepo.getById(USER, lazy.id)).toMatchObject({ status: 'completed', sessionOwned: false, chatId: kit.chatId })
+    expect(taskRepo.getById(USER, created.ref)).toMatchObject({ chatId: kit.chatId, sessionOwned: true })
+    // Whatever touches the settled one later, the chat's task is the one in hand.
+    holder.current!.sqlite.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000) + 3600, lazy.id)
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(created.ref)
+    await expect(taskToolService.tasksCreate(kit, { title: 'Third', description: 'x', category: 'active' })).rejects.toThrow(ALREADY(created.ref))
+    const report = await taskToolService.tasksReport(kit, { status: 'in_progress', summary: 'Going' })
+    expect(report).toMatchObject({ ref: created.ref })
+  })
+
+  it('attaches by report in a chat whose lazy task a typed message reopened, settling that one Done', async () => {
+    const kit = session('kit-1')
+    const lazy = lazyDoneTask(kit.chatId)
+    await typeMessage(kit.chatId, 'run-2')
+    const queued = taskService.create(USER, { title: 'Queued', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: queued.id, status: 'in_progress', summary: 'On it' })
+    expect(result).toMatchObject({ ref: queued.id, taskStatus: 'in_progress', attached: true })
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ chatId: kit.chatId, sessionOwned: true })
+    expect(taskRepo.getById(USER, lazy.id)?.status).toBe('completed')
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(queued.id)
+  })
+
+  it('refuses an `active` create in a chat a person’s task was continued into, leaving that task in progress', async () => {
+    const kit = session('kit-1')
+    // A task the person made, taken over and continued into this fresh chat
+    // (`taskStartService`): In progress, bound here, not owned, no ask — but not ask-born.
+    const person = taskService.create(USER, { title: 'Mine', goal: 'Do it', origin: 'local', executor: 'desktop', assigneeAgentId: 'kit-1', assigneeKind: 'agent' })
+    taskService.start(USER, person.id, { chatId: kit.chatId })
+    expect(taskRepo.getById(USER, person.id)).toMatchObject({ chatId: kit.chatId, status: 'in_progress', sessionOwned: false, askBorn: false })
+    await expect(taskToolService.tasksCreate(kit, { title: 'Next', description: 'x', category: 'active' })).rejects.toThrow(ALREADY(person.id))
+    const queued = taskService.create(USER, { title: 'Queued', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: queued.id, status: 'in_progress', summary: 'Noted' })
+    expect(result).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, person.id)).toMatchObject({ status: 'in_progress', chatId: kit.chatId })
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(person.id)
+  })
+
+  it('keeps refusing while the reopened lazy task has an open ask', async () => {
+    const kit = session('kit-1')
+    const lazy = lazyDoneTask(kit.chatId)
+    await typeMessage(kit.chatId, 'run-2')
+    taskInputRequestRepo.open({ requestId: 'ask-1', taskId: lazy.id, chatId: kit.chatId, agentId: 'kit-1', invocationId: 'run-2', request: { kind: 'question', questions: [{ question: 'Which?' }] } as never, resume: 'next_message' })
+    await expect(taskToolService.tasksCreate(kit, { title: 'Next', description: 'x', category: 'active' })).rejects.toThrow(ALREADY(lazy.id))
+    const queued = taskService.create(USER, { title: 'Queued', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: queued.id, status: 'in_progress', summary: 'Noted' })
+    expect(result).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, lazy.id)?.status).toBe('in_progress')
+  })
+
+  it('attaches a task whose ownership is stale: owned, with no chat (a peer never receives `chat_id`)', async () => {
+    const queued = taskService.create(USER, { title: 'From a peer', goal: 'x', assigneeAgentId: 'kit-1' })
+    holder.current!.sqlite.prepare('UPDATE tasks SET session_owned = 1 WHERE id = ?').run(queued.id)
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ sessionOwned: true, chatId: null })
+    const kit = session('kit-1')
+    const result = await taskToolService.tasksReport(kit, { ref: queued.id, status: 'in_progress', summary: 'Mine' })
+    expect(result).toMatchObject({ ref: queued.id, attached: true })
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: 'in_progress' })
+  })
+
+  it('sees a dispatcher flight that took the task while the bind was waiting, and binds nothing', async () => {
+    const { setDispatchHoldsTask } = await import('../tasks/dispatchedTurns')
+    const queued = taskService.create(USER, { title: 'Contended', goal: 'x', assigneeAgentId: 'kit-1' })
+    // Free when the report looks, held by the time the bind checks.
+    let looks = 0
+    setDispatchHoldsTask((_user, taskId) => taskId === queued.id && looks++ > 0)
+    try {
+      await expect(taskToolService.tasksReport(session('kit-1'), { ref: queued.id, status: 'in_progress', summary: 'S' }))
+        .rejects.toThrow(`${queued.id} is no longer waiting to be picked up; read it with tasks_get`)
+    } finally {
+      setDispatchHoldsTask(null)
+    }
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'new' })
+  })
+
+  it('refuses a report from another conversation on a task a dispatcher flight holds, leaving its status', async () => {
+    const { setDispatchHoldsTask } = await import('../tasks/dispatchedTurns')
+    const kit = session('kit-1', {})
+    const waiting = taskService.create(USER, { title: 'Queued', goal: 'x', assigneeAgentId: 'kit-1' })
+    const running = taskService.create(USER, { title: 'Running', goal: 'x', assigneeAgentId: 'kit-1' })
+    taskService.setStatus(USER, running.id, 'in_progress')
+    setDispatchHoldsTask((_user, taskId) => taskId === waiting.id || taskId === running.id)
+    try {
+      await expect(taskToolService.tasksReport(kit, { ref: waiting.id, status: 'done', summary: 'S' }))
+        .rejects.toThrow(`${waiting.id} is no longer waiting to be picked up; read it with tasks_get`)
+      await expect(taskToolService.tasksReport(kit, { ref: running.id, status: 'done', summary: 'S' }))
+        .rejects.toThrow('This task has a turn running in another conversation; try again once it ends.')
+    } finally {
+      setDispatchHoldsTask(null)
+    }
+    expect(taskRepo.getById(USER, waiting.id)?.status).toBe('new')
+    expect(taskRepo.getById(USER, running.id)?.status).toBe('in_progress')
+  })
+
+  it('puts back the assignee it gave an unassigned task when the start fails', async () => {
+    const mine = taskService.create(USER, { title: 'Unassigned', goal: 'x', createdByAgentId: 'kit-1' })
+    const before = taskRepo.getById(USER, mine.id)!
+    const start = vi.spyOn(taskService, 'start').mockImplementationOnce(() => { throw new Error('disk full') })
+    try {
+      await expect(taskToolService.tasksReport(session('kit-1'), { ref: mine.id, status: 'in_progress', summary: 'S' })).rejects.toThrow('disk full')
+    } finally {
+      start.mockRestore()
+    }
+    expect(taskRepo.getById(USER, mine.id)).toMatchObject({
+      chatId: null, sessionOwned: false, status: 'new',
+      assigneeAgentId: before.assigneeAgentId, assigneeKind: before.assigneeKind, assigneeName: before.assigneeName
+    })
+  })
+
+  it('takes `blocked` on a never-started task from a chat with a task of its own through In progress', async () => {
+    const kit = session('kit-1', {})
+    const fresh = taskService.create(USER, { title: 'Fresh', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: fresh.id, status: 'blocked', summary: 'Stuck', question: 'Which?' })
+    expect(result).toMatchObject({ ref: fresh.id, status: 'blocked', taskStatus: 'blocked' })
+    expect(result).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, fresh.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'blocked' })
+  })
+
+  it('attaches a second task by report once the chat’s session-owned task was reported done', async () => {
+    const kit = session('kit-1')
+    holder.live.add(kit.chatId)
+    const first = await taskToolService.tasksCreate(kit, { title: 'First', description: 'x', category: 'active' }) as { ref: string }
+    await taskToolService.tasksReport(kit, { status: 'done', summary: 'Shipped' })
+    expect(taskRepo.getById(USER, first.ref)?.status).toBe('completed')
+    const queued = taskService.create(USER, { title: 'Queued', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: queued.id, status: 'in_progress', summary: 'Next one' })
+    expect(result).toMatchObject({ ref: queued.id, taskStatus: 'in_progress', attached: true })
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: 'in_progress' })
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(queued.id)
+  })
+
+  it.each([['done', 'completed'], ['failed', 'error']] as const)('closes a session-owned task from Waiting with `%s`', async (status, taskStatus) => {
+    const kit = session('kit-1')
+    const created = await taskToolService.tasksCreate(kit, { title: 'Ask first', description: 'x', category: 'active' }) as { ref: string }
+    await taskToolService.tasksReport(kit, { status: 'blocked', summary: 'Need input', question: 'Which branch?' })
+    expect(taskRepo.getById(USER, created.ref)?.status).toBe('blocked')
+    const result = await taskToolService.tasksReport(kit, { status, summary: 'Ended' })
+    expect(result).toMatchObject({ ref: created.ref, status, taskStatus })
+    expect(taskRepo.getById(USER, created.ref)).toMatchObject({ chatId: kit.chatId, sessionOwned: true, status: taskStatus })
+  })
+
+  it('fails a kit agent’s unknown ref at once, with no index pass', async () => {
+    const { taskSyncScheduler } = await import('./taskSyncScheduler')
+    const refresh = vi.spyOn(taskSyncScheduler, 'refresh').mockResolvedValue(undefined as never)
+    try {
+      await expect(taskToolService.tasksReport(session('kit-1'), { ref: 'ITAN-2026-0404', status: 'in_progress', summary: 'S' })).rejects.toThrow('No task with that ref.')
+      await expect(taskToolService.tasksCreate(session('kit-1'), { title: 'Sub', description: 'x', parent: 'ITAN-2026-0404' })).rejects.toThrow('No task with that ref.')
+      expect(refresh).not.toHaveBeenCalled()
+    } finally {
+      refresh.mockRestore()
+    }
+  })
+
+  it('waits for a folder agent’s index pass outside the chat’s lock, and stops waiting when the call is aborted', async () => {
+    const { taskSyncScheduler } = await import('./taskSyncScheduler')
+    let finish: () => void = () => {}
+    const pass = new Promise<void>((resolve) => { finish = resolve })
+    const refresh = vi.spyOn(taskSyncScheduler, 'refresh').mockImplementation(() => pass as never)
+    try {
+      const bare = session('bare-1')
+      const controller = new AbortController()
+      const waiting = taskToolService.tasksReport(bare, { ref: 'ITAN-2026-0505', status: 'in_progress', summary: 'S' }, controller.signal)
+      void waiting.catch(() => {})
+      await settle()
+      expect(refresh).toHaveBeenCalledTimes(1)
+      // Another call in the same chat is not held behind the wait.
+      await expect(taskToolService.tasksReport(bare, { status: 'in_progress', summary: 'S' })).rejects.toThrow('pass ref')
+      controller.abort()
+      await expect(waiting).rejects.toThrow()
+    } finally {
+      finish()
+      refresh.mockRestore()
+    }
+  })
+
+  it('never attaches a script task, one with an unresolved remote handoff, or one a dispatcher flight holds', async () => {
+    const { taskHandoffRepo } = await import('../db/taskHandoffs')
+    const { setDispatchHoldsTask } = await import('../tasks/dispatchedTurns')
+    const scripted = taskService.create(USER, { title: 'Scripted', goal: 'x', assigneeAgentId: 'kit-1' })
+    holder.current!.sqlite.prepare("UPDATE tasks SET router = 'script' WHERE id = ?").run(scripted.id)
+    const handedOff = taskService.create(USER, { title: 'Handed off', goal: 'x', assigneeAgentId: 'kit-1' })
+    const flown = taskService.create(USER, { title: 'In flight', goal: 'x', assigneeAgentId: 'kit-1' })
+    const unresolved = vi.spyOn(taskHandoffRepo, 'unresolved').mockImplementation((_user, taskId) => taskId === handedOff.id)
+    setDispatchHoldsTask((_user, taskId) => taskId === flown.id)
+    try {
+      for (const task of [scripted, handedOff]) {
+        const kit = session('kit-1')
+        const result = await taskToolService.tasksReport(kit, { ref: task.id, status: 'in_progress', summary: 'S' })
+        expect(result).not.toHaveProperty('attached')
+        expect(taskRepo.getById(USER, task.id)).toMatchObject({ chatId: null, sessionOwned: false })
+      }
+      // The flight's task takes no report from a conversation at all.
+      await expect(taskToolService.tasksReport(session('kit-1'), { ref: flown.id, status: 'in_progress', summary: 'S' }))
+        .rejects.toThrow(`${flown.id} is no longer waiting to be picked up; read it with tasks_get`)
+      expect(taskRepo.getById(USER, flown.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'new' })
+    } finally {
+      unresolved.mockRestore()
+      setDispatchHoldsTask(null)
+    }
+  })
+
+  it('answers in cinna-core’s words when the task moved on before the bind could start it', async () => {
+    const queued = taskService.create(USER, { title: 'Raced', goal: 'x', assigneeAgentId: 'kit-1' })
+    const start = vi.spyOn(taskService, 'start').mockImplementationOnce((_user, taskId) => {
+      holder.current!.sqlite.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(taskId)
+      throw new Error('Task cannot go from cancelled to in_progress')
+    })
+    try {
+      await expect(taskToolService.tasksReport(session('kit-1'), { ref: queued.id, status: 'in_progress', summary: 'S' }))
+        .rejects.toThrow(`${queued.id} is no longer waiting to be picked up; read it with tasks_get`)
+    } finally {
+      start.mockRestore()
+    }
+    expect(taskRepo.getById(USER, queued.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'cancelled' })
+  })
+
+  it('loses the ownership with the chat when the chat is hard-deleted', async () => {
+    const kit = session('kit-1')
+    const created = await taskToolService.tasksCreate(kit, { title: 'Owned', description: 'x', category: 'active' }) as { ref: string }
+    expect(taskRepo.getById(USER, created.ref)?.sessionOwned).toBe(true)
+    chatRepo.permanentDelete(USER, kit.chatId)
+    expect(taskRepo.getById(USER, created.ref)).toMatchObject({ chatId: null, sessionOwned: false, status: 'in_progress' })
+  })
+
+  it('never binds a task with a delegation or a handover behind it', async () => {
+    const executorChat = session('kit-2')
+    const delegated = taskService.create(USER, { title: 'Delegated', goal: 'x', assigneeAgentId: 'kit-2' })
+    const requester = session('kit-1')
+    delegationRepo.insert({ userId: USER, requesterKey: 'r', originKind: 'local_chat', originChatId: requester.chatId, originAgentId: 'kit-1', targetKind: 'kit', targetAgentId: 'kit-2', channel: 'local', depth: 1, taskId: delegated.id })
+    await expect(taskToolService.tasksReport(executorChat, { ref: delegated.id, status: 'in_progress', summary: 'S' })).rejects.toThrow('Report on delegated work')
+    expect(taskRepo.getById(USER, delegated.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'new' })
+
+    const handedOver = taskService.create(USER, { title: 'Handed over', goal: 'x', assigneeAgentId: 'kit-2' })
+    const handover = { id: 'h-1', userId: USER, taskId: handedOver.id, agentId: 'kit-2', originAgentId: 'kit-1', folderPath: holder.agentPath }
+    const byTask = vi.spyOn(handoverRepo, 'byTaskId').mockImplementation((_user, taskId) => (taskId === handedOver.id ? handover as never : undefined))
+    try {
+      await expect(taskToolService.tasksReport(session('kit-2'), { ref: handedOver.id, status: 'in_progress', summary: 'S' })).rejects.toThrow('Report on delegated work')
+    } finally {
+      byTask.mockRestore()
+    }
+    expect(taskRepo.getById(USER, handedOver.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'new' })
+  })
+
+  it('does not bind from a chat that already has a task: the report goes to the task named, unbound', async () => {
+    const kit = session('kit-1', {})
+    const own = taskRepo.getByChatId(USER, kit.chatId)!
+    const other = taskService.create(USER, { title: 'Other', goal: 'x', assigneeAgentId: 'kit-1' })
+    const result = await taskToolService.tasksReport(kit, { ref: other.id, status: 'in_progress', summary: 'Noted' })
+    expect(result).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, other.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'in_progress' })
+    expect(taskRepo.getByChatId(USER, kit.chatId)?.id).toBe(own.id)
+  })
+
+  it('closes a task with `done` without binding, and binds nothing on a malformed `blocked`', async () => {
+    // A task nothing has run, which an `in_progress` report would bind: `done`
+    // closes it through In progress, as cinna-core does, and binds nothing.
+    const fresh = taskService.create(USER, { title: 'Quick', goal: 'x', assigneeAgentId: 'kit-1' })
+    const kit = session('kit-1')
+    const closed = await taskToolService.tasksReport(kit, { ref: fresh.id, status: 'done', summary: 'Done' })
+    expect(closed).toEqual({ ref: fresh.id, status: 'done', taskStatus: 'completed', category: 'done' })
+    expect(taskRepo.getById(USER, fresh.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'completed' })
+    expect(taskRepo.getByChatId(USER, kit.chatId)).toBeUndefined()
+    // A started one closes, still unbound.
+    const assigned = taskService.create(USER, { title: 'Quick 2', goal: 'x', assigneeAgentId: 'kit-1' })
+    taskService.setStatus(USER, assigned.id, 'in_progress')
+    const result = await taskToolService.tasksReport(kit, { ref: assigned.id, status: 'done', summary: 'Done' })
+    expect(result).not.toHaveProperty('attached')
+    expect(taskRepo.getById(USER, assigned.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'completed' })
+
+    const waiting = taskService.create(USER, { title: 'Ask', goal: 'x', assigneeAgentId: 'kit-1' })
+    await expect(taskToolService.tasksReport(kit, { ref: waiting.id, status: 'blocked', summary: 'S' })).rejects.toThrow('question')
+    expect(taskRepo.getById(USER, waiting.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'new' })
+  })
+
+  it('never binds a task a person has started or one of another agent', async () => {
+    const started = taskService.create(USER, { title: 'Started', goal: 'x', assigneeAgentId: 'kit-1' })
+    taskService.setStatus(USER, started.id, 'in_progress')
+    const kit = session('kit-1')
+    await taskToolService.tasksReport(kit, { ref: started.id, status: 'in_progress', summary: 'Still' })
+    expect(taskRepo.getById(USER, started.id)).toMatchObject({ chatId: null, sessionOwned: false })
+    const stranger = taskService.create(USER, { title: 'Stranger', goal: 'x', assigneeAgentId: 'kit-2' })
+    await expect(taskToolService.tasksReport(kit, { ref: stranger.id, status: 'in_progress', summary: 'S' })).rejects.toThrow('assigned to you')
   })
 })

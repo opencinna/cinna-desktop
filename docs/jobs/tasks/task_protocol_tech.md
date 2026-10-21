@@ -34,6 +34,7 @@ None. The tools are session tools on the loopback MCP; the skill and the context
 
 - `tasksProtocolParity.test.ts` reads the schema from `TASKS_SCHEMA_REPO_PATH`, or from `CINNA_TASKS_SCHEMA` (absolute or repository-relative) to try a draft or cinna-core's own copy. It asserts `protocol_version === TASKS_PROTOCOL_VERSION`, `server === 'cinna'`, that `DelegationToolProvider.getTools()` names exactly the schema's tools, and that each tool's `inputSchema` equals the schema's with `#/$defs/<name>` inlined (a local key beside a `$ref`, such as a `description`, wins). It compares input schemas, not descriptions. `describe.skipIf` skips the whole block when no schema file exists.
 - The `aliases` block is not read anywhere; no old name is registered or mapped.
+- Contract 1.16.0 changed two descriptions and one enum in the schema: `tasks_create.category` is `["backlog", "ready", "active", "draft"]`, and the `tasks_create.category` and `tasks_report.ref` descriptions say what `active` and an attaching report do. `TASKS_TOOL_SCHEMAS` carries the same text, and the parity test (which compares input schemas, not descriptions) holds the enum. The skill's verb table gained a line for "say this conversation is working on a task" and its Lifecycle section a sentence on binding; `references/file-protocol.md` says a file task's `id` is a valid `ref`. What each does in the desktop: [Agent Task Tools (tech)](agent_task_tools_tech.md#services--key-methods).
 
 ### Targets
 
@@ -58,7 +59,7 @@ None. The tools are session tools on the loopback MCP; the skill and the context
 
 - `cinnaTasksSection` writes `## Cinna tasks`, one line on the `cinna` server, the two numbered rules, `Your Cinna agent id is \`<id>\` — the \`origin.agent\` of any task or brief you create.` and, when there is a delivery, `Open the \`cinna-tasks\` skill before your first \`tasks_*\` call.` or the pointer. `handoverSections` adds it only when the context has an `agentId`; kit and bare prompts put it after the desktop context block (`assembleBareNativePrompt` through its trailing-sections loop).
 - `buildTurnHeader` writes `Cinna task context (not part of the conversation):`, `- here: Cinna Desktop, folder agent \`<agentId>\` · chat \`<chatId>\``, `- current task: \`<ref>\` "<title>" (report required: yes|no)` (the title through `JSON.stringify`) or `- current task: none`, then one `- ` line of the nonzero parts `chain depth: N`, `open delegations: T` with ` (W waiting on the user)` only when W > 0, `ready tasks: N` joined by ` · `, then `- tasks skill: <label>` when there is one.
-- `turnHeaderFor` sets `reportRequired` from `row.dispatchAgentId`, a delegation row for the task, or `row.jobRunId`. A failure reading the task or counts is logged and leaves those parts out; a failure reading the skill only drops its line. Built only when the driver's capabilities include `cwd`.
+- `turnHeaderFor` sets `reportRequired` from `row.dispatchAgentId`, a delegation row for the task, or `row.jobRunId`; a session-owned task has none of them, so it reads `report required: no`, which is what contract 1.16.0 says. A failure reading the task or counts is logged and leaves those parts out; a failure reading the skill only drops its line. Built only when the driver's capabilities include `cwd`.
 
 ### The result packet
 

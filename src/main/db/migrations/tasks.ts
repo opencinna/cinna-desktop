@@ -178,6 +178,28 @@ export function migrateTasks(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'tasks', 'started_by_user')) {
     sqlite.exec('ALTER TABLE tasks ADD COLUMN started_by_user INTEGER NOT NULL DEFAULT 0')
   }
+  // The bound conversation took the task on itself (`category: active`, or an
+  // attaching `tasks_report`): settled by reports only, never by a turn's end.
+  // False on every existing row.
+  if (!hasColumn(sqlite, 'tasks', 'session_owned')) {
+    sqlite.exec('ALTER TABLE tasks ADD COLUMN session_owned INTEGER NOT NULL DEFAULT 0')
+  }
+  // `inboxService.taskForChat` made the task to hold a chat's first ask: the
+  // only kind that gives way to a task the conversation takes on itself.
+  // Device-local, never synced; false on every existing row.
+  if (!hasColumn(sqlite, 'tasks', 'ask_born')) {
+    sqlite.exec('ALTER TABLE tasks ADD COLUMN ask_born INTEGER NOT NULL DEFAULT 0')
+  }
+  // Ownership goes with the conversation: when a chat is hard-deleted, its
+  // `ON DELETE SET NULL` clears the task's `chat_id`, and this clears
+  // `session_owned` in the same statement — on every delete path (a trashed
+  // chat purged, the trash emptied, a job run's chat removed) — so a later
+  // run in a fresh chat does not inherit report-only settlement. Leaves
+  // `updated_at` alone, as `taskRepo.setSessionOwned` does.
+  sqlite.exec(`CREATE TRIGGER IF NOT EXISTS tasks_session_owned_follows_chat
+    AFTER UPDATE OF chat_id ON tasks
+    WHEN NEW.chat_id IS NULL AND NEW.session_owned = 1
+    BEGIN UPDATE tasks SET session_owned = 0 WHERE id = NEW.id; END`)
   // A folder binding stored before the dispatcher has no `trustedDigest`, and
   // its task row took what Cinna wrote as trusted. Nobody approved that
   // content, so it is untrusted until the user approves it once in the Inbox

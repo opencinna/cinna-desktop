@@ -350,6 +350,14 @@ export interface TaskUpdateInput {
   customFields?: TaskCustomFields | null
 }
 
+/** The chat a task is bound to, as {@link TaskDto.chat} names it. */
+export interface TaskChatRef {
+  id: string
+  title: string
+  /** A turn (or an autonomous runner's turn) is live in the chat now. */
+  running: boolean
+}
+
 /** One task, as every surface sees it. */
 export interface TaskDto {
   /** Portable definition; execution checkpoints stay on the executing device. */
@@ -394,6 +402,18 @@ export interface TaskDto {
 
   /** The chat this task runs in, on this device. Never syncs — chats are not a synced collection. */
   chatId: string | null
+  /**
+   * The bound chat as a row shows it: its title, and whether a turn is live
+   * there now. Null when the task has no chat, or the chat is not visible
+   * here or is in the trash (`chatId` still names it).
+   */
+  chat: TaskChatRef | null
+  /**
+   * The bound conversation took this task on itself (`tasks_create` with
+   * `category: active`, or an attaching `tasks_report`). Only a report, an
+   * answered ask or a person's move changes its status; a turn's end never does.
+   */
+  sessionOwned: boolean
   assignee: TaskAssignee
   parentTaskId: string | null
   /** cinna's computed pair, mirrored: how many subtasks, how many of them are done. */

@@ -208,7 +208,10 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
     // the wrapper named rather than the chat's own root.
     assigneeAgentId: ctx.agentId,
     assigneeName: agent?.name ?? null,
-    assigneeKind: ctx.agentId ? 'agent' : 'model'
+    assigneeKind: ctx.agentId ? 'agent' : 'model',
+    // The one kind of task that gives way to one the conversation takes on
+    // itself (`taskToolService.givesWay`).
+    askBorn: true
   })
   taskService.start(ctx.userId, created.id, { chatId: ctx.chatId })
   logger.info('a chat raised its first ask, so it has a task now', {
@@ -216,6 +219,26 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
     taskId: created.id
   })
   return taskService.getRow(ctx.userId, created.id)
+}
+
+/**
+ * The task an ask in this chat lands on: the chat's task, or — when it has
+ * none, or only one the conversation took on itself (`session_owned`) and
+ * has since settled — a new lazy one ({@link taskForChat}), when the ask
+ * writes a row. A settled session-owned task is reopened by a person's move
+ * or the agent's report only, never by a message (see `resumeChat`), so an
+ * ask parked on it could never be answered: the typed answer would be refused
+ * as no longer awaited, and every later message in the chat with it. A
+ * settled task the chat made lazily is still the chat's: a message reopens it.
+ * `getByChatId` puts an unsettled task first, so a settled one here means the
+ * chat has nothing in hand.
+ */
+function openChatTask(ctx: RunEventContext, writesRow: boolean): TaskRow | null {
+  const current = taskRepo.getByChatId(ctx.userId, ctx.chatId)
+  const settledOwn = !!current && current.sessionOwned &&
+    ['completed', 'error', 'cancelled', 'archived'].includes(current.status)
+  if (current && !settledOwn) return current
+  return writesRow ? taskForChat(ctx) : null
 }
 
 /**
@@ -357,8 +380,7 @@ export const inboxService = {
     // An attributable ask always has a delivery path: a parked driver address
     // or a new message to the same agent through the main execution service.
     const writesRow = !!ctx.agentId
-    const task =
-      taskRepo.getByChatId(ctx.userId, ctx.chatId) ?? (writesRow ? taskForChat(ctx) : null)
+    const task = openChatTask(ctx, writesRow)
     if (!task) return
     // A runtime conductor has an agent identity, but its main-owned ask_user
     // gate still belongs to the runner. Do not overwrite it as a live driver park.
@@ -485,6 +507,19 @@ export const inboxService = {
       }
     }
 
+    // **A task this conversation took on itself is settled by reports only**
+    // (`session_owned`: `tasks_create` with `category: active`, or an attaching
+    // `tasks_report`): a done, an error and a stop all leave its status, and
+    // only the agent's report, an answered ask or a person's move change it.
+    // An ask that expired here still lets it out of Waiting — unless the agent
+    // reported `blocked` in this very run, whose word stands; any other report
+    // in the run (an `in_progress` note) does not hold it there.
+    if (task.sessionOwned && task.chatId === ctx.chatId) {
+      const reported = takeAgentStatusReport(task.id, ctx.turnId)
+      if (expired > 0 && reported !== 'blocked') markAfterAskChange(ctx.userId, task.id)
+      return
+    }
+
     // **A task a job run owns is finished by the job run**, and must be left in
     // `in_progress` for it to find: `jobService.reportRunCompletion` knows the
     // outcome this event cannot — a stop, a refusal, a budget ceiling — and
@@ -589,7 +624,9 @@ export const inboxService = {
         throw new Error('This task is running elsewhere. Take it over before continuing here.')
       }
     }
-    if (linked && ctx.completionOwner !== 'runner' && linked.origin === 'local' &&
+    // A task the conversation took on itself is reopened by a person's move or
+    // the agent's report, never by a message.
+    if (linked && !linked.sessionOwned && ctx.completionOwner !== 'runner' && linked.origin === 'local' &&
       !linked.jobId && !linked.jobRunId && !linked.remoteAdapter && linked.router !== 'script' &&
       ['completed', 'cancelled', 'error'].includes(linked.status)) {
       taskService.resumeFinishedChat(ctx.userId, linked.id, ctx.chatId)

@@ -4,7 +4,7 @@ import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { TaskStatusIcon } from './TaskStatusIcon'
 import { TaskAssigneeChip } from './TaskAssigneeChip'
-import { taskStatusText } from './tasksViewModel'
+import { taskChatName, taskStatusText } from './tasksViewModel'
 
 /**
  * One task as a list row: where it stands, what it is, and when it last moved.
@@ -27,9 +27,10 @@ export function TaskRow({
   task,
   size = 'regular',
   showAssignee = false,
+  hideChat = false,
   onOpened
 }: {
-  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'> & Partial<Pick<TaskDto, 'assignee' | 'statusLabel'>>
+  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'> & Partial<Pick<TaskDto, 'assignee' | 'statusLabel' | 'chat'>>
   /**
    * The type scale of the surface the row renders into (`ux_rules.md` §12):
    * `regular` is the Inbox's 13/11, `compact` the composer chrome's 12/11
@@ -42,12 +43,24 @@ export function TaskRow({
    * stays the one part that changes width on its own.
    */
   showAssignee?: boolean
+  /**
+   * The row sits under its own chat (the Tasks popover under the composer),
+   * which already shows whether a turn is live: no live dot, and no ", running"
+   * in the name. A compact row elsewhere — a task page's Subtasks, each in a
+   * chat of its own — keeps the dot.
+   */
+  hideChat?: boolean
   /** After the task was opened — a popover around the row closes itself. */
   onOpened?: () => void
 }): React.JSX.Element {
   const compact = size === 'compact'
   const openTask = useOpenTask()
   const now = useRelativeNow()
+  const showDot = !hideChat && !!task.chat
+  const live = showDot && !!task.chat?.running
+  // Shown only on a regular row (a compact one has no room for it), and only
+  // when the chat has a real name.
+  const chatName = !compact && !hideChat && task.chat ? taskChatName(task.chat.title) : null
   return (
     <button
       type="button"
@@ -65,8 +78,12 @@ export function TaskRow({
         there, and a name that changes under a screen reader every
         minute is worse than one that omits a detail the user can
         reach by reading the row.
+
+        Whether its chat has a turn live is said here too, because the
+        dot that shows it is decorative: ", running" while it is, and only
+        where the dot is drawn. So is the chat's name when the row shows it.
       */
-      aria-label={`${task.title} — ${taskStatusText(task)}`}
+      aria-label={`${task.title} — ${taskStatusText(task)}${chatName ? `, in ${chatName}` : ''}${live ? ', running' : ''}`}
       onClick={() => {
         openTask(task.id)
         onOpened?.()
@@ -90,16 +107,63 @@ export function TaskRow({
         on every row depending on how long "in progress" is.
       */}
       <TaskStatusIcon status={task.status} />
-      <span
-        className={`min-w-0 flex-1 truncate ${compact ? 'text-[12px]' : 'text-[13px]'} text-[var(--color-text)]`}
-        title={task.title}
-      >
-        {task.title}
-      </span>
+      {/*
+        Where the work happens, after what it is: the bound chat's name, muted,
+        at the regular size only — a compact row has no room for it — and only
+        when the chat has a name (not blank, not the default "New Chat").
+        The title wins the width: the name's huge shrink factor makes it give
+        way, down to nothing, before the title loses a character.
+      */}
+      {chatName ? (
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="min-w-0 truncate text-[13px] text-[var(--color-text)]" title={task.title}>
+            {task.title}
+          </span>
+          <span data-task-row-chat className="min-w-0 max-w-[12rem] shrink-[9999] truncate text-[11px] text-[var(--color-text-muted)]" title={chatName}>
+            in {chatName}
+          </span>
+        </span>
+      ) : (
+        <span
+          className={`min-w-0 flex-1 truncate ${compact ? 'text-[12px]' : 'text-[13px]'} text-[var(--color-text)]`}
+          title={task.title}
+        >
+          {task.title}
+        </span>
+      )}
       {showAssignee && task.assignee && <TaskAssigneeChip task={{ assignee: task.assignee }} className="max-w-[10rem] shrink-0" />}
+      {/* Not with `hideChat`: the row sits under that very chat, whose composer already shows it live. */}
+      {showDot && task.chat && <TaskLiveDot running={task.chat.running} chatTitle={task.chat.title} />}
       <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-muted)]">
         {formatRelativeFromDate(task.updatedAt, now)}
       </span>
     </button>
+  )
+}
+
+/**
+ * A turn is live in the task's chat now. Rendered for every task that has a
+ * chat — a fixed fact about it, like the assignee chip — and only made
+ * `invisible` while the chat is idle, so a poll that flips it moves nothing
+ * beside it (`ux_rules.md` §1). It pulses like the app's other live dot
+ * (`SessionActivityBadges`), and names the chat on hover. Decorative: the
+ * row's name says ", running". `className` places it (the board pins it to
+ * the corner of the status icon).
+ */
+export function TaskLiveDot({ running, chatTitle, className = 'shrink-0' }: {
+  running: boolean
+  chatTitle: string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-task-live-dot={running ? 'running' : 'idle'}
+      title={running ? `Running in ${taskChatName(chatTitle) ?? 'New Chat'}` : undefined}
+      // The ring, in the page background, parts the dot from whatever it sits
+      // on — the board pins it to the In progress spinner, blue on blue in the
+      // light theme.
+      className={`h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] ring-1 ring-[var(--color-bg)] ${className} ${running ? 'visible motion-safe:animate-pulse' : 'invisible'}`}
+    />
   )
 }

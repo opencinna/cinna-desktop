@@ -17,7 +17,7 @@ import { installTaskRunnerHooks, taskRunnerBridge } from './taskRunnerBridge'
 import { setDispatchableAgentsSource, setDispatchQueuesSource } from './taskDispatchInbox'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { runtimeAgentSlotFree, withRuntimeAgent } from '../tasks/runtimeAdmission'
-import { clearDispatchedRun, markDispatchedRun, setDispatchOwnedTurnSettler, setDispatchWake, type DispatchOwnedTurnEnd } from '../tasks/dispatchedTurns'
+import { clearDispatchedRun, markDispatchedRun, setDispatchHoldsTask, setDispatchOwnedTurnSettler, setDispatchWake, type DispatchOwnedTurnEnd } from '../tasks/dispatchedTurns'
 import { publishEvent } from '../host/events'
 import { createLogger } from '../logger/logger'
 import { parseHandoverState } from '../../shared/handovers'
@@ -1046,6 +1046,15 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
         })
     },
 
+    /**
+     * Whether a flight holds this task (still waiting for its slot, or
+     * running), or its last owned turn is being settled: no one else may take
+     * it on (`tasks_report`'s attach asks this).
+     */
+    holdsTask(userId: string, taskId: string): boolean {
+      return held(userId, taskId) || settlingTask(userId, taskId)
+    },
+
     async list(runScope: RunScope): Promise<AgentDispatchState[]> {
       const agents = await deps.agents(runScope)
       return agents.map((agent) => stateFor(runScope.profileUserId, agent))
@@ -1285,6 +1294,9 @@ setDispatchOwnedTurnSettler((end) => taskDispatchService.settleOwnedTurn(end))
 
 /** An answer stored for a queue is sent by the next pass. */
 setDispatchWake(() => taskDispatchService.wake())
+
+/** A task a flight holds is no conversation's to take on. */
+setDispatchHoldsTask((userId, taskId) => taskDispatchService.holdsTask(userId, taskId))
 
 /**
  * The agents of this profile that can work a queue now: the dispatcher's own

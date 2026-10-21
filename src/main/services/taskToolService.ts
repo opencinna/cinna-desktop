@@ -8,10 +8,14 @@ import { taskCommentRepo, type TaskCommentRow } from '../db/taskComments'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { scriptRuntimeRepo } from '../db/scriptRuntimes'
+import { taskHandoffRepo } from '../db/taskHandoffs'
+import { visibleChat } from '../auth/chatScope'
 import { taskRunnersByChat } from './taskRunnerState'
 import { delegationService, validateSession, type DelegationSession } from './delegationService'
 import { localAgentService } from './localAgents/localAgentService'
 import { noteAgentStatusReport } from '../tasks/agentStatusReports'
+import { dispatcherHoldsTask } from '../tasks/dispatchedTurns'
+import { FOLDER_ADAPTER_ID } from '../tasks/adapters/folderTaskAdapter'
 import { parseTaskReport } from '../tasks/taskReport'
 import { decodeTaskTarget } from '../../shared/taskTargets'
 import { createLogger } from '../logger/logger'
@@ -25,6 +29,7 @@ import {
 } from '../../shared/folderTasks'
 import {
   TASK_PROTOCOL_CATEGORIES,
+  canTransition,
   fromProtocolCategory,
   isTaskStatus,
   parseTaskStatus,
@@ -33,7 +38,7 @@ import {
   type TaskProtocolCategory,
   type TaskStatus
 } from '../../shared/taskStatus'
-import { TASK_COMMENT_MAX, isTaskPriority, type TaskArtifact, type TaskCommentDto, type TaskCustomFields } from '../../shared/tasks'
+import { TASK_COMMENT_MAX, isTaskPriority, parseTaskAssigneeKind, type TaskArtifact, type TaskCommentDto, type TaskCustomFields } from '../../shared/tasks'
 
 /**
  * The Cinna Task Protocol's eight tools — `tasks_targets`, `tasks_list`,
@@ -196,11 +201,101 @@ function summary(row: TaskRow, relations: Relation[], delegation: DelegationRow 
   }
 }
 
-function requireTask(userId: string, ref: unknown): TaskRow {
-  const taskId = text(ref, 'ref', 128)
-  const row = taskRepo.getById(userId, taskId)
-  if (!row || row.deletedAt) fail('No task with that ref.')
-  return row
+/**
+ * `work`, unless the tool call is aborted first: then the abort's reason. The
+ * work itself carries on; only this caller stops waiting for it.
+ */
+function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
+/**
+ * The task a `ref` names: a row id, or — for the calling agent's own folder —
+ * a task file's id (the folder binding `<agentId>:<fileId>`, the protocol's
+ * "a folder task's id"). For an agent whose tasks live in its own folder (a
+ * bare agent's `.cinna/tasks`, as `localHomeFor` says), a miss waits for one
+ * index pass — or until the tool call is aborted — and looks again both ways,
+ * so a file a script wrote a moment ago is found; any other agent's tasks are
+ * all in the table already, and a miss is final at once. Answers keep the row
+ * id as `ref`; both name the same task. Called before any per-chat lock.
+ */
+async function requireTask(session: DelegationSession, ref: unknown, signal?: AbortSignal): Promise<TaskRow> {
+  const userId = session.scope.profileUserId
+  const id = text(ref, 'ref', 128)
+  const look = (): TaskRow | undefined => {
+    const byId = taskRepo.getById(userId, id)
+    if (byId && !byId.deletedAt) return byId
+    const byFile = taskRepo.getByRemote(userId, FOLDER_ADAPTER_ID, `${session.agentId}:${id}`)
+    return byFile && !byFile.deletedAt ? byFile : undefined
+  }
+  const found = look()
+  if (found) return found
+  const { localHomeFor } = await import('../tasks/adapters')
+  if (await localHomeFor(session.agentId)) {
+    const { taskSyncScheduler } = await import('./taskSyncScheduler')
+    await untilAborted(taskSyncScheduler.refresh(), signal)
+  }
+  return look() ?? fail('No task with that ref.')
+}
+
+/** A task resolved before the per-chat lock, read again inside it: it may have moved or gone while the call waited. */
+function reread(session: DelegationSession, row: TaskRow): TaskRow {
+  const now = taskRepo.getById(session.scope.profileUserId, row.id)
+  return now && !now.deletedAt ? now : fail('No task with that ref.')
+}
+
+/** Settled: Done, Failed, Cancelled or Archived. A chat's settled task is history, not work it is doing. */
+function settledStatus(status: string): boolean {
+  return status === 'completed' || status === 'error' || status === 'cancelled' || status === 'archived'
+}
+
+/** The chat's task when it is still work in hand; undefined for none or a settled one. */
+function inHand(task: TaskRow | undefined): TaskRow | undefined {
+  return task && !settledStatus(task.status) ? task : undefined
+}
+
+/**
+ * Whether a conversation owns the task (`session_owned`). Ownership without a
+ * chat is stale and means nothing: the trigger that clears it when `chat_id`
+ * goes NULL leaves `updated_at` alone, so a peer — which never receives
+ * `chat_id` — keeps the flag on a row no conversation here holds.
+ */
+function sessionOwned(row: TaskRow): boolean {
+  return row.sessionOwned && !!row.chatId
+}
+
+/**
+ * Whether the chat's task in hand gives way to a task the agent takes on
+ * (`category: active`, or an attaching report): a lazy task an ask made in a
+ * chat opened by hand (`askBorn` — never a task a person created and continued
+ * into this chat), In progress only because a typed message reopened it
+ * (`inboxService.resumeChat`). Not one the conversation owns, with no open
+ * ask, nothing that runs or settles it elsewhere — job, job run, dispatcher
+ * (owning it or a flight holding it), delegation, handover, remote adapter,
+ * runtime or script — made here (`local`) and run here (`desktop`).
+ */
+function givesWay(session: DelegationSession, task: TaskRow): boolean {
+  const { profileUserId } = session.scope
+  if (!task.askBorn || task.status !== 'in_progress' || sessionOwned(task) || task.chatId !== session.chatId) return false
+  if (task.origin !== 'local' || task.executor !== 'desktop' || task.remoteAdapter) return false
+  if (task.jobId || task.jobRunId || task.dispatchAgentId || task.router === 'script' || task.script != null) return false
+  if (dispatcherHoldsTask(profileUserId, task.id)) return false
+  if (delegationRepo.byTaskId(profileUserId, task.id) || handoverRepo.byTaskId(profileUserId, task.id)) return false
+  if (taskInputRequestRepo.listOpenForTask(task.id).length > 0) return false
+  if ([...taskRunnersByChat.values()].some((runner) => runner.taskId === task.id || runner.controllerTaskId === task.id)) return false
+  return !(taskRuntimeRepo.get(profileUserId, task.id) || scriptRuntimeRepo.owner(profileUserId, task.id))
+}
+
+/** The chat's task when it blocks taking another on: in hand, and not one that {@link givesWay}. */
+function blocking(session: DelegationSession, task: TaskRow | undefined): TaskRow | undefined {
+  const current = inHand(task)
+  return current && !givesWay(session, current) ? current : undefined
 }
 
 /** How a task concerns the calling agent; empty when it does not. */
@@ -214,8 +309,8 @@ function relationsOf(session: DelegationSession, row: TaskRow): Relation[] {
 }
 
 /** The task `ref` names, or this chat's own task when it is left out. */
-function taskOrCurrent(session: DelegationSession, current: TaskRow | undefined, ref: unknown): TaskRow {
-  if (ref !== undefined) return requireTask(session.scope.profileUserId, ref)
+async function taskOrCurrent(session: DelegationSession, current: TaskRow | undefined, ref: unknown): Promise<TaskRow> {
+  if (ref !== undefined) return requireTask(session, ref)
   if (!current) fail('This conversation is not working on a task; pass ref.')
   return current
 }
@@ -283,8 +378,111 @@ function agentName(settingsUserId: string, agentId: string | null): string | nul
   }
 }
 
-/** `tasks_create`, run only through {@link serializedInChat}. */
-async function createTask(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+/** cinna-core's refusals for a conversation taking a task on, word for word. */
+const ACTIVE_WITH_ASSIGNEE = '`category: active` is for your own queue; a delegation starts at once'
+const alreadyWorking = (ref: string): string => `This conversation is already working on ${ref}`
+const boundElsewhere = (ref: string): string => `${ref} is already being worked on in another conversation`
+const reportedElsewhere = (ref: string): string => `${ref} is being worked on in another conversation; only that conversation can report on it`
+const noLongerWaiting = (ref: string): string => `${ref} is no longer waiting to be picked up; read it with tasks_get`
+
+/**
+ * Whether a report may bind the calling chat to `row` (an attach): a task in
+ * Backlog or Ready that nothing has run or owns — no chat bound, never
+ * started, no dispatcher (owning it, or a flight holding it), delegation,
+ * handover, unresolved remote handoff, runtime or script behind it, not
+ * handed to another executor — assigned to the caller, or unassigned and
+ * created by it. The dispatcher's own refusals, so a conversation never takes
+ * what the queue may be about to. The caller checks that its chat has no
+ * unsettled task of its own.
+ */
+function attachable(session: DelegationSession, row: TaskRow): boolean {
+  const { profileUserId } = session.scope
+  if (row.status !== 'new' && row.status !== 'open') return false
+  if (row.chatId || row.startedAt || sessionOwned(row) || row.dispatchAgentId || row.executor !== 'desktop') return false
+  if (row.router === 'script' || row.script != null) return false
+  if (taskHandoffRepo.unresolved(profileUserId, row.id) || dispatcherHoldsTask(profileUserId, row.id)) return false
+  const mine = row.assigneeAgentId === session.agentId ||
+    (row.assigneeAgentId === null && row.assigneeKind === 'model' && row.createdByAgentId === session.agentId)
+  if (!mine) return false
+  if (delegationRepo.byTaskId(profileUserId, row.id) || handoverRepo.byTaskId(profileUserId, row.id)) return false
+  if (taskInputRequestRepo.listOpenForTask(row.id).length > 0) return false
+  if ([...taskRunnersByChat.values()].some((runner) => runner.taskId === row.id || runner.controllerTaskId === row.id)) return false
+  return !(taskRuntimeRepo.get(profileUserId, row.id) || scriptRuntimeRepo.owner(profileUserId, row.id))
+}
+
+/**
+ * Make the calling chat the one working on a task, which it then owns
+ * (`session_owned`): an unassigned task becomes the caller's, and the task
+ * starts through `taskService.start` with the chat bound — the legal
+ * `new|open → in_progress` step a start takes, which also writes a folder
+ * task's active word to its file. Synchronous after its one import, so no
+ * other chat can bind the task between the checks and the write. Runs only
+ * inside {@link serializedInChat} for the calling chat.
+ */
+async function bindToChat(session: DelegationSession, taskId: string, attach: boolean): Promise<TaskRow> {
+  // The one await, before every check: from here to the write nothing yields,
+  // so a dispatcher flight, a delegation, a runtime or an ask that arrived
+  // while the call waited is seen.
+  const { taskService } = await import('./taskService')
+  const { profileUserId, settingsUserId } = session.scope
+  // A settled task the chat had (a lazy one an ask made, one it reported done)
+  // is history: the new one becomes the chat's (`getByChatId` prefers it). A
+  // lazy one a message reopened gives way, and is settled once the bind holds.
+  const current = inHand(taskRepo.getByChatId(profileUserId, session.chatId))
+  const yielding = current && current.id !== taskId && givesWay(session, current) ? current : undefined
+  if (current && current.id !== taskId && !yielding) fail(alreadyWorking(current.id))
+  const row = taskRepo.getById(profileUserId, taskId)
+  if (!row || row.deletedAt) fail('No task with that ref.')
+  if (sessionOwned(row) || (row.chatId && row.chatId !== session.chatId)) fail(boundElsewhere(row.id))
+  if (row.status !== 'new' && row.status !== 'open') fail(noLongerWaiting(row.id))
+  if (attach && !attachable(session, row)) fail(noLongerWaiting(row.id))
+  const assignee = { kind: parseTaskAssigneeKind(row.assigneeKind), agentId: row.assigneeAgentId, name: row.assigneeName }
+  const assigns = !row.assigneeAgentId
+  if (assigns) {
+    plain(() => taskService.setAssignee(profileUserId, row.id, { kind: 'agent', agentId: session.agentId, name: agentName(settingsUserId, session.agentId) }))
+  }
+  // Before the start, so the start's write (the one sync pushes) carries it.
+  taskRepo.setSessionOwned(profileUserId, row.id, true)
+  try {
+    plain(() => taskService.start(profileUserId, row.id, { chatId: session.chatId }))
+  } catch (error) {
+    taskRepo.setSessionOwned(profileUserId, row.id, false)
+    if (assigns) {
+      try {
+        taskService.setAssignee(profileUserId, row.id, assignee)
+      } catch (restoreError) {
+        logger.warn('a failed bind could not restore the assignee', { taskId: row.id, error: restoreError instanceof Error ? restoreError.message : String(restoreError) })
+      }
+    }
+    // Moved on between the checks and the start: core's words, not the transition's.
+    const now = taskRepo.getById(profileUserId, row.id)
+    if (now && now.status !== 'new' && now.status !== 'open') fail(noLongerWaiting(row.id))
+    throw error
+  }
+  if (yielding) {
+    // Reopened only by the message: its record stays as Done.
+    try {
+      taskService.setStatus(profileUserId, yielding.id, 'completed')
+    } catch (error) {
+      logger.warn('a lazy chat task could not be settled when the chat took another on', { taskId: yielding.id, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  logger.info('a conversation took a task on itself', { taskId: row.id, chatId: session.chatId, agentId: session.agentId, settled: yielding?.id })
+  return taskRepo.getById(profileUserId, row.id) ?? row
+}
+
+/** Whether a `tasks_create` goes to the caller's own queue: no assignee, or one naming the caller. */
+function ownQueue(session: DelegationSession, input: Record<string, unknown>): boolean {
+  if (input.assignee === undefined) return true
+  const assignee = decodeTaskTarget(input.assignee)
+  return !!assignee && assignee.kind !== 'cloud' && assignee.agentId === session.agentId
+}
+
+/**
+ * `tasks_create`, run only through {@link serializedInChat}. `parent` is the
+ * task `input.parent` names, resolved before the lock.
+ */
+async function createTask(session: DelegationSession, input: Record<string, unknown>, parent: TaskRow | undefined, signal?: AbortSignal): Promise<unknown> {
   signal?.throwIfAborted()
   const assignee = input.assignee === undefined
     ? undefined
@@ -292,6 +490,7 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
   // Naming yourself (a local target: no adapter) is your own queue.
   const self = !!assignee && assignee.kind !== 'cloud' && assignee.agentId === session.agentId
   if (assignee !== undefined && !self) {
+    if (input.category === 'active') fail(ACTIVE_WITH_ASSIGNEE)
     if (input.parent !== undefined) fail('parent applies to your own queue; leave it out when delegating.')
     // The delegation request: the brief is the description. A bare folder's
     // brief also carries the priority and custom fields.
@@ -319,12 +518,20 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
   const description = text(input.description, 'description', 100_000)
   const priority = priorityOf(input.priority)
   const customFields = customFieldsOf(input.custom_fields)
-  if (input.category !== undefined && input.category !== 'backlog' && input.category !== 'ready') {
-    fail('Choose category backlog or ready for your own queue; draft is for a delegation to a folder agent.')
+  if (input.category !== undefined && input.category !== 'backlog' && input.category !== 'ready' && input.category !== 'active') {
+    fail('Choose category backlog or ready for your own queue (active to work on it in this conversation now); draft is for a delegation to a folder agent.')
   }
+  const active = input.category === 'active'
+  // Created in Backlog, then started by the bind: `new → in_progress` is the
+  // step a start takes.
   const status: TaskStatus = input.category === 'ready' ? 'open' : 'new'
 
   const { task } = validateSession(session)
+  // Only work in hand blocks: a settled chat task (a lazy one an ask made, or
+  // one reported done) does not,
+  // and neither does a lazy one a message reopened (`givesWay`).
+  const holding = active ? blocking(session, task) : undefined
+  if (holding) fail(alreadyWorking(holding.id))
   const { profileUserId, settingsUserId } = session.scope
   // One deeper than the chat's task — and a chat with no task is the root, so
   // its first task is at depth 1, as a delegation from it is.
@@ -334,9 +541,9 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
   }
   let parentTaskId: string | undefined
   if (input.parent !== undefined) {
-    const parent = requireTask(profileUserId, input.parent)
-    if (parent.assigneeAgentId !== session.agentId) fail('A parent must be a task in your own queue.')
-    parentTaskId = parent.id
+    const named = reread(session, parent ?? await requireTask(session, input.parent, signal))
+    if (named.assigneeAgentId !== session.agentId) fail('A parent must be a task in your own queue.')
+    parentTaskId = named.id
   }
   assertChatCap(session)
   signal?.throwIfAborted()
@@ -355,8 +562,131 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
     },
     { parentTaskId, createdByAgentId: session.agentId, createdByChatId: session.chatId, chainDepth: depth }
   ))
+  if (active) {
+    try {
+      const bound = await bindToChat(session, created.id, false)
+      return { ...summary(bound, ['assigned', 'created'], undefined), attached: true }
+    } catch (error) {
+      // The bind refused: the task this call made goes (its file too), as cinna-core's does.
+      const { taskSyncService } = await import('./taskSyncService')
+      await taskSyncService.removeTask(profileUserId, created.id).catch((removeError: unknown) =>
+        logger.warn('an active task whose bind failed could not be removed', { taskId: created.id, error: removeError instanceof Error ? removeError.message : String(removeError) }))
+      throw error
+    }
+  }
   const row = taskRepo.getById(profileUserId, created.id)
   return row ? summary(row, ['assigned', 'created'], undefined) : { ref: created.id, title: created.title, status: created.status }
+}
+
+const NO_REQUESTER = 'No agent asked for this task, so there is no requester; leave audience out or choose user.'
+
+/**
+ * `tasks_report`, run only through {@link serializedInChat}; see
+ * {@link taskToolService.tasksReport}. `named` is the task `input.ref` names,
+ * resolved before the lock.
+ */
+async function reportTask(session: DelegationSession, input: Record<string, unknown>, named: TaskRow | undefined): Promise<unknown> {
+  const { task: current, source } = validateSession(session)
+  const { profileUserId } = session.scope
+  let row = named ? reread(session, named) : await taskOrCurrent(session, current, input.ref)
+  // From a chat with no task in hand (none, or only a settled one), an
+  // `in_progress` or `blocked` report on a task of the caller's that nothing
+  // has run binds the chat to it (an attach); `done` and `failed` close
+  // without binding.
+  const attach = !blocking(session, current) && row.id !== current?.id &&
+    (input.status === 'in_progress' || input.status === 'blocked') && attachable(session, row)
+  if (attach) {
+    // The report is checked before anything binds: a malformed one binds nothing.
+    if (parseTaskReport(input, 'user').audience === 'requester') fail(NO_REQUESTER)
+    row = await bindToChat(session, row.id, true)
+  }
+  const isCurrent = attach || current?.id === row.id
+
+  const role = delegatedRole(session, row)
+  if (role === 'requester') fail(DELEGATED_REQUESTER)
+  if (role === 'executor') {
+    if (!isCurrent) fail('Report on delegated work from the conversation working on it.')
+    const handover = delegationRepo.byTaskId(profileUserId, row.id) ? undefined : handoverRepo.byTaskId(profileUserId, row.id)
+    if (!handover) return plainAsync(() => delegationService.report(session, input))
+    // A folder brief with no delegation behind it: the handover's own report
+    // path, as a report.md would, without needing the file.
+    const report = parseTaskReport(input, 'requester')
+    const folder = handover.folderPath
+    const links = report.artifacts.filter((artifact) => /^https?:\/\//.test(artifact.ref))
+    const files = report.artifacts.filter((artifact) => !links.includes(artifact))
+      .map((artifact) => relative(folder, isAbsolute(artifact.ref) ? artifact.ref : join(source.path, artifact.ref)))
+    const body = [report.body, ...links.map((link) => `- ${link.name ?? link.ref}: ${link.ref}`)].filter(Boolean).join('\n\n')
+    const { handoverService } = await import('./handoverService')
+    plain(() => handoverService.applyReport(session.scope, handover, { status: report.status, summary: report.summary, question: report.question, artifacts: files, body }))
+    return { handoverId: handover.id, ref: row.id, status: report.status }
+  }
+
+  if (!isCurrent) {
+    if (row.assigneeAgentId !== session.agentId && !(row.createdByAgentId === session.agentId && !row.chatId)) {
+      fail('You can report only on this conversation’s task, or on a task assigned to you.')
+    }
+    // A task another conversation took on itself takes reports from that one
+    // only, while that conversation is not in the trash. Any other bound task
+    // (a dispatched one left “Ended without reporting”) may be closed from
+    // here, unless a turn runs there now (`ownedElsewhere`).
+    if (row.chatId && row.chatId !== session.chatId && sessionOwned(row)) {
+      const chat = visibleChat(profileUserId, row.chatId)
+      if (chat && !chat.deletedAt) fail(reportedElsewhere(row.id))
+    }
+    // A dispatcher flight holding it (about to start it, or running it) is the
+    // queue's, as `attachable` says.
+    if (dispatcherHoldsTask(profileUserId, row.id)) {
+      fail(row.status === 'new' || row.status === 'open' ? noLongerWaiting(row.id) : 'This task has a turn running in another conversation; try again once it ends.')
+    }
+    const refusal = await ownedElsewhere(session, row)
+    if (refusal) fail(refusal)
+  }
+  // A runtime is finished by its runner, not by its agent.
+  if ([...taskRunnersByChat.values()].some((runner) => runner.taskId === row.id || runner.controllerTaskId === row.id)) {
+    fail('A runtime owns this task and reports its outcome itself; finish your turn instead.')
+  }
+  const report = parseTaskReport(input, 'user')
+  if (report.audience === 'requester') fail(NO_REQUESTER)
+
+  const status = statusForReport(report.status)
+  const digest = createHash('sha256').update(JSON.stringify([report.status, report.summary, report.question, report.body, report.artifacts])).digest('hex')
+  // The mark keeps this turn's end from settling over the report — also for
+  // an identical repeat in a later turn, which writes nothing else.
+  const markReported = async (): Promise<void> => {
+    if (!isCurrent) return
+    const { activeChatRunId } = await import('./chatRemoval')
+    const runId = activeChatRunId(session.chatId)
+    if (runId) noteAgentStatusReport(row.id, session.chatId, runId, status)
+  }
+  const stored = lastReports.get(row.id)
+  if (stored?.digest === digest && row.status === status) {
+    await markReported()
+    return stored.result
+  }
+
+  // Summary first, then the question and the full answer: the note the task page and the next agent read.
+  const note = [report.summary, report.question ? `Question: ${report.question}` : '', report.body].filter(Boolean).join('\n\n')
+  const { taskService } = await import('./taskService')
+  plain(() => taskService.setHandoffNote(profileUserId, row.id, note))
+  if (report.artifacts.length > 0) {
+    plain(() => taskService.setArtifacts(profileUserId, row.id, report.artifacts.map((artifact) => artifactOf(source.path, artifact))))
+  }
+  if (row.status !== status) {
+    // `done` and `failed` from Waiting, Backlog or Ready walk through In
+    // progress, as `taskService.applyRunState` and cinna-core do: the
+    // transition table has no direct step there.
+    const from = parseTaskStatus(row.status)
+    // So does `blocked` from Backlog or Ready.
+    if ((settledStatus(status) || status === 'blocked') && !canTransition(from, status) && canTransition(from, 'in_progress')) {
+      plain(() => taskService.setStatus(profileUserId, row.id, 'in_progress'))
+    }
+    plain(() => taskService.setStatus(profileUserId, row.id, status))
+  }
+  await markReported()
+  const after = taskRepo.getById(profileUserId, row.id) ?? row
+  const result = { ref: row.id, status: report.status, taskStatus: after.status, category: categoryOf(parseTaskStatus(after.status)) }
+  lastReports.set(row.id, { digest, result })
+  return attach ? { ...result, attached: true } : result
 }
 
 /**
@@ -449,7 +779,7 @@ export const taskToolService = {
   async tasksGet(session: DelegationSession, input: Record<string, unknown>) {
     const { task: current } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = requireTask(profileUserId, input.ref)
+    const row = await requireTask(session, input.ref)
     const relations = relationsOf(session, row)
     if (relations.length === 0 && current?.id !== row.id) fail('You can read only tasks assigned to you, created by you or delegated by you.')
     const { taskService } = await import('./taskService')
@@ -484,14 +814,21 @@ export const taskToolService = {
     }
   },
 
-  tasksCreate(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-    return serializedInChat(session.chatId, () => createTask(session, input, signal))
+  async tasksCreate(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    // The parent is resolved before the per-chat lock: a ref the index has
+    // not seen yet waits for its pass without holding the chat's other calls.
+    let parent: TaskRow | undefined
+    if (input.parent !== undefined && ownQueue(session, input)) {
+      validateSession(session)
+      parent = await requireTask(session, input.parent, signal)
+    }
+    return serializedInChat(session.chatId, () => createTask(session, input, parent, signal))
   },
 
   async tasksUpdate(session: DelegationSession, input: Record<string, unknown>): Promise<unknown> {
     const { task: current } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = requireTask(profileUserId, input.ref)
+    const row = await requireTask(session, input.ref)
     const isCurrent = current?.id === row.id
     const assigned = row.assigneeAgentId === session.agentId
     const created = row.createdByAgentId === session.agentId
@@ -539,74 +876,17 @@ export const taskToolService = {
    * the mark keeps this turn's end from settling over it: the dispatcher's
    * report rule, the job run's attempt and the turn end all read that.
    */
-  async tasksReport(session: DelegationSession, input: Record<string, unknown>): Promise<unknown> {
-    const { task: current, source } = validateSession(session)
-    const { profileUserId } = session.scope
-    const row = taskOrCurrent(session, current, input.ref)
-    const isCurrent = current?.id === row.id
-
-    const role = delegatedRole(session, row)
-    if (role === 'requester') fail(DELEGATED_REQUESTER)
-    if (role === 'executor') {
-      if (!isCurrent) fail('Report on delegated work from the conversation working on it.')
-      const handover = delegationRepo.byTaskId(profileUserId, row.id) ? undefined : handoverRepo.byTaskId(profileUserId, row.id)
-      if (!handover) return plainAsync(() => delegationService.report(session, input))
-      // A folder brief with no delegation behind it: the handover's own report
-      // path, as a report.md would, without needing the file.
-      const report = parseTaskReport(input, 'requester')
-      const folder = handover.folderPath
-      const links = report.artifacts.filter((artifact) => /^https?:\/\//.test(artifact.ref))
-      const files = report.artifacts.filter((artifact) => !links.includes(artifact))
-        .map((artifact) => relative(folder, isAbsolute(artifact.ref) ? artifact.ref : join(source.path, artifact.ref)))
-      const body = [report.body, ...links.map((link) => `- ${link.name ?? link.ref}: ${link.ref}`)].filter(Boolean).join('\n\n')
-      const { handoverService } = await import('./handoverService')
-      plain(() => handoverService.applyReport(session.scope, handover, { status: report.status, summary: report.summary, question: report.question, artifacts: files, body }))
-      return { handoverId: handover.id, ref: row.id, status: report.status }
+  async tasksReport(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    // The ref is resolved before the per-chat lock: a ref the index has not
+    // seen yet waits for its pass without holding the chat's other calls.
+    let named: TaskRow | undefined
+    if (input.ref !== undefined) {
+      validateSession(session)
+      named = await requireTask(session, input.ref, signal)
     }
-
-    if (!isCurrent) {
-      if (row.assigneeAgentId !== session.agentId && !(row.createdByAgentId === session.agentId && !row.chatId)) {
-        fail('You can report only on this conversation’s task, or on a task assigned to you.')
-      }
-      const refusal = await ownedElsewhere(session, row)
-      if (refusal) fail(refusal)
-    }
-    // A runtime is finished by its runner, not by its agent.
-    if ([...taskRunnersByChat.values()].some((runner) => runner.taskId === row.id || runner.controllerTaskId === row.id)) {
-      fail('A runtime owns this task and reports its outcome itself; finish your turn instead.')
-    }
-    const report = parseTaskReport(input, 'user')
-    if (report.audience === 'requester') fail('No agent asked for this task, so there is no requester; leave audience out or choose user.')
-
-    const status = statusForReport(report.status)
-    const digest = createHash('sha256').update(JSON.stringify([report.status, report.summary, report.question, report.body, report.artifacts])).digest('hex')
-    // The mark keeps this turn's end from settling over the report — also for
-    // an identical repeat in a later turn, which writes nothing else.
-    const markReported = async (): Promise<void> => {
-      if (!isCurrent) return
-      const { activeChatRunId } = await import('./chatRemoval')
-      const runId = activeChatRunId(session.chatId)
-      if (runId) noteAgentStatusReport(row.id, session.chatId, runId)
-    }
-    const stored = lastReports.get(row.id)
-    if (stored?.digest === digest && row.status === status) {
-      await markReported()
-      return stored.result
-    }
-
-    // Summary first, then the question and the full answer: the note the task page and the next agent read.
-    const note = [report.summary, report.question ? `Question: ${report.question}` : '', report.body].filter(Boolean).join('\n\n')
-    const { taskService } = await import('./taskService')
-    plain(() => taskService.setHandoffNote(profileUserId, row.id, note))
-    if (report.artifacts.length > 0) {
-      plain(() => taskService.setArtifacts(profileUserId, row.id, report.artifacts.map((artifact) => artifactOf(source.path, artifact))))
-    }
-    if (row.status !== status) plain(() => taskService.setStatus(profileUserId, row.id, status))
-    await markReported()
-    const after = taskRepo.getById(profileUserId, row.id) ?? row
-    const result = { ref: row.id, status: report.status, taskStatus: after.status, category: categoryOf(parseTaskStatus(after.status)) }
-    lastReports.set(row.id, { digest, result })
-    return result
+    // Serialized with this chat's creates: an attaching report and an
+    // `active` create may not both bind the chat.
+    return serializedInChat(session.chatId, () => reportTask(session, input, named))
   },
 
   /** `tasks_reply`: an answer or follow-up to work the agent delegated, by the delegated task's ref. */
@@ -614,10 +894,11 @@ export const taskToolService = {
     return plainAsync(() => delegationService.reply(session, input))
   },
 
+
   async tasksComment(session: DelegationSession, input: Record<string, unknown>): Promise<unknown> {
     const { task: current, source } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = taskOrCurrent(session, current, input.ref)
+    const row = await taskOrCurrent(session, current, input.ref)
     const body = text(input.body, 'body', TASK_COMMENT_MAX)
     const delegation = delegationRepo.byTaskId(profileUserId, row.id)
     const mine = row.assigneeAgentId === session.agentId || row.createdByAgentId === session.agentId ||

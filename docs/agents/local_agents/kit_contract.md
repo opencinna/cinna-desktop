@@ -236,6 +236,10 @@ Contract 1.10.0 adds two records. The desktop reads and checks both, and writes 
 
 Contract 1.15.0 adds `marketplace_skills[]` to `cinna-agent.json`: skills from the skills-format marketplaces connected to cinna-core, pinned by reference like `catalog_skills[]` but **content-addressed** (`entry_uuid`, `marketplace_uuid`, `marketplace_name`, `name`, `archive_sha256`; `commit_hash` and `version` for display). The files never live under `skills/`. One name space covers `skills/`, platform skills, catalog pins and marketplace pins; the validator reports each clash and a duplicate `entry_uuid` as errors, as `kit.py` does. Unknown keys on a pin survive a rewrite. Behaviour: [Agent Skills](skills.md).
 
+### Conversation-owned tasks (1.16.0)
+
+Contract 1.16.0 lets an agent say that the conversation it is in is the one working on a task: `tasks_create` with `category: active` for new work, or an `in_progress` / `blocked` `tasks_report` from a conversation with no current task for one it already has. It changes the task protocol and its skill, not the manifest or the folder model, so no folder needs changing and a tool built against an earlier 1.x keeps operating a 1.16.0 folder. The task is settled by the agent's reports and a person's moves, never by a turn ending. The desktop's side of it is [Agent Task Tools](../../jobs/tasks/agent_task_tools.md#taking-a-task-on-attach); the schema and skill text arrive in the bundle only through `make kit-sync`.
+
 ### Scaffold ignore files
 
 Ignore rules ship **dotless** in the template trees and the scaffolder restores the dot in the created folder — shipping them dotted would make them live ignore rules wherever the contract is stored, hiding scaffold files from that repository. The pairs are declared in `layout.json`'s `scaffold_ignore_files`, per template tree, and a scaffolder must read that list rather than hard-code it: the set has already grown once (`app-data/cache/gitignore`), and a scaffolder that missed the addition left a cache folder tracked by git.

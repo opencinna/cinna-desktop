@@ -488,6 +488,7 @@ const taskMapper: CollectionMapper = {
         artifacts: r.artifacts ?? null,
         budget: r.budget ?? null,
         customFields: r.customFields ?? null,
+        sessionOwned: r.sessionOwned,
         errorMessage: r.errorMessage ?? null,
         // `createdAt` travels, unlike a job's. A task page prints it ("Created
         // three days ago") and so do `startedAt` / `finishedAt`; a replica that
@@ -554,6 +555,8 @@ const taskMapper: CollectionMapper = {
       // value is rebuilt by the shared validator — one this build refuses is
       // left alone rather than half-applied.
       customFields: syncedCustomFields(plaintext),
+      // Absent from a build before session-owned tasks: keep this device's value.
+      sessionOwned: typeof plaintext.sessionOwned === 'boolean' ? plaintext.sessionOwned : undefined,
       errorMessage: strOrNull(plaintext.errorMessage),
       // A payload from a build that predates `createdAt` travelling would have
       // none; the peer's own modification time is the closest honest answer,

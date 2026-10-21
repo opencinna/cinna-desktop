@@ -567,6 +567,32 @@ function TaskPage({
                   </button>
                 ) : assignee}
               </Detail>
+              {/*
+                The session working on it: its chat, one click away as the
+                header's Open the chat, and whether a turn is live there. The
+                word has a slot of its own, so a poll that flips it moves
+                nothing (§1); the name wraps to two lines beside it rather
+                than cutting at ten characters. A blank title reads "New
+                Chat", as in the sidebar, so the link is never empty.
+              */}
+              {task.chat && (
+                <Detail label="Chat" wide>
+                  <span className="flex min-w-0 items-start justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => openChat(task.chat!.id)}
+                      title={task.chat.title.trim() || 'New Chat'}
+                      className="min-w-0 text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+                    >
+                      {/* Clamped on an inner span: Chromium does not reliably clamp a button's own box. */}
+                      <span className="line-clamp-2 break-words">{task.chat.title.trim() || 'New Chat'}</span>
+                    </button>
+                    <span data-task-session-state className="w-[3.25rem] shrink-0 text-right text-[var(--color-text-muted)]">
+                      {task.chat.running ? 'Running' : 'Idle'}
+                    </span>
+                  </span>
+                </Detail>
+              )}
               <Detail label="Priority">{capitalize(task.priority)}</Detail>
               {task.executor === 'remote' && (
                 <Detail label="Running">In the connected service</Detail>

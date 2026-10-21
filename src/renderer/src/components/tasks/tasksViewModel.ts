@@ -330,3 +330,13 @@ export function taskStatusText(task: { status: string; statusLabel?: string | nu
 export function isUnassigned(task: Pick<TaskDto, 'assignee' | 'chatId'>): boolean {
   return task.assignee.kind === 'model' && !task.chatId
 }
+
+/**
+ * The bound chat's name as a row may show it, or null when it has none worth
+ * showing: blank, or the default "New Chat" a chat carries until it is named.
+ * Mirrors `titleOf` in main's `activeAgentSessions.ts`.
+ */
+export function taskChatName(title: string | null | undefined): string | null {
+  const trimmed = title?.trim()
+  return trimmed && trimmed !== 'New Chat' ? trimmed : null
+}

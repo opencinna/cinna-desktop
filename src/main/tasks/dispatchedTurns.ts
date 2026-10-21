@@ -83,3 +83,19 @@ export function setDispatchWake(wake: (() => void) | null): void {
 export function wakeDispatcher(): void {
   dispatchWake?.()
 }
+
+/**
+ * Whether a dispatcher flight holds this task now (waiting for its slot or
+ * running), or its owned turn is being settled. Registered by the dispatcher
+ * for the same import-cycle reason as {@link setDispatchOwnedTurnSettler};
+ * false until it is, when no flight can exist.
+ */
+let holdsTask: ((userId: string, taskId: string) => boolean) | null = null
+
+export function setDispatchHoldsTask(probe: ((userId: string, taskId: string) => boolean) | null): void {
+  holdsTask = probe
+}
+
+export function dispatcherHoldsTask(userId: string, taskId: string): boolean {
+  return holdsTask?.(userId, taskId) ?? false
+}

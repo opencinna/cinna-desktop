@@ -1067,3 +1067,28 @@ describe('a queue’s hold on a task (dispatch_agent_id)', () => {
     })
   })
 })
+
+describe('a session-owned task (session_owned)', () => {
+  it('carries the flag to the peer, and a payload without it keeps the peer’s own value', () => {
+    // Mutation: drop `sessionOwned` from listDirty, or apply an absent key as false.
+    const task = on(deviceA, () => taskService.create(USER, { title: 'Owned', goal: 'Owned work' }))
+    on(deviceA, () => {
+      taskRepo.setSessionOwned(USER, task.id, true)
+      taskService.update(USER, task.id, { title: 'Owned, renamed' })
+    })
+    const encoded = encode(deviceA, task.id)
+    expect(encoded.plaintext.sessionOwned).toBe(true)
+    applyTo(deviceB, task.id, encoded)
+    on(deviceB, () => expect(taskRepo.getById(USER, task.id)?.sessionOwned).toBe(true))
+
+    // An older build's payload has no key at all.
+    const { sessionOwned: _dropped, ...withoutFlag } = encoded.plaintext
+    const older: Encoded = { ...encoded, plaintext: { ...withoutFlag, title: 'From an older build' }, clientUpdatedAt: encoded.clientUpdatedAt + 60_000 }
+    applyTo(deviceB, task.id, older)
+    on(deviceB, () => expect(taskRepo.getById(USER, task.id)).toMatchObject({ title: 'From an older build', sessionOwned: true }))
+
+    // An explicit false from a current build clears it.
+    applyTo(deviceB, task.id, { ...older, plaintext: { ...older.plaintext, sessionOwned: false }, clientUpdatedAt: older.clientUpdatedAt + 60_000 })
+    on(deviceB, () => expect(taskRepo.getById(USER, task.id)?.sessionOwned).toBe(false))
+  })
+})

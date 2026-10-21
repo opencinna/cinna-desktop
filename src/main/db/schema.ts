@@ -843,6 +843,20 @@ export const tasks = sqliteTable('tasks', {
    * here notifies is this device's business.
    */
   startedByUser: integer('started_by_user', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * The conversation bound in `chatId` took this task on itself (`tasks_create`
+   * with `category: active`, or an attaching `tasks_report`): only a report,
+   * an answered ask or a person's move changes its status, never how a turn
+   * ended. Travels in device sync; an older peer's payload keeps the local value.
+   */
+  sessionOwned: integer('session_owned', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * Made by `inboxService.taskForChat` to hold a chat's first ask (a lazy
+   * task), not by a person or an agent: the one kind that gives way to a task
+   * the conversation takes on itself (`taskToolService.givesWay`). Set at
+   * creation only. Device-local, never synced: a peer's copy reads false.
+   */
+  askBorn: integer('ask_born', { mode: 'boolean' }).notNull().default(false),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })
