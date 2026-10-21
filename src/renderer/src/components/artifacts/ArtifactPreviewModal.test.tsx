@@ -47,7 +47,7 @@ async function open(artifact: PublishedArtifact): Promise<void> {
 
 describe('the artifact preview', () => {
   it('shows a site’s start page in the sandboxed frame, and releases its token on close', async () => {
-    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'pages/index.html', files: [], revision: 4 })
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'pages/index.html', files: [{ path: 'pages/index.html', size: 200, mime: 'text/html' }, { path: 'pages/app.js', size: 80, mime: 'text/javascript' }], revision: 4 })
     renderModal()
     await open(site)
     expect(openArtifact).toHaveBeenCalledWith(ID)
@@ -92,6 +92,59 @@ describe('the artifact preview', () => {
     fireEvent.click(screen.getByRole('button', { name: /data\.zip/ }))
     expect(screen.queryByTestId('artifact-preview-frame')).toBeNull()
     expect(screen.getByText('No preview for this file type.')).toBeTruthy()
+  })
+
+  it('opens the file list only for several files, and the header toggle shows or hides it', async () => {
+    const md = { path: 'report.md', size: 20, mime: 'text/markdown' }
+    const toggle = (name: string): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement
+    renderModal()
+    // A single file: collapsed, its content shown.
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: null, revision: 1, files: [md] })
+    await open(files)
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy()
+    expect(screen.queryByRole('list', { name: 'Files' })).toBeNull()
+    expect(toggle('Show files').getAttribute('aria-expanded')).toBe('false')
+    // A site: collapsed on its start page; showing the list lets another file open.
+    openArtifact.mockResolvedValue({
+      ok: true,
+      token: 'art-tok',
+      baseUrl: BASE,
+      entry: 'index.html',
+      revision: 1,
+      files: [{ path: 'index.html', size: 200, mime: 'text/html' }, md]
+    })
+    await open(site)
+    expect((screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement).getAttribute('src')).toBe(`${BASE}index.html`)
+    expect(screen.queryByRole('list', { name: 'Files' })).toBeNull()
+    expect(document.querySelector('[data-artifact-preview-path]')).toBeNull()
+    fireEvent.click(toggle('Show files'))
+    const list = screen.getByRole('list', { name: 'Files' })
+    expect(toggle('Hide files').getAttribute('aria-controls')).toBe(list.id)
+    expect(within(list).getByRole('button', { name: /index\.html/ }).getAttribute('aria-current')).toBe('true')
+    // Picking the start page again reloads its frame (back from a page navigated inside it).
+    const first = screen.getByTestId('artifact-preview-frame')
+    fireEvent.click(within(list).getByRole('button', { name: /index\.html/ }))
+    expect(screen.getByTestId('artifact-preview-frame')).not.toBe(first)
+    fireEvent.click(within(list).getByRole('button', { name: /report\.md/ }))
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy()
+    expect(document.querySelector('[data-artifact-preview-path]')).toBeNull()
+    fireEvent.click(toggle('Hide files'))
+    expect(screen.queryByRole('list', { name: 'Files' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Summary' })).toBeTruthy()
+    // With the list hidden, the header names the file shown.
+    expect(document.querySelector('[data-artifact-preview-path]')?.textContent).toBe('· report.md')
+    // Several files: open, and the choice starts over on the next open.
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: null, revision: 1, files: [md, { path: 'notes.md', size: 20, mime: 'text/markdown' }] })
+    await open(files)
+    expect(screen.getByRole('list', { name: 'Files' })).toBeTruthy()
+    expect(toggle('Hide files').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps the toggle in place but disabled until the view is in', async () => {
+    openArtifact.mockReturnValue(new Promise(() => {}))
+    renderModal()
+    await open(files)
+    expect((screen.getByRole('button', { name: 'Show files' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('says a deleted artifact is gone, and a failure offers the browser, closing nothing', async () => {
@@ -150,7 +203,7 @@ describe('the artifact preview', () => {
   })
 
   it('offers Share… to the owner only, first in the header so its arrival moves nothing', async () => {
-    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [{ path: 'index.html', size: 200, mime: 'text/html' }], revision: 2 })
     const viewer = renderModal()
     await open(site)
     await waitFor(() => expect(detailCall).toHaveBeenCalledWith(ID))
@@ -168,7 +221,7 @@ describe('the artifact preview', () => {
   })
 
   it('Share… opens the card’s popover inside the preview: a press in it keeps both open, Escape closes it first and the preview next', async () => {
-    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [{ path: 'index.html', size: 200, mime: 'text/html' }], revision: 2 })
     detailCall.mockResolvedValue({ ok: true, detail: owned })
     const now = vi.spyOn(Date, 'now')
     renderModal()
@@ -194,7 +247,7 @@ describe('the artifact preview', () => {
   })
 
   it('a press outside the preview while Share… is open closes only Share…', async () => {
-    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [], revision: 2 })
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, entry: 'index.html', files: [{ path: 'index.html', size: 200, mime: 'text/html' }], revision: 2 })
     detailCall.mockResolvedValue({ ok: true, detail: owned })
     const now = vi.spyOn(Date, 'now')
     renderModal()

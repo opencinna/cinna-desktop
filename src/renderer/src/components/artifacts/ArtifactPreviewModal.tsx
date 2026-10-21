@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FileText, Globe, Loader2, Share2, X } from 'lucide-react'
+import { ExternalLink, FileText, Globe, Loader2, PanelLeft, PanelLeftClose, Share2, X } from 'lucide-react'
 import { HTML_PREVIEW_SANDBOX } from '../../../../shared/htmlPreview'
 import { agentFilePreviewKindFor } from '../../../../shared/agentFiles'
 import { previewKindFor, type PreviewRenderKind } from '../../../../shared/filePreview'
@@ -79,6 +79,15 @@ export function artifactFileView(baseUrl: string, file: ArtifactViewFile): Artif
   return { type: 'none' }
 }
 
+/**
+ * Whether the file list starts open: only for a files artifact of more than
+ * one file. A single file, and a site (it opens its start page), start with
+ * the list collapsed.
+ */
+export function filesPanelOpenByDefault(view: { entry: string | null; files: ArtifactViewFile[] }): boolean {
+  return view.entry === null && view.files.length > 1
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`
@@ -89,8 +98,9 @@ function formatSize(bytes: number): string {
  * The in-app preview of a published artifact: the revision core serves now,
  * read through a view capability that main keeps and serves over
  * `cinna-preview:` — the renderer only holds a token. A site shows its start
- * page in the sandboxed frame; files list on the left with the chosen one on
- * the right. Built like the file preview (expands from the click, pinned to
+ * page in the sandboxed frame, files show their first; the file list on the
+ * left is open by default only for more than one file of a files artifact
+ * (a header toggle shows or hides it). Built like the file preview (expands from the click, pinned to
  * the top, fixed height so nothing moves as it loads). Loading, a failure and
  * a deleted artifact are said inside; nothing closes on an error. The owner
  * also gets Share… in the header, the card's popover, portaled into the
@@ -109,6 +119,9 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
   const instanceName = useArtifactPreviewStore((s) => s.instanceName)
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const [selected, setSelected] = useState<string | null>(null)
+  /** The user's choice for the file list; null until they toggle it, when the default applies. */
+  const [panelChoice, setPanelChoice] = useState<boolean | null>(null)
+  const panelId = useId()
   const [message, setMessage] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   /** The card as state too: Share…'s popover is portaled into it once it exists. */
@@ -217,6 +230,11 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
 
   const ready = state.status === 'ready' ? state.result : null
   const revision = ready?.revision ?? artifact.revision
+  const panelOpen = ready ? (panelChoice ?? filesPanelOpenByDefault(ready)) : false
+  const panelLabel = panelOpen ? 'Hide files' : 'Show files'
+  const shownPath = ready ? (selected ?? ready.entry ?? ready.files[0]?.path ?? null) : null
+  /** With the list hidden, nothing else says which of several files is shown (a site's start page needs no name). */
+  const headerPath = ready && !panelOpen && ready.files.length > 1 && shownPath !== ready.entry ? shownPath : null
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]">
@@ -232,9 +250,27 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
       >
         <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">
+            {/* There from the first frame, disabled until the view is in, so the title never shifts. */}
+            <button
+              type="button"
+              onClick={() => setPanelChoice(!panelOpen)}
+              disabled={!ready}
+              aria-expanded={panelOpen}
+              aria-controls={panelOpen ? panelId : undefined}
+              aria-label={panelLabel}
+              title={panelLabel}
+              className="inline-flex shrink-0 items-center rounded-md border border-[var(--color-border)] p-1 text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:hover:bg-transparent"
+            >
+              {panelOpen ? <PanelLeftClose size={12} aria-hidden /> : <PanelLeft size={12} aria-hidden />}
+            </button>
             <Icon size={16} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
             <div title={artifact.title} className="truncate text-sm font-semibold text-[var(--color-text)]">{artifact.title}</div>
             <span className="shrink-0 text-xs text-[var(--color-text-muted)]">rev {revision}</span>
+            {headerPath && (
+              <span data-artifact-preview-path title={headerPath} className="min-w-0 truncate text-xs text-[var(--color-text-muted)]">
+                · {headerPath}
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {/* First in the right-aligned row: appearing when core answers moves none of the others. */}
@@ -279,7 +315,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
         )}
         <div className="flex min-h-0 flex-1">
           {state.status === 'loading' ? (
-            <div className="flex items-center gap-2 px-5 py-4 text-xs text-[var(--color-text-muted)]">
+            <div className="flex h-fit items-center gap-2 px-5 py-4 text-xs text-[var(--color-text-muted)]">
               <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
               <span>Loading preview…</span>
             </div>
@@ -296,23 +332,17 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
                 Open in browser
               </button>
             </div>
-          ) : ready && ready.entry ? (
-            <iframe
-              data-testid="artifact-preview-frame"
-              src={ready.baseUrl + encodePath(ready.entry)}
-              title={artifact.title}
-              sandbox={HTML_PREVIEW_SANDBOX}
-              referrerPolicy="no-referrer"
-              className="block h-full w-full rounded-b-xl border-0 bg-[var(--color-html-page)]"
-            />
           ) : ready ? (
             <FilesView
               title={artifact.title}
               token={ready.token}
               baseUrl={ready.baseUrl}
               files={ready.files}
-              selected={selected ?? ready.files[0]?.path ?? null}
+              entry={ready.entry}
+              selected={shownPath}
               onSelect={setSelected}
+              panelOpen={panelOpen}
+              panelId={panelId}
               onOpenInBrowser={() => void openInBrowser()}
             />
           ) : null}
@@ -329,23 +359,37 @@ function FilesView({
   token,
   baseUrl,
   files,
+  entry,
   selected,
   onSelect,
+  panelOpen,
+  panelId,
   onOpenInBrowser
 }: {
   title: string
   token: string
   baseUrl: string
   files: ArtifactViewFile[]
+  /** A site's start page: shown in the frame and titled as the artifact. */
+  entry: string | null
   selected: string | null
   onSelect: (path: string) => void
+  panelOpen: boolean
+  panelId: string
   onOpenInBrowser: () => void
 }): React.JSX.Element {
   const file = files.find((candidate) => candidate.path === selected) ?? null
   const shown = file ? artifactFileView(baseUrl, file) : null
+  /** Bumped when the shown file is picked again: a page navigated inside its frame starts over. */
+  const [reload, setReload] = useState(0)
+  const pick = (path: string): void => {
+    if (path === selected) setReload((n) => n + 1)
+    else onSelect(path)
+  }
+  const corner = panelOpen ? 'rounded-br-xl' : 'rounded-b-xl'
   return (
     <>
-      <ul aria-label="Files" className="w-64 shrink-0 overflow-auto border-r border-[var(--color-border)] py-2">
+      {panelOpen && <ul id={panelId} aria-label="Files" className="w-64 shrink-0 overflow-auto border-r border-[var(--color-border)] py-2">
         {files.map((candidate) => {
           const current = candidate.path === selected
           return (
@@ -353,7 +397,7 @@ function FilesView({
               <button
                 type="button"
                 aria-current={current || undefined}
-                onClick={() => onSelect(candidate.path)}
+                onClick={() => pick(candidate.path)}
                 title={candidate.path}
                 className={
                   'flex w-full items-center gap-2 px-3 py-1 text-left text-xs transition-colors ' +
@@ -370,19 +414,19 @@ function FilesView({
           )
         })}
         {files.length === 0 && <li className="px-3 py-1 text-xs text-[var(--color-text-muted)]">No files.</li>}
-      </ul>
+      </ul>}
       <div className="min-w-0 flex-1">
         {file && shown?.type === 'text' ? (
-          <TextFile key={file.path} token={token} path={file.path} kind={shown.kind} />
+          <TextFile key={file.path} token={token} path={file.path} kind={shown.kind} corner={corner} />
         ) : file && shown?.type === 'frame' ? (
           <iframe
-            key={file.path}
+            key={`${file.path}#${reload}`}
             data-testid="artifact-preview-frame"
             src={shown.url}
-            title={`${title}: ${file.path}`}
+            title={file.path === entry ? title : `${title}: ${file.path}`}
             sandbox={HTML_PREVIEW_SANDBOX}
             referrerPolicy="no-referrer"
-            className="block h-full w-full rounded-br-xl border-0 bg-[var(--color-html-page)]"
+            className={`block h-full w-full ${corner} border-0 bg-[var(--color-html-page)]`}
           />
         ) : file ? (
           <div className="space-y-2 px-5 py-4 text-xs text-[var(--color-text-muted)]">
@@ -409,7 +453,7 @@ type TextState =
  * another file starts over at loading; an answer for a file no longer shown is
  * dropped.
  */
-function TextFile({ token, path, kind }: { token: string; path: string; kind: TextKind }): React.JSX.Element {
+function TextFile({ token, path, kind, corner }: { token: string; path: string; kind: TextKind; corner: string }): React.JSX.Element {
   const [state, setState] = useState<TextState>({ status: 'loading' })
   useEffect(() => {
     let cancelled = false
@@ -428,7 +472,7 @@ function TextFile({ token, path, kind }: { token: string; path: string; kind: Te
   }, [token, path])
 
   return (
-    <div data-testid="artifact-preview-text" className="h-full overflow-auto rounded-br-xl px-5 py-4">
+    <div data-testid="artifact-preview-text" className={`h-full overflow-auto ${corner} px-5 py-4`}>
       {state.status === 'loading' ? (
         <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
           <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
