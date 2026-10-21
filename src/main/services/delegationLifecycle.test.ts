@@ -17,6 +17,9 @@ vi.mock('./taskService', () => ({ taskService: {} }))
 const { createDelegationLifecycle, returnPacket } = await import('./delegationLifecycle')
 const scope = { profileUserId: 'user', settingsUserId: 'settings' }
 let rows: Map<string, DelegationRow>
+/** What reached each executor chat, and when (ms): the fake behind `executorInputMarker`. */
+let inputs: Array<{ chatId: string; marker: string; at: number }>
+const input = (chatId: string, marker: string, at = 0) => { inputs.push({ chatId, marker, at }) }
 let deps: DelegationLifecycleDeps
 let service: ReturnType<typeof createDelegationLifecycle>
 function row(id: string, patch: Partial<DelegationRow> = {}): DelegationRow {
@@ -26,6 +29,7 @@ function row(id: string, patch: Partial<DelegationRow> = {}): DelegationRow {
 }
 beforeEach(() => {
   rows = new Map()
+  inputs = []
   deps = {
     repo: {
       getById: (userId, id) => rows.get(id)?.userId === userId ? rows.get(id) : undefined,
@@ -48,7 +52,8 @@ beforeEach(() => {
       getById: vi.fn((_userId, taskId) => ({ id: taskId, chatId: `chat-${taskId}`, status: 'in_progress' }) as TaskDto),
       setStatus: vi.fn(), setHandoffNote: vi.fn(), setArtifacts: vi.fn(), acceptRemoteResult: vi.fn()
     },
-    hasOpenAsk: () => false, isRunning: () => false, wake: vi.fn(), now: () => 180_000, logger: { warn() {} }
+    hasOpenAsk: () => false, isRunning: () => false, wake: vi.fn(), now: () => 180_000, logger: { warn() {} },
+    executorInputMarker: (chatId, at) => inputs.filter((entry) => entry.chatId === chatId && entry.at < at).at(-1)?.marker ?? null
   }
   service = createDelegationLifecycle(deps)
 })
@@ -323,6 +328,120 @@ describe('a relay waiting on its own delegations', () => {
     rows.get('last')!.state = 'done'
     service.sweepLostRuns(scope)
     expect(rows.get('middle')).toMatchObject({ state: 'failed', warning: 'run_lost' })
+  })
+})
+
+describe('an executor reporting the same work through both channels', () => {
+  /** What the real wake records once the packet lands; the fake one does not. */
+  const delivered = (id: string) => { rows.get(id)!.wokeAt = new Date(1) }
+  const wakesOf = (id: string) => vi.mocked(deps.wake).mock.calls.filter(([, woken]) => woken.some((member) => member.id === id))
+
+  it('treats a reworded tasks_report after report.md as a restatement: one wake, the newest text on the task', () => {
+    const a = row('a', { channel: 'file', runId: 'run' })
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'Wrote the notes', body: 'From report.md', artifacts: ['/folder/notes.md'] })
+    delivered('a')
+    service.applyResult(scope, a, { status: 'done', summary: 'Notes written', body: 'From tasks_report' })
+    expect(deps.wake).toHaveBeenCalledTimes(1)
+    expect(deps.tasks.setHandoffNote).toHaveBeenLastCalledWith('user', 'task-a', 'Notes written\n\nFrom tasks_report')
+    const stored = rows.get('a')!
+    expect(stored).toMatchObject({ state: 'done', summary: 'Notes written', wokeAt: new Date(1), resultInputId: 'brief' })
+    expect(stored.wakeDigest).toBe(stored.resultDigest)
+    service.sweepLostRuns(scope)
+    expect(deps.wake).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats report.md after tasks_report the same way', () => {
+    const a = row('a', { channel: 'file', runId: 'run' })
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'Notes written', body: 'From tasks_report' })
+    delivered('a')
+    service.applyResult(scope, a, { status: 'done', summary: 'Wrote the notes', body: 'From report.md', artifacts: ['/folder/notes.md'] })
+    expect(deps.wake).toHaveBeenCalledTimes(1)
+    expect(deps.tasks.setArtifacts).toHaveBeenLastCalledWith('user', 'task-a', [{ kind: 'file', name: 'notes.md', ref: '/folder/notes.md' }])
+    expect(rows.get('a')).toMatchObject({ summary: 'Wrote the notes', wokeAt: new Date(1) })
+  })
+
+  it('wakes again for a report that answers new input — a revision, a reply or the user', () => {
+    const a = row('a')
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'First answer' })
+    delivered('a')
+    input('chat-task-a', 'revision', 100_000)
+    service.applyResult(scope, a, { status: 'done', summary: 'Revised answer' })
+    expect(deps.wake).toHaveBeenCalledTimes(2)
+    expect(rows.get('a')).toMatchObject({ wokeAt: null, resultInputId: 'revision' })
+  })
+
+  it('wakes again when the status changes', () => {
+    const a = row('a')
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'Finished' })
+    delivered('a')
+    service.applyResult(scope, a, { status: 'failed', summary: 'Actually it broke' })
+    expect(deps.wake).toHaveBeenCalledTimes(2)
+  })
+
+  it('wakes again without an executor chat, or for a result stored before the input was recorded', () => {
+    vi.mocked(deps.tasks.getById).mockImplementation((_userId, taskId) => ({ id: taskId, chatId: null, status: 'in_progress' }) as TaskDto)
+    const outside = row('outside', { channel: 'file' })
+    service.applyResult(scope, outside, { status: 'done', summary: 'Done outside' })
+    delivered('outside')
+    service.applyResult(scope, outside, { status: 'done', summary: 'Done outside, reworded' })
+    expect(wakesOf('outside')).toHaveLength(2)
+
+    vi.mocked(deps.tasks.getById).mockImplementation((_userId, taskId) => ({ id: taskId, chatId: `chat-${taskId}`, status: 'completed' }) as TaskDto)
+    input('chat-task-old', 'brief')
+    const old = row('old', { state: 'done', resultStatus: 'done', resultDigest: 'old', wakeDigest: 'old', wokeAt: new Date(1), resultInputId: null })
+    service.applyResult(scope, old, { status: 'done', summary: 'Reworded' })
+    expect(wakesOf('old')).toHaveLength(1)
+  })
+
+  it('delivers one wake when the second report lands while the first is still queued', () => {
+    const a = row('a')
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'First wording' })
+    service.applyResult(scope, a, { status: 'done', summary: 'Second wording' })
+    // The first claim's digest is stale, so the real wake's `isCurrent` drops it; only the second lands.
+    const [first, second] = vi.mocked(deps.wake).mock.calls.map(([, woken]) => woken[0].wakeDigest)
+    expect(first).not.toBe(rows.get('a')!.resultDigest)
+    expect(second).toBe(rows.get('a')!.resultDigest)
+    expect(rows.get('a')).toMatchObject({ summary: 'Second wording', wokeAt: null })
+  })
+
+  it('does not send a completed group again for a restated member', () => {
+    const a = row('a', { channel: 'file', groupId: 'release', runId: 'run' })
+    const b = row('b', { groupId: 'release' })
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'done', summary: 'A done' })
+    service.applyResult(scope, b, { status: 'done', summary: 'B done' })
+    expect(deps.wake).toHaveBeenCalledTimes(1)
+    delivered('a')
+    delivered('b')
+    service.applyResult(scope, rows.get('a')!, { status: 'done', summary: 'A done, reworded' })
+    service.checkGroup(scope, rows.get('a')!)
+    expect(deps.wake).toHaveBeenCalledTimes(1)
+  })
+
+  it('judges a late-applied report.md against the input it had when written, not when scanned', () => {
+    const a = row('a', { channel: 'file', runId: 'run' })
+    input('chat-task-a', 'brief')
+    input('chat-task-a', 'revision', 100_000)
+    // Written at 50s, applied by the scan at 180s — after the revision arrived.
+    service.applyResult(scope, a, { status: 'done', summary: 'Before the revision' }, 50_000)
+    expect(rows.get('a')?.resultInputId).toBe('brief')
+    delivered('a')
+    service.applyResult(scope, a, { status: 'done', summary: 'Answers the revision' })
+    expect(deps.wake).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the recorded input with the result', () => {
+    const a = row('a')
+    input('chat-task-a', 'brief')
+    service.applyResult(scope, a, { status: 'blocked', summary: 'Approve?' })
+    rows.get('a')!.state = 'running'
+    service.applyOutcome(scope, 'a', { state: 'canceled', text: '' })
+    expect(rows.get('a')).toMatchObject({ resultInputId: null, resultDigest: null })
   })
 })
 

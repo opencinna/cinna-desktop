@@ -7,6 +7,7 @@ import { handoverRepo, type HandoverRow } from '../db/handovers'
 import { taskRepo } from '../db/tasks'
 import { taskResultHead } from '../../shared/handovers'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
+import { executorInputMarker } from './executorInputs'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
@@ -33,10 +34,16 @@ export interface DelegationLifecycleDeps {
   tasks: Pick<typeof taskService, 'getById' | 'setStatus' | 'setHandoffNote' | 'setArtifacts' | 'acceptRemoteResult'>
   hasOpenAsk(taskId: string): boolean
   isRunning(chatId: string): boolean
+  /**
+   * What had reached the executor chat from outside before `at` (ms): its newest `user`/`system`
+   * row and the mid-turn steers since. Two reports with the same marker answer the same input;
+   * null when the chat had no inbound row.
+   */
+  executorInputMarker(chatId: string, at: number): string | null
   wake(scope: RunScope, rows: DelegationRow[], groupId?: string, settled?: () => void): void
   mirror?(row: DelegationRow): void
   now(): number
-  logger: { warn(message: string, detail?: unknown): void }
+  logger: { warn(message: string, detail?: unknown): void; info?(message: string, detail?: unknown): void }
 }
 
 /** What a result digest stands in for while a row has none. */
@@ -59,7 +66,7 @@ function stateFor(row: DelegationRow, status: DelegationResult['status'], audien
 
 /** The fields a row carries only while it holds a result or an acknowledged wake. */
 const NO_WAKE = { wokeAt: null, wakeRunId: null, wakeDigest: null }
-const NO_RESULT = { resultStatus: null, resultDigest: null, question: null, questionAudience: null, ...NO_WAKE }
+const NO_RESULT = { resultStatus: null, resultDigest: null, resultInputId: null, question: null, questionAudience: null, ...NO_WAKE }
 
 export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
   const pendingWakes = new Set<string>()
@@ -106,7 +113,45 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
     })
   }
 
-  function applyResult(scope: RunScope, initial: DelegationRow, result: DelegationResult): void {
+  /**
+   * The input the executor chat had received when it reported, at `at` — null when there is no
+   * executor chat here (cloud, an outside file executor) or it cannot be read, which never counts
+   * as a restatement.
+   */
+  function executorInputId(row: DelegationRow, at: number): string | null {
+    if (row.channel === 'cloud' || !row.taskId) return null
+    try {
+      const chatId = deps.tasks.getById(row.userId, row.taskId).chatId
+      return chatId ? deps.executorInputMarker(chatId, at) : null
+    } catch (error) {
+      deps.logger.warn('a delegation could not read its executor chat', { id: row.id, error: String(error) })
+      return null
+    }
+  }
+
+  /**
+   * An executor can report the same finished work through both channels — `report.md` and
+   * `tasks_report` — in either order, worded differently. The second is a restatement when the
+   * requester has had the first, both say the same final status, and nothing reached the executor
+   * in between: no revision, no `tasks_reply`, no message from the user.
+   */
+  function isRestatement(row: DelegationRow, status: DelegationResult['status'], inputId: string | null): boolean {
+    return (
+      !!row.wokeAt &&
+      row.resultStatus === status &&
+      (status === 'done' || status === 'failed') &&
+      row.channel !== 'cloud' &&
+      inputId !== null &&
+      row.resultInputId === inputId
+    )
+  }
+
+  /**
+   * `reportedAt` (ms) is when the executor reported, where that is earlier than now — a `report.md`'s
+   * mtime, applied by a later scan. It decides which input the report answers; it is not part of
+   * the result's digest.
+   */
+  function applyResult(scope: RunScope, initial: DelegationRow, result: DelegationResult, reportedAt?: number): void {
     const row = deps.repo.getById(scope.profileUserId, initial.id)
     if (!row || !row.taskId) return
 
@@ -153,7 +198,8 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
       advance(row, status)
     }
 
-    const updated = patch(row, {
+    const inputId = executorInputId(row, reportedAt ?? deps.now())
+    const fields = {
       state,
       resultStatus: result.status,
       summary: normalized.summary,
@@ -162,8 +208,17 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
       resultBody: normalized.body,
       questionAudience: normalized.audience,
       resultDigest: digest,
-      ...NO_WAKE
-    })
+      resultInputId: inputId
+    }
+    if (isRestatement(row, result.status, inputId)) {
+      // The newest wording wins on the task page; the requester already has the news. Keeping
+      // `wokeAt` and moving `wakeDigest` onto the new digest keeps the sweep from owing it a wake.
+      patch(row, { ...fields, wakeDigest: digest })
+      deps.logger.info?.('a delegation restated its result; requester not woken again', { id: row.id, status: result.status })
+      return
+    }
+
+    const updated = patch(row, { ...fields, ...NO_WAKE })
     if (result.status !== 'in_progress') wake(scope, updated)
   }
 
@@ -426,6 +481,7 @@ export const delegationLifecycle = createDelegationLifecycle({
   tasks: taskService,
   hasOpenAsk: (id) => taskInputRequestRepo.listOpenForTask(id).length > 0,
   isRunning: (id) => runExecutionService.isRunning(id),
+  executorInputMarker,
   now: () => Date.now(),
   logger,
   mirror(row) {

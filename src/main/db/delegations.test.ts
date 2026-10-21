@@ -8,11 +8,23 @@ const { delegationRepo } = await import('./delegations')
 const { handoverRepo } = await import('./handovers')
 const { taskRepo } = await import('./tasks')
 const { chatRepo } = await import('./chats')
+const { messageRepo } = await import('./messages')
 const USER = '__default__'
 beforeEach(() => { holder.current = createTestDatabase() })
 afterEach(() => { holder.current?.close() })
 const make = (key = 'request') => delegationRepo.insert({ userId: USER, requesterKey: key, originKind: 'local_chat', originChatId: 'chat', originAgentId: 'source', targetKind: 'kit', targetAgentId: 'kit', channel: 'local', depth: 1 })
 describe('delegation repository', () => {
+  it('reads the newest input an executor chat received, skipping its own output', () => {
+    const chat = chatRepo.create(USER, { title: 'Executor', router: 'direct', agentId: null })
+    expect(messageRepo.lastInboundIdBefore(chat.id, Date.now() + 2_000)).toBeNull()
+    const brief = messageRepo.saveUser({ chatId: chat.id, content: 'Brief' })
+    messageRepo.saveAssistant({ chatId: chat.id, content: 'Working' })
+    messageRepo.saveToolCall({ chatId: chat.id, content: '{}', toolCallId: 'call', toolName: 'tasks_report', toolInput: {}, toolError: false })
+    expect(messageRepo.lastInboundIdBefore(chat.id, Date.now() + 2_000)).toBe(brief)
+    const packet = messageRepo.saveSystem({ chatId: chat.id, content: 'Task result from …' })
+    messageRepo.saveAssistant({ chatId: chat.id, content: 'Relaying' })
+    expect(messageRepo.lastInboundIdBefore(chat.id, Date.now() + 2_000)).toBe(packet)
+  })
   it('enforces requester identity per origin and target and profile-scopes reads', () => {
     const row = make()
     expect(() => make()).toThrow()

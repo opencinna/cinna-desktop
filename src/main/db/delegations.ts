@@ -100,6 +100,7 @@ const rawDelegationRepo = {
       resultDigest: null,
       artifacts: [],
       resultBody: null,
+      resultInputId: null,
       pendingReplies: [],
       questionAudience: null,
       groupId: null,

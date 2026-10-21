@@ -129,7 +129,7 @@ export interface HandoverDeps {
   /** Depth of the delegation that owns the origin's task — found by task id, or through the origin chat. */
   chainDepth?(userId: string, origin: { taskId: string | null; chatId: string | null }): number | null
   /** Hand a report to the delegation bus; `false` when no delegation stands behind the row, which then takes the report itself. */
-  applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport): boolean | void
+  applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport, reportedAt?: number): boolean | void
   checkDelegationGroup?(scope: RunScope, row: HandoverRow): void
   /**
    * Is this executor still waiting on delegations it made itself — from its task or its chat? Such a
@@ -267,6 +267,12 @@ function readBytes(path: string): Buffer | null {
  * matches a stored stamp and therefore always falls through to the read: the
  * stamp may only ever *skip* work, never decide anything on its own.
  */
+/** The mtime (ms) a {@link fileStamp} records, or undefined when it does not parse. */
+export function stampTime(stamp: string | null | undefined): number | undefined {
+  const match = /^(\d+):/.exec(stamp ?? '')
+  return match ? Number(BigInt(match[1]) / 1_000_000n) : undefined
+}
+
 function fileStamp(path: string): string | null {
   try {
     const stat = statSync(path, { bigint: true })
@@ -737,7 +743,11 @@ export function createHandoverService(deps: HandoverDeps) {
       // between a terminal `claude` and a second executor on the same brief.
       deps.repo.update(scope.profileUserId, row.id, { state: 'waiting_external' })
       advance(scope.profileUserId, row.taskId as string, 'in_progress')
-      if (report && report.parsed.ok) applyReportEffects(scope, deps.repo.getById(scope.profileUserId, row.id) ?? row, report.parsed.report)
+      if (report && report.parsed.ok) {
+        applyReportEffects(scope, deps.repo.getById(scope.profileUserId, row.id) ?? row, report.parsed.report, {
+          reportedAt: stampTime(report.stat)
+        })
+      }
       return
     }
 
@@ -830,9 +840,9 @@ export function createHandoverService(deps: HandoverDeps) {
    * report was rewritten was never spoken about again; the single path read the
    * column not at all, so a terminal report rewritten in place woke the origin
    * a second time with the same news. The rule both now follow is one wake per
-   * (row, report digest): `reconcile` clears `woke_at` when a *new* report
-   * digest lands, so a genuinely new terminal report may wake again and the
-   * same bytes never do.
+   * (row, report digest): a *new* report digest clears `woke_at` — in
+   * `applyReportEffects`, or in the delegation bus for a row it stands behind —
+   * so a genuinely new terminal report may wake again and the same bytes never do.
    *
    * The row is re-read first because everything the packet quotes — the state,
    * the summary, the task — was written a few lines ago, and because `woke_at`
@@ -864,13 +874,33 @@ export function createHandoverService(deps: HandoverDeps) {
    * everything it needs — the origin ids, the summary, the folder — is what
    * this function already has in hand.
    */
-  function applyReportEffects(scope: RunScope, row: HandoverRow, report: HandoverReport): void {
+  /**
+   * `file` is set when the report came from `report.md` rather than `tasks_report`: `newReport` when
+   * its bytes changed since the last scan, `reportedAt` its mtime (ms) — the time the bus judges the
+   * executor's input against, since a scan can apply a report well after it was written.
+   */
+  function applyReportEffects(
+    scope: RunScope,
+    row: HandoverRow,
+    report: HandoverReport,
+    file: { newReport?: boolean; reportedAt?: number } = {}
+  ): void {
     if (deps.applyResult) {
       if (row.state === 'gated') deps.repo.update(row.userId, row.id, withdrawGate(row))
-      if (deps.applyResult(scope, row, report) !== false) return
+      // The bus owns `woke_at` for a row it stands behind, and it reads it to tell an executor
+      // restating a result it already delivered from a new one. Cleared here first, the mirror into
+      // the delegation would have made every rewritten `report.md` look like news.
+      if (deps.applyResult(scope, row, report, file.reportedAt) !== false) return
       // No delegation behind this brief: its own effects below, on the row as it now is.
       row = deps.repo.getById(row.userId, row.id) ?? row
     }
+    /*
+      A new report file is news the origin has not had. Clearing `woke_at` is
+      what makes "one wake per (row, report digest)" true on both wake paths:
+      the group path has always skipped a member that carries the column, and
+      {@link wakeOnce} now does the same for a single handover.
+    */
+    if (file.newReport && row.wokeAt) row = deps.repo.update(row.userId, row.id, { wokeAt: null, wakeRunId: null }) ?? row
     const userId = scope.profileUserId
     const taskId = row.taskId
     if (!taskId) return
@@ -1405,22 +1435,16 @@ export function createHandoverService(deps: HandoverDeps) {
     }
     patch.reportDigest = report.digest
     if (row.reportStat !== report.stat) patch.reportStat = report.stat
-    /*
-      A new report is news the origin has not had. Clearing `woke_at` is what
-      makes "one wake per (row, report digest)" true on both wake paths: the
-      group path has always skipped a member that carries the column, and
-      {@link wakeOnce} now does the same for a single handover.
-    */
-    patch.wokeAt = null
-    patch.wakeRunId = null
     if (!report.parsed.ok) {
+      // `woke_at` stays: an unparseable report wakes nobody, and the next parsed one clears it if it
+      // is news. Cleared here, the mirror into the delegation would make a restated result look new.
       patch.warning = 'report_unparseable'
       const scanned = deps.repo.update(userId, row.id, patch) ?? row
       deliverRevisions(scope, scanned, found)
       return
     }
     const updated = deps.repo.update(userId, row.id, patch) ?? row
-    applyReportEffects(scope, updated, report.parsed.report)
+    applyReportEffects(scope, updated, report.parsed.report, { newReport: true, reportedAt: stampTime(report.stat) })
     // **After** the report, deliberately: a report and a revision arriving in
     // the same scan are the executor finishing and the requester following up,
     // in that order, and the revision has to be read against the state the
@@ -1791,7 +1815,7 @@ export function createHandoverService(deps: HandoverDeps) {
     },
 
     /** The seam phase 3 hooks for the return packet. */
-    applyReport: applyReportEffects
+    applyReport: (scope: RunScope, row: HandoverRow, report: HandoverReport): void => applyReportEffects(scope, row, report)
   }
 }
 
@@ -1816,10 +1840,15 @@ function productionDeps(): HandoverDeps {
     repo: handoverRepo,
     originProfile: (brief) => handoverOriginProfile(brief, getProfileScopeUserId()),
     chainDepth: (userId, origin) => delegationRepo.parentOfOrigin(userId, origin)?.depth ?? null,
-    applyResult: (scope, row, report) => {
+    applyResult: (scope, row, report, reportedAt) => {
       const delegation = delegationRepo.getById(row.userId, row.id)
       if (!delegation) return false
-      delegationLifecycle.applyResult(scope, delegation, { ...report, artifacts: report.artifacts.map((path) => join(row.folderPath, path)) })
+      delegationLifecycle.applyResult(
+        scope,
+        delegation,
+        { ...report, artifacts: report.artifacts.map((path) => join(row.folderPath, path)) },
+        reportedAt
+      )
       return true
     },
     checkDelegationGroup: (scope, row) => {

@@ -1,6 +1,6 @@
 import { redactingRepository } from '../security/serviceCredentialRedaction'
 import { nanoid } from 'nanoid'
-import { and, asc, eq, desc, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, eq, desc, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
 import type { MessagePart } from '../../shared/messageParts'
@@ -300,6 +300,30 @@ const rawMessageRepo = {
       .select({ id: messages.id })
       .from(messages)
       .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.sortOrder))
+      .limit(1)
+      .get()
+    return row?.id ?? null
+  },
+
+  /**
+   * The id of the newest message that reached a chat from outside its agent — a `user` or `system`
+   * row: a brief, a revision, a `tasks_reply` follow-up or the user typing — written before `at`
+   * (ms). `created_at` holds whole seconds, so a row from the same second as `at` counts as after
+   * it. The delegation bus compares this across two reports to tell a restatement from an answer
+   * to new input, and that ambiguity resolves to "new input".
+   */
+  lastInboundIdBefore(chatId: string, at: number): string | null {
+    const row = getDb()
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          inArray(messages.role, ['user', 'system']),
+          lt(messages.createdAt, new Date(Math.floor(at / 1000) * 1000))
+        )
+      )
       .orderBy(desc(messages.sortOrder))
       .limit(1)
       .get()

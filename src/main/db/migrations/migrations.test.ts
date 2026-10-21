@@ -1021,3 +1021,20 @@ describe('published artifacts on an install that predates them', () => {
     raw.close()
   })
 })
+
+describe('delegations.result_input_id on an install that predates it', () => {
+  it('adds the nullable column, keeps the rows, and replays as a no-op', () => {
+    const raw = freshDatabase()
+    raw.exec(`ALTER TABLE delegations DROP COLUMN result_input_id;
+      INSERT INTO users (id, type, username, display_name, created_at) VALUES ('p', 'local_user', 'p', 'P', 1);
+      INSERT INTO delegations (id, user_id, requester_key, origin_key, origin_kind, target_kind, target_agent_id, channel, root_delegation_id, state, result_status, result_digest, woke_at, created_at, updated_at)
+      VALUES ('d', 'p', 'k', 'o', 'local_chat', 'kit', 'a', 'local', 'd', 'done', 'done', 'digest', 1, 1, 1);`)
+    expect(columnNames(raw, 'delegations')).not.toContain('result_input_id')
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(columnNames(raw, 'delegations')).toContain('result_input_id')
+    expect(raw.prepare("SELECT state, result_digest, result_input_id FROM delegations WHERE id = 'd'").get())
+      .toEqual({ state: 'done', result_digest: 'digest', result_input_id: null })
+    raw.close()
+  })
+})

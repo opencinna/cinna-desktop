@@ -15,7 +15,7 @@ export function migrateDelegations(sqlite: Database.Database): void {
     title TEXT NOT NULL DEFAULT '', brief TEXT NOT NULL DEFAULT '',
     execution TEXT NOT NULL DEFAULT 'ask', state TEXT NOT NULL DEFAULT 'seen',
     refusal_reason TEXT, warning TEXT, result_status TEXT, summary TEXT, question TEXT,
-    pending_replies TEXT NOT NULL DEFAULT '[]', result_digest TEXT, artifacts TEXT NOT NULL DEFAULT '[]', result_body TEXT, question_audience TEXT,
+    pending_replies TEXT NOT NULL DEFAULT '[]', result_digest TEXT, artifacts TEXT NOT NULL DEFAULT '[]', result_body TEXT, result_input_id TEXT, question_audience TEXT,
     group_id TEXT, woke_at INTEGER, wake_run_id TEXT, wake_digest TEXT, run_id TEXT,
     gate_request_id TEXT, gate_chat_id TEXT,
     remote_connection_id TEXT, remote_task_id TEXT, remote_task_key TEXT, remote_url TEXT,
@@ -27,6 +27,7 @@ export function migrateDelegations(sqlite: Database.Database): void {
   CREATE INDEX IF NOT EXISTS idx_delegations_group ON delegations(user_id, origin_chat_id, group_id);
   `)
   if (!hasColumn(sqlite, 'delegations', 'pending_replies')) sqlite.exec("ALTER TABLE delegations ADD COLUMN pending_replies TEXT NOT NULL DEFAULT '[]'")
+  if (!hasColumn(sqlite, 'delegations', 'result_input_id')) sqlite.exec('ALTER TABLE delegations ADD COLUMN result_input_id TEXT')
   const missing = sqlite.prepare('SELECT h.id FROM handovers h LEFT JOIN delegations d ON d.handover_id = h.id WHERE d.id IS NULL').all() as { id: string }[]
   sqlite.exec(`INSERT OR IGNORE INTO delegations (
     id, user_id, requester_key, origin_key, origin_kind, origin_agent_id, origin_chat_id,

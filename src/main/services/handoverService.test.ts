@@ -2212,4 +2212,37 @@ describe('a report on a brief the bus does not own', () => {
     expect(h.task().status).toBe('completed')
     expect(h.row()).toMatchObject({ state: 'done', reportStatus: 'done', summary: 'Retry added' })
   })
+
+  it('leaves woke_at to the bus when a rewritten report.md reaches a row it owns', async () => {
+    // The bus reads `woke_at` to tell a restated result from a new one; the scan must not clear it first.
+    const seen: Array<Date | null> = []
+    const applyResult = vi.fn((_scope: unknown, row: HandoverRow) => { seen.push(row.wokeAt); return true })
+    const service = createHandoverService({ ...h.deps, applyResult })
+    h.write('20260917-1200-retry', 'brief.md', brief('origin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    h.write('20260917-1200-retry', 'report.md', report('status: done\nsummary: Retry added\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    const woken = new Date()
+    h.rows.set(h.row().id, { ...h.row(), wokeAt: woken } as HandoverRow)
+    h.write('20260917-1200-retry', 'report.md', report('status: done\nsummary: Retry added, reworded\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    expect(applyResult).toHaveBeenCalledTimes(2)
+    expect(seen[1]).toEqual(woken)
+    expect(h.row().wokeAt).toEqual(woken)
+    expect(h.wakes.length).toBe(0)
+  })
+
+  it('still clears woke_at for a new report when the bus says no delegation stands behind the row', async () => {
+    const service = createHandoverService({ ...h.deps, applyResult: vi.fn(() => false) })
+    h.write('20260917-1200-retry', 'brief.md', brief('origin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    h.write('20260917-1200-retry', 'report.md', report('status: done\nsummary: Retry added\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    expect(h.wakes.length).toBe(1)
+    h.rows.set(h.row().id, { ...h.row(), wokeAt: new Date() } as HandoverRow)
+    h.write('20260917-1200-retry', 'report.md', report('status: done\nsummary: Retry added, and the flake fixed\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    expect(h.wakes.length).toBe(2)
+    expect(h.row().wokeAt).toBeNull()
+  })
 })

@@ -10,6 +10,7 @@ import { taskRepo } from '../db/tasks'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { syncRepo } from '../db/sync'
 import { messageRepo } from '../db/messages'
+import { executorInputs } from './executorInputs'
 import { chatRepo } from '../db/chats'
 import { ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
@@ -364,6 +365,8 @@ export const runExecutionService = {
           logger.warn('a mid-turn message failed', { chatId: payload.chatId, error: String(error) })
           return 'unavailable'
         }
+        // The message becomes a row only when the turn is saved; the delegation bus needs it now.
+        if (outcome === 'injected') executorInputs.recordSteer(payload.chatId)
         if (outcome !== 'late') return outcome
         // The engine has the message, but the turn's rows were already built
         // without it. Keep the user's words in the transcript on their own.
@@ -374,6 +377,7 @@ export const runExecutionService = {
         } catch (error) {
           logger.warn('a late mid-turn message could not be saved', { chatId: payload.chatId, error: String(error) })
           // No row to show, and the engine already has it: sending it again would say it twice.
+          executorInputs.recordSteer(payload.chatId)
           return 'injected'
         }
         return 'saved'

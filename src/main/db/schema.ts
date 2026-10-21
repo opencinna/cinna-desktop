@@ -1290,6 +1290,11 @@ export const delegations = sqliteTable('delegations', {
   resultDigest: text('result_digest'),
   artifacts: text('artifacts', { mode: 'json' }).$type<string[]>().notNull().default([]),
   resultBody: text('result_body'),
+  /**
+   * The newest inbound (`user`/`system`) message in the executor chat when the current result was
+   * applied. A later same-status result with no new input since is the executor restating itself.
+   */
+  resultInputId: text('result_input_id'),
   pendingReplies: text('pending_replies', { mode: 'json' }).$type<DelegationReply[]>().notNull().default([]),
   questionAudience: text('question_audience').$type<'requester' | 'user'>(),
   groupId: text('group_id'),
