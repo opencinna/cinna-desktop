@@ -4,7 +4,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsButton, SettingsRow, SettingsRows, SettingsSection, SettingsToggleRow } from './SettingsLayout'
 
 /**
- * Features → Finder (macOS only): the "Mention in Cinna" Quick Action, which
+ * Features → OS Integration (macOS only): the "Mention in Cinna" Quick Action, which
  * sends files and folders selected in Finder to the new-chat composer as
  * reference chips. The switch is whether the workflow is installed in
  * `~/Library/Services`.
@@ -32,7 +32,7 @@ export function FinderQuickActionSection(): React.JSX.Element | null {
   if (!status?.supported) return null
 
   return (
-    <SettingsSection title="Finder">
+    <SettingsSection title="OS Integration">
       <SettingsRows insetDividers>
         <SettingsToggleRow
           id="feature-finder-mention"

@@ -160,7 +160,7 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 - [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — The Features tab hosts the "AI Functions" subsection where this opt-in toggle lives
 - [AI Spending Level](../../llm/ai_spending_level/ai_spending_level.md) — The Features tab's "AI Functions" group hosts the Eco / Mid / Greedy control (`aiSpendingLevel`)
 - [Desktop Notifications](../desktop_notifications/desktop_notifications.md) — The Features tab's "Interface" group hosts the `desktopNotifications` switch
-- [Path Mentions](../../chat/path_mentions/path_mentions.md) — On macOS the Features tab ends with a "Finder" section holding one switch, **Mention in Cinna**, which installs or removes the Finder Quick Action
+- [Path Mentions](../../chat/path_mentions/path_mentions.md) — On macOS the Features tab ends with an "OS Integration" section holding one switch, **Mention in Cinna**, which installs or removes the Finder Quick Action
 - [Hints](../hints/hints.md) — The Features tab's "Interface" group hosts the `showHints` toggle and the "Reset hints" button that clears the localStorage retirement counters
 - [Agents](../../agents/agents/agents.md) — Add an agent in the Agents sidebar creates direct A2A connections; each agent page exposes its own Settings action
 - [Local Agents](../../agents/local_agents/agents_tab.md) — Agents section (Default group): the registered agent folders, the local engine and its binary path, and the detected developer tools, in three titled sections

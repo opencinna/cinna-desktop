@@ -34,12 +34,12 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('Features → Finder', () => {
+describe('Features → OS Integration', () => {
   it('renders nothing where the Quick Action is not supported', async () => {
     api.status.mockResolvedValue({ supported: false, installed: false, outdated: false })
     const client = mount()
     await waitFor(() => expect(client.getQueryState(['finder-quick-action', 'status'])?.status).toBe('success'))
-    expect(screen.queryByRole('heading', { name: 'Finder' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'OS Integration' })).toBeNull()
     expect(screen.queryByRole('switch')).toBeNull()
   })
 
@@ -48,7 +48,7 @@ describe('Features → Finder', () => {
     api.install.mockResolvedValue({ success: true, status: ON } satisfies FinderQuickActionResult)
     api.uninstall.mockResolvedValue({ success: true, status: OFF } satisfies FinderQuickActionResult)
     mount()
-    expect(await screen.findByRole('heading', { name: 'Finder' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'OS Integration' })).toBeTruthy()
     expect(toggle().getAttribute('aria-checked')).toBe('false')
     // The how-to is behind the (?), not on the surface.
     expect(screen.queryByText(/Quick Actions or Services/)).toBeNull()

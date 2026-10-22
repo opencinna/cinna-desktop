@@ -70,7 +70,7 @@ const queryClient = new QueryClient({
 // Main's speech probe, asked once at start: the composer's mic button and the
 // Features row would otherwise appear a beat after their surface (ux_rules §1).
 void queryClient.prefetchQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: fetchSpeechStatus })
-// The same for Features → Finder, which exists only on macOS.
+// The same for Features → OS Integration, which exists only on macOS.
 void queryClient.prefetchQuery({ queryKey: FINDER_QUICK_ACTION_QUERY_KEY, queryFn: fetchFinderQuickActionStatus })
 
 function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Element {

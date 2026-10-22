@@ -15,14 +15,14 @@ Send a file or folder to Cinna from outside it. Right-click in Finder, choose **
 
 ## User Stories / Flows
 
-1. **Install**: Settings → Features → Finder (macOS only; the section does not exist elsewhere) has one switch, **Mention in Cinna**. On installs the workflow into `~/Library/Services` and asks macOS to re-read its Services; off removes it. The item then appears in Finder's right-click menu under Quick Actions or Services.
+1. **Install**: Settings → Features → OS Integration (macOS only; the section does not exist elsewhere) has one switch, **Mention in Cinna**. On installs the workflow into `~/Library/Services` and asks macOS to re-read its Services; off removes it. The item then appears in Finder's right-click menu under Quick Actions or Services.
 2. **Mention**: select one or more files and folders in Finder, right-click, **Mention in Cinna**. Cinna comes to the front (launching if it was not running; a window closed earlier is recreated) and shows the new-chat screen with one chip per item.
 3. **Agent**: the chat starts with the folder agent whose folder contains the first item; that replaces whatever agents the new-chat draft held. With no such folder agent, the most recently used folder agent is a guess, applied only when the new-chat draft has no agents yet; otherwise, and when there is no folder agent at all, the chat keeps the agent selection the new-chat draft already holds.
 4. **Send**: the user types or not, and sends. Each chip becomes a line `Referenced folder: `<absolute path>`` or `Referenced file: ...` after the typed text, a blank line between. The transcript links those backticked paths like any other file reference (see [File References](../file_references/file_references.md)).
 5. **Reference in a new chat** (right-click on a file reference in the transcript) puts the same chip, for the reference's realpath, into the new-chat draft with that reference's agent.
 6. **Busy elsewhere**: when a dialog is open or the screen is not the chat view (Settings with a half-filled form, say), nothing navigates. The chips go into the new-chat draft, with the agent, and a toast says "<name> added to a new chat" or "N items added to a new chat".
 7. **Before sign-in**: login, onboarding, a locked profile. Main keeps the paths; the signed-in shell takes them when it mounts, and again whenever a profile becomes ready.
-8. **Update**: if the installed workflow is from an older template or points at a different app location, the Finder section shows "Installed from an older Cinna." with **Update**. A failed install or removal shows a one-sentence reason as its own row below the switch.
+8. **Update**: if the installed workflow is from an older template or points at a different app location, the OS Integration section shows "Installed from an older Cinna." with **Update**. A failed install or removal shows a one-sentence reason as its own row below the switch.
 
 ## Business Rules
 
@@ -56,6 +56,6 @@ Finder -> Quick Action (open -b <bundle id> "$@") -> Launch Services
 - [Conversation UI](../conversation_ui/conversation_ui.md): the composer's attachment row and draft hold the chips.
 - [Auto Chat Titles](../auto_titles/auto_titles.md): the fallback title strips reference lines.
 - [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md): `startAgentChat` is shared with the chat-starting shortcuts.
-- [Settings](../../ui/settings/settings.md): Features → Finder.
+- [Settings](../../ui/settings/settings.md): Features → OS Integration.
 - [Bare Mac](../../development/bare_mac/bare_mac.md): install and run inside a fresh VM.
 - [Technical Details](path_mentions_tech.md)

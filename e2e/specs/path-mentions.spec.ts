@@ -44,7 +44,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *   new-chat composer after Back.
  * - A cold launch's mention survives the first-run screen and shows once the
  *   shell is up.
- * - Settings → Features → Finder → Mention in Cinna installs the workflow into
+ * - Settings → Features → OS Integration → Mention in Cinna installs the workflow into
  *   `~/Library/Services` and removes it (macOS only).
  *
  * ## What it does not
