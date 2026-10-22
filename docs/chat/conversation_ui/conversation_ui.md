@@ -72,7 +72,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 
 ### Leaving and returning to a draft
 
-1. Type on the dashboard, an agent start screen or an existing chat; choose any relevant agents, MCP servers, mode, files and notes.
+1. Type on the dashboard, an agent start screen or an existing chat; choose any relevant agents, MCP servers, mode, files and notes. Files and folders sent from Finder or from a file reference's **Reference in a new chat** sit in the same attachment row as path chips, which count as content: a chip alone can be sent. See [Path Mentions](../path_mentions/path_mentions.md).
 2. Visit another chat, agent page or settings screen. Returning restores that surface's draft, including explicit mode deselection. The dashboard and each agent start page remain independent.
 3. The restored textarea resizes, focuses with the caret at the end and scrolls to its last line. Menus and note previews stay closed; reopening a draft used to place the caret at the start, so typing accidentally prepended text.
 4. Sending consumes submitted content only after dispatch. Preparation failure leaves it available for retry; newer changes made while preparation runs remain in the source draft.

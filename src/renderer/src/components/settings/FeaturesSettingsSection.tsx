@@ -8,6 +8,7 @@ import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useSpeechStatus } from '../chat/voice/useSpeechStatus'
+import { FinderQuickActionSection } from './FinderQuickActionSection'
 import {
   SettingsButton,
   SettingsLabel,
@@ -345,6 +346,9 @@ export function FeaturesSettingsSection(): React.JSX.Element {
           )}
         </SettingsRows>
       </SettingsSection>
+
+      {/* macOS only; renders nothing elsewhere. */}
+      <FinderQuickActionSection />
     </div>
   )
 }

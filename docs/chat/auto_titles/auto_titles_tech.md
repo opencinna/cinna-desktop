@@ -7,7 +7,7 @@
 | File | Role |
 |------|------|
 | `src/shared/appSettings.ts` | `AppSettingsSchema` interface (`autoChatTitles: boolean` among other keys), `AppSettingKey` alias, `CHAT_TITLE_UPDATED_CHANNEL` constant, `ChatTitleUpdatedPayload` interface. Single source of truth for the settings schema across main + preload + renderer. |
-| `src/shared/chatTitle.ts` | `AUTO_TITLE_MAX_FROM_MESSAGE = 50` constant + `deriveTitleFromMessage(message)` function. Renderer uses it to compute the fallback chat title; main-process title service uses it to recognise that fallback as an "untouched auto-title". |
+| `src/shared/chatTitle.ts` | `AUTO_TITLE_MAX_FROM_MESSAGE = 50` constant + `deriveTitleFromMessage(message)` function (it splits off `Referenced file|folder:` lines with `splitPathRefs` from `src/shared/pathMentions.ts` first). Renderer uses it to compute the fallback chat title; main-process title service uses it to recognise that fallback as an "untouched auto-title". |
 
 ### Main Process — DB
 

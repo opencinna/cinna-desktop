@@ -12,6 +12,7 @@ import {
   type AgentFileTextUse
 } from '../../../../shared/agentFiles'
 import { previewKindFor } from '../../../../shared/filePreview'
+import type { ComposerPathRef } from '../../../../shared/pathMentions'
 import { useSaveMessageNote } from '../../hooks/useNotes'
 import { useAuthStore } from '../../stores/auth.store'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
@@ -78,9 +79,9 @@ export function messageMenuItems(file: FileRefTarget | undefined, canPublish = f
     : [contents, pathGroup, ...publish]
 }
 
-/** What a new chat about `ref` starts with: its path, ready for the rest of the sentence. */
-export function referenceDraft(ref: AgentFileRef): string {
-  return `The ${ref.kind === 'dir' ? 'folder' : 'file'} \`${ref.path}\` `
+/** The reference chip a new chat about `ref` starts with. */
+export function referenceChip(ref: AgentFileRef): ComposerPathRef {
+  return { path: ref.path, displayPath: ref.displayPath, kind: ref.kind }
 }
 
 /**
@@ -386,7 +387,7 @@ function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, o
       if (!mounted.current) return
       const agent = startableAgent(agents, file.agentId)
       if (agent) {
-        startAgentChat(agent.id, { draft: referenceDraft(file.ref) })
+        startAgentChat(agent.id, { pathRefs: [referenceChip(file.ref)] })
       } else {
         useToastStore.getState().show(unavailableAgentMessage(agents, file.agentId, 'That agent is no longer available'))
       }

@@ -16,6 +16,13 @@ export interface PopoverOptions {
    * trigger. Re-anchored above the trigger on the next open or a resize.
    */
   keepTopWhileOpen?: boolean
+  /**
+   * `below-*` only: open above the trigger instead when the popover, once laid
+   * out, does not fit between the trigger and the bottom of the window and
+   * there is room above (or more room above than below). Decided once per
+   * open, so it never flips back and forth.
+   */
+  flipWhenNoRoom?: boolean
 }
 
 /**
@@ -65,7 +72,10 @@ export function usePopover<
   P extends HTMLElement = HTMLDivElement
 >(placement: PopoverPlacement, options: PopoverOptions = {}): PopoverApi<T, P> {
   const keepTop = options.keepTopWhileOpen === true
+  const flipWhenNoRoom = options.flipWhenNoRoom === true
   const [open, setOpen] = useState(false)
+  /** A `below-*` popover that did not fit below, now laid out above instead. */
+  const [flipped, setFlipped] = useState(false)
   const triggerRef = useRef<T>(null)
   const popoverRef = useRef<P>(null)
   const [pos, setPos] = useState<FixedPos | null>(null)
@@ -81,15 +91,19 @@ export function usePopover<
       setPos(null)
       setShift(0)
       setShiftY(0)
+      setFlipped(false)
       return
     }
+    const effective: PopoverPlacement = !flipped
+      ? placement
+      : placement === 'below-right' ? 'above-right' : placement === 'below-left' ? 'above-left' : placement
     const measure = (): void => {
       const t = triggerRef.current
       if (!t) return
       const r = t.getBoundingClientRect()
       const vw = window.innerWidth
       const vh = window.innerHeight
-      switch (placement) {
+      switch (effective) {
         case 'above-left':
           setPos({ left: r.left, bottom: vh - r.top + GAP })
           break
@@ -122,7 +136,22 @@ export function usePopover<
       document.removeEventListener('mousedown', handleClick)
       window.removeEventListener('resize', measure)
     }
-  }, [open, placement])
+  }, [open, placement, flipped])
+
+  // In the frame it is first laid out, before it paints: a popover hanging
+  // below a trigger near the bottom of the window would run past the edge.
+  useLayoutEffect(() => {
+    const el = popoverRef.current
+    const t = triggerRef.current
+    if (!flipWhenNoRoom || flipped || !open || !pos || !el || !t) return
+    if (placement !== 'below-left' && placement !== 'below-right') return
+    const height = el.getBoundingClientRect().height
+    if (height === 0) return
+    const r = t.getBoundingClientRect()
+    const below = window.innerHeight - EDGE - (r.bottom + BELOW_GAP)
+    const above = r.top - GAP - EDGE
+    if (height > below && (height <= above || above > below)) setFlipped(true)
+  }, [flipWhenNoRoom, flipped, open, pos, placement])
 
   // After the popover has been laid out, not before: the correction depends on
   // how wide it actually turned out to be. A layout effect, so the adjustment

@@ -47,10 +47,16 @@ const EXPECTED_OWNERS = new Set(['Cinna Desktop', 'Window Server', 'Dock', 'Cont
  * nothing. Seen on the DMG install only, never on a zip. Its other windows —
  * the "downloaded from the Internet" confirmation, a rejection — are layer 0
  * and still count.
+ *
+ * Automator's running indicator: the gear `ScriptMonitor` puts in the menu bar
+ * (layer 25, 24 points tall) while any Quick Action runs — Finder's own
+ * right-click shows it too, and it asks nothing. A ScriptMonitor error window
+ * is a normal window and still counts.
  */
 function isExpectedWindow(w: GuestWindow): boolean {
   if (EXPECTED_OWNERS.has(w.owner)) return true
   const height = Number(w.size.split('x')[1])
+  if (w.owner === 'ScriptMonitor') return w.layer === 25 && height <= 24
   return w.owner === 'CoreServicesUIAgent' && w.layer === 3 && height <= 100
 }
 

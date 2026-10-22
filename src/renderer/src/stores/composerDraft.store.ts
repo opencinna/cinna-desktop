@@ -1,10 +1,13 @@
 import { create } from 'zustand'
 import type { ComposerAttachment } from '../../../shared/attachments'
+import type { ComposerPathRef } from '../../../shared/pathMentions'
 
 export interface ComposerDraft {
   sending: boolean
   text: string
   notes: { id: string; title: string }[]
+  /** Files and folders referenced by path (chips); sent as lines naming each path, never read. Unique by `path`. */
+  pathRefs: ComposerPathRef[]
   files: {
     attachments: ComposerAttachment[]
     uploading: boolean
@@ -21,7 +24,7 @@ export interface ComposerDraft {
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   sending: false,
-  text: '', notes: [],
+  text: '', notes: [], pathRefs: [],
   files: { attachments: [], uploading: false, error: null, token: null },
   modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false, conductorId: null
 }

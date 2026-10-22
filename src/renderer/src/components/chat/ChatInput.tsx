@@ -49,6 +49,8 @@ import {
   pasteIntent
 } from '../../utils/composerPaste'
 import { NoteBadgeList } from './NoteBadge'
+import { PathRefBadgeList } from './PathRefBadge'
+import { withPathRefs } from '../../../../shared/pathMentions'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
@@ -241,6 +243,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const draftKey = suppliedDraftKey ?? defaultDraftKey
   const [input, setInput] = useComposerDraftField(draftKey, 'text')
   const [sending] = useComposerDraftField(draftKey, 'sending')
+  // Files and folders referenced by path ("Mention in Cinna", Reference in a
+  // new chat): chips that become lines naming each path when the message is sent.
+  const [pathRefs, setPathRefs] = useComposerDraftField(draftKey, 'pathRefs')
   const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
   // Component state on purpose: navigating away drops edit mode and leaves the
   // text as an ordinary draft.
@@ -626,14 +631,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const clearComposer = useCallback(() => {
     // The send may finish after switching away or editing another draft.
     // Consume only the submitted values that are still unchanged.
+    // By path, not identity: a mention merged in while the send was in flight
+    // makes a new array that still holds the chips just sent.
+    const sentPaths = new Set(pathRefs.map((ref) => ref.path))
     useComposerDraftStore.getState().update(draftKey, (draft) => ({
       text: draft.text === input ? '' : draft.text,
       notes: draft.notes === pendingNotes ? [] : draft.notes,
+      pathRefs: draft.pathRefs.filter((ref) => !sentPaths.has(ref.path)),
       files: draft.files.attachments === pendingAttachments
         ? { ...draft.files, attachments: [], error: null }
         : draft.files
     }))
-  }, [draftKey, input, pendingNotes, pendingAttachments])
+  }, [draftKey, input, pendingNotes, pathRefs, pendingAttachments])
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
   const fetchNote = useFetchNote()
   const [previewNoteId, setPreviewNoteId] = useState<string | null>(null)
@@ -923,7 +932,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // chat has no turn of its own to stop: while its first send is in flight it
   // keeps a disabled Send (`sending`).
   const hasSendableFiles = (targetSupportsAttachments && pendingAttachments.length > 0) || pendingNotes.length > 0
-  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles) || readiness.refusal !== null)
+  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles && pathRefs.length === 0) || readiness.refusal !== null)
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
@@ -1267,6 +1276,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [observeHint]
   )
 
+  const handleRemovePathRef = useCallback(
+    (path: string) => setPathRefs((curr) => curr.filter((ref) => ref.path !== path)),
+    [setPathRefs]
+  )
+
   const handleRemovePendingNote = useCallback(
     (id: string) => {
       if (pendingExpansionNoteId === id) setPendingExpansionNoteId(null)
@@ -1367,8 +1381,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // composer handles attachments; new chats still require text for title.
     const hasContent =
       trimmed.length > 0 ||
+      pathRefs.length > 0 ||
       (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
     if (!hasContent) return
+    // Reference chips name their paths in the text itself; nothing is attached.
+    const outgoing = withPathRefs(trimmed, pathRefs)
     // A restored draft can render before destination queries finish. Keep its
     // files, and validate on send instead of deleting them during loading.
     if (pendingAttachments.length > 0 && !targetSupportsAttachments) {
@@ -1394,7 +1411,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (!onNewChat || !useComposerDraftStore.getState().beginSend(draftKey)) return
       const noteIds = pendingNotes.map((n) => n.id)
       try {
-        const sent = await onNewChat(trimmed, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
+        const sent = await onNewChat(outgoing, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
         if (sent !== false) clearComposer()
       } catch (error) {
         setSendError(unwrapIpcError(error, 'Could not start new chat'))
@@ -1440,7 +1457,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         noteAttachments.length > 0
           ? [...(persistedAttachments ?? []), ...noteAttachments]
           : persistedAttachments
-      const dispatched = await composer.submit(trimmed, mergedAttachments)
+      const dispatched = await composer.submit(outgoing, mergedAttachments)
       // Consume submitted values from the source draft, even after navigation.
       if (dispatched) {
         clearComposer()
@@ -1457,6 +1474,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChat,
     composer,
     pendingNotes,
+    pathRefs,
     attachScope,
     attachNotesAsync,
     setAttachError,
@@ -1700,7 +1718,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     (editingId
       ? !input.trim()
       : blocksSend ||
-        (!input.trim() && !(chatId !== null && hasSendableFiles)))
+        (!input.trim() && pathRefs.length === 0 && !(chatId !== null && hasSendableFiles)))
   // The headphone double click: exactly what a click on Send would do, and
   // nothing where Send is disabled or Stop stands in its place.
   const sendFromHeadphones = (): void => {
@@ -1830,7 +1848,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
-        {(pendingAttachments.length > 0 || pendingNotes.length > 0) && (
+        {(pendingAttachments.length > 0 || pendingNotes.length > 0 || pathRefs.length > 0) && (
           <div className="px-3 pb-2 pt-1 flex flex-wrap items-end gap-1 justify-end">
             <AttachmentList
               attachments={pendingAttachments}
@@ -1851,6 +1869,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onPreview={handlePreviewNote}
               align="right"
             />
+            <PathRefBadgeList refs={pathRefs} onRemove={handleRemovePathRef} align="right" />
           </div>
         )}
         {isDraggingOver && (

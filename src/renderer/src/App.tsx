@@ -20,6 +20,7 @@ import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { ArtifactsHost } from './components/artifacts/ArtifactsHost'
 import { useAuthStore } from './stores/auth.store'
 import { fetchSpeechStatus, SPEECH_STATUS_QUERY_KEY } from './components/chat/voice/useSpeechStatus'
+import { fetchFinderQuickActionStatus, FINDER_QUICK_ACTION_QUERY_KEY } from './hooks/useFinderQuickAction'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import { useStartup } from './hooks/useAuth'
@@ -33,6 +34,7 @@ import { useSkillCredentialsWatch } from './hooks/useServiceCredentials'
 import { useEngineWatch } from './hooks/useEngine'
 import { useRuntimeSetupWatch } from './hooks/useRuntimeSetup'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
+import { usePathMentions } from './hooks/usePathMentions'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
 import {
   consumeForceOnboarding,
@@ -68,6 +70,8 @@ const queryClient = new QueryClient({
 // Main's speech probe, asked once at start: the composer's mic button and the
 // Features row would otherwise appear a beat after their surface (ux_rules §1).
 void queryClient.prefetchQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: fetchSpeechStatus })
+// The same for Features → Finder, which exists only on macOS.
+void queryClient.prefetchQuery({ queryKey: FINDER_QUICK_ACTION_QUERY_KEY, queryFn: fetchFinderQuickActionStatus })
 
 function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Element {
   const needsPassword = useAuthStore((s) => s.needsPassword)
@@ -146,6 +150,10 @@ function Shell(): React.JSX.Element {
   // ⌘N, ⇧⌘N and ⌘1–⌘9 from the application menu. Here, and not beside the
   // LogsOverlay, so the keys start nothing on the login or onboarding screens.
   useAppShortcuts()
+  // Files and folders sent from Finder ("Mention in Cinna") land in the new-chat
+  // composer as reference chips. Here for the same reason as the shortcuts:
+  // main holds them through login and onboarding, and this takes them after.
+  usePathMentions()
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.

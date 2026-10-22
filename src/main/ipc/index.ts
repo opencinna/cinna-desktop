@@ -34,6 +34,7 @@ import { registerArtifactHandlers } from './artifacts.ipc'
 import { registerHtmlPreviewHandlers } from './html_preview.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
+import { registerPathMentionHandlers } from './path_mention.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
 import { registerSharingHandlers } from './sharing.ipc'
 import { registerCatalogSkillHandlers } from './catalogSkills.ipc'
@@ -91,5 +92,7 @@ export function registerAllIpcHandlers(): void {
   registerHtmlPreviewHandlers()
   registerEngineHandlers()
   registerConnectHandlers()
+  // "Mention in Cinna": Finder paths waiting for the composer, and the Quick Action.
+  registerPathMentionHandlers()
   registerLocalDevHandlers()
 }

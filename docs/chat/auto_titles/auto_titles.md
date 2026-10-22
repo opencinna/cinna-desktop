@@ -14,7 +14,7 @@ A chat whose root agent runs on **Codex** is the exception: Codex names its own 
 - **Untouched auto-title** — A chat is considered "still using an auto-generated title" when its current title is either the DB default `'New Chat'` or the renderer's truncated-first-message fallback (see [`deriveTitleFromMessage`](#shared-truncation-rule)). Both shapes are safe to overwrite; anything else is treated as a user edit and never overwritten.
 - **Mid-flight rename race** — The user can rename a chat while the LLM call is in flight. The service re-reads the chat title right before writing and bails if the title no longer matches an "untouched auto-title". A real rename always wins over a slow generation.
 - **Title broadcast** — `chats:title-updated` event sent from main → renderer when a title successfully writes. Renderer invalidates the chat list + the active chat detail so sidebar and header refresh instantly.
-- **Shared truncation rule** — Single source of truth in `src/shared/chatTitle.ts` for the renderer's truncated-title fallback (`message ≤ 50 chars` → message; else `first 50 + '…'`). Used by both the renderer (to compute the fallback) and the main-process title service (to recognise it).
+- **Shared truncation rule** — Single source of truth in `src/shared/chatTitle.ts` for the renderer's truncated-title fallback (`message ≤ 50 chars` → message; else `first 50 + '…'`), computed on the typed text: trailing "Referenced file/folder" lines from path chips are stripped first, and with no typed text the chips' names are the title ([Path Mentions](../path_mentions/path_mentions.md)). Used by both the renderer (to compute the fallback) and the main-process title service (to recognise it).
 
 ## User Stories / Flows
 

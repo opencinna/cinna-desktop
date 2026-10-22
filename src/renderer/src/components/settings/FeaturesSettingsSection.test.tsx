@@ -26,6 +26,8 @@ beforeEach(() => {
 })
 vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
 vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
+// Its own section with its own test (FinderQuickActionSection.test.tsx).
+vi.mock('./FinderQuickActionSection', () => ({ FinderQuickActionSection: () => null }))
 vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => ({ supported: false, engine: null, authorization: 'unknown' }) }))
 vi.mock('../../hooks/useAppSettings', () => ({
   useAiFunctionsBackend: () => ({ data: functionsBackend }),

@@ -145,6 +145,48 @@ describe('usePopover right placement', () => {
   })
 })
 
+describe('usePopover flipWhenNoRoom', () => {
+  // Window 1000×800; trigger 20 tall with its right edge at 900; popover 200 tall.
+  function open(triggerTop: number, options: PopoverOptions = { flipWhenNoRoom: true }, placement: PopoverPlacement = 'below-right'): void {
+    stubRects()
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1000)
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
+    rects.set('trigger', { top: triggerTop, height: 20, left: 880, width: 20 })
+    rects.set('popover', { top: 0, height: 200, left: 580, width: 320 })
+    render(createElement(Harness, { placement, options, rows: 1 }))
+    act(() => setOpen(true))
+  }
+
+  it('stays below where it fits', () => {
+    open(300)
+    expect(latest).toEqual({ position: 'fixed', right: 100, top: 324 })
+  })
+
+  it('opens above the trigger when it would run past the bottom of the window', () => {
+    // Trigger at 700–720: below leaves 800 − 8 − 724 = 68, above 700 − 8 − 8 = 684.
+    open(700)
+    expect(latest).toEqual({ position: 'fixed', right: 100, bottom: 108 })
+  })
+
+  it('does the same for below-left', () => {
+    open(700, { flipWhenNoRoom: true }, 'below-left')
+    expect(latest).toEqual({ position: 'fixed', left: 880, bottom: 108 })
+  })
+
+  it('reopens below once the trigger has room again', () => {
+    open(700)
+    act(() => setOpen(false))
+    rects.set('trigger', { top: 300, height: 20, left: 880, width: 20 })
+    act(() => setOpen(true))
+    expect(latest).toEqual({ position: 'fixed', right: 100, top: 324 })
+  })
+
+  it('stays below without the option', () => {
+    open(700, {})
+    expect(latest).toEqual({ position: 'fixed', right: 100, top: 724 })
+  })
+})
+
 describe('useHoverPopover', () => {
   function HoverHarness(): React.JSX.Element {
     const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')

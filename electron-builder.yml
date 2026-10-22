@@ -27,6 +27,9 @@ files:
   # The speech helper ships via extraResources too (an executable must sit
   # outside the asar), so it is kept out of the asar and asarUnpack here.
   - '!resources/speech/**'
+  # The "Mention in Cinna" Finder Quick Action template ships via the mac
+  # extraResources too: it is copied as a directory into ~/Library/Services.
+  - '!resources/finder/**'
   # **The Claude Agent SDK's bundled `claude`, which we must never ship.**
   #
   # `@anthropic-ai/claude-agent-sdk` declares eight optional platform packages,
@@ -114,6 +117,12 @@ mac:
   extraResources:
     - from: resources/speech
       to: speech
+    # The "Mention in Cinna" Finder Quick Action: an Automator workflow bundle
+    # that src/main/host/desktop/finderQuickAction.ts copies to
+    # ~/Library/Services, with the `open` command substituted. Read at
+    # Resources/finder/ when packaged, from the repo in development.
+    - from: resources/finder
+      to: finder
   # A map, not a list: a list lands in Info.plist as keys "0", "1", … and
   # macOS never sees the usage strings.
   extendInfo:

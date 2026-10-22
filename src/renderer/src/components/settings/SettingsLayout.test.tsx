@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { SettingsLabel } from './SettingsLayout'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SettingsInfoTip, SettingsLabel } from './SettingsLayout'
 
 /**
  * `SettingsLabel`'s `info` prop: the standing explanation goes behind a `(?)`
@@ -38,5 +38,27 @@ describe('SettingsLabel', () => {
       </SettingsLabel>
     )
     expect(screen.getByRole('button', { name: 'About the thing' })).toBeTruthy()
+  })
+})
+
+describe('SettingsInfoTip', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // jsdom lays nothing out: the (?) sits at the bottom of an 800-tall window
+  // and the tip is 200 tall, so below it there is no room.
+  it('opens above its (?) when there is no room below', () => {
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1000)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rect = this.getAttribute('role') === 'dialog'
+        ? { top: 0, left: 580, width: 320, height: 200 }
+        : { top: 760, left: 880, width: 20, height: 20 }
+      return { ...rect, bottom: rect.top + rect.height, right: rect.left + rect.width, x: rect.left, y: rect.top, toJSON: () => ({}) } as DOMRect
+    })
+    render(<SettingsInfoTip label="About the last row"><p>Long help.</p></SettingsInfoTip>)
+    fireEvent.click(screen.getByRole('button', { name: 'About the last row' }))
+    const tip = screen.getByRole('dialog', { name: 'About the last row' })
+    expect(tip.style.bottom).toBe('48px')
+    expect(tip.style.top).toBe('')
   })
 })

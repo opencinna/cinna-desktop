@@ -44,6 +44,7 @@ import {
   registerHtmlPreviewScheme
 } from './host/desktop/htmlPreview'
 import { clearPastedFilesAtStart } from './host/desktop/clipboard'
+import { mentionPathsFromArgv, pathMentionIntentService } from './host/desktop/pathMentionIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowCreator, installWindowResolver } from './window/focus'
 import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
@@ -130,6 +131,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on('open-url', (event, url) => {
     event.preventDefault()
     connectIntentService.deliver(url, 'open-url')
+  })
+
+  // "Mention in Cinna" in Finder: the Quick Action runs `open` with the
+  // selected paths, and macOS hands each one over as its own `open-file`
+  // event — on a cold launch before `ready`, which is why this is here and not
+  // in `startup()`. The service validates, merges the burst and tells the
+  // renderer once it settles.
+  app.on('open-file', (event, path) => {
+    event.preventDefault()
+    void pathMentionIntentService.deliver(path, 'open-file')
   })
 }
 
@@ -469,6 +480,14 @@ function startup(): void {
       startupIntentUrl.startsWith('cinna://') ? 'argv' : 'test-argv'
     )
   }
+
+  // The E2E suite's form of an `open-file` delivery, into the same funnel.
+  for (const path of mentionPathsFromArgv(process.argv)) {
+    void pathMentionIntentService.deliver(path, 'test-argv')
+  }
+  // Paths that arrived while no profile was activated (login, lock, a profile
+  // switch) are announced again once one is.
+  userActivation.onProfileReady(() => pathMentionIntentService.profileReady())
 
   // Pause periodic sync around OS sleep so a token refresh can't be suspended
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +

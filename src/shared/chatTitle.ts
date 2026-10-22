@@ -7,6 +7,8 @@
  * truncation changes.
  */
 
+import { pathRefLabel, splitPathRefs } from './pathMentions'
+
 export const AUTO_TITLE_MAX_FROM_MESSAGE = 50
 
 /**
@@ -15,6 +17,11 @@ export const AUTO_TITLE_MAX_FROM_MESSAGE = 50
  * {@link AUTO_TITLE_MAX_FROM_MESSAGE} characters plus a unicode ellipsis.
  */
 export function deriveTitleFromMessage(message: string): string {
+  // Files and folders sent as reference chips ("Mention in Cinna") are lines
+  // naming absolute paths after the typed text; the title is the typed text,
+  // or with none the chips' names — never "Referenced file: /Users/…".
+  const { text, paths } = splitPathRefs(message)
+  if (paths.length > 0) message = text.trim() || paths.map(pathRefLabel).join(', ')
   if (message.length > AUTO_TITLE_MAX_FROM_MESSAGE) {
     return message.slice(0, AUTO_TITLE_MAX_FROM_MESSAGE) + '…'
   }

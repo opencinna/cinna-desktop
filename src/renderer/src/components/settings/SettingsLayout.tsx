@@ -532,7 +532,9 @@ export function SettingsInfoTip({
   label: string
   children: ReactNode
 }): React.JSX.Element {
-  const popover = usePopover<HTMLButtonElement, HTMLDivElement>('below-right')
+  // Above when there is no room below: a tip on the last row of a tab would
+  // otherwise open past the bottom of the window.
+  const popover = usePopover<HTMLButtonElement, HTMLDivElement>('below-right', { flipWhenNoRoom: true })
   useEffect(() => {
     if (!popover.open) return
     const onKey = (event: KeyboardEvent): void => {

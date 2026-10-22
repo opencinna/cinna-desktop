@@ -33,7 +33,8 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *   title is the file name.
  * - A `.env` reference offers only the path items; Copy full path copies the
  *   realpath; Reference in a new chat lands on the new-chat screen with the
- *   agent selected and "The file `<realpath>` " in the composer.
+ *   agent selected, an empty composer and the file as a reference chip
+ *   (`path-ref-badge`); what the chip sends is `path-mentions.spec.ts`'s.
  *
  * ## What it does not
  *
@@ -263,15 +264,24 @@ test('right-clicking a file reference copies, saves, copies the path and starts 
       await expect.poll(() => readClipboard(cinna)).toBe(envPath)
     })
 
-    await test.step('Reference in a new chat: the new-chat screen, the agent selected, the path typed', async () => {
+    await test.step('Reference in a new chat: the new-chat screen, the agent selected, the file as a chip', async () => {
       const page = cinna.page
       const menu = await openMenuOn(page, ENV)
       await menu.getByRole('menuitem', { name: 'Reference in a new chat', exact: true }).click()
       await expect(page.getByRole('heading', { name: 'What can I help with?', level: 1 })).toBeVisible()
       await expect(page.getByRole('button', { name: `Remove agent ${AGENT}`, exact: true })).toBeVisible()
+      // One chip naming the file, its tooltip the reference's display path
+      // (agent-relative inside the folder); nothing is typed for the user.
+      const chips = page.getByTestId('path-ref-badge')
+      await expect(chips).toHaveCount(1)
+      await expect(chips).toHaveText(ENV)
+      await expect(chips).toHaveAttribute('title', ENV)
+      await expect(chips.getByRole('button', { name: `Remove ${ENV}`, exact: true })).toBeVisible()
       const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
-      await expect(input).toHaveValue(`The file \`${envPath}\` `)
+      await expect(input).toHaveValue('')
       await expect(input).toBeFocused()
+      // A chip alone is sendable.
+      await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     })
 
     // Every file is inside the agent folder: nothing was asked, and the secret never showed.

@@ -383,24 +383,35 @@ describe('Show in the folder', () => {
 })
 
 describe('Reference in a new chat', () => {
-  it('lands on the new-chat screen with the agent and the path in the composer', async () => {
+  it('lands on the new-chat screen with the agent and the file as a reference chip, typing nothing', async () => {
     mount()
     openOn('src/main.py')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Reference in a new chat' }))
     await waitFor(() => expect(useUIStore.getState().pendingAgentId).toBe('folder:a'))
     expect(useUIStore.getState().activeView).toBe('chat')
     expect(useUIStore.getState().sidebarTab).toBe('chats')
-    expect(useComposerDraftStore.getState().drafts[DRAFT]?.text).toBe('The file `/agent/src/main.py` ')
+    const draft = useComposerDraftStore.getState().drafts[DRAFT]
+    expect(draft?.pathRefs).toEqual([{ path: '/agent/src/main.py', displayPath: 'src/main.py', kind: 'file' }])
+    expect(draft?.text).toBe('')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   })
 
-  it('adds a folder on a new line under what the new-chat draft already holds', async () => {
-    useComposerDraftStore.getState().update(DRAFT, () => ({ text: 'Compare these:\n' }))
+  it('adds a folder chip after the chips already there, keeps the typed text, and never repeats a path', async () => {
+    const existing = { path: '/elsewhere/notes.md', displayPath: '~/notes.md', kind: 'file' as const }
+    useComposerDraftStore.getState().update(DRAFT, () => ({ text: 'Compare these:\n', pathRefs: [existing] }))
     mount()
     openOn('pulled')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Reference in a new chat' }))
     await waitFor(() => expect(useUIStore.getState().pendingAgentId).toBe('folder:a'))
-    expect(useComposerDraftStore.getState().drafts[DRAFT]?.text).toBe('Compare these:\nThe folder `/agent/pulled` ')
+    const pulled = { path: '/agent/pulled', displayPath: 'pulled', kind: 'dir' }
+    expect(useComposerDraftStore.getState().drafts[DRAFT]?.pathRefs).toEqual([existing, pulled])
+    expect(useComposerDraftStore.getState().drafts[DRAFT]?.text).toBe('Compare these:\n')
+
+    useUIStore.setState({ pendingAgentId: null })
+    openOn('pulled')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reference in a new chat' }))
+    await waitFor(() => expect(useUIStore.getState().pendingAgentId).toBe('folder:a'))
+    expect(useComposerDraftStore.getState().drafts[DRAFT]?.pathRefs).toEqual([existing, pulled])
   })
 
   it('says why when the agent is switched off, and changes nothing', async () => {

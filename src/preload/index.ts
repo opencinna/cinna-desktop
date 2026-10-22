@@ -87,6 +87,8 @@ import type {
 import { ANTIGRAVITY_BINARY_CHANNEL, CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL, RUNTIME_SETUP_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
+import { PATH_MENTION_CHANNEL, type PathMentionTake } from '../shared/pathMentions'
+import type { FinderQuickActionResult, FinderQuickActionStatus } from '../shared/finderQuickAction'
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
@@ -1633,6 +1635,30 @@ const api = {
       ipcRenderer.on(CONNECT_INTENT_CHANNEL, listener)
       return () => ipcRenderer.off(CONNECT_INTENT_CHANNEL, listener)
     }
+  },
+
+  /**
+   * Files and folders sent from Finder ("Mention in Cinna"). Main buffers them;
+   * the signed-in shell takes them and puts them in the new-chat composer as
+   * reference chips. Only realpaths and kinds cross — nothing is read.
+   */
+  pathMention: {
+    /** Drain the buffer, resolved for the active profile; empty before sign-in. */
+    take: (): Promise<PathMentionTake> => ipcRenderer.invoke('path-mention:take'),
+    /** Fires when paths are waiting. Returns an unsubscribe. */
+    onPending: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(PATH_MENTION_CHANNEL, listener)
+      return () => ipcRenderer.off(PATH_MENTION_CHANNEL, listener)
+    }
+  },
+
+  /** The "Mention in Cinna" Finder Quick Action in `~/Library/Services` (macOS). */
+  finderQuickAction: {
+    status: (): Promise<FinderQuickActionStatus> => ipcRenderer.invoke('finder-quick-action:status'),
+    /** Failures are data (`success: false`, `error`), with the status after the attempt. */
+    install: (): Promise<FinderQuickActionResult> => ipcRenderer.invoke('finder-quick-action:install'),
+    uninstall: (): Promise<FinderQuickActionResult> => ipcRenderer.invoke('finder-quick-action:uninstall')
   },
 
   /**

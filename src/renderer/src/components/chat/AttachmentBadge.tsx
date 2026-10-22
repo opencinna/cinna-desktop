@@ -54,7 +54,8 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
-function truncate(name: string, max = 24): string {
+/** `name` cut to `max` characters, keeping a short extension: `quarterly-rep…xlsx`. */
+export function truncateFilename(name: string, max = 24): string {
   if (name.length <= max) return name
   const dot = name.lastIndexOf('.')
   if (dot === -1 || name.length - dot > 6) return name.slice(0, max - 1) + '…'
@@ -111,7 +112,7 @@ export function AttachmentBadge({
       ) : (
         pickIcon(attachment.mimeType)
       )}
-      <span className="truncate">{truncate(attachment.filename, isInput ? 24 : 22)}</span>
+      <span className="truncate">{truncateFilename(attachment.filename, isInput ? 24 : 22)}</span>
       {!isInput && hasSize && (
         <span className="opacity-70 ml-0.5">{formatSize(attachment.size)}</span>
       )}
