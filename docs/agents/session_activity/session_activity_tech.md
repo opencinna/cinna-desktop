@@ -17,6 +17,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 - `src/shared/tasks.ts` — `TaskListQuery.chatId`
 
 ### Main process — services and IPC
+- `src/main/services/userCommands/userCommandService.ts` — reports and stops `command` items ([Run Commands (tech)](../../chat/run_commands/run_commands_tech.md))
 - `src/main/services/sessionActivityHub.ts` — `createSessionActivityHub(now?)`, the `sessionActivityHub` singleton, `ENDED_PER_KIND` (5)
 - `src/main/services/sessionActivityStop.ts` — `installSessionActivityStopper(provider, stopper)`, `stopSessionActivity(chatId, itemId, hub?)`, `SessionActivityStopper`, `SessionActivityStopOutcome`
 - `src/main/services/chatSessionRelease.ts` — `installChatSessionForgetter`, `forgetChatSessions(chatId, agentId?)`, `releaseChatSessions(chatId, agentId?)` (forget, then `endAll(…, 'lost')`)
@@ -47,6 +48,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 - `src/renderer/src/hooks/useTaskList.ts` — `useTaskList(selection)`, `TaskListSelection`, `taskListKey()`
 - `src/renderer/src/components/chat/SessionMetaBadges.tsx` — the strip; `SPLIT` / `COLLAPSED` container-query classes
 - `src/renderer/src/components/chat/SessionActivityBadges.tsx` — `SessionActivityBadge`, `activityLabel()`, `formatActivityDuration()`, `metaBadgeClass`, `metaCountClass`, `metaPopoverClass`
+- `CommandsBadge` in the same file: the Commands badge, rendered by `SessionMetaBadges` after Subagents and Background
 - `src/renderer/src/components/chat/ChatTasksBadge.tsx` — `ChatTasksBadge`, `tasksLabel()`
 - `src/renderer/src/components/tasks/TaskRow.tsx` — the row shared with the Tasks view's lists, with `size: 'regular' | 'compact'` and `onOpened`
 - `src/renderer/src/components/ui/useHoverPopover.ts` — `useHoverPopover(placement)`, `HOVER_CLOSE_DELAY_MS` (200 ms)
@@ -75,10 +77,11 @@ The push listener (`registerSessionActivityHandlers`) reads `chatRepo.isTrashed`
 
 | Method | Behaviour |
 |---|---|
-| `report(chatId, agentId, change)` | Applies one change. The first upsert for an id creates the item; if no item of that kind is running, the ended items of that kind are deleted first. Later upserts merge only fields they carry (`undefined` and `null` never overwrite), and `canStop` is forced false for an ended item. An end sets state, `endedAt`, `canStop: false`, and the summary when given; a repeated identical end is not a change. The ended items of the kind are trimmed to `ENDED_PER_KIND`. Emits only on an effective change, and records `lastChange` for the agent |
-| `endAll(filter, state = 'lost')` | Ends every running item matching `{chatId?, agentId?, kind?, ids?}` (`ids`: item ids only), one emit per chat, and answers how many it ended. The count is what lets the Claude turn-end safety net warn only when it ended something |
+| `report(chatId, agentId, change)` | Applies one change. The first upsert for an id creates the item; if no item of that kind is running, the ended items of that kind are deleted first (not for `command`, which is in `KEPT_ACROSS_ROUNDS`). Later upserts merge only fields they carry (`undefined` and `null` never overwrite), and `canStop` is forced false for an ended item. An end sets state, `endedAt`, `canStop: false`, and the summary when given; a repeated identical end is not a change. The ended items of the kind are trimmed to `ENDED_PER_KIND`. Emits only on an effective change, and records `lastChange` for the agent |
+| `endAll(filter, state = 'lost')` | Ends every running item matching `{chatId?, agentId?, kinds?, kind?, ids?}` (`ids`: item ids only), one emit per chat, and answers how many it ended. The count is what lets the Claude turn-end safety net warn only when it ended something |
 | `snapshot(chatId)` | Ordered copies (dates cloned) |
-| `hasRunning(filter)` / `lastChangeAt(agentId)` | What the reaper reads |
+| `hasRunning(filter)` / `lastChangeAt(agentId, kinds?)` | What the reaper reads. Filters take `kinds`; the reaper, `wirePoolToActivity` and `releaseChatSessions` pass `AGENT_PROCESS_KINDS` so a `command` is never counted or ended by them. `lastChange` is kept per agent per kind |
+| `remove(chatId, itemId)` | Deletes one ended item (a dismissed command); false for a running or unknown one |
 | `onChange(listener)` | A throwing listener is logged and skipped |
 | `clear(chatId)` | Forgets the chat; emits an empty snapshot if it held anything |
 

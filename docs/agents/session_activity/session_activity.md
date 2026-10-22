@@ -8,7 +8,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 
 ## Core Concepts
 
-- **Session activity** — what a chat's agent sessions are running beside and between their turns. There are two kinds: **subagents** and **background processes**. It is one engine-neutral model (`src/shared/sessionActivity.ts`): a driver reports changes and never reads the state back
+- **Session activity** — what a chat's agent sessions are running beside and between their turns. There are three kinds: **subagents** and **background processes**, which belong to the agent's session and process, and **commands**, which the user ran from a message ([Run Commands](../../chat/run_commands/run_commands.md)). It is one engine-neutral model (`src/shared/sessionActivity.ts`): a driver reports changes and never reads the state back
 - **Activity item** — one subagent or background process: title, detail, state, start and end times, an output path to show, and whether it can be stopped. Its states are `running`, `completed`, `failed`, `stopped` and `lost`
 - **Lost** — the desktop can no longer see the item, because the agent's process exited or was reaped, or the chat stopped answering to that agent. **It is never shown as completed**, because nobody knows whether it finished
 - **Activity hub** — the main-process store of every chat's items, **held in memory only**. Activity describes live processes, and an app restart ends them all
@@ -55,6 +55,15 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 - **Narrow composer, one badge.** Below a 40rem composer row, Subagents and Background collapse into one **Activity** badge. Its popover groups the items under a heading per kind. The switch is a container query on the row, not a measurement. A measurement would flip back and forth, because swapping the badges changes the width it measured
 - The popover is a non-modal dialog that opens on hover and on keyboard focus, never a tooltip, because it holds buttons
 
+### Commands the user ran are not the agent's work
+A `command` item is a process the user started in the agent's folder. It is not the agent's, so everything that acts on the agent's process leaves it alone, and each exclusion exists because the opposite was wrong:
+- **The reaper does not count it.** A long run must not keep the agent's process alive past the time the agent itself is idle
+- **The process exiting does not end it as `lost`.** The command is a child of the app, not of the agent's process
+- **Switching the chat's agent does not end it.** The row stays and keeps running
+- **A new round does not drop it.** Ended commands stay (newest five) until removed, so their output can still be attached after the badge's run has ended. Only **Remove** or the cap deletes one, and its log goes with it
+- It has its own **Commands** badge, which stays while the chat has any command, running or ended. It is not part of the collapsed Activity badge
+- Commands do not survive a restart or the chat's removal: they are killed, not marked lost
+
 ### Retention and ordering
 - **Running items come first, oldest start first. Ended items follow, most recently ended first**
 - **At most five ended items per kind are kept per chat.** When an item of a kind starts while nothing of that kind is running, the ended items of that kind are dropped: they belonged to the previous round, whose badge has already gone
@@ -93,7 +102,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 - **A Claude background subagent's launch text is not in the transcript.** The CLI writes "launched in the background" itself, and it is not on the wire. The synthesized `Agent` call closes as completed without it
 - **A Codex subagent gets a made-up name.** No role or nickname reaches the wire, so Cinna names its item like Codex's own nicknames, "Adjective Colour Animal" ("Brave Teal Otter"), derived from its thread id: the same name live, on every later run and after a restart. The prompt it was spawned with is the item's detail until its report replaces it. Codex keeps its default of one level (a subagent cannot spawn its own), which Cinna does not raise; nesting is shown for Claude and OpenCode only
 - **OpenCode's own `.opencode/agent` or global permission rules are not Cinna's.** See [permissions](../local_agents/permissions.md#opencode-subagents-run-under-the-agents-policy)
-- **The output path is shown, not opened**
+- **The output path is shown, not opened** (a command's output opens in its own panel)
 
 ## Architecture Overview
 
@@ -108,11 +117,12 @@ ACP adapter ──session/update──► connection (transport tap, routing, ch
    │                                          session-activity:changed      pool reaper
    │                                                               ▼        (isBusy / lastChangeAt)
    │                                useSessionActivity ──► SessionMetaBadges
-   │                                                         ├ Subagents / Background / Activity
+   │                                                         ├ Subagents / Background / Activity / Commands
    │                                                         └ Tasks (task:list {chatId, rootOnly})
    │
 User Stop ──► sessionActivity:stop ──► stopSessionActivity ──► ACP stopper
                                          ──► _session/async_task/stop ──► adapter
+                                      (command items: userCommandService, SIGTERM to the group)
 ```
 
 ## Integration Points
