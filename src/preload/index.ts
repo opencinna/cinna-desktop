@@ -130,6 +130,15 @@ import {
   type SessionActivityStopResult
 } from '../shared/sessionActivity'
 import {
+  isUserCommandOutputFrame,
+  type UserCommandDismissResult,
+  type UserCommandOutputFileResult,
+  type UserCommandOutputFrame,
+  type UserCommandOutputTextResult,
+  type UserCommandRunInput,
+  type UserCommandRunResult
+} from '../shared/userCommands'
+import {
   SESSION_TELEMETRY_CHANGED_CHANNEL,
   type SessionTelemetryChangedPayload,
   type SessionTelemetryGetResult,
@@ -374,6 +383,8 @@ export interface AgentData {
   remoteTargetType: string | null // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: string | null
   remoteMetadata: RemoteAgentMetadata | null
+  /** Folder agents only: the agent folder's absolute path on this machine. */
+  localPath?: string | null
   /** Which driver runs this agent. */
   acpTransport?: 'stdio' | 'websocket'
   driver: string | null
@@ -1088,6 +1099,35 @@ const api = {
       ipcRenderer.on(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
     }
+  },
+
+  /** Commands the user runs from an agent's message, in its folder. Stop is `sessionActivity.stop`. */
+  userCommands: {
+    /** Start one. `reviewed: false` is checked against the own-command rule first (`needs_review`). */
+    run: (input: UserCommandRunInput): Promise<UserCommandRunResult> => ipcRenderer.invoke('userCommands:run', input),
+    /**
+     * Follow a run's output: `start` with the log's tail, live `chunk`s, then
+     * `end` (or one `missing`). Returns the unsubscribe; closing never stops the run.
+     */
+    output: (chatId: string, itemId: string, onFrame: (frame: UserCommandOutputFrame) => void): (() => void) => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = (event) => {
+        if (isUserCommandOutputFrame(event.data)) onFrame(event.data)
+      }
+      ipcRenderer.postMessage('userCommands:output', { chatId, itemId }, [channel.port2])
+      return () => { channel.port1.onmessage = null; channel.port1.close() }
+    },
+    /** An ended run's output as attachment text (ANSI stripped, the last 200 KB, with a header). */
+    outputText: (chatId: string, itemId: string): Promise<UserCommandOutputTextResult> =>
+      ipcRenderer.invoke('userCommands:outputText', chatId, itemId),
+    /** The same text written to a file, for the composer to attach like a dropped one. */
+    outputFile: (chatId: string, itemId: string): Promise<UserCommandOutputFileResult> =>
+      ipcRenderer.invoke('userCommands:outputFile', chatId, itemId),
+    /** Remove an ended run's row and delete its log. */
+    dismiss: (chatId: string, itemId: string): Promise<UserCommandDismissResult> =>
+      ipcRenderer.invoke('userCommands:dismiss', chatId, itemId),
+    /** The home folder, for showing a folder as `~/…` the way main does. */
+    home: (): Promise<string> => ipcRenderer.invoke('userCommands:home')
   },
 
   /** What a chat's agent session reports it used: model, tokens, cost, context, login kind. */

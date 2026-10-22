@@ -59,6 +59,7 @@ import { ComposerNoticePanel } from './ComposerNoticePanel'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
+import { useComposerAttachTargetStore } from '../../stores/composerAttachTarget.store'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { VoiceInputButton } from './voice/VoiceInputButton'
@@ -349,6 +350,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     remove: handleRemoveAttachment,
     setError: setAttachError
   } = useChatAttachments(chatId, attachScope, draftKey)
+  // Published for the surfaces outside the composer that add a file to it
+  // (a command's output): same draft, same scope, decided only here.
+  const setAttachTarget = useComposerAttachTargetStore((s) => s.set)
+  useEffect(() => {
+    if (chatId) setAttachTarget(chatId, { draftKey, scope: attachScope })
+  }, [chatId, draftKey, attachScope, setAttachTarget])
   // Dictated text joins the draft after a space, and the cursor goes to its end.
   // Writes the draft store, so a transcription that finishes after this
   // composer unmounted still lands in its draft. One from a chat the user has

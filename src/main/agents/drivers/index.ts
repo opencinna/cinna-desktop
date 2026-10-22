@@ -680,11 +680,14 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
 }
 
 /**
- * Where an Antigravity folder agent's pinned skills live, for the permission
- * rule that runs their scripts without asking. None for a bare folder, and
- * none when the manifest or the caches cannot be read — the safe direction.
+ * The own-command rule's `scriptRoots` for a folder agent: where its pinned
+ * (catalog, marketplace) skills live, whose scripts count as its own
+ * (`ownCommandPolicy.ts`). The one helper Antigravity's auto-approval policy
+ * and a message's Run (`agentCommandWorkspace`) both build them with. None
+ * for a bare folder, and none when the manifest or the caches cannot be read
+ * — the safe direction.
  */
-function antigravityScriptRoots(agent: { path: string; kind: string; manifest?: unknown }): string[] {
+function ownCommandScriptRoots(agent: { path: string; kind: string; manifest?: unknown }): string[] {
   if (agent.kind !== 'kit') return []
   try {
     return kitAgentPinnedSkillFolders(agent.path, agent.manifest)
@@ -795,7 +798,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         modelDeclared: resolved.modelSource === 'declared',
         approval,
         // Only here, the folder agent's branch: every branch above asks about everything.
-        ...(approval === 'ask' ? { autoApprove: { scriptRoots: antigravityScriptRoots(agent) } } : {})
+        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent) } } : {})
       }
     }
   }),
@@ -1022,6 +1025,43 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
     isGranted: (request) => isGranted(folder.path, folder.kind, request),
     rememberGrant: (request) => { permissionGrantService.remember(folder.path, folder.kind, request); return true }
   }
+}
+
+/**
+ * The agent's workspace root: the folder a turn's folder view names (what
+ * `launcher.plan` receives), for a folder agent, a kit or bare one, and for
+ * the local-development build session's synced workspace. Null for anything
+ * else — a remote or cinna-core agent, a custom launcher, a chat runtime (its
+ * folder is the desktop's, not an agent's), a websocket engine — and when the
+ * folder cannot be read. Not the ACP session cwd, which Antigravity moves.
+ */
+export async function agentWorkspaceFolder(userId: string, agent: AgentRow): Promise<string | null> {
+  if (driverOfRow(agent) !== 'acp' || isChatConductor(agent) || agent.driverConfig?.transport === 'websocket') return null
+  try {
+    const runtime = await readAcpRuntime(userId, agent)
+    return runtime?.type === 'folder' ? runtime.folder.path : null
+  } catch (err) {
+    logger.warn('an agent workspace could not be read', { agentId: agent.id, error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
+}
+
+/**
+ * What a message's Run checks a command against: the workspace root, and the
+ * pinned skill folders whose scripts count as the agent's own — the same
+ * `scriptRoots` Antigravity's auto-approval policy is built from. `missing`
+ * for a folder agent whose folder cannot be read; null for an agent that has
+ * no folder here.
+ */
+export async function agentCommandWorkspace(userId: string, agent: AgentRow): Promise<{ folder: string; scriptRoots: string[] } | 'missing' | null> {
+  const folder = await agentWorkspaceFolder(userId, agent)
+  // A folder agent whose folder moved or went away resolves to nothing.
+  if (folder === null) return agent.source === 'folder' ? 'missing' : null
+  let scriptRoots: string[] = []
+  if (agent.source === 'folder' && !isDevelopmentAgent(agent)) {
+    try { scriptRoots = ownCommandScriptRoots(localAgentService.get(userId, agent.id)) } catch { scriptRoots = [] }
+  }
+  return { folder, scriptRoots }
 }
 
 /**

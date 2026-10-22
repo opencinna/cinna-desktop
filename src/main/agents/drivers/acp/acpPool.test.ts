@@ -25,6 +25,13 @@ function hubWithWork(): ReturnType<typeof createSessionActivityHub> {
   return hub
 }
 
+/** A user's command in agent-c's folder, and nothing of the agent's own. */
+function hubWithCommand(): ReturnType<typeof createSessionActivityHub> {
+  const hub = createSessionActivityHub(() => new Date(1_000))
+  hub.report('chat-3', 'agent-c', { type: 'upsert', id: 'cmd-1', kind: 'command', title: 'sleep 60', canStop: true })
+  return hub
+}
+
 describe('activityReapDeps', () => {
   it('is busy while the agent has running work, and reports its last change as a number', () => {
     const hub = hubWithWork()
@@ -32,6 +39,12 @@ describe('activityReapDeps', () => {
     expect(deps.isBusy?.('agent-a')).toBe(true)
     expect(deps.isBusy?.('agent-c')).toBe(false)
     expect(deps.lastActivityAt?.('agent-a')).toBe(1_000)
+    expect(deps.lastActivityAt?.('agent-c')).toBeUndefined()
+  })
+
+  it('does not count a user command as the agent\'s work', () => {
+    const deps = activityReapDeps(hubWithCommand())
+    expect(deps.isBusy?.('agent-c')).toBe(false)
     expect(deps.lastActivityAt?.('agent-c')).toBeUndefined()
   })
 })
@@ -46,6 +59,14 @@ describe('wirePoolToActivity', () => {
 
     expect(hub.snapshot('chat-1').items.map((item) => item.state)).toEqual(['lost'])
     expect(hub.snapshot('chat-2').items.map((item) => item.state)).toEqual(['running'])
+  })
+
+  it('leaves a user command running when the agent\'s process goes away', () => {
+    const hub = hubWithCommand()
+    const pool = fakePool()
+    wirePoolToActivity(pool, hub)
+    pool.emit('agent-c', { state: 'stopped' })
+    expect(hub.snapshot('chat-3').items.map((item) => item.state)).toEqual(['running'])
   })
 
   it('leaves the work alone while the process starts or runs', () => {

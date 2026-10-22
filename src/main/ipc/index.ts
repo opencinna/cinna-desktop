@@ -6,6 +6,7 @@ import { registerMcpHandlers } from './mcp.ipc'
 import { registerLlmHandlers } from './llm.ipc'
 import { registerRunHandlers } from './run.ipc'
 import { registerSessionActivityHandlers } from './session_activity.ipc'
+import { registerUserCommandHandlers } from './user_commands.ipc'
 import { registerSessionTelemetryHandlers } from './session_telemetry.ipc'
 import { registerChatModeHandlers } from './chatmode.ipc'
 import { registerAgentHandlers } from './agent.ipc'
@@ -53,6 +54,8 @@ export function registerAllIpcHandlers(): void {
   registerRunHandlers()
   // What a chat's agent session runs beside its turns: subagents, background work.
   registerSessionActivityHandlers()
+  // Commands the user runs from a message, in the agent's folder.
+  registerUserCommandHandlers()
   registerSessionTelemetryHandlers()
   registerChatModeHandlers()
   registerAgentHandlers()

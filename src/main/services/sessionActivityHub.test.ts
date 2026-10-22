@@ -228,3 +228,49 @@ describe('session activity hub', () => {
     expect(hub.hasRunning({ chatId: 'c1' })).toBe(false)
   })
 })
+
+describe('user commands in the hub', () => {
+  const command = (id: string): SessionActivityChange => ({ type: 'upsert', id, kind: 'command', title: `ls ${id}`, canStop: true })
+
+  it('keeps ended commands across a new run, up to the per-kind cap', () => {
+    const { hub } = setup()
+    hub.report('chat', 'agent', command('c1'))
+    hub.report('chat', 'agent', end('c1'))
+    // Nothing of the kind runs, and a new command starts: an agent kind would drop c1 here.
+    hub.report('chat', 'agent', command('c2'))
+    expect(ids(hub.snapshot('chat'))).toEqual(['c2', 'c1'])
+    hub.report('chat', 'agent', start('bg'))
+    hub.report('chat', 'agent', end('bg'))
+    hub.report('chat', 'agent', start('bg2'))
+    // The agent's own kind still drops its previous round.
+    expect(ids(hub.snapshot('chat'))).toEqual(['c2', 'bg2', 'c1'])
+    for (let i = 3; i < 3 + ENDED_PER_KIND + 1; i++) { hub.report('chat', 'agent', command(`c${i}`)); hub.report('chat', 'agent', end(`c${i}`)) }
+    expect(hub.snapshot('chat').items.filter((item) => item.kind === 'command' && item.state !== 'running')).toHaveLength(ENDED_PER_KIND)
+  })
+
+  it('filters by kind for hasRunning, endAll and lastChangeAt', () => {
+    const { hub } = setup()
+    hub.report('chat', 'agent', command('c1'))
+    expect(hub.hasRunning({ agentId: 'agent' })).toBe(true)
+    expect(hub.hasRunning({ agentId: 'agent', kinds: ['subagent', 'background'] })).toBe(false)
+    expect(hub.lastChangeAt('agent')).not.toBeNull()
+    expect(hub.lastChangeAt('agent', ['subagent', 'background'])).toBeNull()
+    hub.report('chat', 'agent', start('bg'))
+    const agentAt = hub.lastChangeAt('agent', ['background'])!.getTime()
+    hub.report('chat', 'agent', { type: 'upsert', id: 'c1', kind: 'command', detail: 'later' })
+    expect(hub.lastChangeAt('agent', ['background'])!.getTime()).toBe(agentAt)
+    expect(hub.endAll({ chatId: 'chat', kinds: ['background'] })).toBe(1)
+    expect(hub.snapshot('chat').items.find((item) => item.id === 'c1')?.state).toBe('running')
+  })
+
+  it('removes one ended item, never a running one', () => {
+    const { hub, events } = setup()
+    hub.report('chat', 'agent', command('c1'))
+    expect(hub.remove('chat', 'c1')).toBe(false)
+    hub.report('chat', 'agent', end('c1', 'failed'))
+    events.length = 0
+    expect(hub.remove('chat', 'c1')).toBe(true)
+    expect(hub.remove('chat', 'c1')).toBe(false)
+    expect(events).toEqual([['chat', { chatId: 'chat', items: [] }]])
+  })
+})

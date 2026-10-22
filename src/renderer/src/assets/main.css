@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+/* The command output panel's terminal; in `base`, so utilities still win. */
+@import '@xterm/xterm/css/xterm.css' layer(base);
 @source "../**/*.{ts,tsx}";
 
 @layer base {

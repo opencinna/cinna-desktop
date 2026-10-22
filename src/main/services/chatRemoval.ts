@@ -5,6 +5,7 @@ import { activeRunsByChat } from './runExecutionState'
 import { sessionActivityHub } from './sessionActivityHub'
 import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions } from './chatSessionRelease'
+import { userCommandService } from './userCommands'
 
 /**
  * The turn or autonomous runner currently working in a chat, if any. A chat
@@ -23,7 +24,7 @@ export function activeChatRunId(chatId: string): string | null {
 
 /**
  * Everything held in memory for a chat, released once its row is hard-deleted:
- * a waiting script's gates, the chat's agent sessions, activity and telemetry, and its
+ * a waiting script's gates, the chat's agent sessions, the commands run from it, activity and telemetry, and its
  * conductor runtime. Call after the delete has committed, never before.
  */
 export function chatHardDeleted(userId: string, chatId: string, ownerUserId = userId): void {
@@ -31,6 +32,8 @@ export function chatHardDeleted(userId: string, chatId: string, ownerUserId = us
   // owner, which is the default profile for a chat shared across profiles.
   taskRunnerBridge.chatRemoved(userId, chatId)
   forgetChatSessions(chatId)
+  // Commands the user ran from the chat are killed and their logs deleted.
+  userCommandService.chatRemoved(chatId)
   sessionActivityHub.clear(chatId)
   sessionTelemetryService.forget(chatId)
   chatConductorService.remove(ownerUserId, chatId)

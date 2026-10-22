@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
-import { FileRefContext, chatMarkdownComponents } from './fileRefs'
+import { FileRefContext, MessageIdContext, chatMarkdownComponents } from './fileRefs'
 import { repairNestedFences } from '../../utils/nestedFences'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 
@@ -114,6 +114,9 @@ export function MessageBubble({
   // File references link only once the message is persisted: a streaming
   // bubble renders plain inline code whatever scope surrounds it.
   const inheritedFileRefs = useContext(FileRefContext)
+  // The persisted message an agent's reply renders, for the message menu's
+  // Run items: main resolves the message's agent and folder from it.
+  const messageId = useContext(MessageIdContext)
   const fileRefs = isStreaming ? null : inheritedFileRefs
   // One text for what the bubble shows and what Copy text / Save to Notes take,
   // so a copied snippet carries neither the model's broken nesting nor its
@@ -200,6 +203,7 @@ export function MessageBubble({
       )}
       <div
         data-message-markdown={markdown}
+        data-message-id={!isStreaming && messageId ? messageId : undefined}
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >

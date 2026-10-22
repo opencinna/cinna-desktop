@@ -11,7 +11,16 @@
  * Dates cross IPC as `Date` (structured clone keeps them), as `TaskDto` does.
  */
 
-export type SessionActivityKind = 'subagent' | 'background'
+/**
+ * `subagent` and `background` belong to the agent's session and its process;
+ * `command` is a command the user ran from a message in the agent's folder
+ * (`userCommands`), which outlives neither the app nor the chat but is not the
+ * agent's: its process exiting, a reap or an agent switch does not touch it.
+ */
+export type SessionActivityKind = 'subagent' | 'background' | 'command'
+
+/** The kinds an agent's process owns: what its reaper, its exit and a chat's agent switch act on. */
+export const AGENT_PROCESS_KINDS: readonly SessionActivityKind[] = ['subagent', 'background']
 
 /**
  * `lost` means the desktop can no longer see the item: its process exited or

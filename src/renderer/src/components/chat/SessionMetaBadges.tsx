@@ -2,7 +2,7 @@ import type { SessionActivityItem } from '../../../../shared/sessionActivity'
 import { useSessionActivity } from '../../hooks/useSessionActivity'
 import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
 import { ChatTasksBadge } from './ChatTasksBadge'
-import { SessionActivityBadge } from './SessionActivityBadges'
+import { CommandsBadge, SessionActivityBadge } from './SessionActivityBadges'
 
 /**
  * Live meta information about this chat's session, under the composer, to the
@@ -11,7 +11,8 @@ import { SessionActivityBadge } from './SessionActivityBadges'
  *
  * **Order is the layout rule** (`ux_rules.md` §1). The cluster is right-aligned,
  * so a badge that appears pushes only what is to its left. The badges that come
- * and go with running work (Agents, Background) are therefore leftmost, and
+ * and go with running work (Agents, Background) are therefore leftmost; then
+ * Commands, which stays while the chat has any command the user ran; and
  * Tasks — which stays once a chat has one — sits next to the router badge.
  *
  * Only for a chat that exists: an unsent chat has no session and no tasks.
@@ -42,6 +43,8 @@ export function SessionMetaBadges({ chatId }: { chatId: string }): React.JSX.Ele
       <SessionActivityBadge kind="subagent" items={items} stop={stop} className={SPLIT} />
       <SessionActivityBadge kind="background" items={items} stop={stop} className={SPLIT} />
       <SessionActivityBadge kind="all" items={items} stop={stop} className={COLLAPSED} />
+      {/* Stays while the chat has any command, so it sits right of the ones that come and go. */}
+      <CommandsBadge chatId={chatId} items={items} stop={stop} />
       <ChatTasksBadge chatId={chatId} />
     </div>
   )

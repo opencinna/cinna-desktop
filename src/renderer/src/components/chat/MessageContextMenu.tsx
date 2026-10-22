@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Upload, type LucideIcon } from 'lucide-react'
+import { Cog, Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Play, SquarePen, Upload, type LucideIcon } from 'lucide-react'
 import {
   agentFileContentKind,
   isCredentialFileRef,
@@ -25,6 +25,24 @@ import { fileNoteFromContents } from '../../utils/fileNote'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { startAgentChat, unavailableAgentMessage } from '../../utils/startAgentChat'
 import { fileRefTargetOf, type FileRefTarget } from './fileRefs'
+import { detectCommand, looksAutoRunnable } from '../../../../shared/commandRun'
+import { USER_COMMAND_RUN_REASONS } from '../../../../shared/userCommands'
+import { agentRunsCommands, fenceLanguage, primeHomeDir } from '../../utils/userCommands'
+import { useUserCommandsStore } from '../../stores/userCommands.store'
+
+type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
+type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
+
+/** A command found in the right-clicked code, in a message whose agent can run it here. */
+export interface MenuCommand {
+  /** What runs, prompts stripped (`detectCommand`). */
+  text: string
+  messageId: string
+  /** The agent's folder as far as the renderer knows it, for the edit dialog. */
+  folder: string | null
+  /** The disk-free half of the own-command rule passed: Run and Run in background are offered. */
+  auto: boolean
+}
 
 interface MenuState {
   id: number
@@ -35,6 +53,8 @@ interface MenuState {
   highlight?: HTMLElement
   /** The file or folder reference the right-clicked inline code or file link names. */
   file?: FileRefTarget
+  /** The right-clicked code that is not a file reference: the menu looks for a command in it. */
+  code?: { element: HTMLElement; text: string }
 }
 
 /** Room kept below a top-anchored menu for an error row (two lines of `text-xs`). */
@@ -53,6 +73,9 @@ export type MessageMenuItem =
   | 'reveal'
   | 'reference'
   | 'publish'
+  | 'run'
+  | 'run-background'
+  | 'edit-run'
 
 /**
  * The menu's items, in groups separated by a divider. Decided once, from the
@@ -65,9 +88,16 @@ export type MessageMenuItem =
  * `canPublish` (the profile's instance keeps artifacts) adds Publish…, last,
  * for a file or folder inside the agent's folder that is not a credential
  * file — main would leave nothing of one to publish.
+ *
+ * `command` (code that is not a file reference holds a command, in a local
+ * agent's message) adds a last group: Run, Run in background and Edit and
+ * Run… for one that looks safe, Edit and Run… alone for any other.
  */
-export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false): MessageMenuItem[][] {
-  if (!file) return [['copy-text', 'save-text']]
+export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false, command?: { auto: boolean }): MessageMenuItem[][] {
+  if (!file) {
+    if (!command) return [['copy-text', 'save-text']]
+    return [['copy-text', 'save-text'], command.auto ? ['run', 'run-background', 'edit-run'] : ['edit-run']]
+  }
   const { ref } = file
   const pathOnly = ref.kind === 'dir' || isCredentialFileRef(ref) || agentFileContentKind(ref.path) === 'binary'
   const pathGroup: MessageMenuItem[] = ['copy-path', 'reveal', 'reference']
@@ -151,6 +181,31 @@ export function fileLinkContextTarget(root: HTMLElement, target: Element, select
   return file ? { element, file } : null
 }
 
+/**
+ * The command in right-clicked code, or undefined. Only for code that is not a
+ * file reference, in a persisted message whose agent is a local agent with a
+ * folder (read from the cached chat and agents at open; main checks again).
+ */
+export function menuCommandOf(
+  code: { element: HTMLElement; text: string },
+  chat: CachedChat | undefined,
+  agents: readonly AgentData[] | undefined
+): MenuCommand | undefined {
+  const messageId = code.element.closest('[data-message-id]')?.getAttribute('data-message-id')
+  if (!messageId || !chat) return undefined
+  const message = chat.messages.find((candidate) => candidate.id === messageId)
+  if (!message || message.role !== 'assistant') return undefined
+  const agentId = message.sourceAgentId ?? chat.agentId
+  const agent = agentId ? agents?.find((candidate) => candidate.id === agentId) : undefined
+  if (!agentRunsCommands(agent)) return undefined
+  const fenced = code.element.tagName === 'PRE'
+  const text = detectCommand(code.text, { fenced, lang: fenced ? fenceLanguage(code.element.querySelector('code')) : null })
+  if (text === null) return undefined
+  // Ready by the time Edit and Run… shows the folder as `~/…`.
+  void primeHomeDir()
+  return { text, messageId, folder: agent?.localPath ?? null, auto: looksAutoRunnable(text) }
+}
+
 export function useMessageContextMenu(chatId: string) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const nextId = useRef(0)
@@ -178,7 +233,8 @@ export function useMessageContextMenu(chatId: string) {
     event.preventDefault()
     const rect = event.target.getBoundingClientRect()
     const highlight = link?.element ?? code?.element
-    setMenu({ id: ++nextId.current, text, highlight, file, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
+    // Commands are looked for only where no file reference was found.
+    setMenu({ id: ++nextId.current, text, highlight, file, code: code && !file ? code : undefined, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
   }, [])
   return {
     onContextMenu,
@@ -186,7 +242,7 @@ export function useMessageContextMenu(chatId: string) {
   }
 }
 
-function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, onClose }: MenuState & { chatId: string; canPublish: boolean; onClose: () => void }) {
+function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPublish, onClose }: MenuState & { chatId: string; canPublish: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<MenuPosition>({ left: x, top: y })
   const [error, setError] = useState<string | null>(null)
@@ -198,6 +254,10 @@ function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, o
   const mounted = useRef(true)
   const saveMessageNote = useSaveMessageNote()
   const queryClient = useQueryClient()
+  // Decided once, at open, from the cached chat and agents (D1); main checks again.
+  const [command] = useState(() => code
+    ? menuCommandOf(code, queryClient.getQueryData<CachedChat>(['chat', chatId]), queryClient.getQueryData<AgentData[]>(['agents']))
+    : undefined)
   // A block right-clicked mid-stream keeps growing under its outline; the
   // action takes the block as it is now, not as it was at the right-click.
   const payload = (): string => (highlight?.isConnected ? codeText(highlight) : text)
@@ -349,6 +409,28 @@ function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, o
     else fail(result.error)
   }
 
+  /**
+   * Run or Run in background: no confirmation (D4). Main checks the
+   * own-command rule against the agent's real folder; a command it will not
+   * run unreviewed opens the edit dialog with the reason, never a dead end.
+   */
+  const runCommand = async (fail: (reason: string) => void, background: boolean): Promise<void> => {
+    if (!command) return
+    const result = await window.api.userCommands.run({ chatId, messageId: command.messageId, command: command.text, reviewed: false })
+    const store = useUserCommandsStore.getState()
+    if (result.ok) {
+      if (!background) store.openPanel(chatId, result.itemId)
+      onClose()
+      return
+    }
+    if (result.code === 'needs_review') {
+      onClose()
+      store.openEdit({ chatId, messageId: command.messageId, command: command.text, folder: result.folder ?? command.folder, reason: result.reason })
+      return
+    }
+    fail(result.reason)
+  }
+
   const actions: Record<MessageMenuItem, () => Promise<void>> = {
     'copy-text': () => run('copy-text', async () => {
       await navigator.clipboard.writeText(payload())
@@ -404,7 +486,18 @@ function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, o
         messageId: file.messageId ?? null
       })
       onClose()
-    }, 'Could not open Publish.')
+    }, 'Could not open Publish.'),
+    'run': () => run('run', (fail) => runCommand(fail, false), 'The command could not be started.'),
+    'run-background': () => run('run-background', (fail) => runCommand(fail, true), 'The command could not be started.'),
+    // The dialog is app-wide and owns its run; the menu only opens it.
+    'edit-run': () => run('edit-run', async () => {
+      if (!command) return
+      useUserCommandsStore.getState().openEdit({
+        chatId, messageId: command.messageId, command: command.text, folder: command.folder,
+        reason: command.auto ? null : USER_COMMAND_RUN_REASONS.needs_review
+      })
+      onClose()
+    }, 'Could not open Edit and Run.')
   }
 
   const labels: Record<MessageMenuItem, [string, LucideIcon]> = {
@@ -416,10 +509,14 @@ function MessageContextMenu({ x, y, text, highlight, file, chatId, canPublish, o
     'copy-path': ['Copy full path', Link],
     'reveal': ['Show in the folder', FolderOpen],
     'reference': ['Reference in a new chat', MessageSquarePlus],
-    'publish': ['Publish…', Upload]
+    'publish': ['Publish…', Upload],
+    'run': ['Run', Play],
+    // The Cog the Background badge wears.
+    'run-background': ['Run in background', Cog],
+    'edit-run': ['Edit and Run…', SquarePen]
   }
   // Decided once, at open: nothing appears or disappears while the menu is open.
-  const [groups] = useState(() => messageMenuItems(file, canPublish))
+  const [groups] = useState(() => messageMenuItems(file, canPublish, command))
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (['Escape', 'Tab', 'PageUp', 'PageDown'].includes(event.key)) {

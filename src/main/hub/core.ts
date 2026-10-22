@@ -16,7 +16,8 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
-import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins } from '../agents/drivers'
+import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins, agentCommandWorkspace } from '../agents/drivers'
+import { installUserCommandWorkspace, userCommandService } from '../services/userCommands'
 import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
 import { marketplaceSkillService } from '../services/marketplaceSkillService'
@@ -61,6 +62,10 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   installFolderMovedListener((agentId) => acpProcessPool.retire(agentId))
   installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
+  // A message's Run resolves the agent's folder where a turn's folder view is built.
+  installUserCommandWorkspace(agentCommandWorkspace)
+  // Commands run from messages died with the last app; so do their logs.
+  userCommandService.sweep()
   // A listing that names a newer version of an installed cloud agent syncs the remote agents once.
   installCloudUpdateFollow()
   // Cached catalog revisions and marketplace snapshots no agent pins: once per start, off the boot
@@ -99,6 +104,8 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   taskRuntimeService.interruptAll(reason)
   taskSyncScheduler.stop()
   const processes = acpProcessPool.shutdown()
+  // Commands the user ran from messages: every group is signalled now, killed after a grace.
+  const userCommands = userCommandService.shutdown()
   const conductor = conductorBridge.shutdown()
   // The credential token endpoint's loopback listener ends with the app, its bearers with it.
   const credentialTokens = serviceCredentialService.closeTokenServer()
@@ -108,5 +115,5 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   const bootstraps = shutdownOpencodeBootstraps()
   toolInstallService.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, conductor, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
+  await Promise.all([processes, userCommands, conductor, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
 }

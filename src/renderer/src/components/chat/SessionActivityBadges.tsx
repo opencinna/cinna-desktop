@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Activity, Cog, Network } from 'lucide-react'
+import { Activity, Check, CircleX, Cog, Loader2, Network, PanelBottomOpen, Paperclip, SquareTerminal, Trash2 } from 'lucide-react'
 import type {
   SessionActivityItem,
   SessionActivityKind,
@@ -8,6 +9,8 @@ import type {
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import type { SessionActivityStopControl } from '../../hooks/useSessionActivityStop'
 import { useHoverPopover } from '../ui/useHoverPopover'
+import { useUserCommandsStore } from '../../stores/userCommands.store'
+import { addCommandOutputToComposer } from '../../utils/userCommands'
 
 /**
  * The Agents and Background badges under the composer: one shape, two kinds.
@@ -21,7 +24,8 @@ import { useHoverPopover } from '../ui/useHoverPopover'
 
 const FACE: Record<SessionActivityKind, { icon: typeof Cog; heading: string; one: string; many: string }> = {
   subagent: { icon: Network, heading: 'Subagents', one: 'subagent', many: 'subagents' },
-  background: { icon: Cog, heading: 'Background processes', one: 'background process', many: 'background processes' }
+  background: { icon: Cog, heading: 'Background processes', one: 'background process', many: 'background processes' },
+  command: { icon: SquareTerminal, heading: 'Commands', one: 'command', many: 'commands' }
 }
 
 const STATE_LABEL: Record<SessionActivityState, string> = {
@@ -40,9 +44,10 @@ const STATE_TONE: Record<SessionActivityState, string> = {
   lost: 'text-[var(--color-warning)]'
 }
 
-/** Which items a badge stands for: one kind, or both (the collapsed Activity badge). */
-export type ActivityBadgeKind = SessionActivityKind | 'all'
+/** Which items a badge stands for: one of the agent's kinds, or both (the collapsed Activity badge). */
+export type ActivityBadgeKind = Exclude<SessionActivityKind, 'command'> | 'all'
 
+/** The agent's own kinds; commands the user ran have a badge of their own ({@link CommandsBadge}). */
 const KINDS: readonly SessionActivityKind[] = ['subagent', 'background']
 
 function countOf(kind: SessionActivityKind, n: number): string {
@@ -71,6 +76,31 @@ export function formatActivityDuration(ms: number): string {
   const hours = Math.floor(minutes / 60)
   const rest = minutes % 60
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
+}
+
+/**
+ * How long a command the user ran took, or has been running — the one format
+ * the Commands popover and the output panel's header share: `4s`, `2m 05s`,
+ * `1h 03m`.
+ */
+export function formatRunDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  if (total < 60) return `${total}s`
+  const minutes = Math.floor(total / 60)
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`
+}
+
+/** Now, every second while `active` (a running command's seconds); still otherwise. */
+export function useSecondsNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+  return now
 }
 
 /**
@@ -105,7 +135,7 @@ export function SessionActivityBadge({
   className?: string
 }): React.JSX.Element | null {
   const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')
-  const mine = kind === 'all' ? items : items.filter((item) => item.kind === kind)
+  const mine = kind === 'all' ? items.filter((item) => KINDS.includes(item.kind)) : items.filter((item) => item.kind === kind)
   const running = mine.filter((item) => item.state === 'running').length
   // The badge leaves with its last running item — but not while its popover
   // is open: the user may be watching the row they just stopped. It leaves
@@ -255,6 +285,207 @@ function ActivityRow({ item, stop }: { item: SessionActivityItem; stop?: Session
       {refusal && (
         <p role="alert" className="text-[var(--color-danger)]">{refusal}</p>
       )}
+    </div>
+  )
+}
+
+/** A row's icon action: named by its `title` and a row-specific `aria-label`. */
+const rowIconClass = `shrink-0 grid place-items-center w-5 h-5 rounded text-[var(--color-text-secondary)]
+  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
+  aria-disabled:opacity-50 aria-disabled:cursor-default aria-disabled:hover:bg-transparent
+  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]`
+
+/** The badge's accessible name: what runs, or how the last one ended (§10). */
+export function commandsLabel(items: readonly SessionActivityItem[]): string {
+  const commands = items.filter((item) => item.kind === 'command')
+  const running = commands.filter((item) => item.state === 'running').length
+  if (running > 0) return `${countOf('command', running)} running`
+  const last = commands.find((item) => item.state !== 'running')
+  return last ? `Commands: the last one ${STATE_LABEL[last.state].toLowerCase()}` : 'No commands'
+}
+
+/**
+ * Adding a run's output to the composer, per item, owned by the badge so a
+ * row that unmounts with its popover does not lose the answer.
+ */
+export interface CommandOutputAdder {
+  add(itemId: string): void
+  pending(itemId: string): boolean
+  error(itemId: string): string | null
+}
+
+export function useCommandOutputAdder(chatId: string): CommandOutputAdder {
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
+  const [errors, setErrors] = useState<ReadonlyMap<string, string>>(() => new Map())
+  return {
+    add: (itemId) => {
+      if (pending.has(itemId)) return
+      setPending((prev) => new Set(prev).add(itemId))
+      setErrors((prev) => { const next = new Map(prev); next.delete(itemId); return next })
+      void addCommandOutputToComposer(chatId, itemId).then((error) => {
+        setPending((prev) => { const next = new Set(prev); next.delete(itemId); return next })
+        if (error) setErrors((prev) => new Map(prev).set(itemId, error))
+      })
+    },
+    pending: (itemId) => pending.has(itemId),
+    error: (itemId) => errors.get(itemId) ?? null
+  }
+}
+
+/**
+ * The Commands badge: commands the user ran from the chat's messages.
+ *
+ * Unlike Agents and Background it stays while the chat **has any** command,
+ * running or ended, so an ended run's output can still be opened or added to
+ * the message. Its face is the icon and the running count; with nothing
+ * running, the count's place holds a check (completed) or a crossed circle
+ * (failed) for the last result, in one fixed-size cell; after a Stop the
+ * cell goes and the badge is the icon alone.
+ */
+export function CommandsBadge({
+  chatId,
+  items,
+  stop,
+  className = ''
+}: {
+  chatId: string
+  items: readonly SessionActivityItem[]
+  stop?: SessionActivityStopControl
+  className?: string
+}): React.JSX.Element | null {
+  const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')
+  const adder = useCommandOutputAdder(chatId)
+  const commands = items.filter((item) => item.kind === 'command')
+  if (commands.length === 0) return null
+  const running = commands.filter((item) => item.state === 'running').length
+  const last = commands.find((item) => item.state !== 'running')
+  const ended = commands.length - running
+  const label = commandsLabel(items)
+  return (
+    <>
+      <button
+        ref={popover.triggerRef}
+        type="button"
+        aria-label={label}
+        data-badge="command"
+        className={`relative ${metaBadgeClass} ${className}`}
+        {...popover.triggerProps}
+      >
+        <SquareTerminal size={12} className="shrink-0" />
+        {/* One line box tall whatever it holds, a digit or a glyph; after a Stop there is nothing to say, so no cell. */}
+        {(running > 0 || last?.state === 'completed' || last?.state === 'failed' || last?.state === 'lost') && (
+          <span data-count className={`${metaCountClass} grid h-[1lh] place-items-center`}>
+            {running > 0 ? running
+              : last?.state === 'completed'
+                ? <Check size={11} aria-hidden className="text-[var(--color-success)]" />
+                : <CircleX size={11} aria-hidden className={last?.state === 'lost' ? 'text-[var(--color-warning)]' : 'text-[var(--color-danger)]'} />}
+          </span>
+        )}
+        {running > 0 && (
+          <span aria-hidden className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-pulse" />
+        )}
+      </button>
+      {popover.open &&
+        createPortal(
+          <div
+            ref={popover.popoverRef}
+            aria-label="Commands"
+            style={popover.style ?? { position: 'fixed', visibility: 'hidden' }}
+            className={metaPopoverClass}
+            {...popover.popoverProps}
+          >
+            <p className="px-3 pb-1.5 flex items-baseline gap-1.5">
+              <span className="font-semibold text-[var(--color-text)]">Commands</span>
+              <span className="text-[var(--color-text-muted)]">
+                {running} running{ended > 0 ? ` · ${ended} ended` : ''}
+              </span>
+            </p>
+            <div
+              tabIndex={0}
+              aria-label="Commands list"
+              className="max-h-80 overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+            >
+              <ul className="list-none m-0 p-0">
+                {commands.map((item) => (
+                  <li key={item.id}>
+                    <CommandRow chatId={chatId} item={item} stop={stop} adder={adder} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
+  )
+}
+
+/**
+ * One run in the Commands popover. Stop sits where the Background row puts
+ * its own, before the state; once the run ends its slot holds the state as
+ * text, and the end-state actions sit on the line below, where Stop never was,
+ * so a second click on Stop lands on nothing (§1).
+ */
+function CommandRow({ chatId, item, stop, adder }: {
+  chatId: string
+  item: SessionActivityItem
+  stop?: SessionActivityStopControl
+  adder: CommandOutputAdder
+}): React.JSX.Element {
+  const ended = item.state !== 'running'
+  const now = useSecondsNow(!ended)
+  const ranFor = (item.endedAt?.getTime() ?? now) - item.startedAt.getTime()
+  const refusal = stop?.refusal(item.id) ?? null
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const adding = adder.pending(item.id)
+  const error = adder.error(item.id) ?? removeError ?? refusal
+  const remove = (): void => {
+    setRemoveError(null)
+    void window.api.userCommands.dismiss(chatId, item.id)
+      .then((result) => {
+        if (!result.ok) { setRemoveError(result.reason); return }
+        useUserCommandsStore.getState().closePanelFor(chatId, item.id)
+      })
+      .catch(() => setRemoveError('This run could not be removed.'))
+  }
+  return (
+    <div data-state={item.state} className="px-3 py-1.5 space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate font-mono text-[var(--color-text)]" title={item.title}>
+          {item.title.split('\n')[0]}
+        </span>
+        <span data-slot="stop" className="shrink-0 tabular-nums">
+          {!ended && item.canStop && stop ? <StopButton item={item} stop={stop} />
+            : ended ? <span className={STATE_TONE[item.state]}>{STATE_LABEL[item.state]}</span> : null}
+        </span>
+        {/* Last: the only part that rewrites itself while the popover is open. */}
+        <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">
+          {!ended && <span className={STATE_TONE.running}>{STATE_LABEL.running} </span>}
+          · {formatRunDuration(ranFor)}
+        </span>
+      </div>
+      <div className="flex items-center gap-1">
+        <p className="min-w-0 flex-1 truncate text-[var(--color-text-muted)]" title={item.detail ?? undefined}>{item.detail}</p>
+        {ended && (
+          <>
+            <button type="button" className={rowIconClass} aria-disabled={adding || undefined}
+              title="Add output to message" aria-label={`Add output of ${item.title} to message`}
+              onClick={() => { if (!adding) adder.add(item.id) }}>
+              {adding ? <Loader2 size={12} aria-hidden className="animate-spin motion-reduce:animate-none" /> : <Paperclip size={12} aria-hidden />}
+            </button>
+            <button type="button" className={rowIconClass} title="Remove" aria-label={`Remove ${item.title}`} onClick={remove}>
+              <Trash2 size={12} aria-hidden />
+            </button>
+          </>
+        )}
+        {/* Last, so it keeps its place when the run ends and the others arrive. */}
+        <button type="button" className={rowIconClass} title="Open output" aria-label={`Open output of ${item.title}`}
+          onClick={() => useUserCommandsStore.getState().openPanel(chatId, item.id)}>
+          <PanelBottomOpen size={12} aria-hidden />
+        </button>
+      </div>
+      {/* Only when something was refused, last in the row: it moves nothing above it (§1, §6). */}
+      {error && <p role="alert" className="text-[var(--color-danger)]">{error}</p>}
     </div>
   )
 }

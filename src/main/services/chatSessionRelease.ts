@@ -1,4 +1,5 @@
 import { sessionActivityHub } from './sessionActivityHub'
+import { AGENT_PROCESS_KINDS } from '../../shared/sessionActivity'
 
 /**
  * Stop listening between turns to a chat's agent sessions (only the named
@@ -22,9 +23,12 @@ export function forgetChatSessions(chatId: string, agentId?: string): void {
 /**
  * The chat no longer answers to the agent (or to any of its agents): what the
  * old session says from now on must not land in it, and what it was running is
- * no longer this chat's to show — written off as `lost`.
+ * no longer this chat's to show — written off as `lost`. A command the user
+ * ran from the chat is not the session's: it keeps running, and its row stays.
  */
 export function releaseChatSessions(chatId: string, agentId?: string): void {
   forgetChatSessions(chatId, agentId)
-  sessionActivityHub.endAll(agentId === undefined ? { chatId } : { chatId, agentId }, 'lost')
+  sessionActivityHub.endAll(agentId === undefined
+    ? { chatId, kinds: AGENT_PROCESS_KINDS }
+    : { chatId, agentId, kinds: AGENT_PROCESS_KINDS }, 'lost')
 }

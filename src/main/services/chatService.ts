@@ -23,6 +23,7 @@ import { sessionActivityHub } from './sessionActivityHub'
 import { liveRunHub } from './liveRunHub'
 import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
+import { userCommandService } from './userCommands'
 import { conductorSessionRepo } from '../db/conductorSessions'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import { turnNotices } from './turnNotices'
@@ -200,6 +201,8 @@ export const chatService = {
     // Activity is held per chat in memory; a trashed chat shows none, and
     // nothing its agents say between turns lands in it.
     forgetChatSessions(chatId)
+    // A trashed chat runs nothing: the commands run from it are killed, their logs deleted.
+    userCommandService.chatRemoved(chatId)
     sessionActivityHub.clear(chatId)
     // Its sessions are forgotten, so their telemetry goes with them.
     sessionTelemetryService.forget(chatId)

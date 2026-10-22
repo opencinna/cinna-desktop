@@ -17,7 +17,19 @@ export type SessionActivityListener = (chatId: string, snapshot: SessionActivity
 export interface SessionActivityFilter {
   chatId?: string
   agentId?: string
+  /** Only items of these kinds (absent: every kind). */
+  kinds?: readonly SessionActivityKind[]
 }
+
+/**
+ * Kinds whose ended items outlive their round: a new start does not drop
+ * them, only the per-kind cap and an explicit {@link SessionActivityHub.remove}.
+ * A user's command keeps its output attachable after its badge row ends.
+ */
+const KEPT_ACROSS_ROUNDS: ReadonlySet<SessionActivityKind> = new Set(['command'])
+
+const kindMatches = (filter: SessionActivityFilter, kind: SessionActivityKind): boolean =>
+  filter.kinds === undefined || filter.kinds.includes(kind)
 
 /** What {@link SessionActivityHub.endAll} may narrow further: one kind, these item ids only. */
 export interface SessionActivityEndFilter extends SessionActivityFilter {
@@ -53,7 +65,8 @@ const order = (items: SessionActivityItem[]): SessionActivityItem[] => {
  * nothing of that kind is running, the ended items of that kind are dropped: they
  * belonged to the previous round, whose badge has already hidden. So while a
  * round runs the popover can say "2 finished, 1 running", and the finished ones
- * of a quiet kind stay only until that kind's next start.
+ * of a quiet kind stay only until that kind's next start. A `command` has no
+ * rounds: its ended items stay (newest `ENDED_PER_KIND`) until removed.
  *
  * **Corrections.** A later terminal state replaces an earlier one (state,
  * `endedAt`, and the summary if one came). Nothing moves an ended item back to
@@ -64,7 +77,8 @@ const order = (items: SessionActivityItem[]): SessionActivityItem[] => {
  */
 export function createSessionActivityHub(now: () => Date = () => new Date()) {
   const chats = new Map<string, Map<string, SessionActivityItem>>()
-  const lastChange = new Map<string, number>()
+  /** Per agent, per kind: when an item last changed. */
+  const lastChange = new Map<string, Map<SessionActivityKind, number>>()
   const listeners = new Set<SessionActivityListener>()
 
   const snapshotOf = (chatId: string): SessionActivitySnapshot => ({
@@ -109,7 +123,7 @@ export function createSessionActivityHub(now: () => Date = () => new Date()) {
     if (!existing) {
       if (!items) { items = new Map(); chats.set(chatId, items) }
       const kindRunning = [...items.values()].some((item) => item.kind === change.kind && item.state === 'running')
-      if (!kindRunning) {
+      if (!kindRunning && !KEPT_ACROSS_ROUNDS.has(change.kind)) {
         for (const item of [...items.values()]) if (item.kind === change.kind) items.delete(item.id)
       }
       if (!change.title) logger.debug('an activity item started without a title', { chatId, agentId, id: change.id })
@@ -133,13 +147,18 @@ export function createSessionActivityHub(now: () => Date = () => new Date()) {
     return true
   }
 
-  const touch = (agentId: string, at: Date): void => { lastChange.set(agentId, at.getTime()) }
+  const touch = (agentId: string, kind: SessionActivityKind, at: Date): void => {
+    let kinds = lastChange.get(agentId)
+    if (!kinds) { kinds = new Map(); lastChange.set(agentId, kinds) }
+    kinds.set(kind, at.getTime())
+  }
 
   return {
     report(chatId: string, agentId: string, change: SessionActivityChange): void {
       const at = now()
       if (!apply(chatId, agentId, change, at)) return
-      touch(agentId, at)
+      const kind = chats.get(chatId)?.get(change.id)?.kind
+      if (kind) touch(agentId, kind, at)
       emit(chatId)
     },
 
@@ -156,9 +175,10 @@ export function createSessionActivityHub(now: () => Date = () => new Date()) {
         for (const item of [...items.values()]) {
           if (item.state !== 'running' || (filter.agentId !== undefined && item.agentId !== filter.agentId)) continue
           if (filter.kind !== undefined && item.kind !== filter.kind) continue
+          if (!kindMatches(filter, item.kind)) continue
           if (filter.ids !== undefined && !filter.ids.has(item.id)) continue
           apply(chatId, item.agentId, { type: 'end', id: item.id, state }, at)
-          touch(item.agentId, at)
+          touch(item.agentId, item.kind, at)
           changed = true
           count++
         }
@@ -175,21 +195,37 @@ export function createSessionActivityHub(now: () => Date = () => new Date()) {
       for (const [chatId, items] of chats) {
         if (filter.chatId !== undefined && chatId !== filter.chatId) continue
         for (const item of items.values()) {
-          if (item.state === 'running' && (filter.agentId === undefined || item.agentId === filter.agentId)) return true
+          if (item.state !== 'running' || !kindMatches(filter, item.kind)) continue
+          if (filter.agentId === undefined || item.agentId === filter.agentId) return true
         }
       }
       return false
     },
 
-    /** When an item of this agent last changed, in any chat; null if never. */
-    lastChangeAt(agentId: string): Date | null {
-      const at = lastChange.get(agentId)
-      return at === undefined ? null : new Date(at)
+    /** When an item of this agent (of these kinds, when given) last changed, in any chat; null if never. */
+    lastChangeAt(agentId: string, kinds?: readonly SessionActivityKind[]): Date | null {
+      let latest: number | undefined
+      for (const [kind, at] of lastChange.get(agentId) ?? []) {
+        if (kinds !== undefined && !kinds.includes(kind)) continue
+        if (latest === undefined || at > latest) latest = at
+      }
+      return latest === undefined ? null : new Date(latest)
     },
 
     onChange(listener: SessionActivityListener): () => void {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
+    },
+
+    /** Removes one ended item (a dismissed command); false when it is unknown or still running. */
+    remove(chatId: string, itemId: string): boolean {
+      const items = chats.get(chatId)
+      const item = items?.get(itemId)
+      if (!items || !item || item.state === 'running') return false
+      items.delete(itemId)
+      if (items.size === 0) chats.delete(chatId)
+      emit(chatId)
+      return true
     },
 
     /** Forgets a chat (it was deleted). Announces the empty snapshot if it held anything. */
