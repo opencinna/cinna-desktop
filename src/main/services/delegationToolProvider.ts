@@ -192,13 +192,13 @@ export class DelegationToolProvider implements ToolProvider {
         return { content: { ...listed, ...(unchanged ? { notice: UNCHANGED_NOTICE } : {}) } }
       }
       case 'tasks_get':
-        return { content: await taskToolService.tasksGet(this.session, input) }
+        return { content: await taskToolService.tasksGet(this.session, input, signal) }
       case 'tasks_create':
         return { content: await taskToolService.tasksCreate(this.session, input, signal) }
       case 'tasks_update':
-        return { content: await taskToolService.tasksUpdate(this.session, input) }
+        return { content: await taskToolService.tasksUpdate(this.session, input, signal) }
       case 'tasks_comment':
-        return { content: await taskToolService.tasksComment(this.session, input) }
+        return { content: await taskToolService.tasksComment(this.session, input, signal) }
       case 'tasks_report':
         return { content: await taskToolService.tasksReport(this.session, input, signal) }
       default:

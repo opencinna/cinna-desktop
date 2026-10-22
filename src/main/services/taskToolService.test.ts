@@ -983,6 +983,16 @@ describe('a conversation taking a task on itself (session-owned)', () => {
     expect(taskRepo.getById(USER, fresh.id)).toMatchObject({ chatId: null, sessionOwned: false, status: 'blocked' })
   })
 
+  it('refuses `blocked` on a settled task from another conversation in its own words, not the transition table’s', async () => {
+    const kit = session('kit-1', {})
+    const closed = taskService.create(USER, { title: 'Closed', goal: 'x', assigneeAgentId: 'kit-1' })
+    taskService.setStatus(USER, closed.id, 'in_progress')
+    taskService.setStatus(USER, closed.id, 'completed')
+    await expect(taskToolService.tasksReport(kit, { ref: closed.id, status: 'blocked', summary: 'Stuck', question: 'Which?' }))
+      .rejects.toThrow(`${closed.id} is not being worked on in this conversation; report blocked from the conversation working on it.`)
+    expect(taskRepo.getById(USER, closed.id)).toMatchObject({ status: 'completed', handoffNote: null })
+  })
+
   it('attaches a second task by report once the chat’s session-owned task was reported done', async () => {
     const kit = session('kit-1')
     holder.live.add(kit.chatId)
@@ -1034,6 +1044,34 @@ describe('a conversation taking a task on itself (session-owned)', () => {
       await expect(taskToolService.tasksReport(bare, { status: 'in_progress', summary: 'S' })).rejects.toThrow('pass ref')
       controller.abort()
       await expect(waiting).rejects.toThrow()
+    } finally {
+      finish()
+      refresh.mockRestore()
+    }
+  })
+
+  it.each([
+    ['tasks_get', (bare: ReturnType<typeof session>, signal: AbortSignal) => taskToolService.tasksGet(bare, { ref: 'ITAN-2026-0506' }, signal)],
+    ['tasks_update', (bare: ReturnType<typeof session>, signal: AbortSignal) => taskToolService.tasksUpdate(bare, { ref: 'ITAN-2026-0506', title: 'T' }, signal)],
+    ['tasks_comment', (bare: ReturnType<typeof session>, signal: AbortSignal) => taskToolService.tasksComment(bare, { ref: 'ITAN-2026-0506', body: 'B' }, signal)]
+  ] as const)('stops %s waiting for a folder agent’s index pass when the call is aborted, while the pass goes on', async (_tool, call) => {
+    const { taskSyncScheduler } = await import('./taskSyncScheduler')
+    let finish: () => void = () => {}
+    let finished = false
+    const pass = new Promise<void>((resolve) => { finish = resolve }).then(() => { finished = true })
+    const refresh = vi.spyOn(taskSyncScheduler, 'refresh').mockImplementation(() => pass as never)
+    try {
+      const controller = new AbortController()
+      const waiting = call(session('bare-1'), controller.signal)
+      void waiting.catch(() => {})
+      await settle()
+      expect(refresh).toHaveBeenCalledTimes(1)
+      controller.abort(new Error('aborted'))
+      await expect(waiting).rejects.toThrow('aborted')
+      expect(finished).toBe(false)
+      finish()
+      await pass
+      expect(finished).toBe(true)
     } finally {
       finish()
       refresh.mockRestore()

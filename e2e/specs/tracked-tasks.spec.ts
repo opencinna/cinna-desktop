@@ -23,8 +23,9 @@ import { scriptAcpEngine, type ScriptAcpEngine, type ScriptAcpHeld } from '../fi
  * Not proved: that a model picks these tools; the dispatcher continuing a
  * session-owned task in its chat after a drag to Ready (plan §5's third case);
  * the Inbox answer to a `blocked` question resuming the chat (an ACP ask never
- * becomes a stored answer, see `dispatcher.ts`); the live dot while running
- * (asserted only idle); device sync of `session_owned`.
+ * becomes a stored answer, see `dispatcher.ts`); the live dot on the Board
+ * layout and in a chat's Tasks popover (the List row and Details are asserted,
+ * running mid-turn and idle after); device sync of `session_owned`.
  */
 
 const HEADING = 'Granite Notes'
@@ -171,6 +172,53 @@ test.describe('tracked tasks', () => {
         // Cinna writes") — unlike `tasks_update {category: done}`, which writes `done`.
         expect(doneWord).toBe('completed')
         await expect(statusPill(cinna)).toHaveText(doneWord)
+      })
+      expect(fake.unexpected).toEqual([])
+    } finally { await fake.close() }
+  })
+
+  test('the live dot and the Chat row say Running while the turn is held, and Idle once it ends', async ({ cinna }) => {
+    const fake = await scriptAcpEngine()
+    try {
+      const { agentId } = await arrange(cinna, fake)
+      const chatId = await directChat(cinna, agentId, CHAT)
+
+      // The turn stays open from here until `endTurn`: the agent has called
+      // `tasks_create` and its next step is held by the scripted engine.
+      const i = await startTurn(cinna, fake, chatId, 'Let us index the granite notes.')
+      const held = await callTool(fake, fake.calls[i], 'tasks_create', { title: TITLE, description: DESCRIPTION, category: 'active' })
+      expect(okResult(held)).toMatchObject({ title: TITLE, attached: true, status: 'in_progress' })
+
+      const details = cinna.page.getByRole('complementary', { name: 'Details' })
+      await test.step('mid-turn: the row’s dot pulses with the chat’s name, the row says running, Details says Running', async () => {
+        await openTasksView(cinna, HEADING)
+        await showTasksLayout(cinna.page, 'List')
+        const row = listRow(cinna, 'In progress', TITLE)
+        await expect(row).toBeVisible({ timeout: 15_000 })
+        const dot = row.locator('[data-task-live-dot]')
+        // `running` arrives on the Tasks view's 5 s poll.
+        await expect(dot).toHaveAttribute('data-task-live-dot', 'running', { timeout: 15_000 })
+        await expect(dot).toHaveClass(/(^|\s)motion-safe:animate-pulse(\s|$)/)
+        await expect(dot).toHaveAttribute('title', `Running in ${CHAT}`)
+        await expect(row).toHaveAccessibleName(new RegExp(`^${TITLE} — .+, in ${CHAT}, running$`))
+
+        await openTaskFromList(cinna, 'In progress', TITLE)
+        await expect(details.locator('[data-task-session-state]')).toHaveText('Running', { timeout: 15_000 })
+      })
+
+      await test.step('after the turn ends: Details says Idle, and the row’s dot is idle and still', async () => {
+        await endTurn(cinna, held, chatId, 'Started the granite index.')
+        // The task page polls on the same 5 s interval.
+        await expect(details.locator('[data-task-session-state]')).toHaveText('Idle', { timeout: 15_000 })
+
+        await openTasksView(cinna, HEADING)
+        await showTasksLayout(cinna.page, 'List')
+        const row = listRow(cinna, 'In progress', TITLE)
+        const dot = row.locator('[data-task-live-dot]')
+        await expect(dot).toHaveAttribute('data-task-live-dot', 'idle', { timeout: 15_000 })
+        await expect(dot).not.toHaveClass(/(^|\s)motion-safe:animate-pulse(\s|$)/)
+        await expect(dot).not.toHaveAttribute('title')
+        await expect(row).toHaveAccessibleName(new RegExp(`^${TITLE} — .+, in ${CHAT}$`))
       })
       expect(fake.unexpected).toEqual([])
     } finally { await fake.close() }

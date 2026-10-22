@@ -309,8 +309,8 @@ function relationsOf(session: DelegationSession, row: TaskRow): Relation[] {
 }
 
 /** The task `ref` names, or this chat's own task when it is left out. */
-async function taskOrCurrent(session: DelegationSession, current: TaskRow | undefined, ref: unknown): Promise<TaskRow> {
-  if (ref !== undefined) return requireTask(session, ref)
+async function taskOrCurrent(session: DelegationSession, current: TaskRow | undefined, ref: unknown, signal?: AbortSignal): Promise<TaskRow> {
+  if (ref !== undefined) return requireTask(session, ref, signal)
   if (!current) fail('This conversation is not working on a task; pass ref.')
   return current
 }
@@ -384,6 +384,8 @@ const alreadyWorking = (ref: string): string => `This conversation is already wo
 const boundElsewhere = (ref: string): string => `${ref} is already being worked on in another conversation`
 const reportedElsewhere = (ref: string): string => `${ref} is being worked on in another conversation; only that conversation can report on it`
 const noLongerWaiting = (ref: string): string => `${ref} is no longer waiting to be picked up; read it with tasks_get`
+/** A `blocked` report from a conversation not working on the task, which no step can take to Waiting. Desktop's own words. */
+const notWorkedHere = (ref: string): string => `${ref} is not being worked on in this conversation; report blocked from the conversation working on it.`
 
 /**
  * Whether a report may bind the calling chat to `row` (an attach): a task in
@@ -649,6 +651,13 @@ async function reportTask(session: DelegationSession, input: Record<string, unkn
   if (report.audience === 'requester') fail(NO_REQUESTER)
 
   const status = statusForReport(report.status)
+  // `blocked` on a task this conversation is not working on, which no step
+  // takes to Waiting (Done, Cancelled or Hidden; a Failed one steps back
+  // through In progress), gets the tool's sentence, not the transition table's.
+  if (!isCurrent && status === 'blocked' && row.status !== status) {
+    const from = parseTaskStatus(row.status)
+    if (!canTransition(from, status) && !canTransition(from, 'in_progress')) fail(notWorkedHere(row.id))
+  }
   const digest = createHash('sha256').update(JSON.stringify([report.status, report.summary, report.question, report.body, report.artifacts])).digest('hex')
   // The mark keeps this turn's end from settling over the report — also for
   // an identical repeat in a later turn, which writes nothing else.
@@ -776,10 +785,10 @@ export const taskToolService = {
   },
 
   /** `tasks_get`: one task in full, if it concerns the caller (as `tasks_list` would show it) or is this chat's. */
-  async tasksGet(session: DelegationSession, input: Record<string, unknown>) {
+  async tasksGet(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal) {
     const { task: current } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = await requireTask(session, input.ref)
+    const row = await requireTask(session, input.ref, signal)
     const relations = relationsOf(session, row)
     if (relations.length === 0 && current?.id !== row.id) fail('You can read only tasks assigned to you, created by you or delegated by you.')
     const { taskService } = await import('./taskService')
@@ -825,10 +834,10 @@ export const taskToolService = {
     return serializedInChat(session.chatId, () => createTask(session, input, parent, signal))
   },
 
-  async tasksUpdate(session: DelegationSession, input: Record<string, unknown>): Promise<unknown> {
+  async tasksUpdate(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const { task: current } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = await requireTask(session, input.ref)
+    const row = await requireTask(session, input.ref, signal)
     const isCurrent = current?.id === row.id
     const assigned = row.assigneeAgentId === session.agentId
     const created = row.createdByAgentId === session.agentId
@@ -895,10 +904,10 @@ export const taskToolService = {
   },
 
 
-  async tasksComment(session: DelegationSession, input: Record<string, unknown>): Promise<unknown> {
+  async tasksComment(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const { task: current, source } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
-    const row = await taskOrCurrent(session, current, input.ref)
+    const row = await taskOrCurrent(session, current, input.ref, signal)
     const body = text(input.body, 'body', TASK_COMMENT_MAX)
     const delegation = delegationRepo.byTaskId(profileUserId, row.id)
     const mine = row.assigneeAgentId === session.agentId || row.createdByAgentId === session.agentId ||
