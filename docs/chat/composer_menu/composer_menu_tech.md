@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Renderer — components
-- `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the `[+]` button + popover. Owns `open` and `view: 'root' | 'modes'` state, outside-click / Esc close, and the chat-mode sub-view. Purely presentational — all data/handlers arrive via props.
+- `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the `[+]` button + popover. Owns `open` and `view: 'root' | 'modes' | 'actions'` state, outside-click / Esc close, and the chat-mode sub-view. Purely presentational — all data/handlers arrive via props.
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the popover itself; `PlusCoordinateToggle { coordinating, pending?, onToggle }` is the **Coordinate by <conductor>** row (`role="menuitem"`, `aria-disabled` while pending, reserved `w-3.5` tick slot). Omitted entirely when there is no agent to coordinate.
 - `src/renderer/src/components/agents/AgentPickerModal.tsx` — shared card-grid modal (portal-rendered, autofocused search, multi-select). Extended with the `activeFirst` prop for this feature; also used by Jobs (`JobEditForm`). The optional `catalogItems` / `installingCatalogId` / `catalogBusy` / `onInstallCatalog` / `catalogError` props render the bottom **Catalog** section (cards in the catalog tile's design with **Get** and a spinner, plus an inline error row; the `CatalogPickerItem` type lives here too).
 - `src/renderer/src/components/chat/ChatInput.tsx` — composer host. Renders `ComposerPlusMenu` as the first footer-left element and the `AgentPickerModal` (gated by `capabilityPickerOpen`); wires `pickAttachments`, `chatModeMenu`, and the capability picker.
@@ -24,6 +24,7 @@
 
 ## Key Props / Interfaces
 
+- `PlusActions { improvementRequest?: PlusAction }`, `PlusAction { disabled, reason?, onOpen() }` — the **Actions** sub-menu (`actions` prop). A disabled entry uses `aria-disabled` and `title={reason}` so it keeps its tooltip and focus. `ChatInput` passes it only when `useImprovementTargets` is non-empty; see [Improvement Request](../improvement_requests/improvement_requests_tech.md).
 - `ComposerPlusMenu` props: `canAttachFiles`, `uploading`, `onAttachFiles`, `hasCapabilities`, `onOpenCapabilityPicker`, `modeMenu?` (`PlusModeMenu`), `activeModeColor?`.
 - `PlusModeMenu` (exported from `ComposerPlusMenu.tsx`): `{ modes, activeId, onSelectMode(mode|null), renderIcon, composeSecondary }`. `onSelectMode(null)` deselects.
 - `ChatInput` prop `chatModeMenu?: PlusModeMenu` — forwarded straight to `ComposerPlusMenu.modeMenu`. (Replaced the old `leftSlot` prop.)

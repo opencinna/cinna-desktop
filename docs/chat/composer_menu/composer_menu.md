@@ -6,11 +6,12 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 
 ## Core Concepts
 
-- **`[+]` Composer Menu** — The single composer entry point (`ComposerPlusMenu`). Opens a small frosted popover with up to four rows: **Attach files**, **Chat mode** (sub-menu), **Add agents / MCP** (search modal), and **Coordinate by <conductor>** (a one-way action). Replaces the former separate chat-mode `+` button, agent dropdown, and right-side attach button.
+- **`[+]` Composer Menu** — The single composer entry point (`ComposerPlusMenu`). Opens a small frosted popover with up to five rows: **Attach files**, **Chat mode** (sub-menu), **Add agents / MCP** (search modal), **Actions** (sub-menu) and **Coordinate by <conductor>** (a one-way action). Replaces the former separate chat-mode `+` button, agent dropdown, and right-side attach button.
 - **Capability** — A polymorphic chat tool source: an **agent** or an **MCP server**. The picker treats both uniformly as selectable cards.
 - **Capability Picker** — The card modal opened by **Add agents / MCP** (`AgentPickerModal` in `activeFirst` multi-select mode): an autofocused search box over a grid of agent + MCP cards.
 - **Active-First Ordering** — On open, already-selected cards float to the top; they then hold position while the user toggles (a card never jumps under the cursor). The order snapshot re-sorts only on the next open or when the available capability set changes. Ported from the cinna-mobile picker.
 - **Chat-mode Sub-menu** — An in-place sub-view of the `[+]` menu (back-navigable) listing the user's chat modes, mirroring the `~` shortcut popup.
+- **Actions Sub-menu** — An in-place sub-view (back-navigable) for one-off things done *to the conversation* rather than set up for it. Its only entry is **Improvement request…**, which opens a dialog sending a cloud bundle agent's conversation to the bundle's publisher. See [Improvement Request](../improvement_requests/improvement_requests.md).
 - **Catalog Section** — A dedicated group at the bottom of the Capability Picker listing the catalog's agents not on this computer yet: ones that run in Cinna (not installed) and ones that run on this computer (no local copy), never skills. Each card is drawn like a catalog tile, kind badge included, and carries a **Get** button (not a selection toggle); the Get runs inline, the card spins meanwhile, and on success the new agent is selected automatically. Cinna-only — empty for non-Cinna profiles. See [Inline Catalog Install](../../agents/bundles_catalog/inline_install.md).
 
 ## User Stories / Flows
@@ -45,6 +46,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - **Attach files** — shown when the current target accepts attachments (`canShowAttachButton`) and no stream is in flight. Gating rules: see [File Attachments](../file_attachments/file_attachments.md) → Destination gating.
 - **Chat mode** — shown when chat modes exist AND mode selection applies here: always on the new-chat screen, and on active chats that were created with a mode. (Mode-less active chats keep their manual model + MCP controls instead.)
 - **Add agents / MCP** — shown when at least one enabled agent or MCP server exists.
+- **Actions** — shown only in a chat with at least one eligible cloud bundle agent (see [Improvement Request](../improvement_requests/improvement_requests.md)); sits right after Add agents / MCP. The entry stays visible but disabled, with a tooltip, while a turn is running. Rows that do not apply are not drawn; a sub-menu with no entry is not drawn either.
 - **Coordinate by <conductor>** — shown when coordination is available and has not already been chosen; hidden for coordinator chats, and when there is nothing to coordinate — no real agent other than the would-be conductor — or the agents and attached rows have not loaded yet (see [Chat Routing](../chat_routing/chat_routing.md)).
 - The `[+]` button is hidden entirely when none of the rows apply.
 
@@ -89,4 +91,5 @@ User clicks [+]  ->  ChatInput  ->  ComposerPlusMenu
 - [On-Demand MCP](../../mcp/on_demand/on_demand.md) — active-chat MCP toggles engage/detach the same on-demand set as the `@` popup.
 - [Chat Routing](../chat_routing/chat_routing.md) — the **Coordinate by <conductor>** row is the one deliberate router switch; adding a capability through the picker moves the chat onto the router that shape needs.
 - [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md) — what a coordinated chat does once it is on that router.
+- [Improvement Request](../improvement_requests/improvement_requests.md) — the **Actions → Improvement request…** entry.
 - [Technical details](composer_menu_tech.md) — files, hook, and component references.
