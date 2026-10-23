@@ -45,7 +45,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - **Attach files** — shown when the current target accepts attachments (`canShowAttachButton`) and no stream is in flight. Gating rules: see [File Attachments](../file_attachments/file_attachments.md) → Destination gating.
 - **Chat mode** — shown when chat modes exist AND mode selection applies here: always on the new-chat screen, and on active chats that were created with a mode. (Mode-less active chats keep their manual model + MCP controls instead.)
 - **Add agents / MCP** — shown when at least one enabled agent or MCP server exists.
-- **Coordinate by <conductor>** — shown when coordination is available and has not already been chosen; hidden for coordinator chats.
+- **Coordinate by <conductor>** — shown when coordination is available and has not already been chosen; hidden for coordinator chats, and when there is nothing to coordinate — no real agent other than the would-be conductor — or the agents and attached rows have not loaded yet (see [Chat Routing](../chat_routing/chat_routing.md)).
 - The `[+]` button is hidden entirely when none of the rows apply.
 
 ### Choosing coordination
