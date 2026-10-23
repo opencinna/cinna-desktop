@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Activity, Check, CircleX, Cog, Loader2, Network, PanelBottomOpen, Paperclip, SquareTerminal, Trash2 } from 'lucide-react'
+import { Activity, AppWindow, Check, CircleX, Cog, Loader2, Network, Paperclip, SquareTerminal, Trash2 } from 'lucide-react'
 import type {
   SessionActivityItem,
   SessionActivityKind,
@@ -9,7 +9,7 @@ import type {
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import type { SessionActivityStopControl } from '../../hooks/useSessionActivityStop'
 import { useHoverPopover } from '../ui/useHoverPopover'
-import { useUserCommandsStore } from '../../stores/userCommands.store'
+import { useRunScriptStore } from '../../stores/runScript.store'
 import { addCommandOutputToComposer } from '../../utils/userCommands'
 
 /**
@@ -80,7 +80,7 @@ export function formatActivityDuration(ms: number): string {
 
 /**
  * How long a command the user ran took, or has been running — the one format
- * the Commands popover and the output panel's header share: `4s`, `2m 05s`,
+ * the Commands popover and the Run Script window's header share: `4s`, `2m 05s`,
  * `1h 03m`.
  */
 export function formatRunDuration(ms: number): string {
@@ -368,6 +368,7 @@ export function CommandsBadge({
         type="button"
         aria-label={label}
         data-badge="command"
+        data-chat-id={chatId}
         className={`relative ${metaBadgeClass} ${className}`}
         {...popover.triggerProps}
       >
@@ -408,7 +409,7 @@ export function CommandsBadge({
               <ul className="list-none m-0 p-0">
                 {commands.map((item) => (
                   <li key={item.id}>
-                    <CommandRow chatId={chatId} item={item} stop={stop} adder={adder} />
+                    <CommandRow chatId={chatId} item={item} stop={stop} adder={adder} onOpenOutput={popover.close} />
                   </li>
                 ))}
               </ul>
@@ -426,11 +427,13 @@ export function CommandsBadge({
  * text, and the end-state actions sit on the line below, where Stop never was,
  * so a second click on Stop lands on nothing (§1).
  */
-function CommandRow({ chatId, item, stop, adder }: {
+function CommandRow({ chatId, item, stop, adder, onOpenOutput }: {
   chatId: string
   item: SessionActivityItem
   stop?: SessionActivityStopControl
   adder: CommandOutputAdder
+  /** The popover shuts behind the window it opens, or Escape would close it first. */
+  onOpenOutput?: () => void
 }): React.JSX.Element {
   const ended = item.state !== 'running'
   const now = useSecondsNow(!ended)
@@ -444,7 +447,7 @@ function CommandRow({ chatId, item, stop, adder }: {
     void window.api.userCommands.dismiss(chatId, item.id)
       .then((result) => {
         if (!result.ok) { setRemoveError(result.reason); return }
-        useUserCommandsStore.getState().closePanelFor(chatId, item.id)
+        useRunScriptStore.getState().runRemoved(chatId, item.id)
       })
       .catch(() => setRemoveError('This run could not be removed.'))
   }
@@ -480,8 +483,14 @@ function CommandRow({ chatId, item, stop, adder }: {
         )}
         {/* Last, so it keeps its place when the run ends and the others arrive. */}
         <button type="button" className={rowIconClass} title="Open output" aria-label={`Open output of ${item.title}`}
-          onClick={() => useUserCommandsStore.getState().openPanel(chatId, item.id)}>
-          <PanelBottomOpen size={12} aria-hidden />
+          onClick={(event) => {
+            useRunScriptStore.getState().openForRun(
+              chatId, { id: item.id, title: item.title, agentId: item.agentId, detail: item.detail },
+              event.detail > 0 ? { x: event.clientX, y: event.clientY } : null
+            )
+            onOpenOutput?.()
+          }}>
+          <AppWindow size={12} aria-hidden />
         </button>
       </div>
       {/* Only when something was refused, last in the row: it moves nothing above it (§1, §6). */}

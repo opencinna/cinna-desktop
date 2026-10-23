@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, type ComponentProps, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, type ComponentProps, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
 import type { AgentFileRef } from '../../../../shared/agentFiles'
@@ -8,6 +8,8 @@ import { useAgentFileRefs, type FileRefScope } from '../../hooks/useAgentFileRef
 import { repairNestedFences } from '../../utils/nestedFences'
 import { artifactIdFromUrl } from '../../../../shared/artifacts'
 import { ArtifactLinkCard } from '../artifacts/ArtifactCard'
+import { detectCommand } from '../../../../shared/commandRun'
+import { useRunScriptStore } from '../../stores/runScript.store'
 
 export type { FileRefScope }
 
@@ -23,6 +25,47 @@ export const FileRefContext = createContext<FileRefScope | null>(null)
  * its card right after that message.
  */
 export const MessageIdContext = createContext<string | null>(null)
+
+/**
+ * Which persisted replies of the chat may have their commands run here (an
+ * assistant message whose agent `agentRunsCommands`), by message id, with
+ * the agent and its folder as far as the renderer knows them. Provided by
+ * the transcript; null outside one.
+ */
+export interface CommandScope {
+  chatId: string
+  messages: ReadonlyMap<string, { agentId: string; folder: string | null }>
+}
+export const CommandScopeContext = createContext<CommandScope | null>(null)
+
+/** The reply a bubble renders, when its commands are clickable: set by `MessageBubble` for a persisted, settled reply only. */
+export interface CommandMessage {
+  chatId: string
+  messageId: string
+  agentId: string
+  folder: string | null
+}
+export const CommandMessageContext = createContext<CommandMessage | null>(null)
+
+/** Open the Run Script window on a command: from the click point, or the centre after Enter or Space. */
+function openRunScript(target: CommandMessage, command: string, origin: { x: number; y: number } | null): void {
+  useRunScriptStore.getState().openFromCode({ ...target, command, origin })
+}
+
+/** A click or a key on a command: what it opens with, or null for neither. */
+function commandActivation(event: MouseEvent<HTMLElement>): { x: number; y: number } | null | false {
+  // Ending a selection inside it is not a request to run it.
+  if (window.getSelection()?.toString()) return false
+  // The second click of a double-click: the first already opened it.
+  if (event.detail > 1) return false
+  return event.detail > 0 ? { x: event.clientX, y: event.clientY } : null
+}
+
+function commandKey(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return false
+  event.preventDefault()
+  return true
+}
 
 /** The reference a rendered `code.file-ref` or `a.file-link` stands for, and whose folder it resolved in. */
 export interface FileRefTarget {
@@ -68,11 +111,71 @@ function textOf(children: ReactNode): string | null {
   return null
 }
 
-/** react-markdown 10 has no `inline` prop; a `pre` tells its `code` instead. */
-function MarkdownPre({ node: _node, children, ...props }: ComponentProps<'pre'> & ExtraProps): React.JSX.Element {
+interface HastLike {
+  type: string
+  tagName?: string
+  value?: string
+  properties?: { className?: unknown }
+  children?: HastLike[]
+}
+
+/** A hast node's text: highlighting splits a block into spans, so the text is read from the tree. */
+function hastText(node: HastLike): string {
+  if (node.type === 'text') return node.value ?? ''
+  return (node.children ?? []).map(hastText).join('')
+}
+
+/** A fenced block's text (without the fence's trailing newline) and language, from its `code` child; null for any other `pre`. */
+function fencedBlock(node: HastLike | undefined): { text: string; lang: string | null } | null {
+  const code = node?.children?.find((child) => child.type === 'element')
+  if (!code || code.tagName !== 'code') return null
+  const classes = code.properties?.className
+  const list = Array.isArray(classes) ? classes.map(String) : typeof classes === 'string' ? classes.split(/\s+/) : []
+  const lang = list.find((name) => name.startsWith('language-'))?.slice('language-'.length).toLowerCase() ?? null
+  return { text: hastText(code).replace(/\n$/, ''), lang }
+}
+
+/**
+ * react-markdown 10 has no `inline` prop; a `pre` tells its `code` instead.
+ *
+ * In a reply whose commands may run here, a fenced block holding a command
+ * is clickable as a whole: it opens the Run Script window, nothing runs. Its
+ * box stays the code block's (`pre.command-ref` only tints it), so nothing
+ * moves. A click that ends a selection inside it opens nothing.
+ */
+function MarkdownPre({ node, children, className, ...props }: ComponentProps<'pre'> & ExtraProps): React.JSX.Element {
+  const target = useContext(CommandMessageContext)
+  const block = target ? fencedBlock(node as HastLike | undefined) : null
+  const text = block?.text ?? null
+  const lang = block?.lang ?? null
+  // Detection runs once per block text, and only in a reply that may run commands.
+  const command = useMemo(() => (text === null ? null : detectCommand(text, { fenced: true, lang })), [text, lang])
+  if (!target || command === null) {
+    return (
+      <InsidePreContext.Provider value={true}>
+        <pre className={className} {...props}>{children}</pre>
+      </InsidePreContext.Provider>
+    )
+  }
   return (
     <InsidePreContext.Provider value={true}>
-      <pre {...props}>{children}</pre>
+      <pre
+        {...props}
+        className={className ? `${className} command-ref` : 'command-ref'}
+        role="button"
+        tabIndex={0}
+        title="Run…"
+        aria-label={`Run… ${command.split('\n')[0]}`}
+        onClick={(event) => {
+          const origin = commandActivation(event)
+          if (origin !== false) openRunScript(target, command, origin)
+        }}
+        onKeyDown={(event) => {
+          if (commandKey(event)) openRunScript(target, command, null)
+        }}
+      >
+        {children}
+      </pre>
     </InsidePreContext.Provider>
   )
 }
@@ -94,8 +197,33 @@ function MarkdownCode({ node: _node, children, className, ...props }: ComponentP
   const insideLink = useContext(InsideLinkContext)
   const scope = useContext(FileRefContext)
   const messageId = useContext(MessageIdContext)
+  const commandTarget = useContext(CommandMessageContext)
   const text = textOf(children)
   const ref = !insidePre && !insideLink && scope && text !== null ? scope.refs.get(text) : undefined
+  // A span that is not a file reference may be a command; detected once per text, only where commands may run.
+  const commandText = !ref && !insidePre && !insideLink && commandTarget ? text : null
+  const command = useMemo(() => (commandText === null ? null : detectCommand(commandText, { fenced: false })), [commandText])
+  if (command !== null && commandTarget) {
+    return (
+      <code
+        {...props}
+        className={className ? `${className} command-ref` : 'command-ref'}
+        role="button"
+        tabIndex={0}
+        title="Run…"
+        aria-label={`Run… ${command}`}
+        onClick={(event) => {
+          const origin = commandActivation(event)
+          if (origin !== false) openRunScript(commandTarget, command, origin)
+        }}
+        onKeyDown={(event) => {
+          if (commandKey(event)) openRunScript(commandTarget, command, null)
+        }}
+      >
+        {children}
+      </code>
+    )
+  }
   if (!scope || !ref || text === null) {
     return (
       <code className={className} {...props}>

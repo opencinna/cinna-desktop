@@ -11,11 +11,12 @@
  *   (`localAgents/ownCommandPolicy.ts`), against the agent's real folder and
  *   pinned skill folders, with the run's cwd that folder. A refusal is
  *   `needs_review` carrying the rule's reason (`ownCommandRefusal`), and the
- *   renderer opens the edit dialog with it. A reviewed command runs as given.
+ *   renderer opens the Run Script window with it. A reviewed command runs as given.
  * - **The folder** is the agent's workspace root, resolved where a turn's is
  *   (`agents/drivers` `agentWorkspaceFolder`), injected rather than imported.
  * - **The environment** is what a terminal there would see (D6): the login
- *   shell's, narrowed as every child's is, plus colour hints. Nothing from the
+ *   shell's, narrowed as every child's is, plus colour hints, the window's
+ *   width as `COLUMNS` and `PYTHONUNBUFFERED`. Nothing from the
  *   agent's runtime, no credentials.
  *
  * Runs die with the app: `sweep` deletes every log at startup and `shutdown`
@@ -37,6 +38,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { randomUUID } from 'node:crypto'
 import {
   USER_COMMAND_RUN_REASONS,
+  commandColumns,
   homeDisplayPath,
   stripAnsi,
   userCommandOutputRefusal,
@@ -53,6 +55,7 @@ import type { SessionActivityChange, SessionActivitySnapshot, SessionActivityTer
 import type { SessionActivityStopper } from '../sessionActivityStop'
 import { ownCommandRefusal } from '../localAgents/ownCommandPolicy'
 import { commandOutputFilename } from '../../../shared/commandRun'
+import { FOLDER_AGENT_ID_PREFIX } from '../../../shared/localAgents'
 import { createLogger } from '../../logger/logger'
 
 const logger = createLogger('user-commands')
@@ -313,7 +316,10 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     if (!message || message.chatId !== chatId) return { refusal: refusal('chat_not_found') }
     const agentId = (message.role === 'assistant' ? message.sourceAgentId : null) ?? chat.agentId
     const agent = agentId ? deps.agent(profileUserId, agentId) : null
-    return agent ? { agent } : { refusal: refusal('not_local') }
+    if (agent) return { agent }
+    // A folder agent whose folder moved or went away drops out of the rescanned
+    // list: it was on this computer, so say the folder is gone.
+    return { refusal: refusal(agentId?.startsWith(FOLDER_AGENT_ID_PREFIX) ? 'folder_missing' : 'not_local') }
   }
 
   /** The output as an attachment's text: ANSI stripped, the last 200 KB, with a header. */
@@ -385,7 +391,12 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     try {
       child = spawn(shell, ['-c', command], {
         cwd: folder,
-        env: { ...env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1', TERM: 'xterm-256color', COLUMNS: '120' },
+        // PYTHONUNBUFFERED: Python block-buffers a pipe, so a script's
+        // progress would arrive all at once at its end.
+        env: {
+          ...env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1', TERM: 'xterm-256color',
+          COLUMNS: String(commandColumns(input.columns)), PYTHONUNBUFFERED: '1'
+        },
         detached: platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true

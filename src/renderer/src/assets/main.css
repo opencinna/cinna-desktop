@@ -66,6 +66,8 @@
     --color-danger: #ef4444;
     --color-success: #22c55e;
     --color-warning: #eab308;
+    /* The edge of a runnable command in a reply, apart from a file reference's neutral one. */
+    --color-command-ref-edge: #3f6f52;
     /* Send while a turn runs: the message joins that turn or its queue. */
     --color-send-queued: #3b82f6;
     /* The new-chat logo's stroke gradient, after the dark app icon's copper. */
@@ -116,6 +118,7 @@
     --color-danger: #dc2626;
     --color-success: #16a34a;
     --color-warning: #ca8a04;
+    --color-command-ref-edge: #8cc09f;
     --color-send-queued: #2563eb;
     /* The light app icon's blue into teal. */
     --color-logo-from: #1d4e76;
@@ -899,6 +902,38 @@
     outline-offset: 1px;
   }
 
+  /* A command in a folder agent's reply (`code.command-ref`, and a whole
+     fenced block, `pre.command-ref`) wears the file reference's fill, with
+     an edge of its own (`--color-command-ref-edge`): it opens the Run Script
+     window. Only colours differ; nothing is added that would move text.
+     The fill is `.file-ref`'s above — keep the two in step. */
+  .markdown-body code.command-ref,
+  .markdown-body pre.command-ref {
+    --file-ref-fill: color-mix(in srgb, var(--color-bg-hover), var(--color-accent) 12%);
+    --file-ref-edge: var(--color-command-ref-edge);
+    --file-ref-edge-hover: color-mix(in srgb, var(--color-command-ref-edge), white 18%);
+  }
+  [data-theme="light"] .markdown-body code.command-ref,
+  [data-theme="light"] .markdown-body pre.command-ref {
+    --file-ref-fill: color-mix(in srgb, var(--color-bg-hover), var(--color-accent) 14%);
+    --file-ref-edge: var(--color-command-ref-edge);
+    --file-ref-edge-hover: color-mix(in srgb, var(--color-command-ref-edge), black 14%);
+  }
+  .markdown-body code.command-ref {
+    cursor: pointer;
+    background: var(--file-ref-fill);
+    box-shadow: inset 0 0 0 1px var(--file-ref-edge);
+    transition: box-shadow 120ms ease;
+  }
+  .markdown-body code.command-ref:hover {
+    box-shadow: inset 0 0 0 1px var(--file-ref-edge-hover);
+  }
+  .markdown-body code.command-ref:focus-visible,
+  .markdown-body pre.command-ref:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
   /* A markdown link whose href resolved to a file in the agent's folder. It
      looks like any other link (`.markdown-body a`): until resolution lands it
      renders as plain text in a span, and the swap must not reflow the line,
@@ -924,6 +959,20 @@
   }
   [data-theme="light"] .markdown-body pre:has(> code) {
     background: var(--color-bg-secondary) !important;
+  }
+  /* A fenced block that is a command: the block's own border takes the edge
+     colour (same width, so nothing moves) and the fill the tint. */
+  .markdown-body pre.command-ref {
+    cursor: pointer;
+    border-color: var(--file-ref-edge);
+    transition: border-color 120ms ease;
+  }
+  .markdown-body pre.command-ref,
+  [data-theme="light"] .markdown-body pre.command-ref:has(> code) {
+    background: var(--file-ref-fill) !important;
+  }
+  .markdown-body pre.command-ref:hover {
+    border-color: var(--file-ref-edge-hover);
   }
   .markdown-body pre code {
     display: block;

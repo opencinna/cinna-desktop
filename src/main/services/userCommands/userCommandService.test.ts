@@ -37,7 +37,11 @@ afterAll(() => rmSync(base, { recursive: true, force: true }))
 interface World {
   hub: ReturnType<typeof createSessionActivityHub>
   service: ReturnType<typeof createUserCommandService>
-  state: { workspace: UserCommandWorkspace | 'missing' | null; shell: string; trashed: boolean; onShellEnv: (() => void) | null; onUserData: (() => void) | null }
+  state: {
+    workspace: UserCommandWorkspace | 'missing' | null; shell: string; trashed: boolean; onShellEnv: (() => void) | null; onUserData: (() => void) | null
+    /** Agent ids the profile no longer sees (a folder agent pruned by a rescan). */
+    gone: Set<string>
+  }
 }
 
 const services: World['service'][] = []
@@ -45,13 +49,15 @@ const services: World['service'][] = []
 function world(options: { logCapBytes?: number; stopGraceMs?: number } = {}): World {
   userData = mkdtempSync(join(base, 'userData-'))
   const hub = createSessionActivityHub()
-  const state: World['state'] = { workspace: { folder, scriptRoots: [] }, shell: '/bin/sh', trashed: false, onShellEnv: null, onUserData: null }
+  const state: World['state'] = { workspace: { folder, scriptRoots: [] }, shell: '/bin/sh', trashed: false, onShellEnv: null, onUserData: null, gone: new Set() }
   const service = createUserCommandService<UserCommandAgent>({
     chat: (_profile, chatId) => chatId === 'chat-1' || chatId === 'chat-2'
       ? { id: chatId, agentId: 'agent-root', deletedAt: state.trashed ? new Date() : null } : undefined,
     message: (id) => id === 'msg-1' ? { chatId: 'chat-1', role: 'assistant', sourceAgentId: 'agent-a' }
-      : id === 'msg-2' ? { chatId: 'chat-2', role: 'assistant', sourceAgentId: null } : undefined,
-    agent: (_profile, agentId) => ({ userId: 'settings', id: agentId }),
+      : id === 'msg-2' ? { chatId: 'chat-2', role: 'assistant', sourceAgentId: null }
+        : id === 'msg-folder' ? { chatId: 'chat-1', role: 'assistant', sourceAgentId: 'folder:moved' }
+          : id === 'msg-remote' ? { chatId: 'chat-1', role: 'assistant', sourceAgentId: 'remote:gone' } : undefined,
+    agent: (_profile, agentId) => state.gone.has(agentId) ? null : { userId: 'settings', id: agentId },
     workspace: async () => state.workspace,
     shellEnv: async () => {
       state.onShellEnv?.()
@@ -100,6 +106,23 @@ describe('running a command', () => {
     await ended(w, 'chat-1', result.itemId)
     expect(item(w, result.itemId)!.state).toBe('completed')
     expect(readFileSync(started.outputPath!, 'utf8')).toBe('hello from you\n')
+  })
+
+  it.each([
+    ['the default width when the window sent none', undefined, '120'],
+    ['the window\'s width', 97, '97'],
+    ['a width clamped up to 40', 3, '40'],
+    ['a width clamped down to 400', 9000, '400']
+  ])('gives the child unbuffered Python and %s as COLUMNS', async (_name, columns, expected) => {
+    const w = world()
+    const result = await w.service.run('profile', {
+      chatId: 'chat-1', messageId: 'msg-1', command: 'echo "$PYTHONUNBUFFERED $COLUMNS"', reviewed: true,
+      ...(columns === undefined ? {} : { columns })
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    await ended(w, 'chat-1', result.itemId)
+    expect(readFileSync(item(w, result.itemId)!.outputPath!, 'utf8')).toBe(`1 ${expected}\n`)
   })
 
   it('takes the chat\'s agent for a message with no source agent', async () => {
@@ -163,6 +186,15 @@ describe('running a command', () => {
     expect(await run(w, 'ls', false, '../escape', 'msg-1')).toMatchObject({ ok: false, code: 'chat_not_found' })
     w.state.trashed = true
     expect(await run(w, 'ls')).toMatchObject({ ok: false, code: 'chat_not_found' })
+  })
+
+  it('says folder_missing, not not_local, for a folder agent that dropped out of the list with its folder', async () => {
+    const w = world()
+    w.state.gone = new Set(['folder:moved', 'remote:gone'])
+    expect(await run(w, 'ls', false, 'chat-1', 'msg-folder')).toEqual({ ok: false, code: 'folder_missing', reason: USER_COMMAND_RUN_REASONS.folder_missing })
+    expect(await run(w, 'ls', true, 'chat-1', 'msg-folder')).toMatchObject({ ok: false, code: 'folder_missing' })
+    // An agent that was never a folder here is still not local.
+    expect(await run(w, 'ls', false, 'chat-1', 'msg-remote')).toMatchObject({ ok: false, code: 'not_local' })
   })
 
   it('answers spawn_failed, with the error, when the shell cannot start', async () => {

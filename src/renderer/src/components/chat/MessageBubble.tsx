@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
-import { FileRefContext, MessageIdContext, chatMarkdownComponents } from './fileRefs'
+import { CommandMessageContext, CommandScopeContext, FileRefContext, MessageIdContext, chatMarkdownComponents, type CommandMessage } from './fileRefs'
 import { repairNestedFences } from '../../utils/nestedFences'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 
@@ -118,6 +118,18 @@ export function MessageBubble({
   // Run items: main resolves the message's agent and folder from it.
   const messageId = useContext(MessageIdContext)
   const fileRefs = isStreaming ? null : inheritedFileRefs
+  // A settled, persisted reply whose agent runs commands here: its commands are clickable.
+  const commandScope = useContext(CommandScopeContext)
+  const commandEntry = !isUser && !isStreaming && messageId ? commandScope?.messages.get(messageId) : undefined
+  const commandChatId = commandScope?.chatId
+  const commandAgentId = commandEntry?.agentId
+  const commandFolder = commandEntry?.folder ?? null
+  // Keyed on values, so a transcript refetch does not re-render every code span.
+  const commandMessage = useMemo((): CommandMessage | null =>
+    commandAgentId && commandChatId && messageId
+      ? { chatId: commandChatId, messageId, agentId: commandAgentId, folder: commandFolder }
+      : null,
+  [commandAgentId, commandChatId, commandFolder, messageId])
   // One text for what the bubble shows and what Copy text / Save to Notes take,
   // so a copied snippet carries neither the model's broken nesting nor its
   // zero-width escapes (see `utils/nestedFences.ts`).
@@ -211,7 +223,9 @@ export function MessageBubble({
             rendered as a separate badge. Streaming pass also hides partial tags
             mid-stream so no fragment flashes before the turn finalizes. */}
         <FileRefContext.Provider value={fileRefs}>
-          <MarkdownContent content={markdown} highlight={!isStreaming} />
+          <CommandMessageContext.Provider value={commandMessage}>
+            <MarkdownContent content={markdown} highlight={!isStreaming} />
+          </CommandMessageContext.Provider>
         </FileRefContext.Provider>
         {isStreaming && (
           <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm" />

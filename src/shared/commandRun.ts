@@ -282,6 +282,42 @@ export function looksAutoRunnable(command: string): boolean {
   return !script.split(/[/\\]/).includes('..')
 }
 
+/** Why a command does not look auto-runnable: several commands, or one the rule does not know to be safe. */
+export type AutoRunRefusal = 'several_commands' | 'not_read_only'
+
+/**
+ * Whether a command line holds more than one command: a second line, or `;`,
+ * `|`, `&&` or a background `&` outside quotes (a redirection's `>&` / `&>`
+ * is not one).
+ */
+export function chainsCommands(command: string): boolean {
+  const text = command.trim()
+  let quote: "'" | '"' | null = null
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (quote === "'") { if (ch === "'") quote = null; continue }
+    if (ch === '\\') { i++; continue }
+    if (quote === '"') { if (ch === '"') quote = null; continue }
+    if (ch === "'" || ch === '"') { quote = ch; continue }
+    if (ch === '\n' || ch === ';' || ch === '|') return true
+    if (ch === '&') {
+      if (text[i + 1] === '&') return true
+      if (text[i - 1] === '>' || text[i + 1] === '>') continue
+      if (text.slice(i + 1).trim() !== '') return true
+    }
+  }
+  return false
+}
+
+/**
+ * Why {@link looksAutoRunnable} says no, judged by the same checks; null when
+ * it says yes. The Run Script window's guard line says it.
+ */
+export function autoRunRefusal(command: string): AutoRunRefusal | null {
+  if (looksAutoRunnable(command)) return null
+  return chainsCommands(command) ? 'several_commands' : 'not_read_only'
+}
+
 /**
  * Command names an inline code span may start with to count as a command
  * (with at least one more word). Recognising is not running: anything outside

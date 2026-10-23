@@ -5,8 +5,8 @@ import { messageMenuItems, useMessageContextMenu } from './MessageContextMenu'
 import { MessageBubble } from './MessageBubble'
 import { MessageIdContext } from './fileRefs'
 import { useAuthStore } from '../../stores/auth.store'
-import { useUserCommandsStore } from '../../stores/userCommands.store'
-import { USER_COMMAND_RUN_REASONS } from '../../../../shared/userCommands'
+import { useRunScriptStore } from '../../stores/runScript.store'
+import { COMMAND_REVIEW_REASONS } from '../../../../shared/userCommands'
 
 /**
  * The message menu's last group: Run, Run in background and Edit and Run…
@@ -23,7 +23,7 @@ beforeEach(() => {
   run.mockReset().mockResolvedValue({ ok: true, itemId: 'cmd-1', folder: '~/agents/a' })
   window.api = { app: { setTheme: async () => {} }, userCommands: { run } } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
-  useUserCommandsStore.setState({ panels: {}, edit: null, editPending: null, editError: null })
+  useRunScriptStore.setState({ window: null, pending: null, error: null, runSources: {} })
   window.getSelection()?.removeAllRanges()
 })
 afterEach(() => vi.restoreAllMocks())
@@ -55,23 +55,23 @@ describe('messageMenuItems with a command', () => {
 })
 
 describe('the command group', () => {
-  it('offers the three items for a safe inline command and runs it unreviewed, opening the panel', async () => {
+  it('offers the three items for a safe inline command and runs it unreviewed, opening the window on the run', async () => {
     mount('Run `uv run scripts/x.py --live` now.')
     fireEvent.contextMenu(screen.getByText('uv run scripts/x.py --live'))
     expect(items()).toEqual(['Copy text', 'Save to Notes', 'Run', 'Run in background', 'Edit and Run…'])
     fireEvent.click(screen.getByRole('menuitem', { name: 'Run' }))
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(run).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-1', command: 'uv run scripts/x.py --live', reviewed: false })
-    expect(useUserCommandsStore.getState().panels['chat-1']).toBe('cmd-1')
+    expect(run).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-1', command: 'uv run scripts/x.py --live', reviewed: false, columns: expect.any(Number) })
+    expect(useRunScriptStore.getState().window).toMatchObject({ chatId: 'chat-1', messageId: 'msg-1', command: 'uv run scripts/x.py --live', runs: ['cmd-1'], reason: null })
   })
 
-  it('runs in the background without opening the panel', async () => {
+  it('runs in the background without opening the window', async () => {
     mount('`ls -la`')
     fireEvent.contextMenu(screen.getByText('ls -la'))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Run in background' }))
     await waitFor(() => expect(run).toHaveBeenCalled())
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(useUserCommandsStore.getState().panels).toEqual({})
+    expect(useRunScriptStore.getState().window).toBeNull()
   })
 
   it('offers only Edit and Run… for a fenced rm, with the review line', () => {
@@ -79,17 +79,18 @@ describe('the command group', () => {
     fireEvent.contextMenu(screen.getByTestId('transcript').querySelector('pre code')!)
     expect(items()).toEqual(['Copy text', 'Save to Notes', 'Edit and Run…'])
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit and Run…' }))
-    expect(useUserCommandsStore.getState().edit).toMatchObject({
-      chatId: 'chat-1', messageId: 'msg-1', command: 'rm -rf build', folder: '/agents/a', reason: USER_COMMAND_RUN_REASONS.needs_review
+    expect(useRunScriptStore.getState().window).toMatchObject({
+      chatId: 'chat-1', messageId: 'msg-1', agentId: 'folder:a', command: 'rm -rf build', folder: '/agents/a', reason: COMMAND_REVIEW_REASONS.not_read_only, runs: []
     })
+    expect(run).not.toHaveBeenCalled()
   })
 
-  it('opens the edit dialog with main\'s reason when Run comes back needs_review', async () => {
+  it('opens the Run Script window with main\'s reason when Run comes back needs_review', async () => {
     run.mockResolvedValue({ ok: false, code: 'needs_review', reason: 'Check it first.', folder: '~/agents/a' })
     mount('`uv run scripts/missing.py`')
     fireEvent.contextMenu(screen.getByText('uv run scripts/missing.py'))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Run' }))
-    await waitFor(() => expect(useUserCommandsStore.getState().edit).toMatchObject({ command: 'uv run scripts/missing.py', reason: 'Check it first.', folder: '~/agents/a' }))
+    await waitFor(() => expect(useRunScriptStore.getState().window).toMatchObject({ command: 'uv run scripts/missing.py', reason: 'Check it first.', folder: '~/agents/a', runs: [] }))
     expect(screen.queryByRole('menu')).toBeNull()
   })
 

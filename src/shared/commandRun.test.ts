@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commandFirstWord, commandOutputFilename, detectCommand, looksAutoRunnable } from './commandRun'
+import { autoRunRefusal, chainsCommands, commandFirstWord, commandOutputFilename, detectCommand, looksAutoRunnable } from './commandRun'
 import { COMMAND_CASES } from './commandRunCases'
 
 const inline = (text: string): string | null => detectCommand(text, { fenced: false })
@@ -64,5 +64,36 @@ describe('commandOutputFilename', () => {
     expect(commandOutputFilename('./run.sh --x')).toBe('output-run.txt')
     expect(commandOutputFilename('ls -la')).toBe('output-ls.txt')
     expect(commandOutputFilename('rm -rf build | tee x')).toBe('output-rm.txt')
+  })
+})
+
+describe('autoRunRefusal', () => {
+  it('says nothing for what looksAutoRunnable passes', () => {
+    expect(autoRunRefusal('ls -la')).toBeNull()
+    expect(autoRunRefusal('uv run scripts/check.py italy')).toBeNull()
+  })
+
+  it.each([
+    ['a block of lines', 'echo one\necho two'],
+    ['a chain', 'make build && make test'],
+    ['a sequence', 'cd x; ls'],
+    ['a pipe', 'cat a.txt | wc -l'],
+    ['an or', 'ls x || true'],
+    ['a background job before another', 'sleep 1 & ls']
+  ])('calls %s several commands', (_name, command) => {
+    expect(chainsCommands(command)).toBe(true)
+    expect(autoRunRefusal(command)).toBe('several_commands')
+  })
+
+  it.each([
+    ['rm', 'rm -rf build'],
+    ['a quoted operator', "echo 'a; b | c && d'"],
+    ['an escaped semicolon', 'find . -name x -exec ls {} \\;'],
+    ['a redirection of stderr', 'make 2>&1'],
+    ['a trailing background job', 'sleep 60 &'],
+    ['an absolute script', '/usr/local/bin/tool --x']
+  ])('calls %s not known to be read-only', (_name, command) => {
+    expect(chainsCommands(command)).toBe(false)
+    expect(autoRunRefusal(command)).toBe('not_read_only')
   })
 })

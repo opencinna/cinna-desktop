@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionActivityItem } from '../../../../shared/sessionActivity'
 import { CommandsBadge, SessionActivityBadge, commandsLabel, formatRunDuration } from './SessionActivityBadges'
-import { useUserCommandsStore } from '../../stores/userCommands.store'
+import { useRunScriptStore } from '../../stores/runScript.store'
 import { useComposerAttachTargetStore } from '../../stores/composerAttachTarget.store'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
 
@@ -26,7 +26,7 @@ beforeEach(() => {
   api.dismiss.mockReset().mockResolvedValue({ ok: true })
   api.ingestPaths.mockReset().mockResolvedValue({ success: true, files: [{ id: 'f1', name: 'output-ls.txt' }] })
   window.api = { userCommands: { outputFile: api.outputFile, dismiss: api.dismiss }, files: { ingestPaths: api.ingestPaths } } as never
-  useUserCommandsStore.setState({ panels: {}, edit: null, editPending: null, editError: null })
+  useRunScriptStore.setState({ window: null, pending: null, error: null, runSources: {} })
   useComposerAttachTargetStore.setState({ targets: { 'chat-1': { draftKey: 'draft-chat-1', scope: 'local' } } })
   useComposerDraftStore.setState({ drafts: {} })
 })
@@ -60,7 +60,9 @@ describe('the Commands badge', () => {
     expect(within(list).getByRole('button', { name: 'Stop ls c1' })).toBeTruthy()
     expect(within(list).queryByRole('button', { name: /Add output/ })).toBeNull()
     fireEvent.click(within(list).getByRole('button', { name: 'Open output of ls c1' }))
-    expect(useUserCommandsStore.getState().panels['chat-1']).toBe('c1')
+    expect(useRunScriptStore.getState().window).toMatchObject({ chatId: 'chat-1', runs: ['c1'], command: 'ls c1', agentId: 'folder:a' })
+    // The popover shuts behind the window, so Escape reaches the window.
+    expect(screen.queryByLabelText('Commands list')).toBeNull()
   })
 
   it('adds an ended run\'s output to the composer\'s draft as a dropped file would be', async () => {
@@ -87,21 +89,26 @@ describe('the Commands badge', () => {
     await waitFor(() => expect(api.dismiss).toHaveBeenCalledWith('chat-1', 'c1'))
   })
 
-  it('closes the output panel when the run it shows is removed, and only then', async () => {
-    useUserCommandsStore.setState({ panels: { 'chat-1': 'c1', 'chat-2': 'c9' } })
+  it('closes the Run Script window when the run it shows is removed, and only then', async () => {
+    useRunScriptStore.getState().openForRun('chat-1', { id: 'c1', title: 'ls c1', agentId: 'folder:a', detail: '~/agents/a' })
     render(<CommandsBadge chatId="chat-1" items={[command('c1', { state: 'completed', endedAt: T0 })]} stop={stop} />)
     fireEvent.click(badge()!)
     fireEvent.click(screen.getByRole('button', { name: 'Remove ls c1' }))
-    await waitFor(() => expect(useUserCommandsStore.getState().panels).toEqual({ 'chat-2': 'c9' }))
+    await waitFor(() => expect(useRunScriptStore.getState().window).toBeNull())
   })
 
-  it('keeps an open panel on another run of the chat when one is removed', async () => {
-    useUserCommandsStore.setState({ panels: { 'chat-1': 'c2' } })
+  it('keeps the window on another run of the chat when one is removed', async () => {
+    useRunScriptStore.getState().openForRun('chat-1', { id: 'c2', title: 'ls c2', agentId: 'folder:a', detail: '~/agents/a' })
     render(<CommandsBadge chatId="chat-1" items={[command('c1', { state: 'completed', endedAt: T0 })]} stop={stop} />)
     fireEvent.click(badge()!)
     fireEvent.click(screen.getByRole('button', { name: 'Remove ls c1' }))
     await waitFor(() => expect(api.dismiss).toHaveBeenCalled())
-    expect(useUserCommandsStore.getState().panels).toEqual({ 'chat-1': 'c2' })
+    expect(useRunScriptStore.getState().window?.runs).toEqual(['c2'])
+  })
+
+  it('names its chat, so the window collapses into the right badge', () => {
+    render(<CommandsBadge chatId="chat-1" items={[command('c1')]} stop={stop} />)
+    expect(badge()?.dataset.chatId).toBe('chat-1')
   })
 
   it('puts the state, not a button, in Stop\'s slot once the run ends', () => {
@@ -124,7 +131,7 @@ describe('the Commands badge', () => {
     expect(screen.getByRole('button', { name: 'Remove ls c1' }).getAttribute('title')).toBe('Remove')
   })
 
-  it('shows a run\'s duration as the output panel does', () => {
+  it('shows a run\'s duration as the Run Script window does', () => {
     render(<CommandsBadge chatId="chat-1" items={[command('c1', { state: 'completed', endedAt: new Date(T0.getTime() + 65_000) })]} stop={stop} />)
     fireEvent.click(badge()!)
     expect(screen.getByLabelText('Commands list').textContent).toContain('1m 05s')

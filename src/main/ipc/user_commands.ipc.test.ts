@@ -49,6 +49,13 @@ describe('userCommands IPC', () => {
     expect(service.run).toHaveBeenCalledWith('profile-1', { chatId: 'mine', messageId: 'm', command: 'ls', reviewed: false })
   })
 
+  it('passes the window\'s columns when it is a number, and drops anything else', async () => {
+    await invoke('userCommands:run', { chatId: 'mine', messageId: 'm', command: 'ls', reviewed: true, columns: 88 })
+    expect(service.run).toHaveBeenLastCalledWith('profile-1', { chatId: 'mine', messageId: 'm', command: 'ls', reviewed: true, columns: 88 })
+    await invoke('userCommands:run', { chatId: 'mine', messageId: 'm', command: 'ls', reviewed: true, columns: '88' })
+    expect(service.run).toHaveBeenLastCalledWith('profile-1', { chatId: 'mine', messageId: 'm', command: 'ls', reviewed: true })
+  })
+
   it.each(['binned', 'theirs', 42])('refuses chat %s as data, before the service', async (chatId) => {
     expect(await invoke('userCommands:run', { chatId, messageId: 'm', command: 'ls', reviewed: true })).toMatchObject({ ok: false, code: 'chat_not_found' })
     expect(invoke('userCommands:outputText', chatId, 'cmd-1')).toMatchObject({ ok: false, code: 'chat_not_found' })

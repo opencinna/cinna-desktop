@@ -39,7 +39,8 @@ export function registerUserCommandHandlers(): void {
       chatId: payload.chatId as string,
       messageId: typeof payload.messageId === 'string' ? payload.messageId : '',
       command: typeof payload.command === 'string' ? payload.command : '',
-      reviewed: payload.reviewed === true
+      reviewed: payload.reviewed === true,
+      ...(typeof payload.columns === 'number' ? { columns: payload.columns } : {})
     })
   })
 

@@ -36,6 +36,7 @@ import { agentFileName, isCredentialFileRef } from '../../../../shared/agentFile
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
 import { useChatStore } from '../../stores/chat.store'
+import { CARD_MOTION, playCardEntrance, playCardExit } from '../../utils/cardMotion'
 
 /** Labelled secondary button at the app-chrome scale (Contents); colours by state. */
 const HEADER_ACTION_CLASS =
@@ -43,7 +44,7 @@ const HEADER_ACTION_CLASS =
   'border-[var(--color-border)] disabled:opacity-50 transition-colors'
 
 /** Entrance timing: short enough to never be waited on. */
-const ENTRANCE: KeyframeAnimationOptions = { duration: 170, easing: 'cubic-bezier(0.2, 0, 0, 1)' }
+const ENTRANCE = CARD_MOTION
 
 /** The card's widest closed width, `max-w-3xl`, in rem. */
 const CARD_MAX_WIDTH_REM = 48
@@ -153,30 +154,11 @@ function useCardEntrance({
     state.timer = null
     if (typeof card.animate === 'function') {
       // Keyboard opens have no point and grow from the centre; reduced motion
-      // only fades. The rect is read before any transform applies.
-      const { origin } = useFilePreviewStore.getState()
-      const rect = card.getBoundingClientRect()
-      card.style.transformOrigin = origin ? `${origin.x - rect.left}px ${origin.y - rect.top}px` : 'center'
-      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      // only fades (`playCardEntrance`).
       card.style.opacity = ''
-      const animations = [
-        card.animate(
-          reduceMotion
-            ? [{ opacity: 0 }, { opacity: 1 }]
-            : [
-                { opacity: 0, transform: 'scale(0.92)' },
-                { opacity: 1, transform: 'scale(1)' }
-              ],
-          ENTRANCE
-        )
-      ]
       const backdrop = backdropRef.current
-      if (backdrop) {
-        backdrop.style.opacity = ''
-        const fade = backdrop.animate?.([{ opacity: 0 }, { opacity: 1 }], ENTRANCE)
-        if (fade) animations.push(fade)
-      }
-      state.animations = animations
+      if (backdrop) backdrop.style.opacity = ''
+      state.animations = playCardEntrance(card, backdrop, useFilePreviewStore.getState().origin)
     }
     card.focus({ preventScroll: true })
   }, [cardRef, backdropRef])
@@ -418,23 +400,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
     const card = cardRef.current
     const neverShown = card?.style.opacity === '0'
     const animations: Animation[] = []
-    if (card && !neverShown && typeof card.animate === 'function') {
-      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-      const exit: KeyframeAnimationOptions = { ...ENTRANCE, fill: 'forwards' }
-      animations.push(
-        card.animate(
-          reduceMotion
-            ? [{ opacity: 1 }, { opacity: 0 }]
-            : [
-                { opacity: 1, transform: 'scale(1)' },
-                { opacity: 0, transform: 'scale(0.92)' }
-              ],
-          exit
-        )
-      )
-      const fade = backdropRef.current?.animate?.([{ opacity: 1 }, { opacity: 0 }], exit)
-      if (fade) animations.push(fade)
-    }
+    if (card && !neverShown) animations.push(...playCardExit(card, backdropRef.current))
     const timer = setTimeout(() => setExitView(null), animations.length > 0 ? Number(ENTRANCE.duration) : 0)
     return () => {
       clearTimeout(timer)

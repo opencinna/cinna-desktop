@@ -15,7 +15,8 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
 import { MessageBubble } from './MessageBubble'
-import { FileRefContext, FileRefResolver, MessageIdContext, collectFileRefSources, type FileRefScope } from './fileRefs'
+import { CommandScopeContext, FileRefContext, FileRefResolver, MessageIdContext, collectFileRefSources, type CommandScope, type FileRefScope } from './fileRefs'
+import { agentRunsCommands } from '../../utils/userCommands'
 import { ArtifactCard, ShownArtifactsContext } from '../artifacts/ArtifactCard'
 import { ArtifactPublishToolBlock, parsePublishResult } from '../artifacts/ArtifactPublishTool'
 import { ArtifactCardsSource, useArtifactsSupport } from '../../hooks/useArtifacts'
@@ -256,12 +257,6 @@ function renderCommandToolPair(opts: {
 interface MessageStreamProps {
   chatId: string
   bottomPadding?: number
-  /**
-   * Where the transcript's pills sit, from the bottom, when something docked
-   * above the composer (a command's output panel) must not be covered; by
-   * default they straddle the composer's fade band.
-   */
-  pillsBottom?: number
 }
 
 const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
@@ -285,15 +280,13 @@ function TranscriptPills({
   pinned,
   onCollapse,
   onJumpToLatest,
-  bottomPadding,
-  pillsBottom
+  bottomPadding
 }: {
   store: TranscriptExpansionStore
   pinned: boolean
   onCollapse: () => void
   onJumpToLatest: () => void
   bottomPadding?: number
-  pillsBottom?: number
 }): React.JSX.Element | null {
   const hasExpanded = useSyncExternalStore(store.subscribe, store.hasExpanded)
   if (pinned && !hasExpanded) return null
@@ -306,7 +299,7 @@ function TranscriptPills({
   return (
     <div
       className="absolute inset-x-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-2 whitespace-nowrap pointer-events-none"
-      style={{ bottom: pillsBottom ?? Math.max(0, (bottomPadding ?? 0) - 8) }}
+      style={{ bottom: Math.max(0, (bottomPadding ?? 0) - 8) }}
     >
       <div className="flex justify-end">
         {hasExpanded && (
@@ -479,7 +472,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
 const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
-export function MessageStream({ chatId, bottomPadding, pillsBottom }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
@@ -546,6 +539,19 @@ export function MessageStream({ chatId, bottomPadding, pillsBottom }: MessageStr
     [chatData?.messages, agents, rootAgentId]
   )
   const [fileRefScopes, setFileRefScopes] = useState<ReadonlyMap<string, FileRefScope>>(NO_FILE_REF_SCOPES)
+  // The replies whose commands are clickable: persisted assistant messages of
+  // an agent that runs commands on this computer (main checks again on Run).
+  const commandScope = useMemo((): CommandScope | null => {
+    const runners = new Map((agents ?? []).filter((agent) => agentRunsCommands(agent)).map((agent) => [agent.id, agent]))
+    if (runners.size === 0) return null
+    const messages = new Map<string, { agentId: string; folder: string | null }>()
+    for (const message of chatData?.messages ?? []) {
+      if (message.role !== 'assistant') continue
+      const agent = runners.get(message.sourceAgentId ?? rootAgentId ?? '')
+      if (agent) messages.set(message.id, { agentId: agent.id, folder: agent.localPath ?? null })
+    }
+    return messages.size > 0 ? { chatId, messages } : null
+  }, [agents, chatData?.messages, rootAgentId, chatId])
   const fileRefScopeFor = (agentId: string | null): FileRefScope | null =>
     agentId ? fileRefScopes.get(agentId) ?? null : null
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
@@ -732,6 +738,7 @@ export function MessageStream({ chatId, bottomPadding, pillsBottom }: MessageStr
         their own and the scroll element stays the direct flex child it has
         always been. */}
     <TranscriptExpansionContext.Provider value={expansionStore}>
+    <CommandScopeContext.Provider value={commandScope}>
     {/* Keyed by chat: the resolver remembers each agent's last answer, which
         belongs to this transcript only. */}
     {fileRefSources.size > 0 && <FileRefResolver key={chatId} sources={fileRefSources} onChange={setFileRefScopes} />}
@@ -1650,9 +1657,9 @@ export function MessageStream({ chatId, bottomPadding, pillsBottom }: MessageStr
         onCollapse={collapseExpanded}
         onJumpToLatest={scrollToBottom}
         bottomPadding={bottomPadding}
-        pillsBottom={pillsBottom}
       />
       {messageContextMenu.menu}
+    </CommandScopeContext.Provider>
     </TranscriptExpansionContext.Provider>
     </ShownArtifactsContext.Provider>
   )

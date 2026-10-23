@@ -26,9 +26,8 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { startAgentChat, unavailableAgentMessage } from '../../utils/startAgentChat'
 import { fileRefTargetOf, type FileRefTarget } from './fileRefs'
 import { detectCommand, looksAutoRunnable } from '../../../../shared/commandRun'
-import { USER_COMMAND_RUN_REASONS } from '../../../../shared/userCommands'
 import { agentRunsCommands, fenceLanguage, primeHomeDir } from '../../utils/userCommands'
-import { useUserCommandsStore } from '../../stores/userCommands.store'
+import { estimateRunColumns, useRunScriptStore } from '../../stores/runScript.store'
 
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -38,7 +37,9 @@ export interface MenuCommand {
   /** What runs, prompts stripped (`detectCommand`). */
   text: string
   messageId: string
-  /** The agent's folder as far as the renderer knows it, for the edit dialog. */
+  /** The message's agent, for the Run Script window's file actions. */
+  agentId: string | null
+  /** The agent's folder as far as the renderer knows it, for the Run Script window. */
   folder: string | null
   /** The disk-free half of the own-command rule passed: Run and Run in background are offered. */
   auto: boolean
@@ -201,9 +202,9 @@ export function menuCommandOf(
   const fenced = code.element.tagName === 'PRE'
   const text = detectCommand(code.text, { fenced, lang: fenced ? fenceLanguage(code.element.querySelector('code')) : null })
   if (text === null) return undefined
-  // Ready by the time Edit and Run… shows the folder as `~/…`.
+  // Ready by the time the Run Script window shows the folder as `~/…`.
   void primeHomeDir()
-  return { text, messageId, folder: agent?.localPath ?? null, auto: looksAutoRunnable(text) }
+  return { text, messageId, agentId: agent?.id ?? null, folder: agent?.localPath ?? null, auto: looksAutoRunnable(text) }
 }
 
 export function useMessageContextMenu(chatId: string) {
@@ -411,24 +412,19 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
 
   /**
    * Run or Run in background: no confirmation (D4). Main checks the
-   * own-command rule against the agent's real folder; a command it will not
-   * run unreviewed opens the edit dialog with the reason, never a dead end.
+   * own-command rule against the agent's real folder. The store starts it, so
+   * the answer lands even once the menu has gone: Run opens the Run Script
+   * window on the run, a command main will not run unreviewed opens it with
+   * main's reason, never a dead end. Any other refusal is said here.
    */
   const runCommand = async (fail: (reason: string) => void, background: boolean): Promise<void> => {
     if (!command) return
-    const result = await window.api.userCommands.run({ chatId, messageId: command.messageId, command: command.text, reviewed: false })
-    const store = useUserCommandsStore.getState()
-    if (result.ok) {
-      if (!background) store.openPanel(chatId, result.itemId)
-      onClose()
-      return
-    }
-    if (result.code === 'needs_review') {
-      onClose()
-      store.openEdit({ chatId, messageId: command.messageId, command: command.text, folder: result.folder ?? command.folder, reason: result.reason })
-      return
-    }
-    fail(result.reason)
+    const refusal = await useRunScriptStore.getState().runFromMenu({
+      chatId, messageId: command.messageId, agentId: command.agentId, folder: command.folder, command: command.text,
+      origin: { x, y }, columns: estimateRunColumns()
+    }, background)
+    if (refusal === null) onClose()
+    else fail(refusal)
   }
 
   const actions: Record<MessageMenuItem, () => Promise<void>> = {
@@ -489,12 +485,12 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
     }, 'Could not open Publish.'),
     'run': () => run('run', (fail) => runCommand(fail, false), 'The command could not be started.'),
     'run-background': () => run('run-background', (fail) => runCommand(fail, true), 'The command could not be started.'),
-    // The dialog is app-wide and owns its run; the menu only opens it.
+    // The window is app-wide and owns its runs; the menu only opens it.
     'edit-run': () => run('edit-run', async () => {
       if (!command) return
-      useUserCommandsStore.getState().openEdit({
-        chatId, messageId: command.messageId, command: command.text, folder: command.folder,
-        reason: command.auto ? null : USER_COMMAND_RUN_REASONS.needs_review
+      useRunScriptStore.getState().openFromCode({
+        chatId, messageId: command.messageId, agentId: command.agentId, folder: command.folder, command: command.text,
+        origin: { x, y }
       })
       onClose()
     }, 'Could not open Edit and Run.')

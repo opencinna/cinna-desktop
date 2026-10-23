@@ -2,8 +2,6 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { NO_CHAT_MODE, useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useAgents } from '../../hooks/useAgents'
-import { CommandOutputPanel } from '../chat/CommandOutputPanel'
-import { useUserCommandsStore } from '../../stores/userCommands.store'
 import { MessageStream } from '../chat/MessageStream'
 import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { RefusableExamplePrompts, readinessRefusal } from '../chat/ComposerReadiness'
@@ -113,7 +111,6 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const chatInputRef = useRef<ChatInputHandle>(null)
   const inputWrapperRef = useRef<HTMLDivElement>(null)
   const [inputHeight, setInputHeight] = useState(0)
-  const commandPanelOpen = useUserCommandsStore((s) => !!activeChatId && !!s.panels[activeChatId])
 
   // Track input wrapper height for overlay padding
   // Re-attach when activeView changes because the input wrapper unmounts in settings
@@ -500,10 +497,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
-      {/* With a command's output open, the pills sit just above the panel (the
-          wrapper's content box plus its 12px bottom padding, and a gap), in
-          the transcript, rather than over the panel's header. */}
-      <MessageStream chatId={activeChatId} bottomPadding={inputHeight} pillsBottom={commandPanelOpen ? inputHeight + 12 + 8 : undefined} />
+      <MessageStream chatId={activeChatId} bottomPadding={inputHeight} />
       <div
         ref={inputWrapperRef}
         className="absolute bottom-0 left-0 right-0 pt-6 pb-3 pointer-events-none"
@@ -521,9 +515,6 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           }}
         />
         <div className="relative pointer-events-auto">
-          {/* Docked above the composer: the measured input height grows with
-              it, so the transcript gives up the room once, on the click. */}
-          <CommandOutputPanel chatId={activeChatId} />
           {sendErrorBanner}
           <ChatInput
             ref={chatInputRef}

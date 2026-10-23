@@ -7,17 +7,33 @@
  * Refusals cross IPC as data, never as a thrown error code.
  */
 
+import { autoRunRefusal, type AutoRunRefusal } from './commandRun'
+
 export interface UserCommandRunInput {
   chatId: string
   /** The persisted message the command was found in; its agent is the run's agent. */
   messageId: string
   command: string
   /**
-   * The user saw the command in the edit dialog and chose to run it: main
+   * The user saw the command in the Run Script window and chose to run it: main
    * runs what it was given. False (Run, Run in background from the menu):
    * main checks the own-command rule first and answers `needs_review`.
    */
   reviewed: boolean
+  /**
+   * The Run Script window's terminal width, in columns: the child sees it as
+   * `COLUMNS`, so a tool that wraps or draws a table fits the window. Clamped
+   * by main ({@link commandColumns}); absent means the default width.
+   */
+  columns?: number
+}
+
+/** `COLUMNS` for a run: the window's width, clamped, or the default when it sent none. */
+export const COMMAND_COLUMNS = { min: 40, max: 400, default: 120 } as const
+
+export function commandColumns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return COMMAND_COLUMNS.default
+  return Math.min(COMMAND_COLUMNS.max, Math.max(COMMAND_COLUMNS.min, Math.floor(value)))
 }
 
 export type UserCommandRunFailure = 'needs_review' | 'not_local' | 'folder_missing' | 'chat_not_found' | 'spawn_failed'
@@ -28,14 +44,15 @@ export type UserCommandRunResult =
       ok: false
       code: UserCommandRunFailure
       reason: string
-      /** The agent's folder, when main resolved it: the edit dialog shows it. */
+      /** The agent's folder, when main resolved it: the Run Script window shows it. */
       folder?: string
     }
 
 /**
  * The sentence the renderer shows for each refusal (a spawn error says its
- * own). Main's `needs_review` carries the own-command rule's reason instead;
- * this one is for a command the menu itself sent to review.
+ * own). Main's `needs_review` carries the own-command rule's reason instead,
+ * and the Run Script window says why it holds a command itself
+ * ({@link commandReviewReason}); this one is the fallback.
  */
 export const USER_COMMAND_RUN_REASONS: Record<UserCommandRunFailure, string> = {
   needs_review: 'This command can change or delete files, so it runs after you check it.',
@@ -45,10 +62,22 @@ export const USER_COMMAND_RUN_REASONS: Record<UserCommandRunFailure, string> = {
   spawn_failed: 'The command could not be started.'
 }
 
+/** The Run Script window's guard line, by why the command does not look safe to run as is. */
+export const COMMAND_REVIEW_REASONS: Record<AutoRunRefusal, string> = {
+  several_commands: 'Several commands — check each before you run them.',
+  not_read_only: 'This command isn\'t known to be read-only — check it before you run it.'
+}
+
+/** The guard line for a command the window opens on, or null for one that looks safe to run as is. */
+export function commandReviewReason(command: string): string | null {
+  const why = autoRunRefusal(command)
+  return why === null ? null : COMMAND_REVIEW_REASONS[why]
+}
+
 /**
- * The agent's folder as the edit dialog and the rows show it: `~/…` under the
- * home folder, else as given. Main and renderer both use it, so the dialog's
- * "Runs in" reads the same whether the menu or main named the folder. Either
+ * The agent's folder as the Run Script window and the rows show it: `~/…` under the
+ * home folder, else as given. Main and renderer both use it, so the window's
+ * folder reads the same whether the menu or main named the folder. Either
  * separator (macOS / Windows); an already shortened path is left alone.
  */
 export function homeDisplayPath(path: string, home: string | null | undefined): string {

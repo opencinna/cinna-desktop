@@ -18,7 +18,7 @@ import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { AgentColorsProvider } from './components/agents/AgentColorsProvider'
 import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { ArtifactsHost } from './components/artifacts/ArtifactsHost'
-import { CommandEditDialog } from './components/chat/CommandEditDialog'
+import { RunScriptModal } from './components/chat/RunScriptModal'
 import { useAuthStore } from './stores/auth.store'
 import { fetchSpeechStatus, SPEECH_STATUS_QUERY_KEY } from './components/chat/voice/useSpeechStatus'
 import { fetchFinderQuickActionStatus, FINDER_QUICK_ACTION_QUERY_KEY } from './hooks/useFinderQuickAction'
@@ -266,7 +266,7 @@ function App(): React.JSX.Element {
         <SyncSetupModal />
         <FilePreviewModal />
         <ArtifactsHost />
-        <CommandEditDialog />
+        <RunScriptModal />
         </AgentColorsProvider>
       </AuthGate>
     </QueryClientProvider>
