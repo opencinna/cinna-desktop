@@ -28,6 +28,22 @@ Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Ta
 
 A hand-written `backdrop-filter` lists `-webkit-backdrop-filter` **first** and the standard property after it. The build's CSS optimizer (lightningcss, run by `@tailwindcss/vite` on build only) keeps just the last of the pair, and Chromium ignores the prefixed one — so with the standard property first, every hand-written blur in `main.css` (`.app-sidebar`, `.app-popover-surface`, `.sidebar-tab`) shipped as no blur at all while looking right in `npm run dev`, and a menu showed the card under it sharp through its 10% alpha. Tailwind's `backdrop-blur-*` utilities are emitted correctly and need nothing.
 
+## Surface Materials
+
+A flat fill on every surface reads as white on white in the light theme and as one grey slab in the dark one. Each surface takes one of four materials, decided by what it is, not by taste. All four live in `main.css`.
+
+| Material | Where | Class |
+|----------|-------|-------|
+| **Glass scrim** | Behind every modal | `app-modal-scrim` on an `absolute inset-0` sibling *before* the panel |
+| **Glass panel** | A modal's own frame: header, body padding, side panels, footer | `app-modal-panel` with `rounded-xl border` (it brings its own tint, border colour, highlight edge and shadow; add no `bg-*` or `shadow-*`) |
+| **Solid** | What sits on a glass panel and is acted on or read closely: cards, buttons, inputs, badges, a terminal, an iframe | The `--color-bg*` tokens; `app-modal-well` for a solid content well with its border |
+| **Ambient** | An inline block in the transcript that asks the user something: a question (`AskUserQuestionBlock`), a permission request (`PermissionRequestBlock`) | `ambient-block`, `data-tone="ask"` / `"permission"` while it waits (no tone once settled), `style={ambientMeshStyle(seed)}` |
+
+- **A modal is glass by default.** Solid is the exception for what sits on it, the way the Agent Status overlay draws solid agent cards on a frosted frame. Run Script (terminal in an `app-modal-well`), File Preview, Artifact Preview and Answer Questions are built this way. Floating layers inside a modal, like File Preview's Contents panel over the body, take `app-popover-surface`.
+- **The scrim is the panel's sibling, never its parent.** A parent with a `backdrop-filter`, `filter`, `opacity` below 1 or a mask becomes the panel's backdrop root, and the panel's blur then sees nothing.
+- **Ambient is for blocks that ask, not for every block.** Tool rows, code blocks and message bubbles stay plain. A mesh on everything is noise, and the blocks that need the user stop standing out. `ambient-block` is static gradients (no blur, no animation) so it costs nothing while the chat streams. `ambientMeshStyle` (`components/ui/ambientMesh.ts`) only shifts the cloud positions from a stable seed (the question text, the request id), so two blocks in a row are not stamped copies. Keep the tone border on the block: the mesh sits behind the content and never replaces the border.
+- **Older modals still use the solid shell** (`bg-black/25` scrim + `bg-[var(--color-bg-secondary)]` card). Move one to the glass materials when you next touch it; never build a new modal on the old shell.
+
 ## Typography — two scales, chosen by surface
 
 Cinna has **two** type scales, and picking the wrong one is the most visible way a screen goes wrong: it renders a step or two smaller than the screen beside it and reads as a different application. The scale is decided by *where the surface lives*, never by how much content it has.

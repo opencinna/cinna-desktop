@@ -153,3 +153,4 @@ A user who meets one kind of record in three places learns it once. Draw it thre
 15. An editable list: compare editing, deleting and adding an item with the sibling list in the neighbouring tab. Different pattern: finding.
 16. Open a form, type into it, then press every other control that opens a form. Is the input lost? High.
 17. Read one row's actions. A labelled verb repeated on every row (rather than an icon button with a title): finding.
+18. A new or changed modal: is it built on `app-modal-scrim` + `app-modal-panel` (UI Guidelines, "Surface Materials"), with only what sits on it solid? A new inline block that asks the user something: is it an `ambient-block`? A solid modal shell or a flat-filled ask block is a finding.
