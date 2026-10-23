@@ -59,11 +59,11 @@ export function AutonomousTaskDialog({ chatId, initialGoal, agentName, onClose, 
         </div>
         <p className="pt-2 text-[11px] text-[var(--color-text-muted)]">Time pauses at saved task questions; approvals within a running agent turn still count. Each coordinator or specialist turn counts toward the turn limit.</p>
       </details>
-      <div className="flex justify-end gap-2">
+      <div className="flex items-start gap-2">
+        <div role="alert" className="min-w-0 flex-1 self-center text-xs text-[var(--color-danger)]">{error}</div>
         <button type="button" disabled={pending} onClick={onClose} className="px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">Cancel</button>
         <button type="submit" disabled={pending || !goal.trim()} className="min-w-24 rounded-md px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white disabled:opacity-50">{pending ? 'Starting…' : 'Start task'}</button>
       </div>
-      <div role="alert" className="h-12 overflow-y-auto text-xs text-[var(--color-danger)]">{error}</div>
     </form>
   </dialog>, document.body)
 }
