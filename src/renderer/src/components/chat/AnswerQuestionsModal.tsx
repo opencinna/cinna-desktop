@@ -280,6 +280,16 @@ export function AnswerQuestionsModal({
                       value={a.custom}
                       disabled={pending}
                       onChange={(e) => setCustom(i, e.target.value)}
+                      onKeyDown={(e) => {
+                        // Enter sends once every question is answered; while
+                        // others are still open it does nothing. An IME
+                        // confirming a candidate also fires Enter — skip it.
+                        if (e.key !== 'Enter' || e.repeat) return
+                        if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
+                        if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                        e.preventDefault()
+                        handleSend()
+                      }}
                       placeholder="Type your answer…"
                       className="w-full mt-1 px-3 py-2 text-[13px] rounded-lg border border-[var(--color-border)]
                         bg-[var(--color-bg-input)] text-[var(--color-text)]
