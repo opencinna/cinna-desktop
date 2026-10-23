@@ -48,7 +48,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 - `src/renderer/src/hooks/useTaskList.ts` — `useTaskList(selection)`, `TaskListSelection`, `taskListKey()`
 - `src/renderer/src/components/chat/SessionMetaBadges.tsx` — the strip; `SPLIT` / `COLLAPSED` container-query classes
 - `src/renderer/src/components/chat/SessionActivityBadges.tsx` — `SessionActivityBadge`, `activityLabel()`, `formatActivityDuration()`, `metaBadgeClass`, `metaCountClass`, `metaPopoverClass`
-- `CommandsBadge` in the same file: the Commands badge, rendered by `SessionMetaBadges` after Subagents and Background
+- `CommandsBadge` in the same file: the Commands badge, rendered by `SessionMetaBadges` after Subagents and Background. Its **Open output** row action (icon `AppWindow`) opens the Run Script window on that run through `useRunScriptStore.openForRun` and closes the popover (`onOpenOutput`), because Escape would otherwise close the popover first; **Remove** calls `runRemoved`. The badge carries `data-chat-id` so the window can collapse into it
 - `src/renderer/src/components/chat/ChatTasksBadge.tsx` — `ChatTasksBadge`, `tasksLabel()`
 - `src/renderer/src/components/tasks/TaskRow.tsx` — the row shared with the Tasks view's lists, with `size: 'regular' | 'compact'` and `onOpened`
 - `src/renderer/src/components/ui/useHoverPopover.ts` — `useHoverPopover(placement)`, `HOVER_CLOSE_DELAY_MS` (200 ms)

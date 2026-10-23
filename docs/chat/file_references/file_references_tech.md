@@ -348,6 +348,7 @@ None.
   - `:hover` switches to `--file-ref-edge-hover` (`white 18%` / `black 12%`), with a 120 ms `box-shadow` transition;
   - a `:focus-visible` 2px accent outline with a 1px offset;
   - no border and no `box-decoration-break`.
+- `.markdown-body code.command-ref` and `pre.command-ref` (a command, not a reference): the same `--file-ref-*` variables, with `--file-ref-edge` and `--file-ref-edge-hover` taken from `--color-command-ref-edge` (`#3f6f52` dark, `#8cc09f` light; hover mixed with white 18% / black 14%). A fenced block's own border takes the edge colour at the same width, so nothing moves. The fill is `.file-ref`'s, duplicated: keep the two in step. Wired in `fileRefs.tsx`; see [Run Commands (tech)](../run_commands/run_commands_tech.md).
 - `.markdown-body a.file-link`: `cursor: pointer` only. Colour and underline come from `.markdown-body a`, because the element is a plain `span` until resolution lands and any box would reflow the line at the swap.
 
 ## Configuration

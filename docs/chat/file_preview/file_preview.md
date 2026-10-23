@@ -35,7 +35,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - An image is read whole instead, as a `data:` URL: `files:read-image`, refused above 25 MB rather than cut. The thumbnails use `files:read-thumbnail`, a scaled-down copy.
   - A composer file not sent yet is read by path: `files:read-preview-path` for text, `files:read-image` with `{ path }` for an image, only for a path the user picked, dropped or pasted this session.
 - **Preview target**: what is open — an `attachment` (marked `composer` when opened from the composer), an `agentFile` (an agent id plus the resolved reference), or a `path` (a new chat's composer file).
-- **Single global modal**: one `FilePreviewModal` mounted at the app root, driven by `useFilePreviewStore`.
+- **Single global modal**: one `FilePreviewModal` mounted at the app root, driven by `useFilePreviewStore`. Its card motion (entrance and exit) is shared with the [Run Script window](../run_commands/run_commands.md), a sibling modal; a preview opened from that window's ⋯ menu sits over it and takes Escape and outside presses first.
   - Opening a second preview replaces the first.
   - A monotonic `requestId` discards a stale fetch that finishes after the user opened another file or closed the modal.
   - `openSeq` changes on every open, so the entrance plays again.

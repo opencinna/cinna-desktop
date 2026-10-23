@@ -162,7 +162,7 @@
       A second layout effect calls `start()` once `settled` (`!isLoading`).
     - **`start()` runs once per open:**
       1. reads the card rect and sets `transform-origin` (or `center`);
-      2. runs the WAAPI `ENTRANCE` animation (170 ms, `cubic-bezier(0.2, 0, 0, 1)`) on the card and backdrop, opacity only under `prefers-reduced-motion`;
+      2. runs `playCardEntrance` (`utils/cardMotion.ts`: the WAAPI animation, 170 ms, `cubic-bezier(0.2, 0, 0, 1)`) on the card and backdrop, opacity only under `prefers-reduced-motion`;
       3. focuses the card with `preventScroll`.
     - **Cleanup** cancels running animations. The close cleanup gives focus back only after a keyboard open; it runs when the exit ends, not when the store closes.
   - **The exit**, in the modal body:
@@ -171,7 +171,7 @@
     - `exiting`: the store is closed and `exitView` is set. The modal then reads every field from `exitView`, so it renders the last open preview.
     - That snapshot still has a target, so `useCardEntrance` still sees `open`. Its focus cleanup therefore waits for `exitView` to clear.
     - A layout effect on `exiting` runs the reverse keyframes on the card (scale 1 → 0.92 and opacity 1 → 0; opacity only under reduced motion) and on the backdrop.
-      - It uses `ENTRANCE` plus `fill: 'forwards'`, so the last frame holds until unmount.
+      - It is `playCardExit`, which uses the same options plus `fill: 'forwards'`, so the last frame holds until unmount.
       - The card keeps the `transform-origin` the entrance set.
     - A timer of `ENTRANCE.duration` (0 when `Element.animate` is missing) clears `exitView`. The effect's cleanup cancels the timer and the animations; that is how a new open mid-fade cancels the fade.
     - The overlay gets `pointer-events-none` while `exiting`.
@@ -382,7 +382,7 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 - `MAX_PREVIEW_ROWS` = 500 (`PreviewBody.tsx`): the CSV table render cap, and where `parseDelimited` stops.
 - `MAX_HIGHLIGHT_CHARS` = 1024 × 1024 characters (`CodePreview.tsx`): above it code is shown plain and markdown as its raw body, with no Contents for markdown.
 - `ENTRANCE_WAIT_MS` = 150 (`FilePreviewModal.tsx`): how long the card stays hidden waiting for a settled state.
-- `ENTRANCE` = 170 ms, `cubic-bezier(0.2, 0, 0, 1)`. The exit uses the same options, with `fill: 'forwards'`.
+- `ENTRANCE` = `CARD_MOTION` (`src/renderer/src/utils/cardMotion.ts`) = 170 ms, `cubic-bezier(0.2, 0, 0, 1)`. The exit uses the same options, with `fill: 'forwards'`. The card motion lives there because the Run Script window plays the same one ([Run Commands](../run_commands/run_commands_tech.md)).
 - `COPIED_HINT_MS` = 1200 (`FilePreviewModal.tsx`): how long "Copied" or "Couldn't copy" stands before the hint fades.
 - `OPEN_PRESS_GUARD_MS` = 500 (`FilePreviewModal.tsx`): how long after an open, or after a Contents toggle, an outside press is ignored.
 - `CONTENTS_PANEL_WIDTH` = 240 (`FilePreviewContents.tsx`): the panel's width, and what the card widens by.

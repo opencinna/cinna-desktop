@@ -92,6 +92,25 @@ A resolved file reference in a folder agent's chat is a focusable `code` with `r
 | `Esc` / `Tab` (⋯ menu open) | Close the menu only, and focus its trigger. The preview stays; the next `Esc` closes it. Registered on `window` in the capture phase while the menu is open, and stopped there. |
 | `↑` / `↓` / `Home` / `End` (⋯ menu open) | Move between the enabled items, wrapping. Opening the menu focuses the first enabled item. |
 
+### Command in a reply (`code.command-ref`, `pre.command-ref`)
+
+A command in a local agent's reply is a focusable `role="button"`. See [Run Commands](../../chat/run_commands/run_commands.md).
+
+| Key | Action |
+|-----|--------|
+| `Enter` / `Space` | Open the Run Script window on the command, growing from the window's centre. Nothing runs. |
+
+### Run Script window (`RunScriptModal`)
+
+| Combo | Action |
+|-------|--------|
+| `Esc` | Close the window; the run keeps going. Taken first by the ⋯ menu or a file preview opened from the window. |
+| `Enter` (command line) | Run a one-line command; a new line in a multi-line block. `Shift+Enter` / `Alt+Enter` is always a new line. A held key's repeats and an IME-committing Enter run nothing. |
+| `⌘↩` / `Ctrl+Enter` | Run, whatever the command's shape. `⇧⌘↩` runs in the background. |
+| `↑` / `↓` (one-line command) | Walk the chat's earlier commands, most recent first, and back to what was typed. |
+| `Esc` / `Tab` (⋯ menu open) | Close the menu only, and focus its trigger. |
+| `↑` / `↓` (⋯ menu open) | Move between the enabled items, wrapping. |
+
 ### Logs overlay (`LogsOverlay`)
 
 | Combo | Action |

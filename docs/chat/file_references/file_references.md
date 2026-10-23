@@ -242,6 +242,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - Its tooltip is the display path. A folder's ends in `/`, so it does not read as a file of that name.
   - Its accessible name says what a click does, "Preview <text>" or "Show <text> in its folder" ([UX rule 10](../../development/ui_guidelines/ux_rules.md)).
 - **Clicks that do not open it:** selecting part of a path does not open it, and the second click of a double-click opens nothing more.
+- **A command shares this box.** In a local agent's reply, inline code or a fenced block that is a shell command (and not a reference) wears the same fill, inset edge, hover and focus ring, with its own edge colour `--color-command-ref-edge` (green) so it is told apart from a file at a glance. Its tooltip is "Run…" and a click opens the [Run Script window](../run_commands/run_commands.md); it never previews anything. A reference wins: code that resolved as a file keeps its preview.
 - **A file link looks like a link, not like a span.** It keeps the ordinary link colour and underline and adds only a pointer cursor. Until resolution lands it is plain text in a span, so any padding, edge or fill would reflow the line at the swap. Its tooltip is the display path (a folder's ends in `/`), and its accessible name is "Preview <link text>" or "Show <link text> in its folder". The same click rules apply.
 
 ### The modal for a file reference
@@ -327,6 +328,7 @@ For file paths, IPC signatures and method-level detail see [File References — 
 - [Open in Tools](../../agents/local_agents/open_in_tools.md): the Default Tool that **Open** prefers. The editor launch is the one the agent page uses.
 - [The Agents Folder Question](../../agents/local_agents/home_access.md): owns the guarded-location check this feature reuses, so the resolver never probes a guarded folder.
 - [Kit Contract](../../agents/local_agents/kit_contract.md): the `credentials/` folder convention the credential rule follows.
+- [Run Commands](../run_commands/run_commands.md): a command in a reply shares the reference's box with its own edge colour, and code that is a reference is never read as a command.
 - [Conversation UI](../conversation_ui/conversation_ui.md): the message bubbles the links render in, and the transcript right-click menu the reference items live in.
 - [Notes](../../notes/notes/notes.md): Save to Notes creates an ordinary note from the file, and opens it as a saved excerpt is opened.
 - [Artifacts](../artifacts/artifacts.md): the **Publish…** item, and the persisted message a reference remembers (`MessageIdContext`) so the card goes after it. A link to `/artifact/<uuid>` is also no file link: it renders as an artifact card.
