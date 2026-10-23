@@ -115,14 +115,15 @@ export function AnswerQuestionsModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-backdrop)] px-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={questions.length > 1 ? `${questions.length} questions` : 'Question'}
-        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border
-          border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg"
+        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border
+          app-modal-panel"
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-2 px-5 py-3 border-b border-[var(--color-border)]">

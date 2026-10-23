@@ -191,9 +191,9 @@ export function FilePreviewContents({
       className={
         'absolute top-0 bottom-0 overflow-auto' +
         (overlay ? ' right-0' : '') +
-        ' rounded-br-xl border-l border-[var(--color-border)] ' +
-        'bg-[var(--color-bg-secondary)] px-2 py-3' +
-        (overlay ? ' shadow-[-8px_0_16px_-4px_rgb(0_0_0/0.18)]' : '')
+        ' rounded-br-xl border-l border-[var(--color-border)] px-2 py-3' +
+        // Over the body it is a floating layer and frosts what it covers; beside it, the panel's glass shows through.
+        (overlay ? ' app-popover-surface shadow-[-8px_0_16px_-4px_rgb(0_0_0/0.18)]' : '')
       }
     >
       <ul className="space-y-px">

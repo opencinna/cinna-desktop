@@ -8,6 +8,7 @@ import {
   permissionGrantPatterns,
   type LocalPermissionRequest
 } from '../../../../shared/localAgentRequests'
+import { ambientMeshStyle } from '../ui/ambientMesh'
 
 interface PermissionRequestBlockProps {
   request: LocalPermissionRequest
@@ -124,11 +125,11 @@ export function PermissionRequestBlock({
 
   return (
     <div
+      data-tone={live || holding ? 'permission' : undefined}
+      style={ambientMeshStyle(requestId ?? String(request.action))}
       className={
-        'rounded-lg border px-3.5 py-3 ' +
-        (live || holding
-          ? 'border-[var(--color-warning)]/50 bg-[var(--color-warning)]/8'
-          : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] opacity-90')
+        'ambient-block rounded-lg border px-3.5 py-3 ' +
+        (live || holding ? 'border-[var(--color-warning)]/50' : 'border-[var(--color-border)] opacity-90')
       }
     >
       <div className="flex items-start gap-2.5">

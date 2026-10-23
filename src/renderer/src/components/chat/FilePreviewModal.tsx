@@ -500,14 +500,14 @@ export function FilePreviewModal(): React.JSX.Element | null {
       ref={overlayRef}
       className={`fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]${exiting ? ' pointer-events-none' : ''}`}
     >
-      <div ref={backdropRef} aria-hidden className="absolute inset-0 bg-black/25" />
+      <div ref={backdropRef} aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={cardRef}
         tabIndex={-1}
         style={cardStyle}
         className={
-          'relative w-full max-h-[80vh] flex flex-col rounded-xl border border-[var(--color-border)] ' +
-          'bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none ' +
+          'relative w-full max-h-[80vh] flex flex-col rounded-xl border ' +
+          'app-modal-panel focus:outline-none ' +
           (html ? 'max-w-6xl h-[80vh]' : 'max-w-3xl')
         }
       >

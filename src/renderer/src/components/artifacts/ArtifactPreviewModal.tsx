@@ -238,7 +238,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]">
-      <div ref={backdropRef} aria-hidden className="absolute inset-0 bg-black/25" />
+      <div ref={backdropRef} aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={setCard}
         tabIndex={-1}
@@ -246,7 +246,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
         aria-modal="true"
         aria-label={`Preview of ${artifact.title}`}
         data-artifact-preview={artifact.id}
-        className="relative flex h-[80vh] w-full max-w-6xl flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none"
+        className="relative flex h-[80vh] w-full max-w-6xl flex-col rounded-xl border app-modal-panel focus:outline-none"
       >
         <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">

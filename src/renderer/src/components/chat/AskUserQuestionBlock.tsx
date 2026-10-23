@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Check, CheckCircle2, HelpCircle } from 'lucide-react'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { AnswerQuestionsModal } from './AnswerQuestionsModal'
+import { ambientMeshStyle } from '../ui/ambientMesh'
 import type { AskQuestion } from '../../utils/askUserQuestion'
 
 interface AskUserQuestionBlockProps {
@@ -86,11 +87,11 @@ export function AskUserQuestionBlock({
 
   return (
     <div
+      data-tone={live ? 'ask' : undefined}
+      style={ambientMeshStyle(questions.map((q) => q.question).join('\n'))}
       className={
-        'rounded-lg border px-3.5 py-3 ' +
-        (live
-          ? 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8'
-          : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] opacity-90')
+        'ambient-block rounded-lg border px-3.5 py-3 ' +
+        (live ? 'border-[var(--color-accent)]/40' : 'border-[var(--color-border)] opacity-90')
       }
     >
       <div className="flex items-start gap-2.5">

@@ -506,6 +506,82 @@
     border-color: rgba(255, 255, 255, 0.07);
   }
 
+  /* Modal materials (ui_guidelines_llm.md, "Surface materials"). The scrim
+     dims and softens the window behind a modal; the panel is the modal's
+     frosted frame. What sits on the panel — cards, inputs, buttons, a
+     terminal, an iframe — stays solid. The scrim must be the panel's
+     sibling, never its parent: a blurred parent becomes the panel's backdrop
+     root and the panel's own blur then sees nothing. The panel's alpha stays
+     high enough to read where the blur does not composite (see above). */
+  .app-modal-scrim {
+    background-color: rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+  }
+  [data-theme="light"] .app-modal-scrim {
+    background-color: rgba(30, 36, 48, 0.14);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+  }
+  .app-modal-panel {
+    background-color: rgba(28, 28, 31, 0.72);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    backdrop-filter: blur(24px) saturate(150%);
+    border-color: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  }
+  [data-theme="light"] .app-modal-panel {
+    background-color: rgba(250, 250, 252, 0.74);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 24px 64px -12px rgba(15, 23, 42, 0.25);
+  }
+  /* A solid well on a glass panel for content read closely (a terminal). */
+  .app-modal-well {
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+  }
+
+  /* An inline block in the transcript that asks the user something (a
+     question, a permission request): a static mesh of soft clouds instead of
+     a flat fill. Painted once from gradients — no blur, no animation — so it
+     costs nothing while the chat scrolls or streams. `data-tone` tints one
+     cloud; `--mesh-*` positions come from ambientMeshStyle() so two blocks in
+     a row are not stamped copies. */
+  .ambient-block {
+    --mesh-x1: 12%; --mesh-y1: 10%;
+    --mesh-x2: 85%; --mesh-y2: 25%;
+    --mesh-x3: 45%; --mesh-y3: 100%;
+    --mesh-tint: rgba(255, 255, 255, 0.05);
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
+    background-image:
+      radial-gradient(55% 90% at var(--mesh-x1) var(--mesh-y1), rgba(255, 255, 255, 0.06), transparent 70%),
+      radial-gradient(50% 85% at var(--mesh-x2) var(--mesh-y2), var(--mesh-tint), transparent 70%),
+      radial-gradient(70% 100% at var(--mesh-x3) var(--mesh-y3), rgba(0, 0, 0, 0.32), transparent 72%);
+  }
+  .ambient-block[data-tone="ask"] {
+    --mesh-tint: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+  .ambient-block[data-tone="permission"] {
+    --mesh-tint: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  }
+  [data-theme="light"] .ambient-block {
+    --mesh-tint: rgba(110, 118, 132, 0.1);
+    background-color: #f4f5f7;
+    background-image:
+      radial-gradient(55% 90% at var(--mesh-x1) var(--mesh-y1), #ffffff, transparent 70%),
+      radial-gradient(50% 85% at var(--mesh-x2) var(--mesh-y2), var(--mesh-tint), transparent 70%),
+      radial-gradient(70% 100% at var(--mesh-x3) var(--mesh-y3), rgba(255, 255, 255, 0.9), transparent 72%),
+      radial-gradient(45% 70% at calc(100% - var(--mesh-x1)) calc(100% - var(--mesh-y1)), rgba(110, 118, 132, 0.08), transparent 70%);
+  }
+  [data-theme="light"] .ambient-block[data-tone="ask"] {
+    --mesh-tint: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+  [data-theme="light"] .ambient-block[data-tone="permission"] {
+    --mesh-tint: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  }
+
   /* The scrim over a selected runtime card while it needs something (Install,
      Log in, …): the card's own label and sub-line stay readable through it, the
      centred button reads over them. `-webkit-` first, as everywhere here. */

@@ -401,15 +401,15 @@ function RunScriptCard({ view, exiting, onExited }: {
 
   return createPortal(
     <div className={`fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]${exiting ? ' pointer-events-none' : ''}`}>
-      <div ref={backdropRef} aria-hidden className="absolute inset-0 bg-black/25" />
+      <div ref={backdropRef} aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={cardRef}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={`Run ${title}`}
-        className="relative flex h-[70vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-[var(--color-border)]
-          bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none"
+        className="relative flex h-[70vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border
+          app-modal-panel focus:outline-none"
       >
         <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4">
           <SquareTerminal size={15} aria-hidden className="shrink-0 text-[var(--color-text-muted)]" />
@@ -471,7 +471,7 @@ function RunScriptCard({ view, exiting, onExited }: {
         </div>
         {/* A row: the parameters' fixed-width sidebar, when the script has one, is there from the open. */}
         <div className="flex min-h-0 flex-1">
-          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="app-modal-well m-2 mr-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg">
             <CommandTerminal
               chatId={chatId}
               itemId={itemId}
