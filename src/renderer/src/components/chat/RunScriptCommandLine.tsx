@@ -186,9 +186,14 @@ export const RunScriptCommandLine = forwardRef<HTMLTextAreaElement, {
         // Rows fixed at open, no resize: the window keeps its layout while the user types.
         // A field of several rows keeps half a line of bottom padding, so a scrolled
         // field shows the next line cut off and reads as more below; one row sits
-        // centred on the buttons beside it.
-        className={`block min-w-0 flex-1 resize-none overflow-y-auto bg-transparent pt-1.5 ${rows > 1 ? 'pb-2.5' : 'pb-1.5'} text-[var(--color-text)]
-          placeholder:text-[var(--color-text-muted)] focus:outline-none read-only:text-[var(--color-text-secondary)]`}
+        // centred on the buttons beside it. It is drawn as a field because it is
+        // one: bare text after the `$` did not read as editable. The 1 px border
+        // comes out of the padding, so the text stays level with the `$`. While a
+        // run is going it is read-only and drops the field back to plain text.
+        className={`block min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-[var(--color-border)]
+          bg-[var(--color-bg-secondary)] px-2 pt-[5px] ${rows > 1 ? 'pb-[9px]' : 'pb-[5px]'} text-[var(--color-text)]
+          placeholder:text-[var(--color-text-muted)] transition-colors focus:outline-none focus:border-[var(--color-accent)]
+          read-only:border-transparent read-only:bg-transparent read-only:text-[var(--color-text-secondary)]`}
       />
     </div>
   )
