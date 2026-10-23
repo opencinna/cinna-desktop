@@ -55,6 +55,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Header actions**:
   - Attachments get an icon-only Download, except one opened from the composer. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
   - An agent file inside the agent's folder, other than a credential file, also gets a **Publish…** button (an upload icon and the word) before **⋯** while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it.
+  - A script file gets a **Run…** button (a terminal icon and the word) before **Publish…** and **⋯**. It closes the preview and opens the [Run Script window](../run_commands/run_commands.md) on the command Cinna chose for the file; nothing runs until Run is pressed there. See *Running a script* below
   - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
   - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
@@ -127,6 +128,18 @@ One read-only modal for looking at a file **in place**, reached three ways.
 2. Clicking a web link in the page opens it in the user's browser. The page itself stays put.
 3. **Source** in the header shows the markup, highlighted. **Rendered** goes back to the page as it was left, without reloading it.
 4. **Open in browser** (the globe button for an attachment, the **⋯** menu for an agent file) opens the file in the default web browser. A failure appears in the row under the header: "Couldn't open it in the browser: …", or "No browser could open this file."
+
+### Running a script from the preview
+1. The user opens `scripts/report.py` from a file reference in a folder agent's chat. The header shows **Run…**
+2. Clicking it asks main for the command (`userCommands:commandForFile`). The preview closes and the Run Script window grows from the click, on `python3 scripts/report.py` (or `uv run …`), with the script's Parameters form when it has one. Nothing has run
+3. If main refuses, the preview stays open and the header's error row says why ("Cinna doesn't know how to run this file as a script."; for a `#!` script that only lacks the execute bit, "This script isn't executable. Make it executable (chmod +x) to run it here."). Nothing closes
+
+- **When Run… shows**: an agent file that is a regular file inside the agent's folder, is not a credential file, and is a script — `.py`, `.sh`, or a first line starting `#!` **in a file that has an extension** (`tool.pl`). An extensionless `#!` file (`bin/tool`) is deliberately left out: a name with no extension is more often something to read than to launch, and the user chose to offer Run… only where the file says what it is. The `#!` check waits for the text to load
+- **Which agent**: the message the reference was in, else the active chat when that chat's own agent is the file's agent. A file previewed from another agent's chat, or with no chat open, has no Run…. Main checks the agent again; the preview's idea of it is never trusted
+- **The command is main's choice**, not the renderer's: `.py` is `uv run <path>` when the agent's folder has a `pyproject.toml`, else `python3 <path>`; `.sh` is `bash <path>`; an executable `#!` file is `./<path>`; a non-executable one runs by the shell or Python its shebang names, when that is all it names. The path is relative to the folder and quoted, and a name that starts with `-` gets `./` so an interpreter does not read it as an option. Details in [Run Commands](../run_commands/run_commands.md)
+- **It does not run anything.** Run… is a shortcut to the window the user would otherwise reach by typing the command; consent is pressing Run there, as for a clicked command
+- **A command already starting** in the window blocks it: "A command is starting. Try again once it has." in the error row, since opening the window would open nothing
+- **The button spins while main answers** and the header does not move ([UX rule 1](../../development/ui_guidelines/ux_rules.md)); the ⋯ menu's trigger does not borrow that spinner
 
 ### Clicking a non-previewable attachment
 1. The user clicks a `pdf` / `heic` / `zip` / … badge.
@@ -375,6 +388,7 @@ File reference click (folder agent chat):
     → agent-files:authorize → agent-files:read-preview → FilePreviewModal
        header ⋯ menu: Open → agent-files:open · Open in browser (html) → agent-files:open-in-browser
                       · Open folder → agent-files:reveal
+       header Run… (script) → userCommands:commandForFile → close → Run Script window
 
 Long markdown (either way in):
   markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
@@ -408,6 +422,7 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 - [Agent Attachments](../agent_attachments/agent_attachments.md): agent-attached badges preview too; they used to be download-only.
 - [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy. An HTML page's assets go through the same containment, consent and credential checks, and its right-click menu offers Open in browser.
 - [Artifacts](../artifacts/artifacts.md): the header's **Publish…** for an agent file. The preview target remembers the persisted message the reference was in (`messageId` on `useFilePreviewStore`'s `agentFile` target) so the card is placed after it.
+- [Run Commands](../run_commands/run_commands.md): the header's **Run…** hands a script to the Run Script window; main builds the command and the window is the same one a clicked command opens. The window's ⋯ menu *Preview source* goes the other way.
 - [Note Attachments](../note_attachments/note_attachments.md): a separate preview surface, `NotePreviewModal`, which shows a live note body at the composer stage. This feature previews files already sent or on disk.
 
 ## Future Enhancements (Out of Scope)

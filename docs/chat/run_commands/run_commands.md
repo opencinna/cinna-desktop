@@ -43,7 +43,7 @@ Right-click offers the same by menu: **Run** starts a command that looks safe at
 1. Enter runs a one-line command; in a multi-line block Enter is a new line. Shift+Enter or Alt+Enter is always a new line
 2. ⌘↩ (Ctrl+Enter) always runs; ⇧⌘↩ runs in the background
 3. A held key's repeats run nothing, so the press that opened the window cannot run it; nor does an Enter that commits an IME composition
-4. On a one-line command, ↑ and ↓ walk the chat's earlier commands (most recent first, each once) and back to what was typed
+4. On a one-line command, ↑ and ↓ walk the chat's earlier commands (most recent first, each once) and back to what was typed. On a command that soft-wraps, ↑ and ↓ first move the caret between its rows, and walk the history only from the first row (↑) or the last (↓): a long command's caret could not otherwise be moved up a row without losing the line
 5. It is read-only while a run is going and while a start is in flight. It edits the command; it is not the run's stdin, which stays closed
 
 ### Filling a script's parameters
@@ -52,6 +52,12 @@ Right-click offers the same by menu: **Run** starts a command that looks safe at
 3. Ticking a switch such as Apply adds `--apply` to the end of the line; typing in Year rewrites only `--year …`; clearing a field removes only its words. The rest of the line, in the user's order and quoting, stays as typed
 4. Editing the line by hand updates the form the same way. If the line stops being one simple command that names the script (a pipe, another script, a `$`), the form is **edited by hand**: it shows its last values dimmed and read-only, with a line saying so, and follows the line again as soon as it parses
 5. While a run is going or starting the form reads and edits nothing, as the line does not
+
+### Running a script from the file preview
+1. The agent named `scripts/report.py` in its reply and the user opened it in the [file preview](../file_preview/file_preview.md). Its header offers **Run…**
+2. Pressing it closes the preview and opens the Run Script window on the command main chose (`python3 scripts/report.py`), with the Parameters form when the script has one. Nothing has run; Run in the window is the consent, as for any command
+3. A script main will not build a command for (outside the folder, a credential, not a script it knows how to start) leaves the preview open and says so under its header
+4. The window is the same as for a clicked command, with one difference: it has no source message, so main knows the agent as the chat's own. The window runs, inspects and opens Choose… in that agent, and a run started from it can be run again after a reload
 
 ### Giving the output to the agent
 1. When a run has ended, its row in the Commands popover, and the window's ⋯ menu, offer **Add output to message**
@@ -84,7 +90,7 @@ Right-click offers the same by menu: **Run** starts a command that looks safe at
 
 ### The guard sentence
 The window says **why** it is holding a command, not only that it is, so the user knows what to check. The sentence is fixed when the window opens (`commandReviewReason`, from `autoRunRefusal`), never recomputed while the user edits, so nothing appears or disappears as they type:
-- **Several commands** (a second line, `;`, `|`, `&&` or a trailing `&`, outside quotes): "Several commands — check each before you run them."
+- **Several commands** (a second line, `;`, `|`, `&&` or a trailing `&`, outside quotes): "Several commands — check each before you run them." A `#` comment is not a command (its `;` and a comment-only line separate nothing), nor is a here-document's body (`python3 - <<EOF … EOF`): a one-command line is not called several because of what it quotes. This sharpens the sentence only; whether the menu offers Run is `looksAutoRunnable`'s call, which still refuses such a line
 - **Anything else** the rule does not know to be read-only: "This command isn't known to be read-only — check it before you run it."
 - **Main's own sentence** when a menu Run was refused at level 2 (a missing script, a path outside the folder, …)
 - The generic `needs_review` sentence ("This command can change or delete files, so it runs after you check it.") remains only as the fallback reason for that code
@@ -92,20 +98,28 @@ The window says **why** it is holding a command, not only that it is, so the use
 ### When a form appears
 - **The script is the agent's own and readable**: a regular file inside the agent's folder (by real path, so a symlink out of it is outside), or in a pinned skill folder, that is not protected for a read (credentials, `.cinna/`, `.git/`, secret-looking names), at most 512 KB, and not binary. The command must be one simple command naming it (`[interpreter] script …`, `uv run script.py …`, `./script.sh …`, env assignments first are fine)
 - **The parameters come from the source, never from running it.** Running a script to ask `--help` would execute the agent's code before the user pressed Run
-- **Python**: calls to `add_argument` on the script's **one** `ArgumentParser`, or on the parser a `build_parser()`-style factory returns (a function whose body returns the parser, called as `parser = build_parser()` or `build_parser().parse_args()`). Its argument groups count. A **Usage** line in the module docstring fills what argparse did not say; option lines in the docstring (`  --basis month   per month`) supply help text for a flag already known
-- **Shell**: a leading `# Usage:` comment block is the only source
-- **Fails closed.** Subparsers, a second parser, `parents=`, a parser that is not assigned to a name, an `add_argument` on anything else, a parser name rebound to something else, `**kwargs` in a call, a custom action, a flag that is not a string literal, an unterminated string, more than 200 calls, or literals nested deeper than 8 give **no form**. A form that omitted or misread a parameter would be worse than none, and the window is then the plain one
+- **Which scripts**: the ones that say their parameters in a form the reader knows. The agent kit's scripts guide asks for exactly that: a docstring `Usage:` line, `help=` on every argparse argument and literal option names, so the window can show the options without running anything. A script that does not follow it gets no form, or a thinner one
+- **Python, argparse**: calls to `add_argument` on the script's **one** `ArgumentParser`, or on the parser a `build_parser()`-style factory returns (a function whose body returns the parser, called as `parser = build_parser()` or `build_parser().parse_args()`). Its argument groups count. A **Usage** line in the module docstring fills what argparse did not say; option lines in the docstring (`  --basis month   per month`) supply help text for a flag already known
+- **Python, click**: the `@click.option` / `@click.argument` stack on the script's **one** `@click.command`, with the command actually called. Groups, a second command, params built by hand and prompts as options give no form
+- **Python, typer**: the signature of the script's **one** command, either `typer.run(main)` or a single `@app.command()` on an app that is called, with `typer.Option` / `typer.Argument` as defaults or in `Annotated`. `typer.Context` parameters are not shown. Enums, `Literal`, string annotations, `@app.callback`, `add_typer` and a shared `typer.Option` give no form
+- **At most one framework speaks.** A script using argparse and click, or click and typer, together gets no form: which parser is the real one is not something the source states
+- **Shell, getopts**: a `while getopts "<literal optstring>" var` loop and the `case` that handles it give the option letters; the leading `# Usage:` block names and explains them. getopts decides the flag set, so a Usage option getopts does not know (or that disagrees on whether it takes a value) means no form: the script reads it somewhere the reader does not look. A letter the Usage block does not name is still shown, labelled by the variable its arm sets. A letter whose arm exits (`-h`, `-V`) is left out, as argparse's help is. Positionals come from the Usage block only
+- **getopts stops at the first operand**, so the form writes options before positionals and reads every word after the first operand as an operand. A script that reads an operand (`$1`, `shift`, `$@`) at the top level before its `while getopts` loop, or whose Usage line puts a positional before an option, gets no form: the line's order would not be the order the script reads
+- **Shell without getopts**: a leading `# Usage:` comment block is the only source
+- **Fails closed.** Subparsers, a second parser, `parents=`, a parser that is not assigned to a name, an `add_argument` on anything else, a parser name rebound to something else, `**kwargs` in a call, a custom action, a flag that is not a string literal, an unterminated string, more than 200 calls, or literals nested deeper than 8 give **no form** (so do the click, typer and getopts refusals above). A form that omitted or misread a parameter would be worse than none, and the window is then the plain one
 - **Anything surprising is quiet**: an unreadable or oversized file, a refusal, an error, or an answer slower than 150 ms leaves the window without a form and says nothing
 
 ### What the form shows
 - **Positionals first, then options**, in declaration order. Parameters that **write** (a switch named or described as apply, write, force, delete, commit, overwrite or push) go **last, under a divider**, labelled in the warning colour with "writes". The label is humanised from the destination (`as_of` becomes "As of"); a positional that is required carries `*`; a `(?)` beside the label holds the script's help, its flags, and a default the control cannot show itself
-- **Field kinds**: a switch is a toggle; a count is a number field; a parameter with up to four short choices is segmented buttons (pressing the chosen one again leaves it to the script), more choices a select; a date is a text field with a calendar button; a path is a text field with **Choose…**; everything else is text. A repeated or multi-value parameter is one field of words as a shell would read them
+- **Field kinds**: a switch is a toggle; a `--x/--no-x` switch (click, typer's bools) shows its effective state, so one the script declares on opens **on** with nothing on the line, and its `(?)` and tooltip show both flags and `Default: on` or `off`; a count is a number field; a parameter with up to four short choices is segmented buttons (pressing the chosen one again leaves it to the script), more choices a select; a date is a text field with a calendar button; a path is a text field with **Choose…**; everything else is text. A repeated or multi-value parameter is one field of words as a shell would read them
 - **Defaults are placeholders, not values.** An empty field is left out of the command, so the script's own default applies: the placeholder reads `default: data`, or **set by the script** when the default is an expression the reader cannot evaluate (`date.today().year`), or the format wanted (`YYYY-MM-DD`)
 - **Choose…** opens the desktop's native file dialog in the agent's folder (a folder too, on macOS) and writes the path **relative to the folder** when it is inside it, as chosen otherwise
 - **Other arguments**: one line below the fields for every word the form does not know (an unknown option, anything after `--`). Typing there edits those words only
 - A header line says where the form came from ("From report.py") and, behind its `(?)`, that the script is read and not run; the script's Usage line is shown there
 
 ### How the form and the line stay in step
+- **A switch writes only what differs from the script's default.** Turning on an off-by-default switch adds `--x`; turning off an on-by-default one adds `--no-x`; putting either back to its default removes the words, so the line never carries a flag that changes nothing. When both flags are on the line the last wins, as the script reads it
+- **Options come first for getopts.** A new option goes before the first operand, a new positional after the options, and the form builds the line in that order
 - **Form edits rewrite only that parameter**, in place. A parameter newly set is added where it belongs (a positional after the previous one, an option at the end, before a `--`); a cleared one loses its words and nothing else. If an edit in place would not read back as the form says, the whole line is rewritten in spec order, keeping the text up to and including the script word verbatim. The form always shows what the line says, never what was typed
 - **Line edits update the form** on each keystroke: `--year=2026` and `--year 2026` both read, `-vvv` reads as a count of three
 - The user's choices are never lost to the sync: unknown words survive in Other arguments, in order
@@ -126,7 +140,7 @@ The window says **why** it is holding a command, not only that it is, so the use
 - A run's log is deleted when its row leaves the hub (Remove, the newest-five cap, the chat clearing)
 
 ### The window keeps its shape
-- **Fixed size.** The card is 70% of the viewport tall, with a fixed header, body and footer. The command line's rows (one, up to six; more scrolls) are counted once at open, including the soft wraps of a long line, so nothing resizes while the user types. For a script with a form the count also reserves room for the switches the form could add and the line does not yet name, at most three rows in all; a longer line scrolls to its tail when the form appends to it
+- **Fixed size.** The card is 70% of the viewport tall, with a fixed header, body and footer. The command line's rows (one, up to six; more scrolls) are counted once at open, including the soft wraps of a long line, so nothing resizes while the user types. For a script with a form the count also reserves room for the switches the form could add and the line does not yet name (sized by the flag the form would write — the off flag for a switch that is on — and a flag written as a quoted word counts as named), at most three rows in all; a longer line scrolls to its tail when the form appends to it
 - **A refusal or guard line takes its row from the terminal**, never from the command line: nothing under the user's cursor moves
 - **Run, Run again and Stop share one slot of one width**, and Run in background is hidden (kept in layout) while a run is going, so a press that swaps them moves nothing. The state and time in the header are a fixed place rewritten in place
 - **Stop is guarded against a double-click on Run.** For 400 ms after Stop takes Run's place a pointer press on it is ignored: the second press of a double-click on Run would otherwise stop the run it just started. The keyboard is not held back, and a window opened on an already-running run shows Stop unguarded
@@ -143,7 +157,7 @@ Open script, Preview source (the [file preview](../file_preview/file_preview.md)
 The badge's **Open output** can open a run this renderer has no record of (after a reload). The window then has no source message, and names a recent reply of the run's agent when the user runs again. If there is none, the start says "The message this command came from is no longer in the chat." instead of running.
 
 ### Refusals are data
-`userCommands:run` returns `{ ok: false, code, reason }`, never a thrown error, because a thrown error's code does not reach the renderer. Codes: `needs_review` (opens the window with the reason), `not_local`, `folder_missing`, `chat_not_found`, `spawn_failed`. A refusal from the window shows inside it and closes nothing; from the menu it shows in the menu.
+`userCommands:run` returns `{ ok: false, code, reason }`, never a thrown error, because a thrown error's code does not reach the renderer. Codes: `needs_review` (opens the window with the reason), `not_local`, `folder_missing`, `chat_not_found`, `spawn_failed`. A refusal from the window shows inside it and closes nothing; from the menu it shows in the menu. `userCommands:commandForFile` (the preview's Run…) answers the same way and adds `not_runnable`: "Cinna doesn't know how to run this file as a script.", or, for a `#!` script whose only missing piece is the execute bit, "This script isn't executable. Make it executable (chmod +x) to run it here." — said as such because the fix is one `chmod`, not a different file
 
 ### What it deliberately does not do
 - No automatic follow-up turn: the agent learns of a run only from an attached output
@@ -158,6 +172,7 @@ The badge's **Open output** can open a run this renderer has no record of (after
 
 ```
 click a command ──────────────► Run Script window (nothing running) ─► Run ─► userCommands:run {reviewed:true}
+file preview Run… ─► userCommands:commandForFile ─► Run Script window (then as Edit and Run…)
 right-click ─► detectCommand + looksAutoRunnable (renderer) ─► menu items
   Run / Run in background ─► userCommands:run {reviewed:false} ─► window on the run / badge only
   Edit and Run… ─► Run Script window
@@ -174,7 +189,7 @@ right-click ─► detectCommand + looksAutoRunnable (renderer) ─► menu item
 - [Session Activity](../../agents/session_activity/session_activity.md) — the `command` kind, the Commands badge, and the places that must not treat a command as the agent's work
 - [Conversation UI](../conversation_ui/conversation_ui.md) — the message context menu and its last group
 - [File References](../file_references/file_references.md) — code that is a reference keeps its own menu; a command shares the reference's box with its own edge colour
-- [File Preview](../file_preview/file_preview.md) — the window is a sibling modal and shares its entrance and exit motion; Preview source opens a file preview over it
+- [File Preview](../file_preview/file_preview.md) — the window is a sibling modal and shares its entrance and exit motion; Preview source opens a file preview over it, and the preview's **Run…** closes it and opens this window on a script
 - [Antigravity](../../agents/local_agents/antigravity_engine.md) — shares the own-command rule
 - [File Attachments](../file_attachments/file_attachments.md) — the output joins the composer as any dropped text file
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — the window keeps a fixed size while the user types or a run streams
