@@ -5,6 +5,7 @@ import {
   CheckCircle,
   ChevronRight,
   ChevronsDownUp,
+  Clock,
   RefreshCw
 } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
@@ -14,6 +15,8 @@ import { useAgents } from '../../hooks/useAgents'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
+import { describeProviderError, formatProviderErrorDetail } from '../../../../shared/providerErrors'
+import { useOpenExternal } from '../../hooks/useSystem'
 import { MessageBubble } from './MessageBubble'
 import { CommandScopeContext, FileRefContext, FileRefResolver, MessageIdContext, collectFileRefSources, type CommandScope, type FileRefScope } from './fileRefs'
 import { agentRunsCommands } from '../../utils/userCommands'
@@ -324,14 +327,22 @@ function TranscriptPills({
   )
 }
 
+/** A provider's error read out of an error row: the headline, and any wait. */
+interface ProviderErrorBubbleView {
+  title: string
+  retryAfterSec?: number
+}
+
 function SystemMessage({
   message,
   detail,
-  code
+  code,
+  provider
 }: {
   message: string
   detail?: string
   code?: string
+  provider?: ProviderErrorBubbleView
 }): React.JSX.Element {
   // Reauth-required errors get a dedicated bubble that swaps its entire
   // appearance (danger → success) once the user completes re-auth — leaving
@@ -341,6 +352,7 @@ function SystemMessage({
     return <ReauthErrorBubble detail={detail} />
   }
 
+  if (provider) return <ProviderErrorBubble view={provider} message={message} detail={detail} />
   return <GenericErrorBubble message={message} detail={detail} />
 }
 
@@ -379,6 +391,148 @@ function GenericErrorBubble({
       </div>
     </div>
   )
+}
+
+/** `http(s)://…` up to whitespace; trailing sentence punctuation is not the URL. */
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
+
+/** The provider's message with its URLs as links; a click hands the URL to `onOpen`. */
+function LinkifiedText({ text, onOpen }: { text: string; onOpen: (url: string) => void }): React.JSX.Element {
+  const nodes: React.ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(URL_RE)) {
+    const url = m[0].replace(/[.,;:!?]+$/, '')
+    const start = m.index ?? 0
+    if (start > last) nodes.push(text.slice(last, start))
+    nodes.push(
+      <a
+        key={start}
+        href={url}
+        onClick={(e) => {
+          e.preventDefault()
+          onOpen(url)
+        }}
+        className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] underline underline-offset-2 [overflow-wrap:anywhere]"
+      >
+        {url}
+      </a>
+    )
+    last = start + url.length
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return <>{nodes}</>
+}
+
+/**
+ * A provider's refusal (a 429, a rejected key): the title as the headline, in
+ * the generic bubble's danger style, and the provider's whole message under it
+ * — left-aligned, its line breaks kept and its links live — with the wait it
+ * asked for as a static line when the message does not already say it.
+ * Details holds the body, indented. A link that fails to open says so.
+ */
+function ProviderErrorBubble({
+  view,
+  message,
+  detail
+}: {
+  view: ProviderErrorBubbleView
+  message: string
+  detail?: string
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const [openError, setOpenError] = useState<string | null>(null)
+  const openExternal = useOpenExternal()
+  const onOpen = useCallback((url: string) => {
+    setOpenError(null)
+    void openExternal(url).then((result) => {
+      if (!result.success) setOpenError(result.error)
+    })
+  }, [openExternal])
+  // A message that already says "retry in …" would otherwise say it twice.
+  const showWait = view.retryAfterSec !== undefined && !/retry in/i.test(message)
+
+  return (
+    <div className="flex justify-center">
+      <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-xl w-full">
+        <div className="flex items-center justify-start gap-2 text-xs font-medium text-left text-[var(--color-danger)]">
+          <AlertTriangle size={13} className="shrink-0" />
+          <span>{view.title}</span>
+        </div>
+        <p className="mt-1.5 text-xs text-left text-[var(--color-text-secondary)] whitespace-pre-wrap break-words">
+          <LinkifiedText text={message} onOpen={onOpen} />
+        </p>
+        {openError && (
+          <p className="mt-1 text-[10px] text-left text-[var(--color-danger)]">
+            Couldn&apos;t open the link: {openError}
+          </p>
+        )}
+        {showWait && (
+          <p className="mt-1 flex items-center gap-1 text-[10px] text-left text-[var(--color-text-secondary)]">
+            <Clock size={10} className="shrink-0" />
+            Provider asked to wait {view.retryAfterSec}s
+          </p>
+        )}
+        {detail && (
+          <div className="text-left">
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-1.5 inline-flex items-center gap-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            >
+              <ChevronRight size={10} className={`transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
+              Details
+            </button>
+            {expanded && (
+              <pre className="mt-1.5 text-[11px] text-left text-[var(--color-text-secondary)] font-mono whitespace-pre max-h-80 overflow-auto">
+                {detail}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+interface ErrorRowContent {
+  short: string
+  detail?: string
+  code?: string
+  provider?: ProviderErrorBubbleView
+}
+
+/** An `error` row's JSON, with a provider's error read out of it. */
+function parseErrorRow(content: string): ErrorRowContent | null {
+  let err: { short: string; detail?: string; code?: string; title?: string; retryAfterSec?: number }
+  try {
+    err = JSON.parse(content)
+  } catch {
+    return null
+  }
+  if (!err || typeof err !== 'object') return null
+  // Main saves a provider's error as its title and message. A row saved before
+  // it did still holds the raw blob in `short`, and is read the same way here —
+  // only when it has no code: a coded row (sign-in, cut-off) is Cinna's own.
+  if (err.title) {
+    return { short: err.short, detail: err.detail, code: err.code, provider: { title: err.title, retryAfterSec: err.retryAfterSec } }
+  }
+  if (!err.code) {
+    const view = describeProviderError(err.short)
+    if (view) {
+      return {
+        short: view.message,
+        detail: formatProviderErrorDetail(err.detail ?? err.short) ?? err.detail,
+        provider: { title: view.title, retryAfterSec: view.retryAfterSec }
+      }
+    }
+  }
+  return { short: err.short, detail: err.detail, code: err.code }
+}
+
+/** One `error` row; its parsing runs once per content, not on every render. */
+function ErrorRow({ content }: { content: string }): React.JSX.Element {
+  const row = useMemo(() => parseErrorRow(content), [content])
+  if (!row) return <SystemMessage message={content} />
+  return <SystemMessage message={row.short} detail={row.detail} code={row.code} provider={row.provider} />
 }
 
 /**
@@ -783,17 +937,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
 
             if (msg.role === 'error') {
-              let node: React.JSX.Element
-              try {
-                const err = JSON.parse(msg.content) as {
-                  short: string
-                  detail?: string
-                  code?: string
-                }
-                node = <SystemMessage message={err.short} detail={err.detail} code={err.code} />
-              } catch {
-                node = <SystemMessage message={msg.content} />
-              }
+              const node = <ErrorRow content={msg.content} />
               renderNodes.push({
                 slot: 'plain',
                 key: msg.id,

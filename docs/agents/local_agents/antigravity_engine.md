@@ -122,6 +122,7 @@ Approval or question → `session/request_permission` → shared pending request
 - [The ACP Engine Contract](acp_contract.md) — the reasoning behind those observations.
 - [The Local Engine](engine.md) — machine default, runtime precedence, binary resolution and prompt assembly.
 - [The Codex Engine](codex_engine.md) — the sibling managed engine whose shape this one follows.
+- [Conversation UI](../../chat/conversation_ui/conversation_ui.md) — a provider's quota or auth refusal (a Gemini 429 arrives as `Provider request failed with HTTP 429: […]`) is shown as a headline and the provider's full message; it is not a rate-limit pause.
 - [The Agent Turn](agent_turn.md) — process pooling, session save and load, and cancellation.
 - [Local Agent Permissions](permissions.md) — standing grants and the conducting-session rule.
 - [Bare Agents](bare_agents.md) — native versus isolated folders.

@@ -100,7 +100,7 @@ Events are `RunEvent`s (`src/shared/runEvents.ts`), the one vocabulary every cha
 5. `{ type: 'tool_error', id, error }` — Tool call failed
 6. `{ type: 'child', toolCallId, agentId, event }` — One event of an agent called as a tool, streamed into that call's sub-thread (see [Orchestrated Agents tech](../orchestrated_agents/orchestrated_agents_tech.md))
 7. `{ type: 'done', stopReason }` — Stream finished: `end_turn`, or `canceled` whenever a stop ended the turn, wherever the stop landed (see [Cancellation](#cancellation))
-8. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. The projector finishes streaming; authoritative hub closure starts a fresh transcript read and guarded cleanup. A failed read preserves the projection for recovery.
+8. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. For a direct agent turn whose failure embeds a provider's error body, the stored row is `{short: <provider message>, detail: <body pretty-printed>, title, retryAfterSec?}` and the port event and job run carry `"<title>: <message>"` ([conversation UI](../conversation_ui/conversation_ui_tech.md#systemmessage-inline-in-messagestream)). The projector finishes streaming; authoritative hub closure starts a fresh transcript read and guarded cleanup. A failed read preserves the projection for recovery.
 
 An agent turn can also post `{ type: 'user_message', text }` where its engine took a message the user sent mid-turn; see [Pending Messages](../pending_messages/pending_messages.md).
 

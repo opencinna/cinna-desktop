@@ -70,6 +70,7 @@ import {
   a2aStreamingService,
   toRunState
 } from './a2aStreamingService'
+import { CINNA_REAUTH_REQUIRED_CODE } from '../../shared/cinnaErrors'
 
 function fakePort(): { posted: RunEvent[]; closed: boolean; port: { postMessage: (m: RunEvent) => void; close: () => void } } {
   const posted: RunEvent[] = []
@@ -294,6 +295,77 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(p.posted.at(-1)).toEqual({ type: 'error', error: 'The agent reported that its task failed.', code: 'agent_task_failed' })
     // The job run still gets the agent's own reason.
     expect(runCompletions).toEqual([{ status: 'failed', message: 'Could not reach the ledger.' }])
+  })
+
+  describe('a provider’s error body in the failure', () => {
+    const body = [{ error: {
+      code: 429,
+      message: 'You exceeded your current quota.\nPlease retry in 33.5s.',
+      status: 'RESOURCE_EXHAUSTED',
+      details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '33s' }]
+    } }]
+    const blob = `Internal error: Provider request failed with HTTP 429: ${JSON.stringify(body)}`
+    const pretty = `Internal error: Provider request failed with HTTP 429:\n${JSON.stringify(body, null, 2)}`
+
+    it('saves the provider’s message under a title, the body indented as Details', async () => {
+      // Mutation: save `message` as before → the whole blob is the row's
+      // `short`, which the bubble showed as its one-line headline.
+      const p = fakePort()
+      await a2aStreamingService.streamToAgent({
+        chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+        run: async () => ({ text: '', parts: [], notices: [], error: { message: blob, raw: blob } })
+      })
+      expect(saved).toEqual([{
+        chatId: 'chat_1',
+        short: 'You exceeded your current quota.\nPlease retry in 33.5s.',
+        detail: pretty,
+        code: undefined,
+        title: 'Quota or rate limit exceeded (429)',
+        retryAfterSec: 33
+      }])
+      // Downstream text keeps the headline: the status is not lost in a task's
+      // error, the Inbox or a delegation relay.
+      // Mutation: carry the bare message → no "(429)" in either.
+      expect(p.posted.at(-1)).toEqual({ type: 'error', error: 'Quota or rate limit exceeded (429): You exceeded your current quota.\nPlease retry in 33.5s.' })
+      expect(runCompletions).toEqual([{ status: 'failed', message: 'Quota or rate limit exceeded (429): You exceeded your current quota.\nPlease retry in 33.5s.' }])
+    })
+
+    it('does the same when the runner throws it', async () => {
+      const p = fakePort()
+      await a2aStreamingService.streamToAgent({
+        chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+        run: async () => { throw new Error(blob) }
+      })
+      expect(saved).toEqual([{
+        chatId: 'chat_1',
+        short: 'You exceeded your current quota.\nPlease retry in 33.5s.',
+        detail: `Error: ${pretty}`,
+        title: 'Quota or rate limit exceeded (429)',
+        retryAfterSec: 33
+      }])
+      expect(p.posted.find((e) => e.type === 'error')).toEqual({ type: 'error', error: 'Quota or rate limit exceeded (429): You exceeded your current quota.\nPlease retry in 33.5s.' })
+      expect(runCompletions).toEqual([{ status: 'failed', message: 'Quota or rate limit exceeded (429): You exceeded your current quota.\nPlease retry in 33.5s.' }])
+    })
+
+    it('leaves a sign-in failure as Cinna wrote it, even with a provider body in it', async () => {
+      // Mutation: drop the CINNA_REAUTH_REQUIRED_CODE skip → the row gets a
+      // provider title and loses its own message.
+      const p = fakePort()
+      await a2aStreamingService.streamToAgent({
+        chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+        run: async () => ({ text: '', parts: [], notices: [], error: { message: blob, raw: blob, code: CINNA_REAUTH_REQUIRED_CODE } })
+      })
+      expect(saved).toEqual([{ chatId: 'chat_1', short: blob, detail: blob, code: CINNA_REAUTH_REQUIRED_CODE }])
+    })
+
+    it('keeps plain failure text exactly as before', async () => {
+      const p = fakePort()
+      await a2aStreamingService.streamToAgent({
+        chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+        run: async () => ({ text: '', parts: [], notices: [], error: { message: 'The agent crashed.', raw: 'exit 1' } })
+      })
+      expect(saved).toEqual([{ chatId: 'chat_1', short: 'The agent crashed.', detail: 'exit 1', code: undefined }])
+    })
   })
 
   it('posts one error when saving a failed turn’s rows throws', async () => {

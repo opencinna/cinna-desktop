@@ -57,6 +57,11 @@ export interface SaveErrorMessage {
    *  in the row's JSON payload so renderer surfaces can branch type-safely
    *  instead of substring-matching the user-facing `short` string. */
   code?: string
+  /** Headline for a provider error read out of the failure (see
+   *  `shared/providerErrors`); `short` is then the provider's own message. */
+  title?: string
+  /** Seconds the provider asked to wait before retrying, shown as is. */
+  retryAfterSec?: number
 }
 
 export interface SaveTransitionMessage {
@@ -213,7 +218,9 @@ const rawMessageRepo = {
         content: JSON.stringify({
           short: msg.short,
           ...(msg.detail === null ? {} : { detail: msg.detail ?? msg.short }),
-          ...(msg.code ? { code: msg.code } : {})
+          ...(msg.code ? { code: msg.code } : {}),
+          ...(msg.title ? { title: msg.title } : {}),
+          ...(msg.retryAfterSec !== undefined ? { retryAfterSec: msg.retryAfterSec } : {})
         }),
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()

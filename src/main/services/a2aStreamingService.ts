@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import { messageRepo } from '../db/messages'
+import { describeProviderError, formatProviderErrorDetail } from '../../shared/providerErrors'
 import { agentSessionRepo } from '../db/agents'
 import { inflightTurnRepo, markLiveMarker } from '../db/inflightTurns'
 import {
@@ -1115,20 +1116,35 @@ export const a2aStreamingService = {
         // event: a write that throws reaches the `catch`, which posts the one
         // error the renderer sees instead of a second one.
         save(result)
+        // A provider's error body pasted into the failure (`… HTTP 429: [{…}]`)
+        // is saved as its title and its own message, the body indented under
+        // Details. The port and the job run carry `title: message`, so the
+        // status survives in the task, the Inbox and a delegation relay.
+        // The cut-off notice and the sign-in error are Cinna's own words.
+        const provider = failure.code === REPLY_CUT_OFF_CODE || failure.code === CINNA_REAUTH_REQUIRED_CODE
+          ? null
+          : describeProviderError(message)
+        const shown = provider ? provider.message : message
+        const carried = provider ? `${provider.title}: ${provider.message}` : message
         messageRepo.saveError({
           chatId,
-          short: message,
+          short: shown,
           // The cut-off notice is its own whole message: no Details under it.
-          detail: failure.code === REPLY_CUT_OFF_CODE ? null : failure.raw,
-          code: failure.code
+          detail: failure.code === REPLY_CUT_OFF_CODE ? null
+            : provider ? formatProviderErrorDetail(failure.raw) ?? failure.raw
+            : failure.raw,
+          code: failure.code,
+          ...(provider ? { title: provider.title } : {}),
+          ...(provider?.retryAfterSec !== undefined ? { retryAfterSec: provider.retryAfterSec } : {})
         })
         port.postMessage(
           failure.code
-            ? { type: 'error', error: message, code: failure.code }
-            : { type: 'error', error: message }
+            ? { type: 'error', error: carried, code: failure.code }
+            : { type: 'error', error: carried }
         )
         // The job run keeps the agent's own reason; only the row was shortened.
-        finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code }, ...turnUsage(result.telemetry) })
+        // A provider's reason is its headline and message without the body.
+        finish({ state: 'failed', text: result.text, error: { message: provider ? carried : failure.message, code: failure.code }, ...turnUsage(result.telemetry) })
         return
       }
 
@@ -1180,9 +1196,18 @@ export const a2aStreamingService = {
       // What the runner offered before it threw is kept, ahead of the error.
       flush()
       if (!abortController.signal.aborted) {
-        port.postMessage({ type: 'error', error: message })
-        messageRepo.saveError({ chatId, short: message, detail: String(err) })
-        finish({ state: 'failed', text: '', error: { message } })
+        const provider = describeProviderError(message)
+        const shown = provider ? provider.message : message
+        const carried = provider ? `${provider.title}: ${provider.message}` : message
+        port.postMessage({ type: 'error', error: carried })
+        messageRepo.saveError({
+          chatId,
+          short: shown,
+          detail: provider ? formatProviderErrorDetail(String(err)) ?? String(err) : String(err),
+          ...(provider ? { title: provider.title } : {}),
+          ...(provider?.retryAfterSec !== undefined ? { retryAfterSec: provider.retryAfterSec } : {})
+        })
+        finish({ state: 'failed', text: '', error: { message: carried } })
       } else {
         // The other way a stopped turn leaves this function, and it needs the
         // same ending for the same reasons — the renderer included. What the
