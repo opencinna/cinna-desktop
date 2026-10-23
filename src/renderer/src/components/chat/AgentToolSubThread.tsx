@@ -196,12 +196,15 @@ export function AgentToolSubThread({
         <div className="overflow-hidden">
           <TranscriptVisibleContext.Provider value={visible && expanded}>
           <EnclosingThreadColor.Provider value={color}>
+          {/* Frosted card over a grid tinted with the agent's color from the
+              top-left corner; takes its turn in the border glow (useAmbientButtons). */}
           <div
-            className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 pl-3"
-            style={{ borderLeft: `2px solid ${color.border}` }}
+            data-ambient-card
+            className="subthread-surface ambient-button mt-1 rounded-lg border border-[var(--color-border)] px-2.5 py-2 pl-3"
+            style={{ '--thread-tint': color.border } as React.CSSProperties}
           >
             {parts.length === 0 && status === 'pending' ? (
-              // The prompt on the same ↳ line `AgentContribution` draws it on,
+              // The prompt on the same line `AgentContribution` draws it on,
               // so it stays put when the first part arrives and takes the
               // "Working…" line's place below it.
               <div className="space-y-2">

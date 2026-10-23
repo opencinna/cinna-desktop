@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Bot, CornerDownRight } from 'lucide-react'
+import { Bot } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
 import { useAgentColor } from '../../utils/agentColors'
 import { MessageBubble } from './MessageBubble'
@@ -50,40 +50,88 @@ interface AgentContributionProps {
  * The toggle exists only when the text actually overflows two lines.
  */
 export function AskLine({ text }: { text: string }): React.JSX.Element {
+  // `expanded` drives the toggle; `unclamped` the text, which stays unclamped
+  // until a collapse has finished animating down to the two lines.
   const [expanded, setExpanded] = useState(false)
+  const [unclamped, setUnclamped] = useState(false)
   const [overflows, setOverflows] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const clampedHeight = useRef(0)
   useLayoutEffect(() => {
     const el = ref.current
-    if (!el || expanded) return
-    const measure = (): void => setOverflows(el.scrollHeight > el.clientHeight + 1)
+    if (!el || unclamped) return
+    const measure = (): void => {
+      clampedHeight.current = el.clientHeight
+      setOverflows(el.scrollHeight > el.clientHeight + 1)
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [text, expanded])
+  }, [text, unclamped])
+
+  /** Animates the box's height from where it is to `to`, then lets it size itself. */
+  const slide = (to: number, done?: () => void): void => {
+    const box = boxRef.current
+    const seconds = box ? parseFloat(getComputedStyle(box).transitionDuration) : 0
+    let finished = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      if (box) {
+        box.removeEventListener('transitionend', end)
+        box.style.height = ''
+      }
+      done?.()
+    }
+    const end = (event: TransitionEvent): void => {
+      if (event.target === box) finish()
+    }
+    // No transition (reduced motion, or no CSS) → no transitionend either.
+    if (!box || !(seconds > 0)) return finish()
+    box.style.height = `${box.offsetHeight}px`
+    void box.offsetHeight
+    box.style.height = `${to}px`
+    box.addEventListener('transitionend', end)
+    // A height that does not change fires no transitionend: never leave it pinned.
+    timer = setTimeout(finish, seconds * 1000 + 100)
+  }
+  const toggle = (): void => {
+    const el = ref.current
+    if (!expanded) {
+      setExpanded(true)
+      setUnclamped(true)
+      if (el) slide(el.scrollHeight)
+    } else {
+      setExpanded(false)
+      slide(clampedHeight.current, () => setUnclamped(false))
+    }
+  }
+
   return (
-    <div className="flex items-start gap-1 text-[11px] text-[var(--color-text-muted)] italic">
-      <CornerDownRight size={11} className="mt-0.5 shrink-0" />
-      <div className="min-w-0">
+    <div className="text-[11px] text-[var(--color-text-muted)] italic">
+      <div ref={boxRef} className="overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none">
         {/* Never `block` beside `line-clamp-2`: the clamp needs `display: -webkit-box`,
             and in the built CSS `block` comes later and wins, so nothing is clamped
             and "Show more" never appears. jsdom has no CSS, so no test sees it. */}
-        <span ref={ref} data-testid="agent-ask" className={`break-words whitespace-pre-wrap ${expanded ? 'block' : 'line-clamp-2'}`}>
+        <span ref={ref} data-testid="agent-ask" className={`break-words whitespace-pre-wrap ${unclamped ? 'block' : 'line-clamp-2'}`}>
           {text}
         </span>
-        {(overflows || expanded) && (
-          <button
-            type="button"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((v) => !v)}
-            className="not-italic font-medium text-[var(--color-accent)] hover:underline"
-          >
-            {expanded ? 'Show less' : 'Show more'}
-          </button>
-        )}
       </div>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={toggle}
+          className="mt-1 not-italic font-medium text-[var(--color-accent)] hover:underline"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
     </div>
   )
 }

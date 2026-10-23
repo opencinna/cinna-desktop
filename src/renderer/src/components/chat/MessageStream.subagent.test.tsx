@@ -289,13 +289,13 @@ describe('a subagent’s own subagent', () => {
   })
 
   it('never draws an inner thread in its outer thread’s color', () => {
-    // Mutation: drop the `enclosing` check in AgentToolSubThread → both borders are the same preset.
+    // Mutation: drop the `enclosing` check in AgentToolSubThread → both tints are the same preset.
     expect(presetForAgentId('inner 1').border).toBe(presetForAgentId('outer').border)
     useUIStore.setState({ verboseMode: true })
     const named = tree.map((part) => (part.toolId === 'a2' && part.kind === 'tool' ? { ...part, toolInput: { description: 'inner 1', prompt: 'Do inner' } } : part))
     data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: named }]
     render(<MessageStream chatId="chat" />)
-    const border = (name: string): string => (thread(name).querySelector('.grid .rounded-lg') as HTMLElement).style.borderLeft
+    const border = (name: string): string => (thread(name).querySelector('.subthread-surface') as HTMLElement).style.getPropertyValue('--thread-tint')
     expect(structure()).toEqual(['outer', 'outer > inner'])
     expect(border('inner 1')).not.toBe(border('outer'))
   })
