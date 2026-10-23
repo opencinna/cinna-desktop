@@ -1956,7 +1956,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
        * ends; one that does name this session is recorded the same way.
        */
       const reportedAuth = connectionAuthOf(connection)
-      noteForeignAuth(reportedAuth, connection, chatId, stream, emit)
+      noteForeignAuth(reportedAuth, plan.expectedAuth ?? 'account', connection, chatId, stream, emit)
       if (reportedAuth) ctx.telemetry?.auth(telemetryAuthOf(reportedAuth))
       logger.info('ACP turn complete', {
         agentId: agent.id,
@@ -2674,21 +2674,23 @@ const foreignAuthNoted = new WeakMap<AcpConnection, Set<string>>()
  * Say, in the transcript, that the turn was not paid for by the login the user
  * chose.
  *
- * **`account` is the only kind that means "the install's own subscription".**
- * Anything else — an API key the environment carried in, a gateway — means
- * something reached the child that this app intended to strip, and the person
- * is being billed somewhere they did not pick. Silence when the agent reported
- * nothing: this app never asserts a subscription, it only reports when the
- * agent says otherwise.
+ * **`expected` is the one kind that means "the login the user picked"**:
+ * `account` (the install's own subscription) by default, `api_key` when
+ * Claude Agent is set to an API token in Settings (`plan.expectedAuth`).
+ * Anything else — an API key the environment carried in on the subscription, a
+ * subscription answering in API mode, a gateway — means the person is being
+ * billed somewhere they did not pick. Silence when the agent reported nothing:
+ * this app never asserts a login, it only reports when the agent says otherwise.
  */
 function noteForeignAuth(
   auth: ConnectionAuth | null,
+  expected: 'account' | 'api_key',
   connection: AcpConnection,
   chatId: string,
   stream: AcpMessageStream,
   emit: EmitMessage
 ): void {
-  if (!auth || auth.kind === 'account') return
+  if (!auth || auth.kind === expected) return
   // Once per chat per connection and login: the login is the connection's,
   // heard once after `initialize`, and a notice on every turn stops being
   // read. A different foreign login later (a provider update) is news again.
@@ -2703,7 +2705,9 @@ function noteForeignAuth(
   noted.add(key)
   emit(
     stream.note(
-      `This turn did not run on the agent’s own login — it reported “${what}”. ` +
+      (expected === 'api_key'
+        ? `This turn did not run on the API token chosen in Settings — it reported “${what}”. `
+        : `This turn did not run on the agent’s own login — it reported “${what}”. `) +
         'It may be billed to that account instead.'
     ).message
   )

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { LocalAgentRuntimeInput } from '../../src/shared/engine'
 import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 import { expect, test, type CinnaApp, type CinnaOptions } from './app'
+import { ANTHROPIC_API_KEY, CLAUDE_API_AUTH } from './claudeApiAuth'
 import { LIVE_REQUESTED, OPENAI_API_KEY, requireLiveKey, seedOpenAiDefaultMode } from './live'
 import { NO_AGENT_TURN } from './mainLog'
 import type { RealLogin } from './realLogin'
@@ -34,6 +35,10 @@ import type { RealLogin } from './realLogin'
  *
  * A missing binary or a logged-out CLI is a skip with the reason, found with
  * the free status commands (`claude auth status`, `codex login status`).
+ *
+ * Claude with `CINNA_E2E_CLAUDE_AUTH=api_key` (`claudeApiAuth.ts`): no login
+ * is needed or checked — the run is an ordinary sandbox in API Token mode on
+ * `.env`'s `ANTHROPIC_API_KEY`, and a missing key is the skip instead.
  *
  * Models (`CINNA_E2E_LIVE_MODEL` overrides each):
  * - OpenCode: `gpt-5.6-luna` (`OPENCODE_LIVE_MODEL`), through the key's listed models.
@@ -193,7 +198,7 @@ function resolve(name: LiveEngineName, override: string = MODEL_OVERRIDE): LiveE
     const tier = override === '' ? 'medium' : ['simple', 'medium', 'complex'].includes(override) ? override : null
     return {
       name,
-      label: `claude ${tier === null ? override : tier === 'simple' ? 'haiku' : tier === 'medium' ? 'sonnet' : 'opus'}`,
+      label: `claude ${tier === null ? override : tier === 'simple' ? 'haiku' : tier === 'medium' ? 'sonnet' : 'opus'}${CLAUDE_API_AUTH ? ' (API token)' : ''}`,
       realLogin: binary ? { engine: 'claude', binary, pathSetting: 'localAgentsClaudePath' } : null,
       runtime: { engine: 'claude', credential: null, modelId: tier === null ? override : null, complexity: (tier ?? null) as LocalAgentRuntimeInput['complexity'] },
       skipReason: binary === null
@@ -276,8 +281,15 @@ function antigravityLoginProblem(): string | null {
   return 'CINNA_E2E_LIVE_ENGINE=antigravity: Antigravity is not logged in on this machine (no ~/.gemini/antigravity-acp/settings.json or no keychain token)'
 }
 
-/** `claude auth status` — runs no turn and bills nothing; JSON with a boolean `loggedIn`. */
+/**
+ * `claude auth status` — runs no turn and bills nothing; JSON with a boolean
+ * `loggedIn`. In API Token mode (`CINNA_E2E_CLAUDE_AUTH=api_key`) the key is
+ * the login: only its absence is a problem.
+ */
 export function claudeLoginProblem(binary: string): string | null {
+  if (CLAUDE_API_AUTH) {
+    return ANTHROPIC_API_KEY === '' ? 'CINNA_E2E_CLAUDE_AUTH=api_key: ANTHROPIC_API_KEY is not set in .env' : null
+  }
   const out = spawnSync(binary, ['auth', 'status'], { encoding: 'utf8', timeout: 15_000 })
   try {
     if (JSON.parse(out.stdout)?.loggedIn === true) return null

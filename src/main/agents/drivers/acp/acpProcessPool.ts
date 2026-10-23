@@ -131,6 +131,8 @@ interface Entry {
   conn?: AcpConnection
   /** The spec key `conn` was started with. */
   key?: string
+  /** The spec's `authFingerprint` `conn` was started with, if it named one. */
+  auth?: string
   /** The acquire currently in flight, shared by every caller asking for `startKey`. */
   starting?: Promise<AcpConnection>
   startKey?: string
@@ -259,6 +261,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     const conn = entry.conn
     entry.conn = undefined
     entry.key = undefined
+    entry.auth = undefined
     entry.retireOnRelease = false
     // A start waiting for this process to drain has nothing left to wait for.
     wakeDrain(entry)
@@ -322,6 +325,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       if (entry.conn !== conn) return
       entry.conn = undefined
       entry.key = undefined
+      entry.auth = undefined
       // A retire mark on a live process was aimed at this one, which is gone.
       entry.retireOnRelease = false
       cancelReap(entry)
@@ -428,6 +432,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
         if (startSignal?.aborted) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
         entry.conn = conn
         entry.key = spec.key
+        entry.auth = spec.authFingerprint
         watch(agentId, entry, conn)
         setState(agentId, entry, { state: 'running', pid: conn.pid, since: now() })
         return conn
@@ -520,6 +525,20 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     void stopNow(agentId, entry, 'retired')
   }
 
+  const retireStaleAuth = (current: string): string[] => {
+    const stopped: string[] = []
+    for (const [agentId, entry] of entries) {
+      if (!entry.conn || entry.auth === undefined || entry.auth === current) continue
+      // In use: the turn finishes on the login it started with; the next
+      // acquire replaces the process, because the environment (and so the
+      // spec key) moved.
+      if (entry.holds > 0 || entry.starting || isBusy(agentId)) continue
+      stopped.push(agentId)
+      void stopNow(agentId, entry, 'auth changed')
+    }
+    return stopped
+  }
+
   return {
     share: (agentId, poolKey) => {
       if (keyFor(agentId) === poolKey) return
@@ -544,6 +563,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     acquire,
     hold,
     retire,
+    retireStaleAuth,
     held: (agentId) => {
       const entry = entries.get(keyFor(agentId))
       return !!entry && ((ownerHolds.get(agentId) ?? 0) > 0 || !!entry.starting)

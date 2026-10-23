@@ -95,6 +95,7 @@ import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
 import { ACP_TOOL_STALL_MS } from './acpToolStall'
 import { startAcpConnection } from './acpConnection'
+import { auditClaudeEnv, type ClaudeApiKeyEnv, type ClaudeLaunchAuth } from './claudeEnv'
 
 const logger = createLogger('acp-launcher')
 
@@ -226,6 +227,13 @@ export interface AcpLaunchPlan {
    * a chat runtime, an AI function, a conductor or a build session asks.
    */
   autoApprove?: AntigravityAutoApprovalPolicy
+  /**
+   * The authentication the engine is expected to report
+   * (`_auth/status_update`'s `kind`): Claude's `account` on the subscription,
+   * `api_key` in API mode. Anything else is noted in the transcript as a
+   * foreign login. Absent means `account`.
+   */
+  expectedAuth?: 'account' | 'api_key'
 }
 
 /** A refusal, in the sentence the user reads instead of a turn. */
@@ -707,8 +715,17 @@ export interface ClaudeLauncherDeps {
   adapterEntry(): string
   /** The executable that runs the adapter, and the environment that makes it behave as Node. */
   nodeRuntime(): { command: string; args: string[]; env: Record<string, string> }
-  /** `buildClaudeEnv`'s answer: the stripped, allowlisted child environment. */
-  claudeEnv(): Promise<Record<string, string>>
+  /**
+   * `buildClaudeEnv`'s answer: the stripped, allowlisted child environment —
+   * plus, in API mode, the picked credential (`apiKey`), added after the strip.
+   */
+  claudeEnv(apiKey?: ClaudeApiKeyEnv | null): Promise<Record<string, string>>
+  /**
+   * How this launch authenticates — the machine's Claude auth mode
+   * (`claudeAuthService.resolve`). Absent: subscription. Asked once per plan
+   * and once per readiness check; must not throw.
+   */
+  launchAuth?(): ClaudeLaunchAuth
   /**
    * The system prompt for this turn, chosen by the folder's runtime mode: an
    * **isolated** folder's whole assembled document, which replaces the SDK's
@@ -768,6 +785,20 @@ export interface ClaudeLauncherDeps {
   agentSkillsPlugin?(userId: string, agentId: string): string | null
 }
 
+const SUBSCRIPTION_LAUNCH: ClaudeLaunchAuth = { mode: 'subscription', fingerprint: 'subscription' }
+
+/** The launch's auth, defaulting to the subscription when nothing is wired or the resolver threw. */
+function launchAuthOf(deps: ClaudeLauncherDeps): ClaudeLaunchAuth {
+  try {
+    return deps.launchAuth?.() ?? SUBSCRIPTION_LAUNCH
+  } catch (err) {
+    // `claudeAuthService.resolve` does not throw; a resolver that did must not
+    // quietly become the subscription in API mode, so it refuses instead.
+    logger.warn('the Claude auth mode could not be resolved', { error: err instanceof Error ? err.message : String(err) })
+    return { mode: 'api_key', fingerprint: 'api_key:unresolved', error: 'Claude Agent could not resolve how to authenticate. Check Settings → Local Agents.' }
+  }
+}
+
 /**
  * Claude Code over `@agentclientprotocol/claude-agent-acp`.
  *
@@ -786,6 +817,11 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
     if (known.state === 'failed') {
       return { state: 'not_installed', reason: CLAUDE_NOT_INSTALLED, detail: known.error }
     }
+    // API mode needs no `claude` login, so it is never sent to log in. A
+    // missing credential is not a readiness state either (none of them says
+    // it, and `credentials_needed` would be read as the folder's own): `plan`
+    // refuses the turn with the sentence pointing at Settings.
+    if (launchAuthOf(deps).mode === 'api_key') return { state: 'ok', reason: null }
     // Only a definite `logged_out` is not ready. A probe that could not answer
     // is `unknown`, which never blocks — the same rule the runner applied, for
     // the same reason: refusing a working engine on our own uncertainty is
@@ -810,8 +846,15 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       const binary = await deps.binary().catch((): { error: string } => ({ error: CLAUDE_NOT_INSTALLED }))
       if ('error' in binary) return { error: binary.error }
       const claudePath = binary.path
-      const auth = await deps.claudeAuth().catch(() => null)
-      if (auth?.state === 'logged_out') return { error: describeEngineSkip('claude_not_logged_in') }
+      // **API mode never falls back to the subscription**: no credential is a
+      // refused turn, and no login check applies (the key is the login).
+      const launch = launchAuthOf(deps)
+      if ('error' in launch) return { error: launch.error }
+      const apiKey = launch.mode === 'api_key' ? launch.credential : null
+      if (!apiKey) {
+        const auth = await deps.claudeAuth().catch(() => null)
+        if (auth?.state === 'logged_out') return { error: describeEngineSkip('claude_not_logged_in') }
+      }
 
       let adapter: string
       try {
@@ -827,7 +870,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
 
       const runtime = deps.nodeRuntime()
       const env: Record<string, string> = {
-        ...(await deps.claudeEnv()),
+        ...(await deps.claudeEnv(apiKey)),
         ...runtime.env,
         // **The pinned binary, never the adapter's bundled one.** Left unset,
         // the adapter runs a `claude` it ships itself (2.1.257 in the probe) —
@@ -837,6 +880,11 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
         // which file this is: it follows HOME, not the binary.
         CLAUDE_CODE_EXECUTABLE: claudePath
       }
+
+      // The environment is the one input whose corruption is invisible in the
+      // result, so the value actually handed over is checked — names only.
+      const leaked = auditClaudeEnv(env, { apiKey: !!apiKey })
+      if (leaked.length > 0) logger.warn('the Claude child environment carries auth variables it should not', { names: leaked })
 
       // **The fork**, on the mode the caller derived rather than on what kind
       // of folder this is. An isolated session is a harness the desktop built,
@@ -873,8 +921,10 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           args: [...runtime.args, adapter],
           env,
           cwd: ctx.folder.path,
-          key: specKey([runtime.command, ...runtime.args, adapter, claudePath, envDigest(env)])
+          key: specKey([runtime.command, ...runtime.args, adapter, claudePath, envDigest(env)]),
+          authFingerprint: launch.fingerprint
         },
+        expectedAuth: apiKey ? 'api_key' : 'account',
         init: {
           protocolVersion: ACP_PROTOCOL_VERSION,
           // **`elicitation.form` is what keeps `AskUserQuestion` alive.**

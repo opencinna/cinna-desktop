@@ -11,6 +11,7 @@ vi.mock('../shell/env', () => ({ getShellEnv: async () => ({ CODEX_HOME: holder.
 const {
   getRuntimeModelCatalog,
   installRuntimeModelCatalogProbe,
+  installRuntimeModelCatalogVariant,
   parseCodexModelsCache,
   readCodexModelsCache,
   recordRuntimeModelCatalog,
@@ -58,6 +59,7 @@ beforeEach(() => {
   holder.codexHome = codexDir
   resetRuntimeModelCatalogsForTests()
   installRuntimeModelCatalogProbe(null)
+  installRuntimeModelCatalogVariant(null)
 })
 afterEach(() => {
   holder.db?.close()
@@ -239,5 +241,24 @@ describe('on-demand refresh', () => {
     installRuntimeModelCatalogProbe(null)
     expect((await refreshRuntimeModelCatalog('p', 'claude')).error).toMatch(/cannot be asked/)
     expect((await refreshRuntimeModelCatalog('p', 'opencode')).error).toMatch(/OpenCode/)
+  })
+
+  it('keeps one Claude catalogue per auth mode, across a restart, and the variant touches no other engine', async () => {
+    let apiMode = false
+    installRuntimeModelCatalogVariant((engine) => (engine === 'claude' && apiMode ? 'api_key' : null))
+    recordRuntimeModelCatalog('p', 'claude', { configOptions: [{ id: 'model', category: 'model', options: [{ value: 'plan-model', name: 'Plan' }] }] })
+    recordRuntimeModelCatalog('p', 'codex', CODEX_NEW)
+    apiMode = true
+    expect((await getRuntimeModelCatalog('p', 'claude')).source).toBe('unavailable')
+    recordRuntimeModelCatalog('p', 'claude', { configOptions: [{ id: 'model', category: 'model', options: [{ value: 'api-model', name: 'API' }] }] })
+    expect((await getRuntimeModelCatalog('p', 'claude')).models.map((m) => m.id)).toEqual(['api-model'])
+    expect((await getRuntimeModelCatalog('p', 'codex')).models.map((m) => m.id)).toEqual(['gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna'])
+    // After a restart (in-memory copies gone), each mode reads its own row.
+    resetRuntimeModelCatalogsForTests()
+    const stored = await getRuntimeModelCatalog('p', 'claude')
+    expect(stored.models.map((m) => m.id)).toEqual(['api-model'])
+    expect(stored.engine).toBe('claude')
+    apiMode = false
+    expect((await getRuntimeModelCatalog('p', 'claude')).models.map((m) => m.id)).toEqual(['plan-model'])
   })
 })

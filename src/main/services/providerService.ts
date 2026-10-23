@@ -17,6 +17,7 @@ import {
 } from '../../shared/credentials'
 import { ModelInfo, ModelCapability, NO_FILE_SUPPORT } from '../llm/types'
 import { createLogger } from '../logger/logger'
+import { notifyAiCredentialsChanged } from './aiCredentialChanges'
 
 const logger = createLogger('Providers')
 
@@ -200,6 +201,8 @@ export const providerService = {
     } else {
       unregisterAdapter(row.id)
     }
+    // A key saved, rotated or switched off may be the one Claude Agent spends.
+    notifyAiCredentialsChanged()
 
     return { id, row: toDto(row) }
   },
@@ -217,6 +220,7 @@ export const providerService = {
     }
     unregisterAdapter(id)
     logger.info('provider deleted', { providerId: id })
+    notifyAiCredentialsChanged()
   },
 
   async test(userId: string, id: string): Promise<ModelInfo[]> {

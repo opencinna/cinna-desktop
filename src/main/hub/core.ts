@@ -16,7 +16,7 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
-import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins, agentCommandWorkspace } from '../agents/drivers'
+import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins, agentCommandWorkspace, installClaudeAuthFollow } from '../agents/drivers'
 import { installUserCommandWorkspace, userCommandService } from '../services/userCommands'
 import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
@@ -60,6 +60,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // A kit agent's folder moved: its warm process may sit in the old path, and the
   // Claude spec key does not include the cwd. `retire` lets a running turn finish.
   installFolderMovedListener((agentId) => acpProcessPool.retire(agentId))
+  // Claude's auth mode, credential or key changed: idle Claude processes on the old one stop.
+  installClaudeAuthFollow()
   installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
   // A message's Run resolves the agent's folder where a turn's folder view is built.

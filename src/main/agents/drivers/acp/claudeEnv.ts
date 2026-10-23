@@ -4,15 +4,25 @@
  *
  * ## Why this is its own module
  *
- * **The desktop is an orchestrator. It never becomes an authentication
- * provider.** Cinna spawns the `claude` the user installed, unmodified, in an
- * environment where that binary resolves the credentials it already has — no
- * login, no stored token, no brokered session. That is the whole basis on which
- * the feature is permitted, and it is one variable away from being false in
- * either direction:
+ * **The desktop is an orchestrator. A turn is paid for by exactly the account
+ * the user picked for Claude Agent in Settings → Local Agents — and nothing
+ * else.** Two picks exist (`shared/claudeAuthMode.ts`):
  *
- * - put an auth variable in, and the turn silently bills the user's **API
- *   account** while the panel says it ran on their Claude plan; or
+ * - **Subscription** (the default): Cinna spawns the `claude` the user
+ *   installed, unmodified, in an environment where that binary resolves the
+ *   credentials it already has — no login, no stored token, no brokered
+ *   session. No key reaches the child.
+ * - **API Token**: the one Anthropic AI credential chosen there, decrypted in
+ *   main, is added as `ANTHROPIC_API_KEY` (and `ANTHROPIC_BASE_URL` when the
+ *   credential names one) **after** the strip. Only that credential: whatever
+ *   the shell profile exported is still removed first. The CLI is also told to
+ *   scrub it from every subprocess it starts, so the agent's own Bash and MCP
+ *   servers never see it.
+ *
+ * Either way the property is one variable away from being false:
+ *
+ * - let an inherited auth variable in, and the turn silently bills an account
+ *   the user did not pick while the panel names another; or
  * - leave the wrong variable out, and the CLI reports *"Not logged in"* on a
  *   machine that is perfectly logged in.
  *
@@ -37,7 +47,10 @@
  *
  * ## The construction rule
  *
- * **Narrow with the helper the app already has, then strip, then add one.**
+ * **Narrow with the helper the app already has, then strip, then add only what
+ * this app chose** — the client-app string, the updater switch and, in API
+ * mode, the picked credential and the subprocess scrub that keeps it out of
+ * the agent's own tools ({@link SUBPROCESS_SCRUB_ENV}).
  *
  * Starting from {@link shellEnvForChild} is not a convenience — it is what
  * makes the `USER` requirement below hold automatically instead of depending on
@@ -57,8 +70,9 @@ import { shellEnvForChild } from '../../../shell/env'
  * Variables stripped from the child no matter where they came from.
  *
  * Every one of these either **re-authenticates** the turn against an account
- * the user did not pick in the Runs-with panel, or **redirects** it at a
- * third-party provider. None of them can be justified by "the agent's own tools
+ * the user did not pick, or **redirects** it at a third-party provider — when
+ * it arrives from the environment. In API mode two of them are put back
+ * afterwards, from the credential picked in Settings ({@link ClaudeApiKeyEnv}). None of them can be justified by "the agent's own tools
  * might need it", which is the argument that gets everything else in.
  *
  * Most are not in `CHILD_ENV_ALLOWLIST` and so never survive the narrowing
@@ -84,9 +98,9 @@ export const CLAUDE_STRIPPED_ENV: readonly string[] = [
  * Prefix of the local engine's per-credential key variables.
  *
  * `configGenerator` hands OpenCode its credentials as `CINNA_ENGINE_KEY_*`.
- * They have no business on this path — there is no credential here — and their
- * presence would be a second way to pay for a turn the user was told is on
- * their subscription.
+ * They have no business on this path — API mode names its one key as
+ * `ANTHROPIC_API_KEY` — and their presence would be a second way to pay for a
+ * turn with a credential nobody picked for Claude Agent.
  */
 export const ENGINE_KEY_PREFIX = 'CINNA_ENGINE_KEY_'
 
@@ -110,6 +124,55 @@ export const CLIENT_APP_ENV = 'CLAUDE_AGENT_SDK_CLIENT_APP'
  */
 export const AUTOUPDATER_ENV = 'DISABLE_AUTOUPDATER'
 
+/**
+ * Makes the CLI strip its own credentials from every subprocess it starts —
+ * API mode only.
+ *
+ * In API mode the picked key is `ANTHROPIC_API_KEY` in the `claude` process,
+ * and a Bash tool call or a stdio MCP server inherits that process's
+ * environment: one `env` in a turn prints the key into the transcript, which
+ * a shared agent syncs. With this set the CLI removes `ANTHROPIC_API_KEY`,
+ * `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS` and its OAuth tokens from
+ * the environment of what it spawns; the CLI itself still authenticates.
+ *
+ * Side effect, read from the 2.1.296 binary: the CLI forces its *startup*
+ * permission mode to `default` while this is set. Cinna sets the mode with
+ * `session/set_mode` after every new/load anyway, and the contract
+ * (`claude.launch.subprocess-env-scrub*`) checks that `auto` and `default`
+ * are still accepted, that `default` still asks over ACP, and that Bash and
+ * file writes in the agent's folder still work.
+ *
+ * Subscription mode leaves it unset: no key is in the child's environment to
+ * leak, and the user's own `claude` runs as they installed it.
+ */
+export const SUBPROCESS_SCRUB_ENV = 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'
+
+/**
+ * The credential API mode adds to the child, already decrypted in main. Never
+ * logged, never in a spec key (the pool digests the environment), never sent
+ * to the renderer.
+ */
+export interface ClaudeApiKeyEnv {
+  apiKey: string
+  /** The credential's own endpoint, when it names one; null for Anthropic's. */
+  baseUrl: string | null
+}
+
+/** The variables API mode puts back after the strip. */
+export const CLAUDE_API_KEY_ENV: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL']
+
+/**
+ * How one Claude launch authenticates, as main resolved it from the setting
+ * (`claudeAuthService.resolve`). `fingerprint` is a non-secret digest of mode,
+ * credential id and key: the pool retires idle processes started under another
+ * one. An `error` refuses the launch — API mode never falls back to the
+ * subscription.
+ */
+export type ClaudeLaunchAuth =
+  | { mode: 'subscription'; fingerprint: string }
+  | { mode: 'api_key'; fingerprint: string; credential: ClaudeApiKeyEnv }
+  | { mode: 'api_key'; fingerprint: string; error: string }
+
 export interface ClaudeEnvInput {
   /** The login-shell environment, as `resolveShellEnv` produced it. */
   shellEnv: NodeJS.ProcessEnv
@@ -132,14 +195,19 @@ export interface ClaudeEnvInput {
    * assertable, independently of a list this module does not own.
    */
   allowlist?: readonly string[]
+  /**
+   * API mode's credential, added **after** the strip so it is the only key the
+   * child sees. Absent: subscription — no key at all.
+   */
+  apiKey?: ClaudeApiKeyEnv | null
 }
 
 /**
  * Build the environment a `claude` child runs in.
  *
  * Deliberately pure and Electron-free, so the one property that matters —
- * *nothing key-shaped reaches the child* — is asserted by a unit test rather
- * than by reading the runner.
+ * *no key reaches the child but the one picked in Settings* — is asserted by a
+ * unit test rather than by reading the runner.
  */
 export function buildClaudeEnv(input: ClaudeEnvInput): Record<string, string> {
   const narrowed = shellEnvForChild(input.shellEnv, input.allowlist, input.processEnv)
@@ -154,9 +222,20 @@ export function buildClaudeEnv(input: ClaudeEnvInput): Record<string, string> {
   // Not `CLAUDE_CODE_ENTRYPOINT`: the SDK sets that itself (`sdk-ts`) and
   // overwriting it would misreport how the CLI was invoked.
   out[CLIENT_APP_ENV] = `cinna-desktop/${input.appVersion}`
+  // API mode: the picked credential, after the strip, so nothing inherited
+  // survives beside it. An empty key would read as "no key" to the CLI and
+  // fall through to the login — refused upstream, never built here.
+  if (input.apiKey?.apiKey) {
+    out.ANTHROPIC_API_KEY = input.apiKey.apiKey
+    if (input.apiKey.baseUrl) out.ANTHROPIC_BASE_URL = input.apiKey.baseUrl
+  }
   // Set last, so nothing inherited can switch it back on. Every Cinna-spawned
   // `claude` gets this environment — sessions and the login probe alike.
   out[AUTOUPDATER_ENV] = '1'
+  // API mode only, and after everything else for the same reason: the key is
+  // in this process's environment, and without the scrub every Bash command
+  // and MCP server the agent starts inherits it.
+  if (input.apiKey?.apiKey) out[SUBPROCESS_SCRUB_ENV] = '1'
   return out
 }
 
@@ -174,9 +253,14 @@ export function buildClaudeEnv(input: ClaudeEnvInput): Record<string, string> {
  * **Names only, never values.** The whole diagnostic value is in the name, and
  * logging the value of `ANTHROPIC_API_KEY` to explain that it leaked would
  * recreate the leak in the log buffer.
+ *
+ * `expected.apiKey` is API mode: the picked credential's `ANTHROPIC_API_KEY`
+ * and `ANTHROPIC_BASE_URL` are then the intended ones and not reported.
+ * Everything else on the list still is.
  */
-export function auditClaudeEnv(env: Record<string, string>): string[] {
+export function auditClaudeEnv(env: Record<string, string>, expected: { apiKey?: boolean } = {}): string[] {
   return Object.keys(env)
     .filter((key) => CLAUDE_STRIPPED_ENV.includes(key) || key.startsWith(ENGINE_KEY_PREFIX))
+    .filter((key) => !(expected.apiKey && CLAUDE_API_KEY_ENV.includes(key)))
     .sort()
 }

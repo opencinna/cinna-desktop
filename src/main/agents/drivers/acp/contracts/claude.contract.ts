@@ -59,6 +59,27 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     live: 'Nothing differs in a contract run: it needs an installed version older than the latest release and real egress to `downloads.claude.ai`, which the trap refuses. Probed by hand 2026-09-18 with 2.1.274 (latest 2.1.276) in a sandbox HOME laid out as a native install (`~/.local/share/claude/versions/2.1.274`, `~/.local/bin/claude` linked to it), `buildClaudeEnv` env, a fake provider and a recording pass-through proxy, 120 s per run. An ACP session (adapter + one turn), **with or without** the variable: no download, link unchanged, `downloads.claude.ai` never contacted — the kind of process Cinna launches does not self-update. Interactive `claude` (positive control) without the variable: 2.1.276 installed and the link retargeted within ~15 s; with it: nothing installed, link unchanged (it still reached `downloads.claude.ai`, without installing). So the variable is proven to stop the background updater, and on sessions it is belt-and-braces. `claude update` ignores it (updated 2.1.274 → 2.1.276 in the sandbox).'
   },
   {
+    id: 'claude.launch.subprocess-env-scrub', area: 'launch & env', surface: 'env var', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+    expectation: 'On API mode’s `buildClaudeEnv` environment, a native Bash `printenv ANTHROPIC_API_KEY; env` runs and its tool result does not contain the key; the same run with the variable removed does (the control).',
+    owners: ['src/main/agents/drivers/acp/claudeEnv.ts#SUBPROCESS_SCRUB_ENV', 'src/main/agents/drivers/acp/claudeEnv.ts#buildClaudeEnv'],
+    feature: 'In API Token mode one `env` in a turn prints the picked Anthropic key into the transcript, and every MCP server the agent starts holds it.',
+    flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
+  },
+  {
+    id: 'claude.launch.subprocess-env-scrub-modes', area: 'launch & env', surface: 'ACP method', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB + session/set_mode',
+    expectation: 'Under the scrub — which forces the CLI’s startup permission mode to `default` — `session/set_mode` to `auto` and to `default` are both accepted, and in `default` a native Bash call still raises one ACP `session/request_permission`, as without it.',
+    owners: [`${LAUNCHERS}#modeId`, `${DRIVER}#applySetup`],
+    feature: 'API Token turns are refused at setup, or run without the desktop’s approval asks.',
+    flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
+  },
+  {
+    id: 'claude.launch.subprocess-env-scrub-tools', area: 'launch & env', surface: 'env var', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (subprocess sandbox)',
+    expectation: 'Under the scrub a native Bash command writes and reads a file in the session cwd, and the Write tool writes one there.',
+    owners: ['src/main/agents/drivers/acp/claudeEnv.ts#SUBPROCESS_SCRUB_ENV'],
+    feature: 'In API Token mode the agent cannot run commands or edit files in its own folder.',
+    flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
+  },
+  {
     id: 'claude.permission.write-outside-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory Write in default mode raises an edit permission and allow_once writes the file. In isolated fake-provider auto mode, no ACP ask is raised and the unavailable classifier refuses the write; authenticated classifier decisions are not established.',
     owners: ['src/main/agents/drivers/acp/acpLaunchers.ts#modeId'],

@@ -28,7 +28,33 @@ import { createLogger } from '../logger/logger'
 const logger = createLogger('runtime-model-catalog')
 
 const catalogs = new Map<string, RuntimeModelCatalog>()
-const key = (userId: string, engine: AgentEngine): string => JSON.stringify([userId, engine])
+
+/**
+ * Which login a runtime's catalogue belongs to, or null for the only one it
+ * has. Claude on an API token may list other models than on a subscription, so
+ * each auth mode keeps its own catalogue (`claude` and `claude:api_key`).
+ * Installed by the drivers' wiring from `claudeAuthService`; absent in a hub
+ * without drivers and in unit tests.
+ */
+export type RuntimeModelCatalogVariant = (engine: AgentEngine) => string | null
+let variant: RuntimeModelCatalogVariant | null = null
+
+export function installRuntimeModelCatalogVariant(next: RuntimeModelCatalogVariant | null): void {
+  variant = next
+}
+
+/** The storage slot: the engine, or `<engine>:<variant>` for a non-default login. */
+function slotOf(engine: AgentEngine): string {
+  let current: string | null = null
+  try {
+    current = variant?.(engine) ?? null
+  } catch {
+    current = null
+  }
+  return current ? `${engine}:${current}` : engine
+}
+
+const key = (userId: string, engine: AgentEngine): string => JSON.stringify([userId, slotOf(engine)])
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 
@@ -124,7 +150,7 @@ export function recordRuntimeModelCatalog(
   }
   catalogs.set(key(userId, engine), next)
   try {
-    runtimeModelCatalogRepo.save(userId, next)
+    runtimeModelCatalogRepo.save(userId, slotOf(engine), next)
   } catch (error) {
     // A cache: the in-memory copy still serves this run.
     logger.warn('could not persist a runtime model catalog', { engine, error: error instanceof Error ? error.message : String(error) })
@@ -136,7 +162,7 @@ function storedCatalog(userId: string, engine: AgentEngine): RuntimeModelCatalog
   const cached = catalogs.get(key(userId, engine))
   if (cached) return cached
   try {
-    const stored = runtimeModelCatalogRepo.get(userId, engine)
+    const stored = runtimeModelCatalogRepo.get(userId, slotOf(engine))
     if (stored && Array.isArray(stored.models) && stored.engine === engine) {
       catalogs.set(key(userId, engine), stored)
       return stored

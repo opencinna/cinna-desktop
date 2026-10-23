@@ -147,6 +147,8 @@ interface WorldOptions {
   sessionCwd?: string
   /** The plan's `autoApprove` (Antigravity folder agents on Ask). */
   autoApprove?: AcpLaunchPlan['autoApprove']
+  /** The plan's `expectedAuth` (Claude in API mode: `api_key`). */
+  expectedAuth?: AcpLaunchPlan['expectedAuth']
 }
 
 function makeWorld(options: WorldOptions = {}): World {
@@ -176,7 +178,8 @@ function makeWorld(options: WorldOptions = {}): World {
             setup: options.setup ?? {},
             ...(options.preamble ? { firstPromptPreamble: options.preamble } : {}),
             ...(options.sessionCwd ? { sessionCwd: options.sessionCwd } : {}),
-            ...(options.autoApprove ? { autoApprove: options.autoApprove } : {})
+            ...(options.autoApprove ? { autoApprove: options.autoApprove } : {}),
+            ...(options.expectedAuth ? { expectedAuth: options.expectedAuth } : {})
           },
     ...options.launcherExtra,
     ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {}),
@@ -3073,6 +3076,19 @@ describe('session telemetry', () => {
     expect(JSON.stringify(changes)).not.toContain('example.com')
     expect(JSON.stringify(changes)).not.toContain('Acme')
     expect(JSON.stringify(result)).not.toContain('example.com')
+  })
+
+  it('in API mode an API-key login is the expected one, and a subscription answering is the foreign login', async () => {
+    const { telemetry } = reporter()
+    const said = async (kind: string, label: string): Promise<string> => {
+      const w = world({ launcher: 'claude', expectedAuth: 'api_key', deps: { telemetry }, script: {
+        newSession: { emit: [{ kind: 'notify', method: '_auth/status_update', params: { authStatus: { kind, label } } }] },
+        prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } }] }
+      } })
+      return (await w.run()).notices.map((notice) => notice.text).join('\n')
+    }
+    expect(await said('api_key', 'Anthropic API key')).not.toContain('did not run on')
+    expect(await said('account', 'Claude Max')).toContain('did not run on the API token chosen in Settings — it reported “Claude Max”')
   })
 
   it('says so about a foreign login once per chat on a connection, not on every turn', async () => {

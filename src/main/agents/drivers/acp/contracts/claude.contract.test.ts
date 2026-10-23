@@ -15,6 +15,7 @@ import { pickPermissionOption } from '../acpPermissions'
 import type { PermissionOption } from '@agentclientprotocol/sdk'
 import { resolveOfferedModel, selectedModelOf } from '../acpMessages'
 import type { AcpLaunchPlan } from '../acpLaunchers'
+import { buildClaudeEnv, SUBPROCESS_SCRUB_ENV } from '../claudeEnv'
 import { CLAUDE_CONTRACT } from './claude.contract'
 import { runCli, spawnAdapter, type AdapterConnection, type AdapterMessage } from './codexHarness'
 import {
@@ -145,7 +146,9 @@ const seen = {
     activityKinds: [] as string[], activity: [] as Json[] },
   /** Scenario E: a native Bash ask answered with Cinna's Deny (`pickPermissionOption(…, 'reject')`). */
   deny: { asks: [] as AdapterMessage[], sent: [] as (string | null)[], answer: null as AdapterMessage | null,
-    turns: [] as ClaudeProviderTurn[], ran: false }
+    turns: [] as ClaudeProviderTurn[], ran: false },
+  /** Scenario F: API mode's environment as `buildClaudeEnv` builds it, with and without the subprocess scrub. */
+  scrub: { on: null as ScrubRun | null, off: null as ScrubRun | null }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -529,6 +532,113 @@ async function denyScenario(binary: string, trap: EgressTrap): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario F */
+
+/** What one API-mode session observed. Kept out of the snapshot, like scenarios C and D. */
+type ScrubProbe = 'auto' | 'printenv' | 'bash' | 'write'
+
+interface ScrubRun {
+  error: unknown
+  /** Whether the child environment carried the scrub — the control run's is false. */
+  scrubbed: boolean
+  /** Whether `session/set_mode` answered without an error, per mode. */
+  setModes: Record<string, boolean>
+  /**
+   * Permission asks per probe. `auto` is a Bash call right after `set_mode`
+   * `auto` — no ask is how the mode is seen to have taken (the adapter sends no
+   * `current_mode_update` for a client's own `set_mode`); the rest run in `default`.
+   */
+  asks: Record<ScrubProbe, number>
+  /** The tool result the CLI sent back to the provider for each probe. */
+  results: Record<ScrubProbe, string>
+  /** Whether the dummy key appears anywhere in what the printenv probe returned. */
+  keyInPrintenv: boolean
+  /** The contents of the files the Bash and Write probes made in the session cwd, or null. */
+  bashFile: string | null
+  writeFile: string | null
+}
+
+const SCRUB_BASH_TEXT = 'CONTRACT_SCRUB_BASH_4c1'
+const SCRUB_WRITE_TEXT = 'CONTRACT_SCRUB_WRITE_4c1'
+const SCRUB_PRINTENV_END = 'CONTRACT_SCRUB_PRINTENV_DONE'
+
+/**
+ * A folder session on **API mode's environment, built by `buildClaudeEnv`**
+ * from the scratch HOME's login variables and the dummy key as the picked
+ * credential — then, for the harness only, the config dir and the egress trap's
+ * proxy. `scrub: false` removes `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` again: the
+ * control that makes "the key is not in the tool's output" mean something.
+ *
+ * In one session: `set_mode` to `auto`, then `default` (Cinna's two modes, in
+ * the order a turn may need them), then three native calls in `default`, each
+ * answered `allow_once` — `printenv ANTHROPIC_API_KEY`, a Bash write and a
+ * Write tool write, both in the session cwd.
+ */
+async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): Promise<ScrubRun> {
+  const observed: ScrubRun = { error: null, scrubbed: false, setModes: {},
+    asks: { auto: 0, printenv: 0, bash: 0, write: 0 }, results: { auto: '', printenv: '', bash: '', write: '' }, keyInPrintenv: false, bashFile: null, writeFile: null }
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  let script: ClaudeProviderReply[] = []
+  let asks = 0
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : (script.shift() ?? { kind: 'text', text: 'OK' }))
+  const scratch = makeClaudeScratch(`cinna-contract-claude-scrub-${scrub ? 'on' : 'off'}-`, { providerPort: provider.port, trapPort: trap.port })
+  try {
+    const dummyKey = scratch.env.ANTHROPIC_API_KEY
+    const built = buildClaudeEnv({ shellEnv: scratch.env, appVersion: 'contract', processEnv: {},
+      apiKey: { apiKey: dummyKey, baseUrl: scratch.env.ANTHROPIC_BASE_URL } })
+    if (!scrub) delete built[SUBPROCESS_SCRUB_ENV]
+    observed.scrubbed = built[SUBPROCESS_SCRUB_ENV] === '1'
+    const harnessOnly = ['CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy']
+    const env = { ...built, ...Object.fromEntries(harnessOnly.map((key) => [key, scratch.env[key]])), CLAUDE_CODE_EXECUTABLE: binary }
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env,
+      answer: (request) => {
+        if (request.method !== 'session/request_permission') return undefined
+        asks += 1
+        const optionId = pickPermissionOption((request.params?.options ?? []) as PermissionOption[], 'allow')
+        return optionId ? { outcome: { outcome: 'selected', optionId } } : undefined
+      } })
+    await connection.rpc('initialize', initParams)
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+      systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {} } } } }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { observed.error = created.error ?? 'no session'; return observed }
+    const setMode = async (modeId: string): Promise<void> => {
+      const answer = await connection!.rpc('session/set_mode', { sessionId, modeId })
+      observed.setModes[modeId] = !answer.error
+      if (answer.error) observed.error ??= answer.error
+    }
+    const probe = async (name: ScrubProbe, reply: ClaudeProviderReply, text: string): Promise<void> => {
+      const asksBefore = asks
+      const turnsBefore = provider!.turns.length
+      script = [reply]
+      const answer = await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, 90_000)
+      if (answer.error) observed.error ??= answer.error
+      observed.asks[name] = asks - asksBefore
+      observed.results[name] = conversation(provider!.turns.slice(turnsBefore)).flatMap((turn) => turn.toolResults).at(-1) ?? ''
+    }
+    await setMode('auto')
+    await probe('auto', { kind: 'tool', name: 'Bash', input: { command: 'echo CONTRACT_SCRUB_AUTO > made-in-auto.txt', description: 'Write a file' } }, 'Write a file in auto mode.')
+    await setMode('default')
+    await probe('printenv', { kind: 'tool', name: 'Bash', input: { command: `printenv ANTHROPIC_API_KEY; env; echo ${SCRUB_PRINTENV_END}`, description: 'Print the environment' } }, 'Print the environment.')
+    observed.keyInPrintenv = observed.results.printenv.includes(dummyKey)
+    const bashFile = join(scratch.cwd, 'made-by-bash.txt')
+    await probe('bash', { kind: 'tool', name: 'Bash', input: { command: `echo ${SCRUB_BASH_TEXT} > made-by-bash.txt && cat made-by-bash.txt`, description: 'Write a file' } }, 'Write a file with Bash.')
+    observed.bashFile = existsSync(bashFile) ? readFileSync(bashFile, 'utf8') : null
+    const writeFile = join(scratch.cwd, 'made-by-write.txt')
+    await probe('write', { kind: 'tool', name: 'Write', input: { file_path: writeFile, content: `${SCRUB_WRITE_TEXT}\n` } }, 'Write a file.')
+    observed.writeFile = existsSync(writeFile) ? readFileSync(writeFile, 'utf8') : null
+    return observed
+  } catch (error) {
+    observed.error ??= error instanceof Error ? error.message : String(error)
+    return observed
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /** A tool call update's output as text, from `content[]` and `rawOutput` (the two places `acpMessages.toolOutputText` reads). */
 function outputText(update: Json): string {
   const content = ((update.content as Json[] | undefined) ?? []).map((block) => {
@@ -629,6 +739,8 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       await modelScenario(binary, trap)
       await toolsScenario(binary, trap)
       await denyScenario(binary, trap)
+      seen.scrub.off = await scrubScenario(binary, trap, false)
+      seen.scrub.on = await scrubScenario(binary, trap, true)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
     } finally {
       seen.egress = [...trap.attempts]
@@ -656,6 +768,37 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   })
 
   it.skip(entry('claude.launch.autoupdater-disabled'), () => undefined)
+
+  it(entry('claude.launch.subprocess-env-scrub'), () => {
+    const { on, off } = seen.scrub
+    // The control: without the scrub the agent's own Bash prints the key.
+    expect(off?.scrubbed).toBe(false)
+    expect(off?.results.printenv, 'the control run never printed its environment').toContain(SCRUB_PRINTENV_END)
+    expect(off?.keyInPrintenv, 'the control run did not leak the key, so the check below proves nothing').toBe(true)
+    // With it, the same command runs and the key is not in what it returned.
+    expect(on?.scrubbed).toBe(true)
+    expect(on?.results.printenv, `the scrubbed run never printed its environment: ${JSON.stringify(on)}`).toContain(SCRUB_PRINTENV_END)
+    expect(on?.keyInPrintenv, 'the key reached the agent’s own Bash under the scrub').toBe(false)
+  })
+
+  it(entry('claude.launch.subprocess-env-scrub-modes'), () => {
+    const on = seen.scrub.on
+    expect(on?.setModes, JSON.stringify(on?.error ?? null)).toEqual({ auto: true, default: true })
+    // `auto` took: its Bash call raised no ask, exactly as without the scrub.
+    expect(on?.asks.auto, `auto mode still asked under the scrub: ${on?.results.auto}`).toBe(0)
+    // In `default` the native calls still come to the desktop to answer.
+    expect(on?.asks.printenv, 'a Bash call in default mode raised no ACP ask under the scrub').toBe(1)
+    expect(on?.asks).toEqual({ auto: 0, printenv: 1, bash: 1, write: 1 })
+    expect(on?.asks).toEqual(seen.scrub.off?.asks)
+  })
+
+  it(entry('claude.launch.subprocess-env-scrub-tools'), () => {
+    const on = seen.scrub.on
+    expect(on?.error ?? null).toBeNull()
+    expect(on?.bashFile, `Bash result: ${on?.results.bash}`).toBe(`${SCRUB_BASH_TEXT}\n`)
+    expect(on?.results.bash).toContain(SCRUB_BASH_TEXT)
+    expect(on?.writeFile, `Write result: ${on?.results.write}`).toBe(`${SCRUB_WRITE_TEXT}\n`)
+  })
 
   /* auth */
   it(entry('claude.auth.status-json'), () => {

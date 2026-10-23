@@ -161,6 +161,24 @@ describe('LocalAgentsSettingsSection', () => {
     expect(sentence.previousElementSibling?.className).toContain('truncate')
   })
 
+  it('shows how Claude Agent signs in only while Claude Agent is the selected runtime', () => {
+    const { unmount } = render(<LocalAgentsSettingsSection />)
+    expect(screen.queryByRole('group', { name: 'Claude Agent signs in with' })).toBeNull()
+    unmount()
+    appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'claude' }
+    render(<LocalAgentsSettingsSection />)
+    expect(screen.getByRole('group', { name: 'Claude Agent signs in with' })).toBeTruthy()
+    // No Anthropic credential in this world: API Token is offered but disabled.
+    expect((screen.getByRole('button', { name: 'API Token' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('keeps the sign-in row while API Token is on, whatever the default runtime', () => {
+    // Mutation: gate the row on the Claude card alone and the key keeps billing with no control in sight.
+    appSettings = { ...HEALTHY_SETTINGS, claudeAuthMode: 'api_key' }
+    render(<LocalAgentsSettingsSection />)
+    expect(screen.getByRole('group', { name: 'Claude Agent signs in with' })).toBeTruthy()
+  })
+
   it('reports a failed resolve in the danger tone, with Try again beside it', () => {
     binary = { state: 'failed', error: 'opencode could not be downloaded.' }
     render(<LocalAgentsSettingsSection />)

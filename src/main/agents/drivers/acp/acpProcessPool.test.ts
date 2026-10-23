@@ -1072,3 +1072,60 @@ describe('createAcpProcessPool', () => {
     })
   })
 })
+
+/**
+ * Claude's auth mode, credential or key changed (Settings, or an account sync
+ * rotating a key): idle processes started under the old fingerprint stop now,
+ * busy ones finish their turn and are replaced by the next acquire.
+ */
+describe('retireStaleAuth', () => {
+  const authSpec = (key: string, authFingerprint?: string): AcpLaunchSpec => ({ ...spec(key), authFingerprint })
+
+  it('stops an idle process started under another fingerprint, and leaves a current one', async () => {
+    const stale = stubConnection(1)
+    const current = stubConnection(2)
+    const { pool } = poolWith([stale, current])
+    await pool.acquire('old', authSpec('k1', 'subscription'), INIT)
+    await pool.acquire('fresh', authSpec('k2', 'api_key:abc'), INIT)
+    expect(pool.retireStaleAuth!('api_key:abc')).toEqual(['old'])
+    await flush()
+    expect(stale.disposals).toBe(1)
+    expect(current.disposals).toBe(0)
+    expect(pool.status('old').state).toBe('stopped')
+    expect(pool.status('fresh').state).toBe('running')
+  })
+
+  it('never touches a process that named no fingerprint (every engine but Claude)', async () => {
+    const other = stubConnection(1)
+    const { pool } = poolWith([other])
+    await pool.acquire('codex', spec('k'), INIT)
+    expect(pool.retireStaleAuth!('api_key:abc')).toEqual([])
+    expect(other.disposals).toBe(0)
+  })
+
+  it('lets a held process finish its turn; the next acquire replaces it because its key moved', async () => {
+    const stale = stubConnection(1)
+    const replacement = stubConnection(2)
+    const { pool } = poolWith([stale, replacement])
+    const release = pool.hold('agent')
+    await pool.acquire('agent', authSpec('k-sub', 'subscription'), INIT)
+    expect(pool.retireStaleAuth!('api_key:abc')).toEqual([])
+    await flush()
+    expect(stale.disposals).toBe(0)
+    release()
+    // The new environment carries the key, so the spec key differs.
+    const release2 = pool.hold('agent')
+    const conn = await pool.acquire('agent', authSpec('k-api', 'api_key:abc'), INIT)
+    expect(conn).toBe(replacement)
+    expect(stale.disposals).toBe(1)
+    release2()
+  })
+
+  it('leaves a process with background work running', async () => {
+    const busy = stubConnection(1)
+    const { pool } = poolWith([busy], { isBusy: (id) => id === 'agent' })
+    await pool.acquire('agent', authSpec('k', 'subscription'), INIT)
+    expect(pool.retireStaleAuth!('api_key:abc')).toEqual([])
+    expect(busy.disposals).toBe(0)
+  })
+})

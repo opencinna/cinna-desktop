@@ -1,5 +1,5 @@
 import { runtimeHost } from '../../host/runtimeHost'
-import { installRuntimeModelCatalogProbe, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
+import { installRuntimeModelCatalogProbe, installRuntimeModelCatalogVariant, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
 import { chatConductorService, isChatConductor, conductorContext } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
@@ -61,7 +61,10 @@ import {
 } from '../../services/localAgents/promptAssembly'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { withDeveloperToolShims } from '../../shell/developerToolShims'
-import { buildClaudeEnv } from './acp/claudeEnv'
+import { buildClaudeEnv, type ClaudeApiKeyEnv } from './acp/claudeEnv'
+import { claudeAuthService } from '../../services/localAgents/claudeAuthService'
+import { appSettingsService } from '../../services/appSettingsService'
+import { onAiCredentialsChanged } from '../../services/aiCredentialChanges'
 import { readFolderAgents } from './acp/claudeAgents'
 import { fetchAgentCard } from '../a2a-client'
 import { folderReadinessBlocksTurn, type LocalAgentKind } from '../../../shared/localAgents'
@@ -229,8 +232,57 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
   // in…". The login follows HOME, not the binary (verified 2026-09-18: a second
   // binary reported the same Max login with no Keychain prompt).
   claudePath: runningBinary(claudeBinaryService),
-  env: async () => withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() }))
+  // The subscription's environment: the probe asks the login, and in API mode
+  // it is not asked at all (`fixed`).
+  env: () => claudeChildEnv(null),
+  // API mode: the key is the login. Reported as such, so no surface offers a
+  // `claude` login the turns would not use.
+  fixed: () => claudeAuthService.mode() === 'api_key'
+    ? { state: 'logged_in', authMethod: 'api_key', subscriptionType: null, email: null }
+    : null
 })
+
+/**
+ * The child environment every Cinna-spawned `claude` gets: `buildClaudeEnv` on
+ * the login-shell environment, with the developer-tool shims — plus, in API
+ * mode, the picked credential (`apiKey`, decrypted in main by
+ * `claudeAuthService`). One function so the probe, the login and the sessions
+ * cannot drift.
+ */
+async function claudeChildEnv(apiKey: ClaudeApiKeyEnv | null): Promise<Record<string, string>> {
+  return withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion(), apiKey }))
+}
+
+/**
+ * **An auth change retires idle Claude processes.** A process froze its
+ * environment — and so its key or login — at start. Switching Subscription /
+ * API Token, picking another credential, or a key saved, removed or rotated by
+ * an account sync moves `claudeAuthService`'s fingerprint; every idle Claude
+ * process started under another one is stopped now, rather than serving the
+ * next turn on the old account. One with a turn or background work running is
+ * left to finish: the next acquire replaces it, because its environment (and so
+ * its spec key) moved. The login probe forgets its answer too. Returns the
+ * unsubscribe; installed by `hub/core.ts`.
+ */
+export function installClaudeAuthFollow(): () => void {
+  // No remembered "last" fingerprint: nothing is decrypted at install, and the
+  // pool compares each process with the current one, so a change that did not
+  // move it stops nothing.
+  const follow = (): void => {
+    const current = claudeAuthService.fingerprint()
+    claudeAuthProbe.invalidate()
+    const stopped = acpProcessPool.retireStaleAuth?.(current) ?? []
+    if (stopped.length > 0) logger.info('Claude auth changed; idle processes retired', { mode: claudeAuthService.mode(), retired: stopped.length })
+  }
+  const off = [
+    appSettingsService.onSaved('claudeAuthMode', follow),
+    appSettingsService.onSaved('claudeApiCredentialId', follow),
+    // The Default AI credential is what an automatic pick prefers.
+    appSettingsService.onSaved('localAgentsDefaultCredentialId', follow),
+    onAiCredentialsChanged(follow)
+  ]
+  return () => { for (const unsubscribe of off) unsubscribe() }
+}
 
 
 /**
@@ -386,7 +438,9 @@ export const engineLogins: Record<EngineLoginId, EngineLogin> = {
         return { error: error instanceof ManagedAssetError ? error.message : CLAUDE_NOT_INSTALLED }
       }
     },
-    env: async () => withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
+    // Always the subscription's environment: `claude auth login` signs in the
+    // install's own account, which an API key beside it would only shadow.
+    env: () => claudeChildEnv(null),
     refresh: () => {
       claudeAuthProbe.invalidate()
       return claudeAuthProbe.refresh()
@@ -568,6 +622,8 @@ function modelCatalogProbeDir(engine: EngineLoginId): string {
   return path
 }
 installRuntimeModelCatalogProbe(probeModelCatalog)
+// Claude on an API token keeps its own catalogue: a key may list other models than a plan.
+installRuntimeModelCatalogVariant((engine) => engine === 'claude' && claudeAuthService.mode() === 'api_key' ? 'api_key' : null)
 
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
 /**
@@ -594,6 +650,16 @@ function codexProcessCwd(poolKey: string): string {
   return path
 }
 
+/**
+ * The Claude auth fingerprint for a shared runtime's pool key, null for every
+ * other engine: two chats (or functions) on different Claude accounts must not
+ * share a process, and one started before an auth change must not be found
+ * again under the same key.
+ */
+function claudeAuthFingerprint(engine: string): string | null {
+  return engine === 'claude' ? claudeAuthService.fingerprint() : null
+}
+
 /** A dedicated utility profile owns a warm process, but never owns resumable sessions. */
 export async function prepareAiFunctionRuntime(userId: string, systemPrompt: string, warmOnly: boolean): Promise<{
   poolKey: string; plan: AcpLaunchPlan; cwd: string
@@ -602,7 +668,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   if (runtime.reason) throw new Error(runtime.reason)
   const engine = runtime.launcher
   // OpenCode instructions are process config; Claude and Codex own them per session.
-  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, engine === 'opencode' ? systemPrompt : null)
+  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, engine === 'opencode' ? systemPrompt : null, claudeAuthFingerprint(engine))
   // Claude shares a process across function prompts, but instruction files are
   // session-owned too: concurrent functions must never rewrite each other's cwd.
   const digest = createHash('sha256').update(JSON.stringify([poolKey, systemPrompt])).digest('hex').slice(0, 24)
@@ -634,7 +700,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const launcher = acpLaunchers[engine]
   if (!launcher) throw new Error('The default runtime cannot run AI functions')
   const chatContext = chatCandidate ? conductorContext(chatCandidate) : undefined
-  const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext) : poolKey
+  const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext, claudeAuthFingerprint(chatContext.engine)) : poolKey
   if (chatContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: chatContext })
   const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
     ? await prepareCodexConductorPolicy(proposed, join(runtimeHost.getPath('userData'), 'acp')) : proposed, engine)
@@ -861,8 +927,10 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status()),
     adapterEntry: claudeAdapterEntry,
     nodeRuntime: hostNodeRuntime,
-    claudeEnv: async () =>
-      withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
+    claudeEnv: (apiKey) => claudeChildEnv(apiKey ?? null),
+    // Subscription or the picked Anthropic credential; an API mode with none
+    // refuses the turn (never the subscription instead).
+    launchAuth: () => claudeAuthService.resolve(),
     systemPrompt: folderSystemPrompt('claude'),
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
     artifactsSkillPlugin: () => ensureArtifactsSkillPlugin(),
@@ -1077,7 +1145,7 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
     const agent = agentRepo.getOwned(ctx.userId, ctx.agentId)
     if (agent && isChatConductor(agent) && ctx.folder) {
       const context = conductorContext(agent)
-      const poolKey = syntheticRuntimePoolKey(ctx.userId, context)
+      const poolKey = syntheticRuntimePoolKey(ctx.userId, context, claudeAuthFingerprint(context.engine))
       syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
       // Codex includes its process cwd in the launch identity. Keep that
       // profile-owned while acpDriver supplies each chat's own session cwd.

@@ -150,3 +150,79 @@ describe('auditClaudeEnv', () => {
     expect(found.join(' ')).not.toContain('sk-ant-secret-value')
   })
 })
+
+/**
+ * API mode (Settings → Local Agents → Claude Agent signs in with → API Token):
+ * the picked Anthropic credential is added **after** the strip, so it is the
+ * one key the child sees — whatever the shell exported is still removed.
+ */
+describe('buildClaudeEnv — API mode adds only the picked credential', () => {
+  const picked = { apiKey: 'sk-ant-picked', baseUrl: null }
+
+  it('adds the picked key as ANTHROPIC_API_KEY and keeps the login variables', () => {
+    const env = buildClaudeEnv({ shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {}, apiKey: picked })
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-picked')
+    expect(Object.hasOwn(env, 'ANTHROPIC_BASE_URL')).toBe(false)
+    expect(env.USER).toBe('someone')
+    expect(env.DISABLE_AUTOUPDATER).toBe('1')
+  })
+
+  it('adds the credential’s base URL when it names one', () => {
+    const env = buildClaudeEnv({
+      shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {},
+      apiKey: { apiKey: 'sk-ant-picked', baseUrl: 'https://gateway.example/anthropic' }
+    })
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://gateway.example/anthropic')
+  })
+
+  it('replaces whatever the shell exported: the inherited key, base URL and provider switches never survive beside it', () => {
+    const shellEnv = {
+      ...SHELL_ENV,
+      ANTHROPIC_API_KEY: 'sk-ant-from-zshrc',
+      ANTHROPIC_BASE_URL: 'https://elsewhere.example',
+      ANTHROPIC_AUTH_TOKEN: 'tok',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CINNA_ENGINE_KEY_ANTHROPIC_AB12: 'sk-engine'
+    }
+    const env = buildClaudeEnv({ shellEnv, appVersion: '9.9.9', processEnv: {}, allowlist: Object.keys(shellEnv), apiKey: picked })
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-picked')
+    expect(Object.values(env)).not.toContain('sk-ant-from-zshrc')
+    expect(Object.hasOwn(env, 'ANTHROPIC_BASE_URL')).toBe(false)
+    expect(Object.hasOwn(env, 'ANTHROPIC_AUTH_TOKEN')).toBe(false)
+    expect(Object.hasOwn(env, 'CLAUDE_CODE_USE_BEDROCK')).toBe(false)
+    expect(Object.keys(env).filter((k) => k.startsWith('CINNA_ENGINE_KEY_'))).toEqual([])
+  })
+
+  it('adds nothing without a credential, or with an empty key', () => {
+    expect(Object.hasOwn(build(), 'ANTHROPIC_API_KEY')).toBe(false)
+    const empty = buildClaudeEnv({ shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {}, apiKey: { apiKey: '', baseUrl: 'https://x' } })
+    expect(Object.hasOwn(empty, 'ANTHROPIC_API_KEY')).toBe(false)
+    expect(Object.hasOwn(empty, 'ANTHROPIC_BASE_URL')).toBe(false)
+  })
+
+  it('tells the CLI to scrub the key from the agent’s own subprocesses, whatever the shell said', () => {
+    expect(buildClaudeEnv({ shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {}, apiKey: picked }).CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe('1')
+    // An inherited `0` past a wide allowlist cannot switch it off.
+    const shellEnv = { ...SHELL_ENV, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0' }
+    const env = buildClaudeEnv({ shellEnv, appVersion: '9.9.9', processEnv: {}, allowlist: Object.keys(shellEnv), apiKey: picked })
+    expect(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe('1')
+  })
+
+  it('leaves the scrub unset on the subscription, and with an empty key', () => {
+    expect(Object.hasOwn(build(), 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB')).toBe(false)
+    const empty = buildClaudeEnv({ shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {}, apiKey: { apiKey: '', baseUrl: null } })
+    expect(Object.hasOwn(empty, 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB')).toBe(false)
+  })
+
+  it('the audit expects the picked key in API mode and still reports everything else', () => {
+    const env = buildClaudeEnv({
+      shellEnv: SHELL_ENV, appVersion: '9.9.9', processEnv: {},
+      apiKey: { apiKey: 'sk-ant-picked', baseUrl: 'https://gateway.example' }
+    })
+    expect(auditClaudeEnv(env, { apiKey: true })).toEqual([])
+    // On the subscription the same environment is a leak.
+    expect(auditClaudeEnv(env)).toEqual(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'])
+    expect(auditClaudeEnv({ ...env, ANTHROPIC_AUTH_TOKEN: 't', CINNA_ENGINE_KEY_X_1: 'k' }, { apiKey: true }))
+      .toEqual(['ANTHROPIC_AUTH_TOKEN', 'CINNA_ENGINE_KEY_X_1'])
+  })
+})

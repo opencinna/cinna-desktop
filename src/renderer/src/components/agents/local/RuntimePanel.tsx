@@ -29,6 +29,7 @@ import { antigravityDefaultOptionLabel, antigravityRunModelLabel, antigravityVer
 import { AntigravityTermsTip } from '../../settings/AntigravityTermsTip'
 import { useRuntimeSetup } from '../../../hooks/useRuntimeSetup'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
+import { useClaudeApiCredential } from '../../../hooks/useClaudeApiCredential'
 import { useAgentCredentialResolution } from '../../../hooks/useAgentAiCredential'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { isCredentialUsable } from '../../../../../shared/credentials'
@@ -152,6 +153,11 @@ import {
  * agent on the same runtime, and both say what they did in the status line —
  * they rewrite the agent's runtime behind a control that only claims to change
  * the view, so they cannot happen wordlessly.
+ *
+ * The box is never held on, and never disabled, because a choice has no tier.
+ * A model (or a model at an effort) no tier describes has nothing to convert
+ * to, so unticking drops it and the agent runs on Default — said on the line,
+ * like every other conversion.
  */
 
 /**
@@ -683,6 +689,7 @@ export function RuntimePanel({
   const { data: models, isError: modelsFailed } = useModels()
   const { data: defaultMode } = useDefaultChatMode()
   const { data: settings } = useAppSettings()
+  const claudeApi = useClaudeApiCredential()
   const setSetting = useSetAppSetting()
   /**
    * Where this agent's choice is kept — the one thing that differs by kind.
@@ -985,18 +992,6 @@ export function RuntimePanel({
    */
   const cliSessionList = cliCatalog?.source === 'session'
   const cliConversionPending = onCodex && declaredModel !== null && (!cliSessionList || catalogDefaultModel(cliCatalog) === null)
-  /**
-   * Why Advanced stays on, once — the status line and the checkbox's tooltip
-   * read the same branch. The effort is the cause when the model alone would
-   * convert.
-   */
-  const cliUnconvertibleReason = cliEngine && declaredModel !== null && cliTier === null
-    ? declaredModel === 'default'
-      ? `${cliName}’s own default has no work complexity — pick a model first.`
-      : declaredEffort && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
-      ? `Advanced stays on — “${declaredEffort}” effort matches no work complexity.`
-      : `Advanced stays on — “${cliNameOf(declaredModel)}” matches no work complexity.`
-    : null
 
   /**
    * Which picker this agent gets.
@@ -1026,7 +1021,8 @@ export function RuntimePanel({
    * because the view derivation below needs it, not only the `disabled` gate.
    */
   const settingsLoaded = settings !== undefined
-  const [view, setView] = useState<{ agentId: string; advanced: boolean } | null>(null)
+  /** `model` is the file's model when the view was set — see {@link untiered}. */
+  const [view, setView] = useState<{ agentId: string; advanced: boolean; model: string | null } | null>(null)
 
   /**
    * Credentials this app can actually make a call with. A managed row flagged
@@ -1107,17 +1103,19 @@ export function RuntimePanel({
 
   /**
    * A pinned model that belongs to no family — a gateway's `my-private-llm-7b`,
-   * the ordinary case for `openai_compatible`.
+   * the ordinary case for `openai_compatible` — or, on a CLI runtime, a model
+   * or effort no tier describes.
    *
-   * The tier picker cannot represent this file at all, so Advanced is not a
-   * preference here but the only truthful view, and the checkbox is **disabled**
-   * rather than left to spring back. A control that snaps to its old value tells
-   * the user nothing and invites a second identical click; a disabled one with
-   * the reason beside it is a state they can read once and act on. It also
-   * removes the need to instruct anyone to clear a hand-written id they cannot
-   * retype — clearing the model enables the checkbox on its own.
+   * The checkbox stays enabled: unticking drops the model (see
+   * {@link toggleAdvanced}). What this still decides is the *view* when the
+   * file changes under a sticky tier view — an assistant writing such a model
+   * into the manifest. A tier picker over a running pinned model is the
+   * misreport this panel exists to prevent, so a model the view was not set
+   * over shows the model picker. The view's own `model` tag is what keeps an
+   * untick that is dropping this very model from being overridden by it
+   * before the file has caught up.
    */
-  const unconvertible = onCli
+  const untiered = onCli
     ? declaredModel !== null && !cliConversionPending && cliTier === null
     : declaredModel !== null && classifyModel(declaredModel, providerType) === null
   /**
@@ -1130,11 +1128,16 @@ export function RuntimePanel({
   // The same rule on every engine now that the CLI runtimes list their models:
   // the agent's own runtime first, then this agent's sticky view, then the
   // remembered preference.
-  const advanced = unconvertible
-    ? true
-    : view?.agentId === agent.id
-      ? view.advanced
-      : (declaredView ?? settings?.localAgentsModelAdvanced === true)
+  const advanced = view?.agentId === agent.id
+    ? view.advanced || (untiered && declaredModel !== view.model)
+    : (declaredView ?? settings?.localAgentsModelAdvanced === true)
+  // The tag only covers the write that set it: once the file has moved off
+  // that model, a later write of the same untiered model is an outside one again.
+  useEffect(() => {
+    if (view && view.agentId === agent.id && view.model !== null && declaredModel !== view.model) {
+      setView({ ...view, model: null })
+    }
+  }, [view, agent.id, declaredModel])
   /**
    * True while nothing can answer "which picker" yet: the manifest declares
    * neither and the preference has not arrived.
@@ -1351,8 +1354,7 @@ export function RuntimePanel({
    * install and login rungs and above the healthy sentence: a declared model
    * the tool no longer offers first (it runs on the tool's default instead, and
    * the chat says so), then — only in the Advanced view, where the list is the
-   * control — that it is being fetched or could not be, then why Advanced is
-   * not available.
+   * control — that it is being fetched or could not be.
    */
   const cliCatalogLine = (): StatusLine | null => {
     // Short, so the line fits at 800px; the whole sentence is the `title`.
@@ -1375,16 +1377,6 @@ export function RuntimePanel({
       return cliRefreshError
         ? { text: `Couldn’t list ${cliName}’s models.`, title: cliRefreshError, tone: WARN, refresh: true }
         : { text: `${cliName} has not listed its models yet.`, tone: WARN, refresh: true }
-    }
-    if (unconvertible && cliUnconvertibleReason) {
-      if (declaredModel === 'default') return { text: cliUnconvertibleReason, tone: NOTE }
-      return {
-        text: declaredEffort && cliEngine && declaredModel && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
-          ? `Advanced stays on — no tier for “${declaredEffort}” effort.`
-          : `Advanced stays on — no tier for “${cliNameOf(declaredModel)}”.`,
-        title: cliUnconvertibleReason,
-        tone: NOTE
-      }
     }
     return null
   }
@@ -1534,11 +1526,16 @@ export function RuntimePanel({
         // inferred — asserting a subscription because an environment variable
         // was stripped is a claim about an environment this app does not fully
         // control.
-        text:
-          claudeAuth.state === 'logged_in'
+        // API Token mode (Settings → Local Agents): the key's owner pays, not
+        // the user's login — and with no key to spend, nothing runs at all.
+        text: claudeApi.mode === 'api_key'
+          ? claudeApi.inForce
+            ? `Claude Agent runs on the API token “${claudeApi.inForce.name}”, on ${claudeModel}.`
+            : 'API Token is on, but no Anthropic credential is usable — turns will not run.'
+          : claudeAuth.state === 'logged_in'
             ? `Claude Agent runs on your own Claude Code login${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}, on ${claudeModel}.`
             : `Claude Agent runs on Claude Code, on ${claudeModel}.`,
-        tone: NOTE
+        tone: claudeApi.mode === 'api_key' && !claudeApi.inForce && claudeApi.providersLoaded ? WARN : NOTE
       }
     }
     // Before the provider list lands, every credential looks missing. Saying so
@@ -1577,25 +1574,6 @@ export function RuntimePanel({
       return {
         text: `Pick a model ${facts.credentialName} lists — “${declaredModel}” is ${ownerName}’s.`,
         tone: WARN
-      }
-    }
-    /**
-     * Why the Advanced checkbox is not available. Standing rather than fired by
-     * a click, so the state is legible before the user tries it.
-     *
-     * Consequence first, because the length of what follows is not ours: the
-     * model id is the user's, and a real gateway one
-     * (`meta-llama/Llama-3.3-70B-Instruct`) is twice the length of a short
-     * sample. With the id leading, that pushes the clause explaining the
-     * disabled control to within a few pixels of the 800px line's edge and a
-     * longer id past it — clipping the only half the user needs. Leading with it
-     * instead ends it at a fixed offset whatever the id, and what falls off is
-     * the reason, which the `title` carries in full.
-     */
-    if (unconvertible) {
-      return {
-        text: `Advanced stays on — “${nameOf(declaredModel)}” matches no work complexity.`,
-        tone: NOTE
       }
     }
     /**
@@ -1690,13 +1668,28 @@ export function RuntimePanel({
     // A message about credentials/.env must not survive the next thing the user
     // does in the pickers above it.
     setSecrets(null)
-    if (options.note) note(options.note, { model: modelId, complexity })
+    /**
+     * **A model on the CLI path names its engine.** A file with no engine runs
+     * on this machine's Default runtime — until it names a model: then
+     * `effectiveEngine` (the contract rule, shared with cinna-core) reads the
+     * bare model as OpenCode, and keeping the absent engine moved the agent off
+     * the runtime it was showing, onto one that lists nothing but that model.
+     * So such a write pins the engine it was made on, and the line says so.
+     */
+    const pinEngine = options.engine === undefined && cliEngine !== null && declaredEngine === null && modelId !== null
+      ? cliEngine
+      : null
+    // The Runs-on picker's own words: “Claude Agent”, not the CLI's product name.
+    const pinnedNote = pinEngine ? `Runs on ${{ claude: 'Claude Agent', codex: 'Codex', antigravity: 'Antigravity' }[pinEngine]} now.` : undefined
+    // The pin first: the line truncates at 800px, and this is the clause that changed the runtime.
+    const noteText = options.note && pinnedNote ? `${pinnedNote} ${options.note}` : (options.note ?? pinnedNote)
+    if (noteText) note(noteText, { model: modelId, complexity })
     else setDropped(null)
     const effort = modelId === null ? null
       : options.effort !== undefined ? options.effort
       : modelId === declaredModel ? declaredEffort : null
     const runtime = {
-      engine: options.engine === undefined ? KEEP_ENGINE : options.engine,
+      engine: pinEngine ?? (options.engine === undefined ? KEEP_ENGINE : options.engine),
       credential,
       modelId,
       complexity,
@@ -1725,7 +1718,7 @@ export function RuntimePanel({
        * `declaredView` decides the view on return.
        */
       onSuccess: () => {
-        setView({ agentId: agent.id, advanced: options.view ?? advanced })
+        setView({ agentId: agent.id, advanced: options.view ?? advanced, model: declaredModel })
         if (options.keep !== undefined) {
           setPinned(options.keep === null ? null : { agentId: agent.id, modelId: options.keep })
         }
@@ -1890,33 +1883,23 @@ export function RuntimePanel({
    * saying one thing.
    *
    * **A conversion that cannot be made is never approximated.** Both directions
-   * have a case with no honest answer: a tier the credential lists no model for
-   * (or lists nothing at all for, because the registry failed to load), and a
-   * model id no family recognises — a gateway's `my-private-llm-7b`, which is
-   * the ordinary case for `openai_compatible`. Writing through either would
-   * delete a choice out of a file the user commits, silently move the agent onto
-   * a different model, and — for the unrecognised id — put it beyond the reach of
-   * the select that would have to offer it back. So neither writes.
+   * have a case with no tier or model to convert to: a tier the credential lists
+   * no model for (or lists nothing at all for, because the registry failed to
+   * load), and a model no tier describes — a gateway's `my-private-llm-7b`, the
+   * ordinary case for `openai_compatible`, or on a CLI runtime a model or effort
+   * outside every tier. Neither is guessed at; they differ in what is written:
    *
-   * They differ in whether the *view* still moves, and the rule is one question:
-   * **can the picker the user asked for represent this file honestly?**
+   * - Tier → model, tier resolves to nothing: the file keeps its tier. A model
+   *   picker sitting on `Default` is not lying about anything — the file's tier
+   *   names no model — and it is where the user can fix it. The view moves, the
+   *   file does not, and the line names the tier still in it.
+   * - Model → tier, model belongs to no tier: the model is **dropped** and the
+   *   agent runs on Default, keeping its engine. The tier picker cannot show a
+   *   model it has no tier for, and holding the box on (as this once did) made
+   *   Advanced a mode the file could lock the user into. The line names what
+   *   was dropped, so the write is never wordless.
    *
-   * - Tier → model, tier resolves to nothing: yes. The file's tier names no
-   *   model, so a model picker sitting on `Default` is not lying about anything,
-   *   and it is where the user can fix it — picking a model replaces the tier.
-   *   The view moves, the file does not, and the line names the tier still in it.
-   * - Model → tier, model belongs to no family: no. The file names a model that
-   *   is *running*, and a tier picker cannot say so — it would read `Default`
-   *   over a live pinned id, which is the misreport this panel exists to
-   *   prevent. That case never reaches this function at all: `unconvertible`
-   *   above disables the checkbox and puts the reason beside it, because a
-   *   control that springs back tells the user nothing and invites an identical
-   *   second click. The `!tier` guard below stays anyway — the guarantee is
-   *   "never convert what cannot be converted", and a guarantee that lives only
-   *   in whether a control is clickable is one line of JSX away from being lost.
-   *
-   * So of the three outcomes only the first goes near the mutation: a
-   * conversion that writes moves the view in `onSuccess`; a deliberate no-op
+   * A conversion that writes moves the view in `onSuccess`; a deliberate no-op
    * moves it immediately, because it succeeded — it just had nothing to write;
    * a refused write moves nothing at all.
    *
@@ -1935,7 +1918,7 @@ export function RuntimePanel({
      * the next agent's default come apart.
      */
     const applyView = (value: boolean): void => {
-      setView({ agentId: agent.id, advanced: value })
+      setView({ agentId: agent.id, advanced: value, model: declaredModel })
       setSetting.mutate({ key: 'localAgentsModelAdvanced', value })
     }
 
@@ -1954,7 +1937,7 @@ export function RuntimePanel({
      * Flash level, Codex's default model at the tier's effort), and a model
      * goes back to the tier it belongs to. A target the tool no longer lists
      * becomes the tool's default, and the line says so; a model no tier
-     * describes never reaches here (`unconvertible` disables the checkbox).
+     * describes is dropped for Default, and the line says that too.
      */
     if (cliEngine) {
       if (next && declaredComplexity !== null) {
@@ -1998,8 +1981,32 @@ export function RuntimePanel({
         return
       }
       if (!next && declaredModel !== null) {
-        // Unreachable through the checkbox while `unconvertible` — kept, as below.
-        if (!cliTier) return
+        // Codex's tier is its *default* model, which only a session's list names:
+        // the checkbox waits while it is pending, and so does this.
+        if (cliConversionPending || cliTier === undefined) return
+        // Only the effort has no tier (Opus at high): keep the model's own tier
+        // and drop the effort, the closer answer to what the user picked.
+        const modelTier = cliTier === null && declaredEffort ? cliModelTier(cliEngine, declaredModel, null, cliCatalog) : null
+        if (modelTier) {
+          const label = modelTier.tier ? WORK_COMPLEXITY_LABELS[modelTier.tier] : 'Default'
+          commit(null, null, modelTier.tier, {
+            view: false,
+            persist: true,
+            keep: null,
+            note: `Switched to ${label} — the tier “${cliNameOf(declaredModel)}” belongs to. Dropped “${declaredEffort}” effort.`
+          })
+          return
+        }
+        if (cliTier === null) {
+          const what = `“${cliNameOf(declaredModel)}”`
+          commit(null, null, null, {
+            view: false,
+            persist: true,
+            keep: null,
+            note: `Dropped ${what} — no complexity fits it, so Default now.`
+          })
+          return
+        }
         const tier = cliTier.tier
         commit(null, null, tier, {
           view: false,
@@ -2051,11 +2058,15 @@ export function RuntimePanel({
 
     if (!next && declaredModel !== null) {
       const tier = classifyModel(declaredModel, providerType)?.tier ?? null
-      // Unreachable through the checkbox, which `unconvertible` disables — kept
-      // because "never convert what cannot be converted" is the guarantee, and a
-      // guarantee that lives only in whether a control is clickable is one line
-      // of JSX away from being lost.
-      if (!tier) return
+      if (!tier) {
+        commit(commitCredential(declaredCredential), null, null, {
+          view: next,
+          persist: true,
+          keep: null,
+          note: `Dropped “${nameOf(declaredModel)}” — no complexity fits it, so Default now.`
+        })
+        return
+      }
       commit(commitCredential(declaredCredential), null, tier, {
         view: next,
         persist: true,
@@ -2328,10 +2339,13 @@ export function RuntimePanel({
               // explanation and leaves this control disabled with nothing
               // visible saying why. The tooltip is the only per-control surface
               // left, so it carries the same sentence rather than advertising an
-              // action the checkbox can no longer perform.
+              // action the checkbox can no longer perform. Over a model no tier
+              // describes it says what unticking will do, since that drops it.
               title={
-                unconvertible
-                  ? (onCli ? (cliUnconvertibleReason ?? undefined) : `Advanced stays on — “${nameOf(declaredModel)}” matches no work complexity.`)
+                untiered && advanced
+                  ? (cliEngine && declaredModel && declaredEffort && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
+                    ? `No work complexity has “${declaredEffort}” effort — unticking drops the effort and keeps the model’s tier.`
+                    : `No work complexity matches “${onCli ? cliNameOf(declaredModel) : nameOf(declaredModel)}” — unticking drops it for Default.`)
                   : cliConversionPending
                     ? (cliRefreshError ? `Couldn’t list ${cliName}’s models: ${cliRefreshError}`
                       : cliRefreshing ? `Checking ${cliName}’s models…` : `${cliName} has not listed its models yet.`)
@@ -2342,7 +2356,7 @@ export function RuntimePanel({
                 type="checkbox"
                 className="size-3 accent-[var(--color-accent)]"
                 checked={advanced}
-                disabled={disabled || unconvertible || cliConversionPending}
+                disabled={disabled || cliConversionPending}
                 onChange={(event) => toggleAdvanced(event.target.checked)}
               />
               Advanced

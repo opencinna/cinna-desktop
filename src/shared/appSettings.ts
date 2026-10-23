@@ -5,6 +5,7 @@
  * `appSettingsRepo` defaults.
  */
 import type { AiSpendingLevel } from './aiSpendingLevel'
+import type { ClaudeAuthMode } from './claudeAuthMode'
 
 export interface AppSettingsSchema {
   /** Concurrent autonomous tasks and agent calls on this device. */
@@ -160,6 +161,23 @@ export interface AppSettingsSchema {
    * strand this one's agents.
    */
   localAgentsDefaultEngine: string
+  /**
+   * How every Claude-engine session on this machine authenticates —
+   * `'subscription'` (the user's own `claude` login, the default) or
+   * `'api_key'` (an Anthropic AI credential this app holds, decrypted in main
+   * and handed to the child as `ANTHROPIC_API_KEY`). Agents, chats, synthetic
+   * runtimes and AI functions alike; never written into an agent folder.
+   * Machine-local like {@link localAgentsDefaultCredentialId}. See
+   * `shared/claudeAuthMode.ts`.
+   */
+  claudeAuthMode: ClaudeAuthMode
+  /**
+   * The Anthropic credential API mode spends, or empty for automatic: the
+   * Default AI credential when it is Anthropic, else the first usable one. A
+   * named credential that no longer qualifies fails the turn rather than
+   * falling back to another key or to the subscription.
+   */
+  claudeApiCredentialId: string
   /** Building-only runtime override; empty inherits the local-agent default. */
   localDevelopmentEngine: string
   /** Optional OpenCode credential for building; empty inherits the default credential. */

@@ -8,6 +8,7 @@ import { repoRoot } from '../playwright.config'
 import { installCachedEngine } from './engine-cache'
 import { checkLiveEngine, NO_AGENT_TURN, type LiveEngineCheck } from './mainLog'
 import { beginRealLogin, endRealLogin, makeRealLoginDirs, pinRealLoginProfile, type RealLogin } from './realLogin'
+import { CLAUDE_API_AUTH, pinClaudeApiProfile, type ClaudeApiAuth } from './claudeApiAuth'
 
 /**
  * One launched app per test, in a sandbox nobody else can see.
@@ -221,7 +222,13 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   env: [{}, { option: true }],
   realLogin: [null, { option: true }],
   liveEngineCheck: [null, { option: true }],
-  cinna: async ({ engine, launchArgs, env, realLogin, liveEngineCheck }, use, testInfo) => {
+  cinna: async ({ engine, launchArgs, env, realLogin: requestedLogin, liveEngineCheck }, use, testInfo) => {
+    // `CINNA_E2E_CLAUDE_AUTH=api_key` (`claudeApiAuth.ts`): a Claude real-login
+    // run becomes an ordinary sandbox in API Token mode on the `.env` key.
+    const claudeApi: ClaudeApiAuth | null = CLAUDE_API_AUTH && requestedLogin?.engine === 'claude'
+      ? { binary: requestedLogin.binary }
+      : null
+    const realLogin = claudeApi ? null : requestedLogin
     const sandbox = makeSandbox(realLogin)
     const realRun = realLogin ? beginRealLogin() : null
     if (engine) installCachedEngine(sandbox.userData)
@@ -281,6 +288,11 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
          * already cached is corrected. A spec that wants the Claude engine says
          * so in the agent's own manifest, which outranks this.
          */
+        if (claudeApi) {
+          // API Token mode: Claude Agent as the Default runtime, on the `.env` Anthropic key.
+          await pinClaudeApiProfile(page, claudeApi)
+          return
+        }
         if (realLogin) {
           // The one exception: a real-login run makes its engine the Default runtime on purpose.
           await pinRealLoginProfile(page, sandbox.home, realLogin)

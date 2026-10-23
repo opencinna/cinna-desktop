@@ -188,7 +188,8 @@ function antigravityTier(model: string): WorkComplexity | null {
 /**
  * What a CLI agent's Advanced choice converts back to on the tier picker:
  * `{ tier }` (a null tier is the engine's Default), or `null` when no tier
- * honestly represents it — the checkbox then stays on, disabled, with the reason.
+ * honestly represents it — unticking Advanced then keeps the
+ * model's own tier when only the effort has none, else drops the model for Default.
  *
  * - Claude: an alias or id of the haiku / sonnet / opus families, with no effort set.
  * - Antigravity: a `-low` / `-medium` / `-high` model.

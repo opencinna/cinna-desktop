@@ -200,6 +200,14 @@ export interface ClaudeAuthProbeDeps {
   claudePath(): Promise<string | null>
   /** The child environment the turn would use. */
   env(): Promise<Record<string, string>>
+  /**
+   * An answer that needs no probe, or null to ask the binary. API mode
+   * (`claudeAuthMode: 'api_key'`): the key is the login, so the status is
+   * `logged_in` with `authMethod: 'api_key'` and nothing prompts a `claude`
+   * login. Read on every {@link ClaudeAuthProbe.status}, before the cache, so
+   * a mode switch takes effect at once. Must not throw.
+   */
+  fixed?(): ClaudeAuthStatus | null
   ttlMs?: number
   now?: () => number
   probe?: typeof probeClaudeAuth
@@ -234,6 +242,8 @@ export class ClaudeAuthProbe {
   }
 
   async status(): Promise<ClaudeAuthStatus> {
+    const fixed = this.fixedAnswer()
+    if (fixed) return fixed
     if (this.cached && this.clock - this.cached.at < this.ttl) return this.cached.value
     if (this.inFlight) return this.inFlight
     const run: Promise<ClaudeAuthStatus> = this.run().finally(() => {
@@ -267,6 +277,14 @@ export class ClaudeAuthProbe {
   refresh(): Promise<ClaudeAuthStatus> {
     this.cached = null
     return this.status()
+  }
+
+  private fixedAnswer(): ClaudeAuthStatus | null {
+    try {
+      return this.deps.fixed?.() ?? null
+    } catch {
+      return null
+    }
   }
 
   private async run(): Promise<ClaudeAuthStatus> {

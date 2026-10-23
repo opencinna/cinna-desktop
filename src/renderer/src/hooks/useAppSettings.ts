@@ -122,6 +122,22 @@ export function useSetAppSetting() {
       // "Runs on" answer is derived from. Unconditional for the same reason
       // as the credential bindings above.
       queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
+      // Claude's auth mode decides what main's login answer says (an API token
+      // needs no login) and which catalogue Claude reads. Literal keys rather
+      // than `CLAUDE_AUTH_KEY` from `useLocalTools`, which imports this file.
+      if (input.key === 'claudeAuthMode' || input.key === 'claudeApiCredentialId') {
+        // Cancelled, then reset — not invalidated. A probe already in flight
+        // (the logged-out poll spawns `claude`, which takes seconds) lands
+        // after an invalidation and is stored as fresh, so the agent page read
+        // "Claude Code is not logged in." in API Token mode for up to the
+        // staleTime. Reset also drops the old answer, so no surface shows it
+        // while the new one is asked.
+        void queryClient
+          .cancelQueries({ queryKey: ['claude-auth'] })
+          .then(() => queryClient.resetQueries({ queryKey: ['claude-auth'] }))
+        queryClient.invalidateQueries({ queryKey: ['runtime-model-catalog'] })
+        queryClient.invalidateQueries({ queryKey: ['runtime-model-catalog-refresh'] })
+      }
     }
   })
 }

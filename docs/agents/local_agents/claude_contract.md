@@ -609,12 +609,14 @@ Supersedes the table the feature was planned around; the rule as it now stands i
 | `HOME` | the CLI's credentials live under it |
 | **`USER`** | **without it the CLI cannot authenticate** (§2). The plan omitted this |
 | `CLAUDE_AGENT_SDK_CLIENT_APP` | `cinna-desktop/<version>`; identifies this app in the User-Agent |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | **API Token mode only**: the one credential picked in Settings, added after the strip |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | `1`, API Token mode only, set last: the CLI removes its own credentials from every subprocess it starts. Forces the startup permission mode to `default`; checked by the three `claude.launch.subprocess-env-scrub*` entries of the [interface contract](contracts/claude_interface.md) |
 | `DISABLE_AUTOUPDATER` | `1`, set last: a desktop session must never move the user's own `claude` to another version, nor move the version under a pooled adapter past the pin gate (§2) |
 | the rest of `shellEnvForChild` | unchanged from the engine's rule |
 
 | Excluded | Status |
 |---|---|
-| `ANTHROPIC_API_KEY` | **unverified that it shadows an OAuth login** — see below. Stripped regardless |
+| `ANTHROPIC_API_KEY` | **unverified that it shadows an OAuth login** — see below. Stripped regardless of what the environment carried; API Token mode adds back only the picked credential's |
 | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` | stripped, unverified |
 | `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` / `_ANTHROPIC_AWS` | stripped, unverified |
 | every `CINNA_ENGINE_KEY_*` | stripped |

@@ -63,6 +63,7 @@ import {
   settingsDropdownRowClass
 } from './SettingsLayout'
 import { RUNTIME_CHOICES, RuntimeChoiceButtons } from './RuntimeChoiceButtons'
+import { ClaudeAuthModeRow } from './ClaudeAuthModeRow'
 
 /**
  * Settings → Agents. Machine-local folders and runtime preferences.
@@ -800,6 +801,11 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               )}
             </div>
           </SettingsRow>
+          {/* How Claude Agent signs in: a fact about this machine while Claude
+              Agent is the runtime it uses (rule 9) — and while API Token is on
+              whatever the default, since agents pinned to Claude still spend
+              the key and this is the only control that says so. */}
+          {(selectedRuntime === 'claude' || appSettings?.claudeAuthMode === 'api_key') && <ClaudeAuthModeRow />}
           <SettingsRow>
             <div className={settingsDropdownRowClass}>
               <div className="flex items-center gap-1.5">

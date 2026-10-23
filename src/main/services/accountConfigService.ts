@@ -3,6 +3,7 @@ import { userRepo } from '../db/users'
 import { llmProviderRepo } from '../db/llmProviders'
 import { chatModeRepo } from '../db/chatModes'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
+import { notifyAiCredentialsChanged } from './aiCredentialChanges'
 import { createAdapter } from '../llm/factory'
 import { registerAdapter, unregisterAdapter } from '../llm/registry'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
@@ -311,6 +312,8 @@ export const accountConfigService = {
       logger.info('pruned de-provisioned managed mode', { modeId: row.id })
     }
 
+    // A provisioned, rotated or pruned key may be the one Claude Agent spends.
+    notifyAiCredentialsChanged()
     logger.info('account-config synced', {
       providers: seenProviderIds.size,
       modes: modeCount,

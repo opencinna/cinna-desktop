@@ -11,6 +11,7 @@ import { isLocalToolId } from '../../shared/localTools'
 import { isAgentEngine } from '../../shared/engine'
 import { isWorkComplexity } from '../../shared/modelFamilies'
 import { isAiSpendingLevel } from '../../shared/aiSpendingLevel'
+import { isClaudeAuthMode } from '../../shared/claudeAuthMode'
 
 const logger = createLogger('app-settings')
 
@@ -238,6 +239,11 @@ const VALUE_CHECKS: {
     if (value === '') return
     if (!isAgentEngine(value)) {
       throw new AppSettingsError('invalid_value', 'That is not a runtime Cinna can run agents on.')
+    }
+  },
+  claudeAuthMode: (value) => {
+    if (!isClaudeAuthMode(value)) {
+      throw new AppSettingsError('invalid_value', 'Choose Subscription or API Token.')
     }
   },
   localDevelopmentEngine: (value) => {

@@ -839,6 +839,65 @@ describe('the Claude launcher', () => {
     )
     expect(otherBinary.spec.key).not.toBe(first.spec.key)
   })
+
+  /**
+   * API mode (Settings → Local Agents, Claude Agent signs in with API Token):
+   * the picked credential reaches the child through `claudeEnv`, no `claude`
+   * login is asked, and no credential is a refusal — never the subscription.
+   */
+  describe('API mode', () => {
+    const apiAuth = { mode: 'api_key' as const, fingerprint: 'api_key:abc', credential: { apiKey: 'sk-ant-picked', baseUrl: null } }
+    const withKey = {
+      ...deps,
+      claudeEnv: async (apiKey?: { apiKey: string; baseUrl: string | null } | null) =>
+        ({ PATH: '/usr/bin', HOME: '/Users/x', ...(apiKey ? { ANTHROPIC_API_KEY: apiKey.apiKey } : {}) }),
+      launchAuth: () => apiAuth
+    }
+
+    it('hands the picked credential to claudeEnv, expects an API-key login and carries the fingerprint', async () => {
+      const claudeEnv = vi.fn(withKey.claudeEnv)
+      const p = plan(await createClaudeLauncher({ ...withKey, claudeEnv }).plan(CTX))
+      expect(claudeEnv).toHaveBeenCalledWith({ apiKey: 'sk-ant-picked', baseUrl: null })
+      expect(p.spec.env.ANTHROPIC_API_KEY).toBe('sk-ant-picked')
+      expect(p.spec.authFingerprint).toBe('api_key:abc')
+      expect(p.expectedAuth).toBe('api_key')
+    })
+
+    it('needs no claude login: a logged-out install still runs, and readiness never asks to log in', async () => {
+      const claudeAuth = vi.fn(async () => ({ state: 'logged_out' }))
+      const launcher = createClaudeLauncher({ ...withKey, claudeAuth })
+      expect(isRefusal(await launcher.plan(CTX))).toBe(false)
+      expect(await launcher.readiness!()).toEqual({ state: 'ok', reason: null })
+      expect(claudeAuth).not.toHaveBeenCalled()
+    })
+
+    it('refuses with the resolver’s sentence when there is no credential, and never falls back to the subscription', async () => {
+      const claudeEnv = vi.fn(withKey.claudeEnv)
+      const result = await createClaudeLauncher({
+        ...withKey,
+        claudeEnv,
+        launchAuth: () => ({ mode: 'api_key' as const, fingerprint: 'api_key:none', error: 'No Anthropic credential — Settings → Local Agents.' })
+      }).plan(CTX)
+      expect(isRefusal(result) && result.error).toBe('No Anthropic credential — Settings → Local Agents.')
+      expect(claudeEnv).not.toHaveBeenCalled()
+    })
+
+    it('a resolver that throws refuses rather than running on the subscription', async () => {
+      const result = await createClaudeLauncher({ ...withKey, launchAuth: () => { throw new Error('boom') } }).plan(CTX)
+      expect(isRefusal(result) && result.error).toMatch(/Settings → Local Agents/)
+    })
+
+    it('the subscription passes no key, expects an account login, and keys apart from API mode', async () => {
+      const claudeEnv = vi.fn(withKey.claudeEnv)
+      const sub = plan(await createClaudeLauncher({ ...withKey, claudeEnv, launchAuth: () => ({ mode: 'subscription' as const, fingerprint: 'subscription' }) }).plan(CTX))
+      expect(claudeEnv).toHaveBeenCalledWith(null)
+      expect(sub.spec.env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(sub.expectedAuth).toBe('account')
+      expect(sub.spec.authFingerprint).toBe('subscription')
+      const api = plan(await createClaudeLauncher(withKey).plan(CTX))
+      expect(api.spec.key).not.toBe(sub.spec.key)
+    })
+  })
 })
 
 describe('a custom ACP agent', () => {

@@ -218,3 +218,15 @@ it('validates the routing preference and keeps AI Functions independent', () => 
   expect(appSettingsService.getAll().aiFunctionsModelId).toBe('')
   expect(appSettingsService.getAll().localAgentsDefaultCredentialId).toBe('')
 })
+
+it('defaults Claude Agent to the subscription, persists API mode and a credential, and rejects any other mode', () => {
+  expect(appSettingsService.getAll().claudeAuthMode).toBe('subscription')
+  expect(appSettingsService.getAll().claudeApiCredentialId).toBe('')
+  appSettingsService.set('claudeAuthMode', 'api_key')
+  appSettingsService.set('claudeApiCredentialId', 'anthropic-1')
+  expect(appSettingsService.getAll()).toMatchObject({ claudeAuthMode: 'api_key', claudeApiCredentialId: 'anthropic-1' })
+  expect(() => appSettingsService.set('claudeAuthMode', 'bedrock')).toThrow()
+  expect(() => appSettingsService.set('claudeAuthMode', '')).toThrow()
+  appSettingsService.set('claudeAuthMode', 'subscription')
+  appSettingsService.set('claudeApiCredentialId', '')
+})

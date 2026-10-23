@@ -222,6 +222,26 @@ describe('ClaudeAuthProbe', () => {
     return { probe, calls: () => n, tick: (ms) => void (now += ms) }
   }
 
+  it('API mode answers logged in with an API key without asking the binary, and the mode is read on every call', async () => {
+    let apiMode = true
+    let n = 0
+    const probe = new ClaudeAuthProbe({
+      claudePath: async () => '/usr/local/bin/claude',
+      env: async () => ({}),
+      probe: async () => {
+        n++
+        return { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      },
+      fixed: () => (apiMode ? { state: 'logged_in', authMethod: 'api_key', subscriptionType: null, email: null } : null)
+    })
+    expect(await probe.status()).toEqual({ state: 'logged_in', authMethod: 'api_key', subscriptionType: null, email: null })
+    expect(await probe.refresh()).toMatchObject({ authMethod: 'api_key' })
+    expect(n).toBe(0)
+    apiMode = false
+    expect((await probe.status()).state).toBe('logged_out')
+    expect(n).toBe(1)
+  })
+
   it('asks once and reuses the answer inside its window', async () => {
     const { probe, calls } = harness({ ttlMs: 30_000 })
     expect((await probe.status()).state).toBe('logged_in')

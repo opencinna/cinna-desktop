@@ -124,6 +124,14 @@ export interface AcpLaunchSpec {
    * never retried. Not part of `key`.
    */
   earlyExitRetry?: { stderr: RegExp; attempts: number }
+  /**
+   * Which login or credential this process authenticates with, as a
+   * non-secret digest (`ClaudeLaunchAuth.fingerprint`). Claude only. Already
+   * covered by `key` through the environment; carried separately so an auth
+   * change can retire idle processes before anyone asks
+   * ({@link AcpProcessPool.retireStaleAuth}).
+   */
+  authFingerprint?: string
 }
 
 /** What one process exit looked like. */
@@ -326,6 +334,15 @@ export interface AcpProcessPool {
   hold(agentId: string): () => void
   /** Stop an agent's process — now if nothing holds it, else when the last hold releases. */
   retire(agentId: string): void
+  /**
+   * Stop every **idle** process started with an auth fingerprint other than
+   * `current` — no hold, no start in flight, no running background work. A
+   * busy one is left alone: its turns finish on the login they started with,
+   * and the next acquire replaces it because the spec key moved. Processes
+   * started with no fingerprint (every engine but Claude) are never touched.
+   * Returns the pool keys stopped.
+   */
+  retireStaleAuth?(current: string): string[]
   /**
    * Some turn holds the agent's process, or a start is in flight: a retire now
    * would wait for it. Any turn of the agent — not necessarily the caller's.

@@ -42,6 +42,9 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsDefaultCredentialId: '',
   // Empty = Automatic: the first runtime detected on this machine.
   localAgentsDefaultEngine: '',
+  // Subscription = the user's own `claude` login; empty credential = automatic.
+  claudeAuthMode: 'subscription',
+  claudeApiCredentialId: '',
   localDevelopmentEngine: '',
   localDevelopmentCredentialId: '',
   localDevelopmentComplexity: 'complex',

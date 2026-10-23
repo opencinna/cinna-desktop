@@ -594,30 +594,30 @@ describe('RuntimePanel', () => {
       expect(screen.queryByLabelText('Model')).toBeNull()
     })
 
-    it('makes Advanced unavailable, not springy, for a model no tier describes', () => {
+    it('drops a model no tier describes when Advanced is unticked, and says so', () => {
       // A gateway id the classifier does not recognise — the ordinary case for
-      // `openai_compatible`. The tier picker cannot represent this file at all,
-      // so the checkbox is disabled with the reason beside it. A control that
-      // snapped back told the user nothing and invited an identical second
-      // click; it also had to instruct them to clear an id they cannot retype.
-      render(<RuntimePanel agent={agent({ credential: 'OpenAI', model: 'my-private-llm-7b' })} />)
-      expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', true)
-      expect(
-        screen.getByText('Advanced stays on — “my-private-llm-7b” matches no work complexity.')
-      ).toBeTruthy()
+      // `openai_compatible`. The checkbox is no longer held on for it: Advanced
+      // is a view, not a mode the file can lock in. Unticking has no tier to
+      // convert to, so it drops the model (keeping the credential and engine)
+      // and the agent runs on Default — said, and warned of in the tooltip.
+      const { rerender } = render(<RuntimePanel agent={agent({ credential: 'OpenAI', model: 'my-private-llm-7b' })} />)
+      const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
+      expect(checkbox).toHaveProperty('disabled', false)
+      expect(checkbox.closest('label')?.title).toBe('No work complexity matches “my-private-llm-7b” — unticking drops it for Default.')
+      expect(screen.queryByText(/Advanced stays on/)).toBeNull()
+      fireEvent.click(checkbox)
+      expect(save.mock.calls[0][0]).toMatchObject({ runtime: { engine: 'keep', credential: 'OpenAI', modelId: null, complexity: null } })
+      expect(setSetting).toHaveBeenCalledWith({ key: 'localAgentsModelAdvanced', value: false })
+      expect(screen.getByText('Dropped “my-private-llm-7b” — no complexity fits it, so Default now.')).toBeTruthy()
+      // Mutation: drop the view's `model` tag and the untick is overridden back
+      // to the model picker by the very model it is dropping.
+      expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('checked', false)
+      rerender(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
+      expect(screen.getByLabelText('Work complexity')).toBeTruthy()
+      // Mutation: never clear the tag and an assistant writing the same id back
+      // leaves the tier picker over a running pinned model.
+      rerender(<RuntimePanel agent={agent({ credential: 'OpenAI', model: 'my-private-llm-7b' })} />)
       expect(screen.getByLabelText('Model')).toBeTruthy()
-      expect(screen.queryByLabelText('Work complexity')).toBeNull()
-      expect(save).not.toHaveBeenCalled()
-      expect(setSetting).not.toHaveBeenCalled()
-      // The reserved line is one prioritised message, so a missing credential or
-      // a refused write displaces the standing explanation. The tooltip is then
-      // the only surface left that can say why the control is dead, and it must
-      // not still be advertising the action it cannot perform.
-      // Scoped to the control: the reserved line carries the same sentence in
-      // its own `title`, and here both are present because nothing displaces it.
-      expect(
-        screen.getByRole('checkbox', { name: /Advanced/ }).closest('label')?.title
-      ).toMatch(/matches no work complexity/)
     })
 
     it('overrides even a sticky tier view when the file names a model no tier fits', () => {
@@ -644,9 +644,9 @@ describe('RuntimePanel', () => {
       // this line — it described a write the file no longer reflected. A note
       // is now tied to the manifest state it is about, so a third-party edit
       // retires it and the standing explanation gets the slot it should have.
-      expect(
-        screen.getByText('Advanced stays on — “my-private-llm-7b” matches no work complexity.')
-      ).toBeTruthy()
+      // The box shows the view it is in, and stays usable.
+      expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('checked', true)
+      expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', false)
       expect(screen.queryByText(/Switched to Medium/)).toBeNull()
     })
 
@@ -1175,6 +1175,19 @@ describe('RuntimePanel', () => {
           /Claude Agent runs on your own Claude Code login — someone@example\.com \(Max plan\), on opus/
         )
       ).toBeTruthy()
+    })
+
+    it('names the API token, never the login, when Claude Agent signs in with one', () => {
+      // Mutation: drop the api_key branch and this reads "your own Claude Code login" over a key someone else pays for.
+      runtimePaths = { claudeAuthMode: 'api_key', claudeApiCredentialId: 'p-anthropic' }
+      claudeAuth = { state: 'logged_in', authMethod: 'api_key', subscriptionType: null, email: null }
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+      expect(screen.getByText(/Claude Agent runs on the API token “Anthropic”, on opus/)).toBeTruthy()
+      cleanup()
+      // No key to spend: main still answers logged_in, so the panel must not read healthy.
+      providers = []
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+      expect(screen.getByText('API Token is on, but no Anthropic credential is usable — turns will not run.')).toBeTruthy()
     })
 
     it.each([
@@ -1836,8 +1849,6 @@ describe('Advanced on the CLI runtimes', () => {
   it('keeps an effort the new model offers, drops one it does not and says so, and drops it with the model', () => {
     cliCatalogs.claude = CLAUDE_CATALOG
     render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus', effort: 'high' })} />)
-    // An effort is a choice the tier picker cannot show, so it keeps Advanced on.
-    expect(screen.getByText('Advanced stays on — no tier for “high” effort.')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-4-6' } })
     expect(runtimeSaved()).toEqual({ credential: null, modelId: 'claude-opus-4-6', complexity: null, effort: 'high' })
     save.mockClear()
@@ -1995,19 +2006,35 @@ describe('Advanced on the CLI runtimes', () => {
     expect(runtimeSaved()).toEqual({ credential: null, modelId: null, complexity: 'simple' })
   })
 
-  it('keeps Advanced on, disabled with the reason, for a choice no tier describes', () => {
+  it('drops a choice no tier describes when Advanced is unticked, keeping the engine, and says so', () => {
+    // Mutation: restore the held-on checkbox and neither click writes anything.
     cliCatalogs.claude = CLAUDE_CATALOG
     render(<RuntimePanel agent={agent({ engine: 'claude', model: 'fable' })} />)
-    expect(screen.getByRole('checkbox', { name: /Advanced/ })).toHaveProperty('disabled', true)
-    expect(screen.getByText('Advanced stays on — no tier for “Fable 5”.')).toBeTruthy()
+    const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
+    expect(checkbox).toHaveProperty('disabled', false)
+    expect(checkbox.closest('label')?.title).toBe('No work complexity matches “Fable 5” — unticking drops it for Default.')
+    fireEvent.click(checkbox)
+    expect(save.mock.calls[0][0]).toMatchObject({ runtime: { engine: 'keep', credential: null, modelId: null, complexity: null } })
+    expect(screen.getByText('Dropped “Fable 5” — no complexity fits it, so Default now.')).toBeTruthy()
     cleanup()
+    save.mockClear()
+    // An effort no tier has: the effort goes, the model's own tier stays.
     cliCatalogs.codex = CODEX_CATALOG
     render(<RuntimePanel agent={agent({ engine: 'codex', model: 'gpt-6-luna', effort: 'xhigh' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    const [vars] = save.mock.calls[0] as [{ runtime: Record<string, unknown> }]
+    expect(vars.runtime).toEqual({ engine: 'keep', credential: null, modelId: null, complexity: null })
+    expect(screen.getByText('Switched to Default — the tier “GPT-6-Luna” belongs to. Dropped “xhigh” effort.')).toBeTruthy()
+  })
+
+  it('keeps a tiered model’s tier and drops only the effort when Advanced is unticked', () => {
+    // Mutation: drop the model-only tier lookup and this lands on Default instead of Complex.
+    cliCatalogs.claude = CLAUDE_CATALOG
+    render(<RuntimePanel agent={agent({ engine: 'claude', model: 'opus', effort: 'high' })} />)
     const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
-    expect(checkbox).toHaveProperty('disabled', true)
-    // The tooltip and the line read the same reason (the effort, not the model).
-    expect(checkbox.closest('label')?.title).toBe('Advanced stays on — “xhigh” effort matches no work complexity.')
-    expect(screen.getByText('Advanced stays on — no tier for “xhigh” effort.').getAttribute('title')).toBe(checkbox.closest('label')?.title)
+    expect(checkbox.closest('label')?.title).toBe('No work complexity has “high” effort — unticking drops the effort and keeps the model’s tier.')
+    fireEvent.click(checkbox)
+    expect(save.mock.calls[0][0]).toMatchObject({ runtime: { engine: 'keep', credential: null, modelId: null, complexity: 'complex' } })
   })
 
   it('waits, disabled and silent, to convert a Codex model until its list names the default', () => {
@@ -2049,15 +2076,14 @@ describe('Advanced on the CLI runtimes — defaults and the Codex cache', () => 
     codexBinary = { state: 'ready', path: '/data/codex', source: 'managed', version: 'codex-cli 0.162.1' }
   })
 
-  it('treats the tool’s own default as a choice with no tier, said the same on the line and the checkbox', () => {
-    // Mutation: drop the `default` branch of the reason and it reads "no tier for “Default (recommended)”".
+  it('treats the tool’s own default as a choice with no tier: unticking drops it for Default', () => {
     cliCatalogs.claude = CLAUDE_CATALOG
     render(<RuntimePanel agent={agent({ engine: 'claude', model: 'default' })} />)
-    const reason = 'Claude Code’s own default has no work complexity — pick a model first.'
     const checkbox = screen.getByRole('checkbox', { name: /Advanced/ })
-    expect(checkbox).toHaveProperty('disabled', true)
-    expect(checkbox.closest('label')?.title).toBe(reason)
-    expect(screen.getByText(reason)).toBeTruthy()
+    expect(checkbox).toHaveProperty('disabled', false)
+    fireEvent.click(checkbox)
+    expect(save.mock.calls[0][0]).toMatchObject({ runtime: { engine: 'keep', modelId: null, complexity: null } })
+    expect(screen.getByText('Dropped “Default (recommended)” — no complexity fits it, so Default now.')).toBeTruthy()
   })
 
   it('names what an unset Codex model runs on, from the list it has', () => {
@@ -2079,5 +2105,70 @@ describe('Advanced on the CLI runtimes — defaults and the Codex cache', () => 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     expect(refreshRetry).toHaveBeenCalled()
     expect(screen.queryByText(/Checking/)).toBeNull()
+  })
+})
+
+describe('a model written on an agent that names no engine', () => {
+  // `effectiveEngine` reads a bare model with no engine as OpenCode (contract
+  // rule), so a CLI write that sets a model on such a file has to name the
+  // engine it was made on, or the agent leaves the runtime it was showing.
+  const written = (): Record<string, unknown> => (save.mock.calls[0][0] as { runtime: Record<string, unknown> }).runtime
+  /** The file as main would write it, back into the panel. */
+  const asFile = (runtime: Record<string, unknown>): Record<string, string> =>
+    Object.fromEntries(
+      Object.entries({ engine: runtime.engine, model: runtime.modelId, complexity: runtime.complexity, effort: runtime.effort })
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    )
+  beforeEach(() => {
+    models = undefined
+    providers = []
+    claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: null, email: null }
+    codexBinary = { state: 'ready', path: '/data/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+    antigravityBinary = { state: 'ready', path: '/data/agy', source: 'managed', version: null }
+  })
+
+  it('pins Claude Agent when Advanced converts a tier, so the panel stays on Claude', () => {
+    // The reported bug: Complex → Advanced wrote `{ model: 'opus' }` with the
+    // engine kept as absent, and the panel flipped to OpenCode listing only "Opus".
+    defaultRuntime = { engine: 'claude' }
+    cliCatalogs.claude = CLAUDE_CATALOG
+    const { rerender } = render(<RuntimePanel agent={agent({ complexity: 'complex' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(written()).toMatchObject({ engine: 'claude', modelId: 'opus', complexity: null })
+    expect(screen.getByText('Runs on Claude Agent now. Pinned “Opus 5.5” — what Complex ran on.')).toBeTruthy()
+    rerender(<RuntimePanel agent={agent(asFile(written()))} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:claude')
+    expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options].map((option) => option.value)).toContain('sonnet')
+  })
+
+  it('pins Codex and Antigravity the same way', () => {
+    defaultRuntime = { engine: 'codex' }
+    cliCatalogs.codex = CODEX_CATALOG
+    render(<RuntimePanel agent={agent({ complexity: 'complex' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(written()).toMatchObject({ engine: 'codex', modelId: 'gpt-6-luna', effort: 'high' })
+    cleanup()
+    save.mockClear()
+    defaultRuntime = { engine: 'antigravity' }
+    cliCatalogs.antigravity = AGY_CATALOG
+    render(<RuntimePanel agent={agent({ complexity: 'medium' })} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
+    expect(written()).toMatchObject({ engine: 'antigravity', modelId: 'gemini-3.8-flash-medium' })
+  })
+
+  it('pins the engine when a model is picked in the Advanced view, and keeps one the file names', () => {
+    defaultRuntime = { engine: 'claude' }
+    cliCatalogs.claude = CLAUDE_CATALOG
+    advanced = true
+    render(<RuntimePanel agent={agent(null)} />)
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'haiku' } })
+    expect(written()).toMatchObject({ engine: 'claude', modelId: 'haiku' })
+    expect(screen.getByText('Runs on Claude Agent now.')).toBeTruthy()
+    cleanup()
+    save.mockClear()
+    // A file that names its engine keeps it as it is.
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'haiku' } })
+    expect(written()).toMatchObject({ engine: 'keep', modelId: 'haiku' })
   })
 })
