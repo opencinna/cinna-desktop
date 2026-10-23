@@ -28,7 +28,7 @@ Behaviour and rules: [Artifacts](artifacts.md). The agent's tool, its approval a
 - `src/renderer/src/components/chat/PreviewBody.tsx` — `PreviewBody`, `MarkdownPreview`, `JsonPreview`, `XmlPreview`, `CsvPreview`, shared with `FilePreviewModal` (extracted from it, nothing else changed).
 - `src/renderer/src/hooks/useArtifacts.ts` — `useArtifactsSupport`, `useArtifactsSupportLoader`, `useArtifactCards`, `ArtifactCardsSource`, `useArtifactDetail`, `useArtifactEvents`.
 - `src/renderer/src/stores/artifactPublish.store.ts` — the dialog's request and the one publish mutation.
-- Surfaces changed: `components/chat/MessageContextMenu.tsx` (**Publish…**), `FilePreviewModal.tsx` (header **Publish…**), `fileRefs.tsx` (`MessageIdContext`, link cards), `MessageStream.tsx` (cards after messages), `stores/filePreview.store.ts` (`messageId`).
+- Surfaces changed: `components/chat/MessageContextMenu.tsx` (**Publish…**), `FilePreviewModal.tsx` and `FileActionsMenu.tsx` (the ⋯ menu's **Publish…**), `fileRefs.tsx` (`MessageIdContext`, link cards), `MessageStream.tsx` (cards after messages), `stores/filePreview.store.ts` (`messageId`).
 
 ## Database Schema
 

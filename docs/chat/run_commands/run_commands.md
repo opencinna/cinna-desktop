@@ -44,7 +44,7 @@ Right-click offers the same by menu: **Run** starts a command that looks safe at
 2. ⌘↩ (Ctrl+Enter) always runs; ⇧⌘↩ runs in the background
 3. A held key's repeats run nothing, so the press that opened the window cannot run it; nor does an Enter that commits an IME composition
 4. On a one-line command, ↑ and ↓ walk the chat's earlier commands (most recent first, each once) and back to what was typed. On a command that soft-wraps, ↑ and ↓ first move the caret between its rows, and walk the history only from the first row (↑) or the last (↓): a long command's caret could not otherwise be moved up a row without losing the line
-5. It is read-only while a run is going and while a start is in flight. It edits the command; it is not the run's stdin, which stays closed
+5. It is drawn as an input field (border, secondary fill, accent border on focus, 32 px tall for one row): bare text after the `$` did not read as editable. It is read-only while a run is going and while a start is in flight, and then drops its border and fill back to plain text, so a field that cannot be typed in does not look like one. It edits the command; it is not the run's stdin, which stays closed
 
 ### Filling a script's parameters
 1. The reply holds `uv run scripts/report.py italy --year 2026`, and `report.py` is an argparse script in the agent's folder. Clicking it opens the window with a **Parameters** sidebar beside the terminal, already filled from the command (Scope `italy`, Year `2026`)

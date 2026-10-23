@@ -30,7 +30,7 @@ Artifacts exist only when **the active profile is a signed-in Cinna account and 
 
 ### Publish a file or folder from the chat
 
-1. In a folder agent's chat the user right-clicks a [file reference](../file_references/file_references.md) and picks **Publish…** (last in the menu), or opens the reference in the [file preview](../file_preview/file_preview.md) and uses **Publish…** in its header.
+1. In a folder agent's chat the user right-clicks a [file reference](../file_references/file_references.md) and picks **Publish…** (last in the menu), or opens the reference in the [file preview](../file_preview/file_preview.md) and uses **Publish…** in its ⋯ menu (last, below a separator).
 2. The **Publish** dialog opens with the path already inspected: a title (the name, a file's without the extension), an optional description, the kind line ("Mini-site · opens index.html", "3 files", "Markdown document"), the files with what is left out struck through and why, the total, and **Who can see it**: *Only you* (the default), *Everyone on the instance*, *Anyone with a link*.
 3. A folder with HTML files but no `index.html` also shows a **Start page** picker; without a choice it is published as files.
 4. If this path was published before the dialog offers **Update "<title>" (rev N)** — the default, taking that artifact's title and audience as its starting point — or **Publish as new**.
@@ -110,7 +110,7 @@ Card -> artifactPreview store -> ArtifactPreviewModal -> html-preview:open-artif
 ## Integration Points
 
 - [File References](../file_references/file_references.md): the **Publish…** menu item, and the persisted message a reference was rendered in (where the card anchors).
-- [File Preview](../file_preview/file_preview.md): the **Publish…** header button of an agent file; and the renderers (markdown, table, trees, highlighted source) and sandboxed frame the artifact Preview reuses.
+- [File Preview](../file_preview/file_preview.md): the **Publish…** item of an agent file's ⋯ menu; and the renderers (markdown, table, trees, highlighted source) and sandboxed frame the artifact Preview reuses.
 - [Agent Publish](agent_publish.md): the `artifacts_publish` tool, its approval card and the Inbox row.
 - [The Cinna Task Protocol](../../jobs/tasks/task_protocol.md): the `cinna` MCP server the tool lives on, and the skill delivery shared with `cinna-tasks`.
 - [Kit Contract](../../agents/local_agents/kit_contract.md): the vendored `artifacts.schema.json` and `cinna-artifacts` skill (contract 1.12.0; the `artifacts/` folder role, 1.13.0).

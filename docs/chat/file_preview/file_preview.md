@@ -5,7 +5,7 @@
 One read-only modal for looking at a file **in place**, reached three ways.
 
 **An attachment badge or thumbnail in a chat message.**
-- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), HTML (`html`, `htm`, `xhtml`), and images (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`). These open the modal instead of the save dialog. An image attachment shows in the transcript as a 64×64 thumbnail rather than a badge ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
+- **What previews:** `txt`, `csv`, `md`, `json`, JSON Lines (`jsonl`, `ndjson`), `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), HTML (`html`, `htm`, `xhtml`), and images (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`). These open the modal instead of the save dialog. An image attachment shows in the transcript as a 64×64 thumbnail rather than a badge ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
 - **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file. An HTML attachment also gets **Open in browser** beside it.
 - **Everything else downloads:** PDF, HEIC, TIFF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
 - **Both directions of attachment:**
@@ -13,7 +13,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - **Agent attachments** under an assistant reply ([Agent Attachments](../agent_attachments/agent_attachments.md)), always `cinna` source.
 
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span, or a markdown link's destination, that names a real file.
-- **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
+- **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**, and **Publish…** under a separator when the file can be published ([Artifacts](../artifacts/artifacts.md)).
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
 - **Not images.** An agent file is read as text, so an image it names opens in its system app, as before.
 
@@ -26,7 +26,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 ## Core Concepts
 
 - **Previewable type**: a filename or MIME type the modal knows how to render.
-  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python`, `xml`, `html`, `image` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
+  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `jsonl`, `csv`, `python`, `xml`, `html`, `image` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
   - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text`, drops `image` (agent files are read as text), and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
@@ -44,6 +44,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
     A leading YAML frontmatter block is lifted out and shown as a key/value card above the body; see [Frontmatter](#frontmatter).
     A body over the [highlight limit](#large-text) is shown as written instead, in a `<pre>`.
   - `json` is a collapsible tree, falling back to raw text if it does not parse; see [JSON tree](#json-tree).
+  - `jsonl` (`jsonl`/`ndjson`; MIME `application/jsonl`, `application/x-jsonlines`, `application/x-ndjson`) is a tree of records or a table, with a Tree/Table toggle; see [JSON Lines](#json-lines). A `.jsonl` attachment used to download; it now previews.
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
   - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews. Over the [highlight limit](#large-text) it is plain from the start.
   - `xml` is a collapsible tree, falling back to highlighted source when it does not parse; see [XML tree](#xml-tree).
@@ -54,10 +55,12 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
   - Attachments get an icon-only Download, except one opened from the composer. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
-  - An agent file inside the agent's folder, other than a credential file, also gets a **Publish…** button (an upload icon and the word) before **⋯** while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it.
-  - A script file gets a **Run…** button (a terminal icon and the word) before **Publish…** and **⋯**. It closes the preview and opens the [Run Script window](../run_commands/run_commands.md) on the command Cinna chose for the file; nothing runs until Run is pressed there. See *Running a script* below
-  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**.
-  - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
+  - An agent file inside the agent's folder, other than a credential file, also gets **Publish…** as the last item of the **⋯** menu, below a separator, while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it. It was a header button until it became as occasional as Open.
+  - A script file gets a **Run…** button (a terminal icon and the word) before **⋯**. It closes the preview and opens the [Run Script window](../run_commands/run_commands.md) on the command Cinna chose for the file; nothing runs until Run is pressed there. See *Running a script* below
+  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**, then **Publish…** when offered.
+  - For `csv`, and for a JSON Lines file while its Table is showing, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows. It sits left of the Tree/Table toggle so it appearing never moves the toggle under the pointer.
+  - A JSON Lines file of records gets a **Tree / Table** icon toggle (`ListTree`, `Table2`) after it; see [JSON Lines](#json-lines).
+  - Every header control is 26 px tall, the height of the agent chip under the composer; see [Header controls](#header-controls).
   - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
   - For a long markdown file, a Python file with several definitions, or an XML file with several sections, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
 - **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, or an XML file's sections (`tag · name`), indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
@@ -100,7 +103,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 
 ### Finding a section in a long markdown file
 1. The user opens a markdown file with several H1s or several H2s. The header shows **Contents**, and the panel is open unless the user closed it last time.
-2. In a wide window the card has grown to the right to hold the panel, and the body sits exactly where it would without it. In a narrow one the panel lies over the body's right edge.
+2. In a wide window the card has widened to hold the panel and stays centred. In a narrow one the panel lies over the body's right edge.
 3. Clicking an entry scrolls the body so that heading sits just under the body's top edge. The entry turns accent.
 4. Scrolling the body moves the accent to whichever section is now at the top.
 5. Resting the pointer on an entry that is cut off shows its full text under it after a quarter of a second.
@@ -224,13 +227,14 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - a folder that has gone: "That folder is no longer there.";
   - a failed folder reveal: "Couldn't show it in its folder: …", or main's own sentence when that already names the action.
 - **A folder reaches the modal only when showing it failed.** It shows a folder icon, its name and path, and no file actions.
-- **Open and Open folder are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing. The **⋯** button itself stays enabled, so the user can still see what is unavailable.
+- **Open, Open folder and Publish… are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing. The **⋯** button itself stays enabled, so the user can still see what is unavailable.
 - **A failed header action** is named in a row under the header: "Couldn't open it: …", "Couldn't show it in its folder: …", or main's own sentence when that names the action already.
   - It closes nothing ([UX rule 6](../../development/ui_guidelines/ux_rules.md)).
   - The row is hidden when the body already shows the same failure.
 
 ### The ⋯ menu
-- **Open and Open folder live in a menu, not the header.** They used to be labelled header buttons. The header now holds the Contents toggle, and these two actions are occasional.
+- **Open, Open folder and Publish… live in a menu, not the header.** They used to be labelled header buttons. The header now holds the Contents toggle, and these actions are occasional.
+- **Publish… is last, after a separator**, because it leaves the machine where the others only hand the file to the OS. Artifact Preview's own **Share…** stays in its header: that modal has no ⋯ menu.
 - **The trigger never disables.** Its items do, while an action runs or the file has gone. A disabled trigger would hide what exists.
 - **The trigger shows the running action.** The menu has closed by the time an action runs, so the **⋯** icon becomes a spinner in place. Nothing moves ([UX rule 1](../../development/ui_guidelines/ux_rules.md)).
 - **The menu is portaled out of the card**, like every menu ([UX rule 8](../../development/ui_guidelines/ux_rules.md)). A press on it still counts as inside the card, so picking an item never closes the preview.
@@ -262,8 +266,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 ### Where the Contents panel goes
 - **The body never changes width.** It keeps the closed card's width whether the panel is open or not, so its text never reflows when the panel toggles.
 - **In a wide enough window the card widens, and the panel sits beside the body.** That happens when the closed width plus 240 px fits within the window minus the overlay's padding, which is from about 1,040 px at the default font size.
-  - **With room for the whole panel on the right** (from about 1,280 px), the card grows to the right only. Its left edge, and so the body, stay exactly where they were.
-  - **With less room**, the card still widens. It moves left only as far as it must to keep 16 px from the window's right edge, so the body moves left by up to 120 px. The user chose this over an overlay.
+  - **The widened card stays centred**, so toggling Contents moves the body 120 px (half the panel), animated with the width. It used to grow to the right only, keeping the body still; in any window without room for the whole panel on the right that left the card visibly off-centre, and the user preferred centred.
 - **In a narrower window the panel lies over the body's right side**, with a shadow. The card keeps its width.
 - **A preview whose load took longer than the entrance wait (150 ms) uses the overlay**, until the user toggles Contents. The entrance ran on the narrow loading card, and widening it when the content landed would move the header's buttons under a pointer that may be on its way to them.
 - **Only the Contents button animates the width**, over the entrance's 170 ms. A preview that opens with the panel already open appears at its final width, and a window resize is followed without animating. Under reduced motion nothing animates.
@@ -303,6 +306,22 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **URLs in strings are links**, `http(s)` only, like frontmatter and markdown links.
 - **Text that does not parse shows as plain text.** That includes a file cut at the 25 MB cap, so a large JSON file previews as its raw first 25 MB rather than an error.
 - **Another file starts from its own fold state.** Fold state is keyed by path; carried over, it would fold paths that mean something else in the new file.
+
+### JSON Lines
+- **One record per line, so a line is the unit.** A log or export is read record by record; the tree shows each line as its own JSON tree with the line number beside it, 200 lines at a time ("Show N more of M").
+- **Every record folds above 2,000 values.** Counted over the whole file, like [JSON tree](#json-tree): a thousand unfolded records would be the wall of text the tree exists to avoid.
+- **A line that is not JSON stays in the file as text**, marked "not JSON", rather than failing the preview. A last line cut at the 25 MB cap is marked "cut at the preview limit" instead: the cut, not the file, made it unparseable.
+- **The Table has a column per value path** (`user.name`, `tags.0`) in first-seen order, and a `#` column with the record's line. Records of one shape line up; records that differ leave blanks.
+  - An empty object or array is its own cell (`{}`, `[]`); a record that is not an object or array is a `value` column cell.
+  - A value nested deeper than 32 levels is one JSON cell, not more columns. If the nesting is deeper than `JSON.stringify` survives, the cell reads `[ … ]` or `{ … }`: `JSON.parse` accepts depth that stringify throws on, and a line of 20,000 nested arrays once blanked the window out of render.
+  - At most 500 records and 200 columns, each with a note under the table ("Showing the first 500 records.", "Showing 200 of N columns."), and a note for lines that are not JSON and have no row.
+  - Filter and sort are the CSV table's own, shared component; for a JSON Lines file the Filter button shows only in the Table view.
+- **The toggle is offered only for a file of records.** A pretty-printed `.jsonl` (one document across lines) shows as a JSON tree, and text with no JSON line as raw text; neither has a toggle, because it would change nothing. Every open starts on Tree.
+- **Both views stay mounted after the Table is first shown**, one hidden, so switching keeps the tree's folds and the table's filters and sort. Until the Table is first asked for, it is not built.
+- **Artifact Preview shows the tree only**: it passes no view and no filters.
+
+### Header controls
+- **Every control in a preview modal's header is 26 px tall**, the agent chip's height, so labelled actions, icon buttons and segmented toggles read as one row. The shared sizes are in `components/ui/modalHeader.ts` and used by File Preview, Artifact Preview and the ⋯ trigger; see [UI guidelines](../../development/ui_guidelines/ui_guidelines_llm.md).
 
 ### XML tree
 - **An XML file is a tree the user folds, built like the JSON tree.** The same fold that never moves the clicked row, Alt-click for a branch, 200 children at a time with "Show N more of M", and every element deeper than 32 levels folded at the start.

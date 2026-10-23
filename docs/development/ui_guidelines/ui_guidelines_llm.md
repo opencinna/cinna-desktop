@@ -207,6 +207,10 @@ Disabled: `disabled:opacity-30 disabled:cursor-not-allowed` (or `disabled:opacit
 - `p-1 rounded transition-colors`
 - Delete: `hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]`
 
+### Preview Modal Header Controls
+- **Every control in a preview modal's header is 26 px tall with `rounded-lg` corners**, the height of the agent chip under the composer: labelled actions (Run…, Contents), icon buttons (Filter, Download, ⋯, Close) and segmented toggles (Tree / Table, Rendered / Source). The card-header `p-1` size above made them a step smaller than the chips the user just left.
+- Build them from `src/renderer/src/components/ui/modalHeader.ts` — `MODAL_HEADER_ACTION`, `MODAL_HEADER_ICON` (14 px icon), `MODAL_HEADER_SEGMENTS` around `MODAL_HEADER_SEGMENT` buttons — and add only the colours. Used by File Preview, Artifact Preview and the file ⋯ menu's trigger.
+
 ## Toggle Switch Pattern
 
 ```

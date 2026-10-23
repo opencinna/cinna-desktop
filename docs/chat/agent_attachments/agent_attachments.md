@@ -19,7 +19,7 @@ A2A stream after the reply text), so on desktop the badge lands at the **end**
 of the turn — not spliced at the tag's textual position the way the web renders
 it from the persisted trace.
 
-Text-based attachments (`txt`/`csv`/`md`/`json`/`yaml`/`py`, XML and its
+Text-based attachments (`txt`/`csv`/`md`/`json`/`jsonl`/`yaml`/`py`, XML and its
 dialects, and HTML) and images (`png`/`jpg`/`gif`/`webp`/`bmp`/`svg`) open an
 in-app read-only preview on click, and the badge is named "Preview *name*"
 rather than "Download *name*" — see [File Preview](../file_preview/file_preview.md).
