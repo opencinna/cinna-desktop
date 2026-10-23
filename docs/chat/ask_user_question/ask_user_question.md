@@ -20,7 +20,7 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 3. Because it is the last turn and nothing is streaming, the block is active — it shows an **Answer** button.
 4. The user clicks **Answer**; a modal opens listing every question with its options as radio buttons (single-select) or checkboxes (multi-select), plus an "Other (enter custom answer)" free-text option.
 5. With more than one question, a progress counter (`2/3 answered`) shows per-question check/circle icons; clicking one scrolls to that question.
-6. The user selects answers; the **Send** button stays disabled until every question has a complete answer (a custom selection requires non-empty text).
+6. The user selects answers; the **Send** button stays disabled until every question has a complete answer (a custom selection requires non-empty text). Pressing Enter in the custom answer field sends as well, once that text completes the last open question; while another question is still unanswered, Enter does nothing.
 7. On send, the answers are formatted into plain text (`question` + `Answer:`/`Answers:` lines) and dispatched as the next user turn. The modal closes.
 8. The answer threads onto the agent's existing context; the agent resumes and streams its continuation. The question block reverts to a muted "N questions asked" record.
 9. On reload the historical block renders read-only from the persisted `parts[]`.

@@ -44,6 +44,7 @@ None added. The answer turn flows through the existing send path: `useChatCompos
 - `AnswerQuestionsModal({ questions, onSubmit, onClose })` — `createPortal` modal; Escape and an outside click close it at once. It has none of `FilePreviewModal`'s entrance/exit fade or its 500 ms outside-press guard.
 - Local state `answers: Record<number, CollectedAnswer>` (`{ selected: string[]; custom: string }`). `setSelected` toggles (multi) or replaces (single); `setCustom` updates free text.
 - `allAnswered` gates the Send button via `isQuestionAnswered` over every question; `handleSend` formats and calls `onSubmit`.
+- The custom answer input's `onKeyDown` calls `handleSend` on a plain `Enter`, so the same `allAnswered` and `pending` gates apply — Enter does nothing while another question is open or a send is in flight. It skips `e.repeat`, any modifier (`Shift`/`Alt`/`Ctrl`/`Meta`) and an IME composition (`nativeEvent.isComposing` or `keyCode` 229), and calls `preventDefault` before sending. Tests: `AnswerQuestionsModal.test.tsx`.
 - Progress counter row renders only when `questions.length > 1`; `scrollToQuestion(i)` scrolls via `data-question-index`.
 
 ### `src/renderer/src/components/chat/MessageStream.tsx`
