@@ -69,6 +69,8 @@ const api: Record<string, unknown> = new Proxy(
 ;(window as unknown as { api: unknown }).api = api
 
 Element.prototype.scrollIntoView = function scrollIntoView(): void {}
+// jsdom has no modal dialogs; the Run on its own dialog opens as one.
+Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', '') } })
 
 const { ChatInput } = await import('./ChatInput')
 const { useChatStore } = await import('../../stores/chat.store')
@@ -110,12 +112,20 @@ interface MountOptions {
   messages?: Array<Record<string, unknown>>
   /** Readiness per agent id; anything unnamed is `ok`. */
   readiness?: Record<string, unknown>
+  /** Agents beyond the two A2A ones, e.g. a local folder agent or a hidden runtime. */
+  extraAgents?: Array<Record<string, unknown>>
 }
+
+/** A local folder agent, which can coordinate. */
+const LOCAL = { ...agent('f-1', 'Planner'), source: 'folder', driver: 'acp', protocol: 'acp', acpTransport: 'stdio' }
+/** A plain chat's own hidden runtime. */
+const RUNTIME = { ...agent('rt', 'Runtime'), driver: 'acp', protocol: 'acp', acpTransport: 'stdio', conductor: true }
 
 async function mount(opts: MountOptions): Promise<void> {
   agentList.current = [
     agent('a-1', 'Research', opts.readiness?.['a-1'] ?? { state: 'ok', reason: null }),
-    agent('a-2', 'Builder', opts.readiness?.['a-2'] ?? { state: 'ok', reason: null })
+    agent('a-2', 'Builder', opts.readiness?.['a-2'] ?? { state: 'ok', reason: null }),
+    ...(opts.extraAgents ?? [])
   ]
   onDemandAgents.current = (opts.attached ?? []).map((agentId) => ({ agentId }))
   chatDetail.current = {
@@ -367,6 +377,25 @@ describe('the coordinate toggle', () => {
     expect(screen.queryByRole('menuitemcheckbox')).toBeNull()
   })
 
+  it('is not offered to a lone local agent, which would coordinate nobody', async () => {
+    await mount({ router: 'direct', agentId: 'f-1', extraAgents: [LOCAL] })
+    openMenu()
+    await screen.findByRole('menuitem', { name: 'Run on its own…' })
+    expect(screen.queryByRole('menuitem', { name: /Coordinate by/ })).toBeNull()
+  })
+
+  it('is offered to a lone remote agent, which the Default runtime would coordinate', async () => {
+    await mount({ router: 'direct', agentId: 'a-1' })
+    openMenu()
+    expect(toggle().textContent).toContain('Coordinate by Default runtime')
+  })
+
+  it('is offered in a plain chat with one attached agent, which its runtime would coordinate', async () => {
+    await mount({ router: 'direct', agentId: 'rt', attached: ['f-1'], extraAgents: [LOCAL, RUNTIME] })
+    openMenu()
+    expect(toggle()).toBeTruthy()
+  })
+
   it('hands the chat to the model', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'] })
     openMenu()
@@ -381,6 +410,41 @@ describe('the coordinate toggle', () => {
     expect(spies.setRouter).not.toHaveBeenCalled()
   })
 
+})
+
+describe('Run on its own', () => {
+  const openMenu = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
+  }
+  const run = (): HTMLElement | null => screen.queryByRole('menuitem', { name: 'Run on its own…' })
+
+  it('is offered in a direct chat with a local agent, naming it in the dialog', async () => {
+    await mount({ router: 'direct', agentId: 'f-1', extraAgents: [LOCAL] })
+    openMenu()
+    fireEvent.click((await screen.findByRole('menuitem', { name: 'Run on its own…' })))
+    const dialog = screen.getByRole('dialog', { name: 'Run on its own' })
+    expect(dialog.textContent).toContain('Planner works toward the goal until it is done or needs your answer. You can leave this conversation while the app stays open.')
+    expect(dialog.textContent).not.toContain('coordinates attached agents')
+  })
+
+  it('keeps the coordinator wording in a coordinated chat', async () => {
+    await mount({ router: 'coordinator', agentId: 'f-1', attached: ['a-1'], extraAgents: [LOCAL] })
+    openMenu()
+    fireEvent.click((await screen.findByRole('menuitem', { name: 'Run on its own…' })))
+    expect(screen.getByRole('dialog', { name: 'Run on its own' }).textContent)
+      .toContain('The model coordinates attached agents until the goal is done or it needs your answer. You can leave')
+  })
+
+  it.each<[string, MountOptions]>([
+    ['a direct chat with a remote agent', { router: 'direct', agentId: 'a-1' }],
+    ['a plain chat with the local model', { router: 'direct', agentId: null }],
+    ['a plain chat on its hidden runtime', { router: 'direct', agentId: 'rt', extraAgents: [RUNTIME] }],
+    ['a human chat', { router: 'human', attached: ['f-1', 'a-1'], extraAgents: [LOCAL] }]
+  ])('is not offered in %s', async (_label, opts) => {
+    await mount(opts)
+    openMenu()
+    expect(run()).toBeNull()
+  })
 })
 
 describe('refusing a send in a human chat', () => {

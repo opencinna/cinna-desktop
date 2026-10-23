@@ -29,7 +29,8 @@ import { agentService } from './agentService'
 import { createLogger } from '../logger/logger'
 import { canConduct } from '../../shared/chatRouting'
 import { nestedToolCallId } from './nestedContinuationService'
-import { chatConductorService } from './chatConductorService'
+import { chatConductorService, isChatConductor } from './chatConductorService'
+import { chatService } from './chatService'
 import { turnNotices } from './turnNotices'
 
 const logger = createLogger('task-runner')
@@ -311,8 +312,15 @@ export const taskRunnerService = {
   prepare(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string; launch(): void } {
     if (!input || typeof input.goal !== 'string' || !input.goal.trim() || input.goal.length > 64000) throw new Error('Enter a task goal of at most 64000 characters.')
     let chat = visibleChat(scope.profileUserId, input.chatId)
-    if (!chat || chat.deletedAt || chat.router !== 'coordinator') {
-      throw new Error('Choose a coordinator before running on its own.')
+    if (!chat || chat.deletedAt) throw new Error('Choose a coordinator before running on its own.')
+    // A direct chat with one local agent, and nobody attached, runs on its own with that agent
+    // coordinating: admission moves the chat onto `coordinator` below, after
+    // every refusal. A plain chat (its hidden runtime) or a human chat must
+    // choose a coordinator first.
+    const promote = chat.router === 'direct' && !!chat.agentId && chatOnDemandAgentRepo.listAgentIds(chat.id).length === 0
+    if (chat.router !== 'coordinator') {
+      const root = promote ? agentService.findAgent(scope.settingsUserId, scope.profileUserId, chat.agentId!)?.row : undefined
+      if (!root || isChatConductor(root)) throw new Error('Choose a coordinator before running on its own.')
     }
     // The conductor lives under the chat's owner — the default profile for a shared chat.
     if (!chat.agentId) chat = chatConductorService.bind(ownerOfVisible(scope.profileUserId, chat), chat)
@@ -337,6 +345,10 @@ export const taskRunnerService = {
     if (existing && !['new', 'open', 'in_progress', 'error'].includes(existing.status)) throw new Error('Start a new conversation for another task.')
     if (existing && existing.goal.trim() !== input.goal.trim()) throw new Error('This conversation already belongs to a task. Use its original goal, or start a new conversation for a different goal.')
     const task = getDb().transaction(() => {
+      // The same move as the bound chip's "Set as Coordinator": a refusal
+      // after this rolls the chat back to `direct`. `setCoordinator` resolves
+      // the chat as the profile sees it, so a shared chat stays its owner's.
+      if (promote) chatService.setCoordinator(scope.profileUserId, chat.id, chat.agentId!)
       const task = existing ? taskService.getById(scope.profileUserId, existing.id) : taskService.create(scope.profileUserId,
         { title: input.goal.trim().slice(0, 80), goal: input.goal.trim(), chatId: chat.id, router: 'coordinator', budget })
       taskService.start(scope.profileUserId, task.id)

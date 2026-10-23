@@ -73,6 +73,7 @@ const { presetForAgentId } = await import('../../utils/agentColors')
 const FOLDER = 'folder:planner'
 const FOLDER_2 = 'folder:coder'
 const REMOTE = 'remote-1'
+const RUNTIME = 'runtime-1'
 /** The folder scan: what makes a chip's agent one with a folder to open. */
 const FOLDERS = { roots: [], agents: [{ id: FOLDER, credentials: [] }, { id: FOLDER_2, credentials: [] }], homeAccess: null }
 
@@ -113,7 +114,9 @@ async function mount(opts: MountOptions): Promise<QueryClient> {
   agentList.current = [
     agent(FOLDER, 'Planner', { source: 'folder', driver: 'acp', protocol: 'acp', acpTransport: 'stdio' }),
     agent(FOLDER_2, 'Coder', { source: 'folder', driver: 'acp', protocol: 'acp', acpTransport: 'stdio' }),
-    agent(REMOTE, 'Helper', { source: 'remote' })
+    agent(REMOTE, 'Helper', { source: 'remote' }),
+    // A plain chat's own hidden runtime: never a chip anyone coordinates.
+    agent(RUNTIME, 'Runtime', { driver: 'acp', protocol: 'acp', acpTransport: 'stdio', conductor: true })
   ]
   onDemandAgents.current = (opts.attached ?? []).map((agentId) => ({ agentId, pendingAnnounce: false }))
   chatDetail.current = {
@@ -328,12 +331,26 @@ describe('the agent chip menu', () => {
     bound.focus()
     fireEvent.keyDown(bound, { key: 'ContextMenu' })
     const menu = screen.getByRole('menu', { name: 'Agent Planner' })
-    // A direct chat has no coordinator yet: its own agent can become one.
-    expect(item(menu, 'Set as Coordinator').disabled).toBe(false)
+    // A lone agent has nobody to coordinate: no Set as Coordinator at all.
+    expect(within(menu).queryByRole('menuitem', { name: 'Set as Coordinator' })).toBeNull()
     // Nobody to address in a direct chat.
     expect(within(menu).queryByRole('menuitem', { name: 'Address Next Message' })).toBeNull()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(document.activeElement).toBe(bound)
+  })
+
+  it('offers Set as Coordinator on the bound chip once a second agent is in the chat', async () => {
+    // Not a reachable shape in main (a second agent moves the chat to human),
+    // but the rule counts agents, not routers.
+    await mount({ router: 'direct', agentId: FOLDER, attached: [FOLDER_2] })
+    expect(item(openMenuOn('Planner'), 'Set as Coordinator').disabled).toBe(false)
+  })
+
+  it('offers no Set as Coordinator to the one agent of a coordinated plain chat', async () => {
+    await mount({ router: 'coordinator', agentId: RUNTIME, attached: [FOLDER_2] })
+    const menu = openMenuOn('Coder')
+    expect(within(menu).queryByRole('menuitem', { name: 'Set as Coordinator' })).toBeNull()
+    expect(item(menu, 'Go to Agent')).toBeTruthy()
   })
 
   it('opens on a left click at the pointer, and the × removes without opening it', async () => {

@@ -147,14 +147,6 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     ? DRAFTING_SEND_HOLD
     : null
 
-  // "Coordinate by…" is one-way inside a chat, but nothing exists yet: a draft
-  // whose agents were all removed starts over, or the next pick would be
-  // coordinated with no control on screen that says why or undoes it.
-  useEffect(() => {
-    if (coordinate && combinedAgentIds.length === 0) setCoordinate(false)
-    if (conductorPick && combinedAgentIds.length === 0) setConductorPick(null)
-  }, [coordinate, conductorPick, combinedAgentIds.length, setCoordinate, setConductorPick])
-
   // Who conducts if this chat is coordinated: the agent the user set as
   // coordinator on its chip while it is still picked, else the first agent
   // picked when it can conduct, else the hidden Default runtime (null).
@@ -165,6 +157,20 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     if (picked && canConduct(picked)) return picked
     return selectedAgent && canConduct(selectedAgent) ? selectedAgent : null
   }, [conductorPick, combinedAgentIds, agentList, selectedAgent])
+
+  // Every picked agent but the conductor would be a participant; with none
+  // there is nothing to coordinate.
+  const canCoordinate = combinedAgentIds.some((id) => id !== conductorAgent?.id)
+
+  // "Coordinate by…" is one-way inside a chat, but nothing exists yet: a draft
+  // left with nothing to coordinate — its agents all removed, or only the
+  // conductor left — starts over, or it would be coordinated with no control
+  // on screen that says why or undoes it.
+  useEffect(() => {
+    if (canCoordinate) return
+    if (coordinate) setCoordinate(false)
+    if (conductorPick) setConductorPick(null)
+  }, [canCoordinate, coordinate, conductorPick, setCoordinate, setConductorPick])
 
   /** A pending chip's "Set as Coordinator": coordinate, with that agent conducting. */
   const setPendingCoordinator = useCallback((agentId: string) => {
@@ -189,8 +195,9 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       : undefined
     return {
       router: newRouter,
-      coordinateAction: newRouter !== 'coordinator' && combinedAgentIds.length > 0 ? { conductorName: conductorAgent?.name ?? 'Default runtime', onCoordinate: () => setCoordinate(true) } : undefined,
-      onSetCoordinator: combinedAgentIds.length > 0 ? setPendingCoordinator : undefined,
+      coordinateAction: newRouter !== 'coordinator' && canCoordinate ? { conductorName: conductorAgent?.name ?? 'Default runtime', onCoordinate: () => setCoordinate(true) } : undefined,
+      // One agent has nobody to coordinate: no chip offers it.
+      onSetCoordinator: combinedAgentIds.length > 1 ? setPendingCoordinator : undefined,
       conductorId: conductorAgent?.id ?? null,
       conductorName: conductorAgent?.name ?? 'Default runtime',
       agentName: nameOf(combinedAgentIds[0]),
@@ -198,7 +205,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       answererName: nameOf(combinedAgentIds[0]),
       modelName
     }
-  }, [newRouter, setCoordinate, setPendingCoordinator, conductorAgent, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
+  }, [newRouter, setCoordinate, setPendingCoordinator, conductorAgent, canCoordinate, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   // The refusal an example prompt would meet: the same rule the composer
   // applies to the agent a message goes straight to. Example prompts are never

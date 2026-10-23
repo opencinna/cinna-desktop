@@ -754,15 +754,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   /** The one-way coordination action behind the [+] menu's "Coordinate by …". */
   const setChatRouter = useSetChatRouter()
+  // The chat's real agents: its root unless that is the chat's own hidden
+  // runtime, and every attached agent.
+  const realAgentIds = useMemo(
+    () => [...(chatRouting.rootAgentId && !boundAgent?.conductor ? [chatRouting.rootAgentId] : []), ...attachedAgentIds],
+    [chatRouting.rootAgentId, boundAgent?.conductor, attachedAgentIds]
+  )
   const coordinateToggle = useMemo(() => {
     if (!chatId) return routerInfo?.coordinateAction ? { coordinating: false, conductorName: routerInfo.coordinateAction.conductorName, pending: false, onToggle: (next: boolean) => { if (next) routerInfo.coordinateAction?.onCoordinate() } } : undefined
     const coordinating = chatRouting.router === 'coordinator'
-    // A plain chat's hidden runtime is not an agent there is anything to coordinate.
-    const hasAgents = attachedAgentIds.length > 0 || (!!chatRouting.rootAgentId && !boundAgent?.conductor)
-    if (coordinating || !hasAgents) return undefined
+    // Until the agents and the attached rows load, who conducts and who
+    // participates is unknown: no row that could vanish under an open menu.
+    if (coordinating || !agents || !onDemandAgentRows) return undefined
     // Main's order: the root, then the attached agents; the first that can conduct does.
     const conductor = [boundAgent, ...attachedAgentIds.map((id) => (agents ?? []).find((agent) => agent.id === id))]
       .find((agent) => !!agent && canConduct(agent))
+    // Nothing to coordinate: every real agent but the conductor is a
+    // participant, and there would be none. A hidden runtime conducting
+    // leaves every real agent a participant.
+    if (!realAgentIds.some((id) => id !== conductor?.id)) return undefined
     const conductorName = conductor ? conductor.name : 'Default runtime'
     return {
       coordinating,
@@ -781,7 +791,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           .catch((err) => setSendError(unwrapIpcError(err, 'Could not change who answers')))
       }
     }
-  }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, attachedAgentIds, boundAgent, agents, setChatRouter, setSendError])
+  }, [chatId, routerInfo, chatRouting.router, realAgentIds, attachedAgentIds, boundAgent, agents, onDemandAgentRows, setChatRouter, setSendError])
 
   /**
    * "Set as Coordinator" on the chips. In a chat: main makes the agent the
@@ -797,6 +807,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         ? { conductorId: routerInfo?.router === 'coordinator' ? routerInfo.conductorId ?? null : null, blockedReason: null, onSet }
         : undefined
     }
+    // One agent has nobody to coordinate: no chip offers it.
+    if (!agents || !onDemandAgentRows || realAgentIds.length < 2) return undefined
     return {
       conductorId: chatRouting.router === 'coordinator' ? chatRouting.rootAgentId : null,
       blockedReason: chatData?.taskHeld
@@ -804,7 +816,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         : isStreaming || !!chatData?.activeRunId || setChatCoordinator.isPending ? COORDINATOR_RUN_REASON : null,
       onSet: (agentId: string) => setChatCoordinator.mutateAsync({ chatId, agentId })
     }
-  }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, isStreaming, chatData?.activeRunId, chatData?.taskHeld, setChatCoordinator])
+  }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, agents, onDemandAgentRows, realAgentIds.length, isStreaming, chatData?.activeRunId, chatData?.taskHeld, setChatCoordinator])
+
+  // A direct chat's own local agent can run on its own: main makes it the
+  // coordinator as it admits the task.
+  const soloAgent = chatId && chatRouting.router === 'direct' && attachedAgentIds.length === 0 && boundAgent && !boundAgent.conductor && canConduct(boundAgent)
+    ? boundAgent : null
 
   const badgeInfo: RouterBadgeInfo | null = useMemo(() => {
     if (!chatId) return routerInfo ?? null
@@ -1902,6 +1919,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       )}
 
       {chatId && autonomousGoal !== null && <AutonomousTaskDialog key={chatId} chatId={chatId} initialGoal={autonomousGoal}
+        agentName={soloAgent?.name}
         onClose={() => setAutonomousGoal(null)} onStarted={() => setInput((current) => current === autonomousGoal ? '' : current)} />}
       <AgentPickerModal
         open={capabilityPickerOpen}
@@ -1948,7 +1966,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
               modeMenu={hintedModeMenu}
               coordinateToggle={coordinateToggle}
-              autonomousRun={chatId && chatRouting.router === 'coordinator'
+              autonomousRun={chatId && (chatRouting.router === 'coordinator' || soloAgent)
                 ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
               activeModeColor={modeColor ? { border: modeColor.border } : null}
             />

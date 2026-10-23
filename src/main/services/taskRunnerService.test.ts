@@ -13,7 +13,10 @@ vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, debug() {
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__', getProfileScopeUserId: () => '__default__', getAgentLookupScope: () => '__default__' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
-vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (user: string, chat: { id: string }) => {
+vi.mock('./chatConductorService', () => ({
+  isChatConductor: (agent: AgentRow) => typeof agent.driverConfig?.conductorChatId === 'string',
+  canConduct: (agent: AgentRow) => agent.driver === 'acp' && agent.driverConfig?.transport !== 'websocket',
+  chatConductorService: { remove() {}, bind: (user: string, chat: { id: string }) => {
   state.boundUnder.push(user)
   state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
   return { ...chat, agentId: 'runtime' }
@@ -134,6 +137,89 @@ describe('autonomous coordinator runner', () => {
       taskRunnerService.prepare({ profileUserId: 'profile-1', settingsUserId: USER }, { chatId: shared.id, goal: 'Finish this task' })
     } catch { /* what happens after the bind is not this test's question */ }
     expect(state.boundUnder).toEqual([USER])
+  })
+
+  describe('a direct chat with one local agent', () => {
+    /** A direct chat rooted on `writer`, made a local ACP agent unless told otherwise. */
+    function directChat(root: string | null = 'writer', router: 'direct' | 'human' = 'direct'): string {
+      if (root === 'writer') {
+        const writer = state.agents.find((agent) => agent.id === 'writer')!
+        writer.driver = 'acp'
+        writer.driverConfig = { transport: 'stdio' }
+        state.database!.raw.prepare("UPDATE agents SET driver = 'acp' WHERE id = 'writer'").run()
+      }
+      return chatRepo.create(USER, { title: 'Direct', router, agentId: root }).id
+    }
+    const row = (id: string) => chatRepo.getOwned(USER, id)
+
+    it.each([USER, 'profile-1'])('is admitted with its agent coordinating as the same root (profile %s)', (profileUserId) => {
+      const direct = directChat()
+      state.boundUnder.length = 0
+      const prepared = taskRunnerService.prepare({ profileUserId, settingsUserId: USER }, { chatId: direct, goal: 'Finish alone' })
+      // Still the default profile's chat when another profile runs it.
+      expect(row(direct)).toMatchObject({ userId: USER, router: 'coordinator', agentId: 'writer' })
+      expect(chatOnDemandAgentRepo.listAgentIds(direct)).toEqual([])
+      expect(state.boundUnder).toEqual([])
+      expect(taskRuntimeRepo.get(profileUserId, prepared.taskId)).toMatchObject({ state: 'queued', coordinator: { agentId: 'writer', name: 'Writer' } })
+      expect(taskService.getById(profileUserId, prepared.taskId)).toMatchObject({ chatId: direct, status: 'in_progress' })
+    })
+
+    it('stays direct when a question is still open, binding nothing', () => {
+      const direct = directChat()
+      const task = taskService.create(USER, { title: 'Earlier', goal: 'Earlier', chatId: direct, router: 'coordinator' })
+      taskInputRequestRepo.open({ requestId: 'open-ask', taskId: task.id, chatId: direct, agentId: 'writer', resume: 'next_message',
+        request: { kind: 'question', questions: [{ question: 'Which branch?', multiSelect: false, options: [] }] } })
+      state.boundUnder.length = 0
+      expect(() => taskRunnerService.prepare(scope, { chatId: direct, goal: 'Finish alone' })).toThrow('Answer the pending questions')
+      expect(row(direct)).toMatchObject({ router: 'direct', agentId: 'writer' })
+      expect(state.boundUnder).toEqual([])
+    })
+
+    it('stays direct when its agent cannot coordinate', () => {
+      const direct = directChat('analyst')
+      state.boundUnder.length = 0
+      expect(() => taskRunnerService.prepare(scope, { chatId: direct, goal: 'Finish alone' })).toThrow('enabled local coordinator')
+      expect(row(direct)).toMatchObject({ router: 'direct', agentId: 'analyst' })
+      expect(state.boundUnder).toEqual([])
+      expect(taskRepo.getByChatId(USER, direct)).toBeFalsy()
+    })
+
+    it('refuses a plain chat, whether or not its hidden runtime is bound, without binding one', () => {
+      const plain = directChat(null)
+      const hidden = directChat('runtime')
+      state.agents.find((agent) => agent.id === 'runtime')!.driverConfig = { conductorChatId: hidden }
+      state.boundUnder.length = 0
+      for (const id of [plain, hidden]) {
+        expect(() => taskRunnerService.prepare(scope, { chatId: id, goal: 'Finish alone' })).toThrow('Choose a coordinator before running on its own.')
+      }
+      expect(row(plain)).toMatchObject({ router: 'direct', agentId: null })
+      expect(row(hidden)).toMatchObject({ router: 'direct', agentId: 'runtime' })
+      expect(state.boundUnder).toEqual([])
+    })
+
+    it('refuses a direct chat that has another agent attached, staying direct', () => {
+      const direct = directChat()
+      chatOnDemandAgentRepo.add(direct, 'analyst')
+      expect(() => taskRunnerService.prepare(scope, { chatId: direct, goal: 'Finish alone' })).toThrow('Choose a coordinator before running on its own.')
+      expect(row(direct)).toMatchObject({ router: 'direct', agentId: 'writer' })
+      expect(taskRepo.getByChatId(USER, direct)).toBeFalsy()
+    })
+
+    it('still refuses a human chat', () => {
+      const human = directChat('writer', 'human')
+      expect(() => taskRunnerService.prepare(scope, { chatId: human, goal: 'Finish alone' })).toThrow('Choose a coordinator before running on its own.')
+      expect(row(human)?.router).toBe('human')
+    })
+
+    it('rolls the chat back to direct when admission fails after the switch', () => {
+      const direct = directChat()
+      const start = vi.spyOn(taskService, 'start').mockImplementationOnce(() => { throw new Error('disk unavailable') })
+      try {
+        expect(() => taskRunnerService.prepare(scope, { chatId: direct, goal: 'Finish alone' })).toThrow('disk unavailable')
+      } finally { start.mockRestore() }
+      expect(row(direct)).toMatchObject({ router: 'direct', agentId: 'writer' })
+      expect(taskRepo.getByChatId(USER, direct)).toBeFalsy()
+    })
   })
 
   it('refuses autonomous work before launch when the chat mode disables tools', () => {

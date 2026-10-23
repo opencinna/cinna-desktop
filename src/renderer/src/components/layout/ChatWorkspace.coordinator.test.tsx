@@ -80,3 +80,29 @@ it('drops a picked conductor once it is removed from the draft', () => {
   act(() => (fixtures.props.current?.onRemovePendingAgent as (id: string) => void)('a2'))
   expect(info()).toMatchObject({ router: 'coordinator', conductorId: null, conductorName: 'Default runtime' })
 })
+
+it('offers no coordination to a lone local agent, which would coordinate nobody', () => {
+  render(<ChatWorkspace agentId="a2" embedded />)
+  expect(info().coordinateAction).toBeUndefined()
+  expect(info().onSetCoordinator).toBeUndefined()
+})
+
+it('offers Coordinate by… but no Set as Coordinator to a lone remote agent', () => {
+  render(<ChatWorkspace agentId="a1" embedded />)
+  // The Default runtime would coordinate it.
+  expect(info().coordinateAction?.conductorName).toBe('Default runtime')
+  expect(info().onSetCoordinator).toBeUndefined()
+})
+
+it('starts over when the draft is left with nothing to coordinate', () => {
+  render(<ChatWorkspace agentId="a2" embedded />)
+  act(() => (fixtures.props.current?.onTogglePendingAgent as (id: string) => void)('a1'))
+  act(() => info().onSetCoordinator?.('a2'))
+  expect(info()).toMatchObject({ router: 'coordinator', conductorId: 'a2' })
+  act(() => (fixtures.props.current?.onRemovePendingAgent as (id: string) => void)('a1'))
+  // Only the coordinator is left: no hidden one-way flag survives.
+  expect(info().router).toBe('direct')
+  // Bringing a1 back is not coordinated behind the user's back.
+  act(() => (fixtures.props.current?.onTogglePendingAgent as (id: string) => void)('a1'))
+  expect(info()).toMatchObject({ router: 'human' })
+})

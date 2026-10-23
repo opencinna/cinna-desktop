@@ -5,8 +5,9 @@ import { unwrapIpcError } from '../../utils/ipcError'
 
 const fieldClass = 'w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-xs text-[var(--color-text)]'
 
-export function AutonomousTaskDialog({ chatId, initialGoal, onClose, onStarted }: {
-  chatId: string; initialGoal: string; onClose(): void; onStarted(): void
+export function AutonomousTaskDialog({ chatId, initialGoal, agentName, onClose, onStarted }: {
+  /** Set for a direct chat's own agent, which works alone rather than coordinating others. */
+  chatId: string; initialGoal: string; agentName?: string; onClose(): void; onStarted(): void
 }): React.JSX.Element {
   const dialog = useRef<HTMLDialogElement>(null)
   const pendingRef = useRef(false)
@@ -37,7 +38,9 @@ export function AutonomousTaskDialog({ chatId, initialGoal, onClose, onStarted }
     className="m-auto w-[28rem] max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-5 text-[var(--color-text)] shadow-lg backdrop:bg-black/25">
     <form onSubmit={(event) => { event.preventDefault(); void submit() }} className="space-y-4">
       <h2 className="text-sm font-semibold">Run on its own</h2>
-      <p className="text-xs text-[var(--color-text-secondary)]">The model coordinates attached agents until the goal is done or it needs your answer. You can leave this conversation while the app stays open.</p>
+      <p className="text-xs text-[var(--color-text-secondary)]">{agentName
+        ? `${agentName} works toward the goal until it is done or needs your answer.`
+        : 'The model coordinates attached agents until the goal is done or it needs your answer.'} You can leave this conversation while the app stays open.</p>
       <label className="block space-y-1.5 text-xs">Goal
         <textarea autoFocus aria-label="Goal" rows={5} className={`${fieldClass} resize-none`} value={goal}
           maxLength={64000} disabled={pending} onChange={(event) => setGoal(event.target.value)} />
