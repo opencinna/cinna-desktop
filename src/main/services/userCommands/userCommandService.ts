@@ -31,9 +31,9 @@
  */
 
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, rmSync, rmdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { randomUUID } from 'node:crypto'
 import {
@@ -44,6 +44,8 @@ import {
   userCommandOutputRefusal,
   type UserCommandDismissResult,
   type UserCommandEnd,
+  type UserCommandInspectInput,
+  type UserCommandInspectResult,
   type UserCommandOutputFileResult,
   type UserCommandOutputFrame,
   type UserCommandOutputTextResult,
@@ -53,8 +55,10 @@ import {
 } from '../../../shared/userCommands'
 import type { SessionActivityChange, SessionActivitySnapshot, SessionActivityTerminalState } from '../../../shared/sessionActivity'
 import type { SessionActivityStopper } from '../sessionActivityStop'
-import { ownCommandRefusal } from '../localAgents/ownCommandPolicy'
+import { ownCommandRefusal, readableOwnScript, type ReadableOwnScript } from '../localAgents/ownCommandPolicy'
 import { commandOutputFilename } from '../../../shared/commandRun'
+import { commandScript } from '../../../shared/scriptArgs'
+import { SCRIPT_SPEC_MAX_BYTES, parseScriptSpec, scriptBaseName, type ScriptSpec } from '../../../shared/scriptSpec'
 import { FOLDER_AGENT_ID_PREFIX } from '../../../shared/localAgents'
 import { createLogger } from '../../logger/logger'
 
@@ -70,6 +74,9 @@ export const ATTACHMENT_BYTES = 200 * 1024
 export const STOP_GRACE_MS = 5_000
 /** How long quitting waits for the groups to go before SIGKILL. */
 export const SHUTDOWN_GRACE_MS = 2_000
+
+/** How many scripts' parsed parameters are kept, by real path. */
+const SPEC_CACHE_SIZE = 64
 
 const TRUNCATED_LINE = '\r\n[output truncated]\r\n'
 /** A chat id is a path segment here; anything else is not a chat of ours. */
@@ -146,6 +153,23 @@ interface Run {
 const refusal = (code: UserCommandRunFailure, extra: { reason?: string; folder?: string } = {}): UserCommandRunResult => ({
   ok: false, code, reason: extra.reason ?? USER_COMMAND_RUN_REASONS[code], ...(extra.folder ? { folder: extra.folder } : {})
 })
+
+type FolderRefusal = Extract<UserCommandInspectResult, { ok: false }>
+
+/**
+ * A path the open dialog chose, as the form writes it: relative to the
+ * agent's folder when inside it (by real path), else as chosen.
+ */
+export function relativeArgPath(folder: string, chosen: string): string {
+  const real = (path: string): string => {
+    try { return realpathSync.native(path) } catch { return resolve(path) }
+  }
+  const root = real(folder)
+  const path = real(chosen)
+  if (path === root) return '.'
+  if (!path.startsWith(root.endsWith(sep) ? root : root + sep)) return chosen
+  return relative(root, path)
+}
 
 /** `~/…` for a path under the home folder ({@link homeDisplayPath}, shared with the renderer). */
 export function displayPath(path: string, home: string = homedir()): string {
@@ -322,6 +346,74 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     return { refusal: refusal(agentId?.startsWith(FOLDER_AGENT_ID_PREFIX) ? 'folder_missing' : 'not_local') }
   }
 
+  /** The agent's workspace for a message, checked: a local agent, its folder a directory. */
+  const workspaceOf = async (
+    profileUserId: string, chatId: unknown, messageId: unknown
+  ): Promise<{ workspace: UserCommandWorkspace; shown: string } | { refusal: FolderRefusal }> => {
+    const resolved = resolveAgent(profileUserId, chatId, messageId)
+    if ('refusal' in resolved) return { refusal: resolved.refusal as FolderRefusal }
+    const workspace = await deps.workspace(resolved.agent)
+    if (workspace === 'missing') return { refusal: refusal('folder_missing') as FolderRefusal }
+    if (!workspace) return { refusal: refusal('not_local') as FolderRefusal }
+    let isDir = false
+    try { isDir = statSync(workspace.folder).isDirectory() } catch { isDir = false }
+    if (!isDir) return { refusal: refusal('folder_missing') as FolderRefusal }
+    return { workspace, shown: displayPath(workspace.folder) }
+  }
+
+  /**
+   * Parsed specs by real path and the name the command gives the script (a
+   * Usage line is matched against that name), valid while the file's mtime
+   * and size are what they were.
+   */
+  const specCache = new Map<string, { mtimeMs: number; size: number; spec: ScriptSpec | null }>()
+
+  /**
+   * The spec of the script the policy judged (`real`, with the device and
+   * inode it found there), named `script` in the command; null over the cap,
+   * on no params, and for anything that is not the regular file judged. The
+   * path was judged by name a moment ago: it is opened without following a
+   * final symlink and without blocking (a FIFO swapped in would hang main's
+   * thread), and the open file must be the very file judged — a parent
+   * directory swapped for a symlink since would be followed by any new
+   * lookup of the path, so only the judged device and inode are trusted.
+   */
+  const readSpec = ({ real, dev, ino }: ReadableOwnScript, script: string): ScriptSpec | null => {
+    let fd: number
+    try {
+      fd = openSync(real, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW)
+    } catch {
+      return null
+    }
+    try {
+      const stat = fstatSync(fd)
+      if (!stat.isFile() || stat.dev !== dev || stat.ino !== ino || stat.size > SCRIPT_SPEC_MAX_BYTES) return null
+      const key = `${real}\0${scriptBaseName(script)}`
+      const cached = specCache.get(key)
+      let spec: ScriptSpec | null
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+        spec = cached.spec
+      } else {
+        const buffer = Buffer.alloc(stat.size)
+        let read = 0
+        while (read < stat.size) {
+          const n = readSync(fd, buffer, read, stat.size - read, read)
+          if (n === 0) break
+          read += n
+        }
+        const text = buffer.subarray(0, read).toString('utf8')
+        // A binary file is not a script whose source can be read.
+        spec = text.includes('\0') ? null : parseScriptSpec(text, { script, fileName: real })
+        specCache.delete(key)
+        specCache.set(key, { mtimeMs: stat.mtimeMs, size: stat.size, spec })
+        if (specCache.size > SPEC_CACHE_SIZE) specCache.delete(specCache.keys().next().value as string)
+      }
+      return spec ? { ...spec, script } : null
+    } finally {
+      closeSync(fd)
+    }
+  }
+
   /** The output as an attachment's text: ANSI stripped, the last 200 KB, with a header. */
   const outputText = (chatId: string, itemId: string): UserCommandOutputTextResult => {
     const run = runs.get(itemId)
@@ -474,6 +566,46 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
 
   return {
     outputText,
+
+    /**
+     * The parameters of the script a command names, read from its source and
+     * never by running it. Resolved as a run is (chat, message, agent,
+     * workspace); the script must be the agent's own (inside its folder, or a
+     * pinned skill's) and not a credential file, and at most 512 KB. Cached by
+     * real path, mtime and size. Never throws: a refusal is data, and anything
+     * unreadable is `spec: null`.
+     */
+    async inspect(profileUserId: string, input: UserCommandInspectInput): Promise<UserCommandInspectResult> {
+      let at: Awaited<ReturnType<typeof workspaceOf>>
+      try {
+        at = await workspaceOf(profileUserId, input?.chatId, input?.messageId)
+      } catch (error) {
+        logger.warn('a command\'s agent folder could not be resolved', { error: String(error) })
+        return refusal('not_local') as FolderRefusal
+      }
+      if ('refusal' in at) return at.refusal
+      const { workspace, shown } = at
+      try {
+        const script = commandScript(typeof input.command === 'string' ? input.command.trim() : '')
+        if (script === null) return { ok: true, spec: null, folder: shown }
+        const judged = readableOwnScript({ folder: workspace.folder, scriptRoots: workspace.scriptRoots }, workspace.folder, script)
+        if (judged === null) return { ok: true, spec: null, folder: shown }
+        return { ok: true, spec: readSpec(judged, script), folder: shown }
+      } catch (error) {
+        logger.warn('a script\'s parameters could not be read', { error: String(error) })
+        return { ok: true, spec: null, folder: shown }
+      }
+    },
+
+    /** The agent's folder (absolute), where the path chooser starts; a refusal as {@link inspect} answers it. */
+    async argPathFolder(profileUserId: string, chatId: unknown, messageId: unknown): Promise<{ ok: true; folder: string } | FolderRefusal> {
+      try {
+        const at = await workspaceOf(profileUserId, chatId, messageId)
+        return 'refusal' in at ? at.refusal : { ok: true, folder: at.workspace.folder }
+      } catch {
+        return refusal('not_local') as FolderRefusal
+      }
+    },
 
     async run(profileUserId: string, input: UserCommandRunInput): Promise<UserCommandRunResult> {
       const resolved = resolveAgent(profileUserId, input?.chatId, input?.messageId)

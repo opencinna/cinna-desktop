@@ -484,7 +484,7 @@ function CommandRow({ chatId, item, stop, adder, onOpenOutput }: {
         {/* Last, so it keeps its place when the run ends and the others arrive. */}
         <button type="button" className={rowIconClass} title="Open output" aria-label={`Open output of ${item.title}`}
           onClick={(event) => {
-            useRunScriptStore.getState().openForRun(
+            void useRunScriptStore.getState().openForRun(
               chatId, { id: item.id, title: item.title, agentId: item.agentId, detail: item.detail },
               event.detail > 0 ? { x: event.clientX, y: event.clientY } : null
             )

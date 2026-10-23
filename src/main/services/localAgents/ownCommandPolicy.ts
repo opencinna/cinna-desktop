@@ -47,6 +47,16 @@ export interface OwnCommandPolicy {
 export interface EntryInfo {
   isFile(): boolean
   isDirectory(): boolean
+  /** Device and inode, where the filesystem gives them: what {@link readableOwnScript} pins the file it judged by. */
+  dev?: number
+  ino?: number
+}
+
+/** The script {@link readableOwnScript} judged: its real path, and the device and inode `stat` found there. */
+export interface ReadableOwnScript {
+  real: string
+  dev: number
+  ino: number
 }
 
 export interface DirEntryInfo {
@@ -261,6 +271,46 @@ function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string
     if (segments !== null && segments.length > 0 && !segments.some((s) => s === '.git' || secretName(s))) return null
   }
   return OWN_COMMAND_REASONS.outside(word)
+}
+
+/**
+ * The real path of the script `word` names, run in `cwd`, when Cinna may read
+ * it for its parameters: a file inside the agent's folder that is not
+ * protected for a read (credentials, `.cinna/`, `.git/`, secret-looking
+ * names), or a file under a pinned script root that is not in `.git` or
+ * secret-looking. Null otherwise, and on any error. The same containment as
+ * {@link scriptRefusal}, judged for reading rather than running. With the
+ * path come the device and inode of the file judged, so the reader can
+ * refuse a file it opens that is not that one (a parent directory swapped
+ * for a symlink since); null when the filesystem gives none.
+ */
+export function readableOwnScript(
+  policy: OwnCommandPolicy,
+  cwd: string,
+  word: string,
+  fs: OwnCommandFs = nodeOwnCommandFs
+): ReadableOwnScript | null {
+  try {
+    if (typeof policy.folder !== 'string' || !isAbsolute(policy.folder) || !isAbsolute(cwd)) return null
+    const folder = fs.realpath(resolve(policy.folder))
+    const real = realPathOf(resolve(cwd, word), fs)
+    if (real === null) return null
+    const stat = fs.stat(real)
+    if (!stat?.isFile() || typeof stat.dev !== 'number' || typeof stat.ino !== 'number') return null
+    const judged: ReadableOwnScript = { real, dev: stat.dev, ino: stat.ino }
+    const inFolder = segmentsIn(folder, real)
+    if (inFolder !== null) return isProtected(inFolder, 'read') ? null : judged
+    for (const root of policy.scriptRoots) {
+      if (typeof root !== 'string' || !isAbsolute(root)) continue
+      let realRoot: string
+      try { realRoot = fs.realpath(resolve(root)) } catch { continue }
+      const segments = segmentsIn(realRoot, real)
+      if (segments !== null && segments.length > 0 && !segments.some((s) => s === '.git' || secretName(s))) return judged
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /* ------------------------------------------------------- read-only basics */

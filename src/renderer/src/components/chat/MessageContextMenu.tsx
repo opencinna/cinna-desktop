@@ -488,7 +488,7 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
     // The window is app-wide and owns its runs; the menu only opens it.
     'edit-run': () => run('edit-run', async () => {
       if (!command) return
-      useRunScriptStore.getState().openFromCode({
+      void useRunScriptStore.getState().openFromCode({
         chatId, messageId: command.messageId, agentId: command.agentId, folder: command.folder, command: command.text,
         origin: { x, y }
       })

@@ -49,7 +49,7 @@ export const CommandMessageContext = createContext<CommandMessage | null>(null)
 
 /** Open the Run Script window on a command: from the click point, or the centre after Enter or Space. */
 function openRunScript(target: CommandMessage, command: string, origin: { x: number; y: number } | null): void {
-  useRunScriptStore.getState().openFromCode({ ...target, command, origin })
+  void useRunScriptStore.getState().openFromCode({ ...target, command, origin })
 }
 
 /** A click or a key on a command: what it opens with, or null for neither. */

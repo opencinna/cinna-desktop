@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { COMMAND_REVIEW_REASONS } from '../../../shared/userCommands'
-import { useRunScriptStore } from './runScript.store'
+import { INSPECT_WAIT_MS, useRunScriptStore } from './runScript.store'
+import type { ScriptSpec } from '../../../shared/scriptSpec'
 
 /**
  * The Run Script window's store: which window is up, and where a start's
@@ -8,10 +9,12 @@ import { useRunScriptStore } from './runScript.store'
  */
 
 const run = vi.fn()
+const inspect = vi.fn()
 
 beforeEach(() => {
   run.mockReset().mockResolvedValue({ ok: true, itemId: 'cmd-1', folder: '~/agents/a' })
-  window.api = { userCommands: { run } } as never
+  inspect.mockReset().mockResolvedValue({ ok: true, spec: null, folder: '~/agents/a' })
+  window.api = { userCommands: { run, inspect } } as never
   useRunScriptStore.setState({ window: null, pending: null, error: null, runSources: {} })
 })
 afterEach(() => useRunScriptStore.setState({ window: null, pending: null, error: null, runSources: {} }))
@@ -89,5 +92,93 @@ describe('the Run Script store', () => {
     release({ ok: true, itemId: 'cmd-1', folder: '~/agents/a' })
     await started
     expect(useRunScriptStore.getState()).toMatchObject({ window: null, pending: null })
+  })
+})
+
+describe('reading the script\'s parameters as the window opens', () => {
+  const SPEC: ScriptSpec = { script: 'scripts/check.py', language: 'python', summary: 'Check.', description: null, usage: null, params: [] }
+  const SCRIPT = 'uv run scripts/check.py italy'
+
+  afterEach(() => vi.useRealTimers())
+
+  it('asks main for a script command and opens with the spec it answers', async () => {
+    inspect.mockResolvedValue({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    const opened = useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    // Not shown until main answers.
+    expect(useRunScriptStore.getState().window).toBeNull()
+    await opened
+    expect(inspect).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-1', command: SCRIPT })
+    expect(useRunScriptStore.getState().window).toMatchObject({ command: SCRIPT, spec: SPEC })
+  })
+
+  it('opens at once, with no spec and no question, for a command that names no script', () => {
+    void useRunScriptStore.getState().openFromCode({ ...source, command: 'ls -la' })
+    expect(useRunScriptStore.getState().window).toMatchObject({ command: 'ls -la', spec: null })
+    expect(inspect).not.toHaveBeenCalled()
+  })
+
+  it('opens without a spec when main is slow, and drops the late answer', async () => {
+    vi.useFakeTimers()
+    let answer: (value: unknown) => void = () => {}
+    inspect.mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    const opened = useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    await vi.advanceTimersByTimeAsync(INSPECT_WAIT_MS - 1)
+    expect(useRunScriptStore.getState().window).toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    await opened
+    const shown = useRunScriptStore.getState().window!
+    expect(shown).toMatchObject({ command: SCRIPT, spec: null })
+    answer({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useRunScriptStore.getState().window).toBe(shown)
+  })
+
+  it('opens no spec for a refusal or an error', async () => {
+    inspect.mockResolvedValueOnce({ ok: false, code: 'not_local', reason: 'x' })
+    await useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    expect(useRunScriptStore.getState().window).toMatchObject({ spec: null })
+    inspect.mockRejectedValueOnce(new Error('boom'))
+    await useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    expect(useRunScriptStore.getState().window).toMatchObject({ spec: null })
+  })
+
+  it('lets a later open, or a dismiss, win over one still waiting for its spec', async () => {
+    let answer: (value: unknown) => void = () => {}
+    inspect.mockReturnValueOnce(new Promise((resolve) => { answer = resolve }))
+    const waiting = useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    void useRunScriptStore.getState().openFromCode({ ...source, command: 'ls later' })
+    answer({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    await waiting
+    expect(useRunScriptStore.getState().window).toMatchObject({ command: 'ls later' })
+
+    useRunScriptStore.getState().dismiss()
+    inspect.mockReturnValueOnce(new Promise((resolve) => { answer = resolve }))
+    const dismissed = useRunScriptStore.getState().openFromCode({ ...source, command: SCRIPT })
+    useRunScriptStore.getState().dismiss()
+    answer({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    await dismissed
+    expect(useRunScriptStore.getState().window).toBeNull()
+  })
+
+  it('reads the spec alongside the menu\'s run, and not for a background run', async () => {
+    inspect.mockResolvedValue({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    await useRunScriptStore.getState().runFromMenu({ ...menu, command: SCRIPT }, false)
+    expect(useRunScriptStore.getState().window).toMatchObject({ runs: ['cmd-1'], spec: SPEC })
+    inspect.mockClear()
+    useRunScriptStore.getState().dismiss()
+    await useRunScriptStore.getState().runFromMenu({ ...menu, command: SCRIPT }, true)
+    expect(inspect).not.toHaveBeenCalled()
+  })
+
+  it('reads the spec of a run reopened from the badge when its message is known', async () => {
+    inspect.mockResolvedValue({ ok: true, spec: SPEC, folder: '~/agents/a' })
+    useRunScriptStore.setState({ runSources: { 'cmd-7': { chatId: 'chat-1', messageId: 'msg-1', agentId: 'folder:a', folder: '~/agents/a' } } })
+    await useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-7', title: SCRIPT, agentId: 'folder:a', detail: null })
+    expect(useRunScriptStore.getState().window).toMatchObject({ runs: ['cmd-7'], spec: SPEC, messageId: 'msg-1' })
+    // Unknown message: nothing to resolve the agent by, so no question.
+    inspect.mockClear()
+    await useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-8', title: SCRIPT, agentId: 'folder:a', detail: null })
+    expect(inspect).not.toHaveBeenCalled()
+    expect(useRunScriptStore.getState().window).toMatchObject({ runs: ['cmd-8'], spec: null })
   })
 })

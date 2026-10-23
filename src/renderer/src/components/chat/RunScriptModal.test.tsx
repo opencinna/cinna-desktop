@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserCommandOutputFrame } from '../../../../shared/userCommands'
+import type { ScriptSpec } from '../../../../shared/scriptSpec'
 import { COMMAND_REVIEW_REASONS } from '../../../../shared/userCommands'
 import { useAuthStore } from '../../stores/auth.store'
 
@@ -89,7 +90,8 @@ function mount() {
 }
 
 const source = { chatId: 'chat-1', messageId: 'msg-1', agentId: 'folder:a', folder: '/Users/me/agents/a', origin: null }
-const openOn = (command: string): void => act(() => useRunScriptStore.getState().openFromCode({ ...source, command }))
+/** Open on a command; with no `inspect` in the fake api there is nothing to ask, and the window opens at once. */
+const openOn = (command: string): void => { act(() => { void useRunScriptStore.getState().openFromCode({ ...source, command }) }) }
 const line = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: 'Command' }) as HTMLTextAreaElement
 const runningItem = (id: string, title = 'uv run scripts/check.py italy') =>
   ({ id, kind: 'command', agentId: 'folder:a', title, detail: '~/agents/a', state: 'running', startedAt: new Date(), endedAt: null, outputPath: '/x.log', canStop: true })
@@ -167,7 +169,7 @@ describe('the Run Script window', () => {
     fireEvent.change(line(), { target: { value: 'ls typed' } })
     act(() => {
       useRunScriptStore.getState().close('close')
-      useRunScriptStore.getState().openFromCode({ ...source, command: 'ls second' })
+      void useRunScriptStore.getState().openFromCode({ ...source, command: 'ls second' })
     })
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(line().value).toBe('ls second')
@@ -279,7 +281,7 @@ describe('the Run Script window', () => {
   it('swaps Run for Stop in the same slot while it runs, and the line is read-only', async () => {
     activity.items = [runningItem('cmd-1', 'ls -la')]
     mount()
-    act(() => useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'ls -la', agentId: 'folder:a', detail: '~/agents/a' }))
+    act(() => { void useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'ls -la', agentId: 'folder:a', detail: '~/agents/a' }) })
     const stopButton = await screen.findByRole('button', { name: 'Stop' })
     expect(screen.queryByRole('button', { name: 'Run' })).toBeNull()
     expect(line().readOnly).toBe(true)
@@ -292,7 +294,7 @@ describe('the Run Script window', () => {
   it('closes on Close and Escape without stopping the run, and lets go of the output', async () => {
     activity.items = [runningItem('cmd-1')]
     mount()
-    act(() => useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'uv run scripts/check.py italy', agentId: 'folder:a', detail: null }))
+    act(() => { void useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'uv run scripts/check.py italy', agentId: 'folder:a', detail: null }) })
     await waitFor(() => expect(ports.open.has('cmd-1')).toBe(true))
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -300,7 +302,7 @@ describe('the Run Script window', () => {
     expect(terminal.disposed).toBe(1)
     expect(stop).not.toHaveBeenCalled()
 
-    act(() => useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'uv run scripts/check.py italy', agentId: 'folder:a', detail: null }))
+    act(() => { void useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'uv run scripts/check.py italy', agentId: 'folder:a', detail: null }) })
     await waitFor(() => expect(ports.open.has('cmd-1')).toBe(true))
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -311,7 +313,7 @@ describe('the Run Script window', () => {
     useRunScriptStore.setState({ runSources: { 'cmd-1': { chatId: 'chat-1', messageId: 'msg-1', agentId: 'folder:a', folder: '~/agents/a' } } })
     activity.items = [{ ...runningItem('cmd-1', 'ls -la'), state: 'completed', endedAt: new Date() }]
     mount()
-    act(() => useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'ls -la', agentId: 'folder:a', detail: '~/agents/a' }))
+    act(() => { void useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'ls -la', agentId: 'folder:a', detail: '~/agents/a' }) })
     await waitFor(() => expect(ports.open.has('cmd-1')).toBe(true))
     act(() => ports.open.get('cmd-1')!({ type: 'start', command: 'ls -la', folder: '~/agents/a', startedAt: Date.now() - 4000, backlog: 'earlier\n' }))
     act(() => ports.open.get('cmd-1')!({ type: 'end', end: { state: 'completed', exitCode: 0, signal: null }, endedAt: Date.now() }))
@@ -331,7 +333,7 @@ describe('the Run Script window', () => {
   it('names a reply of the run\'s agent for a run this renderer did not start', async () => {
     activity.items = [{ ...runningItem('cmd-9', 'ls'), state: 'completed', endedAt: new Date() }]
     mount()
-    act(() => useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-9', title: 'ls', agentId: 'folder:a', detail: '~/agents/a' }))
+    act(() => { void useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-9', title: 'ls', agentId: 'folder:a', detail: '~/agents/a' }) })
     act(() => ports.open.get('cmd-9')?.({ type: 'end', end: { state: 'completed', exitCode: 0, signal: null }, endedAt: Date.now() }))
     fireEvent.click(await screen.findByRole('button', { name: 'Run again' }))
     await waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-1', command: 'ls' })))
@@ -401,5 +403,206 @@ describe('commandLineRows', () => {
     expect(commandLineRows('z'.repeat(100), 40)).toBe(3)
     expect(commandLineRows(`ls\n${'w '.repeat(60)}`, 40)).toBe(4)
     expect(commandLineRows('q '.repeat(400), 40)).toBe(6)
+  })
+})
+
+describe('the Run Script window\'s parameters', () => {
+  const SOURCE = `"""Check the ledger for a scope.
+
+Compares the ledger with the plan.
+"""
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("scope", help="Which scope")
+p.add_argument("--year", type=int, default=2026)
+p.add_argument("--basis", choices=["month", "week"])
+p.add_argument("--db", type=Path)
+p.add_argument("--apply", action="store_true", help="Apply the fixes")
+p.parse_args()
+`
+  const COMMAND = 'DEBUG=1 uv run scripts/check.py italy --basis week'
+  const inspect = vi.fn()
+  const chooseArgPath = vi.fn()
+
+  const openScript = async (command = COMMAND): Promise<void> => {
+    await act(async () => { await useRunScriptStore.getState().openFromCode({ ...source, command }) })
+  }
+  const sidebar = (): HTMLElement => screen.getByRole('complementary', { name: 'Parameters' })
+  // A required positional's label ends in an aria-hidden ` *`.
+  const field = (name: string): HTMLInputElement => screen.getByLabelText(new RegExp(`^${name}( \\*)?$`), { selector: 'input' }) as HTMLInputElement
+
+  beforeEach(async () => {
+    const { parseScriptSpec } = await import('../../../../shared/scriptSpec')
+    const spec = parseScriptSpec(SOURCE, { script: 'scripts/check.py' })
+    inspect.mockReset().mockResolvedValue({ ok: true, spec, folder: '~/agents/a' })
+    chooseArgPath.mockReset().mockResolvedValue({ ok: true, path: 'data/ledger.db' })
+    Object.assign((window.api as unknown as { userCommands: object }).userCommands, { inspect, chooseArgPath })
+  })
+
+  it('opens with the form pre-filled from the command, and the summary as the idle hint', async () => {
+    mount()
+    await openScript()
+    expect(inspect).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-1', command: COMMAND })
+    expect(sidebar()).toBeTruthy()
+    expect(field('Scope').value).toBe('italy')
+    expect(field('Scope').getAttribute('aria-required')).toBe('true')
+    expect(field('Year').value).toBe('')
+    expect(field('Year').placeholder).toBe('default: 2026')
+    expect(screen.getByRole('button', { name: 'week' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('switch', { name: 'Apply' }).getAttribute('aria-checked')).toBe('false')
+    expect(terminal.writes.join('')).toContain('Check the ledger for a scope.')
+    expect(terminal.writes.join('')).not.toContain('Press Run')
+  })
+
+  it('has no sidebar when there is no spec', async () => {
+    inspect.mockResolvedValue({ ok: true, spec: null, folder: '~/agents/a' })
+    mount()
+    await openScript()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Parameters' })).toBeNull()
+    expect(terminal.writes.join('')).toContain('Press Run (↩) to start.')
+  })
+
+  it('rewrites only the edited parameter\'s words, in place, and runs what the line says', async () => {
+    mount()
+    await openScript('DEBUG=1 uv run scripts/check.py --apply --year 2030 spain')
+    // Unticking and ticking a switch: its word goes, then comes back at the end.
+    fireEvent.click(screen.getByRole('switch', { name: 'Apply' }))
+    expect(line().value).toBe('DEBUG=1 uv run scripts/check.py --year 2030 spain')
+    fireEvent.click(screen.getByRole('switch', { name: 'Apply' }))
+    expect(line().value).toBe('DEBUG=1 uv run scripts/check.py --year 2030 spain --apply')
+    // A changed value is rewritten where it stands; the user's order is kept.
+    fireEvent.change(field('Year'), { target: { value: '2025' } })
+    fireEvent.change(field('Scope'), { target: { value: 'new york' } })
+    expect(line().value).toBe("DEBUG=1 uv run scripts/check.py --year 2025 'new york' --apply")
+    fireEvent.click(screen.getByRole('button', { name: 'week' }))
+    expect(line().value).toBe("DEBUG=1 uv run scripts/check.py --year 2025 'new york' --apply --basis week")
+    // A pressed segment pressed again leaves the choice to the script: only its words go.
+    fireEvent.click(screen.getByRole('button', { name: 'week' }))
+    expect(line().value).toBe("DEBUG=1 uv run scripts/check.py --year 2025 'new york' --apply")
+    fireEvent.change(field('Year'), { target: { value: '' } })
+    expect(line().value).toBe("DEBUG=1 uv run scripts/check.py 'new york' --apply")
+    fireEvent.change(field('Other arguments'), { target: { value: '--extra 1' } })
+    expect(line().value).toBe("DEBUG=1 uv run scripts/check.py 'new york' --apply --extra 1")
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      command: "DEBUG=1 uv run scripts/check.py 'new york' --apply --extra 1", reviewed: true
+    })))
+  })
+
+  it('shows what a rebuilt line reads back as when an edit in place cannot be made', async () => {
+    const { parseScriptSpec } = await import('../../../../shared/scriptSpec')
+    const spec = parseScriptSpec(`import argparse
+p = argparse.ArgumentParser()
+p.add_argument("src", nargs="?")
+p.add_argument("dst")
+p.parse_args()
+`, { script: 'scripts/x.py' })
+    inspect.mockResolvedValue({ ok: true, spec, folder: '~/agents/a' })
+    mount()
+    await openScript('python scripts/x.py B')
+    expect(field('Dst').value).toBe('B')
+    // A free word now fills the optional positional: the line reads src=B dst=C.
+    fireEvent.change(field('Other arguments'), { target: { value: 'C' } })
+    const { readCommand } = await import('../../../../shared/scriptArgs')
+    const read = readCommand(spec!, line().value)!
+    expect(field('Src').value).toBe(String(read.values.src ?? ''))
+    expect(field('Dst').value).toBe(String(read.values.dst ?? ''))
+    expect(field('Other arguments').value).toBe(read.other)
+  })
+
+  it('sizes the command line for the switches the form could add, not a fixed reserve', async () => {
+    const { formSizingLine } = await import('./RunScriptModal')
+    const spec = { params: [
+      { kind: 'positional', flags: [] }, { kind: 'value', flags: ['--year'] },
+      { kind: 'switch', flags: ['-a', '--apply'] }, { kind: 'switch', flags: ['--dry-run'] }
+    ] } as unknown as ScriptSpec
+    expect(formSizingLine(spec, 'uv run x.py it --dry-run')).toBe('uv run x.py it --dry-run --apply')
+    expect(formSizingLine(spec, 'uv run x.py it -a --dry-run')).toBe('uv run x.py it -a --dry-run')
+    expect(formSizingLine(null, 'ls')).toBe('ls')
+    // Unmeasured (jsdom) a one-line command with a form keeps one row: no empty rows under it.
+    mount()
+    await openScript()
+    expect(line().rows).toBe(1)
+  })
+
+  it('takes a second row when a tick could wrap the line, never more than three for the form', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    const rect = HTMLElement.prototype.getBoundingClientRect
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return this.tagName === 'TEXTAREA' ? 400 : 0 } })
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return { width: this.tagName === 'SPAN' ? 400 : 0, height: 0, left: 0, top: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    }
+    try {
+      mount()
+      // 36 chars fit one 40-cell row; with the " --apply" a tick adds, 44 do not.
+      await openScript('uv run scripts/check.py italy-region')
+      expect(line().rows).toBe(2)
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+      HTMLElement.prototype.getBoundingClientRect = rect
+    }
+  })
+
+  it('writes the docstring into the terminal as text only: no escape, bell or C1 control reaches xterm', async () => {
+    const { specHint } = await import('./RunScriptModal')
+    const hint = specHint({
+      script: 'x.py', language: 'python', usage: null, params: [],
+      summary: 'Tool\x1b]0;owned\x07 here', description: 'a\x1b[2Jb\tc\x9b31md\x7f\r\nnext\x00'
+    })
+    expect(hint).toBe('Tool]0;owned here\r\n\r\na[2Jb\tc31md\r\nnext')
+    expect(specHint({ script: 'x.py', language: 'python', usage: null, params: [], summary: '\x1b\x07', description: null })).toBeNull()
+  })
+
+  it('keeps the window open when Escape or a press closes a parameter\'s help tip', async () => {
+    mount()
+    await openScript()
+    fireEvent.click(screen.getByRole('button', { name: 'About Apply' }))
+    const tip = await screen.findByRole('dialog', { name: 'About Apply' })
+    expect(tip.closest('[role="dialog"][aria-modal="true"]')).toBeNull()
+    fireEvent.mouseDown(tip)
+    expect(useRunScriptStore.getState().window).not.toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'About Apply' })).toBeNull())
+    expect(useRunScriptStore.getState().window).not.toBeNull()
+    // With the tip gone, Escape closes the window.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(useRunScriptStore.getState().window).toBeNull()
+  })
+
+  it('follows the line into the form, keeps unknown arguments, and goes read-only while the line is hand-edited', async () => {
+    mount()
+    await openScript()
+    const rowsBefore = sidebar().querySelectorAll('input, button, select').length
+    fireEvent.change(line(), { target: { value: 'uv run scripts/check.py spain --apply --mystery x' } })
+    expect(field('Scope').value).toBe('spain')
+    expect(screen.getByRole('switch', { name: 'Apply' }).getAttribute('aria-checked')).toBe('true')
+    expect(field('Other arguments').value).toBe('--mystery x')
+    fireEvent.change(line(), { target: { value: 'uv run scripts/check.py spain | head' } })
+    expect(sidebar().textContent).toContain('Edited by hand — the form follows the command again when it names check.py.')
+    expect(field('Scope').readOnly).toBe(true)
+    expect(field('Scope').value).toBe('spain')
+    // The form's rows never change.
+    expect(sidebar().querySelectorAll('input, button, select').length).toBe(rowsBefore)
+    fireEvent.change(line(), { target: { value: 'uv run scripts/check.py france' } })
+    expect(sidebar().textContent).not.toContain('Edited by hand')
+    expect(field('Scope').value).toBe('france')
+    expect(field('Scope').readOnly).toBe(false)
+  })
+
+  it('writes a chosen path into the field and the line', async () => {
+    mount()
+    await openScript()
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a path for Db' }))
+    await waitFor(() => expect(field('Db').value).toBe('data/ledger.db'))
+    expect(chooseArgPath).toHaveBeenCalledWith('chat-1', 'msg-1')
+    expect(line().value).toBe('DEBUG=1 uv run scripts/check.py italy --basis week --db data/ledger.db')
+  })
+
+  it('puts a writing switch last, under its own divider', async () => {
+    mount()
+    await openScript()
+    const labels = Array.from(sidebar().querySelectorAll('label')).map((label) => label.textContent?.replace(' *', ''))
+    expect(labels).toEqual(['Scope', 'Year', 'Basis', 'Db', 'Apply', 'Other arguments'])
   })
 })

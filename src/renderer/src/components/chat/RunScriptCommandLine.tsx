@@ -143,10 +143,11 @@ export const RunScriptCommandLine = forwardRef<HTMLTextAreaElement, {
           }
         }}
         // Rows fixed at open, no resize: the window keeps its layout while the user types.
-        // The bottom padding (half a line, in every state) lets a scrolled field show
-        // the next line cut off, so it reads as more below rather than as the card's edge.
-        className="block min-w-0 flex-1 resize-none overflow-y-auto bg-transparent pt-1.5 pb-2.5 text-[var(--color-text)]
-          placeholder:text-[var(--color-text-muted)] focus:outline-none read-only:text-[var(--color-text-secondary)]"
+        // A field of several rows keeps half a line of bottom padding, so a scrolled
+        // field shows the next line cut off and reads as more below; one row sits
+        // centred on the buttons beside it.
+        className={`block min-w-0 flex-1 resize-none overflow-y-auto bg-transparent pt-1.5 ${rows > 1 ? 'pb-2.5' : 'pb-1.5'} text-[var(--color-text)]
+          placeholder:text-[var(--color-text-muted)] focus:outline-none read-only:text-[var(--color-text-secondary)]`}
       />
     </div>
   )

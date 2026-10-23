@@ -27,15 +27,23 @@ const service = vi.hoisted(() => ({
   outputText: vi.fn(() => ({ ok: true, text: 't', filename: 'output-ls.txt' })),
   outputFile: vi.fn(() => ({ ok: true, path: '/p', filename: 'output-ls.txt' })),
   dismiss: vi.fn(() => ({ ok: true })),
-  watch: vi.fn()
+  watch: vi.fn(),
+  inspect: vi.fn(async () => ({ ok: true, spec: null, folder: '~/a' })),
+  argPathFolder: vi.fn(async (): Promise<unknown> => ({ ok: true, folder: '/agents/a' }))
 }))
 vi.mock('../services/userCommands', () => ({ userCommandService: service }))
+vi.mock('../services/userCommands/userCommandService', () => ({
+  relativeArgPath: (folder: string, chosen: string) => chosen.startsWith(`${folder}/`) ? chosen.slice(folder.length + 1) : chosen
+}))
+const dialog = vi.hoisted(() => ({ choose: vi.fn(async (): Promise<string | null> => '/agents/a/data/in.csv') }))
+vi.mock('../host/desktop/argPathDialog', () => ({ chooseArgPathDialog: dialog.choose }))
 const guard = vi.hoisted(() => ({ record: vi.fn() }))
 vi.mock('../services/pathGuard', () => ({ pathGuard: guard }))
 
 const { registerUserCommandHandlers } = await import('./user_commands.ipc')
 registerUserCommandHandlers()
-const invoke = (channel: string, ...args: unknown[]): unknown => handlers.get(channel)!({} as IpcMainInvokeEvent, ...args)
+const sender = { id: 7 }
+const invoke = (channel: string, ...args: unknown[]): unknown => handlers.get(channel)!({ sender } as unknown as IpcMainInvokeEvent, ...args)
 
 beforeEach(() => {
   state.chats = new Map([['mine', { deletedAt: null }], ['binned', { deletedAt: new Date(1) }]])
@@ -75,5 +83,31 @@ describe('userCommands IPC', () => {
 
   it('answers the home folder, for the renderer\'s ~ form', () => {
     expect(typeof invoke('userCommands:home')).toBe('string')
+  })
+
+  it('inspects for a live chat, passing only the fields it knows; refuses another chat before the service', async () => {
+    expect(await invoke('userCommands:inspect', { chatId: 'mine', messageId: 'm', command: 'python3 x.py', extra: 1 }))
+      .toEqual({ ok: true, spec: null, folder: '~/a' })
+    expect(service.inspect).toHaveBeenCalledWith('profile-1', { chatId: 'mine', messageId: 'm', command: 'python3 x.py' })
+    for (const chatId of ['binned', 'theirs', 42]) {
+      expect(await invoke('userCommands:inspect', { chatId, messageId: 'm', command: 'x' })).toMatchObject({ ok: false, code: 'chat_not_found' })
+    }
+    expect(await invoke('userCommands:inspect', undefined)).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(service.inspect).toHaveBeenCalledTimes(1)
+  })
+
+  it('chooses a path in the agent\'s folder through the desktop dialog, relative when inside it', async () => {
+    expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: true, path: 'data/in.csv' })
+    expect(service.argPathFolder).toHaveBeenCalledWith('profile-1', 'mine', 'm')
+    expect(dialog.choose).toHaveBeenCalledWith(sender, '/agents/a')
+    dialog.choose.mockResolvedValueOnce(null)
+    expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: true, canceled: true })
+  })
+
+  it('opens no dialog for another chat or a folder core refuses', async () => {
+    expect(await invoke('userCommands:chooseArgPath', 'binned', 'm')).toMatchObject({ ok: false, code: 'chat_not_found' })
+    service.argPathFolder.mockResolvedValueOnce({ ok: false, code: 'folder_missing', reason: 'gone' })
+    expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: false, code: 'folder_missing', reason: 'gone' })
+    expect(dialog.choose).not.toHaveBeenCalled()
   })
 })

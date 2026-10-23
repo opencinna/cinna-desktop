@@ -8,6 +8,7 @@
  */
 
 import { autoRunRefusal, type AutoRunRefusal } from './commandRun'
+import type { ScriptSpec } from './scriptSpec'
 
 export interface UserCommandRunInput {
   chatId: string
@@ -88,6 +89,34 @@ export function homeDisplayPath(path: string, home: string | null | undefined): 
   for (const sep of ['/', '\\']) if (path.startsWith(bare + sep)) return '~' + path.slice(bare.length)
   return path
 }
+
+/** `userCommands:inspect`: what the Run Script window asks before it opens on a command. */
+export interface UserCommandInspectInput {
+  chatId: string
+  messageId: string
+  command: string
+}
+
+/**
+ * The script's parameters, read statically (never by running it). `spec` is
+ * null for anything main will not or cannot read — no script in the command,
+ * a script outside the agent's folder and its pinned skills, a credential
+ * file, one over the size cap, one whose parameters do not parse — and the
+ * window then shows no form. A refusal is the chat or agent being gone.
+ */
+export type UserCommandInspectResult =
+  | { ok: true; spec: ScriptSpec | null; folder: string }
+  | { ok: false; code: Exclude<UserCommandRunFailure, 'needs_review' | 'spawn_failed'>; reason: string }
+
+/**
+ * `userCommands:chooseArgPath`: a path picked in a native open dialog that
+ * starts in the agent's folder — relative to the folder when inside it, else
+ * absolute. `canceled` when the user closed the dialog.
+ */
+export type UserCommandChooseArgPathResult =
+  | { ok: true; path: string }
+  | { ok: true; canceled: true }
+  | { ok: false; code: Exclude<UserCommandRunFailure, 'needs_review' | 'spawn_failed'>; reason: string }
 
 /** Why an output could not be read, attached or removed. */
 export type UserCommandOutputFailure = 'not_found' | 'running' | 'chat_not_found' | 'unreadable'

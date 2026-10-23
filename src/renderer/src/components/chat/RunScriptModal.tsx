@@ -3,14 +3,16 @@ import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Copy, ExternalLink, FileText, FolderOpen, Loader2, Minus, MoreHorizontal, Paperclip, SquareTerminal, X } from 'lucide-react'
 import type { SessionActivityItem } from '../../../../shared/sessionActivity'
-import { homeDisplayPath, type UserCommandEnd, type UserCommandOutputFrame } from '../../../../shared/userCommands'
-import { scriptWord, splitCommandLine } from '../../../../shared/commandRun'
+import { COMMAND_COLUMNS, homeDisplayPath, type UserCommandEnd, type UserCommandOutputFrame } from '../../../../shared/userCommands'
+import { buildCommand, commandScript, editCommand, readCommand, type ScriptForm, type ScriptValues } from '../../../../shared/scriptArgs'
+import type { ScriptSpec } from '../../../../shared/scriptSpec'
 import { useSessionActivity } from '../../hooks/useSessionActivity'
 import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
 import { useRunScriptStore, type RunScriptWindow } from '../../stores/runScript.store'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { usePopover } from '../ui/usePopover'
+import { INFO_TIP_ATTR } from '../settings/SettingsLayout'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { MOD_KEY, resolveKey } from '../../constants/hints'
 import { playCardEntrance, playCardExit, CARD_MOTION } from '../../utils/cardMotion'
@@ -18,6 +20,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { useHomeDir } from '../../utils/userCommands'
 import { CommandTerminal } from './CommandTerminal'
 import { RunScriptCommandLine, commandLineRows, measureCharsPerLine } from './RunScriptCommandLine'
+import { RUN_SCRIPT_POPOVER_ATTR, RunScriptForm } from './RunScriptForm'
 import { formatRunDuration, useCommandOutputAdder, useSecondsNow } from './SessionActivityBadges'
 
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
@@ -35,8 +38,48 @@ const OPEN_PRESS_GUARD_MS = 500
  */
 export const STOP_PRESS_GUARD_MS = 400
 
-/** Marks the window's portaled ⋯ menu, so a press on it is not a press outside the card. */
-const POPOVER_ATTR = 'data-run-script-popover'
+/** Marks the window's portaled ⋯ menu and help tips, so a press on one is not a press outside the card. */
+const POPOVER_ATTR = RUN_SCRIPT_POPOVER_ATTR
+
+/**
+ * What the terminal says before the first run when the script's parameters
+ * were read: its summary and description, dimmed. Null when it has neither.
+ *
+ * The docstring is the script author's text written into a terminal, and an
+ * escape in a Python literal (`\x1b`, `\a`) is a real control character by
+ * now: every C0 control but a line break and a tab, ESC, DEL and the C1
+ * range (`\x9b` is a CSI to xterm) are dropped, so it can only print.
+ */
+export function specHint(spec: ScriptSpec | null): string | null {
+  if (!spec) return null
+  const text = [spec.summary, spec.description].filter((part): part is string => !!part).join('\n\n')
+  // eslint-disable-next-line no-control-regex
+  const printable = text.replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
+  return printable.trim() === '' ? null : printable.replace(/\n/g, '\r\n')
+}
+
+/** The most rows the command line reserves for what the form may add; beyond that it scrolls to the tail. */
+export const FORM_LINE_MAX_ROWS = 3
+
+/**
+ * The line sized at open: the command plus every switch the form could tick
+ * that it does not name yet, so a tick does not hide the flag it added.
+ * Values typed into fields are not counted; the line scrolls to them.
+ */
+export function formSizingLine(spec: ScriptSpec | null, command: string): string {
+  if (!spec) return command
+  const words = new Set(command.split(/\s+/))
+  const extra = spec.params
+    .filter((param) => param.kind === 'switch' && param.flags.length > 0 && !param.flags.some((flag) => words.has(flag)))
+    .map((param) => param.flags[param.flags.length - 1])
+  return extra.length === 0 ? command : `${command} ${extra.join(' ')}`
+}
+
+/** The form's state: the values the line last gave it, and whether the line still names the script. */
+interface FormState {
+  read: ScriptForm | null
+  handEdited: boolean
+}
 
 /** The Commands badge of `chatId`, if it is on screen: the window collapses into it. */
 export function commandsBadgeOf(chatId: string): HTMLElement | null {
@@ -45,10 +88,9 @@ export function commandsBadgeOf(chatId: string): HTMLElement | null {
   return null
 }
 
-/** The script a command runs, as written (`scripts/check.py`), or null. */
+/** The script a command runs, as written (`scripts/check.py`), past any env assignments; null for none. */
 function scriptOf(command: string): string | null {
-  const words = splitCommandLine(command.split('\n')[0].trim())
-  return words ? scriptWord(words) : null
+  return commandScript(command.split('\n')[0])
 }
 
 /** The header's name: the script's file name, else the command's first word. */
@@ -149,13 +191,54 @@ function RunScriptCard({ view, exiting, onExited }: {
   // multi-line block takes Enter as a new line; a long line's rows count its
   // soft wraps, measured once before the first paint.
   const [multiline] = useState(() => view.command.includes('\n'))
-  const [rows, setRows] = useState(() => commandLineRows(view.command))
+  // With a form, room for the switches it could add (at most
+  // FORM_LINE_MAX_ROWS); a longer line scrolls to its tail on a form edit.
+  const sizeRows = (cells?: number): number => {
+    const own = commandLineRows(view.command, cells)
+    const withForm = commandLineRows(formSizingLine(view.spec, view.command), cells)
+    return Math.max(own, Math.min(withForm, FORM_LINE_MAX_ROWS))
+  }
+  const [rows, setRows] = useState(() => sizeRows())
   useLayoutEffect(() => {
     const cells = measureCharsPerLine(lineRef.current)
-    if (cells !== null) setRows(commandLineRows(view.command, cells))
+    if (cells !== null) setRows(sizeRows(cells))
     // Once per open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // The form follows the line: a line edit re-reads it, a form edit rewrites
+  // the line after the script word. Neither ever changes the form's rows.
+  const spec = view.spec
+  const [form, setForm] = useState<FormState>(() => {
+    const read = spec ? readCommand(spec, view.command) : null
+    return { read, handEdited: read === null }
+  })
+  const onLineChange = (text: string): void => {
+    setCommand(text)
+    if (!spec) return
+    const read = readCommand(spec, text)
+    setForm((prev) => (read ? { read, handEdited: false } : { read: prev.read, handEdited: true }))
+  }
+  const onFormChange = (values: ScriptValues, other: string): void => {
+    if (!spec || !form.read || form.handEdited) return
+    // Only the edited parameter's words change, in place; the whole line in
+    // spec order only when an edit in place would not read back. The rebuilt
+    // line may not read back either (a free word taken as the optional
+    // positional), so the form shows what the line says, never what was typed.
+    const inPlace = editCommand(spec, command, values, other)
+    const next = inPlace ?? buildCommand(form.read.prefix, spec, values, other)
+    const read: ScriptForm = inPlace !== null ? { ...form.read, values, other } : readCommand(spec, next) ?? { ...form.read, values, other }
+    setForm({ read, handEdited: inPlace === null && readCommand(spec, next) === null })
+    setCommand(next)
+    // A word added at the end may have wrapped below the field's rows: bring it into view.
+    if (next.length > command.length && next.startsWith(command)) tailPending.current = true
+  }
+  const tailPending = useRef(false)
+  useLayoutEffect(() => {
+    if (!tailPending.current) return
+    tailPending.current = false
+    const field = lineRef.current
+    if (field) field.scrollTop = field.scrollHeight
+  }, [command])
   const [facts, setFacts] = useState<Record<string, RunFacts>>({})
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -225,15 +308,18 @@ function RunScriptCard({ view, exiting, onExited }: {
   useEffect(() => {
     if (exiting) return
     const previewOpen = (): boolean => useFilePreviewStore.getState().target !== null
+    // A parameter's (?) tip is portaled to <body>: open, it takes Escape and
+    // its own presses, and the window is not "outside" it.
+    const tipOpen = (): boolean => document.querySelector(`[${INFO_TIP_ATTR}]`) !== null
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || previewOpen()) return
+      if (event.key !== 'Escape' || previewOpen() || tipOpen()) return
       event.preventDefault()
       close('close')
     }
     const onMouse = (event: MouseEvent): void => {
       const target = event.target as Element
       if (!cardRef.current || cardRef.current.contains(target)) return
-      if (target.closest?.(`[${POPOVER_ATTR}]`) || previewOpen()) return
+      if (target.closest?.(`[${POPOVER_ATTR}]`) || target.closest?.(`[${INFO_TIP_ATTR}]`) || previewOpen()) return
       if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
       event.preventDefault()
       close('close')
@@ -276,7 +362,7 @@ function RunScriptCard({ view, exiting, onExited }: {
     if (pending || running || exiting) return
     startedHere.current = true
     setActionError(null)
-    void start(command, background, columns.current ?? 120, fallbackMessageId())
+    void start(command, background, columns.current ?? COMMAND_COLUMNS.default, fallbackMessageId())
   }
 
   const script = scriptOf(view.command)
@@ -378,7 +464,7 @@ function RunScriptCard({ view, exiting, onExited }: {
             <X size={14} aria-hidden />
           </button>
         </div>
-        {/* A row, so a fixed-width sidebar can join the terminal later without moving it. */}
+        {/* A row: the parameters' fixed-width sidebar, when the script has one, is there from the open. */}
         <div className="flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             <CommandTerminal
@@ -386,10 +472,34 @@ function RunScriptCard({ view, exiting, onExited }: {
               itemId={itemId}
               runNumber={view.runs.length}
               onFrame={onFrame}
-              idleHint={`Press Run (${multiline ? resolveKey(MOD_KEY) : ''}↩) to start.`}
+              idleHint={specHint(spec) ?? `Press Run (${multiline ? resolveKey(MOD_KEY) : ''}↩) to start.`}
               onColumns={(cols) => { columns.current = cols }}
             />
           </div>
+          {spec && (
+            <RunScriptForm
+              spec={spec}
+              values={form.read?.values ?? {}}
+              other={form.read?.other ?? ''}
+              readOnly={running || pending !== null}
+              handEdited={form.handEdited}
+              scriptName={title}
+              onChange={onFormChange}
+              onChoosePath={async () => {
+                const messageId = view.messageId ?? fallbackMessageId()
+                if (!messageId) return null
+                try {
+                  const result = await window.api.userCommands.chooseArgPath(chatId, messageId)
+                  if (!result.ok) { setActionError(result.reason); return null }
+                  setActionError(null)
+                  return 'canceled' in result ? null : result.path
+                } catch (err) {
+                  setActionError(unwrapIpcError(err, 'The path could not be chosen.'))
+                  return null
+                }
+              }}
+            />
+          )}
         </div>
         <div className="shrink-0 space-y-1.5 border-t border-[var(--color-border)] px-4 py-2.5">
           {/* Only when something was refused, above the line: it closes nothing and moves the line not at all. */}
@@ -399,7 +509,7 @@ function RunScriptCard({ view, exiting, onExited }: {
             <RunScriptCommandLine
               ref={lineRef}
               value={command}
-              onChange={setCommand}
+              onChange={onLineChange}
               rows={rows}
               multiline={multiline}
               readOnly={running || pending !== null}

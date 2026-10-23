@@ -4,12 +4,17 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { visibleChat } from '../auth/chatScope'
 import { userCommandService } from '../services/userCommands'
+import { relativeArgPath } from '../services/userCommands/userCommandService'
+import { chooseArgPathDialog } from '../host/desktop/argPathDialog'
 import { pathGuard } from '../services/pathGuard'
 import { ipcHandle } from './_wrap'
 import {
   USER_COMMAND_RUN_REASONS,
   userCommandOutputRefusal,
+  type UserCommandChooseArgPathResult,
   type UserCommandDismissResult,
+  type UserCommandInspectInput,
+  type UserCommandInspectResult,
   type UserCommandOutputFileResult,
   type UserCommandOutputTextResult,
   type UserCommandRunInput,
@@ -42,6 +47,29 @@ export function registerUserCommandHandlers(): void {
       reviewed: payload.reviewed === true,
       ...(typeof payload.columns === 'number' ? { columns: payload.columns } : {})
     })
+  })
+
+  // The script's parameters, read from its source in core; never by running it.
+  ipcHandle('userCommands:inspect', async (_event, input: unknown): Promise<UserCommandInspectResult> => {
+    userActivation.requireActivated()
+    const payload = (input ?? {}) as Partial<UserCommandInspectInput>
+    if (!liveChat(payload.chatId)) return { ok: false, code: 'chat_not_found', reason: USER_COMMAND_RUN_REASONS.chat_not_found }
+    return userCommandService.inspect(getProfileScopeUserId(), {
+      chatId: payload.chatId as string,
+      messageId: typeof payload.messageId === 'string' ? payload.messageId : '',
+      command: typeof payload.command === 'string' ? payload.command : ''
+    })
+  })
+
+  // The form's Choose…: core names the agent's folder, the desktop host asks,
+  // core writes the choice relative to the folder when it is inside it.
+  ipcHandle('userCommands:chooseArgPath', async (event, chatId: unknown, messageId: unknown): Promise<UserCommandChooseArgPathResult> => {
+    userActivation.requireActivated()
+    if (!liveChat(chatId)) return { ok: false, code: 'chat_not_found', reason: USER_COMMAND_RUN_REASONS.chat_not_found }
+    const at = await userCommandService.argPathFolder(getProfileScopeUserId(), chatId, typeof messageId === 'string' ? messageId : '')
+    if (!at.ok) return at
+    const chosen = await chooseArgPathDialog(event.sender, at.folder)
+    return chosen === null ? { ok: true, canceled: true } : { ok: true, path: relativeArgPath(at.folder, chosen) }
   })
 
   // The home folder, so the renderer shortens a folder to `~/…` as main does.

@@ -17,9 +17,27 @@
  * not parse.
  */
 export function splitCommandLine(line: string): string[] | null {
+  const spans = splitCommandSpans(line)
+  return spans ? spans.map((span) => span.word) : null
+}
+
+/** A word of a command line and where it is in the text: `start` inclusive, `end` exclusive. */
+export interface CommandWordSpan {
+  word: string
+  start: number
+  end: number
+}
+
+/**
+ * {@link splitCommandLine} with each word's place in `line`, so a caller can
+ * keep the text up to a word verbatim (the Run Script form rebuilds only what
+ * follows the script). Null exactly where `splitCommandLine` is.
+ */
+export function splitCommandSpans(line: string): CommandWordSpan[] | null {
   if (/[\0-\x08\x0a-\x1f\x7f`]/.test(line)) return null
-  const words: string[] = []
+  const words: CommandWordSpan[] = []
   let word = ''
+  let start = 0
   let inWord = false
   let quote: "'" | '"' | null = null
   for (let i = 0; i < line.length; i++) {
@@ -37,12 +55,13 @@ export function splitCommandLine(line: string): string[] | null {
       continue
     }
     if (ch === ' ' || ch === '\t') {
-      if (inWord) { words.push(word); word = ''; inWord = false }
+      if (inWord) { words.push({ word, start, end: i }); word = ''; inWord = false }
       continue
     }
     if (';&|<>()*?[{~^'.includes(ch)) return null
     // `#` starts a comment, and `=` expands a command path in zsh, at the start of a word.
     if (!inWord && (ch === '#' || ch === '=')) return null
+    if (!inWord) start = i
     inWord = true
     if (ch === "'" || ch === '"') { quote = ch; continue }
     if (ch === '\\') {
@@ -53,8 +72,18 @@ export function splitCommandLine(line: string): string[] | null {
     word += ch
   }
   if (quote !== null) return null
-  if (inWord) words.push(word)
+  if (inWord) words.push({ word, start, end: line.length })
   return words
+}
+
+/**
+ * A word as the shell reads it back: bare when it holds only characters no
+ * shell treats specially, else in single quotes (a `'` inside as `'\''`).
+ * {@link splitCommandLine} reads every result back as the one word given.
+ */
+export function shellQuote(word: string): string {
+  if (/^[A-Za-z0-9_@%+:,./-]+$/.test(word)) return word
+  return `'${word.replace(/'/g, `'\\''`)}'`
 }
 
 export const INTERPRETERS: ReadonlySet<string> = new Set(['python', 'python3', 'node', 'bash', 'sh'])
@@ -67,24 +96,28 @@ export const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 /** The script word of `[interpreter] script args…`, or null when the line is not that form. */
 export function scriptWord(words: string[]): string | null {
+  const at = scriptWordIndex(words)
+  return at === null ? null : words[at]
+}
+
+/** Where {@link scriptWord} is in `words`, or null when the line is not that form. */
+export function scriptWordIndex(words: string[]): number | null {
   const [first] = words
   if (first === undefined) return null
-  if (INTERPRETERS.has(first)) {
-    const script = words[1]
-    return script !== undefined && !script.startsWith('-') && script !== '' ? script : null
+  const named = (at: number): number | null => {
+    const script = words[at]
+    return script !== undefined && !script.startsWith('-') && script !== '' ? at : null
   }
+  if (INTERPRETERS.has(first)) return named(1)
   if (first === 'uv') {
     if (words[1] !== 'run') return null
     let i = 2
     while (i < words.length && UV_RUN_FLAGS.has(words[i])) i++
     const next = words[i]
-    if (next === 'python' || next === 'python3') {
-      const script = words[i + 1]
-      return script !== undefined && !script.startsWith('-') && script !== '' ? script : null
-    }
-    return next !== undefined && !next.startsWith('-') && next.endsWith('.py') ? next : null
+    if (next === 'python' || next === 'python3') return named(i + 1)
+    return next !== undefined && !next.startsWith('-') && next.endsWith('.py') ? i : null
   }
-  return first.includes('/') ? first : null
+  return first.includes('/') ? 0 : null
 }
 
 /* ------------------------------------------------- read-only option tables */

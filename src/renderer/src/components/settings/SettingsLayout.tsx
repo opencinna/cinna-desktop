@@ -192,25 +192,47 @@ export function SettingsToggleRow({
           {label}
         </SettingsLabel>
       </div>
-      <button
-        id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={onToggle}
-        title={title}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-          checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-      >
-        <div
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'left-[18px]' : 'left-0.5'
-          }`}
-        />
-      </button>
+      <SettingsSwitch id={id} checked={checked} disabled={disabled} onToggle={onToggle} title={title} />
     </SettingsRow>
+  )
+}
+
+/**
+ * The app's toggle switch (the Toggle Switch Pattern): a `role="switch"`
+ * button, named by the `<label htmlFor={id}>` beside it.
+ */
+export function SettingsSwitch({
+  id,
+  checked,
+  disabled = false,
+  onToggle,
+  title
+}: {
+  id: string
+  checked: boolean
+  disabled?: boolean
+  onToggle: () => void
+  title?: string
+}): React.JSX.Element {
+  return (
+    <button
+      id={id}
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onToggle}
+      title={title}
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+        checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+      } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+    >
+      <div
+        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+          checked ? 'left-[18px]' : 'left-0.5'
+        }`}
+      />
+    </button>
   )
 }
 
@@ -499,6 +521,14 @@ export function useDialogChrome({
 }
 
 /**
+ * Marks an open {@link SettingsInfoTip}'s popover. It is portaled to `<body>`
+ * outside a `<dialog>`, so a modal built of plain elements (the Run Script
+ * window) checks for it: a press on it is not a press outside, and Escape
+ * while it is open is the tip's.
+ */
+export const INFO_TIP_ATTR = 'data-info-tip'
+
+/**
  * The `(?)` beside a section title or a control's label, and the paragraph
  * behind it. {@link SettingsSection} takes one through `info`, and so does
  * {@link SettingsLabel}, which is the common case.
@@ -570,6 +600,7 @@ export function SettingsInfoTip({
             role="dialog"
             aria-label={label}
             style={popover.style}
+            {...{ [INFO_TIP_ATTR]: '' }}
             className="app-popover-surface z-50 w-[22rem] max-w-[calc(100vw-2rem)] space-y-2 rounded-lg
               border border-[var(--color-border)] p-3 text-[13px] leading-relaxed
               text-[var(--color-text-secondary)] shadow-xl"

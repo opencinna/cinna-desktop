@@ -90,7 +90,7 @@ describe('the Commands badge', () => {
   })
 
   it('closes the Run Script window when the run it shows is removed, and only then', async () => {
-    useRunScriptStore.getState().openForRun('chat-1', { id: 'c1', title: 'ls c1', agentId: 'folder:a', detail: '~/agents/a' })
+    void useRunScriptStore.getState().openForRun('chat-1', { id: 'c1', title: 'ls c1', agentId: 'folder:a', detail: '~/agents/a' })
     render(<CommandsBadge chatId="chat-1" items={[command('c1', { state: 'completed', endedAt: T0 })]} stop={stop} />)
     fireEvent.click(badge()!)
     fireEvent.click(screen.getByRole('button', { name: 'Remove ls c1' }))
@@ -98,7 +98,7 @@ describe('the Commands badge', () => {
   })
 
   it('keeps the window on another run of the chat when one is removed', async () => {
-    useRunScriptStore.getState().openForRun('chat-1', { id: 'c2', title: 'ls c2', agentId: 'folder:a', detail: '~/agents/a' })
+    void useRunScriptStore.getState().openForRun('chat-1', { id: 'c2', title: 'ls c2', agentId: 'folder:a', detail: '~/agents/a' })
     render(<CommandsBadge chatId="chat-1" items={[command('c1', { state: 'completed', endedAt: T0 })]} stop={stop} />)
     fireEvent.click(badge()!)
     fireEvent.click(screen.getByRole('button', { name: 'Remove ls c1' }))

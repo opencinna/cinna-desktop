@@ -1,12 +1,19 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionActivityHub } from '../sessionActivityHub'
 import { stopSessionActivity } from '../sessionActivityStop'
-import { createUserCommandService, displayPath, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
+import { createUserCommandService, displayPath, relativeArgPath, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
 import { USER_COMMAND_RUN_REASONS, type UserCommandOutputFrame } from '../../../shared/userCommands'
-import { OWN_COMMAND_REASONS } from '../localAgents/ownCommandPolicy'
+import { OWN_COMMAND_REASONS, readableOwnScript } from '../localAgents/ownCommandPolicy'
+
+// The real check, unless a test stands in for a file swapped after it.
+vi.mock('../localAgents/ownCommandPolicy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../localAgents/ownCommandPolicy')>()
+  return { ...actual, readableOwnScript: vi.fn(actual.readableOwnScript) }
+})
 
 /**
  * The user command service against real processes (`/bin/sh`) in a real
@@ -434,5 +441,145 @@ describe('sweep', () => {
     file(join(userData, 'command-runs', 'old-chat', 'cmd-old.log'))
     w.service.sweep()
     expect(existsSync(join(userData, 'command-runs'))).toBe(false)
+  })
+})
+
+describe('inspect: a script\'s parameters, read and never run', () => {
+  const REPORT = (flag: string): string => `"""Report a scope."""
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("scope")
+p.add_argument("${flag}", action="store_true")
+p.parse_args()
+`
+  const inspect = (w: World, command: string, messageId = 'msg-1') =>
+    w.service.inspect('profile', { chatId: 'chat-1', messageId, command })
+
+  beforeAll(() => {
+    file(join(folder, 'scripts', 'report.py'), REPORT('--apply'))
+    file(join(folder, 'credentials', 'tool.py'), REPORT('--apply'))
+    file(join(folder, 'scripts', 'deploy.env'), REPORT('--apply'))
+    file(join(base, 'outside', 'evil.py'), REPORT('--apply'))
+    file(join(base, 'skills', 'pinned', 'scripts', 'skill.py'), REPORT('--apply'))
+    symlinkSync(join(base, 'outside', 'evil.py'), join(folder, 'scripts', 'escape.py'))
+    file(join(folder, 'scripts', 'big.py'), REPORT('--apply') + '#'.repeat(512 * 1024))
+  })
+
+  it('reads an own script\'s spec, named as the command wrote it, with env assignments and uv run before it', async () => {
+    const w = world()
+    const result = await inspect(w, 'DEBUG=1 uv run scripts/report.py italy --apply')
+    expect(result).toMatchObject({ ok: true, folder: displayPath(folder) })
+    if (!result.ok) return
+    expect(result.spec).toMatchObject({ script: 'scripts/report.py', summary: 'Report a scope.' })
+    expect(result.spec!.params.map((param) => param.id)).toEqual(['scope', 'apply'])
+  })
+
+  it('reads a pinned skill\'s script', async () => {
+    const w = world()
+    w.state.workspace = { folder, scriptRoots: [join(base, 'skills', 'pinned')] }
+    const result = await inspect(w, `python3 ${join(base, 'skills', 'pinned', 'scripts', 'skill.py')} x`)
+    expect(result.ok && result.spec?.params.length).toBe(2)
+  })
+
+  it.each([
+    ['outside the folder', 'python3 OUTSIDE/evil.py'],
+    ['outside through a symlink', 'python3 scripts/escape.py'],
+    ['outside through ..', 'python3 ../outside/evil.py'],
+    ['a credential file', 'python3 credentials/tool.py'],
+    ['a secret-looking name', 'python3 scripts/deploy.env'],
+    ['too big', 'python3 scripts/big.py'],
+    ['missing', 'python3 scripts/none.py'],
+    ['not a script command', 'ls -la'],
+    ['a pipe', 'python3 scripts/report.py | head'],
+    ['a block', 'python3 scripts/report.py\nls']
+  ])('has no spec for a script %s', async (_name, command) => {
+    const result = await inspect(world(), command.replace('OUTSIDE', join(base, 'outside')))
+    expect(result).toMatchObject({ ok: true, spec: null })
+  })
+
+  it('refuses as data for a chat, message or folder that is not there, and never throws', async () => {
+    const w = world()
+    expect(await w.service.inspect('profile', { chatId: 'nope', messageId: 'msg-1', command: 'python3 scripts/report.py' }))
+      .toMatchObject({ ok: false, code: 'chat_not_found' })
+    w.state.workspace = 'missing'
+    expect(await inspect(w, 'python3 scripts/report.py')).toMatchObject({ ok: false, code: 'folder_missing' })
+    w.state.workspace = null
+    expect(await inspect(w, 'python3 scripts/report.py')).toMatchObject({ ok: false, code: 'not_local' })
+    expect(await w.service.inspect('profile', null as never)).toMatchObject({ ok: false, code: 'chat_not_found' })
+  })
+
+  it('caches by real path, mtime and size: a change the cache cannot see is not read, a new mtime is', async () => {
+    const w = world()
+    const path = join(folder, 'scripts', 'cached.py')
+    file(path, REPORT('--apply'))
+    const fixed = new Date('2026-01-01T00:00:00Z')
+    utimesSync(path, fixed, fixed)
+    const first = await inspect(w, 'python3 scripts/cached.py')
+    expect(first.ok && first.spec?.params[1].id).toBe('apply')
+    // Same size and mtime: the cached spec is answered.
+    writeFileSync(path, REPORT('--force'))
+    utimesSync(path, fixed, fixed)
+    const cached = await inspect(w, 'python3 scripts/cached.py')
+    expect(cached.ok && cached.spec?.params[1].id).toBe('apply')
+    const later = new Date('2026-01-02T00:00:00Z')
+    utimesSync(path, later, later)
+    const fresh = await inspect(w, 'python3 scripts/cached.py')
+    expect(fresh.ok && fresh.spec?.params[1].id).toBe('force')
+  })
+})
+
+describe('inspect: the file read is the file checked', () => {
+  const REPORT = 'import argparse\np = argparse.ArgumentParser()\np.add_argument("--apply", action="store_true")\np.parse_args()\n'
+  const inspect = (w: World, command: string) => w.service.inspect('profile', { chatId: 'chat-1', messageId: 'msg-1', command })
+
+  beforeAll(() => {
+    file(join(base, 'outside', 'swap-target.py'), REPORT)
+    symlinkSync(join(base, 'outside', 'swap-target.py'), join(folder, 'scripts', 'swapped.py'))
+    execFileSync('mkfifo', [join(folder, 'scripts', 'pipe.py')])
+    file(join(folder, 'scripts', 'usage.py'), '"""Tool.\n\nUsage: usage.py <scope> [--apply]\n"""\nimport sys\n')
+    symlinkSync(join(folder, 'scripts', 'usage.py'), join(folder, 'scripts', 'alias.py'))
+  })
+
+  it('has no spec when the checked path is a symlink by the time it is opened', async () => {
+    // As if `scripts/swapped.py` had been a file inside the folder when it was checked.
+    const target = statSync(join(base, 'outside', 'swap-target.py'))
+    vi.mocked(readableOwnScript).mockReturnValueOnce({ real: join(folder, 'scripts', 'swapped.py'), dev: target.dev, ino: target.ino })
+    expect(await inspect(world(), 'python3 scripts/swapped.py')).toMatchObject({ ok: true, spec: null })
+  })
+
+  it('has no spec, and does not block, when a FIFO is at the checked path', async () => {
+    const pipe = statSync(join(folder, 'scripts', 'pipe.py'))
+    vi.mocked(readableOwnScript).mockReturnValueOnce({ real: join(folder, 'scripts', 'pipe.py'), dev: pipe.dev, ino: pipe.ino })
+    expect(await inspect(world(), 'python3 scripts/pipe.py')).toMatchObject({ ok: true, spec: null })
+  })
+
+  it('has no spec when the file opened is not the file the policy judged (a parent swapped for a symlink)', async () => {
+    const path = join(folder, 'scripts', 'judged.py')
+    file(path, REPORT)
+    const real = statSync(path)
+    // The policy judged some other file at this path; whatever is there now is read by nobody.
+    vi.mocked(readableOwnScript).mockReturnValueOnce({ real: path, dev: real.dev, ino: real.ino + 1 })
+    expect(await inspect(world(), 'python3 scripts/judged.py')).toMatchObject({ ok: true, spec: null })
+    // The same file, judged as itself, reads.
+    const read = await inspect(world(), 'python3 scripts/judged.py')
+    expect(read.ok && read.spec?.params.map((param) => param.id)).toEqual(['apply'])
+  })
+
+  it('caches by the name the command gives the script too: a Usage line names one of them', async () => {
+    const w = world()
+    // The same file by another name: its Usage line does not name alias.py.
+    expect(await inspect(w, 'python3 scripts/alias.py x')).toMatchObject({ ok: true, spec: null })
+    const named = await inspect(w, 'python3 scripts/usage.py x')
+    expect(named.ok && named.spec?.params.map((param) => param.id)).toEqual(['scope', 'apply'])
+  })
+})
+
+describe('relativeArgPath', () => {
+  it('writes a chosen path relative to the folder when inside it, else as chosen', () => {
+    expect(relativeArgPath(folder, join(folder, 'notes', 'a.txt'))).toBe(join('notes', 'a.txt'))
+    expect(relativeArgPath(folder, folder)).toBe('.')
+    expect(relativeArgPath(folder, join(base, 'outside', 'evil.sh'))).toBe(join(base, 'outside', 'evil.sh'))
+    // A path that reaches outside through a symlink is outside.
+    expect(relativeArgPath(folder, join(folder, 'linked', 'evil.sh'))).toBe(join(folder, 'linked', 'evil.sh'))
   })
 })
