@@ -48,6 +48,7 @@ import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from '
 import { codexEffortForComplexity, codexEffortForRuntime, declaredEffort, ENGINE_LOGIN_NAMES, isAgentEngine, isEngineLoginId, type AgentEngine, type EngineLoginId } from '../../../shared/engine'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { EngineLogin } from './acp/engineLogin'
+import { installClaudeAuthFollowWith } from './acp/claudeAuthFollow'
 import { pendingRequests } from './pendingRequests'
 import { runtimeService } from '../../services/localAgents/runtimeService'
 import { defaultEngineService } from '../../services/localAgents/defaultEngineService'
@@ -254,34 +255,23 @@ async function claudeChildEnv(apiKey: ClaudeApiKeyEnv | null): Promise<Record<st
 }
 
 /**
- * **An auth change retires idle Claude processes.** A process froze its
- * environment — and so its key or login — at start. Switching Subscription /
- * API Token, picking another credential, or a key saved, removed or rotated by
- * an account sync moves `claudeAuthService`'s fingerprint; every idle Claude
- * process started under another one is stopped now, rather than serving the
- * next turn on the old account. One with a turn or background work running is
- * left to finish: the next acquire replaces it, because its environment (and so
- * its spec key) moved. The login probe forgets its answer too. Returns the
- * unsubscribe; installed by `hub/core.ts`.
+ * Follow a change to how Claude signs in: retire idle processes on another
+ * account, forget the login answer, and cancel a waiting `claude` login when
+ * API Token is chosen (`acp/claudeAuthFollow.ts`). Returns the unsubscribe;
+ * installed by `hub/core.ts`.
  */
 export function installClaudeAuthFollow(): () => void {
-  // No remembered "last" fingerprint: nothing is decrypted at install, and the
-  // pool compares each process with the current one, so a change that did not
-  // move it stops nothing.
-  const follow = (): void => {
-    const current = claudeAuthService.fingerprint()
-    claudeAuthProbe.invalidate()
-    const stopped = acpProcessPool.retireStaleAuth?.(current) ?? []
-    if (stopped.length > 0) logger.info('Claude auth changed; idle processes retired', { mode: claudeAuthService.mode(), retired: stopped.length })
-  }
-  const off = [
-    appSettingsService.onSaved('claudeAuthMode', follow),
-    appSettingsService.onSaved('claudeApiCredentialId', follow),
-    // The Default AI credential is what an automatic pick prefers.
-    appSettingsService.onSaved('localAgentsDefaultCredentialId', follow),
-    onAiCredentialsChanged(follow)
-  ]
-  return () => { for (const unsubscribe of off) unsubscribe() }
+  return installClaudeAuthFollowWith({
+    onSaved: (key, listener) => appSettingsService.onSaved(key, listener),
+    onCredentialsChanged: onAiCredentialsChanged,
+    mode: () => claudeAuthService.mode(),
+    fingerprint: () => claudeAuthService.fingerprint(),
+    invalidateLoginAnswer: () => claudeAuthProbe.invalidate(),
+    retireStaleAuth: (current) => acpProcessPool.retireStaleAuth?.(current) ?? [],
+    // Read at call time: `engineLogins` is declared further down this module.
+    login: { running: () => engineLogins.claude.running(), cancel: () => engineLogins.claude.cancel() },
+    log: (message, fields) => logger.info(message, fields)
+  })
 }
 
 

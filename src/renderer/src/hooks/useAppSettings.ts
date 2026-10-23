@@ -138,6 +138,14 @@ export function useSetAppSetting() {
         queryClient.invalidateQueries({ queryKey: ['runtime-model-catalog'] })
         queryClient.invalidateQueries({ queryKey: ['runtime-model-catalog-refresh'] })
       }
+      // Choosing API Token cancels a waiting `claude` login in main
+      // (`claudeAuthFollow`); re-read the running flag now rather than at the
+      // next poll, so Cancel and "Waiting for sign-in…" go on every surface.
+      // While the child is still exiting the answer stays `waiting`, and the
+      // query's own poll carries it to null.
+      if (input.key === 'claudeAuthMode') {
+        queryClient.invalidateQueries({ queryKey: ['engine-login-running'] })
+      }
     }
   })
 }

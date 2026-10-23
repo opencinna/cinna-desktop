@@ -188,14 +188,14 @@ test('@live one agent processes a task started from the task page', async ({ cin
     await tasksButton(cinna).click()
     await showTasksLayout(cinna.page, 'List')
     await cinna.page.getByRole('region', { name: 'Done', exact: true })
-      .getByRole('button', { name: `${title} — Done`, exact: true }).click()
+      .getByRole('button', { name: new RegExp(`^${title} — Done(, in .+)?$`) }).click()
     await expect(cinna.page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()
     await expect(detailValue(cinna, 'Status')).toHaveText('Done')
     await expect(cinna.page.getByRole('status')).toHaveCount(0)
     await cinna.page.getByRole('button', { name: 'Back to Tasks', exact: true }).click()
     await cinna.page.getByRole('group', { name: 'Tasks layout' }).getByRole('button', { name: 'Board', exact: true }).click()
     await expect(
-      cinna.page.locator('[data-board-column="closed"]').getByRole('button', { name: `${title} — Done`, exact: true })
+      cinna.page.locator('[data-board-column="closed"]').getByRole('button', { name: new RegExp(`^${title} — Done(, in .+)?$`) })
     ).toBeVisible()
   })
 

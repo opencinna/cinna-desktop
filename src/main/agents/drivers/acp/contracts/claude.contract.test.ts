@@ -535,7 +535,7 @@ async function denyScenario(binary: string, trap: EgressTrap): Promise<void> {
 /* -------------------------------------------------------------- scenario F */
 
 /** What one API-mode session observed. Kept out of the snapshot, like scenarios C and D. */
-type ScrubProbe = 'auto' | 'printenv' | 'bash' | 'write'
+type ScrubProbe = 'auto' | 'printenv' | 'bash' | 'write' | 'mcp'
 
 interface ScrubRun {
   error: unknown
@@ -553,6 +553,10 @@ interface ScrubRun {
   results: Record<ScrubProbe, string>
   /** Whether the dummy key appears anywhere in what the printenv probe returned. */
   keyInPrintenv: boolean
+  /** Whether the dummy key appears anywhere in what the stdio MCP server's tool returned (its whole environment). */
+  keyInMcp: boolean
+  /** The command line of the stdio MCP server's parent process, as `ps` reports it — who spawned it. */
+  mcpParent: string | null
   /** The contents of the files the Bash and Write probes made in the session cwd, or null. */
   bashFile: string | null
   writeFile: string | null
@@ -561,6 +565,45 @@ interface ScrubRun {
 const SCRUB_BASH_TEXT = 'CONTRACT_SCRUB_BASH_4c1'
 const SCRUB_WRITE_TEXT = 'CONTRACT_SCRUB_WRITE_4c1'
 const SCRUB_PRINTENV_END = 'CONTRACT_SCRUB_PRINTENV_DONE'
+const SCRUB_MCP_SERVER = 'scrubprobe'
+const SCRUB_MCP_TOOL = 'env_probe'
+const SCRUB_MCP_END = 'CONTRACT_SCRUB_MCP_DONE'
+
+/**
+ * A stdio MCP server with no dependencies: newline-delimited JSON-RPC, one tool
+ * that returns its own `ANTHROPIC_API_KEY` (or `ABSENT`), its whole environment,
+ * and its parent's command line — the process that spawned it.
+ */
+const SCRUB_MCP_SCRIPT = `'use strict'
+const { execFileSync } = require('node:child_process')
+let parent = 'unknown'
+try { parent = execFileSync('/bin/ps', ['-o', 'command=', '-p', String(process.ppid)], { encoding: 'utf8' }).trim() } catch {}
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n')
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  let newline
+  while ((newline = buffer.indexOf('\\n')) >= 0) {
+    const line = buffer.slice(0, newline).trim()
+    buffer = buffer.slice(newline + 1)
+    if (!line) continue
+    let request
+    try { request = JSON.parse(line) } catch { continue }
+    if (request.id === undefined) continue
+    if (request.method === 'initialize') {
+      send({ id: request.id, result: { protocolVersion: request.params?.protocolVersion ?? '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: '${SCRUB_MCP_SERVER}', version: '1' } } })
+    } else if (request.method === 'tools/list') {
+      send({ id: request.id, result: { tools: [{ name: '${SCRUB_MCP_TOOL}', description: 'Report this server process environment.', inputSchema: { type: 'object', properties: {} } }] } })
+    } else if (request.method === 'tools/call') {
+      const text = 'KEY=' + (process.env.ANTHROPIC_API_KEY ?? 'ABSENT') + '\\nPARENT=' + parent + '\\nENV=' + JSON.stringify(process.env) + '\\n${SCRUB_MCP_END}'
+      send({ id: request.id, result: { content: [{ type: 'text', text }] } })
+    } else {
+      send({ id: request.id, result: {} })
+    }
+  }
+})
+`
 
 /**
  * A folder session on **API mode's environment, built by `buildClaudeEnv`**
@@ -576,7 +619,8 @@ const SCRUB_PRINTENV_END = 'CONTRACT_SCRUB_PRINTENV_DONE'
  */
 async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): Promise<ScrubRun> {
   const observed: ScrubRun = { error: null, scrubbed: false, setModes: {},
-    asks: { auto: 0, printenv: 0, bash: 0, write: 0 }, results: { auto: '', printenv: '', bash: '', write: '' }, keyInPrintenv: false, bashFile: null, writeFile: null }
+    asks: { auto: 0, printenv: 0, bash: 0, write: 0, mcp: 0 }, results: { auto: '', printenv: '', bash: '', write: '', mcp: '' },
+    keyInPrintenv: false, keyInMcp: false, mcpParent: null, bashFile: null, writeFile: null }
   let provider: FakeAnthropic | undefined
   let connection: AdapterConnection | undefined
   let script: ClaudeProviderReply[] = []
@@ -599,7 +643,12 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
         return optionId ? { outcome: { outcome: 'selected', optionId } } : undefined
       } })
     await connection.rpc('initialize', initParams)
-    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+    // A stdio MCP server as an ACP descriptor, with no `env` of its own: whatever
+    // it holds, it inherited from whoever spawned it.
+    const mcpScript = join(scratch.home, 'scrub-mcp-server.cjs')
+    writeFileSync(mcpScript, SCRUB_MCP_SCRIPT)
+    const stdioMcp = { name: SCRUB_MCP_SERVER, command: process.execPath, args: [mcpScript], env: [] }
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [stdioMcp], _meta: { claudeCode: { options: {
       systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {} } } } }, 60_000)
     const sessionId = String(created.result?.sessionId ?? '')
     if (!sessionId) { observed.error = created.error ?? 'no session'; return observed }
@@ -628,6 +677,9 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
     const writeFile = join(scratch.cwd, 'made-by-write.txt')
     await probe('write', { kind: 'tool', name: 'Write', input: { file_path: writeFile, content: `${SCRUB_WRITE_TEXT}\n` } }, 'Write a file.')
     observed.writeFile = existsSync(writeFile) ? readFileSync(writeFile, 'utf8') : null
+    await probe('mcp', { kind: 'tool', name: `mcp__${SCRUB_MCP_SERVER}__${SCRUB_MCP_TOOL}`, input: {} }, 'Call the environment probe.')
+    observed.keyInMcp = observed.results.mcp.includes(dummyKey)
+    observed.mcpParent = /^PARENT=(.*)$/m.exec(observed.results.mcp)?.[1] ?? null
     return observed
   } catch (error) {
     observed.error ??= error instanceof Error ? error.message : String(error)
@@ -788,8 +840,21 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect(on?.asks.auto, `auto mode still asked under the scrub: ${on?.results.auto}`).toBe(0)
     // In `default` the native calls still come to the desktop to answer.
     expect(on?.asks.printenv, 'a Bash call in default mode raised no ACP ask under the scrub').toBe(1)
-    expect(on?.asks).toEqual({ auto: 0, printenv: 1, bash: 1, write: 1 })
+    expect(on?.asks).toMatchObject({ auto: 0, printenv: 1, bash: 1, write: 1 })
     expect(on?.asks).toEqual(seen.scrub.off?.asks)
+  })
+
+  it(entry('claude.launch.subprocess-env-scrub-mcp'), () => {
+    const { on, off } = seen.scrub
+    // Who spawns a stdio MCP server: the CLI (`--mcp-config` from the SDK), not the adapter's node process.
+    expect(off?.mcpParent, `MCP result: ${off?.results.mcp}`).toContain(binary)
+    // The control: without the scrub the MCP server inherits the key.
+    expect(off?.results.mcp, `the control run's MCP tool never answered: ${JSON.stringify(off?.error ?? null)}`).toContain(SCRUB_MCP_END)
+    expect(off?.keyInMcp, 'the control run’s MCP server did not hold the key, so the check below proves nothing').toBe(true)
+    // With it, the same server answers and holds no key.
+    expect(on?.results.mcp, `the scrubbed run's MCP tool never answered: ${JSON.stringify(on?.error ?? null)}`).toContain(SCRUB_MCP_END)
+    expect(on?.mcpParent).toContain(binary)
+    expect(on?.keyInMcp, `the key reached a stdio MCP server under the scrub: ${on?.results.mcp.split('\n')[0]}`).toBe(false)
   })
 
   it(entry('claude.launch.subprocess-env-scrub-tools'), () => {

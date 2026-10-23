@@ -365,7 +365,7 @@ test('@live 1 a third-party brief with no execution field auto-runs on a bare ag
       await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
       await showTasksLayout(cinna.page, 'List')
       await cinna.page.getByRole('region', { name: 'Done', exact: true })
-        .getByRole('button', { name: `${b.title} — Done`, exact: true }).click()
+        .getByRole('button', { name: new RegExp(`^${b.title} — Done(, in .+)?$`) }).click()
       await expect(detailValue(cinna, 'Status')).toHaveText('Done')
       await expect(detailValue(cinna, 'Handover')).toHaveText('Done')
     })

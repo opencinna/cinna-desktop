@@ -66,6 +66,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
   },
   {
+    id: 'claude.launch.subprocess-env-scrub-mcp', area: 'launch & env', surface: 'env var', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (stdio MCP server)',
+    expectation: 'On API mode’s `buildClaudeEnv` environment, a stdio MCP server passed in `session/new` `mcpServers` (no `env` of its own) is spawned by the CLI, and its tool, reporting its own environment, does not contain the key; the same run with the variable removed does (the control).',
+    owners: ['src/main/agents/drivers/acp/claudeEnv.ts#SUBPROCESS_SCRUB_ENV', 'src/main/agents/drivers/acp/claudeEnv.ts#buildClaudeEnv'],
+    feature: 'In API Token mode every stdio MCP server the agent starts — a native folder’s `.mcp.json` ones included — holds the picked Anthropic key.',
+    flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
+  },
+  {
     id: 'claude.launch.subprocess-env-scrub-modes', area: 'launch & env', surface: 'ACP method', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB + session/set_mode',
     expectation: 'Under the scrub — which forces the CLI’s startup permission mode to `default` — `session/set_mode` to `auto` and to `default` are both accepted, and in `default` a native Bash call still raises one ACP `session/request_permission`, as without it.',
     owners: [`${LAUNCHERS}#modeId`, `${DRIVER}#applySetup`],
