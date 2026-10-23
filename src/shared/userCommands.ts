@@ -10,10 +10,23 @@
 import { autoRunRefusal, type AutoRunRefusal } from './commandRun'
 import type { ScriptSpec } from './scriptSpec'
 
-export interface UserCommandRunInput {
+/**
+ * Where a command came from, so main can resolve its agent and folder: a
+ * persisted message of the chat (its agent is the run's agent), or — for a
+ * command built for a file in the file preview, which has no message — the
+ * chat's own agent named by id. Main takes `agentId` only when `messageId` is
+ * absent, and only when it is the chat's agent; `messageId` wins when both
+ * are given.
+ */
+export interface UserCommandSource {
   chatId: string
   /** The persisted message the command was found in; its agent is the run's agent. */
-  messageId: string
+  messageId?: string
+  /** The chat's agent, when there is no message; refused unless it is `chat.agentId`. */
+  agentId?: string
+}
+
+export interface UserCommandRunInput extends UserCommandSource {
   command: string
   /**
    * The user saw the command in the Run Script window and chose to run it: main
@@ -91,9 +104,7 @@ export function homeDisplayPath(path: string, home: string | null | undefined): 
 }
 
 /** `userCommands:inspect`: what the Run Script window asks before it opens on a command. */
-export interface UserCommandInspectInput {
-  chatId: string
-  messageId: string
+export interface UserCommandInspectInput extends UserCommandSource {
   command: string
 }
 
@@ -117,6 +128,33 @@ export type UserCommandChooseArgPathResult =
   | { ok: true; path: string }
   | { ok: true; canceled: true }
   | { ok: false; code: Exclude<UserCommandRunFailure, 'needs_review' | 'spawn_failed'>; reason: string }
+
+/** `userCommands:commandForFile`: the command the file preview's Run… opens the Run Script window on. */
+export interface UserCommandForFileInput extends UserCommandSource {
+  /** The file's absolute path, as the preview's reference holds it. */
+  path: string
+}
+
+/**
+ * The command for a script in the agent's folder (`uv run` / `python3` for
+ * Python, `bash` for a shell script, `./` for an executable with a shebang),
+ * its path relative to the folder; nothing ran. `not_runnable` for a file
+ * main will not build one for: outside the folder by real path, protected
+ * (credentials, secrets, `.cinna`, `.git`), not a regular file, or not a
+ * script it knows how to start.
+ */
+export type UserCommandForFileResult =
+  | { ok: true; command: string; folder: string }
+  | {
+      ok: false
+      code: Exclude<UserCommandRunFailure, 'needs_review' | 'spawn_failed'> | 'not_runnable'
+      reason: string
+    }
+
+export const USER_COMMAND_NOT_RUNNABLE_REASON = 'Cinna doesn\'t know how to run this file as a script.'
+
+/** A `#!` script Cinna would start as `./…` but for its missing execute bit. */
+export const USER_COMMAND_NOT_EXECUTABLE_REASON = 'This script isn\'t executable. Make it executable (chmod +x) to run it here.'
 
 /** Why an output could not be read, attached or removed. */
 export type UserCommandOutputFailure = 'not_found' | 'running' | 'chat_not_found' | 'unreadable'

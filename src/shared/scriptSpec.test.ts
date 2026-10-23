@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseScriptSpec, type ScriptParam, type ScriptSpec } from './scriptSpec'
+import { parseScriptSpec, SCRIPT_SPEC_MAX_BYTES, type ScriptParam, type ScriptSpec } from './scriptSpec'
 
 /**
  * Synthetic scripts, shaped like the ones agents write: an argparse block
@@ -45,6 +45,17 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 `
+
+/**
+ * A hostile source no larger than main reads (512 KB) answers null in under
+ * 200 ms: one parse per timing, so a loaded machine does not sum several.
+ */
+const nullInTime = (source: string, script = 'x.py'): void => {
+  expect(source.length).toBeLessThanOrEqual(SCRIPT_SPEC_MAX_BYTES)
+  const started = performance.now()
+  expect(parseScriptSpec(source, { script })).toBeNull()
+  expect(performance.now() - started).toBeLessThan(200)
+}
 
 const param = (spec: ScriptSpec | null, id: string): ScriptParam => {
   const found = spec?.params.find((candidate) => candidate.id === id)
@@ -493,5 +504,364 @@ describe('parseScriptSpec: bounded on main\'s thread', () => {
     expect(timed(wrap(many)).spec).toBeNull()
     const enough = Array.from({ length: 200 }, (_, i) => `parser.add_argument("--f${i}")`).join('\n')
     expect((timed(wrap(enough)).spec as { params: unknown[] }).params).toHaveLength(200)
+  })
+})
+
+describe('parseScriptSpec: click', () => {
+  const CLICK_PY = `"""Sync the ledger with the bank export."""
+import click
+from pathlib import Path
+
+
+@click.command(help="Sync it")
+@click.argument("export", type=click.Path(exists=True))
+@click.argument("extra", nargs=-1)
+@click.option("--year", type=int, default=2026, help="Fiscal year")
+@click.option("--basis", type=click.Choice(["month", "week"], case_sensitive=False), default="month")
+@click.option("-t", "--tag", multiple=True, help="Repeatable")
+@click.option("-v", "--verbose", count=True)
+@click.option("--apply/--no-apply", default=False, help="Write the corrections")
+@click.option("--cache/--no-cache", "-c/-C", default=True)
+@click.option("--force", is_flag=True)
+@click.option("--secret", hidden=True)
+@click.version_option("1.0")
+@click.pass_context
+def sync(ctx, export, extra, year, basis, tag, verbose, apply, cache, force):
+    """Sync."""
+    click.echo(export)
+
+
+if __name__ == "__main__":
+    sync()
+`
+  const spec = parseScriptSpec(CLICK_PY, { script: 'scripts/sync.py' })
+
+  it('reads the one command\'s stack in declaration order, positionals first', () => {
+    expect(spec!.summary).toBe('Sync the ledger with the bank export.')
+    expect(spec!.params.map((p) => p.id)).toEqual(['export', 'extra', 'year', 'basis', 'tag', 'verbose', 'apply', 'cache', 'force'])
+  })
+
+  it.each<[string, Partial<ScriptParam>]>([
+    ['export', { kind: 'positional', required: true, valueType: 'path', multiple: false }],
+    ['extra', { kind: 'positional', required: false, multiple: true }],
+    ['year', { kind: 'value', flags: ['--year'], valueType: 'year', defaultText: '2026', help: 'Fiscal year' }],
+    ['basis', { kind: 'value', choices: ['month', 'week'], defaultText: 'month' }],
+    ['tag', { kind: 'value', flags: ['-t', '--tag'], multiple: true, repeat: true }],
+    ['verbose', { kind: 'count', flags: ['-v', '--verbose'] }],
+    ['apply', { kind: 'switch', flags: ['--apply'], offFlags: ['--no-apply'], defaultOn: false, writes: true }],
+    ['cache', { kind: 'switch', flags: ['--cache', '-c'], offFlags: ['--no-cache', '-C'], defaultOn: true }],
+    ['force', { kind: 'switch', flags: ['--force'], offFlags: [], defaultOn: false }]
+  ])('%s', (id, expected) => {
+    expect(param(spec, id)).toMatchObject(expected)
+  })
+
+  const wrap = (stack: string, tail = 'if __name__ == "__main__":\n    cli()\n'): string =>
+    `import click\n${stack}\ndef cli(**kw):\n    pass\n${tail}`
+
+  it.each([
+    ['a group', 'import click\n@click.group()\ndef cli():\n    pass\n@cli.command()\n@click.option("--x")\ndef run(x):\n    pass\ncli()\n'],
+    ['two commands', 'import click\n@click.command()\n@click.option("--x")\ndef a(x):\n    pass\n@click.command()\ndef b():\n    pass\na()\n'],
+    ['a subcommand decorator on another receiver', `${wrap('@click.command()\n@click.option("--x")')}@other.command()\ndef more():\n    pass\n`],
+    ['an option above the command', wrap('@click.option("--x")\n@click.command()')],
+    ['an option on another function', `${wrap('@click.command()\n@click.option("--x")')}@click.option("--y")\ndef helper(y):\n    pass\n`],
+    ['an unknown decorator in the stack', wrap('@click.command()\n@retry(3)\n@click.option("--x")')],
+    ['the stack on a class', 'import click\n@click.command()\n@click.option("--x")\nclass Cli:\n    pass\nCli()\n'],
+    ['a dynamic option name', wrap('@click.command()\n@click.option(NAME)')],
+    ['an f-string option name', wrap('@click.command()\n@click.option(f"--{name}")')],
+    ['**kwargs in an option', wrap('@click.command()\n@click.option("--x", **common)')],
+    ['an unknown keyword', wrap('@click.command()\n@click.option("--x", callback=check)')],
+    ['context_settings on the command', wrap('@click.command(context_settings={"ignore_unknown_options": True})\n@click.option("--x")')],
+    ['a flag on by default with no off flag', wrap('@click.command()\n@click.option("--shout", is_flag=True, default=True)')],
+    ['a secondary-only off flag', wrap('@click.command()\n@click.option("--shout", " /-S")')],
+    ['a bool type', wrap('@click.command()\n@click.option("--x", type=bool)')],
+    ['a tuple type', wrap('@click.command()\n@click.option("--pt", type=(int, int))')],
+    ['a Choice of an Enum', wrap('@click.command()\n@click.option("--x", type=click.Choice(Color))')],
+    ['a command built by hand', 'import click\ncli = click.Command("x", params=[click.Option(["--x"])])\ncli()\n'],
+    ['the command never called', wrap('@click.command()\n@click.option("--x")', '')],
+    ['the command name bound again', wrap('@click.command()\n@click.option("--x")', 'cli = other\ncli()\n')],
+    ['commands added to it', wrap('@click.command()\n@click.option("--x")', 'cli.add_command(other)\ncli()\n')],
+    ['click imported under another name', 'import click as c\n@c.command()\n@c.option("--x")\ndef cli(x):\n    pass\ncli()\n'],
+    ['click\'s decorators imported by name', 'from click import command, option\n@command()\n@option("--x")\ndef cli(x):\n    pass\ncli()\n'],
+    ['click beside argparse', `${wrap('@click.command()\n@click.option("--x")')}import argparse\np = argparse.ArgumentParser()\np.add_argument("--y")\np.parse_args()\n`]
+  ])('%s → null', (_name, source) => {
+    expect(parseScriptSpec(source, { script: 'x.py' })).toBeNull()
+  })
+
+  it('the refusals\' base shapes read: each row above is null for its own reason', () => {
+    expect(parseScriptSpec(wrap('@click.command()\n@click.option("--x")'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(parseScriptSpec(wrap('@click.command\n@click.option("--x")', 'cli.main(standalone_mode=False)\n'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(parseScriptSpec('import click\n@click.command()\n@click.option("--x")\ndef cli(x):\n    pass\ncli()\n', { script: 'x.py' })).not.toBeNull()
+  })
+
+  it('a script that only echoes through click keeps its argparse form', () => {
+    const spec = parseScriptSpec('import argparse, click\np = argparse.ArgumentParser()\np.add_argument("--y")\np.parse_args()\nclick.echo("hi")\n', { script: 'x.py' })
+    expect(spec!.params.map((p) => p.id)).toEqual(['y'])
+  })
+
+  it('a hostile stack → null in under 200 ms', () => {
+    const many = Array.from({ length: 20_000 }, (_, i) => `@click.option("--f${i}")`).join('\n')
+    nullInTime(`import click\n@click.command()\n${many}\ndef cli(**kw):\n    pass\ncli()\n`)
+    const deep = `@click.option("--x", default=${'['.repeat(100_000)}${']'.repeat(100_000)})`
+    nullInTime(`import click\n@click.command()\n${deep}\ndef cli(x):\n    pass\ncli()\n`)
+  })
+})
+
+describe('parseScriptSpec: typer', () => {
+  it('reads typer.run(main): positionals without defaults, options with them, bools as --x/--no-x', () => {
+    const spec = parseScriptSpec(`"""Report a year."""
+import typer
+from pathlib import Path
+from typing import List, Optional
+
+
+def main(
+    scope: str,
+    out_path: Path = Path("out"),
+    year: int = 2026,
+    rate: float = typer.Option(0.5, "--rate", "-r", help="The rate"),
+    note: Optional[str] = None,
+    tag: List[str] = typer.Option([], help="Repeatable"),
+    verbose: int = typer.Option(0, "-v", count=True),
+    apply: bool = False,
+    cache: bool = True,
+    when: str = typer.Argument("today", help="When"),
+) -> None:
+    print(scope)
+
+
+if __name__ == "__main__":
+    typer.run(main)
+`, { script: 'report.py' })
+    expect(spec!.params.map((p) => p.id)).toEqual(['scope', 'when', 'out_path', 'year', 'rate', 'note', 'tag', 'verbose', 'apply', 'cache'])
+    expect(param(spec, 'scope')).toMatchObject({ kind: 'positional', required: true })
+    expect(param(spec, 'when')).toMatchObject({ kind: 'positional', required: false, defaultText: 'today', help: 'When' })
+    expect(param(spec, 'out_path')).toMatchObject({ kind: 'value', flags: ['--out-path'], valueType: 'path', defaultText: 'out' })
+    expect(param(spec, 'year')).toMatchObject({ flags: ['--year'], valueType: 'year', defaultText: '2026' })
+    expect(param(spec, 'rate')).toMatchObject({ flags: ['--rate', '-r'], valueType: 'float', defaultText: '0.5', help: 'The rate' })
+    expect(param(spec, 'note')).toMatchObject({ kind: 'value', required: false, defaultText: null })
+    expect(param(spec, 'tag')).toMatchObject({ kind: 'value', multiple: true, repeat: true })
+    expect(param(spec, 'verbose')).toMatchObject({ kind: 'count', flags: ['-v'] })
+    expect(param(spec, 'apply')).toMatchObject({ kind: 'switch', flags: ['--apply'], offFlags: ['--no-apply'], defaultOn: false, writes: true })
+    expect(param(spec, 'cache')).toMatchObject({ kind: 'switch', flags: ['--cache'], offFlags: ['--no-cache'], defaultOn: true })
+  })
+
+  it('reads one @app.command() with Annotated params, a Context, and app() called', () => {
+    const spec = parseScriptSpec(`import typer
+from typing import Annotated
+
+app = typer.Typer(add_completion=False)
+
+
+@app.command()
+def main(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Who")],
+    count: Annotated[int, typer.Option("--count", "-c", help="How many")] = 1,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--for-real")] = True,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    secret: Annotated[str, typer.Option(hidden=True)] = "",
+):
+    pass
+
+
+if __name__ == "__main__":
+    app()
+`, { script: 'x.py' })
+    expect(spec!.params.map((p) => p.id)).toEqual(['name', 'count', 'dry_run', 'force'])
+    expect(param(spec, 'name')).toMatchObject({ kind: 'positional', required: true, help: 'Who' })
+    expect(param(spec, 'count')).toMatchObject({ kind: 'value', flags: ['--count', '-c'], valueType: 'int', defaultText: '1' })
+    expect(param(spec, 'dry_run')).toMatchObject({ kind: 'switch', flags: ['--dry-run'], offFlags: ['--for-real'], defaultOn: true })
+    expect(param(spec, 'force')).toMatchObject({ kind: 'switch', flags: ['--force'], offFlags: [], defaultOn: false })
+  })
+
+  const RUN = (signature: string, tail = 'typer.run(main)\n'): string => `import typer\ndef main(${signature}):\n    pass\n${tail}`
+  const APP = (body: string): string => `import typer\napp = typer.Typer()\n${body}\napp()\n`
+
+  it.each([
+    ['*args', RUN('*args')],
+    ['**kwargs', RUN('name: str, **kwargs')],
+    ['a bare *', RUN('*, name: str')],
+    ['an Enum annotation', RUN('color: Color = Color.red')],
+    ['a Literal annotation', RUN('mode: Literal["a", "b"] = "a"')],
+    ['a string annotation', RUN('name: "str"')],
+    ['a bool on by default with only an on flag', RUN('force: bool = typer.Option(True, "--force")')],
+    ['an Optional bool', RUN('apply: Optional[bool] = None')],
+    ['a bool argument', RUN('flag: bool = typer.Argument(False)')],
+    ['a callback on an option', RUN('x: str = typer.Option("", callback=check)')],
+    ['a dynamic option name', RUN('x: str = typer.Option("", NAME)')],
+    ['a shared option object', `import typer\nOPT = typer.Option("", "--x")\ndef main(x: str = OPT):\n    pass\ntyper.run(main)\n`],
+    ['a decorated function under typer.run', `import typer\n@cache\ndef main(x: str):\n    pass\ntyper.run(main)\n`],
+    ['typer.run of something that is not a plain name', RUN('x: str', 'typer.run(cmds.main)\n')],
+    ['the command name bound again', RUN('x: str', 'main = other\ntyper.run(main)\n')],
+    ['two commands', APP('@app.command()\ndef a(x: str):\n    pass\n@app.command()\ndef b(y: str):\n    pass')],
+    ['@app.callback', APP('@app.callback()\ndef cb():\n    pass\n@app.command()\ndef a(x: str):\n    pass')],
+    ['app.add_typer', APP('app.add_typer(other)\n@app.command()\ndef a(x: str):\n    pass')],
+    ['another decorator under the command', APP('@app.command()\n@log\ndef a(x: str):\n    pass')],
+    ['another decorator above the command', APP('@log\n@app.command()\ndef a(x: str):\n    pass')],
+    ['the command decorator not used as one', APP('def a(x: str):\n    pass\napp.command()(a)')],
+    ['context_settings on the command', APP('@app.command(context_settings={"x": 1})\ndef a(x: str):\n    pass')],
+    ['a callback on the app', 'import typer\napp = typer.Typer(callback=cb)\n@app.command()\ndef a(x: str):\n    pass\napp()\n'],
+    ['the app never called', 'import typer\napp = typer.Typer()\n@app.command()\ndef a(x: str):\n    pass\n'],
+    ['typer.run and an app at once', `${APP('@app.command()\ndef a(x: str):\n    pass')}typer.run(a)\n`],
+    ['typer imported by name', 'from typer import Typer\napp = Typer()\n@app.command()\ndef a(x: str):\n    pass\napp()\n']
+  ])('%s → null', (_name, source) => {
+    expect(parseScriptSpec(source, { script: 'x.py' })).toBeNull()
+  })
+
+  it('the refusals\' base shapes read: each row above is null for its own reason', () => {
+    expect(parseScriptSpec(RUN('x: str'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(parseScriptSpec(RUN('x: str = typer.Option("", "--x")'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(parseScriptSpec(RUN('force: bool = typer.Option(False, "--force")'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['force'])
+    expect(parseScriptSpec(APP('@app.command()\ndef a(x: str):\n    pass'), { script: 'x.py' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(parseScriptSpec('import typer\napp = typer.Typer(help="x")\n@app.command(help="y")\ndef a(x: str):\n    pass\napp()\n', { script: 'x.py' })).not.toBeNull()
+  })
+
+  it('a hostile signature → null in under 200 ms', () => {
+    nullInTime(RUN(Array.from({ length: 20_000 }, (_, i) => `p${i}: int = ${i}`).join(', ')))
+    nullInTime(RUN(`x: List[str] = ${'['.repeat(100_000)}${']'.repeat(100_000)}`))
+    nullInTime(RUN(`x: ${'Optional['.repeat(20_000)}str${']'.repeat(20_000)} = None`))
+  })
+})
+
+describe('parseScriptSpec: shell getopts', () => {
+  const SCRIPT = (header: string, optstring: string, arms: string): string => `#!/usr/bin/env bash
+${header}
+set -euo pipefail
+while getopts "${optstring}" opt; do
+  case "$opt" in
+${arms}
+  esac
+done
+shift $((OPTIND - 1))
+echo "$@"
+`
+  const ARMS = `    v) verbose=1 ;;
+    o) out_dir="$OPTARG" ;;
+    n) count="$OPTARG" ;;
+    h) usage; exit 0 ;;
+    \\?) echo "bad option" >&2; exit 1 ;;
+    :) echo "needs a value" >&2; exit 1 ;;`
+
+  it('merges the Usage header (names, help) with getopts (the flag set), options first', () => {
+    const spec = parseScriptSpec(SCRIPT(`# Back up a folder.
+#
+# Usage: backup.sh [-v|--verbose] [-o DIR] [-h] <target>
+#
+#   -o DIR   where the copy goes`, ':vo:n:h', ARMS), { script: 'scripts/backup.sh' })
+    expect(spec).toMatchObject({ language: 'shell', summary: 'Back up a folder.', optionsFirst: true })
+    expect(spec!.params.map((p) => [p.id, p.kind, p.flags, p.label])).toEqual([
+      ['target', 'positional', [], 'Target'],
+      ['verbose', 'switch', ['-v'], 'Verbose'],
+      ['out_dir', 'value', ['-o'], 'Out dir'],
+      ['count', 'value', ['-n'], 'Count']
+    ])
+    expect(param(spec, 'out_dir')).toMatchObject({ metavar: 'DIR', valueType: 'path', help: 'DIR where the copy goes' })
+  })
+
+  it('reads getopts alone, labelling a letter by its variable or else its flag', () => {
+    const spec = parseScriptSpec(SCRIPT('', 'ab:x', `    a) all=true ;;
+    b) BASE="$OPTARG" ;;
+    x) set -x ;;
+    *) exit 2 ;;`), { script: 'run.sh' })
+    expect(spec!.usage).toBeNull()
+    expect(spec!.params.map((p) => [p.id, p.kind, p.flags, p.label])).toEqual([
+      ['all', 'switch', ['-a'], 'All'], ['base', 'value', ['-b'], 'Base'], ['opt_x', 'switch', ['-x'], '-x']
+    ])
+  })
+
+  it('ignores getopts in a comment, a string or a heredoc body', () => {
+    const header = '# Tool.\n#\n# Usage: tool.sh [--force]\n'
+    for (const body of ['# while getopts "ab" opt; do', 'echo "use getopts"', 'cat <<EOF\nwhile getopts "ab" opt; do\nEOF']) {
+      const spec = parseScriptSpec(`#!/bin/sh\n${header}${body}\n`, { script: 'tool.sh' })
+      expect(spec!.params.map((p) => p.id)).toEqual(['force'])
+      expect(spec!.optionsFirst).toBeUndefined()
+    }
+  })
+
+  it.each([
+    ['a variable optstring', 'while getopts "$OPTS" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['a second getopts', 'while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\ngetopts "b" o\n'],
+    ['a letter with no arm', 'while getopts "ab" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['a letter with no arm beside a catch-all', 'while getopts "ab" opt; do\n  case "$opt" in\n    a) x=1 ;;\n    *) y=1 ;;\n  esac\ndone\n'],
+    ['an arm for a letter getopts does not take', 'while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n    z) y=1 ;;\n  esac\ndone\n'],
+    ['a letter arm after the catch-all', 'while getopts "ab" opt; do\n  case "$opt" in\n    a) x=1 ;;\n    *) y=1 ;;\n    b) z=1 ;;\n  esac\ndone\n'],
+    ['a glob arm', 'while getopts "ab" opt; do\n  case "$opt" in\n    [ab]) x=1 ;;\n  esac\ndone\n'],
+    ['a fall-through', 'while getopts "ab" opt; do\n  case "$opt" in\n    a) x=1 ;&\n    b) y=1 ;;\n  esac\ndone\n'],
+    ['a case on another variable', 'while getopts "a" opt; do\n  case "$other" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['a command before the case', 'while getopts "a" opt; do\n  echo "$opt"\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['getopts outside a while', 'getopts "a" opt\ncase "$opt" in\n  a) x=1 ;;\nesac\n'],
+    ['a header option getopts does not read', '# Usage: t.sh [-a] [--long]\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['a header value option getopts reads as a switch', '# Usage: t.sh [-a NAME]\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['a header short flag getopts does not know', '# Usage: t.sh [-a] [-q]\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'],
+    ['an unterminated quote', 'while getopts "a" opt; do\n  case "$opt" in\n    a) x="1 ;;\n  esac\ndone\n'],
+    ...([
+      ['an operand read and shifted', 'action=$1; shift'],
+      ['a shift alone', 'shift'],
+      ['${1} read', 'action="${1:-deploy}"'],
+      ['$2 read', 'echo "$2"'],
+      ['"$@" passed on', 'log "$@"'],
+      ['$* read', 'echo $*'],
+      ['${@} read', 'for a in "${@}"; do :; done'],
+      ['the arguments replaced', 'set -- -a x']
+    ] as const).map(([how, line]) => [`the arguments read before the loop: ${how}`,
+      `${line}\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n`]),
+    ['a Usage line with an operand before an option', '# Usage: t.sh <action> [-a]\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n']
+  ])('%s → null', (_name, body) => {
+    expect(parseScriptSpec(`#!/bin/bash\n${body}`, { script: 't.sh' })).toBeNull()
+  })
+
+  it('the refusals\' base shape reads: each row above is null for its own reason', () => {
+    const spec = parseScriptSpec('#!/bin/bash\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n', { script: 't.sh' })
+    expect(spec!.params.map((p) => p.id)).toEqual(['x'])
+    const header = parseScriptSpec('#!/bin/bash\n# Usage: t.sh [-a]\nwhile getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n', { script: 't.sh' })
+    expect(header!.params.map((p) => [p.id, p.flags])).toEqual([['x', ['-a']]])
+    // `case ${opt} in` and an unbraced `"$@"` after the variable read too; so does a catch-all after every letter.
+    expect(parseScriptSpec('while getopts ab: opt "$@"\ndo\n  case ${opt} in\n    (a) x=1 ;;\n    b) y=$OPTARG ;;\n    *) exit 1 ;;\n  esac\ndone\n', { script: 't.sh' })).not.toBeNull()
+    // Before the loop: a function's own `$1` and `shift`, `$0`, a `$#` check and `OPTIND=1` read none of the script's arguments.
+    const before = 'usage() {\n  echo "usage: $0 [-a] $1" >&2\n}\nfunction die { echo "$1"; shift; exit 1; }\n[ $# -gt 5 ] && usage\nOPTIND=1\n'
+    expect(parseScriptSpec(`${before}while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n`, { script: 't.sh' })!.params.map((p) => p.id)).toEqual(['x'])
+  })
+
+  it('hostile input → null in under 200 ms', () => {
+    nullInTime(SCRIPT('', 'a', Array.from({ length: 20_000 }, () => '    a) x=1 ;;').join('\n')), 't.sh')
+    nullInTime(`while getopts "a" opt; do\n  case "$opt" in\n    a) x=$(${'$('.repeat(50_000)}\n`, 't.sh')
+    nullInTime(`${'cat <<EOF\n'.repeat(20_000)}while getopts "a" opt; do :; done\n`, 't.sh')
+    nullInTime(`x="${'a'.repeat(300_000)}\ngetopts`, 't.sh')
+  })
+})
+
+describe('parseScriptSpec: hostile input stays under 200 ms on main\'s thread', () => {
+  const LOOP = 'while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'
+  const CASES: [string, string, string][] = [
+    // click
+    ['click: 20 000 decorators of its own', 'x.py', `import click\n@click.command()\n${'@click.option("--x")\n'.repeat(20_000)}def cli(x):\n    pass\ncli()\n`],
+    ['click: 30 000 foreign decorators above the stack', 'x.py', `import click\n${'@retry\n'.repeat(30_000)}@click.command()\n@click.option("--x")\ndef cli(x):\n    pass\ncli()\n`],
+    ['click: an option call that never closes', 'x.py', `import click\n@click.command()\n@click.option("--x", ${'('.repeat(150_000)}\ndef cli(x):\n    pass\ncli()\n`],
+    ['click: 30 000 click.command uses outside decorators', 'x.py', `import click\n${'click.command\n'.repeat(30_000)}`],
+    // typer
+    ['typer: 30 000 decorators on the function', 'x.py', `import typer\n${'@log\n'.repeat(30_000)}def main(x: str):\n    pass\ntyper.run(main)\n`],
+    ['typer: a signature that never closes', 'x.py', `import typer\ndef main(${'x: int = 1, '.repeat(30_000)}\ntyper.run(main)\n`],
+    ['typer: 6 000 commands on the app', 'x.py', `import typer\napp = typer.Typer()\n${'@app.command()\ndef a(x: str):\n    pass\n'.repeat(6_000)}app()\n`],
+    ['typer: an Annotated nested 20 000 deep', 'x.py', `import typer\ndef main(x: ${'Annotated['.repeat(20_000)}str${']'.repeat(20_000)}):\n    pass\ntyper.run(main)\n`],
+    // shell lexer and getopts
+    ['shell: 100 000 nested $(', 't.sh', `getopts\nx=${'$('.repeat(100_000)}\n`],
+    ['shell: 100 000 nested ${', 't.sh', `getopts\nx=${'${'.repeat(100_000)}\n`],
+    ['shell: an unterminated backtick', 't.sh', `getopts\nx=\`${'a '.repeat(150_000)}\n`],
+    ['shell: an unterminated single quote', 't.sh', `getopts\nx='${'a;'.repeat(150_000)}\n`],
+    ['shell: 30 000 heredocs on one line', 't.sh', `getopts\ncat ${'<<EOF '.repeat(30_000)}\nbody\n`],
+    ['shell: 200 000 semicolons in an arm', 't.sh', `while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ${'; '.repeat(200_000)}\n`],
+    ['shell: a case nested 20 000 deep in an arm', 't.sh', `while getopts "a" opt; do\n  case "$opt" in\n    a) ${'case x in y) '.repeat(20_000)}\n  esac\ndone\n`],
+    ['shell: 30 000 arms for one letter', 't.sh', `while getopts "a" opt; do\n  case "$opt" in\n${'    a) x=1 ;;\n'.repeat(30_000)}  esac\ndone\n`],
+    ['shell: 30 000 shifts before the loop', 't.sh', `${'f() { shift; }\n'.repeat(30_000)}shift\n${LOOP}`]
+  ]
+
+  it.each(CASES)('%s → null', (_name, script, source) => {
+    nullInTime(source, script)
+  })
+
+  it('shell: 200 000 semicolons before the loop still read it, in time', () => {
+    const started = performance.now()
+    expect(parseScriptSpec(`${';'.repeat(200_000)}\n${LOOP}`, { script: 't.sh' })!.params.map((p) => p.id)).toEqual(['x'])
+    expect(performance.now() - started).toBeLessThan(200)
   })
 })

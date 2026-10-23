@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildCommand, commandScript, editCommand, parseArgs, readCommand, type ScriptValues } from './scriptArgs'
+import { buildCommand, commandScript, editCommand, parseArgs, readCommand, switchOn, type ScriptValues } from './scriptArgs'
 import { shellQuote, splitCommandLine } from './commandRun'
 import type { ScriptParam, ScriptSpec } from './scriptSpec'
 
@@ -7,7 +7,7 @@ import type { ScriptParam, ScriptSpec } from './scriptSpec'
 
 const p = (over: Partial<ScriptParam> & Pick<ScriptParam, 'id' | 'kind'>): ScriptParam => ({
   flags: [], label: over.id, required: false, multiple: false, repeat: false, valueType: 'text',
-  choices: null, defaultText: null, defaultComputed: false, metavar: null, help: null, writes: false, ...over
+  choices: null, defaultText: null, defaultComputed: false, metavar: null, help: null, writes: false, offFlags: [], defaultOn: false, ...over
 })
 
 const SPEC: ScriptSpec = {
@@ -160,5 +160,76 @@ describe('editCommand: a form edit changes only its own words, in place', () => 
   it('is null when the line no longer names the script, or the edit would not read back', () => {
     expect(editCommand(EDIT, 'python3 scripts/other.py it', { scope: 'x' }, '')).toBeNull()
     expect(editCommand(EDIT, 'python3 scripts/check.py it', { scope: 'it', apply: true }, "'open")).toBeNull()
+  })
+})
+
+describe('a --x/--no-x switch: one switch, written only when it differs from the default', () => {
+  const NEG: ScriptSpec = {
+    ...SPEC,
+    script: 'sync.py',
+    params: [
+      p({ id: 'scope', kind: 'positional' }),
+      p({ id: 'apply', kind: 'switch', flags: ['--apply'], offFlags: ['--no-apply'] }),
+      p({ id: 'cache', kind: 'switch', flags: ['--cache', '-c'], offFlags: ['--no-cache', '-C'], defaultOn: true })
+    ]
+  }
+  const edit = (line: string, change: ScriptValues): string | null => {
+    const form = readCommand(NEG, line)!
+    return editCommand(NEG, line, { ...form.values, ...change }, form.other)
+  }
+
+  it('reads either flag, the last one winning, and nothing when neither is given', () => {
+    expect(readCommand(NEG, 'python3 sync.py it')!.values).toEqual({ scope: 'it' })
+    expect(readCommand(NEG, 'python3 sync.py it --no-cache --apply')!.values).toEqual({ scope: 'it', cache: false, apply: true })
+    expect(readCommand(NEG, 'python3 sync.py --no-cache it -c --no-apply')!.values).toEqual({ scope: 'it', cache: true, apply: false })
+  })
+
+  it('switchOn shows the default until the line says otherwise', () => {
+    const [, apply, cache] = NEG.params
+    expect([switchOn(apply, undefined), switchOn(cache, undefined), switchOn(cache, false), switchOn(apply, true)]).toEqual([false, true, false, true])
+  })
+
+  it('writes --no-x to turn off one on by default, --x to turn on one off by default, and nothing at the default', () => {
+    expect(edit('python3 sync.py it', { cache: false })).toBe('python3 sync.py it --no-cache')
+    expect(edit('python3 sync.py it', { apply: true })).toBe('python3 sync.py it --apply')
+    expect(edit('python3 sync.py it --no-cache', { cache: true })).toBe('python3 sync.py it')
+    expect(edit('python3 sync.py it --apply', { apply: false })).toBe('python3 sync.py it')
+    // A redundant flag at the default stays as typed until the switch moves; then it is rewritten in place.
+    expect(edit('python3 sync.py --cache it', { scope: 'es' })).toBe('python3 sync.py --cache es')
+    expect(edit('python3 sync.py --cache it', { cache: false })).toBe('python3 sync.py --no-cache it')
+    expect(buildCommand('python3 sync.py', NEG, { cache: false, apply: false }, '')).toBe('python3 sync.py --no-cache')
+  })
+})
+
+describe('an options-first spec (getopts): options before operands', () => {
+  const GETOPTS: ScriptSpec = {
+    ...SPEC,
+    script: './backup.sh',
+    language: 'shell',
+    optionsFirst: true,
+    params: [
+      p({ id: 'target', kind: 'positional', required: true }),
+      p({ id: 'verbose', kind: 'switch', flags: ['-v'] }),
+      p({ id: 'out', kind: 'value', flags: ['-o'] })
+    ]
+  }
+  const edit = (line: string, change: ScriptValues): string | null => {
+    const form = readCommand(GETOPTS, line)!
+    return editCommand(GETOPTS, line, { ...form.values, ...change }, form.other)
+  }
+
+  it('reads every word after the first operand as an operand, as getopts does', () => {
+    expect(readCommand(GETOPTS, './backup.sh -v -o x site')!.values).toEqual({ verbose: true, out: 'x', target: 'site' })
+    const late = readCommand(GETOPTS, './backup.sh site -v')!
+    expect(late.values).toEqual({ target: 'site' })
+    expect(late.other).toBe('-v')
+  })
+
+  it('adds a new option before the first operand, and a new operand after the options', () => {
+    expect(edit('./backup.sh site', { verbose: true })).toBe('./backup.sh -v site')
+    expect(edit('./backup.sh -v site', { out: 'dir' })).toBe('./backup.sh -v -o dir site')
+    expect(edit('./backup.sh -v', { target: 'site' })).toBe('./backup.sh -v site')
+    expect(edit('./backup.sh', { target: 'site', verbose: true })).toBe('./backup.sh -v site')
+    expect(buildCommand('./backup.sh', GETOPTS, { target: 'site', out: 'a b', verbose: true }, '')).toBe("./backup.sh -v -o 'a b' site")
   })
 })

@@ -12,6 +12,7 @@ import { authorizeAgentFile as authorize } from '../utils/agentFileAccess'
 import { unwrapIpcError } from '../utils/ipcError'
 import { loadImage, type ImageRef } from '../utils/imageDataCache'
 import { createLogger } from './logger.store'
+import { useRunScriptStore } from './runScript.store'
 
 const log = createLogger('file-preview')
 
@@ -52,10 +53,48 @@ export type PreviewNotice = 'credential' | 'unsupported'
 /** Which step of an agent-file open failed; it decides how the body words the reason. */
 export type AgentFileFailedStep = 'authorize' | 'preview' | 'reveal'
 
-/** A header action: Open, Open folder, Open in browser. */
-export type PreviewAction = 'open' | 'reveal' | 'browser'
+/** A header action: Open, Open folder, Open in browser, Run…. */
+export type PreviewAction = 'open' | 'reveal' | 'browser' | 'run'
 
-/** A header action (Open / Open folder / Open in browser) that failed, shown inline under the header. */
+/**
+ * Where a Run… from the preview resolves its agent and folder: the message
+ * the reference was in, or — with none — the active chat, whose agent must be
+ * the file's (main checks it again).
+ */
+export type PreviewRunSource =
+  | { chatId: string; messageId: string }
+  | { chatId: string; agentId: string }
+
+/**
+ * The source of a Run… on `target`, or null for none (no Run…): the target's
+ * message in the active chat, else the active chat when its agent is the
+ * file's agent. No active chat, no source.
+ */
+export function previewRunSource(
+  target: PreviewTarget | null,
+  activeChatId: string | null,
+  activeChatAgentId: string | null | undefined
+): PreviewRunSource | null {
+  if (target?.type !== 'agentFile' || !activeChatId) return null
+  if (target.messageId) return { chatId: activeChatId, messageId: target.messageId }
+  return activeChatAgentId === target.agentId ? { chatId: activeChatId, agentId: target.agentId } : null
+}
+
+/**
+ * Whether the preview offers Run… for an agent file: a file inside the
+ * agent's folder, not a credential file, and a script — `.py`, `.sh`, or a
+ * first line that is a `#!` shebang (`text`, once loaded). Main decides the
+ * command, and may still refuse.
+ */
+export function isRunnableScriptRef(ref: AgentFileRef, text: string): boolean {
+  if (ref.kind !== 'file' || !ref.inside || isCredentialFileRef(ref)) return false
+  const name = ref.path.replace(/\\/g, '/').split('/').pop() ?? ''
+  if ((name.endsWith('.py') && name !== '.py') || (name.endsWith('.sh') && name !== '.sh')) return true
+  // A `#!` file is offered only with an extension: a bare name (`bin/tool`) is left out.
+  return /[^.]\.[^./]+$/.test(name) && text.startsWith('#!')
+}
+
+/** A header action (Open / Open folder / Open in browser / Run…) that failed, shown inline under the header. */
 export interface PreviewActionError {
   action: PreviewAction
   /** Null when the call itself threw rather than answering. */
@@ -123,6 +162,12 @@ interface FilePreviewState {
   revealAgentFile: () => Promise<void>
   /** An HTML agent file or attachment in the default web browser. */
   openInBrowser: () => Promise<void>
+  /**
+   * Run…: main builds the command for the script, then the preview steps
+   * aside for the Run Script window on it. Nothing runs. A refusal stays in
+   * the preview, under the header.
+   */
+  runAgentFile: (source: PreviewRunSource, origin: PreviewOrigin | null) => Promise<void>
   close: () => void
 }
 
@@ -193,7 +238,8 @@ export function agentFileErrorText(
  * is shown as is rather than prefixed a second time.
  */
 export function actionErrorText(actionError: PreviewActionError): string {
-  if (actionError.code === 'launch_failed') return actionError.reason
+  // Main's sentence for Run… already says what could not be done.
+  if (actionError.code === 'launch_failed' || actionError.action === 'run') return actionError.reason
   if (actionError.action === 'browser') return `Couldn't open it in the browser: ${actionError.reason}`
   return actionError.action === 'open'
     ? `Couldn't open it: ${actionError.reason}`
@@ -457,6 +503,36 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
         else fail(result.error, result.code === 'launch_failed' ? 'launch_failed' : null)
       } catch (err) {
         fail(unwrapIpcError(err))
+      }
+    },
+
+    runAgentFile: async (source, origin) => {
+      const target = get().target
+      if (target?.type !== 'agentFile' || target.ref.kind !== 'file' || get().pendingAction) return
+      const fail = (reason: string): void => {
+        if (get().target !== target) return
+        set({ pendingAction: null, actionError: { action: 'run', code: null, reason } })
+      }
+      set({ pendingAction: 'run', actionError: null })
+      try {
+        const result = await window.api.userCommands.commandForFile({ ...source, path: target.ref.path })
+        if (get().target !== target) return
+        if (!result.ok) return fail(result.reason)
+        // A start in flight in the window below holds it: opening now would open nothing.
+        if (useRunScriptStore.getState().pending) return fail('A command is starting. Try again once it has.')
+        const messageId = 'messageId' in source ? source.messageId : null
+        get().close()
+        void useRunScriptStore.getState().openFromCode({
+          chatId: source.chatId,
+          messageId,
+          agentId: target.agentId,
+          viaChatAgent: messageId === null,
+          folder: result.folder,
+          command: result.command,
+          origin
+        })
+      } catch (err) {
+        fail(unwrapIpcError(err, 'The command could not be prepared.'))
       }
     },
 

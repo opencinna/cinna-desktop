@@ -77,7 +77,7 @@ afterEach(() => {
 
 const { RunScriptModal } = await import('./RunScriptModal')
 const { useRunScriptStore } = await import('../../stores/runScript.store')
-const { commandLineRows } = await import('./RunScriptCommandLine')
+const { caretVisualRow, commandLineRows } = await import('./RunScriptCommandLine')
 
 const useQueryClientRef: { current: QueryClient | null } = { current: null }
 
@@ -359,6 +359,38 @@ describe('the Run Script window', () => {
     expect(line().value).toBe('ls now')
   })
 
+  it('on a wrapped one-line command, moves the caret between its rows before ↑/↓ recall history', async () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 23, 10, 0, s))
+    activity.items = [{ ...runningItem('c1', 'ls one'), state: 'completed', startedAt: at(1), endedAt: at(2) }]
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    const rect = HTMLElement.prototype.getBoundingClientRect
+    // A 40-cell field: the command below wraps to two rows.
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return this.tagName === 'TEXTAREA' ? 400 : 0 } })
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return { width: this.tagName === 'SPAN' ? 400 : 0, height: 0, left: 0, top: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    }
+    try {
+      const long = `ls ${'a'.repeat(30)} ${'b'.repeat(30)}`
+      mount()
+      openOn(long)
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy())
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      // Caret on the second row: ↑ is the caret's, ↓ recalls (there is nothing below).
+      line().setSelectionRange(long.length, long.length)
+      fireEvent.keyDown(line(), { key: 'ArrowUp' })
+      expect(line().value).toBe(long)
+      // Caret on the first row: ↓ is the caret's, ↑ recalls.
+      line().setSelectionRange(2, 2)
+      fireEvent.keyDown(line(), { key: 'ArrowDown' })
+      expect(line().value).toBe(long)
+      fireEvent.keyDown(line(), { key: 'ArrowUp' })
+      expect(line().value).toBe('ls one')
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+      HTMLElement.prototype.getBoundingClientRect = rect
+    }
+  })
+
   it('collapses into its chat\'s Commands badge, and fades when the badge is not on screen', async () => {
     const animate = vi.fn(() => ({ cancel: () => {} }) as unknown as Animation)
     const original = HTMLElement.prototype.animate
@@ -403,6 +435,20 @@ describe('commandLineRows', () => {
     expect(commandLineRows('z'.repeat(100), 40)).toBe(3)
     expect(commandLineRows(`ls\n${'w '.repeat(60)}`, 40)).toBe(4)
     expect(commandLineRows('q '.repeat(400), 40)).toBe(6)
+  })
+})
+
+describe('caretVisualRow', () => {
+  it('finds the caret\'s row on a line wrapped at spaces, and in a long word broken anywhere', () => {
+    const line = `${'a'.repeat(20)} ${'b'.repeat(25)}`
+    expect(caretVisualRow(line, 40, 0)).toEqual({ row: 0, rows: 2 })
+    expect(caretVisualRow(line, 40, 20)).toEqual({ row: 0, rows: 2 })
+    expect(caretVisualRow(line, 40, 21)).toEqual({ row: 1, rows: 2 })
+    expect(caretVisualRow(line, 40, line.length)).toEqual({ row: 1, rows: 2 })
+    expect(caretVisualRow('z'.repeat(100), 40, 39)).toEqual({ row: 0, rows: 3 })
+    expect(caretVisualRow('z'.repeat(100), 40, 40)).toEqual({ row: 1, rows: 3 })
+    expect(caretVisualRow('z'.repeat(100), 40, 100)).toEqual({ row: 2, rows: 3 })
+    expect(caretVisualRow('ls -la', 40, 3)).toEqual({ row: 0, rows: 1 })
   })
 })
 
@@ -515,11 +561,25 @@ p.parse_args()
     const { formSizingLine } = await import('./RunScriptModal')
     const spec = { params: [
       { kind: 'positional', flags: [] }, { kind: 'value', flags: ['--year'] },
-      { kind: 'switch', flags: ['-a', '--apply'] }, { kind: 'switch', flags: ['--dry-run'] }
+      { kind: 'switch', flags: ['-a', '--apply'], offFlags: [], defaultOn: false },
+      { kind: 'switch', flags: ['--dry-run'], offFlags: [], defaultOn: false }
     ] } as unknown as ScriptSpec
     expect(formSizingLine(spec, 'uv run x.py it --dry-run')).toBe('uv run x.py it --dry-run --apply')
     expect(formSizingLine(spec, 'uv run x.py it -a --dry-run')).toBe('uv run x.py it -a --dry-run')
     expect(formSizingLine(null, 'ls')).toBe('ls')
+    // A switch on by default would write its off flag, and either flag on the line names it.
+    const negatable = { params: [{ kind: 'switch', flags: ['--color'], offFlags: ['--no-color'], defaultOn: true }] } as unknown as ScriptSpec
+    expect(formSizingLine(negatable, 'uv run x.py')).toBe('uv run x.py --no-color')
+    expect(formSizingLine(negatable, 'uv run x.py --no-color')).toBe('uv run x.py --no-color')
+    // Sized with the flag a toggle writes (the first long one), not the last listed.
+    const longFirst = { params: [
+      { kind: 'switch', flags: ['--overwrite-existing', '-o'], offFlags: [], defaultOn: false },
+      { kind: 'switch', flags: ['--cache', '-c'], offFlags: ['--no-cache', '-C'], defaultOn: true }
+    ] } as unknown as ScriptSpec
+    expect(formSizingLine(longFirst, 'uv run x.py')).toBe('uv run x.py --overwrite-existing --no-cache')
+    // The words as the shell reads them: a quoted switch is named, a word holding one is not.
+    expect(formSizingLine(spec, "uv run x.py it '--apply' --dry-run")).toBe("uv run x.py it '--apply' --dry-run")
+    expect(formSizingLine(spec, "uv run x.py 'it --apply' --dry-run")).toBe("uv run x.py 'it --apply' --dry-run --apply")
     // Unmeasured (jsdom) a one-line command with a form keeps one row: no empty rows under it.
     mount()
     await openScript()

@@ -318,25 +318,88 @@ export function looksAutoRunnable(command: string): boolean {
 /** Why a command does not look auto-runnable: several commands, or one the rule does not know to be safe. */
 export type AutoRunRefusal = 'several_commands' | 'not_read_only'
 
+/** A here-document's delimiter word after `<<` / `<<-` at `at`, unquoted, and where it ends; null for none (`$((1<<2))`). */
+function heredocDelimiter(text: string, at: number): { delim: string; strip: boolean; end: number } | null {
+  let i = at
+  const strip = text[i] === '-'
+  if (strip) i++
+  while (text[i] === ' ' || text[i] === '\t') i++
+  const match = /^(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|\\?([A-Za-z_][\w-]*))(?=$|[\s;&|<>()])/.exec(text.slice(i, i + 80))
+  if (!match) return null
+  return { delim: match[1] ?? match[2] ?? match[3], strip, end: i + match[0].length }
+}
+
 /**
  * Whether a command line holds more than one command: a second line, or `;`,
  * `|`, `&&` or a background `&` outside quotes (a redirection's `>&` / `&>`
- * is not one).
+ * is not one). A `#` comment and a here-document's body are not commands:
+ * their `;` and line breaks separate nothing, and a line holding only a
+ * comment is no second command. Copy only (the guard line's reason);
+ * {@link looksAutoRunnable} does not use it.
  */
 export function chainsCommands(command: string): boolean {
   const text = command.trim()
   let quote: "'" | '"' | null = null
+  /** A line break was passed: the next command word starts a second command. */
+  let broken = false
+  let wordStart = true
+  const heredocs: { delim: string; strip: boolean }[] = []
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
     if (quote === "'") { if (ch === "'") quote = null; continue }
-    if (ch === '\\') { i++; continue }
+    if (ch === '\\') { i++; wordStart = false; if (broken) return true; continue }
     if (quote === '"') { if (ch === '"') quote = null; continue }
+    if (ch === '\n') {
+      broken = true
+      wordStart = true
+      // A here-document's body runs to its delimiter line; an unterminated one to the end.
+      for (const doc of heredocs) {
+        for (;;) {
+          const found = text.indexOf('\n', i + 1)
+          const end = found === -1 ? text.length : found
+          // A `\r\n` line ending still ends the delimiter line.
+          const line = text.slice(i + 1, end).replace(/\r$/, '')
+          i = end
+          if ((doc.strip ? line.replace(/^\t+/, '') : line) === doc.delim || end >= text.length) break
+        }
+      }
+      heredocs.length = 0
+      continue
+    }
+    if (ch === ' ' || ch === '\t' || ch === '\r') { wordStart = true; continue }
+    if (ch === '#' && wordStart) {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++
+      continue
+    }
+    if (broken) return true
+    wordStart = false
     if (ch === "'" || ch === '"') { quote = ch; continue }
-    if (ch === '\n' || ch === ';' || ch === '|') return true
+    // Arithmetic, `$((…))` or `((…))`: its `<<` is a shift and its `|` / `&` are operators on numbers. Skipped to its close.
+    if (ch === '(' && text[i + 1] === '(') {
+      let depth = 0
+      for (; i < text.length; i++) {
+        if (text[i] === '(') depth++
+        else if (text[i] === ')' && --depth === 0) break
+      }
+      continue
+    }
+    // `<<<` is a here-string: one word, no body.
+    if (ch === '<' && text[i + 1] === '<' && text[i + 2] === '<') { i += 2; continue }
+    if (ch === '<' && text[i + 1] === '<') {
+      const doc = heredocDelimiter(text, i + 2)
+      if (doc) {
+        heredocs.push({ delim: doc.delim, strip: doc.strip })
+        i = doc.end - 1
+        continue
+      }
+    }
+    if (ch === ';' || ch === '|') return true
     if (ch === '&') {
       if (text[i + 1] === '&') return true
       if (text[i - 1] === '>' || text[i + 1] === '>') continue
-      if (text.slice(i + 1).trim() !== '') return true
+      // A trailing `&` backgrounds the one command; a comment after it is no second one (a line after it still is, below).
+      const rest = text.slice(i + 1).trim()
+      if (rest !== '' && !rest.startsWith('#')) return true
     }
   }
   return false

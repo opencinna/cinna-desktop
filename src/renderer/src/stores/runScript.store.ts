@@ -32,8 +32,28 @@ export interface RunScriptSource {
   messageId: string | null
   /** The message's agent, for the ⋯ menu's file actions; null when unknown. */
   agentId: string | null
+  /**
+   * Opened from the file preview with no message: main resolves the agent as
+   * the chat's own, by `agentId` (which it accepts only when it is the chat's
+   * agent). Absent for a command from a message.
+   */
+  viaChatAgent?: boolean
   /** The agent's folder as the renderer knows it (raw), or main's `~/…` form; null until named. */
   folder: string | null
+}
+
+/**
+ * What main resolves the agent by: the message, else the chat's agent for a
+ * window opened from a file, else `fallbackMessageId` (a reply of the run's
+ * agent); null when there is none.
+ */
+export function sourceInput(
+  source: Pick<RunScriptSource, 'chatId' | 'messageId' | 'agentId' | 'viaChatAgent'>,
+  fallbackMessageId: string | null = null
+): { chatId: string; messageId: string } | { chatId: string; agentId: string } | null {
+  if (source.messageId) return { chatId: source.chatId, messageId: source.messageId }
+  if (source.viaChatAgent && source.agentId) return { chatId: source.chatId, agentId: source.agentId }
+  return fallbackMessageId ? { chatId: source.chatId, messageId: fallbackMessageId } : null
 }
 
 export interface RunScriptWindow extends RunScriptSource {
@@ -76,11 +96,14 @@ function specWithin(answer: Promise<ScriptSpec | null> | null): Promise<ScriptSp
   return Promise.race([answer, late]).finally(() => clearTimeout(timer))
 }
 
-/** Ask main for the script's spec, when the command names a script and the message is known; null when there is nothing to ask. */
-function askSpec(chatId: string, messageId: string | null, command: string): Promise<ScriptSpec | null> | null {
-  if (!messageId || commandScript(command) === null) return null
+/** Ask main for the script's spec, when the command names a script and its source is known; null when there is nothing to ask. */
+function askSpec(
+  source: Pick<RunScriptSource, 'chatId' | 'messageId' | 'agentId' | 'viaChatAgent'>, command: string
+): Promise<ScriptSpec | null> | null {
+  const input = sourceInput(source)
+  if (!input || commandScript(command) === null) return null
   try {
-    return window.api.userCommands.inspect({ chatId, messageId, command })
+    return window.api.userCommands.inspect({ ...input, command })
       .then((result) => (result.ok ? result.spec : null))
       .catch(() => null)
   } catch {
@@ -163,7 +186,7 @@ export const useRunScriptStore = create<RunScriptState>((set, get) => ({
   openFromCode: async ({ command, origin, ...source }) => {
     if (get().pending) return
     const ticket = ++lastOpen
-    const asked = askSpec(source.chatId, source.messageId, command)
+    const asked = askSpec(source, command)
     // Nothing to ask: the window opens at once, in this task.
     const spec = asked === null ? null : await specWithin(asked)
     set((state) => state.pending || ticket !== lastOpen ? state : {
@@ -179,7 +202,7 @@ export const useRunScriptStore = create<RunScriptState>((set, get) => ({
     if (get().pending) return
     const ticket = ++lastOpen
     const known = get().runSources[run.id]
-    const asked = askSpec(chatId, known?.messageId ?? null, run.title)
+    const asked = askSpec({ chatId, messageId: known?.messageId ?? null, agentId: known?.agentId ?? null, viaChatAgent: known?.viaChatAgent }, run.title)
     const spec = asked === null ? null : await specWithin(asked)
     set((state) => {
       if (state.pending || ticket !== lastOpen) return state
@@ -189,6 +212,7 @@ export const useRunScriptStore = create<RunScriptState>((set, get) => ({
           chatId,
           messageId: source?.messageId ?? null,
           agentId: source?.agentId ?? run.agentId,
+          ...(source?.viaChatAgent ? { viaChatAgent: true } : {}),
           folder: source?.folder ?? run.detail,
           command: run.title,
           reason: null,
@@ -213,7 +237,7 @@ export const useRunScriptStore = create<RunScriptState>((set, get) => ({
       return !pending && ticket === lastOpen && (shown === null || shown.seq === seqAtCall)
     }
     // Asked alongside the run, so the window rarely waits for it.
-    const asked = background ? null : askSpec(source.chatId, source.messageId, command)
+    const asked = background ? null : askSpec(source, command)
     const result = await window.api.userCommands.run({
       chatId: source.chatId, messageId: source.messageId ?? '', command, reviewed: false, columns
     })
@@ -252,20 +276,24 @@ export const useRunScriptStore = create<RunScriptState>((set, get) => ({
       set({ error: 'Type a command to run.' })
       return
     }
-    const messageId = shown.messageId ?? fallbackMessageId
-    if (!messageId) {
+    const input = sourceInput(shown, fallbackMessageId)
+    if (!input) {
       set({ error: 'The message this command came from is no longer in the chat.' })
       return
     }
+    const messageId = 'messageId' in input ? input.messageId : null
     set({ pending: background ? 'background' : 'run', error: null })
     try {
-      const result = await window.api.userCommands.run({ chatId: shown.chatId, messageId, command, reviewed: true, columns })
+      const result = await window.api.userCommands.run({ ...input, command, reviewed: true, columns })
       const still = get().window?.seq === shown.seq
       if (!result.ok) {
         set(still ? { pending: null, error: result.reason } : { pending: null })
         return
       }
-      const source: RunScriptSource = { chatId: shown.chatId, messageId, agentId: shown.agentId, folder: result.folder }
+      const source: RunScriptSource = {
+        chatId: shown.chatId, messageId, agentId: shown.agentId, folder: result.folder,
+        ...(messageId === null ? { viaChatAgent: true } : {})
+      }
       set((state) => ({ pending: null, runSources: { ...state.runSources, [result.itemId]: source } }))
       if (!still) return
       if (background) {

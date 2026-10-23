@@ -29,7 +29,8 @@ const service = vi.hoisted(() => ({
   dismiss: vi.fn(() => ({ ok: true })),
   watch: vi.fn(),
   inspect: vi.fn(async () => ({ ok: true, spec: null, folder: '~/a' })),
-  argPathFolder: vi.fn(async (): Promise<unknown> => ({ ok: true, folder: '/agents/a' }))
+  argPathFolder: vi.fn(async (): Promise<unknown> => ({ ok: true, folder: '/agents/a' })),
+  commandForFile: vi.fn(async () => ({ ok: true, command: 'python3 x.py', folder: '~/a' }))
 }))
 vi.mock('../services/userCommands', () => ({ userCommandService: service }))
 vi.mock('../services/userCommands/userCommandService', () => ({
@@ -98,7 +99,7 @@ describe('userCommands IPC', () => {
 
   it('chooses a path in the agent\'s folder through the desktop dialog, relative when inside it', async () => {
     expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: true, path: 'data/in.csv' })
-    expect(service.argPathFolder).toHaveBeenCalledWith('profile-1', 'mine', 'm')
+    expect(service.argPathFolder).toHaveBeenCalledWith('profile-1', 'mine', 'm', undefined)
     expect(dialog.choose).toHaveBeenCalledWith(sender, '/agents/a')
     dialog.choose.mockResolvedValueOnce(null)
     expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: true, canceled: true })
@@ -109,5 +110,24 @@ describe('userCommands IPC', () => {
     service.argPathFolder.mockResolvedValueOnce({ ok: false, code: 'folder_missing', reason: 'gone' })
     expect(await invoke('userCommands:chooseArgPath', 'mine', 'm')).toEqual({ ok: false, code: 'folder_missing', reason: 'gone' })
     expect(dialog.choose).not.toHaveBeenCalled()
+  })
+
+  it('passes the chat\'s agent as the source when there is no message, as strings only', async () => {
+    await invoke('userCommands:run', { chatId: 'mine', agentId: 'folder:a', command: 'ls', reviewed: true })
+    expect(service.run).toHaveBeenLastCalledWith('profile-1', { chatId: 'mine', agentId: 'folder:a', command: 'ls', reviewed: true })
+    await invoke('userCommands:inspect', { chatId: 'mine', messageId: 'm', agentId: 7, command: 'x' })
+    expect(service.inspect).toHaveBeenLastCalledWith('profile-1', { chatId: 'mine', messageId: 'm', command: 'x' })
+    await invoke('userCommands:chooseArgPath', 'mine', null, 'folder:a')
+    expect(service.argPathFolder).toHaveBeenLastCalledWith('profile-1', 'mine', undefined, 'folder:a')
+  })
+
+  it('builds a file\'s command for a live chat, passing only the fields it knows; refuses another chat before the service', async () => {
+    expect(await invoke('userCommands:commandForFile', { chatId: 'mine', agentId: 'folder:a', path: '/agents/a/x.py', extra: 1 }))
+      .toEqual({ ok: true, command: 'python3 x.py', folder: '~/a' })
+    expect(service.commandForFile).toHaveBeenCalledWith('profile-1', { chatId: 'mine', agentId: 'folder:a', path: '/agents/a/x.py' })
+    for (const chatId of ['binned', 'theirs', 42]) {
+      expect(await invoke('userCommands:commandForFile', { chatId, agentId: 'folder:a', path: '/x' })).toMatchObject({ ok: false, code: 'chat_not_found' })
+    }
+    expect(service.commandForFile).toHaveBeenCalledTimes(1)
   })
 })

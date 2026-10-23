@@ -1,7 +1,7 @@
 import { useId, useRef } from 'react'
 import { CalendarDays } from 'lucide-react'
 import { COMPUTED_DEFAULT_TEXT, type ScriptParam, type ScriptSpec } from '../../../../shared/scriptSpec'
-import type { ScriptValues } from '../../../../shared/scriptArgs'
+import { switchOn, type ScriptValues } from '../../../../shared/scriptArgs'
 import { SettingsInfoTip, SettingsSwitch } from '../settings/SettingsLayout'
 
 /** Marks the window's portaled ⋯ menu, so a press on it is not a press outside the card. */
@@ -121,15 +121,25 @@ export function RunScriptForm({
   )
 }
 
+/** A param's flags as its tip and title name them: `--x, -x`, with a switch's off flags after a slash (`--x/--no-x`). */
+function flagList(param: ScriptParam): string {
+  const on = param.flags.join(', ')
+  return param.offFlags.length > 0 ? `${on} / ${param.offFlags.join(', ')}` : on
+}
+
 /** The (?) beside a parameter's label: its help, its default when a segmented control cannot show it, and its flags. */
 function ParamTip({ param }: { param: ScriptParam }): React.JSX.Element | null {
-  const shownDefault = segmented(param) ? defaultLabel(param) : null
+  // A `--x/--no-x` switch can open already on with nothing on the line: its tip says so.
+  const negatable = param.kind === 'switch' && param.offFlags.length > 0
+  const shownDefault = segmented(param) ? defaultLabel(param) : negatable ? (param.defaultOn ? 'on' : 'off') : null
   if (!param.help && shownDefault === null) return null
+  const flags = flagList(param)
   return (
     <SettingsInfoTip label={`About ${param.label}`}>
       {param.help && <p className="whitespace-pre-line">{param.help}</p>}
       {shownDefault !== null && <p>Default: <span className="font-mono">{shownDefault}</span></p>}
-      {param.flags.length > 0 && <p className="font-mono text-[12px] text-[var(--color-text-muted)]">{param.flags.join(', ')}</p>}
+      {/* A getopts letter no variable names is labelled by its flag: not said twice. */}
+      {param.flags.length > 0 && flags !== param.label && <p className="font-mono text-[12px] text-[var(--color-text-muted)]">{flags}</p>}
     </SettingsInfoTip>
   )
 }
@@ -144,13 +154,15 @@ function ParamRow({ param, value, locked, onValue, onChoosePath }: {
   const id = useId()
   const labelTone = param.writes ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-secondary)]'
   if (param.kind === 'switch') {
+    // The effective value: a `--x/--no-x` switch declared on shows on until the line turns it off.
+    const on = switchOn(param, value)
     return (
       <div className="flex h-6 items-center gap-1">
-        <label htmlFor={id} className={`min-w-0 truncate ${labelClass} ${labelTone}`} title={param.flags.join(', ')}>{param.label}</label>
+        <label htmlFor={id} className={`min-w-0 truncate ${labelClass} ${labelTone}`} title={flagList(param)}>{param.label}</label>
         <ParamTip param={param} />
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {param.writes && <span className="text-[10px] text-[var(--color-warning)]">writes</span>}
-          <SettingsSwitch id={id} checked={value === true} disabled={locked} onToggle={() => onValue(value !== true)} />
+          <SettingsSwitch id={id} checked={on} disabled={locked} onToggle={() => onValue(!on)} />
         </span>
       </div>
     )

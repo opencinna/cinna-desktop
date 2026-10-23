@@ -41,6 +41,37 @@ function wrappedRows(line: string, cells: number): number {
 }
 
 /**
+ * The visual row `caret` is on in `line` soft-wrapped `cells` wide, and how
+ * many rows the line takes, by the same breaks as the rows are counted with.
+ * ↑/↓ recall history only from the first / last row; on a wrapped line they
+ * otherwise move the caret between its rows, as in any field.
+ */
+export function caretVisualRow(line: string, cells: number, caret: number): { row: number; rows: number } {
+  const rows = wrappedRows(line, cells)
+  if (rows === 1) return { row: 0, rows }
+  let row = 0
+  let col = 0
+  let at = 0
+  for (const token of line.match(/\S+\s*|\s+/g) ?? []) {
+    const word = token.trimEnd().length
+    if (col > 0 && col + word > cells) { row++; col = 0 }
+    const inToken = caret < at + token.length
+    if (word > cells) {
+      const last = row + Math.ceil(word / cells) - 1
+      if (inToken) return { row: caret - at < word ? row + Math.floor((caret - at) / cells) : last, rows }
+      row = last
+      col = word % cells || cells
+    } else {
+      if (inToken) return { row, rows }
+      col += word
+    }
+    col += token.length - word
+    at += token.length
+  }
+  return { row, rows }
+}
+
+/**
  * The command line's width in monospace cells, measured at open from the
  * field and a probe in its font; null where nothing is laid out.
  */
@@ -69,7 +100,9 @@ export function measureCharsPerLine(field: HTMLTextAreaElement | null): number |
  * nothing (the press that opened the window must not run it), nor does an
  * Enter that commits an IME composition. On a one-line command ↑ and ↓
  * walk `history` (the chat's earlier commands, most recent first) and back to
- * what was typed. Read-only while a run is going.
+ * what was typed — from the first (↑) or last (↓) visual row only, so on a
+ * line that wraps they first move the caret between its rows. Read-only while
+ * a run is going.
  */
 export const RunScriptCommandLine = forwardRef<HTMLTextAreaElement, {
   value: string
@@ -139,7 +172,15 @@ export const RunScriptCommandLine = forwardRef<HTMLTextAreaElement, {
           }
           if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !readOnly && !multiline && !value.includes('\n')
             && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-            if (recall(event.key === 'ArrowUp' ? 1 : -1)) event.preventDefault()
+            const up = event.key === 'ArrowUp'
+            const field = event.currentTarget
+            const cells = measureCharsPerLine(field)
+            if (cells !== null && cells >= 1) {
+              const { row, rows } = caretVisualRow(value, cells, up ? field.selectionStart : field.selectionEnd)
+              // Not yet on the edge row: the caret moves between the line's rows.
+              if (up ? row > 0 : row < rows - 1) return
+            }
+            if (recall(up ? 1 : -1)) event.preventDefault()
           }
         }}
         // Rows fixed at open, no resize: the window keeps its layout while the user types.

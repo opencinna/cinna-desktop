@@ -1,12 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionActivityHub } from '../sessionActivityHub'
 import { stopSessionActivity } from '../sessionActivityStop'
-import { createUserCommandService, displayPath, relativeArgPath, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
-import { USER_COMMAND_RUN_REASONS, type UserCommandOutputFrame } from '../../../shared/userCommands'
+import { createUserCommandService, displayPath, fileRunCommand, relativeArgPath, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
+import { USER_COMMAND_NOT_EXECUTABLE_REASON, USER_COMMAND_NOT_RUNNABLE_REASON, USER_COMMAND_RUN_REASONS, type UserCommandOutputFrame } from '../../../shared/userCommands'
 import { OWN_COMMAND_REASONS, readableOwnScript } from '../localAgents/ownCommandPolicy'
 
 // The real check, unless a test stands in for a file swapped after it.
@@ -581,5 +581,160 @@ describe('relativeArgPath', () => {
     expect(relativeArgPath(folder, join(base, 'outside', 'evil.sh'))).toBe(join(base, 'outside', 'evil.sh'))
     // A path that reaches outside through a symlink is outside.
     expect(relativeArgPath(folder, join(folder, 'linked', 'evil.sh'))).toBe(join(folder, 'linked', 'evil.sh'))
+  })
+})
+
+describe('the source: a message, or the chat\'s own agent when there is none', () => {
+  const RUN = 'sh scripts/hello.sh you'
+
+  it('runs as the chat\'s agent when there is no message and the agent named is the chat\'s', async () => {
+    const w = world()
+    const result = await w.service.run('profile', { chatId: 'chat-1', agentId: 'agent-root', command: RUN, reviewed: true })
+    expect(result).toMatchObject({ ok: true })
+    if (!result.ok) return
+    expect(item(w, result.itemId)).toMatchObject({ agentId: 'agent-root' })
+  })
+
+  it('refuses another agent than the chat\'s, everywhere the source is read', async () => {
+    const w = world()
+    const source = { chatId: 'chat-1', agentId: 'agent-a' }
+    expect(await w.service.run('profile', { ...source, command: RUN, reviewed: true })).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(await w.service.inspect('profile', { ...source, command: 'python3 scripts/report.py' })).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(await w.service.argPathFolder('profile', 'chat-1', undefined, 'agent-a')).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(await w.service.commandForFile('profile', { ...source, path: join(folder, 'scripts', 'hello.sh') }))
+      .toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(w.service.size()).toBe(0)
+  })
+
+  it('refuses a trashed chat even with its own agent', async () => {
+    const w = world()
+    w.state.trashed = true
+    expect(await w.service.run('profile', { chatId: 'chat-1', agentId: 'agent-root', command: RUN, reviewed: true }))
+      .toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(await w.service.commandForFile('profile', { chatId: 'chat-1', agentId: 'agent-root', path: join(folder, 'scripts', 'hello.sh') }))
+      .toMatchObject({ ok: false, code: 'chat_not_found' })
+  })
+
+  it('takes the message when both are given: its agent, and its refusal', async () => {
+    const w = world()
+    const result = await w.service.run('profile', { chatId: 'chat-1', messageId: 'msg-1', agentId: 'agent-root', command: RUN, reviewed: true })
+    expect(result).toMatchObject({ ok: true })
+    if (result.ok) expect(item(w, result.itemId)).toMatchObject({ agentId: 'agent-a' })
+    // A message that is not the chat's never falls back to the agent beside it.
+    expect(await w.service.run('profile', { chatId: 'chat-1', messageId: 'msg-2', agentId: 'agent-root', command: RUN, reviewed: true }))
+      .toMatchObject({ ok: false, code: 'chat_not_found' })
+  })
+
+  it('refuses with neither', async () => {
+    const w = world()
+    expect(await w.service.run('profile', { chatId: 'chat-1', command: RUN, reviewed: true })).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(await w.service.argPathFolder('profile', 'chat-1', '', '')).toMatchObject({ ok: false, code: 'chat_not_found' })
+  })
+
+  it('names the folder for the path chooser and reads a spec through the chat\'s agent', async () => {
+    const w = world()
+    expect(await w.service.argPathFolder('profile', 'chat-1', undefined, 'agent-root')).toEqual({ ok: true, folder })
+    file(join(folder, 'scripts', 'source.py'), 'import argparse\np = argparse.ArgumentParser()\np.add_argument("--apply", action="store_true")\np.parse_args()\n')
+    const read = await w.service.inspect('profile', { chatId: 'chat-1', agentId: 'agent-root', command: 'python3 scripts/source.py' })
+    expect(read.ok && read.spec?.params.map((param) => param.id)).toEqual(['apply'])
+  })
+})
+
+describe('commandForFile: the command the file preview\'s Run… opens on', () => {
+  let py: string
+  const forFile = (w: World, path: string) => w.service.commandForFile('profile', { chatId: 'chat-1', agentId: 'agent-root', path })
+
+  beforeAll(() => {
+    py = join(base, 'pyagent')
+    file(join(py, 'pyproject.toml'), '[project]\nname = "x"\n')
+    file(join(py, 'scripts', 'report.py'), 'print(1)\n')
+    file(join(folder, 'scripts', 'plain.py'), 'print(1)\n')
+    file(join(folder, 'scripts', 'my tool.py'), 'print(1)\n')
+    file(join(folder, 'bin', 'tool.cli'), '#!/usr/bin/env python3\nprint(1)\n')
+    chmodSync(join(folder, 'bin', 'tool.cli'), 0o755)
+    file(join(folder, 'bin', 'envbash.cli'), '#!/usr/bin/env bash\necho hi\n')
+    chmodSync(join(folder, 'bin', 'envbash.cli'), 0o644)
+    file(join(folder, 'bin', 'strict.cli'), '#!/bin/bash -e\necho hi\n')
+    chmodSync(join(folder, 'bin', 'strict.cli'), 0o644)
+    file(join(folder, 'bin', 'node-tool.cli'), '#!/usr/bin/env node\nconsole.log(1)\n')
+    chmodSync(join(folder, 'bin', 'node-tool.cli'), 0o644)
+    file(join(folder, 'credentials', 'rotate.sh'), 'echo secret\n')
+    file(join(base, 'outside', 'evil.py'), 'print(1)\n')
+    file(join(base, 'skills', 'pinned', 'scripts', 'skill.py'), 'print(1)\n')
+  })
+
+  it('runs Python through uv when the folder has a pyproject.toml, else python3', async () => {
+    const w = world()
+    expect(await forFile(w, join(folder, 'scripts', 'plain.py'))).toEqual({ ok: true, command: 'python3 scripts/plain.py', folder: displayPath(folder) })
+    w.state.workspace = { folder: py, scriptRoots: [] }
+    expect(await forFile(w, join(py, 'scripts', 'report.py'))).toMatchObject({ ok: true, command: 'uv run scripts/report.py' })
+  })
+
+  it('quotes the path, runs a .sh under bash and an executable with a shebang by its path', async () => {
+    const w = world()
+    expect(await forFile(w, join(folder, 'scripts', 'my tool.py'))).toMatchObject({ ok: true, command: "python3 'scripts/my tool.py'" })
+    expect(await forFile(w, join(folder, 'scripts', 'hello.sh'))).toMatchObject({ ok: true, command: 'bash scripts/hello.sh' })
+    expect(await forFile(w, join(folder, 'bin', 'tool.cli'))).toMatchObject({ ok: true, command: './bin/tool.cli' })
+  })
+
+  it('runs a non-executable shebang file under the shell it names alone, and refuses anything more', async () => {
+    const w = world()
+    expect(await forFile(w, join(folder, 'bin', 'envbash.cli'))).toMatchObject({ ok: true, command: 'bash bin/envbash.cli' })
+    expect(await forFile(w, join(folder, 'bin', 'strict.cli'))).toMatchObject({ ok: false, code: 'not_runnable' })
+    expect(await forFile(w, join(folder, 'bin', 'node-tool.cli'))).toMatchObject({
+      ok: false, code: 'not_runnable', reason: USER_COMMAND_NOT_EXECUTABLE_REASON
+    })
+    // A file that is no script at all keeps the general sentence.
+    expect(await forFile(w, join(folder, 'notes', 'a.txt'))).toMatchObject({ reason: USER_COMMAND_NOT_RUNNABLE_REASON })
+  })
+
+  it.each([
+    ['outside the folder', () => join(base, 'outside', 'evil.py')],
+    ['outside through a symlink', () => join(folder, 'linked', 'evil.sh')],
+    ['a symlink to a file outside', () => join(folder, 'scripts', 'escape.py')],
+    ['a credential file', () => join(folder, 'credentials', 'rotate.sh')],
+    ['a file that is not a script', () => join(folder, 'notes', 'a.txt')],
+    ['a folder', () => join(folder, 'scripts')],
+    ['missing', () => join(folder, 'scripts', 'none.py')],
+    ['a relative path', () => 'scripts/plain.py'],
+    ['a pinned skill\'s script', () => join(base, 'skills', 'pinned', 'scripts', 'skill.py')]
+  ])('refuses %s as not_runnable', async (_name, path) => {
+    const w = world()
+    w.state.workspace = { folder, scriptRoots: [join(base, 'skills', 'pinned')] }
+    expect(await forFile(w, path())).toMatchObject({ ok: false, code: 'not_runnable' })
+  })
+
+  it('refuses as data for a folder that is gone or not local', async () => {
+    const w = world()
+    w.state.workspace = 'missing'
+    expect(await forFile(w, join(folder, 'scripts', 'plain.py'))).toMatchObject({ ok: false, code: 'folder_missing' })
+    w.state.workspace = null
+    expect(await forFile(w, join(folder, 'scripts', 'plain.py'))).toMatchObject({ ok: false, code: 'not_local' })
+  })
+})
+
+describe('fileRunCommand', () => {
+  const facts = { firstLine: null, executable: false, pyproject: false }
+  it.each([
+    ['a.py', facts, 'python3 a.py'],
+    ['a.py', { ...facts, pyproject: true }, 'uv run a.py'],
+    ['run.sh', { ...facts, executable: true }, 'bash run.sh'],
+    ["it's/x.cli", { ...facts, firstLine: '#!/bin/sh', executable: true }, "'./it'\\''s/x.cli'"],
+    ['x.cli', { ...facts, firstLine: '#!/bin/sh' }, 'sh x.cli'],
+    ['bin/x', { ...facts, firstLine: '#!/bin/sh', executable: true }, null],
+    ['.x', { ...facts, firstLine: '#!/bin/sh', executable: true }, null],
+    ['x.cli', { ...facts, firstLine: '#!/usr/bin/env python', pyproject: true }, 'uv run python x.cli'],
+    ['x.cli', { ...facts, firstLine: '#!/usr/bin/env -S bash -e' }, null],
+    ['x.cli', { ...facts, firstLine: '#!bash' }, null],
+    ['x.cli', { ...facts, firstLine: 'echo hi', executable: true }, null],
+    ['-x.sh', facts, 'bash ./-x.sh'],
+    ['--with=a.py', { ...facts, pyproject: true }, "uv run './--with=a.py'"],
+    ['-run.cli', { ...facts, firstLine: '#!/bin/sh' }, 'sh ./-run.cli'],
+    ['my tool.py', facts, "python3 'my tool.py'"],
+    ['.py', facts, null],
+    ['../a.py', facts, null],
+    ['', facts, null]
+  ])('%s %o → %s', (rel, more, expected) => {
+    expect(fileRunCommand({ rel, ...more })).toBe(expected)
   })
 })

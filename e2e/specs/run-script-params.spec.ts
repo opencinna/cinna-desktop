@@ -31,6 +31,11 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * - Ticking Apply rewrites the line, keeping its start verbatim; Run runs it,
  *   and the script echoes `italy --year 2026 --apply`. A screenshot is
  *   attached as `run-script-params`.
+ * - A click script and a typer script get their forms from their decorators
+ *   and signature: a `--cache/--no-cache` option declared on shows one switch,
+ *   on, and turning it off writes `--no-cache` (on again writes nothing); a
+ *   typer `bool = False` turned on writes `--dry-run`. Neither is run: click
+ *   and typer need not be installed where the suite runs.
  *
  * ## What it does not
  *
@@ -61,12 +66,52 @@ args = parser.parse_args()
 print("ARGS " + " ".join(sys.argv[1:]))
 `
 
-const REPLY = `Run \`${COMMAND}\` to see the report.`
+const CLICK_COMMAND = 'python3 scripts/sync.py italy'
+const SYNC_PY = `"""Sync the ledger for a scope."""
+import click
 
-const ANSWERS: FakeAcpScript = {
-  newSession: { sessionId: 'ses_e2e_run_script_params' },
-  prompt: {
-    emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: REPLY } } }]
+
+@click.command()
+@click.argument("scope")
+@click.option("--year", type=int, default=2025, help="Fiscal year")
+@click.option("--cache/--no-cache", default=True, help="Use the local cache")
+def main(scope, year, cache):
+    click.echo(f"ARGS {scope} {year} {cache}")
+
+
+if __name__ == "__main__":
+    main()
+`
+
+const TYPER_COMMAND = 'python3 scripts/tidy.py notes'
+const TIDY_PY = `"""Tidy a folder of notes."""
+import typer
+
+
+def main(folder: str, keep: int = 3, dry_run: bool = False):
+    print(folder, keep, dry_run)
+
+
+if __name__ == "__main__":
+    typer.run(main)
+`
+
+/** The script the agent's one reply names, and the file the folder holds. */
+interface Scenario {
+  command: string
+  file: string
+  source: string
+}
+
+const ARGPARSE: Scenario = { command: COMMAND, file: 'report.py', source: REPORT_PY }
+
+function answers(command: string): FakeAcpScript {
+  const reply = `Run \`${command}\` to see the report.`
+  return {
+    newSession: { sessionId: 'ses_e2e_run_script_params' },
+    prompt: {
+      emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } }]
+    }
   }
 }
 
@@ -99,9 +144,9 @@ test.afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
-async function arrange(cinna: CinnaApp): Promise<void> {
+async function arrange(cinna: CinnaApp, scenario: Scenario = ARGPARSE): Promise<void> {
   await cinna.skipOnboarding()
-  await installFakeAcpEngine(cinna, ANSWERS)
+  await installFakeAcpEngine(cinna, answers(scenario.command))
   await cinna.page.evaluate(
     async ({ host, model }) => {
       const { id } = await window.api.providers.upsert({ type: 'ollama', name: 'Ollama', baseUrl: host, enabled: true })
@@ -112,7 +157,7 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   const root = await addAgentRoot(cinna)
   const agent = await createFolderAgent(cinna, root, AGENT, AGENT)
   mkdirSync(join(agent.path, 'scripts'), { recursive: true })
-  writeFileSync(join(agent.path, 'scripts', 'report.py'), REPORT_PY)
+  writeFileSync(join(agent.path, 'scripts', scenario.file), scenario.source)
 
   await cinna.relaunch()
   await cinna.skipOnboarding()
@@ -125,11 +170,11 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await input.fill('How do I see the report?')
   await input.press('Enter')
-  await expect(inlineCode(page)).toBeVisible({ timeout: 30_000 })
+  await expect(inlineCode(page, scenario.command)).toBeVisible({ timeout: 30_000 })
 }
 
-function inlineCode(page: Page): Locator {
-  return page.locator('[data-message-id] code').filter({ hasText: COMMAND })
+function inlineCode(page: Page, command = COMMAND): Locator {
+  return page.locator('[data-message-id] code').filter({ hasText: command })
 }
 
 function runWindow(page: Page): Locator {
@@ -168,4 +213,47 @@ test('a click on an argparse script opens the form pre-filled; a switch rewrites
   await expect(card.locator('[data-slot="state"]')).toContainText('Completed')
   // The form reads, and does not edit, while the line is not the user's to change.
   await expect(form.getByLabel(/^Scope/)).toHaveValue('italy')
+})
+
+test('a click script: a --cache/--no-cache option declared on is one switch, on, and turning it off writes --no-cache', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  await arrange(cinna, { command: CLICK_COMMAND, file: 'sync.py', source: SYNC_PY })
+  const page = cinna.page
+
+  await inlineCode(page, CLICK_COMMAND).click()
+  const card = runWindow(page)
+  await expect(card).toHaveAccessibleName('Run sync.py')
+  const form = card.getByRole('complementary', { name: 'Parameters', exact: true })
+  await expect(form.getByLabel(/^Scope/)).toHaveValue('italy')
+  await expect(form.getByLabel('Year', { exact: true })).toHaveAttribute('placeholder', 'default: 2025')
+  const cache = form.getByRole('switch', { name: 'Cache', exact: true })
+  await expect(cache).toHaveAttribute('aria-checked', 'true')
+
+  const line = card.getByRole('textbox', { name: 'Command', exact: true })
+  await cache.click()
+  await expect(cache).toHaveAttribute('aria-checked', 'false')
+  await expect(line).toHaveValue(`${CLICK_COMMAND} --no-cache`)
+  await cache.click()
+  await expect(cache).toHaveAttribute('aria-checked', 'true')
+  await expect(line).toHaveValue(CLICK_COMMAND)
+})
+
+test('a typer script: a bool parameter off by default is a switch that writes --dry-run', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  await arrange(cinna, { command: TYPER_COMMAND, file: 'tidy.py', source: TIDY_PY })
+  const page = cinna.page
+
+  await inlineCode(page, TYPER_COMMAND).click()
+  const card = runWindow(page)
+  await expect(card).toHaveAccessibleName('Run tidy.py')
+  const form = card.getByRole('complementary', { name: 'Parameters', exact: true })
+  await expect(form.getByLabel(/^Folder/)).toHaveValue('notes')
+  await expect(form.getByLabel('Keep', { exact: true })).toHaveAttribute('placeholder', 'default: 3')
+  const dryRun = form.getByRole('switch', { name: 'Dry run', exact: true })
+  await expect(dryRun).toHaveAttribute('aria-checked', 'false')
+
+  const line = card.getByRole('textbox', { name: 'Command', exact: true })
+  await dryRun.click()
+  await expect(dryRun).toHaveAttribute('aria-checked', 'true')
+  await expect(line).toHaveValue(`${TYPER_COMMAND} --dry-run`)
 })

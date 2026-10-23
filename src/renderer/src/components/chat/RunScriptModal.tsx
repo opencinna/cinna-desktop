@@ -4,11 +4,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Copy, ExternalLink, FileText, FolderOpen, Loader2, Minus, MoreHorizontal, Paperclip, SquareTerminal, X } from 'lucide-react'
 import type { SessionActivityItem } from '../../../../shared/sessionActivity'
 import { COMMAND_COLUMNS, homeDisplayPath, type UserCommandEnd, type UserCommandOutputFrame } from '../../../../shared/userCommands'
-import { buildCommand, commandScript, editCommand, readCommand, type ScriptForm, type ScriptValues } from '../../../../shared/scriptArgs'
+import { buildCommand, commandScript, editCommand, preferredFlag, preferredOffFlag, readCommand, type ScriptForm, type ScriptValues } from '../../../../shared/scriptArgs'
 import type { ScriptSpec } from '../../../../shared/scriptSpec'
+import { splitCommandLine } from '../../../../shared/commandRun'
 import { useSessionActivity } from '../../hooks/useSessionActivity'
 import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
-import { useRunScriptStore, type RunScriptWindow } from '../../stores/runScript.store'
+import { sourceInput, useRunScriptStore, type RunScriptWindow } from '../../stores/runScript.store'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { usePopover } from '../ui/usePopover'
@@ -68,10 +69,14 @@ export const FORM_LINE_MAX_ROWS = 3
  */
 export function formSizingLine(spec: ScriptSpec | null, command: string): string {
   if (!spec) return command
-  const words = new Set(command.split(/\s+/))
+  // The words as the shell reads them (`'--apply'` names `--apply`); a line
+  // the tokenizer refuses falls back to its whitespace-separated words.
+  const words = new Set(splitCommandLine(command) ?? command.split(/\s+/))
   const extra = spec.params
-    .filter((param) => param.kind === 'switch' && param.flags.length > 0 && !param.flags.some((flag) => words.has(flag)))
-    .map((param) => param.flags[param.flags.length - 1])
+    .filter((param) => param.kind === 'switch' && param.flags.length > 0 &&
+      ![...param.flags, ...param.offFlags].some((flag) => words.has(flag)))
+    // The flag a toggle writes (as `paramArgs` does): the off flag (`--no-x`) for a switch on by default.
+    .map((param) => param.defaultOn && param.offFlags.length > 0 ? preferredOffFlag(param) : preferredFlag(param))
   return extra.length === 0 ? command : `${command} ${extra.join(' ')}`
 }
 
@@ -486,10 +491,12 @@ function RunScriptCard({ view, exiting, onExited }: {
               scriptName={title}
               onChange={onFormChange}
               onChoosePath={async () => {
-                const messageId = view.messageId ?? fallbackMessageId()
-                if (!messageId) return null
+                const input = sourceInput(view, fallbackMessageId())
+                if (!input) return null
                 try {
-                  const result = await window.api.userCommands.chooseArgPath(chatId, messageId)
+                  const result = 'messageId' in input
+                    ? await window.api.userCommands.chooseArgPath(chatId, input.messageId)
+                    : await window.api.userCommands.chooseArgPath(chatId, null, input.agentId)
                   if (!result.ok) { setActionError(result.reason); return null }
                   setActionError(null)
                   return 'canceled' in result ? null : result.path

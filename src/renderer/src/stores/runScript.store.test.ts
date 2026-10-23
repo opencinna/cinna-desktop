@@ -182,3 +182,30 @@ describe('reading the script\'s parameters as the window opens', () => {
     expect(useRunScriptStore.getState().window).toMatchObject({ runs: ['cmd-8'], spec: null })
   })
 })
+
+describe('a window opened from the file preview, with no message', () => {
+  const fromFile = { chatId: 'chat-1', messageId: null, agentId: 'folder:a', viaChatAgent: true, folder: '~/agents/a', origin: null }
+
+  it('asks for the spec, runs, and reopens from the badge through the chat\'s agent', async () => {
+    await useRunScriptStore.getState().openFromCode({ ...fromFile, command: 'python3 scripts/x.py' })
+    expect(inspect).toHaveBeenCalledWith({ chatId: 'chat-1', agentId: 'folder:a', command: 'python3 scripts/x.py' })
+    await useRunScriptStore.getState().start('python3 scripts/x.py', false, 100, 'msg-other')
+    // The chat's agent, not a reply found for it.
+    expect(run).toHaveBeenCalledWith({ chatId: 'chat-1', agentId: 'folder:a', command: 'python3 scripts/x.py', reviewed: true, columns: 100 })
+    expect(useRunScriptStore.getState().runSources['cmd-1']).toMatchObject({ messageId: null, viaChatAgent: true })
+    useRunScriptStore.getState().close('close')
+    inspect.mockClear()
+    await useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-1', title: 'python3 scripts/x.py', agentId: 'folder:a', detail: null })
+    expect(inspect).toHaveBeenCalledWith({ chatId: 'chat-1', agentId: 'folder:a', command: 'python3 scripts/x.py' })
+    expect(useRunScriptStore.getState().window).toMatchObject({ viaChatAgent: true, messageId: null })
+  })
+
+  it('never sends the agent for a window that came from a message', async () => {
+    await useRunScriptStore.getState().openForRun('chat-1', { id: 'cmd-7', title: 'python3 scripts/x.py', agentId: 'folder:a', detail: null })
+    // A run this renderer did not start: no message, no chat-agent source, so no question.
+    expect(inspect).not.toHaveBeenCalled()
+    await useRunScriptStore.getState().start('python3 scripts/x.py', false, 100, null)
+    expect(run).not.toHaveBeenCalled()
+    expect(useRunScriptStore.getState().error).toBe('The message this command came from is no longer in the chat.')
+  })
+})

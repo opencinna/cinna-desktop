@@ -139,7 +139,9 @@ import {
   type UserCommandRunResult,
   type UserCommandInspectInput,
   type UserCommandInspectResult,
-  type UserCommandChooseArgPathResult
+  type UserCommandChooseArgPathResult,
+  type UserCommandForFileInput,
+  type UserCommandForFileResult
 } from '../shared/userCommands'
 import {
   SESSION_TELEMETRY_CHANGED_CHANNEL,
@@ -1110,9 +1112,15 @@ const api = {
     run: (input: UserCommandRunInput): Promise<UserCommandRunResult> => ipcRenderer.invoke('userCommands:run', input),
     /** The parameters of the script a command names, read from its source (never run); `spec: null` when none can be read. */
     inspect: (input: UserCommandInspectInput): Promise<UserCommandInspectResult> => ipcRenderer.invoke('userCommands:inspect', input),
-    /** A native open dialog at the agent's folder; the path relative to the folder when inside it. */
-    chooseArgPath: (chatId: string, messageId: string): Promise<UserCommandChooseArgPathResult> =>
-      ipcRenderer.invoke('userCommands:chooseArgPath', chatId, messageId),
+    /** The file preview's Run…: the command for a script in the agent's folder, built by main; nothing runs. */
+    commandForFile: (input: UserCommandForFileInput): Promise<UserCommandForFileResult> =>
+      ipcRenderer.invoke('userCommands:commandForFile', input),
+    /**
+     * A native open dialog at the agent's folder; the path relative to the
+     * folder when inside it. The message, or with none the chat's agent.
+     */
+    chooseArgPath: (chatId: string, messageId: string | null, agentId?: string | null): Promise<UserCommandChooseArgPathResult> =>
+      ipcRenderer.invoke('userCommands:chooseArgPath', chatId, messageId, agentId ?? null),
     /**
      * Follow a run's output: `start` with the log's tail, live `chunk`s, then
      * `end` (or one `missing`). Returns the unsubscribe; closing never stops the run.

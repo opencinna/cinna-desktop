@@ -6,11 +6,13 @@ import {
   Globe,
   Image as ImageIcon,
   Loader2,
+  SquareTerminal,
   TableOfContents,
   Upload,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { QueryClientContext } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { markdownToc } from '../../utils/markdownToc'
@@ -28,6 +30,8 @@ import {
   actionErrorRepeatsBody,
   actionErrorText,
   agentFileErrorText,
+  isRunnableScriptRef,
+  previewRunSource,
   useFilePreviewStore
 } from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
@@ -206,6 +210,25 @@ function useCardEntrance({
   }, [open, openSeq, settled, start])
 }
 
+const NO_SUBSCRIPTION = (): (() => void) => () => undefined
+
+/**
+ * The agent of `chatId` as the chat query last loaded it, followed as the
+ * cache changes; undefined before it loaded, and where no query client is
+ * mounted. Read from the cache rather than fetched: the preview never asks
+ * for a chat the transcript does not already hold.
+ */
+function useCachedChatAgentId(chatId: string | null): string | null | undefined {
+  const client = useContext(QueryClientContext)
+  const subscribe = useMemo(
+    () => (client ? (notify: () => void) => client.getQueryCache().subscribe(notify) : NO_SUBSCRIPTION),
+    [client]
+  )
+  return useSyncExternalStore(subscribe, () =>
+    chatId && client ? client.getQueryData<{ agentId?: string | null } | null>(['chat', chatId])?.agentId : undefined
+  )
+}
+
 /**
  * Single global modal that previews a small text file: a message attachment
  * (txt / csv / md / json / yaml) or a file a folder agent named in its chat.
@@ -217,7 +240,9 @@ function useCardEntrance({
  */
 export function FilePreviewModal(): React.JSX.Element | null {
   const live = useFilePreviewStore()
-  const { close, openAgentFileExternally, revealAgentFile, openInBrowser } = live
+  const { close, openAgentFileExternally, revealAgentFile, openInBrowser, runAgentFile } = live
+  const activeChatId = useChatStore((s) => s.activeChatId)
+  const activeChatAgentId = useCachedChatAgentId(activeChatId)
   const contentsOpen = useUIStore((s) => s.previewContentsOpen)
   const { supported: canPublish } = useArtifactsSupport()
   const togglePreviewContents = useUIStore((s) => s.togglePreviewContents)
@@ -438,6 +463,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const imageShown = kind === 'image' && image !== null && !isLoading && bodyError === null
   // The page fills a fixed-height body, so the card never resizes as the frame loads.
   const htmlRendered = html && htmlView === 'rendered' && !isLoading && bodyError === null && !notice
+  // Run…: a script inside the folder, with a chat to run it in (main builds the command).
+  const runSource =
+    agentFile && isRunnableScriptRef(agentFile.ref, text)
+      ? previewRunSource(target, activeChatId, activeChatAgentId)
+      : null
   const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : kind === 'image' ? ImageIcon : FileText
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
@@ -561,6 +591,27 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 Contents
               </button>
             )}
+            {runSource && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  // The Run Script window grows from the click; the preview steps aside for it.
+                  const origin = event.detail > 0 ? { x: event.clientX, y: event.clientY } : null
+                  void runAgentFile(runSource, origin)
+                }}
+                disabled={pendingAction !== null || fileGone}
+                aria-busy={pendingAction === 'run' || undefined}
+                title="Open in the Run Script window (nothing runs until you press Run)"
+                className={HEADER_ACTION_CLASS + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}
+              >
+                {pendingAction === 'run' ? (
+                  <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : (
+                  <SquareTerminal size={12} aria-hidden />
+                )}
+                Run…
+              </button>
+            )}
             {fileActions && canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref) && (
               <button
                 type="button"
@@ -586,7 +637,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
               <FileActionsMenu
                 key={targetKey}
                 dismissed={exiting}
-                pendingAction={pendingAction}
+                pendingAction={pendingAction === 'run' ? null : pendingAction}
                 fileGone={fileGone}
                 onOpen={() => void openAgentFileExternally()}
                 onReveal={() => void revealAgentFile()}

@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { Locator, Page } from '@playwright/test'
@@ -43,6 +43,11 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * - A click on `bash scripts/wait.sh` and Enter runs it; Collapse leaves it
  *   running; Open output brings it back, Stop ends it Stopped, and Run again
  *   takes Stop's place exactly.
+ * - A second turn names `scripts/report.py` (an argparse script) as a file:
+ *   its preview offers Run…, which opens the window on `python3
+ *   scripts/report.py` (main's `userCommands:commandForFile`; no
+ *   `pyproject.toml`) with the Parameters form and nothing running; the form
+ *   fills the line and Run runs it.
  *
  * ## What it does not
  *
@@ -129,10 +134,25 @@ test.afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
-/** A folder agent on the fake engine with a marker file and its own `sleep 60` script; the turn sent. */
-async function arrange(cinna: CinnaApp): Promise<void> {
+/** The reply that names the agent's own argparse script as a file, for the preview's Run…. */
+const REPORT = 'scripts/report.py'
+const ANSWERS_WITH_A_SCRIPT: FakeAcpScript = {
+  newSession: { sessionId: 'ses_e2e_run_from_preview' },
+  prompt: {
+    emit: [
+      {
+        kind: 'update',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `The report is \`${REPORT}\`.` } }
+      }
+    ]
+  }
+}
+
+/** A folder agent on the fake engine with a marker file, its own `sleep 60` script and an argparse script; the turn sent. */
+/** Returns the agent's folder. */
+async function arrange(cinna: CinnaApp, answers: FakeAcpScript = ANSWERS_WITH_COMMANDS, ready = LS): Promise<string> {
   await cinna.skipOnboarding()
-  await installFakeAcpEngine(cinna, ANSWERS_WITH_COMMANDS)
+  await installFakeAcpEngine(cinna, answers)
   await cinna.page.evaluate(
     async ({ host, model }) => {
       const { id } = await window.api.providers.upsert({ type: 'ollama', name: 'Ollama', baseUrl: host, enabled: true })
@@ -145,6 +165,11 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   writeFileSync(join(agent.path, MARKER), 'sku,count\n')
   mkdirSync(join(agent.path, 'scripts'), { recursive: true })
   writeFileSync(join(agent.path, 'scripts', 'wait.sh'), 'sleep 60\n')
+  writeFileSync(
+    join(agent.path, REPORT),
+    '"""Report a scope."""\nimport argparse\np = argparse.ArgumentParser()\np.add_argument("scope")\n' +
+      'p.add_argument("--apply", action="store_true")\nargs = p.parse_args()\nprint("report", args.scope, args.apply)\n'
+  )
 
   await cinna.relaunch()
   await cinna.skipOnboarding()
@@ -158,7 +183,8 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   await input.fill(PROMPT)
   await input.press('Enter')
   // `data-message-id` is on a persisted, non-streaming body only: the menu can decide from then on.
-  await expect(inlineCode(page, LS)).toBeVisible({ timeout: 30_000 })
+  await expect(inlineCode(page, ready)).toBeVisible({ timeout: 30_000 })
+  return agent.path
 }
 
 function inlineCode(page: Page, text: string): Locator {
@@ -331,5 +357,37 @@ test('commands in a reply open the Run Script window, run in the agent folder or
     expect(after).toEqual(before)
     await closeWindow(page)
     await expect(commandsBadge(page)).toHaveAccessibleName('Commands: the last one stopped')
+  })
+})
+
+test('Run… in the file preview opens the Run Script window on the script, with its form, and runs nothing until Run', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  const folder = await arrange(cinna, ANSWERS_WITH_A_SCRIPT, REPORT)
+  // The scaffold ships a pyproject.toml, which would make it `uv run`: the
+  // python3 branch runs here without syncing an environment in the sandbox.
+  rmSync(join(folder, 'pyproject.toml'))
+  const page = cinna.page
+
+  await test.step('the script\'s preview offers Run…; it opens the window on python3 with the form, nothing running', async () => {
+    await page.locator('[data-message-id] code.file-ref').filter({ hasText: REPORT }).click()
+    const run = page.getByRole('button', { name: 'Run…', exact: true })
+    await expect(run).toBeVisible()
+    await run.click()
+    await expect(runWindow(page)).toHaveAccessibleName('Run report.py')
+    // No pyproject.toml in the folder: python3, the path relative to it.
+    await expect(commandLine(page)).toHaveValue(`python3 ${REPORT}`)
+    await expect(runWindow(page).getByRole('complementary', { name: 'Parameters', exact: true })).toBeVisible()
+    await expect(stateSlot(page)).toHaveText('')
+    await expect(commandsBadge(page)).toHaveCount(0)
+  })
+
+  await test.step('the form fills the line, and Run runs it in the agent\'s folder', async () => {
+    const form = runWindow(page).getByRole('complementary', { name: 'Parameters', exact: true })
+    await form.getByLabel(/^Scope/).fill('italy')
+    await expect(commandLine(page)).toHaveValue(`python3 ${REPORT} italy`)
+    await runWindow(page).getByRole('button', { name: 'Run', exact: true }).click()
+    await expect(terminal(page)).toContainText('report italy False')
+    await expect(stateSlot(page)).toContainText('Completed')
+    await closeWindow(page)
   })
 })

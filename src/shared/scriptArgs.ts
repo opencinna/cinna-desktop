@@ -39,6 +39,20 @@ export function preferredFlag(param: ScriptParam): string {
   return param.flags.find((flag) => flag.startsWith('--')) ?? param.flags[0] ?? ''
 }
 
+/** The off flag the form writes for a `--x/--no-x` switch turned off: its first long one, else its first. */
+export function preferredOffFlag(param: ScriptParam): string {
+  return param.offFlags.find((flag) => flag.startsWith('--')) ?? param.offFlags[0] ?? ''
+}
+
+/**
+ * Whether a switch is on: its value when the line or the form set one, else
+ * its default (on only for a `--x/--no-x` switch declared on). The form's
+ * switch shows this.
+ */
+export function switchOn(param: ScriptParam, value: string | boolean | undefined): boolean {
+  return typeof value === 'boolean' ? value : param.defaultOn
+}
+
 const looksLikeOption = (word: string): boolean => word.startsWith('-') && word.length > 1 && !/^-\d/.test(word)
 
 /**
@@ -55,17 +69,19 @@ export function parseArgs(spec: ScriptSpec, words: string[]): { values: ScriptVa
  * {@link parseArgs} with each word's owner: the param id it was read into, or
  * null for a word the form does not know (an "other" argument).
  */
-function assignArgs(spec: ScriptSpec, words: string[]): { values: ScriptValues; unknown: string[]; owners: (string | null)[] } {
+function assignArgs(spec: ScriptSpec, words: string[]): { values: ScriptValues; unknown: string[]; owners: (string | null)[]; operandAt: number } {
   const values: ScriptValues = {}
   const unknown: string[] = []
   const owners: (string | null)[] = words.map(() => null)
   const lists = new Map<string, string[]>()
   const byFlag = new Map<string, ScriptParam>()
-  for (const param of spec.params) for (const flag of param.flags) byFlag.set(flag, param)
+  for (const param of spec.params) for (const flag of [...param.flags, ...param.offFlags]) byFlag.set(flag, param)
   const loose: string[] = []
   const looseAt: number[] = []
   for (let i = 0; i < words.length; i++) {
     const word = words[i]
+    // A script that stops at its first operand (getopts) reads every word after it as one.
+    if (spec.optionsFirst && loose.length > 0) { loose.push(word); looseAt.push(i); continue }
     if (word === '--') { unknown.push(...words.slice(i)); break }
     if (!looksLikeOption(word)) { loose.push(word); looseAt.push(i); continue }
     const eq = word.startsWith('--') ? word.indexOf('=') : -1
@@ -88,7 +104,8 @@ function assignArgs(spec: ScriptSpec, words: string[]): { values: ScriptValues; 
     }
     if (param.kind === 'switch') {
       if (eq !== -1) { unknown.push(word); continue }
-      values[param.id] = true
+      // `--x` / `--no-x`: the last one given wins.
+      values[param.id] = !param.offFlags.includes(name)
       owners[i] = param.id
       continue
     }
@@ -134,7 +151,7 @@ function assignArgs(spec: ScriptSpec, words: string[]): { values: ScriptValues; 
     values[param.id] = loose[at++]
   })
   // Loose words the positionals did not take come first: they were before any unknown option's value.
-  return { values, unknown: [...loose.slice(at), ...unknown], owners }
+  return { values, unknown: [...loose.slice(at), ...unknown], owners, operandAt: looseAt[0] ?? -1 }
 }
 
 /** A value's words: a multiple value as the shell reads it, else the value as one word. */
@@ -150,7 +167,12 @@ function paramArgs(param: ScriptParam, value: string | boolean | undefined): str
     return valueWords(param, value).map(shellQuote)
   }
   const flag = preferredFlag(param)
-  if (param.kind === 'switch') return value === true ? [flag] : []
+  if (param.kind === 'switch') {
+    // Written only when it differs from the default: `--x` to turn on, `--no-x` to turn off one that is on.
+    const on = switchOn(param, value)
+    if (on === param.defaultOn) return []
+    return on ? [flag] : [preferredOffFlag(param)]
+  }
   if (param.kind === 'count') {
     const times = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Math.min(Number(value.trim()), 20) : 0
     return Array.from({ length: times }, () => flag)
@@ -161,12 +183,11 @@ function paramArgs(param: ScriptParam, value: string | boolean | undefined): str
   return [flag, ...words.map(shellQuote)]
 }
 
-/** The arguments the form's values make, quoted: positionals, then options in spec order. */
+/** The arguments the form's values make, quoted: positionals, then options in spec order (options first for {@link ScriptSpec.optionsFirst}). */
 export function buildArgs(spec: ScriptSpec, values: ScriptValues): string[] {
-  return [
-    ...spec.params.filter((param) => param.kind === 'positional').flatMap((param) => paramArgs(param, values[param.id])),
-    ...spec.params.filter((param) => param.kind !== 'positional').flatMap((param) => paramArgs(param, values[param.id]))
-  ]
+  const positionals = spec.params.filter((param) => param.kind === 'positional').flatMap((param) => paramArgs(param, values[param.id]))
+  const options = spec.params.filter((param) => param.kind !== 'positional').flatMap((param) => paramArgs(param, values[param.id]))
+  return spec.optionsFirst ? [...options, ...positionals] : [...positionals, ...options]
 }
 
 /** Two forms' values for one param mean the same words on the line. */
@@ -193,15 +214,22 @@ export function editCommand(spec: ScriptSpec, line: string, values: ScriptValues
   if (at === null) return null
   const { spans, index } = at
   const args = spans.slice(index + 1)
-  const { values: current, unknown, owners } = assignArgs(spec, args.map((span) => span.word))
+  const { values: current, unknown, owners, operandAt } = assignArgs(spec, args.map((span) => span.word))
 
-  // What goes where, by the index of an existing argument word.
+  // What goes where, by the index of an existing argument word. Options and
+  // positionals inserted at one place keep apart, so a script that reads
+  // options first (getopts) gets them first.
   const replace = new Map<number, string[]>()
   const before = new Map<number, string[]>()
+  const beforeOptions = new Map<number, string[]>()
   const removed = new Set<number>()
   const appended: string[] = []
-  const dashAt = args.findIndex((span, i) => span.word === '--' && owners[i] === null)
+  const appendedOptions: string[] = []
+  const dash = args.findIndex((span, i) => span.word === '--' && owners[i] === null)
+  // Where a new option goes: before a `--`, and for options-first also before the first operand.
+  const optionsEnd = spec.optionsFirst && operandAt !== -1 && (dash === -1 || operandAt < dash) ? operandAt : dash
   const insertBefore = (i: number, words: string[]): void => { before.set(i, [...(before.get(i) ?? []), ...words]) }
+  const insertOptionsBefore = (i: number, words: string[]): void => { beforeOptions.set(i, [...(beforeOptions.get(i) ?? []), ...words]) }
   const positionals = spec.params.filter((param) => param.kind === 'positional')
   const owned = (id: string): number[] => owners.flatMap((owner, i) => (owner === id ? [i] : []))
 
@@ -216,8 +244,8 @@ export function editCommand(spec: ScriptSpec, line: string, values: ScriptValues
     }
     if (words.length === 0) continue
     if (param.kind !== 'positional') {
-      if (dashAt === -1) appended.push(...words)
-      else insertBefore(dashAt, words)
+      if (optionsEnd === -1) appendedOptions.push(...words)
+      else insertOptionsBefore(optionsEnd, words)
       continue
     }
     // A positional: after the nearest one before it on the line, else before the nearest one after it, else first.
@@ -230,6 +258,10 @@ export function editCommand(spec: ScriptSpec, line: string, values: ScriptValues
       else appended.unshift(...words)
     } else if (later) {
       insertBefore(later[0], words)
+    } else if (spec.optionsFirst) {
+      // After the options: before the first operand, else at the end.
+      if (operandAt !== -1) insertBefore(operandAt, words)
+      else appended.unshift(...words)
     } else if (args.length > 0) {
       insertBefore(0, words)
     } else {
@@ -249,7 +281,10 @@ export function editCommand(spec: ScriptSpec, line: string, values: ScriptValues
     const span = args[i]
     const gap = line.slice(previousEnd, span.start)
     previousEnd = span.end
-    for (const word of before.get(i) ?? []) out += ` ${word}`
+    const inserted = spec.optionsFirst
+      ? [...(beforeOptions.get(i) ?? []), ...(before.get(i) ?? [])]
+      : [...(before.get(i) ?? []), ...(beforeOptions.get(i) ?? [])]
+    for (const word of inserted) out += ` ${word}`
     if (replace.has(i)) {
       for (const word of replace.get(i)!) out += ` ${word}`
       continue
@@ -257,7 +292,8 @@ export function editCommand(spec: ScriptSpec, line: string, values: ScriptValues
     if (removed.has(i)) continue
     out += gap + line.slice(span.start, span.end)
   }
-  const tail = [...appended, ...(tailOther ? [tailOther] : [])]
+  const added = spec.optionsFirst ? [...appendedOptions, ...appended] : [...appended, ...appendedOptions]
+  const tail = [...added, ...(tailOther ? [tailOther] : [])]
   out += tail.length > 0 ? ` ${tail.join(' ')}` : line.slice(previousEnd)
 
   // Trusted only if it reads back as the form says.

@@ -91,9 +91,31 @@ describe('autoRunRefusal', () => {
     ['an escaped semicolon', 'find . -name x -exec ls {} \\;'],
     ['a redirection of stderr', 'make 2>&1'],
     ['a trailing background job', 'sleep 60 &'],
-    ['an absolute script', '/usr/local/bin/tool --x']
+    ['an absolute script', '/usr/local/bin/tool --x'],
+    ['a heredoc', 'cat <<EOF > notes/out.txt\nfirst line\nsecond; line | x\nEOF'],
+    ['a quoted, tab-stripped heredoc', "cat <<-'END'\n\tbody && more\n\tEND"],
+    ['an unterminated heredoc', 'cat <<EOF\nbody\nmore'],
+    ['a ; inside a trailing comment', 'rm -rf build # then; ls | wc'],
+    ['a comment line under the command', 'rm -rf build\n# done; next'],
+    ['a comment after a trailing background job', 'sleep 60 & # wait; then'],
+    ['a here-string', 'wc -w <<< "a; b"'],
+    ['a # inside a word', 'rm -rf build#1'],
+    ['a heredoc with \\r\\n line endings', 'cat <<EOF > notes/out.txt\r\nfirst; line\r\nEOF'],
+    ['an arithmetic or', 'echo $(( a | b ))']
   ])('calls %s not known to be read-only', (_name, command) => {
     expect(chainsCommands(command)).toBe(false)
     expect(autoRunRefusal(command)).toBe('not_read_only')
+  })
+
+  it.each([
+    ['a command after a heredoc', 'cat <<EOF\nbody\nEOF\nls'],
+    ['a chain on the heredoc line', 'cat <<EOF | wc -l\nbody\nEOF'],
+    ['a command before a comment line', 'rm -rf build # one\nls'],
+    ['a shift that is not a heredoc', 'echo $((1<<2))\nls'],
+    ['a shift by a name in $((…))', 'echo $((x<<y))\nls'],
+    ['a shift in ((…))', '(( n = x<<y ))\nls'],
+    ['a command after a heredoc with \\r\\n line endings', 'cat <<EOF\r\nbody\r\nEOF\r\nls']
+  ])('still calls %s several commands', (_name, command) => {
+    expect(chainsCommands(command)).toBe(true)
   })
 })

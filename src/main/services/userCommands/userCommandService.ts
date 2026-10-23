@@ -31,12 +31,14 @@
  */
 
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
-import { closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { randomUUID } from 'node:crypto'
 import {
+  USER_COMMAND_NOT_EXECUTABLE_REASON,
+  USER_COMMAND_NOT_RUNNABLE_REASON,
   USER_COMMAND_RUN_REASONS,
   commandColumns,
   homeDisplayPath,
@@ -44,6 +46,8 @@ import {
   userCommandOutputRefusal,
   type UserCommandDismissResult,
   type UserCommandEnd,
+  type UserCommandForFileInput,
+  type UserCommandForFileResult,
   type UserCommandInspectInput,
   type UserCommandInspectResult,
   type UserCommandOutputFileResult,
@@ -56,7 +60,7 @@ import {
 import type { SessionActivityChange, SessionActivitySnapshot, SessionActivityTerminalState } from '../../../shared/sessionActivity'
 import type { SessionActivityStopper } from '../sessionActivityStop'
 import { ownCommandRefusal, readableOwnScript, type ReadableOwnScript } from '../localAgents/ownCommandPolicy'
-import { commandOutputFilename } from '../../../shared/commandRun'
+import { commandOutputFilename, shellQuote } from '../../../shared/commandRun'
 import { commandScript } from '../../../shared/scriptArgs'
 import { SCRIPT_SPEC_MAX_BYTES, parseScriptSpec, scriptBaseName, type ScriptSpec } from '../../../shared/scriptSpec'
 import { FOLDER_AGENT_ID_PREFIX } from '../../../shared/localAgents'
@@ -169,6 +173,63 @@ export function relativeArgPath(folder: string, chosen: string): string {
   if (path === root) return '.'
   if (!path.startsWith(root.endsWith(sep) ? root : root + sep)) return chosen
   return relative(root, path)
+}
+
+/** How much of a file is read for its shebang line. */
+const SHEBANG_BYTES = 256
+
+/** What main found on disk about a file the preview's Run… asks for. */
+export interface FileRunFacts {
+  /** Relative to the agent's folder, `/`-separated. */
+  rel: string
+  /** The file's first line, or null when it could not be read. */
+  firstLine: string | null
+  executable: boolean
+  /** The agent's folder has a `pyproject.toml`: Python runs through `uv run`. */
+  pyproject: boolean
+}
+
+/** The interpreters a non-executable shebang may name, run on the file by name. */
+const SHEBANG_SHELLS = new Set(['bash', 'sh'])
+const SHEBANG_PYTHONS = new Set(['python', 'python3'])
+
+/**
+ * The interpreter a `#!` line names, by its file name (`/usr/bin/env bash` →
+ * `bash`); null for anything else — an argument after it (`bash -e`,
+ * `env -S …`) changes what running it by name would do, so it is not guessed.
+ */
+function shebangInterpreter(line: string): string | null {
+  const words = line.slice(2).trim().split(/[ \t]+/).filter((word) => word !== '')
+  if (words.length === 0 || !words[0].startsWith('/')) return null
+  const program = words[0].slice(words[0].lastIndexOf('/') + 1)
+  if (program === 'env') return words.length === 2 && !words[1].startsWith('-') ? words[1] : null
+  return words.length === 1 ? program : null
+}
+
+/**
+ * The command the file preview's Run… opens the Run Script window on, from
+ * what main found ({@link FileRunFacts}); null when Cinna does not know how to
+ * start the file. `.py`: `uv run` with a `pyproject.toml`, else `python3`;
+ * `.sh`: `bash`; a shebang: `./` when executable, else the shell or Python it
+ * names when that is all it names. The path is shell-quoted.
+ */
+export function fileRunCommand({ rel, firstLine, executable, pyproject }: FileRunFacts): string | null {
+  if (rel === '' || rel.startsWith('../') || rel === '..' || rel.startsWith('/')) return null
+  // `./` before a name that starts with `-`: an interpreter would read it as an
+  // option even quoted, since the shell strips the quotes first.
+  const path = shellQuote(rel.startsWith('-') ? `./${rel}` : rel)
+  const name = rel.slice(rel.lastIndexOf('/') + 1)
+  if (name.endsWith('.py') && name !== '.py') return pyproject ? `uv run ${path}` : `python3 ${path}`
+  if (name.endsWith('.sh') && name !== '.sh') return `bash ${path}`
+  // A `#!` file without an extension (`bin/tool`) is not offered, as the preview does not offer it.
+  if (!/[^.]\.[^./]+$/.test(name)) return null
+  if (firstLine === null || !firstLine.startsWith('#!')) return null
+  if (executable) return shellQuote(`./${rel}`)
+  const interpreter = shebangInterpreter(firstLine)
+  if (interpreter === null) return null
+  if (SHEBANG_SHELLS.has(interpreter)) return `${interpreter} ${path}`
+  if (SHEBANG_PYTHONS.has(interpreter)) return pyproject ? `uv run python ${path}` : `python3 ${path}`
+  return null
 }
 
 /** `~/…` for a path under the home folder ({@link homeDisplayPath}, shared with the renderer). */
@@ -331,26 +392,42 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     if (!run.removed) deps.hub.report(run.chatId, run.agentId, { type: 'end', id: run.id, state, ...(summary ? { summary } : {}) })
   }
 
-  /** Who the message belongs to, checked: the chat is the profile's, live; the message is in it. */
-  const resolveAgent = (profileUserId: string, chatId: unknown, messageId: unknown): { agent: A } | { refusal: UserCommandRunResult } => {
+  /**
+   * Who the command belongs to, checked: the chat is the profile's, live; then
+   * either the message is in it (its agent), or — with no message — the agent
+   * named is the chat's own. A message id, when given, wins: an agent id beside
+   * it is ignored, and a message that is not the chat's refuses.
+   */
+  const resolveAgent = (
+    profileUserId: string, chatId: unknown, messageId: unknown, chatAgentId?: unknown
+  ): { agent: A } | { refusal: UserCommandRunResult } => {
     if (typeof chatId !== 'string' || !SAFE_SEGMENT.test(chatId)) return { refusal: refusal('chat_not_found') }
     const chat = deps.chat(profileUserId, chatId)
     if (!chat || chat.deletedAt) return { refusal: refusal('chat_not_found') }
-    const message = typeof messageId === 'string' ? deps.message(messageId) : undefined
-    if (!message || message.chatId !== chatId) return { refusal: refusal('chat_not_found') }
-    const agentId = (message.role === 'assistant' ? message.sourceAgentId : null) ?? chat.agentId
+    let agentId: string | null
+    if (typeof messageId === 'string' && messageId !== '') {
+      const message = deps.message(messageId)
+      if (!message || message.chatId !== chatId) return { refusal: refusal('chat_not_found') }
+      agentId = (message.role === 'assistant' ? message.sourceAgentId : null) ?? chat.agentId
+    } else if (typeof chatAgentId === 'string' && chatAgentId !== '' && chat.agentId === chatAgentId) {
+      agentId = chat.agentId
+    } else {
+      return { refusal: refusal('chat_not_found') }
+    }
     const agent = agentId ? deps.agent(profileUserId, agentId) : null
     if (agent) return { agent }
     // A folder agent whose folder moved or went away drops out of the rescanned
-    // list: it was on this computer, so say the folder is gone.
+    // list: it was on this computer, so say the folder is gone. (A synced
+    // chat's folder agent that was never on this device reads the same: once
+    // the row is gone nothing records that it was here.)
     return { refusal: refusal(agentId?.startsWith(FOLDER_AGENT_ID_PREFIX) ? 'folder_missing' : 'not_local') }
   }
 
-  /** The agent's workspace for a message, checked: a local agent, its folder a directory. */
+  /** The agent's workspace for a message (or the chat's agent), checked: a local agent, its folder a directory. */
   const workspaceOf = async (
-    profileUserId: string, chatId: unknown, messageId: unknown
+    profileUserId: string, chatId: unknown, messageId: unknown, chatAgentId?: unknown
   ): Promise<{ workspace: UserCommandWorkspace; shown: string } | { refusal: FolderRefusal }> => {
-    const resolved = resolveAgent(profileUserId, chatId, messageId)
+    const resolved = resolveAgent(profileUserId, chatId, messageId, chatAgentId)
     if ('refusal' in resolved) return { refusal: resolved.refusal as FolderRefusal }
     const workspace = await deps.workspace(resolved.agent)
     if (workspace === 'missing') return { refusal: refusal('folder_missing') as FolderRefusal }
@@ -578,7 +655,7 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     async inspect(profileUserId: string, input: UserCommandInspectInput): Promise<UserCommandInspectResult> {
       let at: Awaited<ReturnType<typeof workspaceOf>>
       try {
-        at = await workspaceOf(profileUserId, input?.chatId, input?.messageId)
+        at = await workspaceOf(profileUserId, input?.chatId, input?.messageId, input?.agentId)
       } catch (error) {
         logger.warn('a command\'s agent folder could not be resolved', { error: String(error) })
         return refusal('not_local') as FolderRefusal
@@ -597,10 +674,72 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
       }
     },
 
-    /** The agent's folder (absolute), where the path chooser starts; a refusal as {@link inspect} answers it. */
-    async argPathFolder(profileUserId: string, chatId: unknown, messageId: unknown): Promise<{ ok: true; folder: string } | FolderRefusal> {
+    /**
+     * The command the file preview's Run… opens the Run Script window on, for
+     * a file in the agent's folder ({@link fileRunCommand}); nothing runs.
+     * Resolved as {@link inspect} is. The file must be a regular file inside
+     * the folder by real path and not protected for a read (credentials,
+     * secrets, `.cinna`, `.git`) — a pinned skill's script is not the
+     * folder's — and is read only for its first line, opened as the judged
+     * file without following a final symlink. Never throws.
+     */
+    async commandForFile(profileUserId: string, input: UserCommandForFileInput): Promise<UserCommandForFileResult> {
+      let at: Awaited<ReturnType<typeof workspaceOf>>
       try {
-        const at = await workspaceOf(profileUserId, chatId, messageId)
+        at = await workspaceOf(profileUserId, input?.chatId, input?.messageId, input?.agentId)
+      } catch (error) {
+        logger.warn('a file\'s agent folder could not be resolved', { error: String(error) })
+        return refusal('not_local') as FolderRefusal
+      }
+      if ('refusal' in at) return at.refusal
+      const { workspace, shown } = at
+      const notRunnable: UserCommandForFileResult = { ok: false, code: 'not_runnable', reason: USER_COMMAND_NOT_RUNNABLE_REASON }
+      try {
+        const path = input.path
+        if (typeof path !== 'string' || !isAbsolute(path)) return notRunnable
+        const judged = readableOwnScript({ folder: workspace.folder, scriptRoots: [] }, workspace.folder, path)
+        if (judged === null) return notRunnable
+        const root = realpathSync.native(workspace.folder)
+        const rel = relative(root, judged.real)
+        if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return notRunnable
+        let firstLine: string | null = null
+        const fd = openSync(judged.real, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW)
+        try {
+          const stat = fstatSync(fd)
+          if (!stat.isFile() || stat.dev !== judged.dev || stat.ino !== judged.ino) return notRunnable
+          const buffer = Buffer.alloc(Math.min(SHEBANG_BYTES, stat.size))
+          const read = buffer.length > 0 ? readSync(fd, buffer, 0, buffer.length, 0) : 0
+          const head = buffer.subarray(0, read).toString('utf8')
+          firstLine = head.includes('\0') ? null : head.split(/\r?\n/)[0]
+        } finally {
+          closeSync(fd)
+        }
+        let executable = false
+        try { accessSync(judged.real, fsConstants.X_OK); executable = platform !== 'win32' } catch { executable = false }
+        let pyproject = false
+        try { pyproject = statSync(join(root, 'pyproject.toml')).isFile() } catch { pyproject = false }
+        const command = fileRunCommand({ rel: rel.split(sep).join('/'), firstLine, executable, pyproject })
+        if (command === null) {
+          // A shebang names an interpreter Cinna will not run it with by name:
+          // only the execute bit is missing, so say that.
+          return !executable && firstLine?.startsWith('#!')
+            ? { ...notRunnable, reason: USER_COMMAND_NOT_EXECUTABLE_REASON }
+            : notRunnable
+        }
+        logger.info('built a command for a file', { file: basename(judged.real) })
+        return { ok: true, command, folder: shown }
+      } catch (error) {
+        logger.warn('a file\'s command could not be built', { error: String(error) })
+        return notRunnable
+      }
+    },
+
+    /** The agent's folder (absolute), where the path chooser starts; a refusal as {@link inspect} answers it. */
+    async argPathFolder(
+      profileUserId: string, chatId: unknown, messageId: unknown, chatAgentId?: unknown
+    ): Promise<{ ok: true; folder: string } | FolderRefusal> {
+      try {
+        const at = await workspaceOf(profileUserId, chatId, messageId, chatAgentId)
         return 'refusal' in at ? at.refusal : { ok: true, folder: at.workspace.folder }
       } catch {
         return refusal('not_local') as FolderRefusal
@@ -608,7 +747,7 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     },
 
     async run(profileUserId: string, input: UserCommandRunInput): Promise<UserCommandRunResult> {
-      const resolved = resolveAgent(profileUserId, input?.chatId, input?.messageId)
+      const resolved = resolveAgent(profileUserId, input?.chatId, input?.messageId, input?.agentId)
       if ('refusal' in resolved) return resolved.refusal
       if (closing) return refusal('spawn_failed', { reason: QUITTING })
       const chatId = input.chatId
