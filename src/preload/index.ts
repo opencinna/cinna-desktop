@@ -251,6 +251,13 @@ import {
   type ArtifactVisibility,
   type PublishArtifactInput
 } from '../shared/artifacts'
+import type {
+  ImprovementContext,
+  ImprovementOutcome,
+  ImprovementRequestCreated,
+  ImprovementRequestInput,
+  ImprovementTarget
+} from '../shared/improvementRequests'
 
 export type { MessageAttachment }
 
@@ -2271,6 +2278,22 @@ const api = {
       ipcRenderer.on(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
     }
+  },
+
+  /**
+   * Improvement Request: send a cloud bundle agent's conversation in a chat to
+   * the bundle's publisher. The renderer names `{chatId, agentId}`; main finds
+   * the core session itself. Every answer, refusals included, is data. See
+   * `src/shared/improvementRequests.ts`.
+   */
+  improvementRequests: {
+    /** The chat's agents whose cloud session can be sent; empty hides the action. */
+    targets: (chatId: string): Promise<ImprovementTarget[]> => ipcRenderer.invoke('improvement:targets', chatId),
+    /** core's pre-flight: recipient, message count, whether it can be sent. */
+    context: (chatId: string, agentId: string): Promise<ImprovementOutcome<{ context: ImprovementContext }>> =>
+      ipcRenderer.invoke('improvement:context', { chatId, agentId }),
+    create: (input: ImprovementRequestInput): Promise<ImprovementOutcome<{ request: ImprovementRequestCreated }>> =>
+      ipcRenderer.invoke('improvement:create', input)
   },
 
   /**

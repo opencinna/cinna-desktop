@@ -32,6 +32,7 @@ import { registerLocalToolsHandlers } from './local_tools.ipc'
 import { registerLocalAgentHandlers } from './local_agent.ipc'
 import { registerAgentFileHandlers } from './agent_files.ipc'
 import { registerArtifactHandlers } from './artifacts.ipc'
+import { registerImprovementRequestHandlers } from './improvementRequests.ipc'
 import { registerHtmlPreviewHandlers } from './html_preview.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
@@ -92,6 +93,8 @@ export function registerAllIpcHandlers(): void {
   registerAgentFileHandlers()
   // Artifacts: publish a file or folder from an agent's folder to cinna-core, and share it.
   registerArtifactHandlers()
+  // Improvement Request: send a cloud bundle agent's conversation to its publisher.
+  registerImprovementRequestHandlers()
   registerHtmlPreviewHandlers()
   registerEngineHandlers()
   registerConnectHandlers()

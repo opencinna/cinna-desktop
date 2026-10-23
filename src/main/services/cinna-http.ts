@@ -269,8 +269,8 @@ export interface CinnaSendResult {
 }
 
 /**
- * A write under the profile's own API whose refusals the caller reads as
- * data: any HTTP answer, 4xx included, comes back as `{status, body}` with the
+ * A request — usually a write — under the profile's own API whose refusals
+ * the caller reads as data: any HTTP answer, 4xx included, comes back as `{status, body}` with the
  * body parsed when it is JSON — core's coded refusals (`{detail: {code,
  * message, …}}`) are what the caller branches on, and {@link cinnaFetch}
  * reduces them to a sentence (and a 403 to "re-auth"). Only a 401 throws
@@ -287,7 +287,7 @@ export interface CinnaSendResult {
 export async function cinnaSend(
   userId: string,
   path: string,
-  opts: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string }; signal?: AbortSignal }
+  opts: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string }; signal?: AbortSignal }
 ): Promise<CinnaSendResult> {
   if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is used.')
   opts.signal?.throwIfAborted()

@@ -489,7 +489,8 @@ export function useDialogChrome({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !pending) onDismiss()
+      // Escape while an info tip is open is the tip's (it is portaled outside the modal).
+      if (event.key === 'Escape' && !pending && document.querySelector(`[${INFO_TIP_ATTR}]`) === null) onDismiss()
       if (event.key !== 'Tab' || !modalRef.current) return
       const focusable = modalRef.current.querySelectorAll<HTMLElement>(
         'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -509,6 +510,8 @@ export function useDialogChrome({
     }
     const onClick = (event: MouseEvent): void => {
       if (pending) return
+      // A press on an open info tip is not a press outside: the tip lives in <body>.
+      if ((event.target as Element | null)?.closest?.(`[${INFO_TIP_ATTR}]`)) return
       if (modalRef.current && !modalRef.current.contains(event.target as Node)) onDismiss()
     }
     window.addEventListener('keydown', onKey)

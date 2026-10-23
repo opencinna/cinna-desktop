@@ -7,7 +7,9 @@ import {
   ChevronLeft,
   Check,
   Loader2,
-  Workflow
+  Workflow,
+  Zap,
+  Lightbulb
 } from 'lucide-react'
 import type { ChatModeData } from '../../constants/chatModeColors'
 
@@ -30,6 +32,20 @@ export interface PlusCoordinateToggle {
   onToggle: (coordinating: boolean) => void
 }
 
+/** One entry of the Actions sub-menu; disabled rows stay visible and say why on hover. */
+export interface PlusAction {
+  disabled: boolean
+  /** Why it is disabled — the row's tooltip. */
+  reason?: string
+  onOpen(): void
+}
+
+/** The Actions sub-menu; omitted, or with no entry, hides its row. */
+export interface PlusActions {
+  /** Send a cloud bundle agent's conversation to the bundle's publisher. */
+  improvementRequest?: PlusAction
+}
+
 interface ComposerPlusMenuProps {
   /** "Attach files" row — shown when the current target accepts attachments. */
   canAttachFiles: boolean
@@ -43,11 +59,13 @@ interface ComposerPlusMenuProps {
   /** One-way coordination action, omitted once the chat is coordinated. */
   coordinateToggle?: PlusCoordinateToggle
   autonomousRun?: { disabled: boolean; onStart(): void }
+  /** "Actions" sub-menu, right after Add agents / MCP. */
+  actions?: PlusActions
   /** Tints the [+] button border to the active chat-mode color, if any. */
   activeModeColor?: { border: string } | null
 }
 
-type View = 'root' | 'modes'
+type View = 'root' | 'modes' | 'actions'
 
 /**
  * The single left-side `[+]` composer entry point. Opens a small frosted menu
@@ -64,6 +82,7 @@ export function ComposerPlusMenu({
   modeMenu,
   coordinateToggle,
   autonomousRun,
+  actions,
   activeModeColor
 }: ComposerPlusMenuProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
@@ -98,8 +117,9 @@ export function ComposerPlusMenu({
   }, [open])
 
   const hasModes = !!modeMenu && modeMenu.modes.length > 0
+  const hasActions = !!actions?.improvementRequest
   // Nothing to offer → no button at all.
-  if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle && !autonomousRun) return null
+  if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle && !autonomousRun && !hasActions) return null
 
   const rowCls =
     'w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] ' +
@@ -189,6 +209,19 @@ export function ComposerPlusMenu({
                 </button>
               )}
 
+              {hasActions && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => setView('actions')}
+                  className={rowCls}
+                >
+                  <Zap size={16} className={iconCls} />
+                  <span className="flex-1">Actions</span>
+                  <ChevronLeft size={14} className="rotate-180 text-[var(--color-text-muted)]" />
+                </button>
+              )}
+
               {autonomousRun && <button type="button" role="menuitem" className={rowCls}
                 aria-disabled={autonomousRun.disabled || undefined}
                 onClick={() => { if (!autonomousRun.disabled) { autonomousRun.onStart(); setOpen(false) } }}>
@@ -213,6 +246,40 @@ export function ComposerPlusMenu({
                 </button>
               )}
             </>
+          ) : view === 'actions' ? (
+            <div>
+              <button
+                type="button"
+                onClick={() => setView('root')}
+                className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-[12px]
+                  font-semibold uppercase tracking-wider text-[var(--color-text-muted)]
+                  hover:text-[var(--color-text)] transition-colors"
+              >
+                <ChevronLeft size={14} />
+                <span>Actions</span>
+              </button>
+              {actions?.improvementRequest && (() => {
+                const item = actions.improvementRequest
+                return (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    // `aria-disabled`, not `disabled`: the row keeps its tooltip and focus.
+                    aria-disabled={item.disabled || undefined}
+                    title={item.disabled ? item.reason : undefined}
+                    onClick={() => {
+                      if (item.disabled) return
+                      item.onOpen()
+                      setOpen(false)
+                    }}
+                    className={`${rowCls} aria-disabled:opacity-40 aria-disabled:cursor-not-allowed`}
+                  >
+                    <Lightbulb size={16} className={iconCls} />
+                    <span>Improvement request…</span>
+                  </button>
+                )
+              })()}
+            </div>
           ) : (
             modeMenu && (
               <div className="max-h-72 overflow-y-auto">

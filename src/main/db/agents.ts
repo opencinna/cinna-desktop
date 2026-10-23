@@ -948,6 +948,15 @@ export const agentSessionRepo = {
       .get()
   },
 
+  /** Every agent's session row in this chat — one per agent that has answered here. */
+  listByChat(chatId: string): A2ASessionRow[] {
+    return getDb()
+      .select()
+      .from(a2aSessions)
+      .where(eq(a2aSessions.chatId, chatId))
+      .all()
+  },
+
   getByChatAndAgent(chatId: string, agentId: string): A2ASessionRow | undefined {
     return getDb()
       .select()

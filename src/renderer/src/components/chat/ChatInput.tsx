@@ -1,6 +1,8 @@
 import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
+import { ImprovementRequestDialog } from './ImprovementRequestDialog'
+import { useCreateImprovementRequest, useImprovementTargets } from '../../hooks/useImprovementRequests'
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type CSSProperties } from 'react'
 import { SendHorizontal, Square, Check } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -248,6 +250,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // new chat): chips that become lines naming each path when the message is sent.
   const [pathRefs, setPathRefs] = useComposerDraftField(draftKey, 'pathRefs')
   const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
+  // The chat whose Improvement request dialog is open; another chat on screen closes it.
+  const [improvementChatId, setImprovementChatId] = useState<string | null>(null)
   // Component state on purpose: navigating away drops edit mode and leaves the
   // text as an ordinary draft.
   const [recall, setRecall] = useState<Recall | null>(null)
@@ -424,6 +428,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // composer's only when it is this chat's — a new-chat composer (on the agent
   // page, say) must not inherit another chat's running turn as its own.
   const isStreaming = (chatId !== null && hasPortStream && storeChatId === chatId) || !!chatData?.activeRunId
+  // Cloud bundle agents of this chat whose conversation can go to their publisher.
+  const improvementTargets = useImprovementTargets(chatId, isStreaming)
+  const createImprovement = useCreateImprovementRequest((sent) => setImprovementChatId((open) => (open === sent ? null : open)))
+  // One mutation serves every chat this composer shows: its state is this chat's only when this chat sent it.
+  const improvementSendIsHere = createImprovement.variables?.input.chatId === chatId
+  const resetImprovementSend = (): void => { if (!createImprovement.isPending) createImprovement.reset() }
 
   // A turn that ended without finishing (stopped, failed) leaves what was
   // queued behind it held rather than sending it into a conversation that just
@@ -1918,6 +1928,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      {chatId && improvementChatId === chatId && improvementTargets.length > 0 && (
+        <ImprovementRequestDialog
+          key={chatId}
+          chatId={chatId}
+          targets={improvementTargets}
+          pending={improvementSendIsHere && createImprovement.isPending}
+          error={improvementSendIsHere && createImprovement.error ? unwrapIpcError(createImprovement.error, 'The request could not be sent.') : null}
+          onSubmit={(input, confirmation) => createImprovement.mutate({ input, confirmation })}
+          onTargetChange={resetImprovementSend}
+          onClose={() => setImprovementChatId(null)}
+        />
+      )}
       {chatId && autonomousGoal !== null && <AutonomousTaskDialog key={chatId} chatId={chatId} initialGoal={autonomousGoal}
         agentName={soloAgent?.name}
         onClose={() => setAutonomousGoal(null)} onStarted={() => setInput((current) => current === autonomousGoal ? '' : current)} />}
@@ -1968,6 +1990,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               coordinateToggle={coordinateToggle}
               autonomousRun={chatId && (chatRouting.router === 'coordinator' || soloAgent)
                 ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
+              actions={chatId && improvementTargets.length > 0 ? {
+                improvementRequest: {
+                  disabled: isStreaming,
+                  reason: 'Available once the agent has finished replying',
+                  onOpen: () => { resetImprovementSend(); setImprovementChatId(chatId) }
+                }
+              } : undefined}
               activeModeColor={modeColor ? { border: modeColor.border } : null}
             />
           </div>
