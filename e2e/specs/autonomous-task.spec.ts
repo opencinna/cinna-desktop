@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { openRecentTasks } from '../fixtures/tasksView'
 import { installConductorAcpEngine } from '../fixtures/conductorAcpEngine'
+import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 
 const MODEL = 'qwen3:8b'
 const CHAT = 'Autonomous briefing workspace'
@@ -226,5 +227,66 @@ test('an interrupted autonomous runtime turn requires explicit resume without re
     await finalTranscript(cinna, chatId, INTERRUPTED_SUMMARY, [1, 3])
     expect(fake.runtime).toHaveLength(3)
     expect(fake.agents).toHaveLength(1)
+  } finally { fake.server.closeAllConnections(); await new Promise<void>((resolve) => fake.server.close(() => resolve())) }
+})
+
+const SOLO = 'Autonomous Ledger Keeper'
+const SOLO_CHAT = 'Solo ledger workspace'
+
+test('a direct chat with one local agent runs on its own, and Start makes that agent the coordinator', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const fake = await serve(false)
+  try {
+    await cinna.skipOnboarding()
+    await installConductorAcpEngine(cinna, fake.host)
+    const root = await addAgentRoot(cinna)
+    const keeper = await createFolderAgent(cinna, root, SOLO)
+    const chatId = await cinna.page.evaluate(async ({ host, model, title, agentId }) => {
+      await window.api.settings.set('autoChatTitles', false)
+      const provider = await window.api.providers.upsert({ type: 'ollama', name: 'Autonomous fixture model', baseUrl: host, enabled: true })
+      await window.api.chatModes.upsert({ name: 'Default', providerId: provider.id, modelId: model, engine: 'opencode', toolPolicy: 'connectors', isDefault: true })
+      const chat = await window.api.chat.create()
+      await window.api.chat.update(chat.id, { title, agentId })
+      await window.api.chat.showInList(chat.id)
+      return chat.id
+    }, { host: fake.host, model: MODEL, title: SOLO_CHAT, agentId: keeper.id })
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    expect(await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)).toMatchObject({ router: 'direct', agentId: keeper.id })
+    expect(await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).toEqual([])
+    await cinna.page.getByText(SOLO_CHAT, { exact: true }).click()
+
+    await test.step('[+] offers Run on its own…, and the dialog names the agent', async () => {
+      await expect(cinna.page.getByRole('button', { name: SOLO, exact: true })).toBeVisible()
+      await cinna.page.getByRole('button', { name: 'Add to chat', exact: true }).click()
+      await expect(cinna.page.getByRole('menuitem', { name: /^Coordinate by/ })).toHaveCount(0)
+      await cinna.page.getByRole('menuitem', { name: 'Run on its own…', exact: true }).click()
+      const dialog = cinna.page.getByRole('dialog', { name: 'Run on its own', exact: true })
+      await expect(dialog.getByText(`${SOLO} works toward the goal until it is done or needs your answer. You can leave this conversation while the app stays open.`, { exact: true })).toBeVisible()
+      await dialog.getByRole('textbox', { name: 'Goal', exact: true }).fill(GOAL)
+      await dialog.getByRole('button', { name: 'Start task', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+    })
+
+    await test.step('Start admits the task and moves the chat to coordinator with the same agent', async () => {
+      await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id), chatId)).toMatchObject({ router: 'coordinator', agentId: keeper.id })
+      const tasks = await cinna.page.evaluate(() => window.api.tasks.list())
+      expect(tasks).toEqual([expect.objectContaining({ goal: GOAL, chatId, status: 'in_progress' })])
+      // The agent's own runtime takes the first step toward the goal; it is held there.
+      await expect.poll(() => fake.runtime.length).toBe(1)
+      expect(JSON.stringify(fake.runtime[0].history)).toContain(GOAL)
+      expect(await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).toEqual([])
+    })
+
+    await test.step('the bound chip now coordinates and offers no Set as Coordinator', async () => {
+      await expect(cinna.page.getByRole('status', { name: `Coordinated by ${SOLO}`, exact: true })).toBeVisible()
+      await cinna.page.getByRole('button', { name: `${SOLO} — Coordinator`, exact: true }).click()
+      const menu = cinna.page.getByRole('menu', { name: `Agent ${SOLO}`, exact: true })
+      await expect(menu.getByRole('menuitem').first()).toBeVisible()
+      await expect(menu.getByRole('menuitem', { name: 'Set as Coordinator', exact: true })).toHaveCount(0)
+      await cinna.page.keyboard.press('Escape')
+      await expect(menu).toHaveCount(0)
+    })
   } finally { fake.server.closeAllConnections(); await new Promise<void>((resolve) => fake.server.close(() => resolve())) }
 })
