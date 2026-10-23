@@ -19,6 +19,15 @@ describe('previewKindFor', () => {
     expect(previewKindFor('logo.svg', 'image/svg+xml')).toBe('image')
   })
 
+  it('previews JSON Lines as its own kind, by extension, then by MIME', () => {
+    expect(previewKindFor('events.jsonl')).toBe('jsonl')
+    expect(previewKindFor('events.NDJSON')).toBe('jsonl')
+    for (const mime of ['application/jsonl', 'application/x-jsonlines', 'application/x-ndjson']) {
+      expect(previewKindFor('events', mime)).toBe('jsonl')
+    }
+    expect(previewKindFor('events.json', 'application/x-ndjson')).toBe('json')
+  })
+
   it('lets the extension win over the MIME type', () => {
     expect(previewKindFor('notes.txt', 'text/x-python')).toBe('text')
   })

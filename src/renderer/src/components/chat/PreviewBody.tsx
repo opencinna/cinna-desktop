@@ -5,33 +5,46 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ParsedXml } from '../../utils/xmlDocument'
 import { previewMarkdownComponents } from './FilePreviewContents'
-import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
+import { JsonLinesTree, JsonTree, JsonTreeBoundary, jsonLinesShape, useParsedJson } from './JsonTree'
+import { MAX_TABLE_COLUMNS, MAX_TABLE_RECORDS, jsonLinesTable } from '../../utils/jsonLinesTable'
 import { CodePreview, MAX_HIGHLIGHT_CHARS, PreviewNote, plainTextNote } from './CodePreview'
 import { XmlTree, type XmlReveal } from './XmlTree'
 import { MAX_PREVIEW_BYTES, type PreviewRenderKind } from '../../../../shared/filePreview'
 
 /**
  * How a previewed file's text is shown, by its kind: markdown rendered, JSON
- * and XML as trees, CSV as a table, Python and the rest as code or text. Shared
+ * and XML as trees, JSON Lines as a tree or a table, CSV as a table, Python and the rest as code or text. Shared
  * by the file preview and the artifact preview; each owns the frame around it
  * (the header, the Contents panel, an HTML page or an image).
  */
 
 const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024)
 
+/** How a JSON Lines file is shown: one tree row per record, or a column per value path. */
+export type JsonLinesView = 'tree' | 'table'
+
 export function PreviewBody({
   kind,
   text,
   filtersEnabled,
-  anchorLines
+  anchorLines,
+  jsonLinesView = 'tree',
+  truncated = false
 }: {
   kind: PreviewRenderKind
   text: string
   filtersEnabled: boolean
   anchorLines?: readonly number[]
+  jsonLinesView?: JsonLinesView
+  /** The read stopped at the preview cap: a JSON Lines file's last line may be cut. */
+  truncated?: boolean
 }): React.JSX.Element {
   if (kind === 'json') {
     return <JsonPreview text={text} />
+  }
+
+  if (kind === 'jsonl') {
+    return <JsonLinesPreview text={text} truncated={truncated} view={jsonLinesView} filtersEnabled={filtersEnabled} />
   }
 
   if (kind === 'csv') {
@@ -111,6 +124,77 @@ export function JsonPreview({ text }: { text: string }): React.JSX.Element {
       <JsonTree value={parsed.value} />
     </JsonTreeBoundary>
   )
+}
+
+/**
+ * A JSON Lines file: the tree or the table of its records (see
+ * `jsonLinesShape`), a pretty-printed one as a JSON tree, or the text as
+ * written when no line parses. Once the table has been shown both views stay
+ * mounted and the other is hidden, so a switch keeps the tree's folds and the
+ * table's filters and sort.
+ */
+export function JsonLinesPreview({
+  text,
+  truncated,
+  view,
+  filtersEnabled
+}: {
+  text: string
+  truncated: boolean
+  view: JsonLinesView
+  filtersEnabled: boolean
+}): React.JSX.Element {
+  const shape = useMemo(() => jsonLinesShape(text, truncated), [text, truncated])
+  const [tableShown, setTableShown] = useState(view === 'table')
+  if (view === 'table' && !tableShown) setTableShown(true)
+  const raw = (
+    <pre
+      className="text-xs font-mono whitespace-pre-wrap break-words
+        text-[var(--color-text)]"
+    >
+      {text}
+    </pre>
+  )
+  if (!shape) return raw
+  if (shape.kind === 'document') {
+    return (
+      <JsonTreeBoundary key={text} fallback={raw}>
+        <JsonTree value={shape.value} />
+      </JsonTreeBoundary>
+    )
+  }
+  return (
+    <>
+      <div hidden={view !== 'tree'}>
+        <JsonTreeBoundary key={text} fallback={raw}>
+          <JsonLinesTree lines={shape.lines} />
+        </JsonTreeBoundary>
+      </div>
+      {tableShown && (
+        <div hidden={view !== 'table'}>
+          <JsonTreeBoundary key={text} fallback={raw}>
+            <JsonLinesTablePreview lines={shape.lines} filtersEnabled={filtersEnabled} />
+          </JsonTreeBoundary>
+        </div>
+      )}
+    </>
+  )
+}
+
+function JsonLinesTablePreview({
+  lines,
+  filtersEnabled
+}: {
+  lines: Parameters<typeof jsonLinesTable>[0]
+  filtersEnabled: boolean
+}): React.JSX.Element {
+  const table = useMemo(() => jsonLinesTable(lines), [lines])
+  const notes = [
+    table.clippedRows && `Showing the first ${MAX_TABLE_RECORDS} records.`,
+    table.totalColumns > MAX_TABLE_COLUMNS && `Showing ${MAX_TABLE_COLUMNS} of ${table.totalColumns} columns.`,
+    table.skipped > 0 && `${table.skipped} ${table.skipped === 1 ? 'line is' : 'lines are'} not JSON and not shown.`
+  ].filter((note): note is string => typeof note === 'string')
+  return <DataTable header={table.header} body={table.rows} filtersEnabled={filtersEnabled} notes={notes} />
 }
 
 /**
@@ -228,13 +312,40 @@ export function CsvPreview({
     const clipped = all.length > MAX_PREVIEW_ROWS
     return { rows: clipped ? all.slice(0, MAX_PREVIEW_ROWS) : all, clipped }
   }, [text])
+  const body = useMemo(() => rows.slice(1), [rows])
 
+  if (rows.length === 0) {
+    return <div className="text-xs italic text-[var(--color-text-muted)]">Empty file.</div>
+  }
+  return (
+    <DataTable
+      header={rows[0]}
+      body={body}
+      filtersEnabled={filtersEnabled}
+      notes={clipped ? [`Showing first ${MAX_PREVIEW_ROWS} rows.`] : []}
+    />
+  )
+}
+
+/**
+ * A header row and body rows of text cells, with a filter per column and a
+ * sort on each header while `filtersEnabled`. Shared by CSV and the JSON
+ * Lines table; `notes` are shown under it.
+ */
+function DataTable({
+  header,
+  body,
+  filtersEnabled,
+  notes
+}: {
+  header: string[]
+  body: string[][]
+  filtersEnabled: boolean
+  notes: string[]
+}): React.JSX.Element {
   // Column index → substring filter; null sort means original order.
   const [filters, setFilters] = useState<Record<number, string>>({})
   const [sort, setSort] = useState<{ col: number; dir: SortDir } | null>(null)
-
-  const header = rows[0] ?? []
-  const body = useMemo(() => rows.slice(1), [rows])
 
   // Filter then sort, preserving each row's original index for a stable key.
   // Both controls are gated on `filtersEnabled` — disabled = raw order.
@@ -258,10 +369,6 @@ export function CsvPreview({
     }
     return out
   }, [body, filters, sort, filtersEnabled])
-
-  if (rows.length === 0) {
-    return <div className="text-xs italic text-[var(--color-text-muted)]">Empty file.</div>
-  }
 
   // Click a header to cycle no-sort → asc → desc → no-sort for that column.
   const cycleSort = (col: number): void => {
@@ -359,11 +466,11 @@ export function CsvPreview({
           No rows match the current filters.
         </div>
       )}
-      {clipped && (
-        <div className="mt-2 text-[10px] italic text-[var(--color-text-muted)]">
-          Showing first {MAX_PREVIEW_ROWS} rows.
+      {notes.map((note) => (
+        <div key={note} className="mt-2 text-[10px] italic text-[var(--color-text-muted)]">
+          {note}
         </div>
-      )}
+      ))}
     </div>
   )
 }

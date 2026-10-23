@@ -13,6 +13,7 @@ import { usePopover } from '../ui/usePopover'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { parseXml } from '../../utils/xmlDocument'
 import type { XmlReveal } from '../chat/XmlTree'
+import { MODAL_HEADER_ACTION, MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MarkdownPreview, PreviewBody, XmlPreview } from '../chat/PreviewBody'
 
 /** The file preview's entrance: short enough to never be waited on. */
@@ -22,9 +23,7 @@ const ENTRANCE: KeyframeAnimationOptions = { duration: 170, easing: 'cubic-bezie
 const OPEN_PRESS_GUARD_MS = 500
 
 /** The file preview's labelled header action. */
-const HEADER_ACTION_CLASS =
-  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border ' +
-  'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
+const HEADER_ACTION_CLASS = MODAL_HEADER_ACTION + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
 
 type PreviewState =
   | { status: 'loading' }
@@ -259,7 +258,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
               aria-controls={panelOpen ? panelId : undefined}
               aria-label={panelLabel}
               title={panelLabel}
-              className="inline-flex shrink-0 items-center rounded-md border border-[var(--color-border)] p-1 text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:hover:bg-transparent"
+              className={MODAL_HEADER_ICON + ' border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:hover:bg-transparent'}
             >
               {panelOpen ? <PanelLeftClose size={12} aria-hidden /> : <PanelLeft size={12} aria-hidden />}
             </button>
@@ -302,7 +301,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
             <button
               type="button"
               onClick={onClose}
-              className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              className={MODAL_HEADER_ICON + ' text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'}
               title="Close"
               aria-label="Close preview"
             >
@@ -501,5 +500,5 @@ function TextBody({ kind, text, truncated }: { kind: TextKind; text: string; tru
   const xmlReveal = useRef<XmlReveal | null>(null)
   if (kind === 'markdown') return <MarkdownPreview card={markdown.card} body={markdown.body} />
   if (kind === 'xml') return <XmlPreview text={text} parsed={xml} truncated={truncated} revealRef={xmlReveal} />
-  return <PreviewBody kind={kind} text={text} filtersEnabled={false} />
+  return <PreviewBody kind={kind} text={text} filtersEnabled={false} truncated={truncated} />
 }

@@ -5,10 +5,11 @@ import {
   Folder,
   Globe,
   Image as ImageIcon,
+  ListTree,
   Loader2,
   SquareTerminal,
+  Table2,
   TableOfContents,
-  Upload,
   X
 } from 'lucide-react'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
@@ -24,7 +25,14 @@ import { FileActionsMenu, PREVIEW_POPOVER_ATTR } from './FileActionsMenu'
 import { CONTENTS_PANEL_ID, CONTENTS_PANEL_WIDTH, FilePreviewContents } from './FilePreviewContents'
 import { MAX_HIGHLIGHT_CHARS } from './CodePreview'
 import type { XmlReveal } from './XmlTree'
-import { MarkdownPreview, PreviewBody, XmlPreview } from './PreviewBody'
+import { MarkdownPreview, PreviewBody, XmlPreview, type JsonLinesView } from './PreviewBody'
+import { jsonLinesShape } from './JsonTree'
+import {
+  MODAL_HEADER_ACTION,
+  MODAL_HEADER_ICON,
+  MODAL_HEADER_SEGMENT,
+  MODAL_HEADER_SEGMENTS
+} from '../ui/modalHeader'
 import { HtmlPreview, type HtmlPreviewView } from './HtmlPreview'
 import {
   actionErrorRepeatsBody,
@@ -42,11 +50,6 @@ import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
 import { useChatStore } from '../../stores/chat.store'
 import { CARD_MOTION, playCardEntrance, playCardExit } from '../../utils/cardMotion'
 
-/** Labelled secondary button at the app-chrome scale (Contents); colours by state. */
-const HEADER_ACTION_CLASS =
-  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border ' +
-  'border-[var(--color-border)] disabled:opacity-50 transition-colors'
-
 /** Entrance timing: short enough to never be waited on. */
 const ENTRANCE = CARD_MOTION
 
@@ -54,8 +57,6 @@ const ENTRANCE = CARD_MOTION
 const CARD_MAX_WIDTH_REM = 48
 /** The overlay's horizontal padding (`px-4`), both sides together, in rem. */
 const OVERLAY_PADDING_X_REM = 2
-/** The gap the widened card keeps from the window's right edge. */
-const WINDOW_MARGIN = 16
 /** The card's left and right borders together, inside its border-box width. */
 const CARD_BORDER_X = 2
 /** The text read cap, as the truncation notices name it. */
@@ -65,14 +66,12 @@ const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024)
  * Where the Contents panel goes, from the window width alone.
  *
  * The closed card is `min(768, window - padding)` wide and centred. Opening
- * the panel widens it by the panel's width, **to the right** where the window
- * has room: the card gets that explicit width and is shifted right by
- * `shift`. With room for the whole panel (`shift` is half its width) the left
- * edge — and the body, pinned at the closed width — stays exactly where it
- * was. With less, the card still widens and moves left only as far as it must
- * to keep {@link WINDOW_MARGIN} from the right edge. Only a window too narrow
- * for the closed card and the panel side by side gets the overlay: the card
- * keeps its width and the panel lies over the body's right side.
+ * the panel widens it by the panel's width and it stays centred, so the body —
+ * pinned at the closed width — moves left by half the panel. Growing to the
+ * right only kept the body still but left the card off-centre in every window
+ * without room for the whole panel on that side. Only a window too narrow for
+ * the closed card and the panel side by side gets the overlay: the card keeps
+ * its width and the panel lies over the body's right side.
  */
 export function contentsGeometry(
   windowWidth: number,
@@ -81,16 +80,12 @@ export function contentsGeometry(
 ): {
   closedWidth: number
   sideBySide: boolean
-  shift: number
 } {
   const padding = OVERLAY_PADDING_X_REM * rem
   const closedWidth = Math.min(CARD_MAX_WIDTH_REM * rem, windowWidth - padding)
   const wideWidth = closedWidth + CONTENTS_PANEL_WIDTH
   const sideBySide = wideWidth <= windowWidth - padding
-  // Centred at the wide width, the right edge sits at (window + wide) / 2.
-  const roomRight = windowWidth - WINDOW_MARGIN - (windowWidth + wideWidth) / 2
-  const shift = sideBySide ? Math.max(0, Math.min(CONTENTS_PANEL_WIDTH / 2, roomRight)) : 0
-  return { closedWidth, sideBySide, shift }
+  return { closedWidth, sideBySide }
 }
 
 /**
@@ -324,6 +319,15 @@ export function FilePreviewModal(): React.JSX.Element | null {
   // HTML: Rendered or Source, for this open only — every open starts Rendered.
   const [htmlViewFor, setHtmlViewFor] = useState<{ openSeq: number; view: HtmlPreviewView } | null>(null)
   const htmlView: HtmlPreviewView = htmlViewFor?.openSeq === openSeq ? htmlViewFor.view : 'rendered'
+  // JSON Lines: Tree or Table, for this open only — every open starts as the tree.
+  const [jsonLinesViewFor, setJsonLinesViewFor] = useState<{ openSeq: number; view: JsonLinesView } | null>(null)
+  const jsonLinesView: JsonLinesView = jsonLinesViewFor?.openSeq === openSeq ? jsonLinesViewFor.view : 'tree'
+  // Tree / Table only for a file of records: a pretty-printed document or text
+  // with no JSON line has one view, and a toggle there would change nothing.
+  const jsonLinesRecords = useMemo(
+    () => kind === 'jsonl' && !isLoading && jsonLinesShape(text, truncated)?.kind === 'records',
+    [kind, isLoading, text, truncated]
+  )
 
   const loaded = target !== null && !isLoading && error === null && !notice && kind !== null
   const showContents = loaded && toc?.show === true
@@ -472,11 +476,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
   const geometry = contentsGeometry(windowWidth, rem)
-  const { closedWidth, shift } = geometry
+  const { closedWidth } = geometry
   const sideBySide = geometry.sideBySide && slowOpenFor !== openSeq
   const widened = panelOpen && sideBySide
   const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  const widthTransition = 'width 170ms cubic-bezier(0.2, 0, 0, 1), left 170ms cubic-bezier(0.2, 0, 0, 1)'
+  const widthTransition = 'width 170ms cubic-bezier(0.2, 0, 0, 1)'
   // Explicit only while the Contents button exists, so opening the panel is a
   // change between two pixel widths that can animate; `flexShrink` keeps the
   // widened card from being squeezed back into the overlay's padding.
@@ -485,7 +489,6 @@ export function FilePreviewModal(): React.JSX.Element | null {
         width: widened ? closedWidth + CONTENTS_PANEL_WIDTH : closedWidth,
         maxWidth: 'none',
         flexShrink: 0,
-        left: widened ? shift : 0,
         // Clips the side-by-side panel while the width animates.
         overflow: 'hidden',
         transition: animateWidth && !reduceMotion ? widthTransition : undefined
@@ -532,13 +535,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
             )}
           </div>
           <div className={`flex items-center shrink-0 ${agentFile ? 'gap-1.5' : 'gap-1'}`}>
-            {kind === 'csv' && !notice && (
+            {(kind === 'csv' || (jsonLinesRecords && jsonLinesView === 'table')) && !notice && (
               <button
                 type="button"
                 onClick={() => setFiltersEnabled((v) => !v)}
                 aria-pressed={filtersEnabled}
                 className={
-                  'p-1 rounded transition-colors ' +
+                  MODAL_HEADER_ICON + ' ' +
                   (filtersEnabled
                     ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
                     : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
@@ -549,11 +552,39 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 <Filter size={14} />
               </button>
             )}
+            {/* After the filter button, which appears on Table: placed before, it would
+                push this group out from under the pointer. */}
+            {jsonLinesRecords && !notice && (
+              <div
+                role="group"
+                aria-label="View"
+                className={MODAL_HEADER_SEGMENTS}
+              >
+                {(['tree', 'table'] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    aria-pressed={jsonLinesView === view}
+                    onClick={() => setJsonLinesViewFor({ openSeq, view })}
+                    aria-label={view === 'tree' ? 'Tree' : 'Table'}
+                    title={view === 'tree' ? 'Tree: one record per line' : 'Table: a column per value path'}
+                    className={
+                      MODAL_HEADER_SEGMENT + ' w-6 ' +
+                      (jsonLinesView === view
+                        ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
+                    }
+                  >
+                    {view === 'tree' ? <ListTree size={14} /> : <Table2 size={14} />}
+                  </button>
+                ))}
+              </div>
+            )}
             {html && bodyError === null && !notice && (
               <div
                 role="group"
                 aria-label="View"
-                className="inline-flex rounded-md border border-[var(--color-border)]"
+                className={MODAL_HEADER_SEGMENTS}
               >
                 {(['rendered', 'source'] as const).map((view) => (
                   <button
@@ -562,7 +593,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                     aria-pressed={htmlView === view}
                     onClick={() => setHtmlViewFor({ openSeq, view })}
                     className={
-                      'px-2 py-0.5 rounded-[5px] text-xs font-medium transition-colors ' +
+                      MODAL_HEADER_SEGMENT + ' px-2 text-xs font-medium ' +
                       (htmlView === view
                         ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
                         : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
@@ -581,7 +612,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 aria-controls={CONTENTS_PANEL_ID}
                 title={contentsOpen ? 'Hide contents' : 'Show contents'}
                 className={
-                  HEADER_ACTION_CLASS +
+                  MODAL_HEADER_ACTION +
                   (contentsOpen
                     ? ' bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
                     : ' text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
@@ -602,7 +633,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 disabled={pendingAction !== null || fileGone}
                 aria-busy={pendingAction === 'run' || undefined}
                 title="Open in the Run Script window (nothing runs until you press Run)"
-                className={HEADER_ACTION_CLASS + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}
+                className={MODAL_HEADER_ACTION + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}
               >
                 {pendingAction === 'run' ? (
                   <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
@@ -610,27 +641,6 @@ export function FilePreviewModal(): React.JSX.Element | null {
                   <SquareTerminal size={12} aria-hidden />
                 )}
                 Run…
-              </button>
-            )}
-            {fileActions && canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref) && (
-              <button
-                type="button"
-                onClick={() => {
-                  // The card lands in the chat: the preview steps aside for the dialog.
-                  const { agentId, ref, messageId } = agentFile
-                  close()
-                  useArtifactPublishStore.getState().open({
-                    agentId,
-                    path: ref.path,
-                    kind: ref.kind,
-                    chatId: useChatStore.getState().activeChatId,
-                    messageId: messageId ?? null
-                  })
-                }}
-                className={HEADER_ACTION_CLASS + ' text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}
-              >
-                <Upload size={12} aria-hidden />
-                Publish…
               </button>
             )}
             {fileActions && (
@@ -642,6 +652,22 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 onOpen={() => void openAgentFileExternally()}
                 onReveal={() => void revealAgentFile()}
                 onOpenInBrowser={html ? () => void openInBrowser() : undefined}
+                onPublish={
+                  canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref)
+                    ? () => {
+                        // The card lands in the chat: the preview steps aside for the dialog.
+                        const { agentId, ref, messageId } = agentFile
+                        close()
+                        useArtifactPublishStore.getState().open({
+                          agentId,
+                          path: ref.path,
+                          kind: ref.kind,
+                          chatId: useChatStore.getState().activeChatId,
+                          messageId: messageId ?? null
+                        })
+                      }
+                    : undefined
+                }
               />
             )}
             {attachmentTarget && html && (
@@ -649,9 +675,8 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 type="button"
                 onClick={() => void openInBrowser()}
                 disabled={pendingAction !== null}
-                className="p-1 rounded text-[var(--color-text-muted)]
-                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
-                  disabled:opacity-50 transition-colors"
+                className={MODAL_HEADER_ICON + ` text-[var(--color-text-muted)]
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50`}
                 title="Open in browser"
                 aria-label={`Open ${attachmentTarget.filename} in browser`}
               >
@@ -663,9 +688,8 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 type="button"
                 onClick={() => void download(attachmentTarget)}
                 disabled={isDownloading}
-                className="p-1 rounded text-[var(--color-text-muted)]
-                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
-                  disabled:opacity-50 transition-colors"
+                className={MODAL_HEADER_ICON + ` text-[var(--color-text-muted)]
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50`}
                 title={`Download ${attachmentTarget.filename}`}
                 aria-label={`Download ${attachmentTarget.filename}`}
               >
@@ -679,8 +703,8 @@ export function FilePreviewModal(): React.JSX.Element | null {
             <button
               type="button"
               onClick={close}
-              className="p-1 rounded hover:bg-[var(--color-bg-hover)]
-                text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+              className={MODAL_HEADER_ICON + ` hover:bg-[var(--color-bg-hover)]
+                text-[var(--color-text-muted)] hover:text-[var(--color-text)]`}
               title="Close"
               aria-label="Close preview"
             >
@@ -763,6 +787,8 @@ export function FilePreviewModal(): React.JSX.Element | null {
                     text={text}
                     filtersEnabled={filtersEnabled}
                     anchorLines={anchorLines}
+                    jsonLinesView={jsonLinesView}
+                    truncated={truncated}
                   />
                 )}
                 {truncated && !htmlRendered && (

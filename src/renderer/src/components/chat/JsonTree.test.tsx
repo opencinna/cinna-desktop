@@ -1,6 +1,14 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { CHILD_PAGE, EXPAND_ALL_LIMIT, JsonTree, parseJsonForTree, type JsonValue } from './JsonTree'
+import {
+  CHILD_PAGE,
+  EXPAND_ALL_LIMIT,
+  JsonLinesTree,
+  JsonTree,
+  parseJsonForTree,
+  parseJsonLines,
+  type JsonValue
+} from './JsonTree'
 
 const DOC: JsonValue = {
   name: 'forecast',
@@ -141,5 +149,39 @@ describe('JsonTree', () => {
   it('declines text that is not JSON', () => {
     expect(parseJsonForTree('{"a": 1')).toBeNull()
     expect(parseJsonForTree('[1]')).toEqual({ value: [1] })
+  })
+})
+
+describe('JsonLinesTree', () => {
+  it('numbers each record by its line, skips blank lines and keeps a line that is not JSON as text', () => {
+    const lines = parseJsonLines('{"a": 1}\r\n\n  \n[2]\noops\n"s"')
+    expect(lines).toEqual([
+      { line: 1, value: { a: 1 } },
+      { line: 4, value: [2] },
+      { line: 5, raw: 'oops' },
+      { line: 6, value: 's' }
+    ])
+    render(<JsonLinesTree lines={lines ?? []} />)
+    expect(text()).toContain('1{')
+    expect(text()).toContain('oopsnot JSON')
+    expect(text()).not.toMatch(/^\[/)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse line 4' }))
+    expect(text()).toContain('4[ … ]1 item')
+  })
+
+  it('declines a file in which no line parses', () => {
+    expect(parseJsonLines('one\ntwo')).toBeNull()
+    expect(parseJsonLines('\n\n')).toBeNull()
+  })
+
+  it('opens a large file with every record folded, and pages the records', () => {
+    const lines = parseJsonLines(
+      Array.from({ length: CHILD_PAGE + 5 }, (_, i) => JSON.stringify({ i, pad: Array(10).fill(i) })).join('\n')
+    )
+    render(<JsonLinesTree lines={lines ?? []} />)
+    expect(screen.getByRole('button', { name: 'Expand line 1' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: `Expand line ${CHILD_PAGE + 1}` })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show 5 more of 5' }))
+    expect(screen.getByRole('button', { name: `Expand line ${CHILD_PAGE + 5}` })).toBeTruthy()
   })
 })

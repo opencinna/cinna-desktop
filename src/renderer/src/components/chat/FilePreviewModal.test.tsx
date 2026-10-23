@@ -529,6 +529,71 @@ describe('json', () => {
   })
 })
 
+describe('jsonl', () => {
+  const LINES = '{"id": 1, "user": {"name": "Ann"}}\n\n{"id": 2, "tags": ["x"]}\n'
+
+  it('shows one tree row per record, numbered by its line, and a table of value paths on Table', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'jsonl', text: LINES })
+    expect(screen.getByRole('button', { name: 'Collapse line 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Collapse line 3' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Toggle column filters and sorting' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    // Hidden, not unmounted: its folds survive a switch back.
+    expect(screen.getByTestId('json-tree').closest('[hidden]')).not.toBeNull()
+    const headers = screen.getAllByRole('columnheader').map((th) => th.textContent)
+    expect(headers).toEqual(['#', 'id', 'user.name', 'tags.0'])
+    const cells = [...document.querySelectorAll('tbody tr')].map((tr) =>
+      [...tr.querySelectorAll('td')].map((td) => td.textContent)
+    )
+    expect(cells).toEqual([
+      ['1', '1', 'Ann', ''],
+      ['3', '2', '', 'x']
+    ])
+    expect(screen.getByRole('button', { name: 'Toggle column filters and sorting' })).toBeTruthy()
+
+    // Another open starts as the tree again.
+    open({ target: agentTarget(), kind: 'jsonl', text: '{"b": 1}' })
+    expect(screen.getByTestId('json-tree')).toBeTruthy()
+  })
+
+  it('shows a pretty-printed file as one JSON tree, and text with no JSON line as itself, neither with a Tree / Table toggle', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'jsonl', text: '[\n  1,\n  2\n]' })
+    expect(screen.getByRole('button', { name: 'Collapse root' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Table' })).toBeNull()
+
+    open({ target: agentTarget(), kind: 'jsonl', text: 'plain text' })
+    expect(screen.queryByTestId('json-tree')).toBeNull()
+    expect(document.querySelector('pre')?.textContent).toBe('plain text')
+    expect(screen.queryByRole('button', { name: 'Table' })).toBeNull()
+  })
+
+  it('keeps the table filter and the tree folds across a switch of view', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'jsonl', text: LINES })
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse line 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle column filters and sorting' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filter id' }), { target: { value: '2' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tree' }))
+    expect(screen.getByRole('button', { name: 'Expand line 1' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect((screen.getByRole('textbox', { name: 'Filter id' }) as HTMLInputElement).value).toBe('2')
+  })
+
+  it('names a last line cut at the preview cap as cut, not as a line that is not JSON', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'jsonl', text: '{"a": 1}\n{"a": 2, "b', truncated: true })
+    expect(screen.getByTestId('json-tree').textContent).toContain('cut at the preview limit')
+    expect(screen.getByTestId('json-tree').textContent).not.toContain('not JSON')
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(document.body.textContent).not.toContain('not JSON and not shown')
+  })
+})
+
 describe('python', () => {
   it('highlights the source with the code-block palette and keeps the text intact', () => {
     render(<FilePreviewModal />)
@@ -890,13 +955,13 @@ describe('the Contents panel', () => {
     expect(localStorage.getItem(CONTENTS_KEY)).toBe('1')
   })
 
-  it('widens the card to the right in a wide window, keeping the body at the closed width', () => {
+  it('widens the card in place, centred, keeping the body at the closed width', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
     render(<FilePreviewModal />)
     open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
     // Opened already open: at its final width, with nothing to animate.
     expect(card().style.width).toBe('1008px')
-    expect(card().style.left).toBe('120px')
+    expect(card().style.left).toBe('')
     expect(card().style.transition).toBe('')
     expect(body().style.width).toBe('766px')
     expect(screen.getByRole('navigation', { name: 'Contents' }).className).not.toContain('shadow-[')
@@ -904,7 +969,6 @@ describe('the Contents panel', () => {
     // The button's own change animates, and the body keeps its width.
     fireEvent.click(contentsButton()!)
     expect(card().style.width).toBe('768px')
-    expect(card().style.left).toBe('0px')
     expect(card().style.transition).toContain('width 170ms')
     expect(body().style.width).toBe('766px')
 
@@ -913,13 +977,12 @@ describe('the Contents panel', () => {
     expect(card().style.transition).toBe('')
   })
 
-  it('still widens when the right side is short of room, moving left only as far as it must', () => {
+  it('still widens, centred, when there is room for the panel but not for it on the right alone', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1100 })
     render(<FilePreviewModal />)
     open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
-    // Centred at 1008px the right edge is at 1054; 30px more keeps 16 to spare.
     expect(card().style.width).toBe('1008px')
-    expect(card().style.left).toBe('30px')
+    expect(card().style.left).toBe('')
     expect(body().style.width).toBe('766px')
     expect(screen.getByRole('navigation', { name: 'Contents' }).className).not.toContain('shadow-[')
   })
@@ -963,12 +1026,13 @@ describe('the Contents panel', () => {
   it('follows a resize made while no preview was open', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
     render(<FilePreviewModal />)
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1100 })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 })
     act(() => {
       window.dispatchEvent(new Event('resize'))
     })
     open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
-    expect(card().style.left).toBe('30px')
+    // Too narrow now for the panel beside the body: the overlay, at the closed width.
+    expect(card().style.width).toBe('768px')
   })
 
   it('lays the panel over the body in a narrow window, and follows a resize', () => {
@@ -976,7 +1040,6 @@ describe('the Contents panel', () => {
     render(<FilePreviewModal />)
     open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
     expect(card().style.width).toBe('768px')
-    expect(card().style.left).toBe('0px')
     expect(screen.getByRole('navigation', { name: 'Contents' }).className).toContain('shadow-[')
 
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })

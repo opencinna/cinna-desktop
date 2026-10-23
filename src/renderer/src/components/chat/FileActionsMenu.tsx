@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal } from 'lucide-react'
+import { ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Upload } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
+import { MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 
 /**
@@ -19,13 +20,16 @@ interface FileActionsMenuProps {
   onReveal: () => void
   /** Offered for an HTML file: Open in browser, between Open and Open folder. */
   onOpenInBrowser?: () => void
+  /** Offered when the file can be published: Publish…, after a separator below Open folder. */
+  onPublish?: () => void
   /** The preview is fading out: an open menu goes with it. */
   dismissed: boolean
 }
 
 /**
  * The file preview's ⋯ menu: Open, Open in browser (HTML only) and Open folder
- * for a file an agent named.
+ * for a file an agent named, then Publish… under a separator when the file
+ * can be published (it was a header button; it is as occasional as these).
  *
  * They used to be labelled header buttons; the header now holds the Contents
  * toggle, and these two are occasional. The trigger stays enabled while the
@@ -45,6 +49,7 @@ export function FileActionsMenu({
   onOpen,
   onReveal,
   onOpenInBrowser,
+  onPublish,
   dismissed
 }: FileActionsMenuProps): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
@@ -134,8 +139,8 @@ export function FileActionsMenu({
         aria-expanded={open}
         aria-label="More file actions"
         title="More file actions"
-        className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]
-          hover:text-[var(--color-text)] transition-colors"
+        className={MODAL_HEADER_ICON + ` text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]
+          hover:text-[var(--color-text)]`}
       >
         {pendingAction !== null ? <Loader2 size={14} className="animate-spin" /> : <MoreHorizontal size={14} />}
       </button>
@@ -176,6 +181,21 @@ export function FileActionsMenu({
               <FolderOpen size={12} />
               Open folder
             </button>
+            {onPublish && (
+              <>
+                <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={MENU_ITEM}
+                  disabled={fileGone}
+                  onClick={() => run(onPublish)}
+                >
+                  <Upload size={12} />
+                  Publish…
+                </button>
+              </>
+            )}
           </div>,
           document.body
         )}

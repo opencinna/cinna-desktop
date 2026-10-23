@@ -1,6 +1,6 @@
 /**
  * In-app file preview for a small set of text-based attachment types
- * (`txt`, `csv`, `md`, `json`, `yaml`/`yml`, `py`, `xml` and its dialects)
+ * (`txt`, `csv`, `md`, `json`, `jsonl`/`ndjson`, `yaml`/`yml`, `py`, `xml` and its dialects)
  * and the common image formats (`png`, `jpg`, `gif`, `webp`, `bmp`, `svg`). Clicking a previewable
  * attachment badge opens a modal showing the decoded content instead of
  * going straight to a save dialog; non-previewable types still download.
@@ -10,7 +10,7 @@
  */
 
 /** How the preview modal should render a previewable file's text. */
-export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'
+export type PreviewRenderKind = 'markdown' | 'json' | 'jsonl' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'
 
 /**
  * Max bytes the main process reads for a preview. Large enough that a
@@ -46,6 +46,8 @@ const PREVIEW_KIND_BY_EXT: Record<string, PreviewRenderKind> = {
   md: 'markdown',
   markdown: 'markdown',
   json: 'json',
+  jsonl: 'jsonl',
+  ndjson: 'jsonl',
   csv: 'csv',
   tsv: 'csv',
   yaml: 'text',
@@ -81,6 +83,9 @@ const PREVIEW_KIND_BY_MIME: Record<string, PreviewRenderKind> = {
   'text/plain': 'text',
   'text/markdown': 'markdown',
   'application/json': 'json',
+  'application/jsonl': 'jsonl',
+  'application/x-jsonlines': 'jsonl',
+  'application/x-ndjson': 'jsonl',
   'text/csv': 'csv',
   'text/tab-separated-values': 'csv',
   'application/x-yaml': 'text',

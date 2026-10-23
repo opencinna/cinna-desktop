@@ -32,7 +32,136 @@ const MAX_OPEN_DEPTH = 32
  * default fold state rather than inheriting paths that meant something else.
  */
 export function JsonTree({ value }: { value: JsonValue }): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => defaultCollapsed(value))
+  const folds = useFolds(() => defaultCollapsed(value))
+  return (
+    // Plain rows with disclosure buttons, not an ARIA tree: that pattern wants
+    // focusable items and arrow-key navigation, and rows here hold buttons and
+    // links of their own.
+    <div
+      ref={folds.treeRef}
+      data-testid="json-tree"
+      className="font-mono text-xs leading-relaxed text-[var(--color-text)]"
+    >
+      <JsonNode
+        value={value}
+        path=""
+        label="root"
+        last
+        collapsed={folds.collapsed}
+        onToggle={folds.toggle}
+        shown={folds.shown}
+        onShowMore={folds.showMore}
+      />
+    </div>
+  )
+}
+
+/**
+ * One non-blank line of a JSON Lines file: its value, or its text when it is
+ * not JSON — `cut` when that is the last line of a read stopped at the preview
+ * cap, which is not a malformed line.
+ */
+export type JsonLine = { line: number; value: JsonValue } | { line: number; raw: string; cut?: boolean }
+
+/**
+ * A JSON Lines file as the JSON tree, one record per line, each numbered with
+ * its line in the file rather than wrapped in an array the file does not have.
+ * The records page like a huge array (200 at a time) and fold like one: above
+ * 2,000 values every record starts folded. A line that is not JSON — a log's
+ * stray text, or the last line of a file cut at the preview cap — stays in
+ * place as its text, marked, so one bad line does not cost the whole tree.
+ */
+export function JsonLinesTree({ lines }: { lines: JsonLine[] }): React.JSX.Element {
+  const values = useMemo(() => lines.map((l) => ('value' in l ? l.value : null)), [lines])
+  const folds = useFolds(() => defaultCollapsed(values))
+  const limit = folds.shown.get('') ?? CHILD_PAGE
+  const hidden = Math.max(0, lines.length - limit)
+  const width = `${String(lines[lines.length - 1]?.line ?? 1).length}ch`
+  return (
+    <div
+      ref={folds.treeRef}
+      data-testid="json-tree"
+      className="font-mono text-xs leading-relaxed text-[var(--color-text)]"
+    >
+      {lines.slice(0, limit).map((entry, index) => {
+        const prefix = <LineNumber line={entry.line} width={width} />
+        if (!('value' in entry)) {
+          return (
+            <div key={index} data-json-row className="flex">
+              <Gutter />
+              {/* Hanging past the number, so a wrapped line does not read as another record. */}
+              <span
+                style={{ paddingLeft: `calc(${width} + 0.5rem)`, textIndent: `calc(-${width} - 0.5rem)` }}
+                className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]"
+              >
+                {prefix}
+                <span className="text-[var(--color-text-secondary)]">{entry.raw}</span>
+                <span className="ml-2 font-sans italic text-[var(--color-text-muted)]">
+                  {entry.cut ? 'cut at the preview limit' : 'not JSON'}
+                </span>
+              </span>
+            </div>
+          )
+        }
+        return (
+          <JsonNode
+            key={index}
+            value={entry.value}
+            path={childPath('', String(index))}
+            last
+            prefix={prefix}
+            prefixWidth={`calc(${width} + 0.5rem)`}
+            label={`line ${entry.line}`}
+            collapsed={folds.collapsed}
+            onToggle={folds.toggle}
+            shown={folds.shown}
+            onShowMore={folds.showMore}
+          />
+        )
+      })}
+      {hidden > 0 && (
+        <div className="flex">
+          <Gutter />
+          <button
+            type="button"
+            onClick={() => folds.showMore('')}
+            className="rounded px-1 font-sans text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]"
+          >
+            Show {Math.min(CHILD_PAGE, hidden)} more of {hidden}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LineNumber({ line, width }: { line: number; width: string }): React.JSX.Element {
+  return (
+    <span
+      aria-hidden
+      style={{ minWidth: width }}
+      className="mr-2 inline-block select-none text-right text-[var(--color-text-muted)] [text-indent:0]"
+    >
+      {line}
+    </span>
+  )
+}
+
+interface Folds {
+  treeRef: React.RefObject<HTMLDivElement | null>
+  collapsed: Set<string>
+  toggle: (path: string, node: JsonValue, branch: boolean, anchor: HTMLElement) => void
+  shown: Map<string, number>
+  showMore: (path: string) => void
+}
+
+/**
+ * Fold and paging state for a tree. The parent keys the tree by the file
+ * text, so another file starts from its own default rather than inheriting
+ * paths that meant something else.
+ */
+function useFolds(initial: () => Set<string>): Folds {
+  const [collapsed, setCollapsed] = useState<Set<string>>(initial)
   const [shown, setShown] = useState<Map<string, number>>(() => new Map())
   const showMore = (path: string): void =>
     setShown((prev) => new Map(prev).set(path, (prev.get(path) ?? CHILD_PAGE) + CHILD_PAGE))
@@ -83,27 +212,7 @@ export function JsonTree({ value }: { value: JsonValue }): React.JSX.Element {
     })
   }
 
-  return (
-    // Plain rows with disclosure buttons, not an ARIA tree: that pattern wants
-    // focusable items and arrow-key navigation, and rows here hold buttons and
-    // links of their own.
-    <div
-      ref={treeRef}
-      data-testid="json-tree"
-      className="font-mono text-xs leading-relaxed text-[var(--color-text)]"
-    >
-      <JsonNode
-        value={value}
-        path=""
-        label="root"
-        last
-        collapsed={collapsed}
-        onToggle={toggle}
-        shown={shown}
-        onShowMore={showMore}
-      />
-    </div>
-  )
+  return { treeRef, collapsed, toggle, shown, showMore }
 }
 
 function scrollParent(el: HTMLElement): HTMLElement | null {
@@ -168,8 +277,12 @@ interface JsonNodeProps {
   last: boolean
   /** The key (object member) or nothing (array item, root). */
   name?: string
-  /** What the fold button names: the key, `item N`, or `root`. */
+  /** What the fold button names: the key, `item N`, `line N`, or `root`. */
   label: string
+  /** Shown before the row's content: a JSON Lines record's line number. */
+  prefix?: ReactNode
+  /** The prefix's width, so a long scalar's wrapped lines hang past it too. */
+  prefixWidth?: string
   collapsed: Set<string>
   onToggle: (path: string, node: JsonValue, branch: boolean, anchor: HTMLElement) => void
   /** Children shown per container path, when more than `CHILD_PAGE`. */
@@ -183,6 +296,8 @@ function JsonNode({
   last,
   name,
   label: foldLabel,
+  prefix,
+  prefixWidth,
   collapsed,
   onToggle,
   shown,
@@ -203,7 +318,11 @@ function JsonNode({
         <Gutter />
         {/* Hanging indent: a long string's wrapped lines sit inside the row
             rather than at the key's edge, where they read as more rows. */}
-        <span className="min-w-0 whitespace-pre-wrap pl-[2ch] [overflow-wrap:anywhere] [text-indent:-2ch]">
+        <span
+          style={prefixWidth ? { paddingLeft: `calc(${prefixWidth} + 2ch)`, textIndent: `calc(-${prefixWidth} - 2ch)` } : undefined}
+          className="min-w-0 whitespace-pre-wrap pl-[2ch] [overflow-wrap:anywhere] [text-indent:-2ch]"
+        >
+          {prefix}
           {label}
           <Scalar value={value} />
           {comma}
@@ -220,6 +339,7 @@ function JsonNode({
       <div data-json-row className="flex">
         <Gutter />
         <span className="min-w-0 [overflow-wrap:anywhere]">
+          {prefix}
           {label}
           <Punct>{open + close}</Punct>
           {comma}
@@ -251,6 +371,7 @@ function JsonNode({
           <ChevronRight size={11} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
         </button>
         <span className="min-w-0 [overflow-wrap:anywhere]">
+          {prefix}
           {label}
           {isCollapsed ? (
             <>
@@ -384,4 +505,55 @@ export function parseJsonForTree(text: string): { value: JsonValue } | null {
 /** Memoised `parseJsonForTree`. */
 export function useParsedJson(text: string): { value: JsonValue } | null {
   return useMemo(() => parseJsonForTree(text), [text])
+}
+
+/**
+ * Parse a JSON Lines file, one value per non-blank line, numbered from 1 as
+ * in the file. `null` when no line parses: the text is shown as written. With
+ * `truncated`, a last line that does not parse is marked `cut`.
+ */
+export function parseJsonLines(text: string, truncated = false): JsonLine[] | null {
+  const out: JsonLine[] = []
+  let parsed = 0
+  const physical = text.split('\n')
+  for (let i = 0; i < physical.length; i++) {
+    const source = physical[i].endsWith('\r') ? physical[i].slice(0, -1) : physical[i]
+    if (source.trim() === '') continue
+    try {
+      out.push({ line: i + 1, value: JSON.parse(source) as JsonValue })
+      parsed++
+    } catch {
+      out.push({ line: i + 1, raw: source })
+    }
+  }
+  const last = out[out.length - 1]
+  if (truncated && last && !('value' in last)) last.cut = true
+  return parsed > 0 ? out : null
+}
+
+/**
+ * How a JSON Lines file is shown: `records` (a tree or a table of its lines),
+ * `document` (a pretty-printed `.jsonl` that is one JSON value), or `null`
+ * (no line parses: the text as written). Lines that are not JSON, other than
+ * a cut last line, are first tried as a whole document.
+ *
+ * Read by the modal's header, which offers Tree / Table only for `records`,
+ * and by the body; the last answer is kept, so the two do not each parse a
+ * 25 MB file and cannot disagree.
+ */
+export type JsonLinesShape = { kind: 'records'; lines: JsonLine[] } | { kind: 'document'; value: JsonValue } | null
+
+let lastShape: { text: string; truncated: boolean; shape: JsonLinesShape } | null = null
+
+export function jsonLinesShape(text: string, truncated = false): JsonLinesShape {
+  if (lastShape && lastShape.text === text && lastShape.truncated === truncated) return lastShape.shape
+  const lines = parseJsonLines(text, truncated)
+  let shape: JsonLinesShape
+  if (lines && lines.every((l) => 'value' in l || l.cut)) shape = { kind: 'records', lines }
+  else {
+    const whole = parseJsonForTree(text)
+    shape = whole ? { kind: 'document', value: whole.value } : lines ? { kind: 'records', lines } : null
+  }
+  lastShape = { text, truncated, shape }
+  return shape
 }
