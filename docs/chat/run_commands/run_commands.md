@@ -9,6 +9,7 @@ An agent's reply often contains a command to run: `uv run scripts/check_credenti
 - **Command** — code in an assistant message that looks like a shell command: an inline code span or a fenced block. Recognised by `detectCommand` (`src/shared/commandRun.ts`)
 - **Clickable command** — in a persisted, settled reply of an agent that can run commands, such a span or block wears the file reference's box with an edge of its own colour (`--color-command-ref-edge`, green) and opens the window on click. Clicking runs nothing
 - **Run Script window** — a modal card like the [file preview](../file_preview/file_preview.md): it grows from the click, has a read-only terminal for its body and the command line at its foot. One exists at a time, app-wide
+- **Parameters form** — for a script whose parameters can be read from its source, a sidebar of the window with one field per parameter, kept in step with the command line. Absent for every other command
 - **Run** (menu) — starts the command now, unreviewed, and opens the window on the run
 - **Run in background** (menu) — starts the same process and leaves the window closed. The run is in the **Commands** badge under the composer
 - **Edit and Run…** (menu) — opens the window on the command without running it. Pressing Run in the window is the consent, so a window run is always reviewed
@@ -44,6 +45,13 @@ Right-click offers the same by menu: **Run** starts a command that looks safe at
 3. A held key's repeats run nothing, so the press that opened the window cannot run it; nor does an Enter that commits an IME composition
 4. On a one-line command, ↑ and ↓ walk the chat's earlier commands (most recent first, each once) and back to what was typed
 5. It is read-only while a run is going and while a start is in flight. It edits the command; it is not the run's stdin, which stays closed
+
+### Filling a script's parameters
+1. The reply holds `uv run scripts/report.py italy --year 2026`, and `report.py` is an argparse script in the agent's folder. Clicking it opens the window with a **Parameters** sidebar beside the terminal, already filled from the command (Scope `italy`, Year `2026`)
+2. Before the first run the terminal shows the script's own summary and description, dimmed, in place of "Press Run…"
+3. Ticking a switch such as Apply adds `--apply` to the end of the line; typing in Year rewrites only `--year …`; clearing a field removes only its words. The rest of the line, in the user's order and quoting, stays as typed
+4. Editing the line by hand updates the form the same way. If the line stops being one simple command that names the script (a pipe, another script, a `$`), the form is **edited by hand**: it shows its last values dimmed and read-only, with a line saying so, and follows the line again as soon as it parses
+5. While a run is going or starting the form reads and edits nothing, as the line does not
 
 ### Giving the output to the agent
 1. When a run has ended, its row in the Commands popover, and the window's ⋯ menu, offer **Add output to message**
@@ -81,6 +89,27 @@ The window says **why** it is holding a command, not only that it is, so the use
 - **Main's own sentence** when a menu Run was refused at level 2 (a missing script, a path outside the folder, …)
 - The generic `needs_review` sentence ("This command can change or delete files, so it runs after you check it.") remains only as the fallback reason for that code
 
+### When a form appears
+- **The script is the agent's own and readable**: a regular file inside the agent's folder (by real path, so a symlink out of it is outside), or in a pinned skill folder, that is not protected for a read (credentials, `.cinna/`, `.git/`, secret-looking names), at most 512 KB, and not binary. The command must be one simple command naming it (`[interpreter] script …`, `uv run script.py …`, `./script.sh …`, env assignments first are fine)
+- **The parameters come from the source, never from running it.** Running a script to ask `--help` would execute the agent's code before the user pressed Run
+- **Python**: calls to `add_argument` on the script's **one** `ArgumentParser`, or on the parser a `build_parser()`-style factory returns (a function whose body returns the parser, called as `parser = build_parser()` or `build_parser().parse_args()`). Its argument groups count. A **Usage** line in the module docstring fills what argparse did not say; option lines in the docstring (`  --basis month   per month`) supply help text for a flag already known
+- **Shell**: a leading `# Usage:` comment block is the only source
+- **Fails closed.** Subparsers, a second parser, `parents=`, a parser that is not assigned to a name, an `add_argument` on anything else, a parser name rebound to something else, `**kwargs` in a call, a custom action, a flag that is not a string literal, an unterminated string, more than 200 calls, or literals nested deeper than 8 give **no form**. A form that omitted or misread a parameter would be worse than none, and the window is then the plain one
+- **Anything surprising is quiet**: an unreadable or oversized file, a refusal, an error, or an answer slower than 150 ms leaves the window without a form and says nothing
+
+### What the form shows
+- **Positionals first, then options**, in declaration order. Parameters that **write** (a switch named or described as apply, write, force, delete, commit, overwrite or push) go **last, under a divider**, labelled in the warning colour with "writes". The label is humanised from the destination (`as_of` becomes "As of"); a positional that is required carries `*`; a `(?)` beside the label holds the script's help, its flags, and a default the control cannot show itself
+- **Field kinds**: a switch is a toggle; a count is a number field; a parameter with up to four short choices is segmented buttons (pressing the chosen one again leaves it to the script), more choices a select; a date is a text field with a calendar button; a path is a text field with **Choose…**; everything else is text. A repeated or multi-value parameter is one field of words as a shell would read them
+- **Defaults are placeholders, not values.** An empty field is left out of the command, so the script's own default applies: the placeholder reads `default: data`, or **set by the script** when the default is an expression the reader cannot evaluate (`date.today().year`), or the format wanted (`YYYY-MM-DD`)
+- **Choose…** opens the desktop's native file dialog in the agent's folder (a folder too, on macOS) and writes the path **relative to the folder** when it is inside it, as chosen otherwise
+- **Other arguments**: one line below the fields for every word the form does not know (an unknown option, anything after `--`). Typing there edits those words only
+- A header line says where the form came from ("From report.py") and, behind its `(?)`, that the script is read and not run; the script's Usage line is shown there
+
+### How the form and the line stay in step
+- **Form edits rewrite only that parameter**, in place. A parameter newly set is added where it belongs (a positional after the previous one, an option at the end, before a `--`); a cleared one loses its words and nothing else. If an edit in place would not read back as the form says, the whole line is rewritten in spec order, keeping the text up to and including the script word verbatim. The form always shows what the line says, never what was typed
+- **Line edits update the form** on each keystroke: `--year=2026` and `--year 2026` both read, `-vvv` reads as a count of three
+- The user's choices are never lost to the sync: unknown words survive in Other arguments, in order
+
 ### Where it runs, and with what
 - **Folder**: the agent's workspace root, resolved where a turn's folder view is built (`agentWorkspaceFolder`), not the ACP session cwd (Antigravity's is `<folder>/.cinna/antigravity`). A folder that no longer exists is refused as `folder_missing`, and so is a folder agent that has dropped out of the rescanned list because its folder moved: it was on this computer, so "not local" would be the wrong thing to say
 - **Process**: `$SHELL -c <command>` (fallback `/bin/zsh`), stdin closed, stdout and stderr over pipes, **no PTY**, in its own process group. A command that prompts gets end-of-input and fails. Run and Run in background are the same non-interactive process; only whether the window opens differs
@@ -97,12 +126,14 @@ The window says **why** it is holding a command, not only that it is, so the use
 - A run's log is deleted when its row leaves the hub (Remove, the newest-five cap, the chat clearing)
 
 ### The window keeps its shape
-- **Fixed size.** The card is 70% of the viewport tall, with a fixed header, body and footer. The command line's rows (one, up to six; more scrolls) are counted once at open, including the soft wraps of a long line, so nothing resizes while the user types
+- **Fixed size.** The card is 70% of the viewport tall, with a fixed header, body and footer. The command line's rows (one, up to six; more scrolls) are counted once at open, including the soft wraps of a long line, so nothing resizes while the user types. For a script with a form the count also reserves room for the switches the form could add and the line does not yet name, at most three rows in all; a longer line scrolls to its tail when the form appends to it
 - **A refusal or guard line takes its row from the terminal**, never from the command line: nothing under the user's cursor moves
 - **Run, Run again and Stop share one slot of one width**, and Run in background is hidden (kept in layout) while a run is going, so a press that swaps them moves nothing. The state and time in the header are a fixed place rewritten in place
 - **Stop is guarded against a double-click on Run.** For 400 ms after Stop takes Run's place a pointer press on it is ignored: the second press of a double-click on Run would otherwise stop the run it just started. The keyboard is not held back, and a window opened on an already-running run shows Stop unguarded
 - **Escape and a press outside close it** (after a 500 ms guard against the second press of the opening double-click), unless the ⋯ menu or a file preview opened from it is up; those take the key or press first
 - **A window run closes nothing on failure**: a refusal or spawn error is a line above the command line, inside the window
+- **The form is there from the first frame or never.** The window waits up to 150 ms for main to read the script (a repeat read is cached and answers well inside that) and opens without a form after that; a form that appeared a moment later would shift the terminal under the user's eyes. The form's rows, field kinds and header line are fixed by the script, so typing, toggling and the hand-edited state change values and one line of text, never the layout
+- **A parameter's `(?)` tip is not outside the window**: while it is open, Escape closes the tip, not the window, and a press on it is not a press outside
 - **A window closes on its own** when its run is removed from the Commands badge, when the active profile changes (even with a start in flight), and, for Run in background, when the background run has started
 
 ### The ⋯ menu
@@ -118,6 +149,8 @@ The badge's **Open output** can open a run this renderer has no record of (after
 - No automatic follow-up turn: the agent learns of a run only from an attached output
 - No interactive input, no PTY (the terminal is a viewer, not a shell), no running of a text selection
 - No confirmation for Run and Run in background in the menu; clicking a command runs nothing at all
+- The form never runs the script, never evaluates Python, and never guesses: it shows what the source states literally and leaves the rest to the script
+- The form does not validate: a bad year or a missing required positional is the script's to refuse when run
 - No remote or cinna-core agents
 - No notification when a background run ends; the badge is the signal
 
@@ -128,7 +161,7 @@ click a command ──────────────► Run Script window 
 right-click ─► detectCommand + looksAutoRunnable (renderer) ─► menu items
   Run / Run in background ─► userCommands:run {reviewed:false} ─► window on the run / badge only
   Edit and Run… ─► Run Script window
-        │
+        │ (a script) ─► userCommands:inspect ─► main reads the source ─► Parameters form ⇄ command line
         ▼ main: chat, message and agent checks ─► agentCommandWorkspace
         │         ─► ownCommandRefusal (unless reviewed) ─► spawn $SHELL -c in the folder
         ▼
