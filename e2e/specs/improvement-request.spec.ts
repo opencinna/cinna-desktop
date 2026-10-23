@@ -288,15 +288,14 @@ test('one bundle agent: the publisher named, Send needs a message, memory untick
   await chatWith(cinna, BUNDLE_A, 'Where is order 42?')
   const dialog = await openImprovementDialog(cinna)
 
-  await test.step('the pre-flight: the agent read-only, the publisher, the message count, the external callout', async () => {
+  await test.step('the pre-flight: the agent as its chip, the publisher in bold, the message count, no callout', async () => {
     await expect(dialog.getByRole('combobox', { name: 'Agent session' })).toHaveCount(0)
-    await expect(dialog.locator('[data-improvement-agent]')).toHaveText(/^Order Desk · (just now|\d+ min ago)$/)
+    await expect(dialog.locator('[data-improvement-agent]')).toHaveText(/^Order Desk(just now|\d+ min ago)$/)
+    await expect(dialog.locator('[data-improvement-recipient]')).toHaveText(PUBLISHER)
     const disclosure = dialog.locator('[data-improvement-context]')
     await expect(disclosure).toContainText(`Goes to ${PUBLISHER}, who publishes the bundle this agent was installed from.`)
     await expect(disclosure).toContainText('2 messages will be captured as they are right now. Continuing the conversation afterwards won’t change what is shared.')
-    await expect(dialog.locator('[data-improvement-external]')).toHaveText(
-      `Shared outside your account — bundle ${BUNDLE_ID}, version 1.2. This cannot be undone.`
-    )
+    await expect(dialog.getByText('This cannot be undone.', { exact: false })).toHaveCount(0)
     expect(core.contexts).toEqual([order.sessionId])
   })
 
@@ -374,7 +373,7 @@ test('two bundle agents: the picker sends the chosen session; a 429 shows core�
     await message.fill('Refunds should name the policy.')
     await picker.selectOption(ids[BUNDLE_B])
     await expect.poll(() => core.contexts.at(-1)).toBe(refund.sessionId)
-    await expect(dialog.locator('[data-improvement-external]')).toContainText('This cannot be undone.')
+    await expect(dialog.locator('[data-improvement-recipient]')).toHaveText(PUBLISHER)
     await expect(message).toHaveValue('Refunds should name the policy.')
   })
 

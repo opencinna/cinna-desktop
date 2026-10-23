@@ -15,8 +15,8 @@ From a chat, send one frozen copy of a conversation with a cloud bundle agent to
 ## User Stories / Flows
 
 1. In a chat with an eligible agent, the user opens composer **[+] → Actions › → Improvement request…**. The row is disabled with the hint *Available once the agent has finished replying* while a turn runs.
-2. The dialog opens on the chat's own agent. With more than one eligible agent in the chat, an **Agent session** picker lists them (the chat's own agent first, each with how long ago it last moved); with one, the name is shown as text.
-3. The dialog asks core for the pre-flight and says, in one or two lines, where it goes and how many messages are captured as of now. For an external recipient a warning callout names the bundle and installed version and says *This cannot be undone.*
+2. The dialog opens on the chat's own agent. With more than one eligible agent in the chat, a picker lists them (the chat's own agent first, each with how long ago it last moved); with one, the agent is shown as its regular agent chip, with how long ago its session last moved beside it. There is no field label above either.
+3. The dialog asks core for the pre-flight and says, in one or two lines, where it goes and how many messages are captured as of now. The recipient is plain bold text — their name, followed by `<email>` when core's pre-flight includes a `recipient_email` (today it sends only a display name). There is no separate bundle/version or *cannot be undone* callout.
 4. The user writes the **Message** (required) and leaves **Include MEMORY files of this agent** ticked or unticks it; its explanation sits behind the (?) beside it.
 5. **Send request** closes the dialog and raises a toast: sent to the recipient, or saved on the user's own agent.
 

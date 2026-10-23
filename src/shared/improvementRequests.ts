@@ -31,6 +31,8 @@ export interface ImprovementContext {
   reasonText: string | null
   isSharedExternally: boolean
   recipientDisplay: string | null
+  /** The recipient's email, when core sends one (`recipient_email`). */
+  recipientEmail: string | null
   targetAgentName: string | null
   bundleId: string | null
   installedVersion: string | null

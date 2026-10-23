@@ -143,7 +143,7 @@ describe('context', () => {
     expect(outcome).toEqual({
       ok: true,
       context: {
-        eligible: true, reason: null, reasonText: null, isSharedExternally: true, recipientDisplay: 'Pub Co',
+        eligible: true, reason: null, reasonText: null, isSharedExternally: true, recipientDisplay: 'Pub Co', recipientEmail: null,
         targetAgentName: 'Alpha', bundleId: 'com.pub.alpha', installedVersion: '1.2.0',
         messageCount: 7, existingRequestCount: 1
       }

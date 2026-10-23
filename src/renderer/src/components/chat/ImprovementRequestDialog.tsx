@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, Info, Loader2 } from 'lucide-react'
+import { Info, Loader2 } from 'lucide-react'
 import { CANCEL, DialogShell, ErrorLine, FIELD_BASE, PRIMARY } from '../agents/local/sharing/ShareDialogs'
-import { SettingsBadge, SettingsInfoTip } from '../settings/SettingsLayout'
+import { SettingsInfoTip } from '../settings/SettingsLayout'
+import { AgentChip } from './AgentChip'
+import { useAgentColor } from '../../utils/agentColors'
 import { IMPROVEMENT_KEY } from '../../hooks/useImprovementRequests'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
@@ -12,15 +14,21 @@ import {
   type ImprovementTarget
 } from '../../../../shared/improvementRequests'
 
-/** "Alpha · 3 min ago" — the picker tells two sessions of one chat apart by agent and recency. */
-function targetLabel(target: ImprovementTarget, now: number): string {
-  if (target.lastActivityAt === null) return target.agentName
+/** "3 min ago" — how recently the agent's session in this chat moved. */
+function sinceLabel(target: ImprovementTarget, now: number): string | null {
+  if (target.lastActivityAt === null) return null
   const minutes = Math.max(0, Math.round((now - target.lastActivityAt) / 60000))
   const when = minutes < 1 ? 'just now'
     : minutes < 60 ? `${minutes} min ago`
       : minutes < 60 * 24 ? `${Math.round(minutes / 60)} h ago`
         : new Date(target.lastActivityAt).toLocaleDateString()
-  return `${target.agentName} · ${when}`
+  return when
+}
+
+/** "Alpha · 3 min ago" — the picker tells two sessions of one chat apart by agent and recency. */
+function targetLabel(target: ImprovementTarget, now: number): string {
+  const since = sinceLabel(target, now)
+  return since ? `${target.agentName} · ${since}` : target.agentName
 }
 
 /** The toast after sending: who has it now. */
@@ -36,9 +44,9 @@ export function improvementConfirmation(context: ImprovementContext, agentName: 
  *
  * **Top-anchored, sized to content.** The disclosure is one or two plain
  * lines led by an info icon — one line while the pre-flight runs ("Checking
- * who receives it…") and one line for a session that cannot be sent — and the
- * external-recipient callout sits under it, never inside a scroll box, so
- * "This cannot be undone." is always in view. The pre-flight landing may
+ * who receives it…") and one line for a session that cannot be sent. The
+ * recipient is their name and, when core sends it, `<email>`, in bold; the
+ * agent is its regular agent chip. The pre-flight landing may
  * change the height; typing never does. The dialog is pinned by its top edge,
  * so a refusal under the buttons only lengthens it downward and closes
  * nothing. A session that cannot be sent keeps the message (it carries over to
@@ -97,9 +105,12 @@ export function ImprovementRequestDialog({
     )
   }
 
+  const colorOf = useAgentColor()
   const label = 'block text-[11px] text-[var(--color-text-muted)] mb-1'
   const infoLine = 'flex items-start gap-2 text-xs leading-relaxed'
-  const agentBadge = <SettingsBadge>{context?.targetAgentName ?? target?.agentName ?? ''}</SettingsBadge>
+  const agentName = context?.targetAgentName ?? target?.agentName ?? ''
+  const since = target ? sinceLabel(target, now) : null
+  const recipient = context?.recipientDisplay ?? 'the bundle’s publisher'
   return (
     <DialogShell title="Improvement request" pending={pending} onDismiss={onClose} initialFocusRef={messageRef} width="w-[30rem]" align="top">
       <form
@@ -110,11 +121,10 @@ export function ImprovementRequestDialog({
         }}
       >
         <div>
-          <span className={label} id="improvement-agent-label">Agent session</span>
           <div className="flex h-7 items-center">
             {targets.length > 1 ? (
               <select
-                aria-labelledby="improvement-agent-label"
+                aria-label="Agent session"
                 value={target?.agentId ?? ''}
                 disabled={pending}
                 onChange={(event) => {
@@ -128,9 +138,10 @@ export function ImprovementRequestDialog({
                 ))}
               </select>
             ) : (
-              <span className="truncate text-xs text-[var(--color-text)]" data-improvement-agent>
-                {target ? targetLabel(target, now) : ''}
-              </span>
+              <div className="flex min-w-0 items-center gap-2" data-improvement-agent>
+                {target && <AgentChip name={target.agentName} colors={colorOf(target.agentId)} label={`Agent "${target.agentName}"`} />}
+                {since && <span className="truncate text-[11px] text-[var(--color-text-muted)]">{since}</span>}
+              </div>
             )}
           </div>
         </div>
@@ -160,9 +171,15 @@ export function ImprovementRequestDialog({
               <div className="space-y-1">
                 <p>
                   {context.isSharedExternally ? (
-                    <>Goes to <SettingsBadge>{context.recipientDisplay ?? 'the bundle’s publisher'}</SettingsBadge>, who publishes the bundle this agent was installed from.</>
+                    <>
+                      Goes to{' '}
+                      <strong data-improvement-recipient className="font-semibold text-[var(--color-text)]">
+                        {recipient}{context.recipientEmail ? ` <${context.recipientEmail}>` : ''}
+                      </strong>
+                      , who publishes the bundle this agent was installed from.
+                    </>
                   ) : (
-                    <>Kept on your own agent {agentBadge} as a note for later improvements. Nothing leaves your account.</>
+                    <>Kept on your own agent <strong className="font-semibold text-[var(--color-text)]">{agentName}</strong> as a note for later improvements. Nothing leaves your account.</>
                   )}
                 </p>
                 <p>
@@ -180,23 +197,6 @@ export function ImprovementRequestDialog({
             </div>
           )}
         </div>
-
-        {context?.eligible && context.isSharedExternally && (
-          <div
-            data-improvement-external
-            className="flex gap-2 rounded-md border px-2.5 py-2 text-xs leading-relaxed text-[var(--color-text)]"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',
-              backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)'
-            }}
-          >
-            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--color-warning)]" aria-hidden />
-            <span>
-              Shared outside your account — bundle <span className="font-mono">{context.bundleId ?? 'unknown'}</span>
-              {context.installedVersion ? `, version ${context.installedVersion}` : ''}. This cannot be undone.
-            </span>
-          </div>
-        )}
 
         <div>
           <label htmlFor="improvement-message" className={label}>Message</label>

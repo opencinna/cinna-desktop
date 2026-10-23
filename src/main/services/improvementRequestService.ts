@@ -120,6 +120,7 @@ function toContext(raw: unknown): ImprovementContext {
     reasonText: reason ? REASON_TEXT[reason] ?? 'This session cannot be sent as an improvement request.' : null,
     isSharedExternally: r.is_shared_externally === true,
     recipientDisplay: str(r.recipient_display),
+    recipientEmail: str(r.recipient_email),
     targetAgentName: str(r.target_agent_name),
     bundleId: str(r.bundle_id),
     installedVersion: str(r.installed_version),

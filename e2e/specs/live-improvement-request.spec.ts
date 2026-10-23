@@ -122,20 +122,18 @@ test('B’s consumer install: one real turn, then Improvement request reaches A 
   const sessionId = session!.taskId!
 
   const dialog = b.page.getByRole('dialog', { name: 'Improvement request', exact: true })
-  await test.step('[+] → Actions → Improvement request…: core’s pre-flight names A, the callout says it cannot be undone', async () => {
+  await test.step('[+] → Actions → Improvement request…: core’s pre-flight names A in bold', async () => {
     await b.page.getByRole('button', { name: 'Add to chat', exact: true }).click()
     const menu = b.page.getByRole('menu', { name: 'Add to chat', exact: true })
     await menu.getByRole('menuitem', { name: 'Actions', exact: true }).click()
     await menu.getByRole('menuitem', { name: 'Improvement request…', exact: true }).click()
     await expect(dialog).toBeVisible()
     await expect(dialog.getByRole('combobox', { name: 'Agent session' })).toHaveCount(0)
-    await expect(dialog.locator('[data-improvement-agent]')).toHaveText(new RegExp(`^${cloud.name} · `))
+    await expect(dialog.locator('[data-improvement-agent]')).toContainText(cloud.name)
     const disclosure = dialog.locator('[data-improvement-context]')
     await expect(disclosure).toContainText(`Goes to ${publisher.name}, who publishes the bundle this agent was installed from.`, { timeout: 30_000 })
     await expect(disclosure).toContainText(/\d+ messages will be captured as they are right now\./)
-    await expect(dialog.locator('[data-improvement-external]')).toHaveText(
-      `Shared outside your account — bundle ${cloud.bundleId}, version 1.0. This cannot be undone.`
-    )
+    await expect(dialog.locator('[data-improvement-recipient]')).toHaveText(publisher.name)
     await b.page.screenshot({ path: test.info().outputPath('improvement-dialog.png') })
   })
 

@@ -16,7 +16,7 @@ const ALPHA: ImprovementTarget = { agentId: 'remote:a', agentName: 'Alpha', last
 const BRAVO: ImprovementTarget = { agentId: 'remote:b', agentName: 'Bravo', lastActivityAt: null, bound: false }
 
 const ctx = (over: Partial<ImprovementContext> = {}): ImprovementContext => ({
-  eligible: true, reason: null, reasonText: null, isSharedExternally: true, recipientDisplay: 'Pub Co',
+  eligible: true, reason: null, reasonText: null, isSharedExternally: true, recipientDisplay: 'Pub Co', recipientEmail: null,
   targetAgentName: 'Alpha', bundleId: 'com.pub.alpha', installedVersion: '1.2.0', messageCount: 7, existingRequestCount: 0,
   ...over
 })
@@ -52,13 +52,21 @@ describe('ImprovementRequestDialog', () => {
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(screen.getByText('Alpha')).toBeTruthy()
     await screen.findByText(/who publishes the bundle this agent was installed from/)
-    expect(screen.getByText('Pub Co')).toBeTruthy()
+    expect(document.querySelector('[data-improvement-recipient]')?.textContent).toBe('Pub Co')
     expect(screen.queryByText('Can’t be sent')).toBeNull()
     expect(context).toHaveBeenCalledWith('chat-1', 'remote:a')
     expect(screen.getByText(/7 messages will be captured as they are right now/)).toBeTruthy()
-    // The callout is outside the disclosure, never in a scroll box of its own.
-    const callout = screen.getByText(/This cannot be undone/).closest('[data-improvement-external]')
-    expect(callout?.closest('[data-improvement-context]')).toBeNull()
+    expect(screen.queryByText(/This cannot be undone/)).toBeNull()
+    expect(screen.queryByText('Agent session')).toBeNull()
+  })
+
+  it('names the recipient in bold with their email when core sends one', async () => {
+    context.mockResolvedValue({ ok: true, context: ctx({ recipientEmail: 'pub@example.com' }) })
+    renderDialog([ALPHA])
+    await screen.findByText(/who publishes the bundle this agent was installed from/)
+    const recipient = document.querySelector('[data-improvement-recipient]')
+    expect(recipient?.tagName).toBe('STRONG')
+    expect(recipient?.textContent).toBe('Pub Co <pub@example.com>')
   })
 
   it('says one message in the singular, and the own-agent copy with the agent as a badge', async () => {
