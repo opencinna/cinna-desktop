@@ -134,6 +134,13 @@ A kit agent has skills from three places: folders under `skills/` in the agent f
 - **When in doubt, nothing is removed.** If any agent's pins cannot be read — a manifest gone or unparsable, an indexed agent whose root the scan does not reach (a drive not mounted) — the whole clean-up is skipped and logged: deleting a revision someone still pins is worse than keeping a stale one. A start with nothing cached reads no agent's pins at all. A staging folder is removed only once it is stale (ten minutes), dot-names are left alone, and a link anywhere in the cache is removed as a link, never followed. A pin whose revision was cleaned away — one that arrived while its agent was unreadable, say — reads "Not on this computer yet." and **Try again** fetches it
 - **Local installs are reported, best effort.** After Add, Update and each fetch, main tells core that this device holds the revision in the agent with that manifest id (`host_manifest_id`); after Remove, that it no longer does. Never awaited, never failing the verb, and skipped for a manifest without an `id`
 
+### Plugin skills
+
+- **A pinned plugin's skills join the agent's delivery, and nothing else about them is a skill pin.** The skills in a plugin's cached `skills/<name>/` ([Marketplace Plugins](plugins.md)) are given to every engine through the same plugin of links, `skills.paths` and prompt listing as the agent's own, catalog and marketplace skills, as rows of source `plugin`. They are not rows of the Skills section: the plugin's own row on the Addons tab lists them, each with its switch
+- **The agent's own skill wins a name clash.** A plugin skill whose name is an own, catalog or marketplace skill's, a platform skill's (`cinna-tasks` and the other reserved names) or an earlier plugin's is not delivered, and the plugin's row says why ("This agent already has a skill with this name, which wins." / "Another plugin of this agent has a skill with this name." / "This name is reserved for a skill Cinna provides."). Letting the plugin win would have meant installing a plugin silently replaced a skill the user wrote
+- **The same deliverable rule applies.** A plugin skill is handed over only with no error: its frontmatter `name` equals its folder and it has a description. A skill the user turned off on the pin (`disabled.skills`) is not delivered. A plugin whose cached copy no longer matches what was unpacked delivers nothing at all
+- **Only a plugin on this computer is delivered.** One that is not cached is fetched in the background and the next session gets it
+
 ### Delivery
 
 - **Each engine gets the skills by its own mechanism:**
@@ -213,6 +220,7 @@ Engine / kit command / scheduled run of a kit agent
 ## Integration Points
 
 - [Agent Addons](addons.md): the tab that lists skills beside connectors, the picker that adds both, and the badge that counts skills beside connectors
+- [Marketplace Plugins](plugins.md): a pinned plugin's skills are delivered with these, and the one name space decides clashes ([Plugin skills](#plugin-skills))
 - [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the Catalog dialog's **Add to agent…** menu and **In N agents** on a skill; the picker reads the same catalog listing
 - [Service Credentials](../service_credentials/README.md#skill-credential-slots): skill credential slots, attaching without asking after `provision-local`, Finish setting up's Skills group and the `core.cinna_api` shim
 - [The Inbox](../../jobs/tasks/inbox.md): **Update available for *skill* in *agent***

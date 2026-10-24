@@ -202,7 +202,7 @@ cinna-cli invocations, all with `--no-input --json`:
 - `ensureCli` cheap path: `state.json` stamp matches **and** `cinnaBin` is a file → return. Otherwise probe `cinna --version` and adopt it if it reports the pinned version. Otherwise `uv tool install [--reinstall] cinna-cli==<version>`, then probe again and refuse an install whose `cinna` will not run
 - A failing `uv tool install` reports the **tail** of stderr (500 chars): a resolver failure is hundreds of lines and the last few say why
 - Ceilings: `PROBE_TIMEOUT_MS` 30 s, `INSTALL_TIMEOUT_MS` 15 min (a cold profile downloads a CPython build *and* resolves the cinna-cli dependency tree)
-- `toolchainEnv` = login-shell env + the four `UV_*` variables + `PATH` of `[binDir, mutagenDir, …inherited]`
+- `toolchainEnv` = login-shell env + the `UV_*` variables (`UV_PYTHON_PREFERENCE=only-managed` among them: only a Python uv installed itself, never the Command Line Tools `python3` stub, which raises the install dialog on a bare Mac) + `PATH` of `[binDir, mutagenDir, …inherited]`
 - `asToolchainError` maps a `ManagedAssetError` to a `ToolchainError` **keeping the code string identical** — the overlap is the point, so a reason does not change its name on the way up — while changing the type so the reconciler can catch one family, and adding the tool's label to the message
 
 ### `src/main/localdev/cliRunner.ts`

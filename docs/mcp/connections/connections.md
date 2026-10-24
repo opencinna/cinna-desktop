@@ -14,6 +14,8 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 - **OAuth DCR** — Dynamic Client Registration (RFC 7591) used for authenticating with remote MCP servers when `authType: 'oauth'`
 - **Bearer Token** — A static, user-supplied access token sent as `Authorization: Bearer <token>` on every request, for servers that don't support DCR. No browser round-trip, no `awaiting-auth` state — set once and it's used immediately, encrypted at rest like other credentials
 - **Registry** — A public catalog of MCP servers the user can browse to discover and one-click install — see [Registries](../registries/registries.md)
+- **Managed connector** — a provider a pinned marketplace plugin owns (`managed_by`) for one of its MCP servers: created, attached and removed with the plugin, and only its values, token, sign-in and on/off switch are the user's ([below](#managed-connectors))
+- **Directory connector** — a provider created from an addon-directory entry, which records that entry as its `registry_ref`; a local one keeps its settings encrypted, as a managed connector does
 - **Inherited Environment** (`stdio`) — The fixed, narrow set of variables a spawned server process receives from the app, valued from the user's **login shell** rather than the app's own environment. See [Stdio Environment](#stdio-environment)
 - **Server `env` map** — The per-server environment variables the user types into the provider card. Merged on top of the inherited set and always wins; it is the escape hatch for anything the inherited set does not carry
 
@@ -68,6 +70,16 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 - `authType` defaults to `'oauth'` for every provider (including pre-existing rows migrated forward and registry-installed providers) — Bearer Token is opt-in per server
 - A bearer-token connection never enters `awaiting-auth`: the token is static and known up front, so `client.connect()` either succeeds or fails straight to `error` (e.g. wrong/expired token → 401 surfaces as a connect error, not a re-auth prompt)
 - Changing a provider's URL, transport or auth mode clears its stored OAuth tokens, client registration and discovery state. Credentials tied to one endpoint must not be reused at another. Renaming preserves them; bearer tokens retain their separate write-only, omit-to-preserve semantics.
+
+### Managed connectors
+
+- **A plugin owns what its server runs.** On the card of a managed connector the name, transport, command, arguments and URL are read-only, there is no delete (it goes when its plugin is removed from the agent's Addons tab), and a "From *plugin*" badge says whose it is. An edit of what the plugin owns, and a delete, are refused by main **as data** (`{ok: false, code: 'managed'}`, "comes with a plugin"), because a thrown error's code does not survive IPC. The user's own are the **values** it needs, a bearer token, the sign-in and the switch
+- **The switch is the connector's, for every agent on this computer.** The plugin row's switch for the same server is per agent and only attaches or detaches it. A connector with no agent attached is not started at all
+- **Settings are secret.** A managed connector's `${VAR}` placeholders, and the settings of a local connector made from a directory entry, are shown as one password field per name — never prefilled, an empty field keeps the stored value, every name is sent so none is dropped — and are stored encrypted. The renderer learns the names and whether each has a value, never the value ([Marketplace Plugins](../../agents/local_agents/plugins.md#managed-mcp-servers))
+- **Launch is gated, never failed silently.** A managed server whose cached files changed on disk, or that the admin's policy forbids (local servers), is not started: its connection's error says why, and nothing is deleted. A connector with a setting still empty, or a bearer one with no token, is not connected unattended. An HTTP server whose declared headers are its whole auth connects with no token of the user's
+- **Where it runs matters.** A Python server is started through the app's pinned uv, with uv's environment and a writable project environment of its own, so it never writes into the read-only plugin cache; Node and Docker servers need those installed
+- **What the admin forbids cannot be created, but is never deleted.** `mcp:upsert` refuses, as data (`code: 'policy'`): a new connector with neither a directory ref nor a plugin owner while custom connectors are off; one from a public registry while public directories are off; any new local (stdio) one while local servers are off. Settings → MCP replaces the matching Add button with a muted "Turned off by your admin", and the Add forms keep main's sentence under their button without losing what was typed. Editing a connector, creating one from core's MCP directory, and a hand-made local connector that already exists are unaffected ([Agent Addons](../../agents/local_agents/addons.md#the-admins-policy))
+- **A connector made from a directory entry waits for its settings.** App start does not connect one while a setting it needs is empty; otherwise it starts like any other connector, so a chat can use it from Settings → MCP
 
 ### Stdio Environment
 
@@ -152,6 +164,7 @@ The flow is abandoned — with the connection left untouched — if the user dis
 
 ## Integration Points
 
+- [Marketplace Plugins](../../agents/local_agents/plugins.md) — the managed connectors a pinned plugin brings, and how they are launched
 - [Agent Addons](../../agents/local_agents/addons.md) — connectors attached to a folder agent and offered to all its sessions; the reason for the non-interactive connect, the card's Detach variant and the delete dialog's agent line
 - [MCP Registries](../registries/registries.md) — Discovery layer; the picker creates providers through `mcp:upsert` and reuses the connection flow above
 - [Chat Messaging](../../chat/messaging/messaging.md) — Tool calls during streaming are routed through MCPManager
