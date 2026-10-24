@@ -65,6 +65,9 @@ vi.mock('./localAgents/gitService', () => ({ gitService: { readShareRemote: asyn
 vi.mock('./localAgents/defaultEngineService', () => ({ defaultEngineService: { current: () => 'claude' } }))
 vi.mock('./conductorBridge', () => ({ conductorBridge: { refreshAgent: () => {} } }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { disconnect: async () => undefined } }))
+// What an Add starts at once: every connector it is handed, as if none were up yet.
+const connectAfterAdd = vi.hoisted(() => vi.fn((_user: string, _agent: string, ids: readonly string[]) => [...ids]))
+vi.mock('./agentMcpService', () => ({ agentMcpService: { connectAfterAdd } }))
 vi.mock('../shell/env', () => ({ which: async (bin: string) => path.found[bin] ?? null, clearToolCache: () => {} }))
 vi.mock('../localdev/toolchain', () => ({
   managedUvLayout: () => ({ uvBin: '/ud/uv', uvxBin: '/ud/uvx', env: {} }),
@@ -213,6 +216,7 @@ beforeEach(() => {
   cinnaFetch.mockReset()
   cinnaFetchBytes.mockReset()
   ensureUv.mockClear()
+  connectAfterAdd.mockClear()
   marketplacePluginCache._reset()
   marketplacePluginService._reset()
   stdioRuntimes._reset()
@@ -265,6 +269,38 @@ describe('addToAgent', () => {
     // Its skill joins the agent's delivery.
     const delivered = deliveredSkillRows(agentDir, manifest()).filter((row) => row.source === 'plugin')
     expect(delivered.map((row) => [row.name, row.deliverable, row.path])).toEqual([['report', true, join(dir, 'skills', 'report', 'SKILL.md')]])
+  })
+
+  it('starts the connector of a plugin that needs nothing more right after the add, and not one still needing settings', async () => {
+    const archive = pluginTgz('1.0.0', [], 'carbone', JSON.stringify({ mcpServers: { carbone: { command: 'npx', args: ['-y', 'carbone-mcp'] } } }))
+    serve([entry(archive)], [archive])
+    const result = await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
+    expect(result).toEqual({ ok: true, name: 'carbone', archiveSha256: sha256Of(archive), next: null, starting: [tables.rows[0].id] })
+    expect(connectAfterAdd).toHaveBeenCalledWith(USER, AGENT_ID, [tables.rows[0].id])
+
+    // The first add's connector needs CARBONE_KEY: nothing is started for it.
+    tables.rows = []
+    tables.links = []
+    writeManifest()
+    marketplacePluginCache._reset()
+    connectAfterAdd.mockClear()
+    const keyed = pluginTgz('2.0.0')
+    serve([entry(keyed)], [keyed])
+    expect(await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)).toEqual({ ok: true, name: 'carbone', archiveSha256: sha256Of(keyed), next: 'env' })
+    expect(connectAfterAdd).toHaveBeenCalledWith(USER, AGENT_ID, [])
+  })
+
+  it('delivers the skill of a plugin that names its own skills folder (carbone-skill: "skills": "./carbone")', async () => {
+    const archive = tgzOf([
+      { name: 'carbone/.claude-plugin/plugin.json', body: JSON.stringify({ name: 'carbone', version: '1.0.0', skills: './carbone' }) },
+      { name: 'carbone/carbone/SKILL.md', body: '---\nname: carbone\ndescription: Renders documents with Carbone.\n---\n\n# Carbone\n' }
+    ])
+    serve([entry(archive, { runs_code: false, components: { skills: [{ name: 'carbone', has_scripts: false }], commands: [], agents: [], hooks: null, mcp_servers: [], lsp_servers: [] } })], [archive])
+    expect(await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)).toMatchObject({ ok: true })
+    const delivered = deliveredSkillRows(agentDir, manifest()).filter((row) => row.source === 'plugin')
+    expect(delivered.map((row) => [row.name, row.deliverable, row.path])).toEqual([['carbone', true, join(snapshotDir(archive), 'carbone', 'SKILL.md')]])
+    const status = await marketplacePluginService.status(USER, AGENT_ID)
+    expect(status.ok && status.plugins[0].skills).toEqual([{ name: 'carbone', disabled: false, delivered: true }])
   })
 
   it('refuses bytes whose digest is not the server’s header, and keeps nothing', async () => {
@@ -392,6 +428,19 @@ describe('setDisabled and remove', () => {
     expect(tables.links).toEqual([])
     expect(existsSync(work)).toBe(false)
     expect(existsSync(`${work}.source`)).toBe(false)
+  })
+})
+
+describe('remove after switching a connector off', () => {
+  it('deletes the detached connector with the last pin of its snapshot', async () => {
+    const archive = pluginTgz()
+    serve([entry(archive)], [archive])
+    await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
+    await marketplacePluginService.setDisabled(USER, AGENT_ID, 'carbone', { mcpServers: ['carbone'] })
+    expect(tables.links).toEqual([])
+    expect(tables.rows).toHaveLength(1)
+    expect(await marketplacePluginService.remove(USER, AGENT_ID, 'carbone')).toMatchObject({ ok: true })
+    expect(tables.rows).toEqual([])
   })
 })
 

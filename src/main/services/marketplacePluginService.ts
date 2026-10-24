@@ -67,6 +67,7 @@ import { catalogSkillCache } from './catalogSkillCache'
 import { marketplaceSkillCache } from './marketplaceSkillCache'
 import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { agentMcpRepo } from '../db/agentMcp'
+import { agentMcpService } from './agentMcpService'
 import { mcpManager } from '../mcp/manager'
 import { collectPluginWork, discardPluginWork, managedLaunchBlock, managedNeedsBearer, missingManagedEnv, pluginManagedBy, snapshotKeyOfManagedBy } from '../mcp/managed'
 import { managedUvLayout } from '../localdev/toolchain'
@@ -474,6 +475,24 @@ const managedProviders: PluginMcpProviders = createPluginMcpProviders({
 })
 
 /**
+ * Delete every managed plugin connector of `userId` that no agent uses and no
+ * pin anywhere references (`collectUnreferenced`) — after a Remove or an
+ * Update, so a connector the user had switched off (detached, never looked at
+ * by the agent's sync) goes with the last pin of its snapshot. Skipped when
+ * any agent's pins cannot be read. Never throws.
+ */
+async function releaseUnreferenced(userId: string): Promise<void> {
+  try {
+    const pinned = pinnedKeys((manifest) => pinsOf(manifest).map(pluginSnapshotKeyOf))
+    if (!pinned.ok) return
+    const removed = await managedProviders.collectUnreferenced(userId, pinned.keep)
+    if (removed > 0) logger.info('unreferenced plugin connectors removed', { removed })
+  } catch (err) {
+    logger.warn('unreferenced plugin connectors could not be removed', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
  * Remove the writable working copies (`plugin-work/<entry>/<sha>`) of every
  * snapshot no pin anywhere references and no managed connector still runs
  * (after an Update or a Remove). Skipped when any agent's pins cannot be
@@ -572,6 +591,16 @@ async function syncServers(userId: string, agentId: string, dir: string): Promis
   )
   if (agentMcpRepo.listProviderIds(userId, agentId).join(',') !== before) refreshAgentTools(agentId)
   return outcomes
+}
+
+/** The plugin's connectors that need nothing more of the user: what its Add starts at once. */
+function readyToStart(outcomes: readonly ServerOutcome[], entryUuid: string): string[] {
+  const uuid = entryUuid.toLowerCase()
+  return outcomes.flatMap((outcome) =>
+    outcome.entryUuid.toLowerCase() === uuid && outcome.mcpProviderId && !outcome.blocked && outcome.missingEnv.length === 0 && !outcome.needsBearer
+      ? [outcome.mcpProviderId]
+      : []
+  )
 }
 
 /** The add's next step: settings values, or an access token, one of the plugin's new connectors still needs. */
@@ -729,7 +758,15 @@ export const marketplacePluginService = {
       settle(kit.rootId, agentId)
       logger.info('marketplace plugin added', { agentId, name: pin.name })
       const outcomes = await syncServers(userId, agentId, kit.dir)
-      return { ok: true as const, name: pin.name, archiveSha256: pin.archive_sha256, next: nextOf(outcomes, pin.entry_uuid) }
+      // Its connectors start now, not at the first turn: a cold `npx -y` download outlasts a turn's wait.
+      const starting = agentMcpService.connectAfterAdd(userId, agentId, readyToStart(outcomes, pin.entry_uuid))
+      return {
+        ok: true as const,
+        name: pin.name,
+        archiveSha256: pin.archive_sha256,
+        next: nextOf(outcomes, pin.entry_uuid),
+        ...(starting.length > 0 ? { starting } : {})
+      }
     }))
   },
 
@@ -779,6 +816,7 @@ export const marketplacePluginService = {
       settle(kit.rootId, agentId)
       logger.info('marketplace plugin updated', { agentId, name })
       const outcomes = await syncServers(userId, agentId, kit.dir)
+      await releaseUnreferenced(userId)
       pruneWorkCopies()
       return { ok: true as const, name, archiveSha256: latest, next: nextOf(outcomes, current.entry_uuid) }
     }))
@@ -805,8 +843,10 @@ export const marketplacePluginService = {
       if (!written.ok) return written
       settle(kit.rootId, agentId)
       const pin = dropped as MarketplacePluginPin | null
-      // The sync releases what no remaining pin wants (and deletes a row no pin anywhere references).
+      // The sync releases what no remaining pin wants (and deletes a row no pin anywhere references);
+      // a row switched off earlier is detached already, so the sync never sees it: collected here.
       await syncServers(userId, agentId, kit.dir)
+      await releaseUnreferenced(userId)
       pruneWorkCopies()
       logger.info('marketplace plugin removed', { agentId, name })
       return { ok: true as const, name, archiveSha256: typeof pin?.archive_sha256 === 'string' ? pin.archive_sha256 : '', next: null }

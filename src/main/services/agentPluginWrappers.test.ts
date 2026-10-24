@@ -89,6 +89,18 @@ describe('ensureAgentPluginWrappers', () => {
     expect(readdirSync(agentPluginWrappersRoot('folder:a'))).toEqual([])
   })
 
+  it('re-declares the plugin’s own command and agent paths, linked like any other entry, and never the default hooks file again', () => {
+    write('.claude-plugin/plugin.json', JSON.stringify({ name: 'carbone', commands: ['./extra/cmds', './one.md'], agents: './crew', hooks: './hooks/hooks.json' }))
+    write('extra/cmds/deep/go.md', 'Go\n')
+    write('one.md', 'One\n')
+    write('crew/helper.md', '# Helper\n')
+    const [dir] = ensureAgentPluginWrappers('folder:a', [plugin()], { hooksAllowed: true })
+    expect(JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8'))).toMatchObject({ commands: ['./extra/cmds', './one.md'], agents: ['./crew'] })
+    expect(JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).hooks).toBeUndefined()
+    for (const name of ['extra', 'one.md', 'crew']) expect(readlinkSync(join(dir, name))).toBe(join(pluginDir, name))
+    expect(pluginCommands([plugin()]).commands?.map((command) => command.name)).toEqual(['carbone:render', 'carbone:deep:go', 'carbone:one'])
+  })
+
   it('never takes a reserved plugin name, and skips a plugin not on this computer', () => {
     expect(ensureAgentPluginWrappers('folder:a', [plugin()], { hooksAllowed: true, reserved: ['carbone'] })).toEqual([])
     expect(ensureAgentPluginWrappers('folder:a', [{ pin: pin(), dir: null, tree: null }], { hooksAllowed: true })).toEqual([])
@@ -96,10 +108,11 @@ describe('ensureAgentPluginWrappers', () => {
 })
 
 describe('the plugin tree, read for OpenCode', () => {
-  it('reads the servers from .mcp.json and each command as a template with its description', () => {
+  it('reads the servers of .mcp.json and the manifest’s mcpServers, and each command as a template with its description', () => {
     const tree = readPluginTree(pluginDir)
     expect(tree).toMatchObject({ skills: ['report'], hasAgents: true, hasHooks: true, manifest: { name: 'carbone', version: '1.2.0' } })
-    expect(tree.mcpServers.map((server) => [server.name, server.transport, server.command])).toEqual([['carbone', 'stdio', 'node']])
+    // Core's rule: the manifest's servers supplement .mcp.json's, never replace them.
+    expect(tree.mcpServers.map((server) => [server.name, server.transport, server.command])).toEqual([['carbone', 'stdio', 'node'], ['x', 'stdio', 'node']])
     expect(pluginCommands([plugin()])).toEqual({ commands: [{ name: 'carbone:render', template: 'Render $ARGUMENTS\n', description: 'Render a template' }] })
     expect(pluginCommands([{ pin: pin(), dir: null, tree: null }])).toEqual({})
   })

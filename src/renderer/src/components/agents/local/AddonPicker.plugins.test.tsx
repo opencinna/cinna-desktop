@@ -229,6 +229,54 @@ describe('AddonPicker — plugins', () => {
     expect(view.queryByText('Ready in the next chat')).toBeNull()
   })
 
+  it('reads Starting… in place while the connector its add started comes up, then Ready in the next chat', async () => {
+    add.mockResolvedValue({ ok: true, next: null, starting: ['p-ledger'] })
+    providers = [{ id: 'p-ledger', name: 'ledger', transportType: 'stdio', enabled: true, hasAuth: false, status: 'disconnected', connecting: true, tools: [], managedBy: 'plugin:e-ledger@abc' }]
+    let statusChanged: () => void = () => {}
+    ;(window.api as unknown as { mcp: Record<string, unknown> }).mcp.onStatusChanged = (listener: () => void) => {
+      statusChanged = listener
+      return () => {}
+    }
+    mount()
+    const view = await openPlugin()
+    fireEvent.click(view.getByRole('button', { name: 'Add — runs code on this computer' }))
+    expect(await view.findByText('Starting… the first start downloads the server')).toBeTruthy()
+    expect(view.queryByText('Ready in the next chat')).toBeNull()
+    // Done has its own slot at the right edge, not moved by the text beside it.
+    const doneSlot = (): string | undefined => view.getByRole('button', { name: 'Done' }).closest('[data-addon-ready-line]')?.className
+    expect(doneSlot()).toContain('justify-between')
+    providers = [{ ...providers[0], status: 'connected', connecting: undefined }]
+    statusChanged()
+    await view.findByText('Ready in the next chat')
+    expect(view.queryByText('Starting… the first start downloads the server')).toBeNull()
+    expect(doneSlot()).toContain('justify-between')
+  })
+
+  it('shows the connect step when the connect its add started ended without coming up (cancelled), found by re-reading', async () => {
+    add.mockResolvedValue({ ok: true, next: null, starting: ['p-ledger'] })
+    providers = [{ id: 'p-ledger', name: 'ledger', transportType: 'stdio', enabled: true, hasAuth: false, status: 'disconnected', connecting: true, tools: [], managedBy: 'plugin:e-ledger@abc' }]
+    mount()
+    const view = await openPlugin()
+    fireEvent.click(view.getByRole('button', { name: 'Add — runs code on this computer' }))
+    expect(await view.findByText('Starting… the first start downloads the server')).toBeTruthy()
+    // Cancelled: no status event, no connect in flight any more. The step's own re-read finds it.
+    providers = [{ ...providers[0], connecting: undefined }]
+    expect(await view.findByRole('button', { name: 'Connect' }, { timeout: 4_000 })).toBeTruthy()
+    expect(view.getByText('It did not connect.')).toBeTruthy()
+    expect(view.queryByText('Starting… the first start downloads the server')).toBeNull()
+  })
+
+  it('shows the connect step with its sentence when the connector its add started fails', async () => {
+    add.mockResolvedValue({ ok: true, next: null, starting: ['p-ledger'] })
+    providers = [{ id: 'p-ledger', name: 'ledger', transportType: 'stdio', enabled: true, hasAuth: false, status: 'error', error: 'fetch failed', tools: [], managedBy: 'plugin:e-ledger@abc' }]
+    mount()
+    const view = await openPlugin()
+    fireEvent.click(view.getByRole('button', { name: 'Add — runs code on this computer' }))
+    expect(await view.findByText('It could not reach the server.')).toBeTruthy()
+    expect(view.getByRole('button', { name: 'Connect' })).toBeTruthy()
+    expect(view.queryByText('Ready in the next chat')).toBeNull()
+  })
+
   it('says in place that Check again still finds no Node.js', async () => {
     answer = { ...answer, entries: [plugin({ state: 'blocked', stateReason: 'Needs Node.js — install it from nodejs.org' })] }
     recheckRuntimes.mockResolvedValue({ ok: true, node: false, docker: false })

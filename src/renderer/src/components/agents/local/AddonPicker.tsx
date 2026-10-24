@@ -38,12 +38,29 @@ export const REGISTRY_MIN_QUERY = 2
 /** Kinds the chips offer, in this order; a kind with no entry is not offered. */
 const KINDS: AddonKind[] = ['skill', 'plugin', 'mcp']
 
-/** Whether an entry matches the search: its title, name, summary, source, publisher or tags. */
+/**
+ * How well an entry matches the search (`needle`, lowercase), as core ranks
+ * its directory: exact name 0 > name prefix 1 > title 2 > tags or category 3
+ * > summary or description 4; then, the picker's own, source or publisher 5.
+ * Null when it does not match.
+ */
+export function addonMatchTier(entry: AgentDirectoryEntry, needle: string): number | null {
+  if (!needle) return 0
+  const has = (text: string | null | undefined): boolean => !!text && text.toLowerCase().includes(needle)
+  const name = entry.name.toLowerCase()
+  if (name === needle) return 0
+  if (name.startsWith(needle)) return 1
+  if (has(entry.title)) return 2
+  if (has(entry.category) || entry.tags.some(has)) return 3
+  // The description too: core cuts the summary short, so "pdf" finds a docx skill whose description mentions PDF.
+  if (has(entry.summary) || has(entry.description) || has(name)) return 4
+  if (has(entry.origin.label) || has(entry.publisher?.name)) return 5
+  return null
+}
+
+/** Whether an entry matches the search at all ({@link addonMatchTier}). */
 export function addonMatches(entry: AgentDirectoryEntry, needle: string): boolean {
-  if (!needle) return true
-  return [entry.title, entry.name, entry.summary, entry.origin.label, entry.publisher?.name ?? '', ...entry.tags].some((text) =>
-    text.toLowerCase().includes(needle)
-  )
+  return addonMatchTier(entry, needle) !== null
 }
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -126,6 +143,8 @@ export function addFlowOf(run: AddonAddRun | undefined, settledAtOpen: ReadonlyS
   }
   // A plugin's add names no connector: its status says which of its connectors needs the step.
   if (result.next) return { phase: 'pluginSetup', next: result.next }
+  // Its connectors were started by the add: "Starting…" until they are up.
+  if (result.starting && result.starting.length > 0) return { phase: 'starting', mcpProviderIds: result.starting }
   return { phase: 'ready' }
 }
 
@@ -237,7 +256,13 @@ export function AddonPicker({
       (kind === 'all' || entry.kind === kind) && (!source || entry.provider === source) && addonMatches(entry, needle),
     [kind, source, needle]
   )
-  const shown = useMemo(() => entries.filter(passes), [entries, passes])
+  // Best match first (core's order), the directory's own order within a tier.
+  const shown = useMemo(() => {
+    const kept = entries.filter(passes)
+    if (!needle) return kept
+    const tier = new Map(kept.map((entry) => [entry, addonMatchTier(entry, needle) ?? 6]))
+    return kept.map((entry, at) => ({ entry, at })).sort((a, b) => tier.get(a.entry)! - tier.get(b.entry)! || a.at - b.at).map(({ entry }) => entry)
+  }, [entries, passes, needle])
   // The registry's own search is already the match; only the chips and the source narrow it.
   const more = useMemo(
     () =>

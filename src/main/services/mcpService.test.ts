@@ -15,8 +15,9 @@ const upserted = (_userId: string, input: { id?: string }) => ({
 const repo = vi.hoisted(() => ({ upsert: vi.fn(), getOwned: vi.fn((): unknown => undefined), list: vi.fn((): unknown[] => []), delete: vi.fn() }))
 vi.mock('../db/mcpProviders', () => ({ mcpProviderRepo: repo }))
 vi.mock('../db/chatModes', () => ({ chatModeRepo: { stripMcpProviderId: vi.fn() } }))
+const manager = vi.hoisted(() => ({ connecting: vi.fn((_id: string): Promise<unknown> | undefined => undefined) }))
 vi.mock('../mcp/manager', () => ({
-  mcpManager: { getConnection: () => undefined, connect: vi.fn(), disconnect: vi.fn(async () => undefined), needsUser: () => false }
+  mcpManager: { getConnection: () => undefined, connecting: manager.connecting, connect: vi.fn(), disconnect: vi.fn(async () => undefined), needsUser: () => false }
 }))
 vi.mock('../mcp/config', () => ({ mcpRowToConfig: (row: unknown) => row }))
 vi.mock('../security/keystore', () => ({ encryptApiKey: (value: string) => Buffer.from(value), decryptApiKey: (value: Buffer) => value.toString('utf8') }))
@@ -107,6 +108,14 @@ describe('mcpService and a plugin’s provider', () => {
     repo.list.mockImplementation(() => [managed])
     expect(mcpService.list('u')[0].managedByTitle).toBe('carbone')
     expect(mcpService.list('u')[0].envSlots).toEqual([{ name: 'API_KEY', hasValue: false }])
+  })
+
+  it('says when a connect is in flight, which its status (disconnected meanwhile) does not', () => {
+    repo.list.mockReturnValue([managed])
+    expect(mcpService.list('u')[0].connecting).toBeUndefined()
+    manager.connecting.mockImplementation((id: string) => (id === 'm1' ? new Promise(() => {}) : undefined))
+    expect(mcpService.list('u')[0]).toMatchObject({ status: 'disconnected', connecting: true })
+    manager.connecting.mockReset()
   })
 
   it('shows the renderer the names to fill in and whether each has a value — never a value', () => {

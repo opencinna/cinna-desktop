@@ -139,6 +139,27 @@ describe('AddonPicker', () => {
     expect(within(list()).getByRole('button', { name: 'Linear' }).querySelector('[data-addon-kind]')?.textContent).toBe('Connector')
   })
 
+  it('matches the description too, and ranks exact name, name prefix, title, tags, then summary or description', async () => {
+    const skill = (id: string, over: Partial<AgentDirectoryEntry> & Pick<AgentDirectoryEntry, 'title'>): AgentDirectoryEntry =>
+      entry({ ref: { source: 'core-marketplace', id }, kind: 'skill', summary: '', ...over })
+    answer = {
+      ...answer,
+      entries: [
+        skill('d', { title: 'docx', description: 'Word documents; also exports to PDF.' }),
+        skill('t', { title: 'Office helpers', name: 'office', tags: ['pdf'] }),
+        skill('i', { title: 'Read a PDF', name: 'reader' }),
+        skill('p', { title: 'pdf-tools' }),
+        skill('x', { title: 'pdf' }),
+        skill('s', { title: 'Sheets', name: 'sheets', summary: 'Tables from pdf files' }),
+        skill('n', { title: 'Notes', name: 'notes' })
+      ]
+    }
+    mount()
+    await waitFor(() => expect(tiles()).toHaveLength(7))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search addons' }), { target: { value: 'PDF' } })
+    expect(tiles()).toEqual(['pdf', 'pdf-tools', 'Read a PDF', 'Office helpers', 'docx', 'Sheets'])
+  })
+
   it('filters locally per keystroke, by kind and by source, asking nothing more', async () => {
     mount()
     await waitFor(() => expect(tiles()).toHaveLength(6))
@@ -169,7 +190,8 @@ describe('AddonPicker', () => {
     await waitFor(() => expect(tiles()).toHaveLength(6))
     fireEvent.change(screen.getByRole('textbox', { name: 'Search addons' }), { target: { value: 'skill' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Skills' }))
-    expect(tiles()).toEqual(['release-notes', 'huge-skill', 'fresh-skill'])
+    // Titles holding "skill" first; release-notes only by its source, "Acme Skills".
+    expect(tiles()).toEqual(['huge-skill', 'fresh-skill', 'release-notes'])
     fireEvent.change(screen.getByRole('textbox', { name: 'Search addons' }), { target: { value: 'pdf' } })
     list().scrollTop = 120
     const view = within(await open('PDF'))

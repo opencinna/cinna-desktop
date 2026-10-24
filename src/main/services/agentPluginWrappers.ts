@@ -23,6 +23,12 @@
  * whichever way Claude resolves it: as the wrapper, a path under it follows a
  * link into the cache; as the real path, it is the cache.
  *
+ * Component paths the plugin's manifest declares (`"commands": "./more"`,
+ * `agents`, `hooks` file paths when hooks are on, `lspServers`) are written
+ * into the wrapper's own manifest as declared: the folders they name are
+ * linked like any other top-level entry, so the same relative paths resolve
+ * in the wrapper. Inline maps never are, as above.
+ *
  * A wrapper is built only when it carries something for Claude (commands,
  * agents, hooks, an LSP config). Lives at
  * `<userData>/cinna-plugins/agents/<key>-plugins/<plugin name>/`, rebuilt only
@@ -51,6 +57,8 @@ const NEVER_LINKED: ReadonlySet<string> = new Set(['.mcp.json', 'skills', '.clau
 interface WrapperState {
   name: string
   links: Record<string, string>
+  /** Declared component paths re-declared in the wrapper's manifest. */
+  declared?: Record<string, string[]>
 }
 
 /** `<userData>/cinna-plugins/agents/<key>-plugins`. */
@@ -73,7 +81,11 @@ export function wrapperLinks(plugin: CachedPlugin, hooksAllowed: boolean): Recor
   const hooks = hooksAllowed && !disabledOf(plugin.pin).hooks
   const dir = plugin.dir
   const carries =
-    plugin.tree.commands.length > 0 || plugin.tree.hasAgents || (hooks && plugin.tree.hasHooks) || existsSync(join(dir, '.lsp.json'))
+    plugin.tree.commands.length > 0 ||
+    plugin.tree.hasAgents ||
+    (hooks && plugin.tree.hasHooks) ||
+    existsSync(join(dir, '.lsp.json')) ||
+    plugin.tree.lspServers.length > 0
   if (!carries) return {}
   const links: Record<string, string> = {}
   for (const entry of entries(dir)) {
@@ -82,6 +94,19 @@ export function wrapperLinks(plugin: CachedPlugin, hooksAllowed: boolean): Recor
     links[entry.name] = join(dir, entry.name)
   }
   return links
+}
+
+/** The declared component paths a wrapper re-declares (hooks only when they are delivered). */
+export function wrapperDeclared(plugin: CachedPlugin, hooksAllowed: boolean): Record<string, string[]> {
+  const declared = plugin.tree?.declared
+  if (!declared) return {}
+  const hooks = hooksAllowed && !disabledOf(plugin.pin).hooks
+  const out: Record<string, string[]> = {}
+  if (declared.commands.length > 0) out.commands = declared.commands
+  if (declared.agents.length > 0) out.agents = declared.agents
+  if (hooks && declared.hooks.length > 0) out.hooks = declared.hooks
+  if (declared.lspServers.length > 0) out.lspServers = declared.lspServers
+  return out
 }
 
 function readState(dir: string): WrapperState | null {
@@ -95,6 +120,7 @@ function readState(dir: string): WrapperState | null {
 
 function sameState(a: WrapperState | null, b: WrapperState): boolean {
   if (!a || a.name !== b.name) return false
+  if (JSON.stringify(a.declared ?? {}) !== JSON.stringify(b.declared ?? {})) return false
   const keys = Object.keys(b.links)
   return Object.keys(a.links).length === keys.length && keys.every((key) => a.links[key] === b.links[key])
 }
@@ -121,7 +147,8 @@ function writeWrapper(target: string, plugin: CachedPlugin, wanted: WrapperState
       {
         name: wanted.name,
         description: manifest?.description ?? `The ${wanted.name} plugin from ${plugin.pin.marketplace_name || 'a marketplace'}. Provided by Cinna Desktop.`,
-        version: manifest?.version ?? (typeof plugin.pin.version === 'string' ? plugin.pin.version : '1')
+        version: manifest?.version ?? (typeof plugin.pin.version === 'string' ? plugin.pin.version : '1'),
+        ...(wanted.declared ?? {})
       },
       null,
       2
@@ -165,7 +192,8 @@ export function ensureAgentPluginWrappers(
     const target = join(root, name)
     try {
       mkdirSync(root, { recursive: true })
-      writeWrapper(target, plugin, { name, links })
+      const declared = wrapperDeclared(plugin, options.hooksAllowed)
+      writeWrapper(target, plugin, { name, links, ...(Object.keys(declared).length > 0 ? { declared } : {}) })
       built.push(target)
     } catch (error) {
       logger.warn('a plugin wrapper could not be written', { agentId, plugin: name, error: error instanceof Error ? error.message : String(error) })

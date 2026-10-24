@@ -26,6 +26,8 @@ const SUBHEADING = 'mb-1 text-[12px] font-medium uppercase tracking-wider text-[
 export const PICKER_TEXT = {
   added: 'Added',
   ready: 'Ready in the next chat',
+  /** A plugin's connectors the add started, not up yet: an `npx -y` / `uvx` server downloads on its first start. */
+  starting: 'Starting… the first start downloads the server',
   runsCode: 'Runs code on this computer',
   needsKit: 'A cinna-agent.json: skills are pinned there, and this agent is a plain folder without one. Connectors work on it.',
   addTo: (agent: string) => `Add to ${agent}`,
@@ -80,6 +82,8 @@ export type AddFlow = (
   | { phase: 'idle'; error?: string }
   /** `message`: why the connector is not connected yet (a `connect` step). */
   | { phase: 'setup'; next: AddonNextStep; mcpProviderId: string; message?: string }
+  /** Added; the connectors its add started (`mcpProviderIds`) are not up yet. */
+  | { phase: 'starting'; mcpProviderIds: string[] }
   | { phase: 'ready' }
 ) & { at?: number }
 
@@ -314,19 +318,19 @@ export function AddonPickerDetail({
         onMoved={onSetupLater}
       />
     )
-  } else if (flow.phase === 'ready') {
+  } else if (flow.phase === 'starting') {
     action = (
-      <div className="flex items-center gap-3">
-        <span role="status" className="flex items-center gap-1.5 text-[13px] text-[var(--color-success)]">
-          <Check size={14} aria-hidden />
-          {PICKER_TEXT.ready}
-        </span>
-        {/* "Done", not a second "Close" beside the header's (rule 10). */}
-        <button type="button" onClick={onClose} className={PICKER_PRIMARY}>
-          Done
-        </button>
-      </div>
+      <StartingStep
+        title={entry.title}
+        mcpProviderIds={flow.mcpProviderIds}
+        onDone={onSetupDone}
+        onDirty={onStepDirty}
+        onLater={onSetupLater}
+        onClose={onClose}
+      />
     )
+  } else if (flow.phase === 'ready') {
+    action = <ReadyLine onClose={onClose} />
   } else if (need && !resting) {
     action = (
       <>
@@ -947,6 +951,97 @@ function RuntimeHelp({ link, onLinkError }: { link: RuntimeLink; onLinkError: (m
  * (values, a key, Turn on). Each step is the connector's own form; when none
  * is left, the plugin is ready in the next chat.
  */
+/** "Ready in the next chat" and Done; "Starting…" in the same place while the add's connectors come up. */
+function ReadyLine({ onClose, starting = false }: { onClose: () => void; starting?: boolean }): React.JSX.Element {
+  // Done sits at the right edge, apart from the text: it never moves when "Starting…" turns into "Ready" (ux_rules rule 1).
+  return (
+    <div data-addon-ready-line className="flex items-center justify-between gap-3">
+      {starting ? (
+        <span role="status" data-addon-starting className="flex items-center gap-1.5 text-[13px] text-[var(--color-text-muted)]">
+          <Loader2 size={14} className="animate-spin" aria-hidden />
+          {PICKER_TEXT.starting}
+        </span>
+      ) : (
+        <span role="status" className="flex items-center gap-1.5 text-[13px] text-[var(--color-success)]">
+          <Check size={14} aria-hidden />
+          {PICKER_TEXT.ready}
+        </span>
+      )}
+      {/* "Done", not a second "Close" beside the header's (rule 10); closing never stops the start. */}
+      <button type="button" onClick={onClose} className={`${PICKER_PRIMARY} shrink-0`}>
+        Done
+      </button>
+    </div>
+  )
+}
+
+/** How often the Starting step re-reads its connectors: a cancelled connect sends no status of its own. */
+export const STARTING_POLL_MS = 2_000
+
+const noop = (): void => {}
+
+/**
+ * The connectors a plugin's add started, until they are up: "Starting…" in
+ * place of "Ready in the next chat", which follows once every one is
+ * connected. One that fails — or whose connect ended without coming up
+ * (cancelled: `disconnected`, no connect in flight) — shows the connect step
+ * with its sentence and Connect.
+ */
+function StartingStep({
+  title,
+  mcpProviderIds,
+  onDone,
+  onDirty,
+  onLater,
+  onClose
+}: {
+  title: string
+  mcpProviderIds: string[]
+  onDone: () => void
+  onDirty: (dirty: boolean) => void
+  onLater: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  const { data: providers } = useMcpProviders()
+  const queryClient = useQueryClient()
+  // A connect that ended before this opened is read fresh, not from a list cached before the add.
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })
+  }, [queryClient])
+  const mine = mcpProviderIds.map((id) => providers?.find((provider) => provider.id === id) ?? null)
+  // A connector not in the list yet (read before the add made it) is still starting.
+  const allUp = mine.every((provider) => provider?.status === 'connected')
+  useEffect(() => {
+    if (allUp) onDone()
+  }, [allUp, onDone])
+  const failed =
+    mine.find((provider) => provider?.status === 'error') ??
+    mine.find((provider) => provider !== null && provider.status === 'disconnected' && !provider.connecting) ??
+    null
+  // Re-read while waiting: a connect that was cancelled publishes no status change.
+  const waiting = !allUp && !failed
+  useEffect(() => {
+    if (!waiting) return
+    const timer = window.setInterval(() => void queryClient.invalidateQueries({ queryKey: ['mcp-providers'] }), STARTING_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [waiting, queryClient])
+  if (failed) {
+    return (
+      <SetupStep
+        key={failed.id}
+        title={mcpProviderIds.length > 1 ? failed.name : title}
+        next="connect"
+        mcpProviderId={failed.id}
+        message={failed.error ?? undefined}
+        onDone={noop}
+        onDirty={onDirty}
+        onLater={onLater}
+      />
+    )
+  }
+  return <ReadyLine onClose={onClose} starting />
+}
+
 function PluginSetup({
   agentId,
   entryUuid,

@@ -41,6 +41,8 @@ export interface McpProviderDto {
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
+  /** A connect is in flight (its `status` reads `disconnected` meanwhile); absent otherwise. */
+  connecting?: boolean
   /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, credentials and on/off are editable. */
   managedBy?: string
   /** What the plugin that owns it calls itself (its cached manifest's `displayName`, else `name`, else its folder's name). */
@@ -101,6 +103,7 @@ function toDto(row: McpProviderRow): McpProviderDto {
     status: conn?.status ?? 'disconnected',
     tools: conn?.tools ?? [],
     error: conn?.error,
+    ...(mcpManager.connecting(row.id) ? { connecting: true } : {}),
     ...(row.managedBy ? { managedBy: row.managedBy, managedByTitle: managedTitleOf(row), envSlots: managedSlotStates(row) } : {}),
     ...(isDirectorySecretRow(row) ? { envSlots: directorySlotStates(row) } : {})
   }

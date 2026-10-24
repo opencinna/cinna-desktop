@@ -90,7 +90,7 @@ export const addonDirectory = createAddonDirectory({
   removeMarketplaceSkill: async (userId, agentId, name) => pinOutcome(await marketplaceSkillService.remove(userId, agentId, name)),
   addPlugin: async (userId, agentId, id) => {
     const outcome = await marketplacePluginService.addToAgent(userId, agentId, id)
-    return outcome.ok ? { ok: true, next: outcome.next } : outcome
+    return outcome.ok ? { ok: true, next: outcome.next, ...(outcome.starting ? { starting: outcome.starting } : {}) } : outcome
   },
   removePlugin: async (userId, agentId, name) => pinOutcome(await marketplacePluginService.remove(userId, agentId, name)),
   pluginBlock: (userId, entry) => stdioRuntimes.blockOf(entry.components?.mcpServers ?? [], addonPolicies.get(userId)),

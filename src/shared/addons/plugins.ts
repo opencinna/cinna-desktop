@@ -71,8 +71,12 @@ export type PluginRefusal =
 export type PluginRefused = { ok: false; code: PluginRefusal; message: string }
 
 export type PluginActionResult =
-  /** `next`: the step a managed connector still needs (`env`: settings values to fill in). */
-  | { ok: true; name: string; archiveSha256: string; next: AddonNextStep | null }
+  /**
+   * `next`: the step a managed connector still needs (`env`: settings values
+   * to fill in). `starting` (an add only): the connectors whose first connect
+   * the add started — the picker reads "Starting…" until they are up.
+   */
+  | { ok: true; name: string; archiveSha256: string; next: AddonNextStep | null; starting?: string[] }
   | PluginRefused
 
 /** One of a pinned plugin's skills, as delivered. */

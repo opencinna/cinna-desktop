@@ -123,7 +123,7 @@ export interface AddonDirectoryDeps {
   addMarketplaceSkill(userId: string, agentId: string, entryUuid: string): Promise<PinOutcome>
   removeMarketplaceSkill(userId: string, agentId: string, name: string): Promise<PinOutcome>
   /** Pin a marketplace plugin; `next` is the step a managed connector of it still needs. */
-  addPlugin?(userId: string, agentId: string, entryUuid: string): Promise<{ ok: true; next: AddonNextStep | null } | AddonRefused>
+  addPlugin?(userId: string, agentId: string, entryUuid: string): Promise<{ ok: true; next: AddonNextStep | null; starting?: string[] } | AddonRefused>
   removePlugin?(userId: string, agentId: string, name: string): Promise<PinOutcome>
   /**
    * Why a plugin cannot be added on this computer — a local server needs a
@@ -463,7 +463,8 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         if (ref.source === PLUGIN_SOURCE) {
           if (!deps.addPlugin) return refused('unsupported', ADDON_STATE_TEXT.unsupported)
           const outcome = await deps.addPlugin(userId, agentId, ref.id)
-          return outcome.ok ? { ok: true, next: outcome.next } : refused(outcome.code, outcome.message)
+          if (!outcome.ok) return refused(outcome.code, outcome.message)
+          return { ok: true, next: outcome.next, ...(outcome.starting?.length ? { starting: outcome.starting } : {}) }
         }
         if (ref.source === LOCAL_SOURCE) return await noted(userId, agentId, agent, await attachLocal(userId, agentId, ref.id), null)
 

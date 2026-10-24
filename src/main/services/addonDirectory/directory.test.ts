@@ -410,6 +410,9 @@ describe('addonDirectory plugins', () => {
     expect(deps.addPlugin).toHaveBeenCalledWith(USER, AGENT, 'e2')
     vi.mocked(deps.addPlugin!).mockResolvedValueOnce({ ok: false, code: 'blocked', message: 'Needs Node.js' })
     expect(await directory.add(USER, AGENT, pluginRef('e3'))).toEqual({ ok: false, code: 'blocked', message: 'Needs Node.js' })
+    // The connectors its add started reach the picker, which reads "Starting…" until they are up.
+    vi.mocked(deps.addPlugin!).mockResolvedValueOnce({ ok: true, next: null, starting: ['m7'] })
+    expect(await directory.add(USER, AGENT, pluginRef('e4'))).toEqual({ ok: true, next: null, starting: ['m7'] })
     expect(await directory.remove(USER, AGENT, pluginRef('E1'))).toEqual({ ok: true, next: null })
     expect(deps.removePlugin).toHaveBeenCalledWith(USER, AGENT, 'carbone')
     expect(await directory.remove(USER, AGENT, pluginRef('unpinned'))).toEqual({ ok: true, next: null })

@@ -113,7 +113,8 @@ export function pluginSkillRows(plugins: readonly CachedPlugin[], taken: Readonl
         skipped.push({ plugin: plugin.pin.name, skill: name, reason })
         continue
       }
-      const dir = join(plugin.dir, SKILLS_DIR, name)
+      // A declared `skills` path (`"skills": "./carbone"`) puts the folder outside `skills/`.
+      const dir = plugin.tree.skillDirs[name] ?? join(plugin.dir, SKILLS_DIR, name)
       const parsed = parseSkillDir(dir, name).skill
       used.add(name)
       rows.push({

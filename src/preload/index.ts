@@ -463,6 +463,8 @@ export interface McpProviderData {
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
+  /** A connect is in flight (`status` reads `disconnected` meanwhile). */
+  connecting?: boolean
   /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, sign-in and on/off can change. */
   managedBy?: string
   /** The owning plugin’s title (its cached manifest’s display name), for the “From <plugin>” badge. */

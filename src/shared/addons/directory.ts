@@ -215,8 +215,12 @@ export type AddonSearchResult =
 export type AddonNextStep = 'oauth' | 'bearer' | 'env' | 'connect' | 'enable'
 
 export type AddonActionResult =
-  /** `message`: why the connector is not connected yet (with `next: 'connect'`). */
-  | { ok: true; next: AddonNextStep | null; mcpProviderId?: string; message?: string }
+  /**
+   * `message`: why the connector is not connected yet (with `next: 'connect'`).
+   * `starting`: connectors (a plugin's) whose first connect the add started
+   * and that are not up yet; the picker reads "Starting…" until they are.
+   */
+  | { ok: true; next: AddonNextStep | null; mcpProviderId?: string; message?: string; starting?: string[] }
   | AddonRefused
 
 /**

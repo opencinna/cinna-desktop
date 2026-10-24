@@ -12,13 +12,24 @@ const logger = createLogger('agent-mcp')
 
 /** How long a turn waits for its agent's addons to connect before it starts anyway. */
 export const ADDON_CONNECT_WAIT_MS = 5_000
+/**
+ * How long the first turn after an Add waits for the connect that Add started
+ * (`connectAfterAdd`): a cold `npx -y` / `uvx` download takes longer than
+ * {@link ADDON_CONNECT_WAIT_MS}, and a turn that starts without the tools
+ * never sees them.
+ */
+export const ADDON_ADD_CONNECT_WAIT_MS = 60_000
 /** After a failed connect a turn starts the next one no sooner than this, doubling per failure... */
 export const ADDON_RETRY_BASE_MS = 60_000
 /** ...up to this. */
 export const ADDON_RETRY_MAX_MS = 15 * 60_000
 
-/** One connect per connector at a time, however many turns start together; `first` when it is the first try. */
-const connecting = new Map<string, { attempt: Promise<unknown>; first: boolean }>()
+/**
+ * One connect per connector at a time, however many turns start together;
+ * `first` when it is the first try, `afterAdd` while the Add that started it
+ * has not had a turn wait for it yet.
+ */
+const connecting = new Map<string, { attempt: Promise<unknown>; first: boolean; afterAdd: boolean }>()
 
 /**
  * What turns have tried for a connector in this app run, for one version of
@@ -64,6 +75,37 @@ function connectsUnattended(row: McpProviderRow): boolean {
   // A plugin's server whose declared headers are its whole auth needs no token of the user's.
   if (row.authType === 'bearer') return !!row.bearerTokenEncrypted || managedHeadersOnly(row)
   return !!row.authTokensEncrypted
+}
+
+/**
+ * Start a non-interactive connect of `row` and file it under `connecting`
+ * and `tried`, so turns and the Add share one attempt and its outcome.
+ */
+function startConnect(ownerId: string, agentId: string, row: McpProviderRow, before: AddonAttempts | undefined, afterAdd: boolean): Promise<unknown> {
+  const id = row.id
+  const version = versionOf(row)
+  const attempt = mcpManager.connect(mcpRowToConfig(row), { interactive: false })
+    .then((result) => result.status, (error) => {
+      logger.warn('Could not connect an agent addon', { agentId, mcpProviderId: id, error: String(error) })
+      return 'error'
+    })
+    .then((status) => {
+      if (status === 'connected') { tried.delete(id); return }
+      // Replaced by the user's own connect (Settings), not failed: its
+      // outcome is theirs, and the next turn treats this as a first try.
+      if (status === 'disconnected' && mcpManager.connecting(id)) { tried.delete(id); return }
+      // Filed under the version as it is now: a refresh that saved new
+      // tokens and then failed must not read as a fresh first try.
+      const now = mcpProviderRepo.getOwned(ownerId, id)
+      const failures = (before?.failures ?? 0) + 1
+      tried.set(id, { version: now ? versionOf(now) : version, failures, needsUser: mcpManager.needsUser(id),
+        retryAt: Date.now() + Math.min(ADDON_RETRY_BASE_MS * 2 ** (failures - 1), ADDON_RETRY_MAX_MS) })
+    })
+    .finally(() => { if (connecting.get(id)?.attempt === attempt) connecting.delete(id) })
+  // Marked tried now: a turn starting while this runs does not wait on a retry.
+  if (!before) tried.set(id, { version, failures: 0, retryAt: 0, needsUser: false })
+  connecting.set(id, { attempt, first: !before, afterAdd })
+  return attempt
 }
 
 /** Live conductor sessions of this agent re-list their tools. */
@@ -131,14 +173,22 @@ export const agentMcpService = {
    * this app run (for its current version). One that failed before is retried
    * in the background with a backoff, and one that needs the user is not
    * retried until its version changes. A connection that lands later reaches
-   * the session through `onMcpToolsChanged`.
+   * the session through `onMcpToolsChanged`. The first turn after an Add
+   * whose connect is still running (`connectAfterAdd`) waits for it up to
+   * {@link ADDON_ADD_CONNECT_WAIT_MS} instead.
    */
   async ensureConnected(ownerId: string, agentId: string, options: { signal?: AbortSignal; waitMs?: number } = {}): Promise<void> {
     const waitFor: Promise<unknown>[] = []
+    let afterAdd = false
     for (const id of agentMcpRepo.listProviderIds(ownerId, agentId)) {
       if (mcpManager.getConnection(id)?.status === 'connected') { tried.delete(id); continue }
       const ours = connecting.get(id)
-      if (ours) { if (ours.first) waitFor.push(ours.attempt); continue }
+      if (ours) {
+        if (ours.first) waitFor.push(ours.attempt)
+        // The first turn after an Add waits for the connect that Add started, longer.
+        if (ours.afterAdd) { ours.afterAdd = false; afterAdd = true }
+        continue
+      }
       const row = mcpProviderRepo.getOwned(ownerId, id)
       if (!row) continue
       const version = versionOf(row)
@@ -147,27 +197,7 @@ export const agentMcpService = {
       const theirs = mcpManager.connecting(id)
       if (theirs) { if (!before) waitFor.push(theirs); continue }
       if (!connectsUnattended(row) || before?.needsUser || (before && Date.now() < before.retryAt)) continue
-      const attempt = mcpManager.connect(mcpRowToConfig(row), { interactive: false })
-        .then((result) => result.status, (error) => {
-          logger.warn('Could not connect an agent addon', { agentId, mcpProviderId: id, error: String(error) })
-          return 'error'
-        })
-        .then((status) => {
-          if (status === 'connected') { tried.delete(id); return }
-          // Replaced by the user's own connect (Settings), not failed: its
-          // outcome is theirs, and the next turn treats this as a first try.
-          if (status === 'disconnected' && mcpManager.connecting(id)) { tried.delete(id); return }
-          // Filed under the version as it is now: a refresh that saved new
-          // tokens and then failed must not read as a fresh first try.
-          const now = mcpProviderRepo.getOwned(ownerId, id)
-          const failures = (before?.failures ?? 0) + 1
-          tried.set(id, { version: now ? versionOf(now) : version, failures, needsUser: mcpManager.needsUser(id),
-            retryAt: Date.now() + Math.min(ADDON_RETRY_BASE_MS * 2 ** (failures - 1), ADDON_RETRY_MAX_MS) })
-        })
-        .finally(() => { if (connecting.get(id)?.attempt === attempt) connecting.delete(id) })
-      // Marked tried now: a turn starting while this runs does not wait on a retry.
-      if (!before) tried.set(id, { version, failures: 0, retryAt: 0, needsUser: false })
-      connecting.set(id, { attempt, first: !before })
+      const attempt = startConnect(ownerId, agentId, row, before, false)
       if (!before) waitFor.push(attempt)
     }
     const signal = options.signal
@@ -176,11 +206,42 @@ export const agentMcpService = {
     let stopped: (() => void) | undefined
     await Promise.race([
       Promise.allSettled(waitFor),
-      new Promise<void>((resolve) => { timer = setTimeout(resolve, options.waitMs ?? ADDON_CONNECT_WAIT_MS) }),
+      new Promise<void>((resolve) => {
+        const wait = options.waitMs ?? ADDON_CONNECT_WAIT_MS
+        timer = setTimeout(resolve, afterAdd ? Math.max(wait, ADDON_ADD_CONNECT_WAIT_MS) : wait)
+      }),
       new Promise<void>((resolve) => { stopped = (): void => resolve(); signal?.addEventListener('abort', stopped, { once: true }) })
     ])
     clearTimeout(timer)
     if (stopped) signal?.removeEventListener('abort', stopped)
+  },
+
+  /**
+   * Right after an Add: start a non-interactive connect of each of `ids`
+   * (attached to the agent) that can come up with nobody at the keyboard and
+   * is not up or connecting already. The first turn after it waits for that
+   * connect up to {@link ADDON_ADD_CONNECT_WAIT_MS}. Answers the ids now
+   * starting (one already in flight included). Never throws, never waits.
+   */
+  connectAfterAdd(ownerId: string, agentId: string, ids: readonly string[]): string[] {
+    const starting: string[] = []
+    for (const id of ids) {
+      try {
+        if (mcpManager.getConnection(id)?.status === 'connected') continue
+        const ours = connecting.get(id)
+        if (ours) { ours.afterAdd = true; starting.push(id); continue }
+        if (mcpManager.connecting(id)) { starting.push(id); continue }
+        const row = mcpProviderRepo.getOwned(ownerId, id)
+        if (!row || !connectsUnattended(row)) continue
+        // A new add is a first try, whatever earlier turns tried of this version.
+        tried.delete(id)
+        void startConnect(ownerId, agentId, row, undefined, true)
+        starting.push(id)
+      } catch (error) {
+        logger.warn('Could not start an added connector', { agentId, mcpProviderId: id, error: String(error) })
+      }
+    }
+    return starting
   },
 
   /** Forget what turns tried: tests only. */

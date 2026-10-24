@@ -140,6 +140,52 @@ describe('agentMcpService', () => {
     expect(state.connect).not.toHaveBeenCalled()
   })
 
+  it('starts an added connector at once, and the first turn after the add waits for it past the usual wait', async () => {
+    vi.useFakeTimers()
+    let finish!: () => void
+    state.connect.mockReturnValue(new Promise((resolve) => { finish = () => resolve({ status: 'connected' }) }))
+    agentMcpService.attach(OWNER, 'folder:a', 'm1')
+    expect(agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])).toEqual(['m1'])
+    expect(state.connect).toHaveBeenCalledOnce()
+    expect(state.connect.mock.calls[0][1]).toEqual({ interactive: false })
+    let done = false
+    const turn = agentMcpService.ensureConnected(OWNER, 'folder:a').then(() => { done = true })
+    // Past the 5 s a turn usually waits: still waiting for the add's connect (a cold npx download).
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(done).toBe(false)
+    finish()
+    await vi.advanceTimersByTimeAsync(0)
+    await turn
+    expect(done).toBe(true)
+    expect(state.connect).toHaveBeenCalledOnce()
+  })
+
+  it('gives up on the add’s connect after a minute, and a later turn waits only the usual time', async () => {
+    vi.useFakeTimers()
+    state.connect.mockReturnValue(new Promise(() => {}))
+    agentMcpService.attach(OWNER, 'folder:a', 'm1')
+    agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])
+    let first = false
+    const turn = agentMcpService.ensureConnected(OWNER, 'folder:a').then(() => { first = true })
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(first).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await turn
+    expect(first).toBe(true)
+    let second = false
+    const next = agentMcpService.ensureConnected(OWNER, 'folder:a').then(() => { second = true })
+    await vi.advanceTimersByTimeAsync(5_000)
+    await next
+    expect(second).toBe(true)
+  })
+
+  it('starts nothing at an add for a connector that is up, off, or still needs the user', () => {
+    mcp('up'); mcp('off', { enabled: 0 }); mcp('oauth-never', { transport_type: 'streamable-http', url: 'https://x.test' })
+    state.status = { up: 'connected' }
+    expect(agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['up', 'off', 'oauth-never', 'gone'])).toEqual([])
+    expect(state.connect).not.toHaveBeenCalled()
+  })
+
   it('waits for a connector’s first try', async () => {
     let finish!: () => void
     state.connect.mockReturnValue(new Promise((resolve) => { finish = () => resolve({ status: 'connected' }) }))
