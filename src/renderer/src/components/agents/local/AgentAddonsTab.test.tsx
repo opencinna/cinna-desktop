@@ -5,9 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
 
 /**
- * The agent's Addons tab over the real attach modal: attached connectors draw
- * with Settings' own card, attaching from the picker and creating a new
- * connector both link it to this agent, and Detach only removes the link.
+ * The agent's Addons tab over the real addon picker: one list of connectors
+ * and skills in one row shell, attention first; adding from the picker and
+ * creating a custom connector both link it to this agent, and Detach only
+ * removes the link.
  */
 
 const provider = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
@@ -36,8 +37,29 @@ const removeMarketplaceSkill = vi.fn<(agentId: string, name: string) => Promise<
 const ensureMarketplaceSkills = vi.fn<(agentId: string) => Promise<unknown>>()
 const marketplaceStatus = vi.fn<(agentId: string) => Promise<unknown>>()
 const openExternal = vi.fn()
+/** The directory main would answer: this computer's connectors, plus whatever a test sets. */
+let extraEntries: unknown[] = []
+const localEntry = (p: { id: string; name: string; url: string }) => ({
+  ref: { source: 'this-computer', id: p.id }, kind: 'mcp', name: p.name, title: p.name, summary: p.url, description: '',
+  category: null, tags: [], iconUrl: null, publisher: null,
+  origin: { label: 'On this computer', kind: 'local', repositoryUrl: null, homepage: null },
+  version: null, digest: null, requires: { credentials: [] }, runsCode: false, status: 'ready', unsupportedReason: null, install: null,
+  state: attached.includes(p.id) ? 'added' : 'addable', stateReason: attached.includes(p.id) ? 'Added to this agent' : null, mcpProviderId: p.id
+})
+const directory = vi.fn(async () => ({
+  ok: true,
+  entries: [...providers.map(localEntry), ...extraEntries],
+  sources: [{ id: 'cinna-core', label: 'Cinna' }, { id: 'this-computer', label: 'On this computer' }],
+  policy: { externalDirectories: false, customMcp: true, pluginHooks: true, stdioMcp: true }
+}))
+const addAddon = vi.fn(async (agentId: string, ref: { source: string; id: string }) => {
+  await attachMcpProvider(agentId, ref.id)
+  return { ok: true, next: null, mcpProviderId: ref.id }
+})
 window.api = {
+  addons: { directory, search: async () => ({ ok: true, entries: [], sources: [] }), entry: async () => ({ ok: true, entry: null }), add: addAddon, remove: async () => ({ ok: true, next: null }) },
   system: { openExternal },
+  logger: { log: vi.fn() },
   localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider, openPath },
   mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] },
   sharing: { statuses: () => statusesPending ?? Promise.resolve({ success: true, value: shareStatuses }) },
@@ -50,8 +72,8 @@ const { useAuthStore } = await import('../../../stores/auth.store')
 
 function renderTab(extra: Partial<LocalAgentDto> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const agent = { id: 'folder:a', kind: 'kit', skills: [], ...extra } as unknown as LocalAgentDto
-  return render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent })))
+  const agent = { id: 'folder:a', name: 'Alpha', kind: 'kit', skills: [], ...extra } as unknown as LocalAgentDto
+  return { ...render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent }))), client }
 }
 
 beforeEach(() => {
@@ -59,35 +81,41 @@ beforeEach(() => {
   attached = []
   shareStatuses = []
   statusesPending = null
+  extraEntries = []
   vi.clearAllMocks()
   useAuthStore.setState({ currentUser: null })
 })
 
 describe('AgentAddonsTab', () => {
-  it('attaches an existing connector from the picker and keeps the picker open', async () => {
+  it('adds a connector on this computer from the picker, which stays open saying it is ready', async () => {
     renderTab()
-    await screen.findByText('No connectors attached.')
-    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Attach MCP connector' })
-    // Only a problem wears a glyph on a picker card (ux_rules rule 13).
-    expect(within(dialog).getByRole('img', { name: 'HTTP 401' })).toBeTruthy()
-    expect(within(dialog).queryAllByRole('img')).toHaveLength(1)
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Attach Atlassian' }))
-    await within(dialog).findByRole('button', { name: 'Atlassian attached' })
-    expect(attachMcpProvider).toHaveBeenCalledWith('folder:a', 'jira')
-    // Drawn with Settings' card, which carries the row's Detach.
+    await screen.findByText('No addons yet.')
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Addons for Alpha' })
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Atlassian' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add to Alpha' }))
+    await within(dialog).findByText('Ready in the next chat')
+    expect(addAddon).toHaveBeenCalledWith('folder:a', { source: 'this-computer', id: 'jira' })
+    // Drawn with Settings' card in the addon row shell, which carries the row's Detach.
     await screen.findByRole('button', { name: 'Detach Atlassian from this agent' })
+    fireEvent.click(within(dialog.querySelector('[data-addon-detail]') as HTMLElement).getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it('attaches a connector created from the picker, then closes on it', async () => {
+  const openCustom = async (): Promise<HTMLElement> => {
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Addons for Alpha' })
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Custom connector…' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Remote server/ }))
+    return dialog
+  }
+
+  it('attaches a connector created from Custom connector…, then closes on it', async () => {
     // Mutation: drop `onCreated` from AddCustomMcpForm and the new connector
     // lands in Settings → MCP without ever reaching this agent.
     renderTab()
-    await screen.findByText('No connectors attached.')
-    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Attach MCP connector' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /custom mcp/i }))
+    await screen.findByText('No addons yet.')
+    const dialog = await openCustom()
     fireEvent.change(within(dialog).getByPlaceholderText('e.g., My MCP Server'), { target: { value: 'Jira Cloud' } })
     fireEvent.change(within(dialog).getByPlaceholderText('https://mcp.example.com'), { target: { value: 'https://mcp.atlassian.com/v1/sse' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }))
@@ -97,19 +125,21 @@ describe('AgentAddonsTab', () => {
     await screen.findByRole('button', { name: 'Detach Jira Cloud from this agent' })
   })
 
-  it('keeps an open form when the user clicks outside the picker', async () => {
+  it('keeps an open form when the user clicks outside the picker or presses Escape', async () => {
     renderTab()
-    await screen.findByText('No connectors attached.')
-    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Attach MCP connector' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /custom mcp/i }))
+    await screen.findByText('No addons yet.')
+    const dialog = await openCustom()
     fireEvent.change(within(dialog).getByPlaceholderText('e.g., My MCP Server'), { target: { value: 'Half typed' } })
     fireEvent.mouseDown(document.body)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect((screen.getByPlaceholderText('e.g., My MCP Server') as HTMLInputElement).value).toBe('Half typed')
-    // The header button is the form's way back to the list, never a close.
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Back to connectors' }))
-    expect(screen.getByRole('dialog', { name: 'Attach MCP connector' })).toBeTruthy()
+    // While the form holds input the header button does nothing either; only the form's own Cancel leaves it.
+    const back = within(dialog).getByRole('button', { name: 'Back to addons' }) as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+    fireEvent.click(back)
+    expect((screen.getByPlaceholderText('e.g., My MCP Server') as HTMLInputElement).value).toBe('Half typed')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('dialog', { name: 'Addons for Alpha' })).toBeTruthy()
     expect(screen.queryByPlaceholderText('e.g., My MCP Server')).toBeNull()
   })
 
@@ -124,10 +154,8 @@ describe('AgentAddonsTab', () => {
       return { id: 'new', success: true }
     })
     const view = renderTab()
-    await screen.findByText('No connectors attached.')
-    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Attach MCP connector' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /custom mcp/i }))
+    await screen.findByText('No addons yet.')
+    const dialog = await openCustom()
     fireEvent.change(within(dialog).getByPlaceholderText('e.g., My MCP Server'), { target: { value: 'Slow' } })
     fireEvent.change(within(dialog).getByPlaceholderText('https://mcp.example.com'), { target: { value: 'https://slow.example.com' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }))
@@ -137,13 +165,103 @@ describe('AgentAddonsTab', () => {
     await waitFor(() => expect(attachMcpProvider).toHaveBeenCalledWith('folder:a', 'new'))
   })
 
+  it('lists connectors and skills in one list of one row shell, needing attention first, then by name', async () => {
+    attached = ['jira', 'gh']
+    const skill = (name: string, extra: Partial<LocalAgentSkill> = {}): LocalAgentSkill => ({
+      name, description: '', version: null, source: 'authored', path: `skills/${name}/SKILL.md`, deliverable: true, issues: [], credentials: [], ...extra
+    })
+    renderTab({
+      skills: [
+        skill('zeta'),
+        skill('broken', { issues: [{ code: 'name_mismatch', message: 'Mismatch.', severity: 'error' }] }),
+        skill('beta')
+      ]
+    })
+    await screen.findByRole('button', { name: 'Detach GitHub from this agent' })
+    const section = screen.getByRole('heading', { name: 'Addons' }).closest('section')!
+    const rows = [...section.querySelectorAll('[data-addon-row]')] as HTMLElement[]
+    // GitHub (HTTP 401) and broken need attention; then Atlassian, beta, zeta by name.
+    expect(rows.map((row) => row.getAttribute('data-addon-row'))).toEqual(['skill', 'mcp', 'mcp', 'skill', 'skill'])
+    expect(rows.map((row) => row.querySelector('span[title]:not([data-addon-kind])')?.textContent)).toEqual(['broken', 'GitHub', 'Atlassian', 'beta', 'zeta'])
+    // Each row names its kind in words beside its icon.
+    expect(rows.map((row) => row.querySelector('[data-addon-kind]')?.textContent)).toEqual(['Skill', 'Connector', 'Connector', 'Skill', 'Skill'])
+    // One section, one Add, no kind chips for a short list.
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Addons'])
+    expect(screen.queryByRole('group', { name: 'Show addons of kind' })).toBeNull()
+  })
+
+  it('offers kind chips only once the list is longer than a screen, and filters by them', async () => {
+    attached = ['jira']
+    const skills = Array.from({ length: 8 }, (_, i): LocalAgentSkill => ({
+      name: `skill-${i}`, description: '', version: null, source: 'authored', path: `skills/skill-${i}/SKILL.md`, deliverable: true, issues: [], credentials: []
+    }))
+    renderTab({ skills })
+    await screen.findByRole('button', { name: 'Detach Atlassian from this agent' })
+    const chips = screen.getByRole('group', { name: 'Show addons of kind' })
+    expect(within(chips).getAllByRole('button').map((b) => b.textContent)).toEqual(['All 9', 'Skills 8', 'Connectors 1'])
+    fireEvent.click(within(chips).getByRole('button', { name: /^Connectors/ }))
+    expect(document.querySelectorAll('[data-addon-row]')).toHaveLength(1)
+    expect(within(chips).getByRole('button', { name: /^Connectors/ }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(chips).getByRole('button', { name: /^All/ }))
+    expect(document.querySelectorAll('[data-addon-row]')).toHaveLength(9)
+  })
+
   it('detaches without deleting the connector', async () => {
     attached = ['jira']
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: 'Detach Atlassian from this agent' }))
-    await screen.findByText('No connectors attached.')
+    // Asks first, inside the card, as a skill's Remove does.
+    expect(detachMcpProvider).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('group', { name: 'Detach Atlassian from this agent' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Detach' }))
+    await screen.findByText('No addons yet.')
     expect(detachMcpProvider).toHaveBeenCalledWith('folder:a', 'jira')
     expect(providers.map((p) => p.id)).toContain('jira')
+  })
+
+  it('shows a failed Detach in that connector’s card', async () => {
+    attached = ['jira', 'gh']
+    detachMcpProvider.mockRejectedValueOnce(new Error("Error invoking remote method 'local-agent:detach-mcp': Error: The agent folder is busy"))
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: 'Detach Atlassian from this agent' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Detach Atlassian from this agent' })).getByRole('button', { name: 'Detach' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe('The agent folder is busy')
+    expect(alert.closest('[data-mcp-row]')?.getAttribute('data-mcp-row')).toBe('jira')
+  })
+
+  it('opens a connector’s form from the keyboard: its title line is a button that says whether it is open', async () => {
+    attached = ['jira']
+    renderTab()
+    await screen.findByRole('button', { name: 'Detach Atlassian from this agent' })
+    const header = document.querySelector('[data-mcp-row="jira"] button[aria-expanded]') as HTMLButtonElement
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(header)
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps a row where it is while the user works it, and sorts again after an add or a remove', async () => {
+    attached = ['jira', 'gh']
+    const view = renderTab()
+    await screen.findByRole('button', { name: 'Detach GitHub from this agent' })
+    const order = (): string[] => [...document.querySelectorAll('[data-mcp-row]')].map((row) => row.getAttribute('data-mcp-row') ?? '')
+    // GitHub needs attention (HTTP 401), so it leads.
+    expect(order()).toEqual(['gh', 'jira'])
+    // It connects while the tab is open: it no longer needs attention, and still does not move.
+    providers = providers.map((p) => (p.id === 'gh' ? { ...p, status: 'connected', error: undefined } : p))
+    await act(async () => {
+      await view.client.invalidateQueries({ queryKey: ['mcp-providers'] })
+    })
+    await waitFor(() => expect(document.querySelector('[data-mcp-row="gh"] [role="img"]')?.getAttribute('aria-label')).toBe('Connected'))
+    expect(order()).toEqual(['gh', 'jira'])
+    // An add changes what is listed: sorted again, by name now.
+    attached = ['jira', 'gh', 'zz']
+    providers = [...providers, provider('zz', 'Zulip')]
+    await act(async () => {
+      await view.client.invalidateQueries({ queryKey: ['agent-mcp'] })
+      await view.client.invalidateQueries({ queryKey: ['mcp-providers'] })
+    })
+    await waitFor(() => expect(order()).toEqual(['jira', 'gh', 'zz']))
   })
 })
 
@@ -165,8 +283,8 @@ describe('the Skills section', () => {
 
   it('lists each skill with its source, its state as a glyph naming the sentence, and its slots', async () => {
     renderTab({ skills: SKILLS })
-    await screen.findByText('No connectors attached.')
-    const section = screen.getByRole('heading', { name: 'Skills' }).closest('section')!
+    await waitFor(() => expect(listMcpProviders).toHaveBeenCalled())
+    const section = screen.getByRole('heading', { name: 'Addons' }).closest('section')!
     const items = [...section.querySelector('ul')!.children] as HTMLElement[]
     expect(items.map((item) => within(item).getByTitle(/^(broken|leaky|pdf-tools)$/).textContent)).toEqual(['broken', 'leaky', 'pdf-tools'])
     for (const item of items) expect(within(item).getByText('Authored')).toBeTruthy()
@@ -193,8 +311,8 @@ describe('the Skills section', () => {
       packageId: `io.example.skill.${name}`, packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110', revisionNumber: 3, ...extra
     })
     renderTab({ skills: [pin('csv-export', { version: '1.2.0' }), pin('pdf-report', {}), skill('pdf-tools')] })
-    await screen.findByText('No connectors attached.')
-    const section = screen.getByRole('heading', { name: 'Skills' }).closest('section')!
+    await waitFor(() => expect(listMcpProviders).toHaveBeenCalled())
+    const section = screen.getByRole('heading', { name: 'Addons' }).closest('section')!
     const items = [...section.querySelector('ul')!.children] as HTMLElement[]
     expect(items.map((item) => (item.firstElementChild as HTMLElement).className)).toEqual(
       items.map(() => expect.stringContaining('bg-[var(--color-bg-secondary)]'))
@@ -221,14 +339,13 @@ describe('the Skills section', () => {
     await waitFor(() => expect(openPath).toHaveBeenCalledWith({ agentId: 'folder:a', relPath: 'skills/pdf-tools/SKILL.md' }))
   })
 
-  it('says there is none plainly — the info tip explains the layout — and has no section for a bare agent', async () => {
+  it('says there is none plainly, in the one Addons section a bare agent has too', async () => {
     const view = renderTab()
-    await screen.findByText('No connectors attached.')
-    expect(screen.getByText('No skills yet.')).toBeTruthy()
+    expect(await screen.findByText('No addons yet.')).toBeTruthy()
     view.unmount()
     renderTab({ kind: 'bare', skills: undefined })
-    await screen.findByText('No connectors attached.')
-    expect(screen.queryByRole('heading', { name: 'Skills' })).toBeNull()
+    await screen.findByText('No addons yet.')
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Addons'])
   })
 
   it('counts skills on the tab badge, and a skill with any issue as needing attention', async () => {
@@ -318,8 +435,9 @@ describe('the Skills section', () => {
       ]
     } as unknown as LocalAgentDto
     render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent, onFinishSetup })))
-    await screen.findByText('No connectors attached.')
-    const [docs, done, broken] = [...document.querySelectorAll('[data-skill-slots]')] as HTMLElement[]
+    await waitFor(() => expect(listMcpProviders).toHaveBeenCalled())
+    const slotsOf = (name: string): HTMLElement => document.querySelector(`[data-skill-row="${name}"] [data-skill-slots]`) as HTMLElement
+    const [docs, done, broken] = [slotsOf('docs'), slotsOf('done'), slotsOf('broken')]
     expect(within(docs).getByRole('img', { name: 'A credential for docs.example.com is attached' })).toBeTruthy()
     expect(within(docs).getByRole('img', { name: 'No credential for mail.example.com is attached yet' }).className).toContain('--color-warning')
     expect(docs.title).toContain('mail.example.com (api_token) · not attached')
@@ -529,7 +647,7 @@ describe('the Skills section — a catalog skill’s actions', () => {
         skill('pdf-tools', { shared: null, shareable: true })
       ]
     })
-    await screen.findByText('No connectors attached.')
+    await waitFor(() => expect(listMcpProviders).toHaveBeenCalled())
     expect(within(row('csv-tools')).queryByRole('button', { name: 'Who can use csv-tools…' })).toBeNull()
     expect(within(row('pdf-tools')).queryByRole('button', { name: 'Who can use pdf-tools…' })).toBeNull()
     fireEvent.click(within(row('erp-lookup')).getByRole('button', { name: 'Who can use erp-lookup…' }))
@@ -540,30 +658,46 @@ describe('the Skills section — a catalog skill’s actions', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it('offers Add on the Skills section, disabled when signed out and on a team agent shared to use only', async () => {
-    renderTab()
-    const signedOut = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
-    await waitFor(() => expect(signedOut.title).toBe('The catalog is available when signed in to a Cinna account.'))
-    expect(signedOut.disabled).toBe(true)
-
-    document.body.innerHTML = ''
+  it('offers Add on every agent; on a team agent shared to use only the picker says why no skill can be added', async () => {
+    extraEntries = [{
+      ref: { source: 'core-catalog', id: 'pkg-csv' }, kind: 'skill', name: 'csv', title: 'CSV tools', summary: 'Reads CSV.', description: '',
+      category: null, tags: [], iconUrl: null, publisher: null, origin: { label: 'Catalog', kind: 'catalog', repositoryUrl: null, homepage: null },
+      version: '1.0.0', digest: null, requires: { credentials: [] }, runsCode: null, status: 'ready', unsupportedReason: null, install: null,
+      state: 'addable', stateReason: null
+    }]
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
     useAuthStore.setState({ currentUser: { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false } as never })
     renderTab()
-    const button = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
-    await waitFor(() => expect(button.disabled).toBe(false))
-
-    document.body.innerHTML = ''
-    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
-    renderTab()
-    const readOnly = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
-    await waitFor(() => expect(readOnly.title).toBe('Its skills come with the team’s version'))
-    expect(readOnly.disabled).toBe(true)
+    const add = (await screen.findByRole('button', { name: 'Add' })) as HTMLButtonElement
+    expect(add.disabled).toBe(false)
+    fireEvent.click(add)
+    const dialog = await screen.findByRole('dialog', { name: 'Addons for Alpha' })
+    const tile = await within(dialog).findByRole('button', { name: 'CSV tools' })
+    await waitFor(() => expect(tile.querySelector('[data-addon-state-line]')?.textContent).toBe('Its skills come with the team’s version'))
+    fireEvent.click(tile)
+    expect((within(dialog).getByRole('button', { name: 'Add to Alpha' }) as HTMLButtonElement).disabled).toBe(true)
+    // A connector is local, and stays addable.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Atlassian' }))
+    expect((within(dialog).getByRole('button', { name: 'Add to Alpha' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('offers no Add on a bare agent, which cannot hold skills', async () => {
+  it('offers Add on a bare agent too: its connectors work, and a skill says it needs a cinna-agent.json', async () => {
+    extraEntries = [{
+      ref: { source: 'core-catalog', id: 'pkg-csv' }, kind: 'skill', name: 'csv', title: 'CSV tools', summary: '', description: '',
+      category: null, tags: [], iconUrl: null, publisher: null, origin: { label: 'Catalog', kind: 'catalog', repositoryUrl: null, homepage: null },
+      version: null, digest: null, requires: { credentials: [] }, runsCode: null, status: 'ready', unsupportedReason: null, install: null,
+      state: 'blocked', stateReason: 'Needs a cinna-agent.json'
+    }]
     renderTab({ skills: undefined, kind: 'bare' } as never)
-    await screen.findByText('No connectors attached.')
-    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
+    await screen.findByText('No addons yet.')
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Addons for Alpha' })
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'CSV tools' }))
+    expect((within(dialog).getByRole('button', { name: 'Add to Alpha' }) as HTMLButtonElement).disabled).toBe(true)
+    const detail = within(dialog.querySelector('[data-addon-detail]') as HTMLElement)
+    expect(detail.getByText('Needs a cinna-agent.json')).toBeTruthy()
+    expect(detail.getByText(/skills are pinned there, and this agent is a plain folder/)).toBeTruthy()
   })
 })
 
@@ -622,7 +756,7 @@ describe('the Skills section — a marketplace skill', () => {
 
   it('asks for no status on an agent with no marketplace pin', async () => {
     renderTab({ skills: [] })
-    await screen.findByText('No skills yet.')
+    await screen.findByText('No addons yet.')
     expect(marketplaceStatus).not.toHaveBeenCalled()
   })
 

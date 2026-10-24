@@ -3,6 +3,7 @@ import { migrateConductorSessions } from './conductor-sessions'
 import type Database from 'better-sqlite3'
 import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
+import { migrateMcpRegistryRef } from './mcp-registry-ref'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
 import { migrateChatRunResults } from './chat-run-results'
@@ -74,6 +75,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateServiceCredentials(sqlite)
   migrateProviders(sqlite)
   migrateMcp(sqlite)
+  // `mcp_providers.registry_ref`: a nullable column on the table just created; no DML.
+  migrateMcpRegistryRef(sqlite)
   migrateAgents(sqlite)
   // `agent_roots` before anything that reads it. It creates only its own table
   // (no FK, no cross-table DML), so its position here is about keeping it

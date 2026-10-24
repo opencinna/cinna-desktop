@@ -9,11 +9,11 @@
  * error, because a thrown `DomainError`'s code does not survive IPC.
  *
  * Channels (`marketplaceSkills.ipc.ts`; literal, as `registration.test.ts`
- * reads them): `marketplace-skills:discover` (no input),
- * `marketplace-skills:add` {@link MarketplaceSkillAddInput},
- * `marketplace-skills:update` and `marketplace-skills:remove`
+ * reads them): `marketplace-skills:update` and `marketplace-skills:remove`
  * {@link MarketplaceSkillNameInput}, `marketplace-skills:ensure` and
- * `marketplace-skills:status` {@link MarketplaceSkillAgentInput}.
+ * `marketplace-skills:status` {@link MarketplaceSkillAgentInput}. Listing
+ * and adding a marketplace skill go through the addon directory
+ * (`addons:directory`, `addons:add`), which calls the service in main.
  */
 
 /** One skill a marketplace offers, as `/llm-plugins/discover?plugin_type=skills` lists it. */

@@ -11,9 +11,9 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
 
 /**
- * Marketplace skills against a fake cinna-core: a kit agent's Addons → Skills
- * → Add, the modal's Marketplaces source (search, marketplace filter, an
- * unsupported entry), Add (Adding… → Added, the `marketplace_skills[]` pin, the
+ * Marketplace skills against a fake cinna-core: a kit agent's Addons → Add,
+ * the addon picker over the marketplaces' skills (local search, an
+ * unsupported entry, the detail), Add (Adding… → ready in the next chat, the `marketplace_skills[]` pin, the
  * read-only cache), what a scripted OpenCode session is handed, Update when
  * the entry moves to a new snapshot, "No longer available to you" when the
  * entry leaves the person's view, and Remove (A). A pin written into
@@ -27,7 +27,7 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures
  * read-only modes, the manifest write through its stamp guard, status), the
  * startup auto-fetch (`pinnedSkillAutoFetch`), the skills plugin's links
  * folder and the OpenCode config the launcher writes for the session, the
- * Addons tab and the Add skill modal. Faked: cinna-core — a loopback server
+ * Addons tab and the addon picker. Faked: cinna-core — a loopback server
  * answering discovery, `/llm-plugins/discover`, `/llm-plugins/plugins?ids=`
  * and `/llm-plugins/plugins/{id}/skill-archive` with a gzip tar it builds
  * itself — and the engine, `scriptAcpAgent.mjs` behind the OpenCode launcher.
@@ -310,7 +310,7 @@ async function arrange(
   return { agentId: agent.id, agentPath: agent.path }
 }
 
-/** Agents → the agent → Settings → Addons, and its Skills section. */
+/** Agents → the agent → Settings → Addons, and its one Addons section. */
 async function openSkillsSection(cinna: CinnaApp): Promise<Locator> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
@@ -321,12 +321,14 @@ async function openSkillsSection(cinna: CinnaApp): Promise<Locator> {
   return page
     .getByRole('tabpanel')
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Skills', exact: true }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Addons', exact: true }) })
 }
 
-/** The names of the tiles the Marketplaces source shows, in order. */
+/** The names of the marketplace skills the picker lists, in order (the catalog and the MCP registries list beside them). */
 function tileNames(list: Locator): Promise<string[]> {
-  return list.locator('[data-marketplace-skill]').evaluateAll((tiles) => tiles.map((tile) => tile.getAttribute('aria-label') ?? ''))
+  return list
+    .locator('[data-addon-results] [data-addon-tile^="core-marketplace:"]')
+    .evaluateAll((tiles) => tiles.map((tile) => tile.getAttribute('aria-label') ?? ''))
 }
 
 /* ---------------------------------------------------------------- tests */
@@ -344,89 +346,82 @@ test('A a marketplace skill is added, reaches the session, updates, goes unavail
 
     let section = await openSkillsSection(cinna)
     const page = cinna.page
-    const dialog = page.getByRole('dialog', { name: 'Add skill' })
-    const list = dialog.locator('[data-marketplace-skills-list]')
-    const tile = (name: string): Locator => list.getByRole('group', { name, exact: true })
+    const dialog = page.getByRole('dialog', { name: `Addons for ${AGENT}` })
+    const list = dialog.locator('[data-addon-list]')
+    const tile = (name: string): Locator => list.locator('[data-addon-results]').getByRole('button', { name, exact: true })
+    const detail = dialog.locator('[data-addon-detail]')
 
-    await test.step('Skills → Add → Marketplaces lists what the marketplaces offer', async () => {
-      await expect(section.getByText('No skills yet.', { exact: true })).toBeVisible()
+    await test.step('Addons → Add lists what the marketplaces offer, each tile its kind, source and version', async () => {
+      await expect(section.getByText('No addons yet.', { exact: true })).toBeVisible()
       const add = section.getByRole('button', { name: 'Add', exact: true })
       await expect(add).toBeEnabled()
       await add.click()
       await expect(dialog).toBeVisible()
-      const sources = dialog.getByRole('radiogroup', { name: 'Where skills come from' })
-      await expect(sources.getByRole('radio')).toHaveText(['Catalog', 'Marketplaces'])
-      await sources.getByRole('radio', { name: 'Marketplaces', exact: true }).click()
-      await expect(sources.getByRole('radio', { name: 'Marketplaces', exact: true })).toHaveAttribute('aria-checked', 'true')
       await expect.poll(() => tileNames(list)).toEqual(['release-notes', 'csv-cleaner', 'broken-skill'])
-      // The catalog tile's shape: the marketplace as the badge, the version chip, "by" its owner.
-      await expect(tile('release-notes').getByTitle('From the Acme Skills marketplace')).toHaveText('Acme Skills')
-      await expect(tile('release-notes').getByText('1.0.0', { exact: true })).toBeVisible()
-      await expect(tile('release-notes').getByText('by Acme Labs', { exact: true })).toBeVisible()
-      await expect(tile('release-notes').getByRole('button', { name: 'Open the source of release-notes', exact: true })).toBeVisible()
-      await expect(tile('csv-cleaner').getByTitle('From the Team Tools marketplace')).toHaveText('Team Tools')
-      await expect(tile('csv-cleaner').getByRole('button', { name: /^Open the source/ })).toHaveCount(0)
-      await expect(tile('csv-cleaner').getByRole('img', { name: 'Ships scripts: this skill can run code, not only give instructions.' })).toBeVisible()
+      await expect(tile('release-notes').locator('[data-addon-kind]')).toHaveText('Skill')
+      await expect(tile('release-notes').getByText('Acme Skills · 1.0.0', { exact: true })).toBeVisible()
+      await expect(tile('csv-cleaner').getByTitle('Team Tools', { exact: true })).toBeVisible()
       expect(core.requests).toContain('GET /api/v1/llm-plugins/discover?plugin_type=skills&skip=0&limit=100')
     })
 
-    await test.step('a tile opens its detail over the grid; Escape returns to the grid', async () => {
-      await tile('release-notes').getByRole('button', { name: 'release-notes', exact: true }).click()
-      const detail = dialog.locator(`[data-marketplace-skill-detail="${releaseNotes.id}"]`)
+    await test.step('a tile opens its detail over the list; Escape returns to the list', async () => {
+      await tile('release-notes').click()
       await expect(detail.getByRole('heading', { name: 'release-notes', exact: true })).toBeVisible()
       await expect(detail).toContainText('Acme Labs')
-      await expect(detail.getByRole('button', { name: 'Add release-notes to this agent', exact: true })).toBeEnabled()
-      await expect(detail.getByRole('button', { name: 'Open the source of release-notes', exact: true })).toBeVisible()
+      await expect(detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
+      await expect(detail.getByRole('link', { name: 'Acme Skills', exact: true })).toHaveAttribute('href', ACME.repository)
       await page.keyboard.press('Escape')
       await expect(detail).toHaveCount(0)
       await expect(dialog).toBeVisible()
+      await tile('csv-cleaner').click()
+      await expect(detail.getByText('Runs code on this computer', { exact: true })).toBeVisible()
+      await detail.getByRole('button', { name: 'Back', exact: true }).click()
+      await expect(detail).toHaveCount(0)
     })
 
-    await test.step('search and the Marketplace filter narrow the list locally', async () => {
-      const search = dialog.getByRole('textbox', { name: 'Search marketplace skills' })
+    await test.step('the search narrows the list locally', async () => {
+      const search = dialog.getByRole('textbox', { name: 'Search addons' })
       const discoverReads = core.requests.filter((line) => line.startsWith('GET /api/v1/llm-plugins/discover')).length
       await search.fill('csv')
       await expect.poll(() => tileNames(list)).toEqual(['csv-cleaner'])
-      await search.fill('zzz-nothing')
-      await expect(list).toHaveText('Nothing matches your search.')
+      await search.fill('team tools')
+      await expect.poll(() => tileNames(list)).toEqual(['csv-cleaner'])
       await search.fill('')
       await expect.poll(() => tileNames(list)).toEqual(['release-notes', 'csv-cleaner', 'broken-skill'])
-      const filter = dialog.getByRole('combobox', { name: 'Marketplace' })
-      await expect(filter.locator('option')).toHaveText(['All marketplaces', 'Acme Skills', 'Team Tools'])
-      await expect(filter).toHaveValue('')
-      await filter.selectOption({ label: 'Acme Skills' })
-      await expect.poll(() => tileNames(list)).toEqual(['release-notes', 'broken-skill'])
-      await filter.selectOption({ label: 'Team Tools' })
-      await expect.poll(() => tileNames(list)).toEqual(['csv-cleaner'])
-      await filter.selectOption({ label: 'All marketplaces' })
+      const source = dialog.getByRole('combobox', { name: 'Source' })
+      await expect(source).toHaveValue('')
+      await source.selectOption({ label: 'On this computer' })
+      await expect.poll(() => tileNames(list)).toEqual([])
+      await source.selectOption({ label: 'All sources' })
       await expect.poll(() => tileNames(list)).toEqual(['release-notes', 'csv-cleaner', 'broken-skill'])
       // Filtering asked core nothing.
       expect(core.requests.filter((line) => line.startsWith('GET /api/v1/llm-plugins/discover')).length).toBe(discoverReads)
     })
 
-    await test.step('an unsupported entry offers a disabled Add and says why', async () => {
+    await test.step('an unsupported entry says why on its tile, and its Add is disabled', async () => {
       const reason = 'This skill has no valid SKILL.md, so there is nothing to add.'
-      await expect(tile('broken-skill')).toHaveAttribute('data-marketplace-skill-state', 'unsupported')
-      await expect(tile('broken-skill')).toHaveAttribute('data-marketplace-skill', broken.id)
-      await expect(tile('broken-skill').getByText(reason, { exact: true })).toBeVisible()
-      const add = tile('broken-skill').getByRole('button', { name: 'Add broken-skill to this agent', exact: true })
+      await expect(tile('broken-skill')).toHaveAttribute('data-addon-state', 'blocked')
+      await expect(tile('broken-skill')).toHaveAttribute('data-addon-tile', `core-marketplace:${broken.id}`)
+      await expect(tile('broken-skill').locator('[data-addon-state-line]')).toHaveText(reason)
+      await tile('broken-skill').click()
+      const add = detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true })
       await expect(add).toBeDisabled()
       await expect(add).toHaveAttribute('title', reason)
+      await detail.getByRole('button', { name: 'Back', exact: true }).click()
     })
 
-    await test.step('Add goes Adding… → Added and pins the snapshot into cinna-agent.json', async () => {
+    await test.step('Add goes Adding… → ready in the next chat and pins the snapshot into cinna-agent.json', async () => {
       core.holdArchives(true)
-      await expect(tile('release-notes')).toHaveAttribute('data-marketplace-skill-state', 'addable')
-      await tile('release-notes').getByRole('button', { name: 'Add release-notes to this agent', exact: true }).click()
-      await expect(tile('release-notes')).toHaveAttribute('data-marketplace-skill-state', 'adding')
-      await expect(tile('release-notes').getByRole('button', { name: 'Adding release-notes…', exact: true })).toBeDisabled()
+      await expect(tile('release-notes')).toHaveAttribute('data-addon-state', 'addable')
+      await tile('release-notes').click()
+      await detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).click()
+      await expect(detail.getByRole('button', { name: 'Adding…', exact: true })).toBeDisabled()
       await expect.poll(() => core.held.length).toBe(1)
       // Nothing is pinned before the download is checked.
       expect(marketplacePins(agentPath)).toEqual([])
       core.holdArchives(false)
       core.held.shift()!()
-      await expect(tile('release-notes')).toHaveAttribute('data-marketplace-skill-state', 'added')
-      await expect(tile('release-notes').getByRole('button', { name: 'release-notes added', exact: true })).toBeDisabled()
+      await expect(detail.getByText('Ready in the next chat', { exact: true })).toBeVisible()
       expect(core.requests).toContain(`GET /api/v1/llm-plugins/plugins?ids=${releaseNotes.id}`)
       expect(core.requests).toContain(`GET /api/v1/llm-plugins/plugins/${releaseNotes.id}/skill-archive?sha256=${v1}`)
       expect(marketplacePins(agentPath)).toEqual([
@@ -441,10 +436,13 @@ test('A a marketplace skill is added, reaches the session, updates, goes unavail
         }
       ])
       expect(v1).toBe(sha256(releaseNotes.snapshots.get(v1)!))
+      // Back on the list, the tile says Added once the directory is read again.
+      await detail.getByRole('button', { name: 'Back', exact: true }).click()
+      await expect(tile('release-notes').locator('[data-addon-state-line]')).toHaveText('Added')
     })
 
     let cacheV1 = ''
-    await test.step('the snapshot is in the read-only cache and the Skills row reads From Acme Skills', async () => {
+    await test.step('the snapshot is in the read-only cache and the Addons row reads From Acme Skills', async () => {
       cacheV1 = cachedSnapshotDir(cinna, releaseNotes.id, v1, 'release-notes') ?? ''
       expect(cacheV1, 'the v1 snapshot is cached').not.toBe('')
       expect(readFileSync(join(cacheV1, 'SKILL.md'), 'utf8')).toContain('description: Writes release notes from merged pull requests.')
@@ -532,7 +530,7 @@ test('A a marketplace skill is added, reaches the session, updates, goes unavail
       await confirm.getByRole('button', { name: 'Remove skill', exact: true }).click()
       await expect.poll(() => marketplacePins(agentPath)).toEqual([])
       await expect(section.locator('[data-skill-row="release-notes"]')).toHaveCount(0)
-      await expect(section.getByText('No skills yet.', { exact: true })).toBeVisible()
+      await expect(section.getByText('No addons yet.', { exact: true })).toBeVisible()
     })
   } finally {
     await fake.close()

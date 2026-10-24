@@ -223,12 +223,17 @@ import type {
 } from '../shared/sync'
 import type { CatalogSkillEnsureResult, CatalogSkillOutcome } from '../shared/catalogSkills'
 import type {
-  MarketplaceSkillDiscoverResult,
   MarketplaceSkillEnsureResult,
   MarketplaceSkillOutcome,
   MarketplaceSkillStatusResult
 } from '../shared/marketplaceSkills'
 import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
+import type {
+  AddonActionResult,
+  AddonDirectoryResult,
+  AddonRef,
+  AddonSearchResult
+} from '../shared/addons/directory'
 import {
   ARTIFACTS_APPROVALS_CHANNEL,
   ARTIFACTS_CHANGED_CHANNEL,
@@ -975,6 +980,8 @@ const api = {
       enabled?: boolean
       authType?: 'oauth' | 'bearer'
       bearerToken?: string
+      /** The MCP registry entry a new connector is made from (written on insert only). */
+      registryRef?: { source: string; id: string }
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('mcp:upsert', data),
     delete: (providerId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('mcp:delete', providerId),
@@ -2209,9 +2216,6 @@ const api = {
    * Every answer is data, refusals included. See `src/shared/marketplaceSkills.ts`.
    */
   marketplaceSkills: {
-    discover: (): Promise<MarketplaceSkillDiscoverResult> => ipcRenderer.invoke('marketplace-skills:discover'),
-    add: (agentId: string, entryUuid: string): Promise<MarketplaceSkillOutcome> =>
-      ipcRenderer.invoke('marketplace-skills:add', { agentId, entryUuid }),
     update: (agentId: string, name: string): Promise<MarketplaceSkillOutcome> =>
       ipcRenderer.invoke('marketplace-skills:update', { agentId, name }),
     remove: (agentId: string, name: string): Promise<MarketplaceSkillOutcome> =>
@@ -2220,6 +2224,25 @@ const api = {
       ipcRenderer.invoke('marketplace-skills:ensure', { agentId }),
     status: (agentId: string): Promise<MarketplaceSkillStatusResult> =>
       ipcRenderer.invoke('marketplace-skills:status', { agentId })
+  },
+
+  /**
+   * The addon directory of one folder agent: every skill and MCP connector
+   * it could add from every source (Cinna's catalog and marketplaces, this
+   * computer's connectors, the MCP registries), each with its state for the
+   * agent; a search over the sources too large to list; one entry; and one
+   * Add / Remove that dispatches to the per-kind paths. Every answer is data,
+   * refusals included. See `src/shared/addons/directory.ts`.
+   */
+  addons: {
+    /** `refresh`: re-read the sources' caches (the picker's once-per-opening read). */
+    directory: (agentId: string, options: { refresh?: boolean } = {}): Promise<AddonDirectoryResult> =>
+      ipcRenderer.invoke('addons:directory', { agentId, ...(options.refresh ? { refresh: true } : {}) }),
+    search: (agentId: string, query: string): Promise<AddonSearchResult> =>
+      ipcRenderer.invoke('addons:search', { agentId, query }),
+    add: (agentId: string, ref: AddonRef): Promise<AddonActionResult> => ipcRenderer.invoke('addons:add', { agentId, ref }),
+    remove: (agentId: string, ref: AddonRef): Promise<AddonActionResult> =>
+      ipcRenderer.invoke('addons:remove', { agentId, ref })
   },
 
   /**

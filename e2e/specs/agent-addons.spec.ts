@@ -108,7 +108,7 @@ test('a kit agent’s Overview shows its prompts as markdown, with author notes 
 
   await test.step('there is no Prompts tab, and Addons sits after Overview', async () => {
     await expect(page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab')).toHaveText([
-      'Overview', 'Addons', 'Credentials', 'Commands1', 'Schedules', 'Permissions', 'Folder2', 'Interface'
+      'Overview', 'Addons', 'Credentials', 'Commands1', 'Schedules', 'Tasks', 'Permissions', 'Folder2', 'Interface'
     ])
     await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveCount(0)
   })
@@ -172,44 +172,56 @@ test('Addons attaches an existing connector and a new one, detaches, and a Setti
     const page = cinna.page
     const panel = page.getByRole('tabpanel')
     const addonsTab = page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: /^Addons/ })
-    const dialog = page.getByRole('dialog', { name: 'Attach MCP connector' })
+    const dialog = page.getByRole('dialog', { name: `Addons for ${AGENT}` })
 
     await test.step('a new agent has no connectors', async () => {
       await openAgentTab(cinna, 'Addons')
       await expect(addonsTab).toHaveText('Addons')
-      await expect(panel.getByText('No connectors attached.', { exact: true })).toBeVisible()
+      await expect(panel.getByText('No addons yet.', { exact: true })).toBeVisible()
     })
 
-    await test.step('attach an existing connector: the card turns Attached, and the row appears on close', async () => {
-      await panel.getByRole('button', { name: 'Attach', exact: true }).click()
+    await test.step('add an existing connector from the picker: ready in the next chat, and the row appears', async () => {
+      await panel.getByRole('button', { name: 'Add', exact: true }).click()
       await expect(dialog).toBeVisible()
-      await dialog.getByRole('button', { name: `Attach ${CONNECTOR}`, exact: true }).click()
-      const attached = dialog.getByRole('button', { name: `${CONNECTOR} attached`, exact: true })
-      await expect(attached).toHaveText('Attached')
-      await expect(attached).toBeDisabled()
-      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await dialog.locator('[data-addon-list]').getByRole('button', { name: CONNECTOR, exact: true }).click()
+      const detail = dialog.locator('[data-addon-detail]')
+      await detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).click()
+      await expect(detail.getByText('Ready in the next chat', { exact: true })).toBeVisible()
+      await detail.getByRole('button', { name: 'Done', exact: true }).click()
       await expect(dialog).toBeHidden()
       await expect(panel.getByRole('button', { name: `Detach ${CONNECTOR} from this agent`, exact: true })).toBeVisible()
-      await expect(panel.getByText('No connectors attached.', { exact: true })).toHaveCount(0)
+      await expect(panel.getByText('No addons yet.', { exact: true })).toHaveCount(0)
       await expect(addonsTab).toHaveText('Addons1')
       await expect(addonsTab.locator('span[title]')).toHaveAttribute('title', '1 connector')
       expect(await page.evaluate((id) => window.api.localAgents.listMcpProviders(id), agent.id)).toEqual([connectorId])
     })
 
-    await test.step('create a new connector inside the dialog: attached, dialog closed, badge warns', async () => {
-      await panel.getByRole('button', { name: 'Attach', exact: true }).click()
-      await dialog.getByRole('button', { name: 'Custom MCP', exact: true }).click()
+    await test.step('the picker shows the attached connector as Added', async () => {
+      await panel.getByRole('button', { name: 'Add', exact: true }).click()
+      const tile = dialog.locator('[data-addon-list]').getByRole('button', { name: CONNECTOR, exact: true })
+      await expect(tile.locator('[data-addon-state-line]')).toHaveText('Added')
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(dialog).toBeHidden()
+    })
+
+    await test.step('create a custom connector inside the picker: attached, picker closed, badge warns', async () => {
+      await panel.getByRole('button', { name: 'Add', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Custom connector…', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Remote server (URL)', exact: true }).click()
       await dialog.getByPlaceholder('e.g., My MCP Server').fill(BROKEN)
       await dialog.getByPlaceholder('https://mcp.example.com').fill(broken)
       await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
       await expect(dialog).toBeHidden()
       await expect(panel.getByRole('button', { name: `Detach ${BROKEN} from this agent`, exact: true })).toBeVisible()
-      await expect(addonsTab).toHaveText('Addons2')
+      // With a problem the badge counts the problems, warning-toned; the title has the whole.
+      await expect(addonsTab).toHaveText('Addons1')
       await expect(addonsTab.locator('span[title]')).toHaveAttribute('title', '1 of 2 connectors needs attention')
     })
 
     await test.step('detach removes it from the agent only', async () => {
       await panel.getByRole('button', { name: `Detach ${BROKEN} from this agent`, exact: true }).click()
+      // It asks first, inside the card.
+      await panel.getByRole('group', { name: `Detach ${BROKEN} from this agent`, exact: true }).getByRole('button', { name: 'Detach', exact: true }).click()
       await expect(panel.getByRole('button', { name: `Detach ${BROKEN} from this agent`, exact: true })).toHaveCount(0)
       await expect(addonsTab).toHaveText('Addons1')
       await expect(addonsTab.locator('span[title]')).toHaveAttribute('title', '1 connector')
@@ -241,7 +253,7 @@ test('Addons attaches an existing connector and a new one, detaches, and a Setti
     await test.step('the agent’s Addons tab is empty again', async () => {
       await leaveSettings(cinna)
       await openAgentTab(cinna, 'Addons')
-      await expect(panel.getByText('No connectors attached.', { exact: true })).toBeVisible()
+      await expect(panel.getByText('No addons yet.', { exact: true })).toBeVisible()
       await expect(addonsTab).toHaveText('Addons')
       expect(await page.evaluate((id) => window.api.localAgents.listMcpProviders(id), agent.id)).toEqual([])
     })

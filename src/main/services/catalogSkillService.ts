@@ -93,6 +93,11 @@ const SENTENCES: Record<CatalogSkillRefusal, string> = {
   reauth_required: 'Sign in to Cinna again to download this skill.'
 }
 
+/** The sentence for an agent whose pins are not the user's to change (`changeability`). */
+export function changeabilitySentence(access: 'read_only' | 'access_unknown'): string {
+  return SENTENCES[access]
+}
+
 type Refused = { ok: false; code: CatalogSkillRefusal; message: string }
 
 function refused(code: CatalogSkillRefusal, message?: string): Refused {

@@ -41,6 +41,8 @@ export interface UpsertMcpInput {
   authType?: 'oauth' | 'bearer'
   /** Plaintext — encrypted here before it ever reaches the repo/DB. Omit to keep the existing token. */
   bearerToken?: string
+  /** The addon directory entry it is made from (`registry_ref`); written on insert only, so the directory shows it once. */
+  registryRef?: { source: string; id: string } | null
 }
 
 function assertTransport(t: string): asserts t is 'stdio' | 'sse' | 'streamable-http' {
@@ -98,7 +100,8 @@ export const mcpService = {
       env: input.env ?? null,
       enabled: input.enabled,
       authType: input.authType,
-      bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined
+      bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined,
+      ...(input.id === undefined && input.registryRef ? { registryRef: input.registryRef } : {})
     })
 
     logger.info(created ? 'mcp created' : 'mcp updated', {
@@ -115,6 +118,45 @@ export const mcpService = {
     }
 
     return { id, row: toDto(row) }
+  },
+
+  /**
+   * A provider made from an addon directory entry, carrying the entry's ref
+   * (`registry_ref`) so the directory shows it once. Unlike {@link upsert},
+   * the first connect is non-interactive: it never opens a browser, and an
+   * OAuth server that needs the user answers `needsUser` so the picker can
+   * offer its own Connect step in place.
+   */
+  async createFromDirectory(
+    userId: string,
+    input: {
+      name: string
+      transportType: 'sse' | 'streamable-http'
+      url: string
+      authType: 'oauth' | 'bearer'
+      registryRef: { source: string; id: string }
+      /** Skip the first connect (a bearer server with no token yet). */
+      connect: boolean
+    }
+  ): Promise<{ id: string; status: string; needsUser: boolean; error?: string }> {
+    const { id, row } = mcpProviderRepo.upsert(userId, {
+      name: input.name,
+      transportType: input.transportType,
+      url: input.url,
+      enabled: true,
+      authType: input.authType,
+      registryRef: input.registryRef
+    })
+    logger.info('mcp created from directory', { providerId: id, source: input.registryRef.source, authType: row.authType })
+    if (!input.connect) return { id, status: 'disconnected', needsUser: false }
+    try {
+      const conn = await mcpManager.connect(mcpRowToConfig(row), { interactive: false })
+      return { id, status: conn.status, needsUser: mcpManager.needsUser(id), ...(conn.error ? { error: conn.error } : {}) }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      logger.warn('first connect from directory failed', { providerId: id, error })
+      return { id, status: 'error', needsUser: mcpManager.needsUser(id), error }
+    }
   },
 
   async delete(userId: string, id: string): Promise<void> {

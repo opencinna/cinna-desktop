@@ -12,7 +12,7 @@ import type { LiveCinnaConfig } from '../fixtures/liveCinna'
  * developer's local cinna-core has a skills-format marketplace named `skills`
  * (synced from github.com/anthropics/skills; this spec never syncs, edits or
  * deletes it). A kit folder agent on a profile linked to that core gets
- * `brand-guidelines` through Addons → Skills → Add → Marketplaces: the real
+ * `brand-guidelines` through Addons → Add (the addon picker): the real
  * entries are listed (`claude-api` as unsupported, `no_skill_md`), Add pins
  * the current snapshot into `cinna-agent.json` and the row reads
  * `From skills`, current. One real turn through the agent's composer asks
@@ -135,7 +135,7 @@ async function openSkillsSection(cinna: CinnaApp): Promise<Locator> {
   return page
     .getByRole('tabpanel')
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Skills', exact: true }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Addons', exact: true }) })
 }
 
 test('@live a folder agent answers from a skill added out of the real skills marketplace, then the skill is removed', async ({ cinna }) => {
@@ -171,38 +171,41 @@ test('@live a folder agent answers from a skill added out of the real skills mar
 
   let section = await openSkillsSection(cinna)
   const page = cinna.page
-  const dialog = page.getByRole('dialog', { name: 'Add skill' })
-  const list = dialog.locator('[data-marketplace-skills-list]')
-  const tile = (name: string): Locator => list.getByRole('group', { name, exact: true })
+  const dialog = page.getByRole('dialog', { name: `Addons for ${AGENT}` })
+  const list = dialog.locator('[data-addon-list] [data-addon-results]')
+  const tile = (name: string): Locator => list.getByRole('button', { name, exact: true })
+  const detail = dialog.locator('[data-addon-detail]')
 
-  await test.step('Skills → Add → Marketplaces lists the real entries, claude-api unsupported', async () => {
-    await expect(section.getByText('No skills yet.', { exact: true })).toBeVisible()
+  await test.step('Addons → Add lists the real marketplace entries, claude-api unsupported', async () => {
+    await expect(section.getByText('No addons yet.', { exact: true })).toBeVisible()
     await section.getByRole('button', { name: 'Add', exact: true }).click()
     await expect(dialog).toBeVisible()
-    const sources = dialog.getByRole('radiogroup', { name: 'Where skills come from' })
-    await sources.getByRole('radio', { name: 'Marketplaces', exact: true }).click()
-    await expect(sources.getByRole('radio', { name: 'Marketplaces', exact: true })).toHaveAttribute('aria-checked', 'true')
     await expect(tile(SKILL)).toBeVisible({ timeout: 30_000 })
-    await dialog.getByRole('combobox', { name: 'Marketplace' }).selectOption({ label: MARKETPLACE })
     await expect
-      .poll(() => list.locator('[data-marketplace-skill]').evaluateAll((tiles) => tiles.map((t) => t.getAttribute('aria-label') ?? '').sort()))
+      .poll(() =>
+        list
+          .locator('[data-addon-tile^="core-marketplace:"]')
+          .evaluateAll((tiles, label) => tiles.filter((t) => t.textContent?.includes(label as string)).map((t) => t.getAttribute('aria-label') ?? '').sort(), MARKETPLACE)
+      )
       .toEqual(entries.map((row) => row.name).sort())
-    await expect(tile(SKILL)).toHaveAttribute('data-marketplace-skill', entry.id)
-    await expect(tile(SKILL)).toHaveAttribute('data-marketplace-skill-state', 'addable')
-    await expect(tile(SKILL).getByTitle(`From the ${MARKETPLACE} marketplace`)).toHaveText(MARKETPLACE)
+    await expect(tile(SKILL)).toHaveAttribute('data-addon-tile', `core-marketplace:${entry.id}`)
+    await expect(tile(SKILL)).toHaveAttribute('data-addon-state', 'addable')
+    await expect(tile(SKILL).getByTitle(MARKETPLACE, { exact: true })).toBeVisible()
     const reason = 'This skill has no valid SKILL.md, so there is nothing to add.'
-    await expect(tile(UNSUPPORTED)).toHaveAttribute('data-marketplace-skill-state', 'unsupported')
-    await expect(tile(UNSUPPORTED).getByText(reason, { exact: true })).toBeVisible()
-    const blocked = tile(UNSUPPORTED).getByRole('button', { name: `Add ${UNSUPPORTED} to this agent`, exact: true })
+    await expect(tile(UNSUPPORTED)).toHaveAttribute('data-addon-state', 'blocked')
+    await expect(tile(UNSUPPORTED).locator('[data-addon-state-line]')).toHaveText(reason)
+    await tile(UNSUPPORTED).click()
+    const blocked = detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true })
     await expect(blocked).toBeDisabled()
     await expect(blocked).toHaveAttribute('title', reason)
+    await detail.getByRole('button', { name: 'Back', exact: true }).click()
   })
 
   let cached = ''
   await test.step(`Add pins ${SKILL} into cinna-agent.json; the cached snapshot holds the facts`, async () => {
-    await tile(SKILL).getByRole('button', { name: `Add ${SKILL} to this agent`, exact: true }).click()
-    await expect(tile(SKILL)).toHaveAttribute('data-marketplace-skill-state', 'added', { timeout: 60_000 })
-    await expect(tile(SKILL).getByRole('button', { name: `${SKILL} added`, exact: true })).toBeDisabled()
+    await tile(SKILL).click()
+    await detail.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).click()
+    await expect(detail.getByText('Ready in the next chat', { exact: true })).toBeVisible({ timeout: 60_000 })
     const pins = marketplacePins(agent.path)
     console.log(`live-marketplace-skills pin: ${JSON.stringify(pins)}`)
     // The entry has no version (`""` on core), so the pin's is null.
@@ -222,7 +225,7 @@ test('@live a folder agent answers from a skill added out of the real skills mar
     const skillMd = readFileSync(join(cached, 'SKILL.md'), 'utf8')
     for (const fact of FACTS) expect(skillMd, `the snapshot's SKILL.md holds ${fact}`).toContain(fact)
 
-    await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+    await detail.getByRole('button', { name: 'Done', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     const row = section.locator(`[data-skill-row="${SKILL}"]`)
     await expect(row).toHaveAttribute('data-skill-source', 'marketplace')
@@ -317,6 +320,6 @@ test('@live a folder agent answers from a skill added out of the real skills mar
     await confirm.getByRole('button', { name: 'Remove skill', exact: true }).click()
     await expect.poll(() => marketplacePins(agent.path)).toEqual([])
     await expect(section.locator(`[data-skill-row="${SKILL}"]`)).toHaveCount(0)
-    await expect(section.getByText('No skills yet.', { exact: true })).toBeVisible()
+    await expect(section.getByText('No addons yet.', { exact: true })).toBeVisible()
   })
 })

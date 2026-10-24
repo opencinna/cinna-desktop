@@ -6,6 +6,7 @@ import {
   useUpsertMcpProvider
 } from '../../hooks/useMcp'
 import type { McpRegistryEntry, McpRegistryInfo } from '../../../../shared/mcpRegistries'
+import { mcpRegistryRef } from '../../../../shared/addons/directory'
 
 interface Props {
   onClose: () => void
@@ -42,7 +43,9 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
         name: entry.title?.trim() || entry.name,
         transportType: remote.type,
         url: remote.url,
-        enabled: true
+        enabled: true,
+        // The registry entry it is made from: the agent's addon picker then shows it once, as this connector.
+        registryRef: mcpRegistryRef(entry.registryId, entry.id)
       }
     ).then((result) => { onCreated?.(result.id); onClose() }, () => setAddingId(null))
   }

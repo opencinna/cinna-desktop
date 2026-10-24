@@ -1,6 +1,6 @@
 /**
- * Marketplace skills: the words the Add skill modal's Marketplaces source and
- * the Skills section's marketplace rows use. Core sends unsupported reasons as
+ * Marketplace skills: the words the Addons tab's marketplace rows and the
+ * addon picker use. Core sends unsupported reasons as
  * codes; the sentences are the renderer's.
  */
 
@@ -16,32 +16,9 @@ export function unsupportedSentence(reason: string | null): string {
 }
 
 export const MARKETPLACE_SKILL_TEXT = {
-  sourceLabel: 'Where skills come from',
-  catalog: 'Catalog',
-  marketplaces: 'Marketplaces',
-  searchLabel: 'Search marketplace skills',
-  searchPlaceholder: 'Search marketplace skills…',
-  filterLabel: 'Marketplace',
-  allMarketplaces: 'All marketplaces',
-  loading: 'Loading marketplace skills…',
-  loadFailed: 'Could not load the marketplace skills.',
-  reauth: 'Cinna session expired. Re-authenticate to load the marketplace skills.',
-  empty: 'No skills marketplaces are available to you. An admin connects skills marketplaces in Cinna.',
-  noMatch: 'Nothing matches your search.',
-  hasScripts: 'Ships scripts: this skill can run code, not only give instructions.',
-  noScripts: 'None: this skill only gives instructions.',
   openRepository: 'Open the source repository',
   openRepositoryLabel: (skill: string) => `Open the source of ${skill}`,
-  /** The tile's and the detail's badge: the marketplace's name. */
-  badge: (marketplace: string) => marketplace || 'Marketplace',
-  badgeTitle: (marketplace: string) => (marketplace ? `From the ${marketplace} marketplace` : 'From a skills marketplace'),
-  back: 'Back to marketplace skills',
-  marketplaceLabel: 'Marketplace',
-  ownerLabel: 'Owner',
-  versionLabel: 'Version',
-  scriptsLabel: 'Scripts',
-  addFailed: 'The skill could not be added.',
-  /** The Skills row's badge. */
+  /** The Addons row's badge. */
   from: (marketplace: string) => (marketplace ? `From ${marketplace}` : 'From a marketplace'),
   fromTitle: (marketplace: string) => (marketplace ? `Pinned from the ${marketplace} marketplace` : 'Pinned from a skills marketplace'),
   version: (version: string) => `Version ${version}`,

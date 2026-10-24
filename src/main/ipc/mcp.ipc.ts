@@ -4,6 +4,7 @@ import { mcpService } from '../services/mcpService'
 import { mcpRegistryService } from '../services/mcpRegistryService'
 import { agentMcpService } from '../services/agentMcpService'
 import { ipcErrorShape } from '../errors'
+import { isAddonRef } from '../../shared/addons/directory'
 import { ipcHandle } from './_wrap'
 
 export function registerMcpHandlers(): void {
@@ -27,10 +28,14 @@ export function registerMcpHandlers(): void {
         enabled?: boolean
         authType?: 'oauth' | 'bearer'
         bearerToken?: string
+        /** The MCP registry entry a new connector is made from; ignored on an update. */
+        registryRef?: unknown
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = await mcpService.upsert(getSettingsScopeUserId(), data)
+      const { registryRef, ...rest } = data
+      const ref = isAddonRef(registryRef) ? { source: registryRef.source, id: registryRef.id } : undefined
+      const { id } = await mcpService.upsert(getSettingsScopeUserId(), { ...rest, ...(ref ? { registryRef: ref } : {}) })
       return { id, success: true }
     }
   )

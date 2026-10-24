@@ -283,7 +283,7 @@ export function skillsSection(app: PersonApp) {
   return app.page
     .getByRole('tabpanel')
     .locator('section')
-    .filter({ has: app.page.getByRole('heading', { level: 2, name: 'Skills', exact: true }) })
+    .filter({ has: app.page.getByRole('heading', { level: 2, name: 'Addons', exact: true }) })
 }
 
 /** One row of the Skills section, by the name it shows and its source badge. */

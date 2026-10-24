@@ -41,6 +41,7 @@ import { registerLocalDevHandlers } from './localdev.ipc'
 import { registerSharingHandlers } from './sharing.ipc'
 import { registerCatalogSkillHandlers } from './catalogSkills.ipc'
 import { registerMarketplaceSkillHandlers } from './marketplaceSkills.ipc'
+import { registerAddonHandlers } from './addons.ipc'
 import { registerSkillPublishHandlers } from './skillPublish.ipc'
 
 export function registerAllIpcHandlers(): void {
@@ -88,6 +89,8 @@ export function registerAllIpcHandlers(): void {
   registerCatalogSkillHandlers()
   // Marketplace skills pinned in folder agents: discover, add, update, remove, fetch, status.
   registerMarketplaceSkillHandlers()
+  // The addon directory of a folder agent: one list and one Add / Remove over every source.
+  registerAddonHandlers()
   registerSkillPublishHandlers()
   registerServiceCredentialHandlers()
   registerAgentFileHandlers()

@@ -1,6 +1,8 @@
-import { useState } from 'react'
-import { ArrowUpCircle, ExternalLink, FileText, Loader2, Plus, RotateCw, Share2, Sparkles, Trash2, Users } from 'lucide-react'
-import type { LocalAgentDto, LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
+import { useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
+import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
+import type { AddonKind } from '../../../../../shared/addons/directory'
+import type { McpProviderData } from '../../../../../preload'
 import { useAgentMcpProviders, useAttachAgentMcp, useDetachAgentMcp, useMcpProviders } from '../../../hooks/useMcp'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
 import { useListedShareStatus } from '../../../hooks/useSharing'
@@ -11,29 +13,59 @@ import {
   useUpdateCatalogSkill
 } from '../../../hooks/useCatalogSkills'
 import {
-  marketplacePins,
   useEnsureMarketplaceSkills,
   useMarketplaceSkillStatus,
   useRemoveMarketplaceSkill,
   useUpdateMarketplaceSkill
 } from '../../../hooks/useMarketplaceSkills'
 import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
-import { MARKETPLACE_SKILL_TEXT } from '../../../utils/marketplaceSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogItems'
-import { useAuthStore } from '../../../stores/auth.store'
+import { CATALOG_SKILL_TEXT, SKILL_SHARE_TEXT } from '../../../utils/catalogItems'
 import { usePublishSkill } from '../../../hooks/useSkillPublish'
 import type { SkillPublishInput } from '../../../../../shared/skillPublish'
 import { ShareSkillDialog } from './ShareSkillDialog'
 import { WhoCanUseSkillDialog } from './sharing/WhoCanUseSkillDialog'
-import { AnimatedCollapse } from '../../ui/AnimatedCollapse'
 import { MCPProviderCard } from '../../settings/MCPProviderCard'
-import { CredentialStatusGlyph } from '../../settings/CredentialRow'
-import type { CredentialHealth } from '../../settings/credentialPresentation'
-import { SettingsBadge, SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
-import { McpAttachModal } from './McpAttachModal'
-import { SkillAddModal } from './SkillAddModal'
+import { SettingsButton, SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
 import { mcpProblem } from '../../settings/mcpPresentation'
+import { ADDON_KIND } from './AddonRow'
+import { AddonPicker } from './AddonPicker'
+import { SkillRow, needsAttention, type CatalogRowActions, type CatalogVerb } from './SkillRow'
+
+/** One row of the Addons tab's single list. Plugin rows join in U3. */
+export type AddonListItem =
+  | { kind: 'skill'; key: string; title: string; skill: LocalAgentSkill }
+  | { kind: 'mcp'; key: string; title: string; provider: McpProviderData }
+
+/**
+ * Everything the Addons tab lists, in one list: the attached connectors (in
+ * attach order; a link whose connector is gone is never drawn — the delete
+ * cascades, and the provider list may simply not have caught up) and a kit
+ * agent's skills. The tab and its badge count the same list.
+ */
+export function addonListItems(
+  ids: readonly string[] | undefined,
+  providers: readonly McpProviderData[] | undefined,
+  skills: readonly LocalAgentSkill[] | undefined
+): AddonListItem[] {
+  const connectors: AddonListItem[] = (ids ?? []).flatMap((id) => {
+    const provider = providers?.find((p) => p.id === id)
+    return provider ? [{ kind: 'mcp' as const, key: `mcp:${id}`, title: provider.name, provider }] : []
+  })
+  // An own skill and a pin may share a name (an error the row shows), and so may two pins.
+  const skillRows: AddonListItem[] = (skills ?? []).map((skill, index) => ({
+    kind: 'skill' as const,
+    key: `skill:${skill.source}:${skill.name}:${index}`,
+    title: skill.source !== 'authored' && skill.title ? skill.title : skill.name,
+    skill
+  }))
+  return [...connectors, ...skillRows]
+}
+
+/** Whether a row counts toward the tab badge's problems: a connector sessions run without, or a skill with an issue. */
+function isProblem(item: AddonListItem): boolean {
+  return item.kind === 'mcp' ? mcpProblem(item.provider) !== null : needsAttention(item.skill)
+}
 
 /**
  * The Addons tab's count badge: everything the tab lists — attached connectors
@@ -49,434 +81,48 @@ export function useAddonsBadge(
 ): { count: number; problems: number; skills: number } {
   const { data: ids } = useAgentMcpProviders(agentId)
   const { data: providers } = useMcpProviders()
-  const attached = (providers ?? []).filter((p) => ids?.includes(p.id))
-  const skills = agentSkills ?? []
+  const items = addonListItems(ids, providers, agentSkills)
   return {
-    count: attached.length + skills.length,
-    problems: attached.filter((p) => mcpProblem(p) !== null).length + skills.filter(needsAttention).length,
-    skills: skills.length
+    count: items.length,
+    problems: items.filter(isProblem).length,
+    skills: items.filter((item) => item.kind === 'skill').length
   }
 }
 
 /**
- * Whether a skill counts toward the tab's attention badge: any issue except
- * `not_downloaded`, which a catalog pin carries only until its revision is
- * fetched — transient, and its Try again is on the row itself; or, on a
- * deliverable skill, a declared slot no ready attachment fills — the badge
- * and the row's Finish setup are how that warning is announced, never a banner.
+ * The rows in "needs attention first, then by name" order, sorted only when
+ * what is listed changes (the tab opens, an add or a remove lands, a list
+ * arrives — `settled` flips once the slower reads are in) and otherwise kept:
+ * a row whose state changes while the user works it stays where it is.
  */
-function needsAttention(skill: LocalAgentSkill): boolean {
-  return (
-    skill.issues.some((issue) => issue.code !== 'not_downloaded') ||
-    (skill.deliverable && skill.credentials.some((credential) => credential.filled === false))
-  )
+export function useFrozenOrder(items: AddonListItem[], attention: (item: AddonListItem) => boolean, settled: boolean): AddonListItem[] {
+  const frozen = useRef<{ signature: string; order: string[] } | null>(null)
+  const signature = `${settled ? 1 : 0}|${items.map((item) => item.key).sort().join('\u0000')}`
+  if (frozen.current?.signature !== signature) {
+    const order = items
+      .map((item) => ({ item, attention: attention(item) }))
+      .sort((a, b) => Number(b.attention) - Number(a.attention) || a.item.title.localeCompare(b.item.title, undefined, { sensitivity: 'base' }))
+      .map(({ item }) => item.key)
+    frozen.current = { signature, order }
+  }
+  const byKey = new Map(items.map((item) => [item.key, item]))
+  return frozen.current.order.flatMap((key) => byKey.get(key) ?? [])
 }
 
-/** A skill's state as the shared status glyph draws it: the first error, else the warnings, else fine. */
-function skillHealth(skill: LocalAgentSkill): CredentialHealth {
-  const error = skill.issues.find((issue) => issue.severity === 'error')
-  if (error) return { tone: 'error', label: error.message }
-  if (skill.issues.length > 0) return { tone: 'warning', label: skill.issues.map((issue) => issue.message).join(' ') }
-  return { tone: 'ok', label: 'Every engine of this agent gets this skill' }
-}
+/** Past this many rows the list is longer than a screen, and kind chips filter it. */
+export const ADDON_FILTER_THRESHOLD = 8
 
-/** A catalog row's verb in flight. */
-type CatalogVerb = 'update' | 'ensure' | 'remove'
+const KIND_ORDER: AddonKind[] = ['skill', 'plugin', 'mcp']
 
 /**
- * What a catalog row can do, and its state, owned by the tab so a verb in
- * flight outlives a re-render of the row. Absent on an authored skill.
- */
-interface CatalogRowActions {
-  /**
-   * Update and Remove are not the user's (catalog U9): the agent is shared
-   * with them to use only, its access is not known, or not read yet.
-   */
-  readOnly: boolean
-  /** The agent is shared and the user may change it: a Remove passes on only once they share changes. */
-  sharedEditable: boolean
-  busy: CatalogVerb | null
-  /** Another row's verb is running. */
-  locked: boolean
-  error: string | null
-  confirming: boolean
-  onUpdate: () => void
-  onEnsure: () => void
-  /**
-   * Check again on a not-cached Disconnected row: the same fetch as Try
-   * again, but the row's own refusal is no error line — on a 404 the row
-   * simply stays Disconnected; any other failure becomes the row's issue.
-   */
-  onCheck: () => void
-  onAskRemove: () => void
-  onCancelRemove: () => void
-  onRemove: () => void
-}
-
-/** Whether a catalog row's revision is not on this computer, so Try again can fetch it. */
-function notHere(skill: LocalAgentSkill): boolean {
-  return skill.issues.some((issue) => issue.code === 'not_downloaded' || issue.code === 'download_failed')
-}
-
-/**
- * Whether a catalog row is Disconnected with no copy on this computer (no
- * path): its download was refused as not available, and Check again asks once
- * more — access may have come back. A cached Disconnected copy keeps working,
- * so it gets no Check again.
- */
-function disconnectedNotHere(skill: LocalAgentSkill): boolean {
-  return !skill.path && skill.issues.some((issue) => issue.code === 'catalog_disconnected')
-}
-
-function BusyIcon({ busy, children }: { busy: boolean; children: React.ReactNode }): React.JSX.Element {
-  return busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <>{children}</>
-}
-
-/** Credential slot chips drawn before the rest fold into `+N`. */
-const MAX_SLOT_CHIPS = 2
-
-/**
- * A declared slot's state as the shared status glyph draws it, from the scan's
- * `filled` (a ready attachment of its type whose Service URI is the slot).
- * Null where the scan did not judge it. Never an error: an unfilled skill slot
- * is a warning, and never blocks the agent.
- */
-function slotHealth(credential: LocalAgentSkillCredential): CredentialHealth | null {
-  if (credential.filled === undefined) return null
-  if (credential.filled) return { tone: 'ok', label: `A credential for ${credential.slot} is attached` }
-  if (credential.attachment) return { tone: 'warning', label: `The credential attached for ${credential.slot} is not ready` }
-  return { tone: 'warning', label: `No credential for ${credential.slot} is attached yet` }
-}
-
-/**
- * One skill: its name, where it came from, its state and a reveal of its
- * `SKILL.md` on the title line; then the description, the credential slots it
- * declares and the issues — each only when there are any — and last a reveal
- * that failed. Drawn in the connector card's shell (ux_rules rule 13).
+ * What a local agent runs with beyond its own instructions, as one list:
+ * MCP connectors and a kit agent's skills (plugins join in U3), each in the
+ * same {@link AddonRow} shell, needing-attention first and then by name, and
+ * one **Add** that opens the {@link AddonPicker} over every source.
  *
- * A catalog skill (a `catalog_skills[]` pin) is the same row: "From the
- * catalog" instead of "Authored", its pinned version — or revision, when the
- * pin states no version — muted beside the name, and no reveal, since none of
- * its files are in the folder. The title line keeps the button's height either
- * way, so a list mixing the two does not step.
- *
- * The slots sit on their own neutral "Needs" line, never beside the skill's
- * status glyph. Each chip wears its own glyph once the scan judged it — a ✓
- * where a ready attachment fills it, a triangle where none does — as a
- * credential row says *connected* (rule 13). A deliverable skill with an
- * unfilled slot ends the line with Finish setup, which lists exactly those.
- *
- * An authored skill shared to the catalog shows, to a maintainer of its
- * package (the listing's access), a Who can use icon that opens the skill's
- * People.
- *
- * A catalog row's actions are icons on the title line (rule 13): Update when
- * the catalog has a newer version, Try again when the pinned revision is not
- * on this computer, Check again on a Disconnected row with no copy here, and
- * Remove, whose confirm opens inside the card. Update
- * and Remove are not shown on an agent shared with the user to use only. A
- * verb in flight spins its icon; a refusal is the card's last line (rule 6).
- */
-function SkillRow({
-  skill: scanned,
-  revealError,
-  onReveal,
-  onShare,
-  onWhoCanUse,
-  onFinishSetup,
-  catalogActions,
-  marketplaceStatus
-}: {
-  skill: LocalAgentSkill
-  revealError: string | null
-  onReveal: () => void
-  /** Opens the agent's Finish setting up dialog; offered on a deliverable skill with an unfilled slot. */
-  onFinishSetup?: () => void
-  /** Authored rows the person may share (`skill.shareable`): opens the Share dialog. */
-  onShare?: () => void
-  /** Authored rows shared to the catalog: opens Who can use, offered only to a maintainer of the package. */
-  onWhoCanUse?: () => void
-  catalogActions?: CatalogRowActions
-  /** Marketplace rows: where the pin stands against its marketplace, once read. */
-  marketplaceStatus?: MarketplaceSkillPinStatus | null
-}): React.JSX.Element {
-  const marketplace = scanned.source === 'marketplace'
-  // An entry no longer visible is a warning on the row, never an error: the cached copy is still delivered.
-  const skill: LocalAgentSkill =
-    marketplace && marketplaceStatus?.state === 'unavailable'
-      ? { ...scanned, issues: [...scanned.issues, { code: 'marketplace_unavailable', message: MARKETPLACE_SKILL_TEXT.unavailable, severity: 'warning' }] }
-      : scanned
-  // A pinned row — catalog or marketplace — has no files in the folder: no reveal, the pin's actions instead.
-  const catalog = skill.source === 'catalog' || marketplace
-  // One name per skill (rule 13): a catalog row goes by its catalog title,
-  // as the catalog and the Inbox show it; the folder name is the code.
-  const title = catalog && skill.title ? skill.title : skill.name
-  // An own skill shared to the active account's catalog shows its version as a
-  // pin does, with a Shared badge (rule 13: a badge, not a dotted sub-line).
-  const sharedVersion = !catalog && skill.shared ? catalogVersionLabel(skill.shared.revisionNumber, null) : null
-  const shareLabel = skill.shared ? SKILL_SHARE_TEXT.shareNewVersion(skill.name) : SKILL_SHARE_TEXT.share(skill.name)
-  const pinned = !catalog
-    ? null
-    : marketplace
-      ? skill.version
-        ? MARKETPLACE_SKILL_TEXT.version(skill.version)
-        : null
-      : typeof skill.revisionNumber === 'number'
-      ? catalogVersionLabel(skill.revisionNumber, skill.version)
-      : skill.version
-        ? `Version ${skill.version}`
-        : null
-  // Try again's failure is often the very sentence the amber issue above says.
-  const actionError =
-    catalogActions?.error && !skill.issues.some((issue) => issue.message === catalogActions.error) ? catalogActions.error : null
-  const hasFile = !skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
-  const shown = skill.credentials.slice(0, MAX_SLOT_CHIPS)
-  const hidden = skill.credentials.length - shown.length
-  const slotsTitle = skill.credentials
-    .map((credential) => {
-      const state = credential.filled === undefined ? '' : credential.filled ? ' · attached' : ' · not attached'
-      return `${credential.slot} (${credential.type})${state}${credential.description ? ` — ${credential.description}` : ''}`
-    })
-    .join('\n')
-  const finishSetup =
-    onFinishSetup && skill.deliverable && skill.credentials.some((credential) => credential.filled === false) ? onFinishSetup : null
-  const marketplaceUpdate = marketplace && marketplaceStatus?.state === 'update_available' ? marketplaceStatus : null
-  // The pin names no URL; the status lookup brings the entry's, while it is still visible.
-  const marketplaceSource = marketplace ? (marketplaceStatus?.repositoryUrl ?? null) : null
-  return (
-    <div
-      className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
-      data-skill-row={skill.name}
-      data-skill-source={skill.source}
-      {...(marketplace ? { 'data-marketplace-skill': skill.entryUuid ?? '', 'data-marketplace-skill-state': marketplaceStatus?.state ?? 'unknown' } : {})}
-    >
-      <div className="flex min-h-12 items-center gap-2 px-4 py-2.5">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Sparkles size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />
-          <span
-            title={title === skill.name ? skill.name : `${title} — ${skill.name}`}
-            className="min-w-0 shrink truncate text-[14px] font-medium"
-          >
-            {title}
-          </span>
-          {pinned && (
-            <span title={pinned} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
-              {pinned}
-            </span>
-          )}
-          {sharedVersion && (
-            <span title={sharedVersion} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
-              {sharedVersion}
-            </span>
-          )}
-          {sharedVersion && (
-            <SettingsBadge title={SKILL_SHARE_TEXT.sharedFactTitle(skill.shared?.packageId ?? '')}>{SKILL_SHARE_TEXT.sharedBadge}</SettingsBadge>
-          )}
-          {marketplace ? (
-            <SettingsBadge title={MARKETPLACE_SKILL_TEXT.fromTitle(skill.marketplaceName ?? '')}>
-              {MARKETPLACE_SKILL_TEXT.from(skill.marketplaceName ?? '')}
-            </SettingsBadge>
-          ) : catalog ? (
-            <SettingsBadge title={skill.packageId ? `Pinned from the catalog as ${skill.packageId}` : 'Pinned from the catalog'}>
-              From the catalog
-            </SettingsBadge>
-          ) : (
-            <SettingsBadge title="Written in this agent’s own skills/ folder">Authored</SettingsBadge>
-          )}
-          <CredentialStatusGlyph health={skillHealth(skill)} />
-        </div>
-        {!catalog && skill.shareable && onShare && (
-          <SettingsIconButton onClick={onShare} title={shareLabel} aria-label={shareLabel}>
-            <Share2 size={14} />
-          </SettingsIconButton>
-        )}
-        {!catalog && skill.shared?.access === 'maintain' && onWhoCanUse && (
-          <SettingsIconButton
-            onClick={onWhoCanUse}
-            title={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
-            aria-label={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
-          >
-            <Users size={14} />
-          </SettingsIconButton>
-        )}
-        {!catalog && (
-          <SettingsIconButton
-            onClick={onReveal}
-            title={hasFile ? `Reveal ${skill.path}` : `Reveal skills/${skill.name}`}
-            aria-label={hasFile ? `Reveal SKILL.md of ${skill.name}` : `Reveal the ${skill.name} folder`}
-          >
-            <FileText size={14} />
-          </SettingsIconButton>
-        )}
-        {catalog && catalogActions && (
-          <div className="flex shrink-0 items-center gap-1.5">
-            {marketplaceSource && (
-              <SettingsIconButton
-                onClick={() => void window.api.system.openExternal(marketplaceSource)}
-                title={MARKETPLACE_SKILL_TEXT.openRepository}
-                aria-label={MARKETPLACE_SKILL_TEXT.openRepositoryLabel(title)}
-              >
-                <ExternalLink size={14} />
-              </SettingsIconButton>
-            )}
-            {marketplaceUpdate && !catalogActions.readOnly && (
-              <SettingsIconButton
-                onClick={catalogActions.onUpdate}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
-                title={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
-                aria-label={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
-              >
-                <BusyIcon busy={catalogActions.busy === 'update'}>
-                  <ArrowUpCircle size={14} />
-                </BusyIcon>
-              </SettingsIconButton>
-            )}
-            {!marketplace && skill.updatable && !catalogActions.readOnly && typeof skill.latestRevision === 'number' && (
-              <SettingsIconButton
-                onClick={catalogActions.onUpdate}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
-                title={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
-                aria-label={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
-              >
-                <BusyIcon busy={catalogActions.busy === 'update'}>
-                  <ArrowUpCircle size={14} />
-                </BusyIcon>
-              </SettingsIconButton>
-            )}
-            {notHere(skill) && (
-              <SettingsIconButton
-                onClick={catalogActions.onEnsure}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
-                title={CATALOG_SKILL_TEXT.tryAgain(title)}
-                aria-label={CATALOG_SKILL_TEXT.tryAgain(title)}
-              >
-                <BusyIcon busy={catalogActions.busy === 'ensure'}>
-                  <RotateCw size={14} />
-                </BusyIcon>
-              </SettingsIconButton>
-            )}
-            {disconnectedNotHere(skill) && (
-              <SettingsIconButton
-                onClick={catalogActions.onCheck}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
-                title={CATALOG_SKILL_TEXT.checkAgain(title)}
-                aria-label={CATALOG_SKILL_TEXT.checkAgain(title)}
-              >
-                <BusyIcon busy={catalogActions.busy === 'ensure'}>
-                  <RotateCw size={14} />
-                </BusyIcon>
-              </SettingsIconButton>
-            )}
-            {!catalogActions.readOnly && (
-              <SettingsIconButton
-                danger
-                onClick={catalogActions.onAskRemove}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
-                title={CATALOG_SKILL_TEXT.remove(title)}
-                aria-label={CATALOG_SKILL_TEXT.remove(title)}
-              >
-                <Trash2 size={14} />
-              </SettingsIconButton>
-            )}
-          </div>
-        )}
-      </div>
-      {skill.description && (
-        // Padding on the wrapper: a clamped box clips at its padding edge, so
-        // padding on the paragraph itself shows a sliver of the third line.
-        <div className="-mt-1 px-4 pb-2.5">
-          <p title={skill.description} className="line-clamp-2 text-[13px] text-[var(--color-text-secondary)]">
-            {skill.description}
-          </p>
-        </div>
-      )}
-      {skill.credentials.length > 0 && (
-        <div
-          data-skill-slots
-          title={`Credentials this skill declares:\n${slotsTitle}`}
-          className="-mt-1 flex min-w-0 items-center gap-1.5 px-4 pb-2.5 text-[12px]"
-        >
-          <span className="shrink-0 text-[var(--color-text-muted)]">Needs</span>
-          {shown.map((credential) => {
-            const health = slotHealth(credential)
-            return (
-              <span key={credential.slot} className="flex min-w-0 items-center gap-1">
-                {health && <CredentialStatusGlyph health={health} size={12} />}
-                <code className="min-w-0 truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">
-                  {credential.slot}
-                </code>
-              </span>
-            )
-          })}
-          {hidden > 0 && <span className="shrink-0 text-[var(--color-text-muted)]">+{hidden}</span>}
-          {finishSetup && (
-            <button
-              type="button"
-              onClick={finishSetup}
-              title={`Attach the credentials ${skill.name} needs`}
-              className="ml-auto shrink-0 font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
-            >
-              Finish setup
-            </button>
-          )}
-        </div>
-      )}
-      {skill.issues.length > 0 && (
-        <ul className="space-y-0.5 border-t border-[var(--color-border)] px-4 py-2 text-[13px]">
-          {skill.issues.map((issue, index) => (
-            <li
-              key={`${issue.code}:${index}`}
-              className={issue.severity === 'error' ? 'text-[var(--color-danger)]' : 'text-[var(--color-warning)]'}
-            >
-              {issue.message}
-              {issue.paths?.map((path) => (
-                <code key={path} className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">
-                  {path}
-                </code>
-              ))}
-            </li>
-          ))}
-        </ul>
-      )}
-      {catalogActions && (
-        <AnimatedCollapse open={catalogActions.confirming}>
-          <div
-            role="group"
-            aria-label={CATALOG_SKILL_TEXT.remove(title)}
-            className="border-t border-[var(--color-border)] px-4 py-3"
-          >
-            <p className="mb-3 text-[13px]">
-              {marketplace ? MARKETPLACE_SKILL_TEXT.removeConfirm(title) : CATALOG_SKILL_TEXT.removeConfirm(title)}
-              {catalogActions.sharedEditable && ` ${CATALOG_SKILL_TEXT.removeShareHint}`}
-            </p>
-            <div className="flex gap-2">
-              <SettingsButton disabled={catalogActions.busy === 'remove'} onClick={catalogActions.onRemove}>
-                {catalogActions.busy === 'remove' ? CATALOG_SKILL_TEXT.removing : CATALOG_SKILL_TEXT.removeButton}
-              </SettingsButton>
-              <SettingsButton disabled={catalogActions.busy === 'remove'} onClick={catalogActions.onCancelRemove}>
-                {CATALOG_SKILL_TEXT.cancel}
-              </SettingsButton>
-            </div>
-          </div>
-        </AnimatedCollapse>
-      )}
-      {(revealError || actionError) && (
-        <p role="alert" className="border-t border-[var(--color-border)] px-4 py-2 text-[13px] text-[var(--color-danger)]">
-          {revealError || actionError}
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
- * What a local agent runs with beyond its own instructions: MCP connectors,
- * and a kit agent's skills. Catalog plugins join as their own section when
- * they exist — not as an empty section now.
- *
- * A connector attached here is the same record Settings → MCP lists, drawn
- * with the same card (ux_rules rule 13): toggling, editing or reconnecting it
- * here changes it everywhere. Detach only removes the link to this agent.
+ * A connector listed here is the same record Settings → MCP lists, with the
+ * same toggle and edit form: changing it here changes it everywhere. Detach
+ * only removes the link to this agent.
  */
 export function AgentAddonsTab({
   agent,
@@ -493,8 +139,9 @@ export function AgentAddonsTab({
   const detach = useDetachAgentMcp()
   const openPath = useOpenAgentPath()
   const [picking, setPicking] = useState(false)
-  const [addingSkill, setAddingSkill] = useState(false)
-  const [error, setError] = useState('')
+  const [kindFilter, setKindFilter] = useState<AddonKind | 'all'>('all')
+  // A failed Detach is shown in that connector's card (rule 6).
+  const [detachError, setDetachError] = useState<{ id: string; message: string } | null>(null)
   // A failed reveal is shown in the card of the skill it was for (rule 6).
   const [revealError, setRevealError] = useState<{ skill: string; message: string } | null>(null)
   // Catalog rows: owned here, so a verb in flight outlives the row's re-render
@@ -544,8 +191,8 @@ export function AgentAddonsTab({
       shareStatus.remote.access !== 'edit' &&
       shareStatus.remote.access !== 'maintain')
   const sharedEditable = !readOnly && shareStatus != null
-  // The catalog Add reads is the active Cinna account's.
-  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  // A pin is the agent's to change: on a team agent shared to use only, the picker offers no skill.
+  const skillBlock = shareStatus === undefined ? CATALOG_SKILL_TEXT.checkingAccess : readOnly ? CATALOG_SKILL_TEXT.canUseOnlyTitle : null
 
   const runSkillVerb = (
     name: string,
@@ -620,125 +267,131 @@ export function AgentAddonsTab({
     }
   }
 
-  // In attach order; a link whose connector is gone is never drawn (the
-  // delete cascades, and the provider list may simply not have caught up).
-  const attached = (ids ?? []).flatMap((id) => providers?.find((p) => p.id === id) ?? [])
+  const items = addonListItems(ids, providers, agent.skills)
+  const attention = (item: AddonListItem): boolean => {
+    if (item.kind === 'mcp') return mcpProblem(item.provider) !== null
+    const skill = item.skill
+    if (needsAttention(skill) || skill.updatable) return true
+    const status = skill.source === 'marketplace' ? statusOf(skill) : null
+    return status?.state === 'update_available' || status?.state === 'unavailable'
+  }
+  // Needs attention first (setup, update, unavailable, not connected), then by name — decided when
+  // the tab opens and when an add or a remove changes what is listed, never while the user works a
+  // row: a toggle, an update or a connect does not move the row from under the pointer (rule 1).
+  const sorted = useFrozenOrder(items, attention, marketplaceStatus.data !== undefined)
+  const kinds = KIND_ORDER.filter((kind) => items.some((item) => item.kind === kind))
+  const filtering = items.length > ADDON_FILTER_THRESHOLD && kinds.length > 1
+  const filter = filtering && kinds.includes(kindFilter as AddonKind) ? kindFilter : 'all'
+  const shown = filter === 'all' ? sorted : sorted.filter((item) => item.kind === filter)
+
+  const skillRow = (skill: LocalAgentSkill): React.JSX.Element => (
+    <SkillRow
+      skill={skill}
+      revealError={revealError?.skill === skill.name ? revealError.message : null}
+      catalogActions={skill.source !== 'authored' ? catalogActionsFor(skill) : undefined}
+      marketplaceStatus={skill.source === 'marketplace' ? statusOf(skill) : undefined}
+      onFinishSetup={onFinishSetup}
+      onShare={
+        skill.source === 'authored'
+          ? () => {
+              setShareError(null)
+              setSharingSkill(skill.name)
+            }
+          : undefined
+      }
+      onWhoCanUse={
+        skill.source === 'authored' && skill.shared
+          ? () => setPeopleOf({ uuid: skill.shared!.packageUuid, name: skill.name })
+          : undefined
+      }
+      onReveal={() => {
+        setRevealError(null)
+        const missing = skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
+        openPath.mutate(
+          { agentId: agent.id, relPath: missing ? `skills/${skill.name}` : skill.path },
+          { onError: (e) => setRevealError({ skill: skill.name, message: unwrapIpcError(e) }) }
+        )
+      }}
+    />
+  )
 
   return (
     <div className="space-y-4 text-[13px]">
       <SettingsSection
-        title="MCP Connectors"
+        title="Addons"
         info={
-          <SettingsInfoTip label="About MCP connectors">
-            <p>Every session of this agent gets the tools of the connectors attached here — its own chats, scheduled jobs, task runs, and runs where another agent calls it.</p>
-            <p className="mt-2">Connectors run in Cinna, which keeps their sign-in; the agent’s runtime reaches them through Cinna and never sees a token. A connector that is not connected when a session starts is left out of that session.</p>
-            <p className="mt-2">Each one is also listed in Settings → MCP. Detach removes it from this agent only.</p>
+          <SettingsInfoTip label="About addons">
+            <p>Everything this agent runs with beyond its own instructions: MCP connectors and{agent.skills ? ' skills' : ', on an agent with a cinna-agent.json, skills'}. Every session of this agent gets them — its own chats, scheduled jobs, task runs, and runs where another agent calls it.</p>
+            <p className="mt-2">Connectors run in Cinna, which keeps their sign-in; the agent’s runtime reaches them through Cinna and never sees a token. A connector that is not connected when a session starts is left out of that session. Each one is also listed in Settings → MCP; Detach removes it from this agent only.</p>
+            {agent.skills && (
+              <>
+                <p className="mt-2">A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for. Claude and OpenCode load skills as skills; Codex is told where each one’s SKILL.md is. A skill with an error is left out of every session until its SKILL.md is fixed.</p>
+                <p className="mt-2">A skill from the catalog, or from a skills marketplace an admin connected in Cinna, is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session. A marketplace skill offers Update when its marketplace has a newer copy; one that is no longer available to you keeps working from the copy on this computer.</p>
+              </>
+            )}
+            <p className="mt-2">Add searches every source you may use: Cinna’s catalog and marketplaces, the connectors on this computer and the public MCP registries.</p>
           </SettingsInfoTip>
         }
         action={
-          <SettingsButton onClick={() => setPicking(true)}>
+          <SettingsButton onClick={() => setPicking(true)} title="Add a skill or a connector">
             <Plus size={14} />
-            Attach
+            Add
           </SettingsButton>
         }
       >
-        {ids?.length === 0 && <p className="text-[var(--color-text-muted)]">No connectors attached.</p>}
-        {attached.length > 0 && (
+        {filtering && (
+          <div role="group" aria-label="Show addons of kind" className="flex flex-wrap gap-1.5">
+            {(['all', ...kinds] as const).map((kind) => {
+              const label = kind === 'all' ? 'All' : ADDON_KIND[kind].plural
+              const count = kind === 'all' ? items.length : items.filter((item) => item.kind === kind).length
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  aria-pressed={filter === kind}
+                  onClick={() => setKindFilter(kind)}
+                  className={`rounded-full border px-2.5 py-0.5 text-[12px] font-medium transition-colors ${
+                    filter === kind
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-text)]'
+                      : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  {label} <span className="text-[var(--color-text-muted)]">{count}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {items.length === 0 && ids !== undefined && <p className="text-[var(--color-text-muted)]">No addons yet.</p>}
+        {shown.length > 0 && (
           <ul className="space-y-2">
-            {attached.map((provider) => (
-              <li key={provider.id}>
-                <MCPProviderCard
-                  provider={provider}
-                  detach={{
-                    disabled: detach.isPending,
-                    onDetach: () => {
-                      setError('')
-                      detach.mutateAsync({ agentId: agent.id, mcpProviderId: provider.id })
-                        .catch((e) => setError(unwrapIpcError(e)))
-                    }
-                  }}
-                />
+            {shown.map((item) => (
+              <li key={item.key}>
+                {item.kind === 'skill' ? (
+                  skillRow(item.skill)
+                ) : (
+                  <MCPProviderCard
+                    provider={item.provider}
+                    detach={{
+                      pending: detach.isPending && detach.variables?.mcpProviderId === item.provider.id,
+                      error: detachError?.id === item.provider.id ? detachError.message : null,
+                      onDetach: () => {
+                        if (detach.isPending) return
+                        setDetachError(null)
+                        detach
+                          .mutateAsync({ agentId: agent.id, mcpProviderId: item.provider.id })
+                          .catch((e) => setDetachError({ id: item.provider.id, message: unwrapIpcError(e) }))
+                      }
+                    }}
+                  />
+                )}
               </li>
             ))}
           </ul>
         )}
       </SettingsSection>
-      {/* Kit agents only: a bare agent's DTO carries no `skills`. */}
-      {agent.skills && (
-        <SettingsSection
-          title="Skills"
-          info={
-            <SettingsInfoTip label="About skills">
-              <p>A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for.</p>
-              <p className="mt-2">Every session of this agent can use the skills listed here as working. Claude and OpenCode load them as skills; Codex is told where each one’s SKILL.md is.</p>
-              <p className="mt-2">A skill with an error is left out of every session until its SKILL.md is fixed.</p>
-              <p className="mt-2">A skill from the catalog, or from a skills marketplace an admin connected in Cinna, is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session; add one with Add.</p>
-              <p className="mt-2">A marketplace skill offers Update when its marketplace has a newer copy. One that is no longer available to you keeps working from the copy on this computer.</p>
-            </SettingsInfoTip>
-          }
-          action={
-            // A team agent shared to use only takes its skills with the team's version.
-            <SettingsButton
-              disabled={readOnly || !isCinnaUser}
-              title={
-                !isCinnaUser
-                  ? CATALOG_TEXT.signedOut
-                  : shareStatus === undefined
-                  ? CATALOG_SKILL_TEXT.checkingAccess
-                  : readOnly
-                    ? CATALOG_SKILL_TEXT.canUseOnlyTitle
-                    : 'Add a skill from the catalog or a marketplace'
-              }
-              onClick={() => setAddingSkill(true)}
-            >
-              <Plus size={14} />
-              Add
-            </SettingsButton>
-          }
-        >
-          {agent.skills.length === 0 ? (
-            <p className="text-[var(--color-text-muted)]">No skills yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {agent.skills.map((skill, index) => (
-                // An own skill and a pin may share a name (an error the row shows), and so may two pins.
-                <li key={`${skill.source}:${skill.name}:${index}`}>
-                  <SkillRow
-                    skill={skill}
-                    revealError={revealError?.skill === skill.name ? revealError.message : null}
-                    catalogActions={skill.source !== 'authored' ? catalogActionsFor(skill) : undefined}
-                    marketplaceStatus={skill.source === 'marketplace' ? statusOf(skill) : undefined}
-                    onFinishSetup={onFinishSetup}
-                    onShare={
-                      skill.source === 'authored'
-                        ? () => {
-                            setShareError(null)
-                            setSharingSkill(skill.name)
-                          }
-                        : undefined
-                    }
-                    onWhoCanUse={
-                      skill.source === 'authored' && skill.shared
-                        ? () => setPeopleOf({ uuid: skill.shared!.packageUuid, name: skill.name })
-                        : undefined
-                    }
-                    onReveal={() => {
-                      setRevealError(null)
-                      const missing = skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
-                      openPath.mutate(
-                        { agentId: agent.id, relPath: missing ? `skills/${skill.name}` : skill.path },
-                        { onError: (e) => setRevealError({ skill: skill.name, message: unwrapIpcError(e) }) }
-                      )
-                    }}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </SettingsSection>
-      )}
-      {(error || idsError) && (
-        <p role="alert" className="text-[var(--color-danger)]">{error || unwrapIpcError(idsError)}</p>
+      {idsError && (
+        <p role="alert" className="text-[var(--color-danger)]">{unwrapIpcError(idsError)}</p>
       )}
       {sharingRow && (
         <ShareSkillDialog
@@ -764,22 +417,16 @@ export function AgentAddonsTab({
           onClose={() => setPeopleOf(null)}
         />
       )}
-      {agent.skills && (
-        <SkillAddModal
-          open={addingSkill}
-          agentId={agent.id}
-          pinnedEntries={marketplacePins(agent.skills).flatMap((skill) => (skill.entryUuid ? [skill.entryUuid] : []))}
-          onClose={() => setAddingSkill(false)}
+      {picking && (
+        <AddonPicker
+          agent={{ id: agent.id, name: agent.name, kit: agent.skills !== undefined }}
+          skillBlock={skillBlock}
+          onClose={() => setPicking(false)}
+          onAttachCreated={async (mcpProviderId) => {
+            await attach.mutateAsync({ agentId: agent.id, mcpProviderId })
+          }}
         />
       )}
-      <McpAttachModal
-        open={picking}
-        attachedIds={ids ?? []}
-        onClose={() => setPicking(false)}
-        onAttach={async (mcpProviderId) => {
-          await attach.mutateAsync({ agentId: agent.id, mcpProviderId })
-        }}
-      />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UseMutationResult } from '@tanstack/react-query'
 
@@ -67,12 +67,14 @@ describe('DeleteMcpProviderDialog', () => {
     expect(deleteMutation.mutate).toHaveBeenCalledWith('gh', expect.anything())
   })
 
-  it('offers Detach instead of Delete on an agent’s addon row, without expanding it', () => {
+  it('offers Detach instead of Delete on an agent’s addon row, confirmed in the card, without expanding it', () => {
     const onDetach = vi.fn()
     render(<MCPProviderCard detach={{ onDetach }} provider={{ id: 'gh', name: 'GitHub', transportType: 'stdio', enabled: true,
       hasAuth: false, authType: 'oauth', status: 'connected', tools: [] }} />)
     expect(screen.queryByRole('button', { name: 'Delete MCP GitHub' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Detach GitHub from this agent' }))
+    expect(onDetach).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByRole('group', { name: 'Detach GitHub from this agent' })).getByRole('button', { name: 'Detach' }))
     expect(onDetach).toHaveBeenCalledOnce()
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(deleteMutation.mutate).not.toHaveBeenCalled()

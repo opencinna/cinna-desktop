@@ -44,10 +44,8 @@ beforeEach(() => {
 })
 
 describe('marketplace skills IPC', () => {
-  it('registers the six channels', () => {
+  it('registers the four channels (listing and adding go through the addon directory)', () => {
     expect([...handlers.keys()].sort()).toEqual([
-      'marketplace-skills:add',
-      'marketplace-skills:discover',
       'marketplace-skills:ensure',
       'marketplace-skills:remove',
       'marketplace-skills:status',
@@ -57,12 +55,10 @@ describe('marketplace skills IPC', () => {
 
   it('passes the settings scope and only strings, and hands the service’s answer back as it is', async () => {
     const refusal = { ok: false, code: 'snapshot_missing', message: 'gone' }
-    service.addToAgent.mockResolvedValue(refusal)
-    expect(await call('marketplace-skills:add', { agentId: 'folder:a', entryUuid: 'e-1' })).toBe(refusal)
-    expect(service.addToAgent).toHaveBeenCalledWith('__default__', 'folder:a', 'e-1')
-
-    await call('marketplace-skills:add', { agentId: 42, entryUuid: { evil: true } })
-    expect(service.addToAgent).toHaveBeenLastCalledWith('__default__', '', '')
+    service.update.mockResolvedValue(refusal)
+    expect(await call('marketplace-skills:update', { agentId: 'folder:a', name: 'pdf-report' })).toBe(refusal)
+    await call('marketplace-skills:update', { agentId: 42, name: { evil: true } })
+    expect(service.update).toHaveBeenLastCalledWith('__default__', '', '')
 
     await call('marketplace-skills:update', { agentId: 'folder:a', name: 'pdf-report' })
     expect(service.update).toHaveBeenCalledWith('__default__', 'folder:a', 'pdf-report')
@@ -74,15 +70,13 @@ describe('marketplace skills IPC', () => {
     service.status.mockResolvedValue(status)
     expect(await call('marketplace-skills:status', undefined)).toBe(status)
     expect(service.status).toHaveBeenCalledWith('__default__', '')
-    service.discover.mockResolvedValue({ ok: true, entries: [] })
-    expect(await call('marketplace-skills:discover')).toEqual({ ok: true, entries: [] })
   })
 
   it('refuses before activation, reaching no service', () => {
     activation.activated = false
-    expect(() => call('marketplace-skills:discover')).toThrow()
-    expect(() => call('marketplace-skills:add', { agentId: 'a', entryUuid: 'e' })).toThrow()
-    expect(service.discover).not.toHaveBeenCalled()
-    expect(service.addToAgent).not.toHaveBeenCalled()
+    expect(() => call('marketplace-skills:status', { agentId: 'a' })).toThrow()
+    expect(() => call('marketplace-skills:update', { agentId: 'a', name: 'e' })).toThrow()
+    expect(service.status).not.toHaveBeenCalled()
+    expect(service.update).not.toHaveBeenCalled()
   })
 })

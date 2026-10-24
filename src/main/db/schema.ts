@@ -132,6 +132,12 @@ export const mcpProviders = sqliteTable('mcp_providers', {
    * auto-connected — the user finishes setup (creds/env) before it runs.
    */
   createdBySync: integer('created_by_sync', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * The addon directory entry (`{source, id}`) this provider was created
+   * from, or null for one the user set up by hand. The directory shows such a
+   * provider once, as "On this computer", carrying the entry's metadata.
+   */
+  registryRef: text('registry_ref', { mode: 'json' }).$type<{ source: string; id: string }>(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

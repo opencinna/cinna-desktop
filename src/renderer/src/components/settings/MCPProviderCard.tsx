@@ -1,10 +1,13 @@
 import { useState } from 'react'
-import { AlertTriangle, Trash2, ChevronDown, Wrench, Circle, Shield, Unlink } from 'lucide-react'
+import { Trash2, ChevronDown, Wrench, Shield, Unlink } from 'lucide-react'
 import { useUpsertMcpProvider, useDeleteMcpProvider, useConnectMcp, useDisconnectMcp } from '../../hooks/useMcp'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
-import { mcpProblem } from './mcpPresentation'
+import { mcpHealth } from './mcpPresentation'
 import { DeleteMcpProviderDialog } from './DeleteMcpProviderDialog'
 import { formatEnvVars, parseEnvVars } from '../../utils/envVars'
+import { AddonRow } from '../agents/local/AddonRow'
+import { CredentialStatusGlyph } from './CredentialRow'
+import { SettingsBadge, SettingsButton, SettingsIconButton } from './SettingsLayout'
 
 interface MCPProviderCardProps {
   provider: {
@@ -24,10 +27,13 @@ interface MCPProviderCardProps {
   }
   /**
    * Set where the card lists a connector attached to an agent (its Addons
-   * tab): the header offers Detach instead of Delete — the connector itself
-   * stays in Settings → MCP. Everything else behaves as in Settings.
+   * tab): the card is drawn as one of that tab's addon rows (`AddonRow`),
+   * and offers Detach instead of Delete — the connector itself stays in
+   * Settings → MCP. The toggle and the edit form behave as in Settings.
+   * Detach asks first, inside the card (as a skill row's Remove does);
+   * `pending` while it runs, and a refusal is the card's last line (rule 6).
    */
-  detach?: { onDetach: () => void; disabled?: boolean }
+  detach?: { onDetach: () => void; pending?: boolean; error?: string | null }
 }
 
 export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): React.JSX.Element {
@@ -42,21 +48,15 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
   // Never prefilled with the stored token — write-only, left blank to keep it.
   const [bearerToken, setBearerToken] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [confirmingDetach, setConfirmingDetach] = useState(false)
 
   const upsert = useUpsertMcpProvider()
   const deleteMcp = useDeleteMcpProvider()
   const connectMcp = useConnectMcp()
   const disconnectMcp = useDisconnectMcp()
 
-  const problem = mcpProblem(provider)
-  const statusColor =
-    provider.status === 'connected'
-      ? 'text-[var(--color-success)]'
-      : provider.status === 'error'
-        ? 'text-[var(--color-danger)]'
-        : provider.status === 'awaiting-auth'
-          ? 'text-[var(--color-warning)]'
-          : 'text-[var(--color-text-muted)]'
+  // One glyph and tone for a connector wherever it is listed (rule 13).
+  const statusGlyph = <CredentialStatusGlyph health={mcpHealth(provider)} />
 
   const statusLabel =
     provider.status === 'awaiting-auth'
@@ -123,6 +123,216 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
   const inputClass =
     'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
+  const toggle = (
+    <button
+      onClick={(e) => { e.stopPropagation(); if (!isDirty) handleToggle() }}
+      disabled={isDirty}
+      title={isDirty ? 'Save or discard your edits first' : undefined}
+      aria-label={provider.enabled ? `Turn off ${provider.name}` : `Turn on ${provider.name}`}
+      className={`relative w-9 h-5 shrink-0 rounded-full transition-colors ${
+        provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+      } ${isDirty ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <div
+        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+          provider.enabled ? 'left-[18px]' : 'left-0.5'
+        }`}
+      />
+    </button>
+  )
+
+  const form = (
+        <AnimatedCollapse open={expanded}>
+          <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
+            <div>
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+            </div>
+
+            <div>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
+                <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
+                  <option value="stdio">stdio</option>
+                  <option value="sse">SSE (deprecated)</option>
+                  <option value="streamable-http">Streamable HTTP</option>
+                </select>
+            </div>
+
+            {transportType === 'stdio' ? (
+              <>
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Command</label>
+                  <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="e.g., npx" className={inputClass} />
+                </div>
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
+                  <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="space separated" className={inputClass} />
+                </div>
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
+                  <textarea
+                    value={envStr}
+                    onChange={(e) => setEnvStr(e.target.value)}
+                    rows={2}
+                    placeholder="API_KEY=xxx"
+                    className={`${inputClass} resize-none font-mono`}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
+                  <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
+                </div>
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+                    Authentication
+                  </label>
+                  <div className="flex gap-1 rounded-md border border-[var(--color-border)] p-0.5">
+                    {(['oauth', 'bearer'] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setAuthType(t)}
+                        className={`flex-1 px-2 py-1 rounded text-[13px] font-medium transition-colors ${
+                          authType === t
+                            ? 'bg-[var(--color-accent)] text-white'
+                            : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                        }`}
+                      >
+                        {t === 'oauth' ? 'OAuth' : 'Bearer Token'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {authType === 'bearer' && (
+                  <div>
+                    <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+                      Bearer Token
+                    </label>
+                    <input
+                      type="password"
+                      value={bearerToken}
+                      onChange={(e) => setBearerToken(e.target.value)}
+                      placeholder={
+                        provider.hasAuth
+                          ? 'Leave blank to keep the current token'
+                          : "Paste the server's access token"
+                      }
+                      className={inputClass}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex justify-end gap-2">
+              {provider.status === 'connected' ? (
+                <button
+                  onClick={handleDisconnect}
+                  className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                >
+                  Disconnect
+                </button>
+              ) : provider.status !== 'awaiting-auth' ? (
+                <button
+                  onClick={handleReconnect}
+                  disabled={connectMcp.isPending}
+                  className="min-w-[120px] px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                >
+                  {connectMcp.isPending ? 'Connecting...' : 'Reconnect'}
+                </button>
+              ) : null}
+
+              <button
+                onClick={handleSave}
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
+              >
+                Save
+              </button>
+            </div>
+
+            {statusLabel && (
+              <p className={`text-[12px] ${
+                provider.status === 'awaiting-auth' ? 'text-[var(--color-warning)]' : 'text-[var(--color-danger)]'
+              }`}>
+                {statusLabel}
+              </p>
+            )}
+
+            {provider.tools.length > 0 && (
+              <div>
+                <p className="text-[12px] text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
+                  <Wrench size={10} /> {provider.tools.length} tools
+                </p>
+                <div className="space-y-0.5">
+                  {provider.tools.map((tool) => (
+                    <div key={tool.name} className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--color-bg)] text-[12px]">
+                      <span className="font-mono text-[var(--color-accent)]">{tool.name}</span>
+                      <span className="text-[var(--color-text-muted)] truncate">{tool.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </AnimatedCollapse>
+
+  )
+
+  // On an agent's Addons tab the card is one row of the tab's single list:
+  // the shell every addon shares, with the connector's own toggle, Detach and
+  // edit form (ux_rules rule 13). Settings → MCP keeps its own header.
+  if (detach) {
+    const detachLabel = `Detach ${provider.name} from this agent`
+    return (
+      <AddonRow
+        kind="mcp"
+        title={provider.name}
+        source={<SettingsBadge title="Set up in Settings → MCP on this computer">On this computer</SettingsBadge>}
+        status={statusGlyph}
+        dataAttributes={{ 'data-mcp-row': provider.id }}
+        expandable={{ expanded, onToggle: () => setExpanded(!expanded) }}
+        actions={
+          <>
+            {toggle}
+            <SettingsIconButton
+              danger
+              onClick={() => setConfirmingDetach(true)}
+              disabled={detach.pending || confirmingDetach}
+              title={detachLabel}
+              aria-label={detachLabel}
+            >
+              <Unlink size={14} />
+            </SettingsIconButton>
+          </>
+        }
+      >
+        {form}
+        <AnimatedCollapse open={confirmingDetach}>
+          <div role="group" aria-label={detachLabel} className="border-t border-[var(--color-border)] px-4 py-3">
+            <p className="mb-3 text-[13px]">
+              Detach {provider.name} from this agent? The connector stays in Settings → MCP, and other agents keep it.
+            </p>
+            <div className="flex gap-2">
+              <SettingsButton disabled={detach.pending} onClick={detach.onDetach}>
+                {detach.pending ? 'Detaching…' : 'Detach'}
+              </SettingsButton>
+              <SettingsButton disabled={detach.pending} onClick={() => setConfirmingDetach(false)}>
+                Cancel
+              </SettingsButton>
+            </div>
+          </div>
+        </AnimatedCollapse>
+        {detach.error && (
+          <p role="alert" className="border-t border-[var(--color-border)] px-4 py-2 text-[13px] text-[var(--color-danger)]">
+            {detach.error}
+          </p>
+        )}
+      </AddonRow>
+    )
+  }
+
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
       {/* Outside the clickable header: a portal's clicks still bubble up the React tree. */}
@@ -137,17 +347,16 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
         className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <Circle size={6} className={`fill-current ${statusColor}`} />
-        <span className="min-w-0 truncate font-medium text-[14px]">{provider.name}</span>
-        {/* The dot is colour only; a state that needs attention also gets a
-            glyph whose name is the sentence, as the attach picker draws it
-            (ux_rules rule 13) — the error used to be readable only expanded. */}
-        {problem && (
-          <span role="img" aria-label={problem} title={problem} className="inline-flex shrink-0 text-[var(--color-warning)]">
-            <AlertTriangle size={12} aria-hidden />
-          </span>
-        )}
-        <span className="flex-1" />
+        {/* A button, so the keyboard can open the form; its click bubbles to the header. The
+            status is the same glyph the agent's Addons tab draws (rule 13), its name the sentence. */}
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        >
+          <span className="min-w-0 truncate font-medium text-[14px]">{provider.name}</span>
+          {statusGlyph}
+        </button>
 
         {provider.hasAuth && (
           <Shield
@@ -159,182 +368,22 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
           />
         )}
 
-        <button
-          onClick={(e) => { e.stopPropagation(); if (!isDirty) handleToggle() }}
-          disabled={isDirty}
-          title={isDirty ? 'Save or discard your edits first' : undefined}
-          className={`relative w-9 h-5 rounded-full transition-colors ${
-            provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          } ${isDirty ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          <div
-            className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              provider.enabled ? 'left-[18px]' : 'left-0.5'
-            }`}
-          />
-        </button>
+        {toggle}
 
-        {detach ? (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); detach.onDetach() }}
-            disabled={detach.disabled}
-            title={`Detach ${provider.name} from this agent`}
-            aria-label={`Detach ${provider.name} from this agent`}
-            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors disabled:opacity-40"
-          >
-            <Unlink size={12} />
-          </button>
-        ) : (
-          <button
-            onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true) }}
-            aria-label={`Delete MCP ${provider.name}`}
-            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
-          >
-            <Trash2 size={12} />
-          </button>
-        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true) }}
+          aria-label={`Delete MCP ${provider.name}`}
+          className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
+        >
+          <Trash2 size={12} />
+        </button>
 
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />
         </div>
       </div>
 
-      <AnimatedCollapse open={expanded}>
-        <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
-          <div>
-            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
-          </div>
-
-          <div>
-              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
-              <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
-                <option value="stdio">stdio</option>
-                <option value="sse">SSE (deprecated)</option>
-                <option value="streamable-http">Streamable HTTP</option>
-              </select>
-          </div>
-
-          {transportType === 'stdio' ? (
-            <>
-              <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Command</label>
-                <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="e.g., npx" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
-                <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="space separated" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
-                <textarea
-                  value={envStr}
-                  onChange={(e) => setEnvStr(e.target.value)}
-                  rows={2}
-                  placeholder="API_KEY=xxx"
-                  className={`${inputClass} resize-none font-mono`}
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
-                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-                  Authentication
-                </label>
-                <div className="flex gap-1 rounded-md border border-[var(--color-border)] p-0.5">
-                  {(['oauth', 'bearer'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setAuthType(t)}
-                      className={`flex-1 px-2 py-1 rounded text-[13px] font-medium transition-colors ${
-                        authType === t
-                          ? 'bg-[var(--color-accent)] text-white'
-                          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                      }`}
-                    >
-                      {t === 'oauth' ? 'OAuth' : 'Bearer Token'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {authType === 'bearer' && (
-                <div>
-                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-                    Bearer Token
-                  </label>
-                  <input
-                    type="password"
-                    value={bearerToken}
-                    onChange={(e) => setBearerToken(e.target.value)}
-                    placeholder={
-                      provider.hasAuth
-                        ? 'Leave blank to keep the current token'
-                        : "Paste the server's access token"
-                    }
-                    className={inputClass}
-                  />
-                </div>
-              )}
-            </>
-          )}
-
-          <div className="flex justify-end gap-2">
-            {provider.status === 'connected' ? (
-              <button
-                onClick={handleDisconnect}
-                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-              >
-                Disconnect
-              </button>
-            ) : provider.status !== 'awaiting-auth' ? (
-              <button
-                onClick={handleReconnect}
-                disabled={connectMcp.isPending}
-                className="min-w-[120px] px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-              >
-                {connectMcp.isPending ? 'Connecting...' : 'Reconnect'}
-              </button>
-            ) : null}
-
-            <button
-              onClick={handleSave}
-              className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
-            >
-              Save
-            </button>
-          </div>
-
-          {statusLabel && (
-            <p className={`text-[12px] ${
-              provider.status === 'awaiting-auth' ? 'text-[var(--color-warning)]' : 'text-[var(--color-danger)]'
-            }`}>
-              {statusLabel}
-            </p>
-          )}
-
-          {provider.tools.length > 0 && (
-            <div>
-              <p className="text-[12px] text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
-                <Wrench size={10} /> {provider.tools.length} tools
-              </p>
-              <div className="space-y-0.5">
-                {provider.tools.map((tool) => (
-                  <div key={tool.name} className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--color-bg)] text-[12px]">
-                    <span className="font-mono text-[var(--color-accent)]">{tool.name}</span>
-                    <span className="text-[var(--color-text-muted)] truncate">{tool.description}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </AnimatedCollapse>
+      {form}
     </div>
   )
 }

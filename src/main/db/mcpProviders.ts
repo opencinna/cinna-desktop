@@ -23,6 +23,11 @@ export interface UpsertInput {
    * through the normal upsert path either); `null` clears it explicitly.
    */
   bearerTokenEncrypted?: Buffer | null
+  /**
+   * Set on insert only: the addon directory entry this provider is created
+   * from. An update never moves it, so a provider stays the entry it came from.
+   */
+  registryRef?: { source: string; id: string } | null
 }
 
 export interface UpsertResult {
@@ -38,6 +43,14 @@ export const mcpProviderRepo = {
       .from(mcpProviders)
       .where(eq(mcpProviders.userId, userId))
       .all()
+  },
+
+  /** The oldest of this scope's providers created from the directory entry `ref`. */
+  findByRegistryRef(userId: string, ref: { source: string; id: string }): McpProviderRow | undefined {
+    return mcpProviderRepo
+      .list(userId)
+      .filter((row) => row.registryRef?.source === ref.source && row.registryRef?.id === ref.id)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0]
   },
 
   getOwned(userId: string, id: string): McpProviderRow | undefined {
@@ -106,6 +119,7 @@ export const mcpProviderRepo = {
             createdBySync: input.createdBySync ?? false,
             authType: input.authType ?? 'oauth',
             bearerTokenEncrypted: input.bearerTokenEncrypted ?? null,
+            registryRef: input.registryRef ?? null,
             createdAt: new Date()
           })
           .run()

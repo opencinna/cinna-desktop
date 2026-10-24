@@ -40,7 +40,7 @@ async function openSkillsSection(cinna: CinnaApp): Promise<Locator> {
   return page
     .getByRole('tabpanel')
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Skills', exact: true }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Addons', exact: true }) })
 }
 
 /** The Skills row of an authored skill, by its folder name. */
