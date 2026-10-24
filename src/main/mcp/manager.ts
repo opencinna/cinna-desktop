@@ -9,6 +9,7 @@ import { createLogger } from '../logger/logger'
 import { notifyMcpToolsChanged } from './toolChanges'
 import { droppedChildEnvNames, getShellEnv, mergeEnv, shellEnvForChild } from '../shell/env'
 import { withDeveloperToolShims } from '../shell/developerToolShims'
+import { prepareWorkCopy, releaseWorkCopies } from './workCopy'
 
 /**
  * Channel the main process uses to tell the renderer that one or more MCP
@@ -205,6 +206,11 @@ export class MCPManager {
       this.assertCurrent(connection)
       // A plugin's server whose cached files changed, or that the policy forbids, is never started.
       if (config.blockedReason) throw new Error(config.blockedReason)
+      // Its working copy, checked now that its old process has stopped: copied again only when nothing runs from it.
+      if (config.workCopy) {
+        const refused = prepareWorkCopy(config.id, config.workCopy)
+        if (refused) throw new Error(refused)
+      }
       let transport: AnyTransport
 
       if (config.transportType === 'stdio') {
@@ -366,6 +372,8 @@ export class MCPManager {
         return this.toPublic(connection)
       }
       await this.discardSuperseded(connection, 'connect failed; closing connection', config.id)
+      // Nothing runs from its working copy any more.
+      releaseWorkCopies(config.id)
       connection.needsUser = err instanceof McpReauthorizationRequiredError ||
         (err instanceof Error && err.cause instanceof McpReauthorizationRequiredError)
       this.setStatus(config.id, connection, 'error', String(err))
@@ -501,6 +509,8 @@ export class MCPManager {
       // `connected` flips back to `disconnected` immediately.
       broadcastStatusChange(providerId, 'disconnected')
     }
+    // Its process has stopped: the working copy it ran from may be checked, copied again or swept.
+    releaseWorkCopies(providerId)
   }
 
   async disconnectAll(): Promise<void> {

@@ -2,6 +2,7 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { addonDirectory } from '../services/addonDirectory'
 import { removeRequirementByName } from '../services/addonDirectory/requirements'
+import { addonPolicies } from '../services/addonDirectory/policy'
 import { marketplacePluginService } from '../services/marketplacePluginService'
 import { stdioRuntimes } from '../services/stdioRuntimes'
 import type { PluginActionResult, PluginDisabledInput, PluginRevealResult, PluginStatusResult, RecheckRuntimesResult } from '../../shared/addons/plugins'
@@ -10,6 +11,7 @@ import {
   type AddonActionResult,
   type AddonDirectoryResult,
   type AddonMcpRequirementsResult,
+  type AddonPolicy,
   type AddonRef,
   type AddonSearchResult
 } from '../../shared/addons/directory'
@@ -112,5 +114,11 @@ export function registerAddonHandlers(): void {
   ipcHandle('addons:recheck-runtimes', async (): Promise<RecheckRuntimesResult> => {
     userActivation.requireActivated()
     return { ok: true, ...(await stdioRuntimes.recheck()) }
+  })
+
+  // The active account's stored admin policy (defaults without one): Settings → MCP hides what it turns off.
+  ipcHandle('addons:policy', (): AddonPolicy => {
+    userActivation.requireActivated()
+    return { ...addonPolicies.get(getSettingsScopeUserId()) }
   })
 }

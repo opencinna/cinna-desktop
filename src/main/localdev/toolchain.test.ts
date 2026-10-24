@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import {
   createToolchain,
+  managedUvLayoutAt,
   MUTAGEN_ASSETS,
   mutagenAssetUrl,
   parseVersion,
@@ -213,9 +214,18 @@ describe('paths and the spawn environment', () => {
     expect(env.UV_PYTHON_INSTALL_DIR).toBe(join(root, 'python'))
     expect(env.UV_CACHE_DIR).toBe(join(root, 'uv-cache'))
     for (const [name, value] of Object.entries(env)) {
-      if (!name.startsWith('UV_')) continue
+      if (!name.startsWith('UV_') || name === 'UV_PYTHON_PREFERENCE') continue
       expect(value!.startsWith(root), `${name} escapes the toolchain root`).toBe(true)
     }
+  })
+
+  it('lets uv use only a Python it installed, never one on PATH (the CLT stub /usr/bin/python3 raises the install dialog)', async () => {
+    const env = await createToolchain(deps()).toolchainEnv(PINS)
+    expect(env.UV_PYTHON_PREFERENCE).toBe('only-managed')
+    const layout = managedUvLayoutAt(root)
+    expect(layout.env.UV_PYTHON_PREFERENCE).toBe('only-managed')
+    // No PATH of its own: a plugin server keeps the child PATH, tool shims first, so uv's install_name_tool hits the shim.
+    expect(layout.env).not.toHaveProperty('PATH')
   })
 
   it('keeps the rest of the login-shell environment', async () => {

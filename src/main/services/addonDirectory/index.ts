@@ -27,6 +27,7 @@ import { createAddonDirectory, LOCAL_SOURCE, type AgentFacts, type McpSetup } fr
 import { createCinnaCoreProvider } from './cinnaCore'
 import { createThisComputerProvider } from './thisComputer'
 import { createMcpRegistriesProvider } from './mcpRegistries'
+import { serverKeyOfConnector, serverKeyOfInstall } from './serverIdentity'
 
 const logger = createLogger('AddonDirectory')
 
@@ -117,6 +118,11 @@ export const addonDirectory = createAddonDirectory({
   detachMcp: (userId, agentId, id) => agentMcpService.detach(userId, agentId, id),
   mcpSetup: (userId, id) => thisComputer.setup(userId, id),
   findMcpByRef: (userId, ref) => mcpProviderRepo.findByRegistryRef(userId, ref)?.id ?? null,
+  findMcpByServer: (userId, entry) => {
+    const server = serverKeyOfInstall(entry.install)
+    if (!server) return null
+    return mcpProviderRepo.list(userId).find((row) => !row.managedBy && serverKeyOfConnector(row) === server)?.id ?? null
+  },
   createMcpFromDirectory: async (userId, entry) => {
     const connect = entry.install && 'mcp' in entry.install ? entry.install.mcp : null
     if (!connect) throw new Error('This entry has nothing to connect to.')

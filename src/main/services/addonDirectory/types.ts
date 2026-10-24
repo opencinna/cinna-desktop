@@ -23,6 +23,8 @@ export interface ProviderEntry extends DirectoryEntry {
   mcpProviderId?: string
   /** The directory entry a local provider was created from (`mcp_providers.registry_ref`). */
   registryRef?: AddonRef | null
+  /** A local provider's server, its URL or the package it runs (`serverIdentity.ts`): matched against core's MCP directory. */
+  serverKey?: string | null
   /** Add works, then this step is needed: one sentence, or absent. */
   setupReason?: string
   /** A local connector's step behind {@link setupReason}. */

@@ -563,6 +563,36 @@ describe('addonDirectory local MCP servers from core', () => {
     expect(await dir.add(USER, AGENT, coreMcpRef('web'))).toMatchObject({ ok: true, mcpProviderId: 'new-mcp' })
   })
 
+  it('shows a core MCP directory server this computer already has (same URL or package) as that connector', () => {
+    const merged = mergeLocalProviders([
+      // Made from the opencinna list core's directory is seeded from: its ref names an entry not listed any more.
+      localEntry('opencinna', { registryRef: registryRef('granola'), serverKey: 'url:https://g.example/mcp' }),
+      localEntry('typed', { serverKey: 'npm:@mcp/fs' }),
+      localEntry('typed-twice', { serverKey: 'npm:@mcp/fs' }),
+      localEntry('other', { serverKey: 'url:https://other.example' }),
+      mcpEntry(coreMcpRef('granola'), { title: 'Granola', install: { mcp: { transport: 'streamable-http', url: 'HTTPS://G.example:443/mcp/', auth: 'oauth', requiresAuth: false } } }),
+      { ...stdioEntry('@mcp/fs'), title: 'File System' },
+      stdioEntry('unrelated')
+    ])
+    expect(merged.map((e) => `${e.ref.source}/${e.ref.id}/${e.title}`)).toEqual([
+      `${LOCAL_SOURCE}/opencinna/Granola`,
+      `${LOCAL_SOURCE}/typed/File System`,
+      `${LOCAL_SOURCE}/typed-twice/typed-twice`,
+      `${LOCAL_SOURCE}/other/other`,
+      `${CORE_MCP_SOURCE}/unrelated/unrelated`
+    ])
+    expect(merged[0]).toMatchObject({ mcpProviderId: 'opencinna', origin: { label: 'On this computer' }, install: null })
+  })
+
+  it('attaches the connector that is the same server on Add of a core MCP entry, instead of creating a second one', async () => {
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [stdioEntry('@mcp/fs')] })])
+    deps.findMcpByServer = vi.fn(() => 'typed')
+    expect(await dir.add(USER, AGENT, coreMcpRef('@mcp/fs'))).toEqual({ ok: true, next: null, mcpProviderId: 'typed' })
+    expect(deps.findMcpByServer).toHaveBeenCalledWith(USER, expect.objectContaining({ ref: coreMcpRef('@mcp/fs') }))
+    expect(deps.attachMcp).toHaveBeenCalledWith(USER, AGENT, 'typed')
+    expect(deps.createMcpFromDirectory).not.toHaveBeenCalled()
+  })
+
   it('never asks the MCP block of a remote server', async () => {
     const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('remote'))] })])
     deps.mcpBlock = vi.fn(async () => 'nope')

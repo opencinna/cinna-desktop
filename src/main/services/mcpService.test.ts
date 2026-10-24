@@ -21,10 +21,10 @@ vi.mock('../mcp/manager', () => ({
 vi.mock('../mcp/config', () => ({ mcpRowToConfig: (row: unknown) => row }))
 vi.mock('../security/keystore', () => ({ encryptApiKey: (value: string) => Buffer.from(value), decryptApiKey: (value: Buffer) => value.toString('utf8') }))
 
-const policy = vi.hoisted(() => ({ customMcp: true }))
-vi.mock('./addonDirectory/policy', () => ({ addonPolicies: { get: () => ({ externalDirectories: true, customMcp: policy.customMcp, pluginHooks: true, stdioMcp: true }) } }))
+const policy = vi.hoisted(() => ({ externalDirectories: true, customMcp: true, stdioMcp: true }))
+vi.mock('./addonDirectory/policy', () => ({ addonPolicies: { get: () => ({ ...policy, pluginHooks: true }) } }))
 
-const { mcpService, MANAGED_PROVIDER_DELETE_REFUSED, CUSTOM_MCP_REFUSED, managedRefusalOf } = await import('./mcpService')
+const { mcpService, MANAGED_PROVIDER_DELETE_REFUSED, CUSTOM_MCP_REFUSED, EXTERNAL_DIRECTORY_REFUSED, STDIO_MCP_REFUSED, managedRefusalOf } = await import('./mcpService')
 
 const REF = { source: 'mcp-registry:cinna-official', id: 'granola' }
 const BASE = { name: 'Granola', transportType: 'streamable-http', url: 'https://g.example/mcp', enabled: false }
@@ -215,5 +215,51 @@ describe('mcpService and a local connector made from a directory entry', () => {
     expect(dto.env).toEqual({ ROOT: '', TOKEN: '' })
     expect(JSON.stringify(dto)).not.toContain('sk-plain')
     expect(JSON.stringify(dto)).not.toContain('/srv')
+  })
+})
+
+describe('mcpService.upsert and the admin’s policy on where a new connector comes from', () => {
+  afterEach(() => {
+    Object.assign(policy, { externalDirectories: true, customMcp: true, stdioMcp: true })
+    repo.getOwned.mockImplementation(() => undefined)
+  })
+
+  it('refuses a public registry’s connector as data while external directories are off, and writes nothing', async () => {
+    policy.externalDirectories = false
+    const err = await mcpService.upsert('u', { ...BASE, registryRef: REF }).catch((e: unknown) => e)
+    expect(managedRefusalOf(err)).toEqual({ ok: false, code: 'policy', message: EXTERNAL_DIRECTORY_REFUSED })
+    expect(repo.upsert).not.toHaveBeenCalled()
+  })
+
+  it('allows a core MCP directory connector with external directories and custom connectors off', async () => {
+    policy.externalDirectories = false
+    policy.customMcp = false
+    await mcpService.upsert('u', { ...BASE, registryRef: { source: 'core-mcp-directory', id: 'x' } })
+    expect(repo.upsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('checks a ref of any other source as the user’s own connector', async () => {
+    policy.customMcp = false
+    const err = await mcpService.upsert('u', { ...BASE, registryRef: { source: 'made-up', id: 'x' } }).catch((e: unknown) => e)
+    expect(managedRefusalOf(err)).toEqual({ ok: false, code: 'policy', message: CUSTOM_MCP_REFUSED })
+  })
+
+  it('refuses a new local connector while local servers are off, from a directory too, but edits a hand-made one', async () => {
+    policy.stdioMcp = false
+    const local = { name: 'L', transportType: 'stdio', command: 'node', args: ['s.js'] }
+    for (const input of [local, { ...local, registryRef: { source: 'core-mcp-directory', id: 'x' } }]) {
+      const err = await mcpService.upsert('u', input).catch((e: unknown) => e)
+      expect(managedRefusalOf(err)).toEqual({ ok: false, code: 'policy', message: STDIO_MCP_REFUSED })
+    }
+    repo.getOwned.mockImplementation(() => ({ id: 'l1', transportType: 'stdio', managedBy: null, registryRef: null, env: null, envSecretEncrypted: null }))
+    await mcpService.upsert('u', { ...local, id: 'l1' })
+    expect(repo.upsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses turning a remote connector into a local one while local servers are off', async () => {
+    policy.stdioMcp = false
+    repo.getOwned.mockImplementation(() => ({ id: 'r1', transportType: 'streamable-http', managedBy: null, registryRef: null, env: null, envSecretEncrypted: null }))
+    const err = await mcpService.upsert('u', { id: 'r1', name: 'R', transportType: 'stdio', command: 'node' }).catch((e: unknown) => e)
+    expect(managedRefusalOf(err)).toEqual({ ok: false, code: 'policy', message: STDIO_MCP_REFUSED })
   })
 })

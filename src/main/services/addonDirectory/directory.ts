@@ -37,6 +37,7 @@ import type { McpServerRequirement } from '../../../shared/kit/manifest'
 import type { AgentEngine } from '../../../shared/engine'
 import { compatibilityOf } from '../../../shared/addons/engineSupport'
 import type { DirectoryContext, DirectoryProvider, ProviderEntry, ProviderListing } from './types'
+import { serverKeyOfInstall } from './serverIdentity'
 
 export const LOCAL_SOURCE = 'this-computer'
 export const CATALOG_SOURCE = 'core-catalog'
@@ -153,6 +154,8 @@ export interface AddonDirectoryDeps {
   mcpSetup(userId: string, mcpProviderId: string): McpSetup | null
   /** The local provider created from this directory entry, if any. */
   findMcpByRef(userId: string, ref: AddonRef): string | null
+  /** A local provider (not a plugin's) that is the same server as this entry of core's MCP directory (`serverIdentity.ts`), if any. */
+  findMcpByServer?(userId: string, entry: ProviderEntry): string | null
   /** Create a local provider from a directory MCP entry (with its `registry_ref`); the step it needs next. */
   createMcpFromDirectory(userId: string, entry: ProviderEntry): Promise<{ id: string; setup: McpSetup | null }>
   /** Delete a local provider this directory just created (its attach failed). */
@@ -193,20 +196,36 @@ function mergedLocal(local: ProviderEntry, from: ProviderEntry): ProviderEntry {
 }
 
 /**
- * The only de-duplication: a local provider whose `registry_ref` names an
- * entry another source lists takes that entry's place. Everything else shows
- * once per source, even when two sources hold the same name.
+ * The de-duplication: a local provider whose `registry_ref` names an entry
+ * another source lists takes that entry's place; else, one that is the same
+ * server as an entry of core's MCP directory — its URL, or the package it
+ * runs ({@link ProviderEntry.serverKey}) — takes that entry's place (a
+ * connector typed in by hand, or made from the opencinna list core's
+ * directory is seeded from). Everything else shows once per source, even
+ * when two sources hold the same name.
  */
 export function mergeLocalProviders(entries: ProviderEntry[]): ProviderEntry[] {
   const directory = new Map<string, ProviderEntry>()
-  for (const entry of entries) if (entry.ref.source !== LOCAL_SOURCE) directory.set(addonRefKey(entry.ref), entry)
+  const coreByServer = new Map<string, ProviderEntry>()
+  for (const entry of entries) {
+    if (entry.ref.source === LOCAL_SOURCE) continue
+    directory.set(addonRefKey(entry.ref), entry)
+    const server = entry.ref.source === CORE_MCP_SOURCE ? serverKeyOfInstall(entry.install) : null
+    if (server && !coreByServer.has(server)) coreByServer.set(server, entry)
+  }
+  // What a local provider's own ref takes first, so a match by server never doubles it.
   const consumed = new Set<string>()
+  for (const entry of entries) {
+    if (entry.ref.source === LOCAL_SOURCE && entry.registryRef && directory.has(addonRefKey(entry.registryRef))) consumed.add(addonRefKey(entry.registryRef))
+  }
   const merged = entries.map((entry) => {
-    if (entry.ref.source !== LOCAL_SOURCE || !entry.registryRef) return entry
-    const key = addonRefKey(entry.registryRef)
-    const from = directory.get(key)
+    if (entry.ref.source !== LOCAL_SOURCE) return entry
+    const byRef = entry.registryRef ? directory.get(addonRefKey(entry.registryRef)) : undefined
+    // By server only into an entry no other local provider has taken: one connector stands for it.
+    const byServer = !byRef && entry.serverKey ? coreByServer.get(entry.serverKey) : undefined
+    const from = byRef ?? (byServer && !consumed.has(addonRefKey(byServer.ref)) ? byServer : undefined)
     if (!from) return entry
-    consumed.add(key)
+    consumed.add(addonRefKey(from.ref))
     return mergedLocal(entry, from)
   })
   return merged.filter((entry) => entry.ref.source === LOCAL_SOURCE || !consumed.has(addonRefKey(entry.ref)))
@@ -255,7 +274,7 @@ export function stateOf(
 
 function toAgentEntry(entry: ProviderEntry, agent: AgentFacts, attached: ReadonlySet<string>, skillAccess: SkillAccess): AgentDirectoryEntry {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { registryRef, setupReason, setupStep, mcpProviderId, provider, blockReason, ...shared } = entry
+  const { registryRef, serverKey, setupReason, setupStep, mcpProviderId, provider, blockReason, ...shared } = entry
   return {
     ...shared,
     provider: provider ?? '',
@@ -460,6 +479,9 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         if (entry.kind !== 'mcp' || entry.status === 'unsupported' || !entry.install || !('mcp' in entry.install)) {
           return refused('unsupported', ADDON_STATE_TEXT.unsupported)
         }
+        // The same server is already on this computer (typed in, or from the opencinna list): attach it, never a second one.
+        const same = ref.source === CORE_MCP_SOURCE && deps.findMcpByServer ? deps.findMcpByServer(userId, entry) : null
+        if (same) return await noted(userId, agentId, agent, await attachLocal(userId, agentId, same), ref)
         const block = await blockOf(userId, entry)
         if (block) return refused('blocked', block)
         const created = await deps.createMcpFromDirectory(userId, entry)

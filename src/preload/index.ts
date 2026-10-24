@@ -232,6 +232,7 @@ import type {
   AddonActionResult,
   AddonDirectoryResult,
   AddonMcpRequirementsResult,
+  AddonPolicy,
   AddonRef,
   AddonSearchResult
 } from '../shared/addons/directory'
@@ -2270,7 +2271,9 @@ const api = {
     mcpRequirements: (agentId: string): Promise<AddonMcpRequirementsResult> => ipcRenderer.invoke('addons:mcp-requirements', { agentId }),
     /** Remove the requirement `name` from the kit agent's `mcp_servers[]`; refusals (read-only team agent, not a kit agent) are data. */
     removeRequirement: (agentId: string, name: string): Promise<AddonActionResult> =>
-      ipcRenderer.invoke('addons:remove-requirement', { agentId, name })
+      ipcRenderer.invoke('addons:remove-requirement', { agentId, name }),
+    /** The active account's stored admin policy (everything allowed without one): what Settings → MCP offers. */
+    policy: (): Promise<AddonPolicy> => ipcRenderer.invoke('addons:policy')
   },
 
   /**

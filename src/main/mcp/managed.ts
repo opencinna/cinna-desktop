@@ -24,9 +24,10 @@
  *   `<userData>/plugin-envs/<entry>/<sha>/<server>`, so `uv run --directory`
  *   never writes into the read-only cache. A uv project with no `uv.lock`,
  *   and a `uvx --from <folder>`, run from a writable working copy of the
- *   snapshot's tree (`ManagedSpec.work`, `<userData>/plugin-work/<entry>/<sha>`),
- *   copied from the verified cache at launch and checked against the digests
- *   recorded at copy before every launch ({@link ensurePluginWorkCopy}).
+ *   server's tree (`ManagedSpec.work`, `<userData>/plugin-work/<entry>/<sha>/<server>`),
+ *   copied from the verified cache in the connect, once the old process has
+ *   stopped, and checked against what was recorded at copy before every
+ *   launch; never deleted or recopied under a running server (`workCopy.ts`).
  * * **Not launched** when the cached tree no longer matches its install
  *   digests, or the policy forbids local servers: the config carries
  *   `blockedReason`, and the manager answers that as the connection's error.
@@ -41,12 +42,17 @@
  * ({@link isDirectorySecretRow}); a name with no value is one still to fill
  * in ({@link missingEnvOf}).
  *
+ * A hand-made local connector (no plugin, no directory entry) is never
+ * blocked here: `policy.stdio_mcp` forbids *adding* one
+ * (`mcpService.upsert`), not running one the user already made, and a policy
+ * change stops only a plugin's and a directory's local servers
+ * (`services/addonDirectory/policyFollow.ts`).
+ *
  * Core: no Electron.
  */
 
-import { createHash } from 'node:crypto'
-import { chmodSync, cpSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readdirSync, rmSync, type Dirent } from 'node:fs'
+import { join } from 'node:path'
 import { managedUvLayout } from '../localdev/toolchain'
 import { runtimeHost } from '../host/runtimeHost'
 import { decryptApiKey, encryptApiKey } from '../security/keystore'
@@ -54,6 +60,7 @@ import { verifyPluginTree, PLUGIN_TREE_MODIFIED_SENTENCE } from '../services/mar
 import { addonPolicies } from '../services/addonDirectory/policy'
 import { STDIO_RUNTIME_TEXT } from '../services/stdioRuntimes'
 import type { McpProviderConfig } from './types'
+import { isWorkInUse, type WorkCopySpec } from './workCopy'
 
 export const PLUGIN_MANAGER_PREFIX = 'plugin:'
 
@@ -228,129 +235,63 @@ export function pluginProjectEnvDir(managedBy: string | null | undefined, server
   }
 }
 
-/** `<userData>/plugin-work/<entry>/<sha>`: a snapshot's writable working copy, for servers that write into their project. */
-export function pluginWorkDir(managedBy: string | null | undefined): string | null {
+/**
+ * `<userData>/plugin-work/<entry>/<sha>/<server>`: a plugin server's writable
+ * working copy (`workCopy.ts`), for servers that write into their project;
+ * without `serverName`, the snapshot's folder of them.
+ */
+export function pluginWorkDir(managedBy: string | null | undefined, serverName?: string): string | null {
   const owner = pluginOfManagedBy(managedBy)
   if (!owner || !owner.sha) return null
   try {
-    return join(runtimeHost.getPath('userData'), 'plugin-work', safeComponent(owner.entryUuid), safeComponent(owner.sha))
+    const snapshot = join(runtimeHost.getPath('userData'), 'plugin-work', safeComponent(owner.entryUuid), safeComponent(owner.sha))
+    return serverName === undefined ? snapshot : join(snapshot, safeComponent(serverName))
   } catch {
     return null
-  }
-}
-
-/** Every folder and file under `dir` writable by its owner (the cache's copy is read-only). */
-function makeWritable(dir: string): void {
-  chmodSync(dir, 0o755)
-  const entries: Dirent[] = readdirSync(dir, { withFileTypes: true })
-  for (const entry of entries) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) makeWritable(path)
-    else if (entry.isFile()) chmodSync(path, statSync(path).mode | 0o200)
-  }
-}
-
-/** What a server may write into its working copy, never checked: its lock, its environments, caches and build output. */
-function writtenByServer(rel: string): boolean {
-  const parts = rel.split(/[\\/]/)
-  const name = parts[parts.length - 1]
-  if (name === 'uv.lock') return true
-  return parts.some((part, at) =>
-    part === '.venv' || part === '__pycache__' || part.endsWith('.egg-info') || (at < parts.length - 1 && (part === 'build' || part === 'dist'))
-  )
-}
-
-/** Every regular file under `dir` the copy is checked by, relative path → sha256 (what the server writes left out). */
-function treeDigests(dir: string, rel = '', out: Record<string, string> = {}): Record<string, string> {
-  const entries: Dirent[] = readdirSync(join(dir, rel), { withFileTypes: true })
-  for (const entry of entries) {
-    const path = rel ? `${rel}/${entry.name}` : entry.name
-    if (writtenByServer(path)) continue
-    if (entry.isDirectory()) treeDigests(dir, path, out)
-    else if (entry.isFile()) out[path] = createHash('sha256').update(readFileSync(join(dir, path))).digest('hex')
-  }
-  return out
-}
-
-/** The working copy's marker (`<work>.source`): the tree it was copied from and that tree's file digests at copy. */
-interface WorkMarker {
-  root: string
-  files: Record<string, string>
-}
-
-function readWorkMarker(work: string): WorkMarker | null {
-  try {
-    const parsed = JSON.parse(readFileSync(`${work}.source`, 'utf8')) as unknown
-    if (!parsed || typeof parsed !== 'object') return null
-    const { root, files } = parsed as { root?: unknown; files?: unknown }
-    if (typeof root !== 'string' || !files || typeof files !== 'object' || Array.isArray(files)) return null
-    return { root, files: files as Record<string, string> }
-  } catch {
-    return null
-  }
-}
-
-/** Whether `work` still holds every file of its copy as it was copied (new files, and what the server writes, are its own). */
-function workCopyIntact(work: string, marker: WorkMarker): boolean {
-  try {
-    if (!statSync(work).isDirectory()) return false
-    for (const [rel, digest] of Object.entries(marker.files)) {
-      const path = join(work, rel)
-      const stat = lstatSync(path)
-      if (!stat.isFile()) return false
-      if (createHash('sha256').update(readFileSync(path)).digest('hex') !== digest) return false
-    }
-    return true
-  } catch {
-    return false
   }
 }
 
 /**
- * Make `work` a writable copy of the cached tree `root`, unless it already
- * is one: its marker (`<work>.source`) names `root`, and every file copied
- * still has the digest recorded at copy. A copy that changed is copied
- * again from the cache — the verified cache is the source of truth, so a
- * mismatch is repaired, never refused. What the server writes there (its
- * `uv.lock`, `.venv`, `__pycache__`, `*.egg-info`, `build/`, `dist/`, any
- * new file) is never checked, and stays for the next launch. Copied whole
- * into a sibling first and renamed into place, so a half copy is never used.
+ * Remove a snapshot's folder of working copies, its marker and staging
+ * leftovers — except a server's copy a connection runs from now
+ * (`isWorkInUse`), with its marker. Answers whether all of it went.
  */
-export function ensurePluginWorkCopy(root: string, work: string): void {
-  const marker = readWorkMarker(work)
-  if (marker && marker.root === root && workCopyIntact(work, marker)) return
-  mkdirSync(dirname(work), { recursive: true })
-  const staging = `${work}.staging-${process.pid}-${Date.now()}`
-  try {
-    const files = treeDigests(root)
-    cpSync(root, staging, { recursive: true, verbatimSymlinks: true })
-    makeWritable(staging)
-    rmSync(`${work}.source`, { force: true })
-    rmSync(work, { recursive: true, force: true })
-    renameSync(staging, work)
-    writeFileSync(`${work}.source`, JSON.stringify({ root, files } satisfies WorkMarker))
-  } catch (err) {
-    rmSync(staging, { recursive: true, force: true })
-    throw err
+function removeSnapshotWork(dir: string): boolean {
+  if (!isWorkInUse(dir)) {
+    rmSync(`${dir}.source`, { force: true })
+    rmSync(dir, { recursive: true, force: true })
+    return true
   }
+  let copies: Dirent[]
+  try {
+    copies = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const copy of copies) {
+    const server = copy.name.replace(/\.(source|staging-.*)$/, '')
+    if (isWorkInUse(join(dir, server))) continue
+    rmSync(join(dir, copy.name), { recursive: true, force: true })
+  }
+  return false
 }
 
-/** Remove a snapshot's working copy (Update of a changed cache, a pin gone); the next launch copies it again. Never throws. */
+/** Remove a snapshot's working copies (Update of a changed cache, a pin gone); the next launch copies them again. A copy in use stays. Never throws. */
 export function discardPluginWork(managedBy: string | null | undefined): void {
-  const work = pluginWorkDir(managedBy)
-  if (!work) return
+  const dir = pluginWorkDir(managedBy)
+  if (!dir) return
   try {
-    rmSync(`${work}.source`, { force: true })
-    rmSync(work, { recursive: true, force: true })
+    removeSnapshotWork(dir)
   } catch {
     /* the next launch's check copies it again */
   }
 }
 
 /**
- * Remove every `plugin-work/<entry>/<sha>` copy whose `entry/sha` snapshot
- * key is not in `keep` (the pins' and the remaining managed rows'), with its
- * marker and any staging leftover. Never throws; answers how many went.
+ * Remove every `plugin-work/<entry>/<sha>` folder of copies whose `entry/sha`
+ * snapshot key is not in `keep` (the pins' and the remaining managed rows'),
+ * with its marker and any staging leftover — never a copy a connection runs
+ * from now. Never throws; answers how many snapshot folders went.
  */
 export function collectPluginWork(keep: ReadonlySet<string>): number {
   let base: string
@@ -383,8 +324,12 @@ export function collectPluginWork(keep: ReadonlySet<string>): number {
       const sha = snapshot.name.replace(/\.(source|staging-.*)$/, '')
       if (kept.has(`${entry.name}/${sha}`)) continue
       try {
-        rmSync(join(entryDir, snapshot.name), { recursive: true, force: true })
-        if (snapshot.isDirectory() && !snapshot.name.includes('.')) removed++
+        // A snapshot folder: its copies, unless a connection runs from one; a marker or staging leftover beside it goes.
+        if (snapshot.isDirectory() && sha === snapshot.name) {
+          if (removeSnapshotWork(join(entryDir, snapshot.name))) removed++
+        } else if (!isWorkInUse(join(entryDir, sha))) {
+          rmSync(join(entryDir, snapshot.name), { recursive: true, force: true })
+        }
       } catch {
         /* tried again next start */
       }
@@ -397,6 +342,8 @@ export function collectPluginWork(keep: ReadonlySet<string>): number {
   }
   return removed
 }
+
+export { ensurePluginWorkCopy } from './workCopy'
 
 /** The sentence a server whose working copy could not be made is refused with. */
 export const PLUGIN_WORK_COPY_FAILED = 'The plugin’s files could not be prepared to run on this computer.'
@@ -462,16 +409,14 @@ export function resolveManagedLaunch(config: McpProviderConfig, row: ManagedRowF
   }
   const declared = row.managedSpec?.headers ?? {}
   const headers = Object.fromEntries(Object.entries(declared).map(([name, value]) => [name, fill(value)]))
-  let blockedReason = managedLaunchBlock({ ...row, userId: config.userId, transportType: config.transportType })
+  const blockedReason = managedLaunchBlock({ ...row, userId: config.userId, transportType: config.transportType })
   const work = row.managedSpec?.work
   const root = row.managedSpec?.root
-  if (!blockedReason && work && root && config.transportType === 'stdio') {
-    try {
-      ensurePluginWorkCopy(root, work)
-    } catch {
-      blockedReason = PLUGIN_WORK_COPY_FAILED
-    }
-  }
+  // Checked and made in the connect, once the old process has stopped (`workCopy.ts`), never here.
+  const workCopy: WorkCopySpec | null =
+    !blockedReason && work && root && config.transportType === 'stdio'
+      ? { root, work, changedReason: PLUGIN_TREE_MODIFIED_SENTENCE, failedReason: PLUGIN_WORK_COPY_FAILED }
+      : null
   return {
     ...config,
     ...(config.command ? { command: fill(config.command) } : {}),
@@ -479,6 +424,7 @@ export function resolveManagedLaunch(config: McpProviderConfig, row: ManagedRowF
     ...(config.url ? { url: fill(config.url) } : {}),
     env: { ...uvEnv, ...env },
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
-    ...(blockedReason ? { blockedReason } : {})
+    ...(blockedReason ? { blockedReason } : {}),
+    ...(workCopy ? { workCopy } : {})
   }
 }

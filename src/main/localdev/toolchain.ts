@@ -402,6 +402,9 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       UV_TOOL_DIR: join(root, 'uv-tools'),
       UV_TOOL_BIN_DIR: join(root, 'bin'),
       UV_PYTHON_INSTALL_DIR: join(root, 'python'),
+      // Only a Python uv installed itself: never one found on PATH, where macOS's /usr/bin/python3 is the
+      // Command Line Tools stub that raises the install dialog. No PATH here: the tool shims stay on the child's.
+      UV_PYTHON_PREFERENCE: 'only-managed',
       UV_CACHE_DIR: join(root, 'uv-cache')
     }
   }
@@ -940,6 +943,9 @@ export function managedUvLayoutAt(root: string, uvVersion: string = PINNED_UV_VE
       UV_TOOL_DIR: join(root, 'uv-tools'),
       UV_TOOL_BIN_DIR: join(root, 'bin'),
       UV_PYTHON_INSTALL_DIR: join(root, 'python'),
+      // Only a Python uv installed itself: never one found on PATH, where macOS's /usr/bin/python3 is the
+      // Command Line Tools stub that raises the install dialog. No PATH here: the tool shims stay on the child's.
+      UV_PYTHON_PREFERENCE: 'only-managed',
       UV_CACHE_DIR: join(root, 'uv-cache')
     }
   }

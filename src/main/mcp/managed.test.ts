@@ -45,6 +45,7 @@ const {
   resolveManagedLaunch,
   snapshotKeyOfManagedBy
 } = await import('./managed')
+const { prepareWorkCopy, releaseWorkCopies, _resetWorkCopiesInUse } = await import('./workCopy')
 
 const ENTRY = '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f'
 const SHA = 'a'.repeat(64)
@@ -316,18 +317,79 @@ describe('a snapshot’s writable working copy', () => {
     }
   })
 
-  it('is made at launch for a server that runs from it, and a copy that cannot be made refuses the launch', () => {
+  it('is named in the config, never made while the config is built; the connect makes it, and a copy that cannot be made refuses the launch', () => {
     const { home, root } = readOnlyTree()
     try {
-      const work = join(home, 'plugin-work', 'e', 's')
+      const work = join(home, 'plugin-work', 'e', 's', 'carbone')
       const row = { managedBy: OWNER, managedSpec: { root, slots: [], work }, envSecretEncrypted: null }
       const config = resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run', '--directory', join(work, 'server'), 'srv'] }, row)
       expect(config.blockedReason).toBeUndefined()
+      expect(config.workCopy).toEqual({ root, work, changedReason: 'The cached copy was changed on disk — Update to restore it', failedReason: PLUGIN_WORK_COPY_FAILED })
+      expect(existsSync(work)).toBe(false)
+      expect(prepareWorkCopy('m1', config.workCopy!)).toBeNull()
       expect(existsSync(join(work, 'server', 'pyproject.toml'))).toBe(true)
 
       const missing = { ...row, managedSpec: { root: join(home, 'nowhere'), slots: [], work: join(home, 'w2') } }
-      expect(resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run'] }, missing).blockedReason).toBe(PLUGIN_WORK_COPY_FAILED)
+      const refused = resolveManagedLaunch({ ...base, id: 'm2', command: '/ud/localdev/uv/uv', args: ['run'] }, missing)
+      expect(prepareWorkCopy('m2', refused.workCopy!)).toBe(PLUGIN_WORK_COPY_FAILED)
     } finally {
+      _resetWorkCopiesInUse()
+      cleanup(home, root)
+    }
+  })
+
+  it('is one copy per server of a snapshot', () => {
+    expect(pluginWorkDir(OWNER, 'carbone')).toBe(join('/ud', 'plugin-work', ENTRY, SHA, 'carbone'))
+    expect(pluginWorkDir(OWNER, '../x')).toBe(join('/ud', 'plugin-work', ENTRY, SHA, '__x'))
+  })
+
+  it('is not read again when a copied file keeps its size and mtime', () => {
+    const { home, root } = readOnlyTree()
+    try {
+      const work = join(home, 'plugin-work', 'e', 's')
+      ensurePluginWorkCopy(root, work)
+      const project = join(work, 'server', 'pyproject.toml')
+      // Same length, and the marker says the mtime it now has: the shortcut takes it as the file copied (no hash read).
+      writeFileSync(project, '[project]\nname = "xyz"\n')
+      const marker = JSON.parse(readFileSync(`${work}.source`, 'utf8')) as { files: Record<string, { size: number; mtimeMs: number }> }
+      expect(marker.files['server/pyproject.toml'].size).toBe(statSync(project).size)
+      marker.files['server/pyproject.toml'].mtimeMs = statSync(project).mtimeMs
+      writeFileSync(`${work}.source`, JSON.stringify(marker))
+      ensurePluginWorkCopy(root, work)
+      expect(readFileSync(project, 'utf8')).toContain('"xyz"')
+      // Any other change of size or mtime is hashed, and found.
+      writeFileSync(project, '[project]\nname = "xyz2"\n')
+      ensurePluginWorkCopy(root, work)
+      expect(readFileSync(project, 'utf8')).toContain('"srv"')
+    } finally {
+      cleanup(home, root)
+    }
+  })
+
+  it('is never deleted or copied again under a connected server: a changed copy refuses another launch from it', () => {
+    const { home, root } = readOnlyTree()
+    paths.userData = home
+    try {
+      const work = pluginWorkDir(OWNER, 'carbone')!
+      const spec = { root, work, changedReason: 'changed', failedReason: 'failed' }
+      expect(prepareWorkCopy('m1', spec)).toBeNull()
+      const project = join(work, 'server', 'pyproject.toml')
+      writeFileSync(project, '[project]\nname = "tampered!"\n')
+      // m1 runs from it: another connection is refused, and nothing is copied under m1.
+      expect(prepareWorkCopy('m2', spec)).toBe('changed')
+      expect(readFileSync(project, 'utf8')).toContain('tampered')
+      discardPluginWork(OWNER)
+      expect(collectPluginWork(new Set())).toBe(0)
+      expect(existsSync(project)).toBe(true)
+      // m1 reconnects: its own old process has stopped, so the copy is repaired.
+      expect(prepareWorkCopy('m1', spec)).toBeNull()
+      expect(readFileSync(project, 'utf8')).toContain('"srv"')
+      releaseWorkCopies('m1')
+      discardPluginWork(OWNER)
+      expect(existsSync(work)).toBe(false)
+    } finally {
+      _resetWorkCopiesInUse()
+      paths.userData = '/ud'
       cleanup(home, root)
     }
   })

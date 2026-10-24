@@ -52,6 +52,9 @@ const defaultDeps: AddonPolicyDeps = {
 let deps: AddonPolicyDeps = defaultDeps
 const policies = new Map<string, AddonPolicy>()
 
+export type PolicyChangeListener = (settingsUserId: string, before: AddonPolicy, after: AddonPolicy) => void
+const listeners = new Set<PolicyChangeListener>()
+
 /** A stored policy as the four flags; null when it is not one (a flag missing or not a boolean). */
 export function storedPolicy(raw: unknown): AddonPolicy | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -94,11 +97,12 @@ export const addonPolicies = {
    * (`forAccount`, from {@link addonPolicies.accountKey} at the start — the
    * active one when not given), and write it through. Ignored with no account.
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  set(_settingsUserId: string, policy: AddonPolicy, forAccount?: string | null): void {
+  set(settingsUserId: string, policy: AddonPolicy, forAccount?: string | null): void {
     const key = forAccount !== undefined ? forAccount : account()
     if (key === null) return
     const before = policies.get(key)
+    // What applied until now (memory, else the stored one, else the default): what a listener compares against.
+    const applied = policyOf(key)
     policies.set(key, policy)
     if (before && JSON.stringify(before) === JSON.stringify(policy)) return
     try {
@@ -106,6 +110,21 @@ export const addonPolicies = {
     } catch {
       // Memory still holds it for this session.
     }
+    // Only the active account's policy governs what runs here now.
+    if (JSON.stringify(applied) === JSON.stringify(policy) || key !== account()) return
+    for (const listener of listeners) {
+      try {
+        listener(settingsUserId, applied, policy)
+      } catch {
+        // One listener's failure never stops the policy being stored, or the others.
+      }
+    }
+  },
+
+  /** Called when the active account's policy changes: the scope, what applied, what applies now. Answers the unsubscribe. */
+  onChange(listener: PolicyChangeListener): () => void {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
   },
 
   /** The directory's view: what core last sent for the active account (undefined: nothing yet, or no account). */

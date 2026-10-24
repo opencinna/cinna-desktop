@@ -26,6 +26,8 @@ export interface McpProviderConfig {
   headers?: Record<string, string>
   /** Set when the provider must not be launched now; the connect ends as `error` with this sentence. */
   blockedReason?: string
+  /** A plugin server's writable working copy, checked and made in the connect once the old process has stopped (`workCopy.ts`). */
+  workCopy?: import('./workCopy').WorkCopySpec
 }
 
 export interface McpTool {

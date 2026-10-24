@@ -505,13 +505,25 @@ describe('cinnaCore provider over core’s /addons/directory (U4)', () => {
     const provider = createCinnaCoreProvider(r)
     await provider.list(CTX)
     const failed = await provider.list({ ...CTX, refresh: true })
-    expect(failed).toEqual({ entries: expect.any(Array), error: CORE_SOURCE_TEXT.directoryFailed, mcpDirectory: true })
+    // The cached index holds no core MCP directory entry: not flagged as one.
+    expect(failed).toEqual({ entries: expect.any(Array), error: CORE_SOURCE_TEXT.directoryFailed })
     expect(failed.entries.map((e) => e.ref.id)).toEqual(['pkg-1'])
     expect(failed).not.toHaveProperty('policy')
     expect(await provider.list({ ...CTX, refresh: true })).not.toHaveProperty('policy')
 
     const expired = reads([new CinnaApiError('reauth_required', 'Cinna 401')])
     expect(await createCinnaCoreProvider(expired).list(CTX)).toEqual({ entries: [], error: CORE_SOURCE_TEXT.reauth, errorCode: 'reauth' })
+  })
+
+  it('says core’s MCP directory answered only when the index holds one of its entries, on a fresh read, a cached one and a 304', async () => {
+    const skillsOnly = rows.filter((row) => row.ref.source !== 'core-mcp-directory')
+    const r = reads([{ status: 200, body: { data: skillsOnly, policy: POLICY, etag: '"v1"' } }, { status: 304 }, { status: 200, body: { data: rows, policy: POLICY, etag: '"v2"' } }])
+    const provider = createCinnaCoreProvider(r)
+    expect(await provider.list(CTX)).not.toHaveProperty('mcpDirectory')
+    expect(await provider.list(CTX)).not.toHaveProperty('mcpDirectory')
+    r.advance(CORE_DIRECTORY_TTL_MS)
+    expect(await provider.list(CTX)).not.toHaveProperty('mcpDirectory')
+    expect((await provider.list({ ...CTX, refresh: true })).mcpDirectory).toBe(true)
   })
 
   it('answers nothing when signed out, without asking the directory', async () => {

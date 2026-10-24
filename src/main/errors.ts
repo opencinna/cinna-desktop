@@ -33,6 +33,8 @@ export type McpErrorCode =
   | 'registry_unreachable'
   | 'managed_provider'
   | 'custom_mcp_forbidden'
+  /** A new connector from a public MCP registry (`policy.external_directories`) or a new local one (`policy.stdio_mcp`) while the admin forbids it. */
+  | 'mcp_policy_forbidden'
 
 export type ChatErrorCode =
   | 'not_found'

@@ -241,11 +241,42 @@ export interface McpRefusal {
 /** The sentence a new connector of the user's own is refused with while the admin forbids them (`policy.custom_mcp`). */
 export const CUSTOM_MCP_REFUSED = 'Your admin does not allow adding your own connectors.'
 
+/** The sentence a new connector from a public MCP registry is refused with while the admin turns them off (`policy.external_directories`). */
+export const EXTERNAL_DIRECTORY_REFUSED = 'Your admin does not allow connectors from public MCP registries.'
+
+/** The sentence a new local (stdio) connector is refused with while the admin forbids local servers (`policy.stdio_mcp`). */
+export const STDIO_MCP_REFUSED = 'Your admin does not allow adding local MCP servers.'
+
+/** `CORE_MCP_SOURCE` and `REGISTRY_SOURCE_PREFIX` of `addonDirectory/`, spelled here: this service sits below the directory. */
+const CORE_MCP_DIRECTORY_SOURCE = 'core-mcp-directory'
+const PUBLIC_REGISTRY_PREFIX = 'mcp-registry:'
+
+/**
+ * The admin's policy on a connector being created (or turned into a local
+ * one): a public registry's (`mcp-registry:*`) needs `externalDirectories`,
+ * core's MCP directory's is allowed, anything else is the user's own and
+ * needs `customMcp`; a local (stdio) one also needs `stdioMcp`. A local
+ * connector that already exists is never refused here — `stdioMcp` gates
+ * creating one, not keeping or editing a hand-made one.
+ */
+function assertCreateAllowed(userId: string, input: UpsertMcpInput, registryRef: { source: string; id: string } | null, existing: McpProviderRow | undefined): void {
+  const policy = addonPolicies.get(userId)
+  if (input.id === undefined) {
+    if (registryRef?.source.startsWith(PUBLIC_REGISTRY_PREFIX)) {
+      if (!policy.externalDirectories) throw new McpError('mcp_policy_forbidden', EXTERNAL_DIRECTORY_REFUSED)
+    } else if (registryRef?.source !== CORE_MCP_DIRECTORY_SOURCE && !policy.customMcp) {
+      throw new McpError('custom_mcp_forbidden', CUSTOM_MCP_REFUSED)
+    }
+  }
+  const becomesStdio = input.transportType === 'stdio' && (input.id === undefined || (existing !== undefined && existing.transportType !== 'stdio'))
+  if (becomesStdio && !policy.stdioMcp) throw new McpError('mcp_policy_forbidden', STDIO_MCP_REFUSED)
+}
+
 /** The upsert's refusal of a managed provider's edit or of a connector the policy forbids, as data; anything else is rethrown. */
 export function managedRefusalOf(err: unknown): McpRefusal | null {
   if (!(err instanceof McpError)) return null
   if (err.code === 'managed_provider') return { ok: false, code: 'managed', message: err.message }
-  if (err.code === 'custom_mcp_forbidden') return { ok: false, code: 'policy', message: err.message }
+  if (err.code === 'custom_mcp_forbidden' || err.code === 'mcp_policy_forbidden') return { ok: false, code: 'policy', message: err.message }
   return null
 }
 
@@ -290,10 +321,7 @@ export const mcpService = {
     const existing = input.id !== undefined ? mcpProviderRepo.getOwned(userId, input.id) : undefined
     if (existing?.managedBy) return upsertManaged(userId, existing, input)
     const registryRef = input.id === undefined && input.registryRef ? input.registryRef : null
-    // A connector of the user's own (not a plugin's, not from a directory entry) only while the admin allows them.
-    if (input.id === undefined && !registryRef && !addonPolicies.get(userId).customMcp) {
-      throw new McpError('custom_mcp_forbidden', CUSTOM_MCP_REFUSED)
-    }
+    assertCreateAllowed(userId, input, registryRef, existing)
     // A local connector made from a directory entry keeps its values encrypted, as a plugin's.
     const secretEnv =
       input.transportType === 'stdio' && (existing ? isDirectorySecretRow(existing) : !!registryRef)

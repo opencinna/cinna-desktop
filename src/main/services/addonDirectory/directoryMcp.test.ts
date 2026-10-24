@@ -60,6 +60,18 @@ describe('directoryStdioLaunch', () => {
     expect(ok('npm', 'srv', 'https://evil.example/srv.tgz')).toBe(false)
     expect(ok('npm', 'srv', 'npm:other@1')).toBe(false)
     expect(ok('npm', ':srv', null)).toBe(false)
+  })
+
+  it('takes an npm version only as semver (a range operator allowed) or a plain dist-tag, never a tarball name', () => {
+    const npm = (version: string): boolean => directoryStdioLaunch(pkg('npm', 'srv', version), UV) !== null
+    for (const version of ['1.2.3', '^1.2.3', '~0.4.0', '>=2.0.0-rc.1', '<3.0.0', '=1.0.0+b.7', 'latest', 'next', 'beta-2', '1.2', 'v1_x']) expect(npm(version)).toBe(true)
+    for (const version of ['srv-1.0.0.tgz', 'x.tar', 'x.TAR.GZ', 'a/b', 'tag:x', 'x@1', '^1.2', '>=x', '-latest', '.hidden', '1.2.3 || 2', '^^1.2.3', 'x'.repeat(129)]) {
+      expect(npm(version)).toBe(false)
+    }
+  })
+
+  it('takes the other registries’ versions as before', () => {
+    const ok = (registry: 'npm' | 'pypi' | 'oci', name: string, version: string | null = '1.2.0'): boolean => directoryStdioLaunch(pkg(registry, name, version), UV) !== null
     expect(ok('pypi', 'mcp-server-fetch[cli,extra]', '1!2.0.post1+local')).toBe(true)
     expect(ok('pypi', 'git+https://github.com/acme/srv', null)).toBe(false)
     expect(ok('pypi', 'srv @ https://evil.example/srv.whl', null)).toBe(false)

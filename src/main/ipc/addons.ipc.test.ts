@@ -36,6 +36,8 @@ const runtimes = vi.hoisted(() => ({ recheck: vi.fn(async () => ({ node: true, d
 vi.mock('../services/stdioRuntimes', () => ({ stdioRuntimes: runtimes }))
 const requirements = vi.hoisted(() => ({ removeRequirementByName: vi.fn() }))
 vi.mock('../services/addonDirectory/requirements', () => requirements)
+const storedPolicy = vi.hoisted(() => ({ get: vi.fn(() => ({ externalDirectories: false, customMcp: true, pluginHooks: true, stdioMcp: false })) }))
+vi.mock('../services/addonDirectory/policy', () => ({ addonPolicies: storedPolicy }))
 
 const { registerAddonHandlers } = await import('./addons.ipc')
 registerAddonHandlers()
@@ -70,6 +72,7 @@ describe('addons IPC', () => {
       'addons:directory',
       'addons:mcp-requirements',
       'addons:plugin-status',
+      'addons:policy',
       'addons:recheck-runtimes',
       'addons:remove',
       'addons:remove-requirement',
@@ -143,6 +146,11 @@ describe('addons IPC', () => {
     expect(plugins.reveal).toHaveBeenLastCalledWith('__default__', 'a1', 'carbone')
     await call('addons:reveal-plugin', { agentId: 1, name: ['x'] })
     expect(plugins.reveal).toHaveBeenLastCalledWith('__default__', '', '')
+  })
+
+  it('answers the stored admin policy of the settings scope’s active account', async () => {
+    expect(await call('addons:policy')).toEqual({ externalDirectories: false, customMcp: true, pluginHooks: true, stdioMcp: false })
+    expect(storedPolicy.get).toHaveBeenCalledWith('__default__')
   })
 
   it('caps the query', async () => {

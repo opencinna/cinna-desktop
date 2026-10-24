@@ -49,7 +49,7 @@ it('starts a plugin’s connector only when it can run unattended (an agent has 
   await new Promise((done) => setTimeout(done, 0))
   expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['mcp', 'ready'])
 })
-it('starts a connector made from a directory entry only once an agent has it and its settings are filled in', async () => {
+it('starts a connector made from a directory entry once its settings are filled in, with or without an agent (Settings → MCP registry connectors serve chats)', async () => {
   const ref = { source: 'core-mcp-directory', id: 'x' }
   mcpRows.rows = [
     { id: 'mcp', enabled: true },
@@ -61,5 +61,5 @@ it('starts a connector made from a directory entry only once an agent has it and
   // `dir-ready`'s value is stored (the mock reads `''` as missing): give it one.
   ;(mcpRows.rows[1] as { env: Record<string, string> }).env = { TOKEN: 'set' }
   await reloadUserProviders(() => true)
-  expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['dir-ready', 'mcp'])
+  expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['dir-ready', 'dir-unused', 'mcp'])
 })

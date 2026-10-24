@@ -4,6 +4,7 @@ import {
   addonRefKey,
   type AddonActionResult,
   type AddonDirectoryResult,
+  type AddonPolicy,
   type AddonRef,
   type AddonSearchResult
 } from '../../../shared/addons/directory'
@@ -110,6 +111,20 @@ export function useRefreshAddonDirectory(agentId: string): () => Promise<unknown
       },
       staleTime: 0
     })
+}
+
+/**
+ * The active account's stored admin policy (everything allowed without one),
+ * for surfaces with no agent to read the directory for (Settings → MCP).
+ * Under {@link ADDONS_KEY}, so it re-reads with the directory.
+ */
+export function useAddonPolicy() {
+  const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
+  return useQuery<AddonPolicy>({
+    queryKey: [...ADDONS_KEY, 'policy', profileId],
+    queryFn: () => window.api.addons.policy(),
+    refetchOnWindowFocus: false
+  })
 }
 
 /** The search-only sources (the official MCP registry); asked only for a non-empty query, so debounce it before passing it in. */

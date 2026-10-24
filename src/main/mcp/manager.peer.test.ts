@@ -2,7 +2,7 @@ vi.mock('../host/runtimeHost', async () => {
   const { createDesktopHost } = await import('../host/desktop/runtimeHost')
   return { runtimeHost: createDesktopHost() }
 })
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -99,6 +99,23 @@ describe('MCPManager through the real v2 SDK', () => {
     expect(remote.requests.find((row) => row.rpc?.method === 'tools/call')?.rpc?.params)
       .toMatchObject({ name: TOOL_NAME, arguments: { value: 'request-witness' } })
     expectBearer(remote)
+  })
+
+  it('prepares a working copy in the connect, and refuses one that changed while another connection runs from it until that one stops', async () => {
+    const remote = await peer({ protocol: 'modern' })
+    const root = join(temporary, 'cache')
+    mkdirSync(root)
+    writeFileSync(join(root, 'main.py'), 'print(1)\n')
+    const workCopy = { root, work: join(temporary, 'work', 'srv'), changedReason: 'changed under a running server', failedReason: 'failed' }
+    expect((await manager.connect(config({ id: 'a', url: remote.url, workCopy }))).status).toBe('connected')
+    expect(readFileSync(join(workCopy.work, 'main.py'), 'utf8')).toBe('print(1)\n')
+    writeFileSync(join(workCopy.work, 'main.py'), 'print("tampered")\n')
+    const refused = await manager.connect(config({ id: 'b', url: remote.url, workCopy }))
+    expect(refused).toMatchObject({ status: 'error', error: expect.stringContaining('changed under a running server') })
+    expect(readFileSync(join(workCopy.work, 'main.py'), 'utf8')).toContain('tampered')
+    await manager.disconnect('a')
+    expect((await manager.connect(config({ id: 'b', url: remote.url, workCopy }))).status).toBe('connected')
+    expect(readFileSync(join(workCopy.work, 'main.py'), 'utf8')).toBe('print(1)\n')
   })
 
   it('falls back from method-not-found discovery to the real legacy HTTP handshake', async () => {

@@ -37,6 +37,7 @@ import { installAgentReadiness } from './agentReadiness'
 import { chatModeService } from '../services/chatModeService'
 import { shutdownOpencodeBootstraps } from '../agents/drivers/acp/acpLaunchers'
 import { installCloudUpdateFollow } from '../agents/cloudUpdateFollow'
+import { installAddonPolicyFollow } from '../services/addonDirectory/policyFollow'
 
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
   setLogValueRedactor(redactCredentialValues)
@@ -79,6 +80,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   userCommandService.sweep()
   // A listing that names a newer version of an installed cloud agent syncs the remote agents once.
   installCloudUpdateFollow()
+  // The admin turned local servers off: a directory's and a plugin's running ones stop (never deleted).
+  installAddonPolicyFollow()
   // Cached catalog revisions and marketplace snapshots no agent pins: once per start, off the boot
   // path but in one synchronous run before any profile can activate, so no turn or schedule holds a path into it.
   // Pinned skills not on this computer are fetched in the background once a profile is ready (no

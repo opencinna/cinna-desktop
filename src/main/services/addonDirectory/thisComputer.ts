@@ -11,6 +11,7 @@ import { missingEnvOf } from '../../mcp/managed'
 import type { AddonNextStep, AddonRef } from '../../../shared/addons/directory'
 import { LOCAL_SOURCE, type McpSetup } from './directory'
 import type { DirectoryProvider, ProviderEntry } from './types'
+import { serverKeyOfConnector } from './serverIdentity'
 
 export const LOCAL_SOURCE_TEXT = {
   label: 'On this computer',
@@ -94,6 +95,7 @@ export function localProviderEntry(row: McpProviderRow, setup: AddonNextStep | n
     install: null,
     mcpProviderId: row.id,
     registryRef: registryRefOf(row),
+    serverKey: serverKeyOfConnector(row),
     ...(setup ? { setupReason: LOCAL_SOURCE_TEXT[setup], setupStep: setup } : {})
   }
 }

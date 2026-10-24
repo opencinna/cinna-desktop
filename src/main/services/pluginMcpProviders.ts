@@ -233,7 +233,7 @@ export function createPluginMcpProviders(deps: PluginMcpDeps) {
             outcomes.push({ entryUuid: plugin.entryUuid, name: spec.name, blocked, missingEnv: [] })
             continue
           }
-          const wanted = managedRowSpec(spec, plugin.dir, deps.uv(), pluginWorkDir(managedBy))
+          const wanted = managedRowSpec(spec, plugin.dir, deps.uv(), pluginWorkDir(managedBy, spec.name))
           let current = row
           if (!row) {
             current = deps.upsert(userId, {

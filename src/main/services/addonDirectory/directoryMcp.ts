@@ -44,11 +44,21 @@ const PACKAGE_NAME: Record<AddonMcpLocalConnect['package']['registry'], RegExp> 
   oci: /^(?=.{1,255}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?$/
 }
 
-/** A version as each registry writes one: semver-ish, PEP 440, an image tag — never `:`, `/`, `@` or a scheme. */
-const PACKAGE_VERSION: Record<AddonMcpLocalConnect['package']['registry'], RegExp> = {
-  npm: /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/,
-  pypi: /^[0-9A-Za-z][0-9A-Za-z.!+_-]{0,127}$/,
-  oci: /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
+/** npm: a semver version, with an optional range operator (`^1.2.3`, `>=1.0.0-rc.1`). */
+const NPM_SEMVER =
+  /^(?:\^|~|>=|<=|>|<|=)?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+/** npm: a dist-tag (`latest`, `next`) — never a tarball name, so no `name@x.tgz` reaches npx as a file. */
+const NPM_DIST_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const NPM_TARBALL = /\.(?:tgz|tar|tar\.gz)$/i
+
+/**
+ * A version as each registry writes one: npm's semver (or range) or a
+ * dist-tag, PEP 440, an image tag — never `:`, `/`, `@` or a scheme.
+ */
+const PACKAGE_VERSION: Record<AddonMcpLocalConnect['package']['registry'], (version: string) => boolean> = {
+  npm: (version) => version.length <= 128 && (NPM_SEMVER.test(version) || (NPM_DIST_TAG.test(version) && !NPM_TARBALL.test(version))),
+  pypi: (version) => /^[0-9A-Za-z][0-9A-Za-z.!+_-]{0,127}$/.test(version),
+  oci: (version) => /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(version)
 }
 
 /** The sentence an entry whose package is not one of its registry's is refused with. */
@@ -62,7 +72,7 @@ export function isRunnablePackage(registry: AddonMcpLocalConnect['package']['reg
   if (version === null) return true
   // An image named with its tag takes no second one.
   if (registry === 'oci' && /:[^/]*$/.test(name)) return false
-  return PACKAGE_VERSION[registry].test(version)
+  return PACKAGE_VERSION[registry](version)
 }
 
 /** The command a local directory server runs, and the runtime it needs; null when its package cannot be run safely ({@link DIRECTORY_PACKAGE_REFUSED}). */

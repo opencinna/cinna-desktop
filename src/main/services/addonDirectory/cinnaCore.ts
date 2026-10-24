@@ -381,14 +381,22 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
     }
   }
 
+  /**
+   * The entries, flagged as holding core's MCP directory only when they do: an
+   * index with no `core-mcp-directory` entry (none seeded, or none this account
+   * may see) leaves the opencinna list to the MCP registries provider.
+   */
+  const withMcpFlag = (entries: ProviderEntry[]): Pick<ProviderListing, 'entries' | 'mcpDirectory'> =>
+    entries.some((entry) => entry.ref.source === CORE_MCP_SOURCE) ? { entries, mcpDirectory: true } : { entries }
+
   /** What the cached index still offers when a read failed: its entries (no policy — the stored one stands). */
   const staleListing = (key: string): Pick<ProviderListing, 'entries' | 'mcpDirectory'> =>
-    indexCache && indexCache.key === key ? { entries: indexCache.entries, mcpDirectory: true } : { entries: [] }
+    indexCache && indexCache.key === key ? withMcpFlag(indexCache.entries) : { entries: [] }
 
   /** core's unified index, or `legacy` when this core has none (404). */
   async function unified(profile: string, key: string, read: NonNullable<CinnaCoreReads['directory']>): Promise<ProviderListing | 'legacy'> {
     if (indexCache && indexCache.key === key && reads.now() - indexCache.at < CORE_DIRECTORY_TTL_MS) {
-      return { entries: indexCache.entries, policy: indexCache.policy, mcpDirectory: true }
+      return { ...withMcpFlag(indexCache.entries), policy: indexCache.policy }
     }
     const etag = indexCache && indexCache.key === key ? indexCache.etag : null
     let answer: { status: number; body: unknown }
@@ -403,7 +411,7 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
     if (answer.status === 404) return 'legacy'
     if (answer.status === 304 && indexCache && indexCache.key === key) {
       indexCache = { ...indexCache, at: reads.now() }
-      return { entries: indexCache.entries, policy: indexCache.policy, mcpDirectory: true }
+      return { ...withMcpFlag(indexCache.entries), policy: indexCache.policy }
     }
     if (answer.status === 401 || answer.status === 403) return { entries: [], error: CORE_SOURCE_TEXT.reauth, errorCode: 'reauth' }
     const body = rec(answer.body)
@@ -414,7 +422,7 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
     const entries = body.data.flatMap((row) => fromCoreEntry(row) ?? [])
     const policy = fromCorePolicy(body.policy)
     indexCache = { key, at: reads.now(), etag: str(body.etag), entries, policy }
-    return { entries, policy, mcpDirectory: true }
+    return { ...withMcpFlag(entries), policy }
   }
 
   /** The reads an older core answers: catalog skills and the marketplaces, and no policy. */
