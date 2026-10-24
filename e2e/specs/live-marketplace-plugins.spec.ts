@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import type { Locator } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
@@ -13,8 +14,8 @@ import type { LiveCinnaConfig } from '../fixtures/liveCinna'
  * cinna-core.** A kit folder agent on a profile linked to the local core
  * opens Addons → Add, and the one picker lists skills and plugins from core's
  * `/addons/directory` side by side: `pdf` finds the `pdf` skill and the
- * `carbone-skill` and `desktop-commander` plugins (`docx` is found by its own
- * name: the search reads summaries, and core's docx summary never says PDF).
+ * `carbone-skill` and `desktop-commander` plugins, and `docx`, whose
+ * description (not its summary) says PDF: the search reads both.
  * Nothing on core is synced, edited or deleted.
  *
  * - **L1 `carbone-skill`** (one skill, `carbone`): its `plugin.json` says
@@ -328,11 +329,17 @@ async function skillPluginStory(cinna: CinnaApp, agent: { id: string; path: stri
     expect(touched.length, `a tool call opens or reads the ${story.skill} skill`).toBeGreaterThan(0)
     const roots = [cinna.sandbox.userData, realpathSync(cinna.sandbox.userData), agent.path, realpathSync(agent.path)]
     const paths = touched
-      // File paths only: a URL's path (the skill's docs at https://carbone.io/…) is not a read from disk.
-      .flatMap((tool) => toolText(turn, tool).match(/(?<![\w.~:/-])~?(?:\/[\w.@~+%-]+)+/g) ?? [])
+      // File paths only: a URL's path (the skill's docs at https://carbone.io/…) is not a read from disk,
+      // nor is the tail of a glob (`find ~ -path '*/carbone/SKILL.md'`).
+      .flatMap((tool) => toolText(turn, tool).match(/(?<![\w.~:/*-])~?(?:\/[\w.@~+%-]+)+/g) ?? [])
       .filter((path) => path.includes(`/${story.skill}`))
     console.log(`live-marketplace-plugins skill paths: ${JSON.stringify([...new Set(paths)])}`)
-    expect(paths.filter((path) => !roots.some((root) => path.startsWith(root))), `no tool read a ${story.skill} skill from outside the sandbox`).toEqual([])
+    // Only a path that exists can have been read. Codex sometimes mistypes the cached copy's long path
+    // (the e2e home's `~/.cinna-e2e-codex-A` prefix on userData's `…/userData/…`), the
+    // read fails and it searches the home with find/rg before reading the right path. A copy outside
+    // the sandbox, such as one in the real `~/.codex/skills`, exists and is still caught.
+    const outside = paths.filter((path) => !roots.some((root) => path.startsWith(root)) && existsSync(path.replace(/^~(?=\/)/, homedir())))
+    expect(outside, `no tool read a ${story.skill} skill from outside the sandbox`).toEqual([])
   })
 
   await test.step('the reply carries the fact from the plugin’s SKILL.md', async () => {
@@ -361,13 +368,9 @@ test('@live L1 a folder agent answers from carbone-skill, a plugin added through
     await expect(section.getByText('No addons yet.', { exact: true })).toBeVisible()
     await section.getByRole('button', { name: 'Add', exact: true }).click()
     await expect(dialog).toBeVisible()
-    // docx is a skill too, but the search reads the summary, not the description, and core's
-    // summary of docx never says PDF: it is found under its own name.
-    await search.fill('docx')
-    await expect(tile('docx'), 'docx is listed for "docx"').toBeVisible({ timeout: 30_000 })
-    await expect(tile('docx').locator('[data-addon-kind]')).toHaveText('Skill')
+    // docx's summary never says PDF; its description does, and the search reads descriptions too.
     await search.fill('pdf')
-    for (const [name, kind] of [['pdf', 'Skill'], [CARBONE, 'Plugin'], [COMMANDER, 'Plugin']]) {
+    for (const [name, kind] of [['pdf', 'Skill'], ['docx', 'Skill'], [CARBONE, 'Plugin'], [COMMANDER, 'Plugin']]) {
       await expect(tile(name), `${name} is listed for "pdf"`).toBeVisible({ timeout: 30_000 })
       await expect(tile(name).locator('[data-addon-kind]')).toHaveText(kind)
     }

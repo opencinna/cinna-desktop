@@ -13,7 +13,8 @@ import type { Page } from '@playwright/test'
  * `HOME` — the narrow exception `live-sharing-skill-engines.spec.ts` (T2.3b,
  * T2.3c) introduced, with the same safety measures:
  *
- * - `userData` is still a throwaway temp dir (`CINNA_USER_DATA`) and
+ * - `userData` is still throwaway (`CINNA_USER_DATA`), at
+ *   `<home>/Library/Application Support/Cinna` like an installed app's, and
  *   `--use-mock-keychain` stays, so the app's own safeStorage never touches the
  *   login keychain.
  * - **Nothing is written into the real `HOME`'s rc files.** The sandbox's
@@ -54,13 +55,19 @@ export interface RealLoginRun {
   startedAt: number
 }
 
-/** `<root>`: a temp dir for userData; `home`: a fresh folder under the real `HOME`. */
+/**
+ * `<root>`: a temp dir; `home`: a fresh folder under the real `HOME`, holding
+ * userData where an installed app keeps it. Not under `tmpdir()`: Codex,
+ * pointed at a plugin's cached `SKILL.md` under `/var/folders/<id>/T/…`,
+ * sometimes rewrote that prefix as `~/.` and searched the home when the read
+ * failed, a path shape no installed app has; this one has the real space too.
+ */
 export function makeRealLoginDirs(login: RealLogin): { root: string; home: string; userData: string; appHome: string } {
   const root = mkdtempSync(join(tmpdir(), `cinna-e2e-${login.engine}-`))
-  const userData = join(root, 'userData')
-  mkdirSync(userData, { recursive: true })
   const appHome = homedir()
   const home = mkdtempSync(join(appHome, `.cinna-e2e-${login.engine}-`))
+  const userData = join(home, 'Library', 'Application Support', 'Cinna')
+  mkdirSync(userData, { recursive: true })
   return { root, home, userData, appHome }
 }
 
