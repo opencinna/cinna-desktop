@@ -116,15 +116,6 @@ function expectNoDialog(vm: BareVm, after: string): void {
 }
 
 test('a Node.js plugin is blocked and a Python plugin runs on the app’s own uv', async ({ vm }) => {
-  test.fail(
-    true,
-    'Known defect: on the first Python server launch the managed uv looks for an interpreter on PATH before ' +
-      'downloading one; the tool-shims/python3 stand-in exits 127, uv skips it as a bad interpreter and queries the ' +
-      'next python3 on PATH, /usr/bin/python3 — the Command Line Tools stub — so "Install Command Line Developer Tools" ' +
-      'appears during "connect pytools". The managed uv env sets no UV_PYTHON_PREFERENCE=only-managed (or ' +
-      'UV_MANAGED_PYTHON=1), which skips the PATH search. Every other assertion passes; ' +
-      "expectNoDialog(vm, 'connect pytools') is the one that should once it is fixed."
-  )
   const core = await startAddonCore(
     [NODE_PLUGIN, pythonPlugin(PY_LOCKED.plugin, PY_LOCKED.server, PY_LOCKED.tool, true), pythonPlugin(PY_UNLOCKED.plugin, PY_UNLOCKED.server, PY_UNLOCKED.tool, false)],
     `http://127.0.0.1:${GUEST_PORT}`
