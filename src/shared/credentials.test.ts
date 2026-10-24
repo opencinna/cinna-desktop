@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  firstActiveCredential,
   isCredentialUsable,
   normaliseOllamaHost,
   ollamaOpenAIBaseUrl,
@@ -52,6 +53,14 @@ describe('isCredentialUsable', () => {
   /** Enablement is deliberately not part of this — see the function's own note. */
   it('says nothing about whether the credential is enabled', () => {
     expect(isCredentialUsable({ type: 'ollama', hasApiKey: false })).toBe(true)
+  })
+})
+
+describe('firstActiveCredential', () => {
+  const row = (id: string, over: Record<string, unknown> = {}) => ({ id, type: 'openai', hasApiKey: true, enabled: true, ...over })
+  it('is the first switched-on credential with a usable key, in list order, or null', () => {
+    expect(firstActiveCredential([row('off', { enabled: false }), row('no-key', { hasApiKey: false }), row('oauth', { unsupported: true }), row('ollama', { type: 'ollama', hasApiKey: false }), row('later')])?.id).toBe('ollama')
+    expect(firstActiveCredential([row('off', { enabled: false })])).toBeNull()
   })
 })
 

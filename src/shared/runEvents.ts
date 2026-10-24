@@ -48,6 +48,8 @@ export type InputRequest =
   | {
       kind: 'permission'
       allowRemember?: boolean
+      /** `chat` when *Always allow* is kept for this chat rather than the agent. */
+      rememberScope?: 'chat'
       /** The engine's coarse operation — `bash`, `edit`, `Bash`, `WebFetch`, … */
       action: string
       /** What it wants to touch: a command line, a path, a URL. */

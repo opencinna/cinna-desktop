@@ -107,6 +107,8 @@ export function PermissionRequestBlock({
   // covers more than what is on screen: a URL widened to its origin, and an ask
   // with no resources at all, which can only be remembered as the whole action.
   const scopeIsWider = grantPatterns.some((entry) => entry.scope !== 'exact')
+  // A chat runtime keeps its grants for the chat, not for an agent.
+  const keptFor = request.rememberScope === 'chat' ? 'chat' : 'agent'
 
   const answer = async (reply: 'once' | 'always' | 'reject'): Promise<void> => {
     if (!requestId || busy || uncertain) return
@@ -182,7 +184,7 @@ export function PermissionRequestBlock({
                   ? 'Denied.'
                   : answered?.reply === 'always'
                     ? answered.remembered
-                      ? 'Allowed, and remembered for this agent.'
+                      ? `Allowed, and remembered for this ${keptFor}.`
                       : 'Allowed once — the rule could not be saved.'
                     : 'Allowed once.')}
             </div>
@@ -264,7 +266,7 @@ export function PermissionRequestBlock({
           */}
           {(live || holding) && request.allowRemember !== false && scopeIsWider && (
             <div className="mt-2 text-[11px] text-[var(--color-text-muted)] break-all">
-              Always allow remembers {grantScope} for this agent only.
+              Always allow remembers {grantScope} for this {keptFor} only.
             </div>
           )}
         </div>

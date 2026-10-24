@@ -145,6 +145,21 @@ describe('PermissionRequestBlock', () => {
     expect(await screen.findByText('Allowed, and remembered for this agent.')).toBeTruthy()
   })
 
+  it('says "this chat" for a chat runtime, whose grants are the chat’s', async () => {
+    // Mutation: drop the `rememberScope` branch and both lines say "this agent".
+    render(
+      <PermissionRequestBlock
+        request={request({ action: 'webfetch', resources: ['https://docs.example.com/a'], rememberScope: 'chat' })}
+        requestId="per_chat"
+        interactive
+        onAnswer={async () => ({ remembered: true })}
+      />
+    )
+    expect(screen.getByText(/remembers https:\/\/docs\.example\.com\/\* for this chat only/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Always allow'))
+    expect(await screen.findByText('Allowed, and remembered for this chat.')).toBeTruthy()
+  })
+
   it('names a blanket grant in words when the ask names no resource', () => {
     // `external_directory` with no resources is the one ask whose *Always
     // allow* stores a `*` grant. It has to read as broad, and not in the

@@ -28,6 +28,35 @@ describe('conductor native tool policy', () => {
   })
 })
 
+describe('the workspace tool policy', () => {
+  it('keeps Claude native tools, loads user settings and appends the instructions to the claude_code preset', () => {
+    const original = plan()
+    const meta = original.session.meta as { claudeCode: { options: Record<string, unknown> } }
+    meta.claudeCode.options = { ...meta.claudeCode.options, settingSources: [], strictMcpConfig: true, mcpServers: {}, model: 'haiku', plugins: [{ type: 'local', path: '/p' }] }
+    const workspace = applyConductorToolPolicy(original, 'claude', 'workspace')
+    const options = (workspace.session.meta as { claudeCode: { options: Record<string, unknown> } }).claudeCode.options
+    // Mutation: return the restricted options and `tools: []`/`settingSources: []` come back.
+    expect(options).toEqual({ systemPrompt: { type: 'preset', preset: 'claude_code', append: 'chosen' }, settingSources: ['user'], agents: {},
+      model: 'haiku', plugins: [{ type: 'local', path: '/p' }] })
+    expect(workspace.session.mcpServers).toEqual(original.session.mcpServers)
+    expect(workspace.setup).toEqual(original.setup)
+  })
+  it('restricts every engine when no policy is given, as an AI function asks', () => {
+    expect(applyConductorToolPolicy(plan(), 'claude').session.meta).toMatchObject({ claudeCode: { options: { tools: [] } } })
+    expect(applyConductorToolPolicy(plan(), 'claude', 'connectors').session.meta).toMatchObject({ claudeCode: { options: { tools: [] } } })
+  })
+  it('accepts Codex only when sealed by the workspace inspector, never by the restricted one', () => {
+    expect(() => applyConductorToolPolicy({ ...plan(), conductorPolicy: 'no-native-tools' }, 'codex', 'workspace')).toThrow('Codex workspace chats were not verified')
+    expect(() => applyConductorToolPolicy({ ...plan(), conductorPolicy: 'workspace' }, 'codex', 'connectors')).toThrow('Choose Claude or OpenCode')
+    const sealed = { ...plan(), conductorPolicy: 'workspace' as const }
+    expect(applyConductorToolPolicy(sealed, 'codex', 'workspace')).toBe(sealed)
+  })
+  it('drops the Antigravity conductor allowlist and keeps the sealed-folder denylist', () => {
+    const original = { ...plan(), session: { mcpServers: [], meta: { agy: { enabledTools: ['view_file'], disabledTools: ['run_command'] } } } }
+    expect(applyConductorToolPolicy(original, 'antigravity', 'workspace').session.meta).toEqual({ agy: { disabledTools: ['schedule', 'start_subagent'] } })
+  })
+})
+
 describe('the conductor permission gate', () => {
   it.each([
     ['claude', 'mcp__cinna__ask_writer', { title: 'ask_writer' }],

@@ -79,6 +79,8 @@ function settle(queryClient: QueryClient, engine: EngineLoginId, result: Runtime
   void queryClient.invalidateQueries({ queryKey: ENGINE_LOGIN_RUNNING_KEY })
   void queryClient.invalidateQueries({ queryKey: ['agents'] })
   void queryClient.invalidateQueries({ queryKey: ['local-development-context'] })
+  // Runtime modes carry the engine's availability: an install or login just ended.
+  void queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
 }
 
 /** Write one push from main into the cache. Called by `useRuntimeSetupWatch`. */
@@ -196,7 +198,7 @@ export interface RuntimeCardSetup {
   antigravityTerms: boolean
 }
 
-function percentOf(binary: EngineBinaryState | undefined): number | null {
+export function percentOf(binary: EngineBinaryState | undefined): number | null {
   if (binary?.state !== 'resolving' || binary.received === undefined) return null
   const total = binary.assetBytes ?? binary.total
   return total ? Math.min(99, Math.floor((binary.received / total) * 100)) : null

@@ -294,6 +294,13 @@ export const chatModes = sqliteTable('chat_modes', {
   engine: text('engine').$type<import('../../shared/engine').AgentEngine>(),
   systemPrompt: text('system_prompt').notNull().default(''),
   toolPolicy: text('tool_policy').$type<import('../../shared/chatModeRuntime').ChatToolPolicy>().notNull().default('connectors'),
+  /** Work tier (`simple` | `medium` | `complex`), shown as Effort; null = no preference. */
+  complexity: text('complexity').$type<import('../../shared/modelFamilies').WorkComplexity>(),
+  /**
+   * Set only on a runtime mode: the engine it stands for. Unique per user where
+   * not null (partial index `chat_modes_builtin_engine`, created by the migration).
+   */
+  builtinEngine: text('builtin_engine').$type<import('../../shared/engine').AgentEngine>(),
   mcpProviderIds: text('mcp_provider_ids', { mode: 'json' }).$type<string[]>().default([]),
   colorPreset: text('color_preset').notNull().default('slate'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),

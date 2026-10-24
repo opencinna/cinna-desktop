@@ -6,6 +6,16 @@ import { getManagedResourceScopes, getProfileScopeUserId } from '../auth/scope'
 import { isManagedModeId } from '../llm/accountConfigTypes'
 import { resolveDefaultModeId } from '../../shared/chatModeDefaults'
 import { ChatModeError } from '../errors'
+import {
+  RUNTIME_MODE_ENGINES,
+  RUNTIME_MODE_NAMES,
+  RUNTIME_MODE_TAKES_CREDENTIAL,
+  runtimeModeDefaults,
+  runtimeModeResetFields,
+  supportsWorkspacePolicy
+} from '../../shared/chatModeRuntime'
+import { isWorkComplexity } from '../../shared/modelFamilies'
+import type { AgentEngine } from '../../shared/engine'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('chatmode')
@@ -109,8 +119,11 @@ export const chatModeService = {
     if (input.engine != null && !['claude', 'codex', 'opencode', 'antigravity'].includes(input.engine)) {
       throw new ChatModeError('invalid_value', 'Choose Default runtime, Claude, Codex, Antigravity, or OpenCode.')
     }
-    if (input.toolPolicy !== undefined && input.toolPolicy !== 'none' && input.toolPolicy !== 'connectors') {
-      throw new ChatModeError('invalid_value', 'Choose No tools or Connected tools.')
+    if (input.toolPolicy !== undefined && input.toolPolicy !== 'none' && input.toolPolicy !== 'connectors' && input.toolPolicy !== 'workspace') {
+      throw new ChatModeError('invalid_value', 'Choose Workspace, Connected tools or No tools.')
+    }
+    if (input.complexity != null && !isWorkComplexity(input.complexity)) {
+      throw new ChatModeError('invalid_value', 'Choose Low, Medium or High effort.')
     }
     if (input.systemPrompt !== undefined && (typeof input.systemPrompt !== 'string' || input.systemPrompt.length > 100_000)) {
       throw new ChatModeError('invalid_value', 'Instructions must be text shorter than 100,000 characters.')
@@ -122,19 +135,29 @@ export const chatModeService = {
         'This chat mode is managed by your account and cannot be modified.'
       )
     }
+    // Runtime modes are made by `ensureRuntimeModes` only; an upsert never creates one.
+    const { builtinEngine: _ignored, ...fields } = input
     return getDb().transaction((tx) => {
-      if (input.isDefault) {
+      const existing = fields.id ? chatModeRepo.getOwned(userId, fields.id, tx) : undefined
+      if (fields.id && !existing) throw new ChatModeError('not_found', 'Chat mode not found')
+      if (existing?.builtinEngine) guardRuntimeModeEdit(existing, fields)
+      const engine = fields.engine !== undefined ? fields.engine : existing?.engine ?? null
+      if ((fields.toolPolicy ?? existing?.toolPolicy) === 'workspace' && !supportsWorkspacePolicy(engine)) {
+        throw new ChatModeError('invalid_value', `Workspace is not available for ${engine ? RUNTIME_MODE_NAMES[engine] : 'the Default runtime'} yet.`)
+      }
+
+      if (fields.isDefault) {
         chatModeRepo.clearDefaults(userId, tx)
       }
 
-      if (input.id) {
-        const updated = chatModeRepo.update(userId, input.id, input, tx)
+      if (fields.id) {
+        const updated = chatModeRepo.update(userId, fields.id, fields, tx)
         if (!updated) throw new ChatModeError('not_found', 'Chat mode not found')
-        logger.info('chat mode updated', { modeId: input.id })
-        return { id: input.id }
+        logger.info('chat mode updated', { modeId: fields.id })
+        return { id: fields.id }
       }
 
-      const { id } = chatModeRepo.insert(userId, input, tx)
+      const { id } = chatModeRepo.insert(userId, fields, tx)
       logger.info('chat mode created', { modeId: id })
       return { id }
     })
@@ -147,7 +170,67 @@ export const chatModeService = {
         'This chat mode is managed by your account and cannot be deleted.'
       )
     }
+    if (chatModeRepo.getOwned(userId, id)?.builtinEngine) {
+      throw new ChatModeError('read_only', 'A runtime mode cannot be deleted. Reset it to its defaults instead.')
+    }
     const removed = chatModeRepo.delete(userId, id)
     if (removed) logger.info('chat mode deleted', { modeId: id })
+  },
+
+  /**
+   * Create the user's four runtime modes — Claude Agent, Codex, Antigravity,
+   * OpenCode — where missing. Every engine gets one whether or not it is set up
+   * on this computer, so a chat's `modeId` stays valid while a runtime comes and
+   * goes. Never starred. An existing row takes its engine's current name.
+   * Idempotent, and safe when two calls race: the partial
+   * unique index lets one insert per engine through and ignores the other.
+   */
+  ensureRuntimeModes(userId: string): void {
+    for (const engine of RUNTIME_MODE_ENGINES) {
+      const existing = chatModeRepo.getRuntimeMode(userId, engine)
+      if (existing) {
+        // The user cannot rename a runtime mode, so a renamed runtime must not
+        // leave a row behind the name guard: it follows the current name.
+        if (existing.name !== RUNTIME_MODE_NAMES[engine]) {
+          chatModeRepo.setName(userId, existing.id, RUNTIME_MODE_NAMES[engine])
+          logger.info('runtime mode renamed', { engine })
+        }
+        continue
+      }
+      const defaults = runtimeModeDefaults(engine)
+      if (chatModeRepo.insertRuntimeModeIfMissing(userId, { ...defaults, builtinEngine: engine })) {
+        logger.info('runtime mode created', { engine })
+      }
+    }
+  },
+
+  /**
+   * Put a runtime mode back the way {@link ensureRuntimeModes} made it: name,
+   * effort, tools, instructions and color from the defaults; no model, no
+   * credential, no MCP servers. Whether it is the default is kept.
+   */
+  reset(userId: string, id: string): void {
+    const row = chatModeRepo.getOwned(userId, id)
+    if (!row) throw new ChatModeError('not_found', 'Chat mode not found')
+    if (!row.builtinEngine) throw new ChatModeError('read_only', 'Only a runtime mode can be reset to its defaults.')
+    chatModeRepo.update(userId, id, { ...runtimeModeResetFields(row.builtinEngine), isDefault: row.isDefault })
+    logger.info('runtime mode reset', { modeId: id, engine: row.builtinEngine })
+  }
+}
+
+/**
+ * What may not change on a runtime mode. The renderer saves whole rows, so the
+ * incoming name and engine are compared with the stored ones rather than
+ * refused for being present. OpenCode runs on an AI credential, so its runtime
+ * mode may bind one; the other engines have none to bind.
+ */
+function guardRuntimeModeEdit(existing: ChatModeRow, input: ChatModeUpsertInput): void {
+  const engine = existing.builtinEngine as AgentEngine
+  if (input.name !== existing.name) throw new ChatModeError('read_only', 'A runtime mode keeps its name.')
+  if (input.engine !== undefined && input.engine !== engine) {
+    throw new ChatModeError('read_only', `This runtime mode always runs ${RUNTIME_MODE_NAMES[engine]}.`)
+  }
+  if (!RUNTIME_MODE_TAKES_CREDENTIAL[engine] && (input.providerId ?? null) !== null) {
+    throw new ChatModeError('read_only', `${RUNTIME_MODE_NAMES[engine]} does not use an AI credential.`)
   }
 }

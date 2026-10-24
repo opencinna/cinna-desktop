@@ -204,6 +204,14 @@ describe('startNewChat — the mode and model it stamps', () => {
     expect(written()).toMatchObject({ modeId: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' })
   })
 
+  it('stamps a starred runtime mode, which has no credential or model, by id alone', async () => {
+    const runtime = { id: 'runtime-claude', providerId: null, modelId: null, engine: 'claude', runtime: { engine: 'claude', availability: 'ready' } }
+    await start({ agentIds: [], mode: runtime })
+    expect(written()).toMatchObject({ modeId: 'runtime-claude', router: 'direct' })
+    expect(written()).not.toHaveProperty('providerId')
+    expect(written()).not.toHaveProperty('modelId')
+  })
+
   it('leaves them off a coordinated chat an agent conducts', async () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'], conductorId: 'a-1', mode })
     expect(written()).toMatchObject({ agentId: 'a-1', router: 'coordinator' })

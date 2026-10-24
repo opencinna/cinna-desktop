@@ -116,7 +116,8 @@ function agentRow(id: string, name: string): AgentRow {
 }
 const AGENTS = [agentRow('a-1', 'Research'), agentRow('a-2', 'Builder'), { ...agentRow('a-runtime', 'Chat runtime'), driver: 'acp' as const }]
 const bindRuntime = vi.fn((_userId: string, chat: Record<string, unknown>) => { chatRow = { ...chat, agentId: 'a-runtime' }; return chatRow })
-vi.mock('../services/chatConductorService', () => ({ chatConductorService: { bind: (...args: Parameters<typeof bindRuntime>) => bindRuntime(...args) } }))
+const syncToolPolicy = vi.fn((_userId: string, _chat: Record<string, unknown>) => false)
+vi.mock('../services/chatConductorService', () => ({ chatConductorService: { bind: (...args: Parameters<typeof bindRuntime>) => bindRuntime(...args), syncToolPolicy: (...args: Parameters<typeof syncToolPolicy>) => syncToolPolicy(...args) } }))
 
 const findAgent = vi.fn((_s: string, _p: string, id: string) => {
   const row = AGENTS.find((a) => a.id === id)
@@ -275,6 +276,20 @@ describe('run:send — who answers', () => {
     // stale cache naming another agent must not redirect a direct chat.
     await send({ chatId: 'chat-1', content: 'hello', addressedAgentId: 'a-2' })
     expect(routedTo()).toBe('a-1')
+  })
+
+  it('checks a bound chat\'s runtime against its mode\'s current Tools before the turn runs', async () => {
+    // Mutation: drop the `syncToolPolicy` call in `resolveAndRun` and a mode
+    // set to No tools keeps an existing chat on shell and file tools.
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-runtime' }
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect(syncToolPolicy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'chat-1', agentId: 'a-runtime' }))
+    expect(routedTo()).toBe('a-runtime')
+    syncToolPolicy.mockClear()
+    // A chat bound on this turn was just set up from the mode: nothing to compare.
+    chatRow = { id: 'chat-1', router: 'direct', agentId: null }
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect(syncToolPolicy).not.toHaveBeenCalled()
   })
 
   it('binds an agentless coordinated chat to its default runtime', async () => {

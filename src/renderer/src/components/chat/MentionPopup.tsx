@@ -24,6 +24,8 @@ export interface MentionPopupProps<T> {
   getSecondary?: (item: T) => string | null | undefined
   getMeta?: (item: T) => string | null | undefined
   secondaryClamp?: 'truncate' | 'line-clamp-2'
+  /** A group heading drawn before the first item of each group; null for none. */
+  getGroup?: (item: T) => string | null
 }
 
 // Container is tinted with the accent on a frosted backdrop. Light theme uses
@@ -62,7 +64,8 @@ export function MentionPopup<T>({
   getPrimary,
   getSecondary,
   getMeta,
-  secondaryClamp = 'truncate'
+  secondaryClamp = 'truncate',
+  getGroup
 }: MentionPopupProps<T>): React.JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -104,8 +107,16 @@ export function MentionPopup<T>({
           const secondary = getSecondary?.(item)
           const meta = getMeta?.(item)
 
+          const group = getGroup?.(item) ?? null
+          const groupStarts = group !== null && (i === 0 || getGroup?.(items[i - 1]) !== group)
+
           return (
             <li key={getKey(item, i)} role="presentation">
+              {groupStarts && (
+                <div className={`px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] ${i > 0 ? 'mt-1 border-t border-[var(--color-border)] pt-1.5' : ''}`}>
+                  {group}
+                </div>
+              )}
               <button
                 id={optionId}
                 role="option"

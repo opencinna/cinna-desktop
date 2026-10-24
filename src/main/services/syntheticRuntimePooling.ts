@@ -5,13 +5,16 @@ import type { ConductorContext } from './chatConductorService'
  * Session cwd is deliberately absent: every chat keeps its own session folder.
  * `authFingerprint` is Claude's auth mode/credential digest
  * (`claudeAuthService.fingerprint`), null for other engines; omitted from the
- * hash when null so existing keys stay put.
+ * hash when null so existing keys stay put. `complexity` likewise.
  */
 export function syntheticRuntimePoolKey(userId: string, context: ConductorContext, authFingerprint: string | null = null): string {
   return `chat-runtime:${createHash('sha256').update(JSON.stringify([
     userId, context.engine, context.credentialId, context.modelId,
     context.instructions, context.toolPolicy,
-    ...(authFingerprint ? [authFingerprint] : [])
+    ...(authFingerprint ? [authFingerprint] : []),
+    // Codex takes its effort per process from the tier, so tiers do not share
+    // one. Omitted when null so keys made before Effort stay put.
+    ...(context.complexity ? [{ complexity: context.complexity }] : [])
   ])).digest('hex').slice(0, 32)}`
 }
 

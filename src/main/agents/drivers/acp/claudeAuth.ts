@@ -254,6 +254,15 @@ export class ClaudeAuthProbe {
   }
 
   /**
+   * The last answer kept, however old, or null — **never asks**. For a list
+   * that may say "not logged in" from what is already known (runtime modes'
+   * availability) without spawning a CLI to find out.
+   */
+  lastKnown(): ClaudeAuthStatus | null {
+    return this.fixedAnswer() ?? this.cached?.value ?? null
+  }
+
+  /**
    * Forget the answer **without asking again** — the binary it was asked of is
    * no longer the one in use (the Claude Path in Settings changed). Not
    * `refresh`: the new path may still be resolving. A probe already in flight

@@ -23,6 +23,8 @@ import { useAppSettings } from '../../hooks/useAppSettings'
 import { canConduct, newChatRouter } from '../../../../shared/chatRouting'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
+import { composerModes } from '../../utils/composerModes'
+import { ChatModeGlyph } from '../chat/ChatModeGlyph'
 import { CinnaLogoDraw } from '../ui/CinnaLogoDraw'
 import type { ComposerAttachment } from '../../../../shared/attachments'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
@@ -391,12 +393,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null
 
   // Helpers shared by both ChatInput instances when wiring the `~` mode popup.
-  const renderModeIcon = (mode: ChatModeData): React.ReactNode => (
-    <div
-      className="w-2.5 h-2.5 rounded-full shrink-0"
-      style={{ backgroundColor: getPreset(mode.colorPreset).border }}
-    />
-  )
+  const renderModeIcon = (mode: ChatModeData): React.ReactNode => <ChatModeGlyph mode={mode} dot={10} />
   const composeModeSecondary = (mode: ChatModeData): string | null => {
     const model = mode.modelId
       ? (allModels ?? []).find((m) => m.id === mode.modelId)?.name ?? mode.modelId
@@ -407,7 +404,9 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   }
   // Drop account-managed modes the user has locally disabled — they shouldn't be
   // selectable in the composer (their provider's adapter is unregistered).
-  const availableModes = (chatModes ?? []).filter((m) => m.enabled !== false)
+  // Runtime modes come first (the Runtimes group), and only while their
+  // runtime can start a chat; one that is not set up is fixed in Settings.
+  const availableModes = composerModes(chatModes ?? [])
 
   const sendErrorBanner = sendError ? (
     <div
@@ -527,6 +526,15 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
             ref={chatInputRef}
             chatId={activeChatId}
             modeColor={activeChatModeColor}
+            // A runtime mode's chat: the runtime chip carries the mode's glyph, not the generic bot.
+            conductorIcon={activeChatMode?.builtinEngine ? <ChatModeGlyph mode={activeChatMode} dot={10} /> : undefined}
+            // The chat's captured policy, from main — not its mode's current Tools.
+            onOpenChatFolder={activeChatData?.workspace ? () => {
+              const chatId = activeChatId
+              void window.api.chat.openFolder(chatId)
+                .then((result) => { if (!result.success) setSendError(result.error) })
+                .catch((error: unknown) => setSendError(unwrapIpcError(error, 'Could not open the chat folder.')))
+            } : undefined}
             chatModeMenu={
               activeChatMode && availableModes.length > 0
                 ? {

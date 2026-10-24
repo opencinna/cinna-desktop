@@ -88,6 +88,19 @@ export function isCredentialActive(provider: UsableCredential & { enabled: boole
   return provider.enabled && isCredentialUsable(provider)
 }
 
+/**
+ * The first credential, in list order, that can run right now — or null.
+ *
+ * One rule for two questions about an OpenCode runtime mode: whether Settings
+ * calls it Ready (`runtimeModeAvailability`), and which credential a chat on it
+ * runs on when nothing else names one (`chatConductorService.ensure`). Kept as
+ * one function so a mode can never be Ready on a credential its chat then
+ * cannot find.
+ */
+export function firstActiveCredential<T extends UsableCredential & { enabled: boolean }>(providers: readonly T[]): T | null {
+  return providers.find(isCredentialActive) ?? null
+}
+
 /** As much of a credential as {@link findCredentialByReference} needs. */
 export interface ReferenceableCredential extends UsableCredential {
   id: string

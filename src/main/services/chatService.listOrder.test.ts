@@ -28,7 +28,7 @@ vi.mock('./chatModeService', () => ({ chatModeService: { findMerged: () => null 
 vi.mock('./agentService', () => ({ agentService: { findAgent: () => null } }))
 vi.mock('./chatConductorService', async (original) => {
   const actual = await original<typeof import('./chatConductorService')>()
-  return { ...actual, chatConductorService: { remove: vi.fn(), ensure: vi.fn() } }
+  return { ...actual, chatConductorService: { remove: vi.fn(), ensure: vi.fn(), hasWorkspace: () => false } }
 })
 vi.mock('./conductorBridge', () => ({ conductorBridge: { refresh: async () => {} } }))
 

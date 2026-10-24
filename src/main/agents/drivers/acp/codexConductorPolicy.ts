@@ -249,3 +249,56 @@ export async function prepareCodexConductorPolicy(plan: AcpLaunchPlan, configRoo
     options.signal?.removeEventListener('abort', aborted)
   }
 }
+
+/**
+ * A `workspace` chat's Codex launch: the launcher's own plan — the shape a
+ * folder agent on **Ask for approval** runs, the user's `~/.codex` config and
+ * MCP servers included — sealed only once it is the verified version on the
+ * patched adapter, and held to `workspace-write` (approval on request, the
+ * sandbox rooted at the **session** cwd, the chat's folder, not the
+ * profile-owned process cwd: contract `codex.policy.workspace-cwd`) and the
+ * Default collaboration mode. Never `agent`: its automatic reviewer would
+ * approve on the user's behalf. Under `workspace-write` a command or patch
+ * inside the chat's folder runs without an ask, and one outside it is refused
+ * by the sandbox unless the model asks to escalate, which asks the user.
+ */
+export async function prepareCodexWorkspacePolicy(plan: AcpLaunchPlan, options: CodexConductorPolicyOptions = {}): Promise<AcpLaunchPlan> {
+  const deps = { platform: process.platform, run,
+    adapterDigest: async (path: string): Promise<string> => {
+      const bytes = await readFile(path)
+      if (bytes.length > MAX_OUTPUT) throw failure('the ACP adapter is too large to verify')
+      return createHash('sha256').update(bytes).digest('hex')
+    }, ...options.deps }
+  if (deps.platform === 'win32') throw failure('Windows startup isolation is not supported')
+  const binary = plan.spec.env.CODEX_PATH
+  if (!binary || !isAbsolute(binary)) throw failure('an absolute executable is required')
+  let config: unknown
+  try { config = JSON.parse(plan.spec.env.CODEX_CONFIG ?? '{}') } catch { throw failure('runtime configuration was malformed') }
+  if (!object(config) || typeof config.developer_instructions !== 'string') throw failure('session instructions were missing')
+  const controller = new AbortController()
+  const aborted = (): void => controller.abort()
+  options.signal?.addEventListener('abort', aborted, { once: true })
+  if (options.signal?.aborted) aborted()
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000)
+  timer.unref?.()
+  const input = { binary, env: { ...plan.spec.env }, cwd: plan.spec.cwd, signal: controller.signal }
+  try {
+    const adapter = plan.spec.args.at(-1)
+    if (!adapter || !isAbsolute(adapter) || await abortable(deps.adapterDigest(adapter), controller.signal) !== adapterPatch.patchedSha256) throw failure('the verified ACP adapter patch is missing; reinstall Cinna Desktop')
+    if ((await abortable(deps.run(input, ['--version']), controller.signal)).trim() !== SUPPORTED_VERSION) throw failure(`only ${SUPPORTED_VERSION} has been verified`)
+    controller.signal.throwIfAborted()
+    const env = { ...plan.spec.env, INITIAL_AGENT_MODE: 'workspace-write' }
+    return { ...plan, conductorPolicy: 'workspace',
+      spec: { ...plan.spec, env, key: hash(JSON.stringify(['workspace', plan.spec.key, env.INITIAL_AGENT_MODE])) },
+      setup: { ...plan.setup, modeId: 'workspace-write',
+        configOptions: [...(plan.setup.configOptions ?? []).filter((option) => option.configId !== 'collaboration_mode'),
+          { configId: 'collaboration_mode', value: 'default' }] } }
+  } catch (error) {
+    if (controller.signal.aborted) throw failure('policy inspection was canceled or timed out')
+    if (error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')) throw error
+    throw failure('policy inspection failed')
+  } finally {
+    clearTimeout(timer)
+    options.signal?.removeEventListener('abort', aborted)
+  }
+}

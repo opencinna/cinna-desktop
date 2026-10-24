@@ -347,6 +347,8 @@ export function describePermissionAction(action: string): string {
       return 'use a tool'
     case 'external_directory':
       return 'use a folder outside its own'
+    case 'skill':
+      return 'load a skill'
     // **Claude's tool names, which are a different vocabulary and stay one.**
     // The engines are not mapped onto each other — a grant is stored under the
     // action the engine that raised it actually named, so a rule written on one
@@ -477,6 +479,8 @@ export type RequestResolution =
 export interface LocalPermissionRequest {
   /** False when this runtime cannot store a standing grant. Omitted for existing ACP asks. */
   allowRemember?: boolean
+  /** `chat` when *Always allow* is kept for this chat (a chat runtime); omitted when it is kept for the agent. */
+  rememberScope?: 'chat'
   action: string
   resources: string[]
   savable: string[]
@@ -498,5 +502,6 @@ export function parsePermissionRequest(
     ? toolInput.savable.filter((r): r is string => typeof r === 'string')
     : []
   const callId = typeof toolInput.callId === 'string' ? toolInput.callId : undefined
-  return { action, resources, savable, callId, ...(toolInput.allowRemember === false ? { allowRemember: false } : {}) }
+  return { action, resources, savable, callId, ...(toolInput.allowRemember === false ? { allowRemember: false } : {}),
+    ...(toolInput.rememberScope === 'chat' ? { rememberScope: 'chat' as const } : {}) }
 }

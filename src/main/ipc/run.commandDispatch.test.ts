@@ -72,7 +72,7 @@ vi.mock('../db/chatAgentCursors', () => ({
 vi.mock('../db/chatOnDemandAgent', () => ({
   chatOnDemandAgentRepo: { listAgentIds: vi.fn(() => []) }
 }))
-vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChat: vi.fn() } }))
+vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChat: vi.fn() }, agentRepo: { getOwned: () => undefined } }))
 
 vi.mock('../auth/activation', () => ({
   userActivation: { isActivated: () => true, requireActivated: () => undefined }

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
-import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
+import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS, antigravitySharedHome, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
 import { ANTIGRAVITY_CONDUCTOR_TOOLS, applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { AcpMessageStream } from '../acpMessages'
 import { permissionAsQuestion, permissionQuestionAnswer } from '../acpQuestions'
@@ -134,6 +134,9 @@ const seen = {
     filters: {} as Record<string, string[] | null>,
     unauthenticated: null as AdapterMessage | null
   },
+  /** Scenario D: `workspace` chats, one per chat id, laid out as production lays them out. */
+  workspace: [] as WorkspaceRun[],
+  workspaceControl: null as WorkspaceRun | null,
   chat: {
     meta: null as Json | null,
     steps: [] as Step[],
@@ -413,6 +416,104 @@ async function chatScenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario D */
+
+const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_INSTRUCTIONS_b52'
+
+interface WorkspaceRun {
+  chatId: string
+  chatFolder: string
+  home: string
+  meta: Json | null
+  modeId: string | null
+  steps: Step[]
+  /** The `pwd -P` the command step's tool output carried. */
+  pwdOutput: string
+  written: boolean
+}
+
+/**
+ * A `workspace` chat as production lays it out: the shared process folder
+ * `<root>/chat-conductors/processes/<hash>` with its home where
+ * `antigravitySharedHome` puts a workspace one (`home` of `drivers/index.ts`
+ * passes `workspace` through, `sharedHome` false is the plain-chat layout), the
+ * session in the chat's own folder `<root>/chat-conductors/<chatId>` (no
+ * `AGENTS.md` there), the plan narrowed by `applyConductorToolPolicy(…,
+ * 'workspace')`, mode `default`. A first prompt with the preamble, then a
+ * `run_command` in the directory the server names, then a `write_to_file`.
+ */
+async function workspaceScenario(binary: string, chatId: string, workspaceHome = true): Promise<WorkspaceRun> {
+  const scratch = makeAntigravityScratch('cinna-contract-agy-ws-')
+  const mcp = new ConductorMcpServer()
+  let gateway: FakeGateway | undefined
+  let connection: AdapterConnection | undefined
+  const run: WorkspaceRun = { chatId, chatFolder: '', home: '', meta: null, modeId: null, steps: [], pwdOutput: '', written: false }
+  try {
+    const calls: string[] = []
+    const cinna = await mcp.ensureSession('cinna', mcpProvider(() => ['probe'], (name) => calls.push(name)))
+    let decideFirst: ((turn: GatewayTurn) => GatewayReply) | null = null
+    gateway = await startFakeGateway((turn): GatewayReply => {
+      if (turn.responses.length === 0 && decideFirst) { const decide = decideFirst; decideFirst = null; return decide(turn) }
+      return { kind: 'text', text: 'OK' }
+    })
+    const conductors = join(scratch.root, 'chat-conductors')
+    const processFolder = join(conductors, 'processes', '0f'.repeat(32))
+    const chatFolder = join(conductors, chatId)
+    mkdirSync(processFolder, { recursive: true })
+    mkdirSync(chatFolder, { recursive: true })
+    run.chatFolder = chatFolder
+    const launcher = createAntigravityLauncher({
+      binary: async () => ({ path: binary }),
+      binaryKnown: async () => ({ state: 'ready' }),
+      auth: async () => ({ state: 'logged_in' }),
+      env: async () => ({ ...scratch.env, ...gatewayEnv(gateway!.port, MODELS) }),
+      systemPrompt: () => WORKSPACE_MARKER,
+      settings: () => ({ model: MODEL, approval: 'ask' }),
+      home: (_userId, _agentId, folderPath) => antigravitySharedHome(folderPath, workspaceHome)
+    })
+    const planned = await launcher.plan({ userId: 'contract', agentId: 'chat-runtime:contract',
+      folder: { name: 'Chat', slug: 'chat-runtime', description: '', path: processFolder, kind: 'bare', runtimeMode: 'isolated' } })
+    if ('error' in planned) throw new Error(planned.error)
+    if (planned.spec.env.GEMINI_HOME) writeGatewayHome(planned.spec.env.GEMINI_HOME)
+    run.home = planned.spec.env.GEMINI_HOME ?? ''
+    // What `acpLauncherFor` does for a workspace chat: its session in the chat folder.
+    const plan = { ...applyConductorToolPolicy(planned, 'antigravity', 'workspace'), sessionCwd: chatFolder }
+    run.meta = plan.session.meta ?? null
+    run.modeId = plan.setup.modeId ?? null
+    const permissions: AdapterMessage[] = []
+    connection = spawnAntigravity({ binary: plan.spec.command, args: plan.spec.args, cwd: plan.spec.cwd, env: plan.spec.env,
+      geminiHome: plan.spec.env.GEMINI_HOME ?? null, answer: answerAsk(permissions) })
+    await connection.rpc('initialize', plan.init as unknown as Json)
+    const created = await connection.rpc('session/new', { cwd: plan.sessionCwd, mcpServers: [cinna.descriptor], _meta: plan.session.meta })
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) return run
+    for (const option of plan.setup.configOptions ?? []) await connection.rpc('session/set_config_option', { sessionId, configId: option.configId, value: option.value })
+    if (plan.setup.modeId) await connection.rpc('session/set_mode', { sessionId, modeId: plan.setup.modeId })
+    const step = async (name: string, texts: string[], decide: ((turn: GatewayTurn) => GatewayReply) | null): Promise<void> => {
+      const at = connection!.updates.length, turnAt = gateway!.turns.length, permAt = permissions.length, callAt = calls.length
+      decideFirst = decide
+      const result = await connection!.rpc('session/prompt', { sessionId, prompt: texts.map((text) => ({ type: 'text', text })) }, 60_000)
+      await sleep(500)
+      run.steps.push({ name, result, updates: connection!.updates.slice(at), turns: gateway!.turns.slice(turnAt), permissions: permissions.slice(permAt), calls: calls.slice(callAt) })
+    }
+    await step('first', [plan.firstPromptPreamble ?? '', FIRST_PROMPT], null)
+    // As a model does: the command runs in the directory the server names.
+    await step('command', ['Print the directory.'], (turn) => ({ kind: 'call', name: 'run_command', args: {
+      CommandLine: 'pwd -P', Cwd: commandCwd(turn.systemText) ?? '/nonexistent', WaitMsBeforeAsync: 5000, toolAction: 'Printing', toolSummary: 'Pwd' } }))
+    const command = run.steps.at(-1)!
+    run.pwdOutput = command.turns.map((turn) => JSON.stringify(turn.responses)).join('\n')
+    await step('edit', ['Write the file.'], () => ({ kind: 'call', name: 'write_to_file', args: {
+      TargetFile: join(chatFolder, 'made.txt'), CodeContent: 'x\n', Overwrite: false, Description: 'probe', toolAction: 'Writing', toolSummary: 'Made' } }))
+    run.written = existsSync(join(chatFolder, 'made.txt'))
+  } finally {
+    await connection?.close()
+    await mcp.dispose()
+    await gateway?.close()
+    scratch.dispose()
+  }
+  return run
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 const folderStep = (name: string): Step | undefined => seen.folder.steps.find((step) => step.name === name)
@@ -522,7 +623,11 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     await folderScenario(binary)
     await nativeScenario(binary)
     await chatScenario(binary)
-  }, 300_000)
+    // Chat ids that sort before `processes/` and after it, and the control:
+    // the plain-chat home layout, under which the later one loses its cwd.
+    for (const chatId of ['A1chat-workspace', 'zzchat-workspace']) seen.workspace.push(await workspaceScenario(binary, chatId))
+    seen.workspaceControl = await workspaceScenario(binary, 'zzchat-workspace', false)
+  }, 420_000)
 
   it(entry('antigravity.launch.version-flag'), () => {
     expect(seen.version.status).toBe(0)
@@ -779,6 +884,36 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     expect(answer).toEqual({ stopReason: 'end_turn' })
     // The owner turns such an answer into no turn telemetry.
     expect(parsePromptTelemetry(answer, 'antigravity')).toBeNull()
+  })
+
+  it(entry('antigravity.policy.workspace-native-tools'), () => {
+    expect(seen.workspace).toHaveLength(2)
+    for (const run of seen.workspace) {
+      // The conductor filter is gone; the launcher's sealed denylist stays.
+      expect(run.meta).toEqual({ agy: { disabledTools: [...ANTIGRAVITY_ISOLATED_DISABLED_TOOLS] } })
+      expect(run.modeId).toBe('default')
+      const first = run.steps[0]?.turns[0]
+      expect(first?.tools).toEqual(expect.arrayContaining(['run_command', 'write_to_file', 'replace_file_content', 'view_file', ...MCP_META_TOOLS]))
+      // The instructions arrive in the opening block, with no AGENTS.md in the chat folder.
+      expect(first?.userText).toContain(WORKSPACE_MARKER)
+    }
+  })
+  it(entry('antigravity.policy.workspace-asks'), () => {
+    for (const run of seen.workspace) {
+      const step = (name: string): Step | undefined => run.steps.find((candidate) => candidate.name === name)
+      expect(step('command')?.permissions.length).toBe(1)
+      expect(step('edit')?.permissions.length).toBe(1)
+      expect(run.written).toBe(true)
+    }
+  })
+  it(entry('antigravity.policy.workspace-cwd'), () => {
+    for (const run of seen.workspace) {
+      expect(commandCwd(run.steps.find((step) => step.name === 'command')?.turns[0]?.systemText)).toBe(run.chatFolder)
+      expect(run.pwdOutput).toContain('The command exited with code 0.')
+      expect(run.pwdOutput).toContain(run.chatFolder)
+    }
+    // The control: the home beside the process folder takes the cwd from a chat id after `processes`.
+    expect(commandCwd(seen.workspaceControl?.steps[0]?.turns[0]?.systemText)).toBe(join(seen.workspaceControl?.home ?? '', 'antigravity-cli', 'skills'))
   })
 
   it(entry('antigravity.policy.builtin-tools'), () => {

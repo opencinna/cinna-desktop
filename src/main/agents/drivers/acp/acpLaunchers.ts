@@ -172,8 +172,11 @@ export interface AcpSessionSetup {
 
 export interface AcpLaunchPlan {
   credentialPrompt?: string
-  /** Main-only seal, set after verifying the native runtime's restricted launch. */
-  conductorPolicy?: 'no-native-tools'
+  /**
+   * Main-only seal, set after verifying the native runtime's restricted launch
+   * (`no-native-tools`) or its workspace launch (`workspace`, Codex).
+   */
+  conductorPolicy?: 'no-native-tools' | 'workspace'
   /**
    * The engine reads a session's MCP tools once, when the session starts, and
    * ignores `tools/list_changed` (observed on an authenticated Codex

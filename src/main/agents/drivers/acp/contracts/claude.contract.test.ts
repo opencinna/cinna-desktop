@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -148,7 +148,10 @@ const seen = {
   deny: { asks: [] as AdapterMessage[], sent: [] as (string | null)[], answer: null as AdapterMessage | null,
     turns: [] as ClaudeProviderTurn[], ran: false },
   /** Scenario F: API mode's environment as `buildClaudeEnv` builds it, with and without the subprocess scrub. */
-  scrub: { on: null as ScrubRun | null, off: null as ScrubRun | null }
+  scrub: { on: null as ScrubRun | null, off: null as ScrubRun | null },
+  /** Scenario G: a `workspace` chat, its options produced by the production policy helper. */
+  workspace: { error: null as unknown, options: null as Json | null, turns: [] as ClaudeProviderTurn[],
+    asks: [] as AdapterMessage[], written: null as string | null, pwd: '', cwd: '', model: null as string | null }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -532,6 +535,79 @@ async function denyScenario(binary: string, trap: EgressTrap): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario G */
+
+const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_PROMPT_7d3'
+const WORKSPACE_WRITE = 'CONTRACT_WORKSPACE_WRITE_7d3'
+const USER_SKILL = 'contract-user-skill'
+const USER_SKILL_MARKER = 'CONTRACT_USER_SKILL_7d3'
+
+/**
+ * A `workspace` chat: the launcher's sealed options for a chat runtime (its
+ * instructions as a plain `systemPrompt`, the model, `settingSources: []`…)
+ * run through `applyConductorToolPolicy(…, 'workspace')`, Cinna's MCP server
+ * injected, **no instructions file in the cwd**, and a user `~/.claude` with a
+ * skill and a `model` of its own. A Write and a `pwd` Bash, each answered
+ * `allow_once`. Kept out of the snapshot, like scenarios C–F.
+ */
+async function workspaceScenario(binary: string, trap: EgressTrap): Promise<void> {
+  const mcp = new ConductorMcpServer()
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  let script: ClaudeProviderReply[] = []
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : (script.shift() ?? { kind: 'text', text: 'OK' }))
+  const scratch = makeClaudeScratch('cinna-contract-claude-workspace-', { providerPort: provider.port, trapPort: trap.port })
+  try {
+    mkdirSync(join(scratch.home, '.claude', 'skills', USER_SKILL), { recursive: true })
+    writeFileSync(join(scratch.home, '.claude', 'settings.json'), JSON.stringify({ model: SETTINGS_MODEL }))
+    writeFileSync(join(scratch.home, '.claude', 'skills', USER_SKILL, 'SKILL.md'),
+      `---\nname: ${USER_SKILL}\ndescription: ${USER_SKILL_MARKER} A user skill.\n---\n\n# User skill\n`)
+    seen.workspace.cwd = realpathSync(scratch.cwd)
+    const cinna = await mcp.ensureSession('cinna', { getProviders: () => [{ providerType: 'mcp', displayName: 'contract',
+      getTools: () => [{ name: 'probe', description: 'Return literal OK.', inputSchema: { type: 'object', properties: {} }, providerType: 'mcp', mcpProviderId: 'probe' }],
+      callTool: async () => ({ content: 'OK' }) }] } as never)
+    const plan = { spec: { command: process.execPath, args: [adapter], cwd: scratch.cwd, key: 'contract', env: {} },
+      init: { protocolVersion: 1 }, setup: { modeId: 'default' },
+      session: { mcpServers: [], meta: { claudeCode: { options: { systemPrompt: WORKSPACE_MARKER, model: AGENT_MODEL,
+        settingSources: [], strictMcpConfig: true, mcpServers: {} } } } }
+    } as unknown as AcpLaunchPlan
+    const workspace = applyConductorToolPolicy(plan, 'claude', 'workspace')
+    seen.workspace.options = ((workspace.session.meta?.claudeCode as Json | undefined)?.options ?? null) as Json | null
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary },
+      answer: (request) => {
+        if (request.method !== 'session/request_permission') return undefined
+        seen.workspace.asks.push(request)
+        const option = ((request.params?.options as Json[] | undefined) ?? []).find((candidateOption) => candidateOption.kind === 'allow_once')
+        return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : undefined
+      } })
+    await connection.rpc('initialize', initParams)
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [cinna.descriptor], _meta: workspace.session.meta }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { seen.workspace.error = created.error ?? 'no session'; return }
+    // What the driver does after every new and load: the mode, then the model.
+    await connection.rpc('session/set_mode', { sessionId, modeId: 'default' })
+    const match = resolveOfferedModel(created.result?.configOptions, AGENT_MODEL)
+    if (match?.value) await connection.rpc('session/set_config_option', { sessionId, configId: match.configId, value: match.value })
+    const prompt = async (reply: ClaudeProviderReply, text: string): Promise<void> => {
+      script = [reply]
+      const answer = await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, 90_000)
+      if (answer.error) seen.workspace.error ??= answer.error
+    }
+    const file = join(scratch.cwd, 'made.txt')
+    await prompt({ kind: 'tool', name: 'Write', input: { file_path: file, content: WORKSPACE_WRITE } }, 'Write made.txt.')
+    seen.workspace.written = existsSync(file) ? readFileSync(file, 'utf8') : null
+    await prompt({ kind: 'tool', name: 'Bash', input: { command: 'pwd -P', description: 'Print the working directory' } }, 'Where are you?')
+    seen.workspace.turns = [...provider.turns]
+    seen.workspace.pwd = conversation(provider.turns).flatMap((turn) => turn.toolResults).join('\n')
+    seen.workspace.model = conversation(provider.turns).at(-1)?.model ?? null
+  } finally {
+    await connection?.close()
+    await mcp.dispose()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* -------------------------------------------------------------- scenario F */
 
 /** What one API-mode session observed. Kept out of the snapshot, like scenarios C and D. */
@@ -791,6 +867,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       await modelScenario(binary, trap)
       await toolsScenario(binary, trap)
       await denyScenario(binary, trap)
+      await workspaceScenario(binary, trap)
       seen.scrub.off = await scrubScenario(binary, trap, false)
       seen.scrub.on = await scrubScenario(binary, trap, true)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
@@ -1080,6 +1157,33 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect([...offered].filter((name) => !name.startsWith('mcp__cinna__'))).toEqual([])
     // And it is that option doing it: the folder session, without it, gets the native set.
     expect(conversation(seen.folderTurns)[0]?.tools).toEqual(expect.arrayContaining(NATIVE_TOOLS))
+  })
+
+  it(entry('claude.policy.workspace-native-tools'), () => {
+    expect(seen.workspace.error).toBeNull()
+    expect(seen.workspace.options).toMatchObject({ settingSources: ['user'], agents: {},
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: WORKSPACE_MARKER } })
+    for (const sealed of ['tools', 'strictMcpConfig', 'mcpServers']) expect(seen.workspace.options).not.toHaveProperty(sealed)
+    const turns = conversation(seen.workspace.turns)
+    expect(turns[0]?.tools).toEqual(expect.arrayContaining([...NATIVE_TOOLS.filter((name) => name !== 'Agent'), 'mcp__cinna__probe']))
+    // The instructions arrive with no CLAUDE.md or AGENTS.md in the cwd, on the preset.
+    expect(turns.every((turn) => turn.systemText.includes(WORKSPACE_MARKER))).toBe(true)
+    expect(turns[0]?.systemText).toMatch(/You are Claude Code, Anthropic's official CLI/)
+    // The user's own settings load: their skill is offered.
+    expect(turns.some((turn) => turn.mentions(USER_SKILL_MARKER))).toBe(true)
+    // …and their `model` does not win over the re-asserted one.
+    expect(seen.workspace.model).toMatch(/haiku/i)
+  })
+  it(entry('claude.policy.workspace-asks'), () => {
+    // One ask per native call, titled by what it does: the Write, then the command.
+    const titles = seen.workspace.asks.map((ask) => String((ask.params?.toolCall as Json | undefined)?.title ?? ''))
+    expect(titles).toHaveLength(2)
+    expect(titles[0]).toMatch(/^Write /)
+    expect(titles[1]).toBe('pwd -P')
+    expect(seen.workspace.written).toBe(WORKSPACE_WRITE)
+  })
+  it(entry('claude.policy.workspace-cwd'), () => {
+    expect(seen.workspace.pwd).toContain(seen.workspace.cwd)
   })
 
   /* provider traffic */

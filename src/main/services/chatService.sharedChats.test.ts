@@ -48,7 +48,7 @@ vi.mock('./agentService', async () => {
 vi.mock('./chatConductorService', async (original) => {
   const actual = await original<typeof import('./chatConductorService')>()
   const { agentRepo } = await import('../db/agents')
-  return { ...actual, chatConductorService: { remove: vi.fn(), ensure: (userId: string, chat: { id: string }) =>
+  return { ...actual, chatConductorService: { remove: vi.fn(), hasWorkspace: () => false, ensure: (userId: string, chat: { id: string }) =>
     agentRepo.list(userId).find((agent) => agent.driverConfig?.conductorChatId === chat.id) ??
     agentRepo.createRuntime(userId, { name: 'Claude', driver: 'acp', config: { launcher: 'claude', conductorChatId: chat.id } }) } }
 })

@@ -364,3 +364,17 @@ describe('a chat runtime’s home and the cinna-tasks skill', () => {
     expect(existsSync(join(target, 'reference'))).toBe(false)
   })
 })
+
+describe('antigravitySharedHome', () => {
+  it('keeps a plain chat’s home beside its process folder, and a workspace one where every chat folder sorts first', async () => {
+    const { antigravitySharedHome } = await import('./antigravityLauncher')
+    const processFolder = '/u/chat-conductors/processes/abc'
+    expect(antigravitySharedHome(processFolder, false)).toBe('/u/chat-conductors/processes/abc.agyhome')
+    const home = antigravitySharedHome(processFolder, true)
+    expect(home).toBe('/u/chat-conductors/~workspace-homes/abc.agyhome')
+    // A chat id is a nanoid ([A-Za-z0-9_-]): its folder sorts before the home's whatever it starts with.
+    for (const chatId of ['A1', 'zz', '__', '--', 'processes', 'zzzzzzzzzzzzzzzzzzzzz']) {
+      expect([home, `/u/chat-conductors/${chatId}`].sort()[0]).toBe(`/u/chat-conductors/${chatId}`)
+    }
+  })
+})

@@ -14,7 +14,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 interface ChatModeFormProps { onClose: () => void }
 
 export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element {
-  const [runtime, setRuntime] = useState<ChatModeRuntimeValue>({ engine: null, systemPrompt: '', toolPolicy: 'connectors' })
+  const [runtime, setRuntime] = useState<ChatModeRuntimeValue>({ engine: null, systemPrompt: '', toolPolicy: 'connectors', complexity: null })
   const [name, setName] = useState('')
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set())
   const [colorPreset, setColorPreset] = useState('indigo')
@@ -52,7 +52,7 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
         </div>
         <ChatModeRuntimeFields section="runtime" value={runtime} resolvedEngine={defaultRuntime?.engine} onChange={changeRuntime} />
         {credentialMode && <div>
-          <SettingsLabel htmlFor={`${fieldId}-credential`}>AI Credentials</SettingsLabel>
+          <SettingsLabel htmlFor={`${fieldId}-credential`}>AI credential</SettingsLabel>
           <select id={`${fieldId}-credential`} value={runtime.providerId ?? ''} className={settingsInputClass}
             onChange={event => changeRuntime({ providerId: event.target.value || null, modelId: null })}>
             <option value="">None (use default)</option>

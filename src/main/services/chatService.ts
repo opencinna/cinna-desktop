@@ -173,7 +173,7 @@ export const chatService = {
     if (chatRunResultRepo.markRead(chatId, runId)) turnNotices.resultRead(chatId, runId)
   },
 
-  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null }) | null {
+  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null; workspace: boolean }) | null {
     const chat = visibleChat(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
@@ -182,7 +182,8 @@ export const chatService = {
       messages,
       activeRunId: activeRunId(chatId),
       taskHeld: taskRunnersByChat.has(chatId),
-      lastRunResult: chatRunResultRepo.get(chat.userId, chatId)
+      lastRunResult: chatRunResultRepo.get(chat.userId, chatId),
+      workspace: chatConductorService.hasWorkspace(chat)
     }
   },
 
@@ -217,6 +218,15 @@ export const chatService = {
     const ok = chatRepo.restore(chatOwnerFor(userId, chatId), chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     logger.info('chat restored', { chatId })
+  },
+
+  /**
+   * Open the folder the chat's runtime works in (`<userData>/chat-conductors/<chatId>`),
+   * for a chat this user can see. The path is fixed here; nothing is created.
+   */
+  openFolder(userId: string, chatId: string): Promise<{ success: true } | { success: false; error: string }> {
+    const chat = requireOwnedChat(userId, chatId)
+    return chatConductorService.openFolder(chat.id)
   },
 
   permanentDelete(userId: string, chatId: string): void {

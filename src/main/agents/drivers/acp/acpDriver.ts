@@ -3072,7 +3072,9 @@ async function answerPermission(
   const { agent, runtime, input } = ctx
   try { runtime.validate(input.chatId) } catch { return { outcome: { outcome: 'cancelled' } } }
   const toolName = world.stream.toolName(params.toolCall.toolCallId)
-  const request = toAcpPermissionRequest(ctx.launcherId, params, toolName)
+  const parsed = toAcpPermissionRequest(ctx.launcherId, params, toolName)
+  // A chat runtime's grants are the chat's, and the block says so.
+  const request = runtime.rememberScope === 'chat' ? { ...parsed, rememberScope: 'chat' as const } : parsed
 
   const selected = (decision: 'allow' | 'reject'): RequestPermissionResponse => {
     const optionId = pickPermissionOption(params.options, decision)
@@ -3102,9 +3104,11 @@ async function answerPermission(
   // silently: no block, no wait. A block that appeared and answered itself
   // milliseconds later would be a widget the user cannot act on, in the middle
   // of streaming text.
-  // A chat-owned runtime may only ever be asked about Cinna's own tools.
+  // A chat-owned runtime may only ever be asked about Cinna's own tools —
+  // unless its mode's policy is `workspace`, whose native tools ask the user.
   const chatOwned = typeof agent.driverConfig?.conductorChatId === 'string'
-  if (chatOwned && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return refused('not_allowed')
+  const workspaceChat = chatOwned && agent.driverConfig?.conductorToolPolicy === 'workspace'
+  if (chatOwned && !workspaceChat && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return refused('not_allowed')
   // A question in a permission request's clothes (Antigravity's `ask_question`).
   const question = permissionAsQuestion(ctx.launcherId, params)
   if (question) return answerPermissionQuestion(deps, ctx, world, params, question)
@@ -3172,7 +3176,8 @@ async function answerPermission(
         kind: 'permission',
         action: request.action,
         resources: request.resources,
-        ...(request.callId ? { callId: request.callId } : {})
+        ...(request.callId ? { callId: request.callId } : {}),
+        ...(request.rememberScope ? { rememberScope: request.rememberScope } : {})
       },
       resume: 'reply'
     })
@@ -3213,7 +3218,7 @@ async function answerPermission(
       // was written beside the folder, and what the agent is told is a plain
       // allow-once. The transcript says which of the two happened.
       return settle(
-        resolution.remembered ? 'Allowed, and remembered for this agent.' : 'Allowed once.',
+        resolution.remembered ? `Allowed, and remembered for this ${request.rememberScope === 'chat' ? 'chat' : 'agent'}.` : 'Allowed once.',
         selected('allow')
       )
     }

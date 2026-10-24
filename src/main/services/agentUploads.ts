@@ -11,3 +11,8 @@ import { runtimeHost } from '../host/runtimeHost'
 export function agentUploadsDir(agentId: string, kitFolder: string | null): string {
   return kitFolder ? join(kitFolder, 'app-data', 'uploads') : join(runtimeHost.getPath('userData'), 'agent-uploads', agentId)
 }
+
+/** A `workspace` chat runtime's attachments: inside the chat's own folder, where its file tools work. */
+export function chatUploadsDir(chatFolder: string): string {
+  return join(chatFolder, 'attachments')
+}

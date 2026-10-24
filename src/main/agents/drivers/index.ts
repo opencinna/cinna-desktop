@@ -1,6 +1,6 @@
 import { runtimeHost } from '../../host/runtimeHost'
 import { installRuntimeModelCatalogProbe, installRuntimeModelCatalogVariant, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
-import { chatConductorService, isChatConductor, conductorContext } from '../../services/chatConductorService'
+import { chatConductorService, isChatConductor, conductorContext, conductorModelId, clearWorkspaceInstructionFiles } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
  * Production wiring for the drivers, and the one resolver every caller uses.
@@ -21,7 +21,7 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
-import { prepareCodexConductorPolicy } from './acp/codexConductorPolicy'
+import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy } from './acp/codexConductorPolicy'
 import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
 import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
@@ -29,7 +29,7 @@ import { chatRuntimePermissions, engineAgentKey } from '../../engine/configGener
 import { join } from 'node:path'
 import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
-import { collectEngineConfigInput } from '../../engine/engineConfigSource'
+import { collectEngineConfigInput, getCachedEngineModels } from '../../engine/engineConfigSource'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { localAgentService } from '../../services/localAgents/localAgentService'
@@ -41,7 +41,7 @@ import { createLogger } from '../../logger/logger'
 import { CodexAuthProbe } from './acp/codexAuth'
 import { AntigravityAuthProbe } from './acp/antigravityAuth'
 import { ANTIGRAVITY_NOT_INSTALLED, antigravityServerArgs, buildAntigravityEnv } from './acp/antigravityEnv'
-import { antigravityIsolatedHome, antigravityPreamble, createAntigravityLauncher } from './acp/antigravityLauncher'
+import { antigravityIsolatedHome, antigravityPreamble, antigravitySharedHome, createAntigravityLauncher } from './acp/antigravityLauncher'
 import { acpAuthenticateLogin } from './acp/acpLogin'
 import { buildCodexEnv } from './acp/codexEnv'
 import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from './acp/codexLauncher'
@@ -78,7 +78,7 @@ import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView, type AcpPromptTurn } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 import { sessionActivityHub } from '../../services/sessionActivityHub'
-import { agentUploadsDir } from '../../services/agentUploads'
+import { agentUploadsDir, chatUploadsDir } from '../../services/agentUploads'
 import { sessionTelemetryService } from '../telemetry/sessionTelemetryService'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
 import { installSessionActivityStopper } from '../../services/sessionActivityStop'
@@ -672,6 +672,11 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const chatCandidate = (engine === 'codex' || engine === 'antigravity' || (engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT)) ? liveAgents.find((agent) => {
     if (!isChatConductor(agent)) return false
     const context = conductorContext(agent)
+    // A Codex workspace chat's process runs `workspace-write`, so the
+    // restricted plan below never matches its key: a warm-only title would
+    // wait on it for nothing. OpenCode and Antigravity set the policy per
+    // session (agent entry, session tools), so their processes still match.
+    if (engine === 'codex' && context.toolPolicy === 'workspace') return false
     return context.engine === engine && context.credentialId === runtime.credentialId && context.modelId === runtime.modelId
   }) : undefined
   if (warmOnly && acpProcessPool.status(poolKey).state !== 'running' && compatibleCandidates.length === 0 && !chatCandidate) {
@@ -783,11 +788,11 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
       const synthetic = syntheticRuntimeProfiles.get(agentId)
-      if (synthetic?.userId === userId) return { model: synthetic.context.modelId, effort: 'medium', approval: 'ask' }
+      if (synthetic?.userId === userId) return { model: synthetic.context.modelId, effort: codexEffortForComplexity(synthetic.context.complexity), approval: 'ask' }
       const utility = aiFunctionProfiles.get(agentId)
       if (utility?.userId === userId) return { model: utility.modelId, effort: 'medium', approval: 'ask' }
       const conductor = agentRepo.getOwned(userId, agentId)
-      if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, effort: 'medium', approval: 'ask' }
+      if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, effort: codexEffortForComplexity(conductorContext(conductor).complexity), approval: 'ask' }
       const development = desktopFeatures.developmentAgentContext(userId, agentId)
       if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
@@ -821,12 +826,16 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     },
     env: async () => withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() })),
     systemPrompt: folderSystemPrompt('antigravity'),
-    // A chat runtime or AI function has no shell, so the shell-cwd quirk the
-    // nested home fixes does not apply; its home sits beside the (empty)
-    // process folder. The server still lets `view_file` read the whole home.
-    home: (userId, agentId, folderPath) =>
-      syntheticRuntimeProfiles.get(agentId)?.userId === userId || aiFunctionProfiles.get(agentId)?.userId === userId
-        ? `${folderPath}.agyhome` : antigravityIsolatedHome(folderPath),
+    // A chat runtime or AI function shares a profile-owned home, never one
+    // inside a chat folder: beside its process folder, or — for a `workspace`
+    // chat, whose session runs in its chat folder with a shell — where that
+    // folder sorts first (`antigravitySharedHome`). The server lets
+    // `view_file` read the whole home.
+    home: (userId, agentId, folderPath) => {
+      const synthetic = syntheticRuntimeProfiles.get(agentId)
+      if (synthetic?.userId === userId) return antigravitySharedHome(folderPath, synthetic.context.toolPolicy === 'workspace')
+      return aiFunctionProfiles.get(agentId)?.userId === userId ? antigravitySharedHome(folderPath, false) : antigravityIsolatedHome(folderPath)
+    },
     tasksSkill: () => {
       const info = tasksSkillInfo()
       return info.available ? { name: TASKS_SKILL_NAME, dir: info.dir } : null
@@ -876,15 +885,17 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       for (const [agentId, synthetic] of syntheticRuntimeProfiles) {
         if (synthetic.userId !== userId) continue
         const context = synthetic.context
-        input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy !== 'none') })
-        input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'Chat title', prompt: TITLE_SYSTEM_PROMPT, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+        // A chat runtime that captured no model asks again, now that the cache is fresh.
+        const modelId = conductorModelId(context, getCachedEngineModels())
+        input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: modelId ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy) })
+        input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'Chat title', prompt: TITLE_SYSTEM_PROMPT, providerId: context.credentialId ?? '', modelId: modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const [agentId, utility] of aiFunctionProfiles) {
         if (utility.userId === userId && !utility.probe) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: utility.systemPrompt, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const row of agentRepo.list(userId).filter(isChatConductor)) {
         const context = conductorContext(row)
-        input.agents.push({ agentId: row.id, slug: `chat-${row.id}`, description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy !== 'none') })
+        input.agents.push({ agentId: row.id, slug: `chat-${row.id}`, description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: conductorModelId(context, getCachedEngineModels()) ?? '', permissionMode: 'replace', permissions: chatRuntimePermissions(context.toolPolicy) })
       }
       for (const row of agentRepo.list(userId).filter(isDevelopmentAgent)) {
         try {
@@ -982,6 +993,9 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // Unreadable state falls to the default too: the turn still runs, and every
     // ask the classifier declines still reaches the permission block.
     approval: (userId, agentId) => {
+      // A workspace chat's native tools ask (`default`), whatever the CLI's
+      // own default would be: the ask is what protects the user there.
+      if (syntheticRuntimeProfiles.get(agentId)?.context.toolPolicy === 'workspace') return 'ask'
       try {
         const agent = localAgentService.get(userId, agentId)
         return (
@@ -1135,6 +1149,10 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
     const agent = agentRepo.getOwned(ctx.userId, ctx.agentId)
     if (agent && isChatConductor(agent) && ctx.folder) {
       const context = conductorContext(agent)
+      // Planned on every turn, so before every session/new or session/load:
+      // an AGENTS.md the model wrote into its own folder is never loaded as
+      // the next session's instructions.
+      if (context.toolPolicy === 'workspace') clearWorkspaceInstructionFiles(context.path)
       const poolKey = syntheticRuntimePoolKey(ctx.userId, context, claudeAuthFingerprint(context.engine))
       syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
       // Codex includes its process cwd in the launch identity. Keep that
@@ -1143,7 +1161,9 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
       let plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, path: processCwd, slug: 'chat-runtime' } })
       if ('error' in plan) return plan
       if (id === 'codex') {
-        try { plan = await prepareCodexConductorPolicy(plan, join(runtimeHost.getPath('userData'), 'acp')) }
+        // A workspace chat runs the launcher's own (folder-agent) plan, sealed
+        // and held to `workspace-write` with its sandbox at the chat's folder.
+        try { plan = context.toolPolicy === 'workspace' ? await prepareCodexWorkspacePolicy(plan) : await prepareCodexConductorPolicy(plan, join(runtimeHost.getPath('userData'), 'acp')) }
         catch (error) {
           return { error: error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')
             ? error.message : 'Codex chat policy could not be verified. Check the installed runtime.' }
@@ -1152,7 +1172,11 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
       // Antigravity's sessions run in the empty process folder itself, with
       // its home beside it: never in the chat folder. `view_file` can still
       // read the whole home (verified, drafts p7c), conversations included.
-      if (id === 'antigravity') plan = { ...plan, sessionCwd: processCwd }
+      // A `workspace` chat's session runs in its own chat folder instead; the
+      // process (and its home) stays shared per user, profile and mode, so its
+      // native tools can read and change the other chats' folders too — and
+      // that home's conversations — behind the server's asks.
+      if (id === 'antigravity') plan = { ...plan, sessionCwd: context.toolPolicy === 'workspace' ? ctx.folder.path : processCwd }
       acpProcessPool.share?.(ctx.agentId, poolKey)
       return plan
     }
@@ -1175,10 +1199,15 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
  * Where a turn's attachments are copied for the engine to open with its own
  * tools ({@link agentUploadsDir}), or null to inline them as text. A remote
  * engine cannot see this disk, and a chat runtime runs with its file tools
- * removed, so both get text.
+ * removed, so both get text — except a `workspace` chat, whose files tools
+ * are on: its attachments go into the chat's own folder.
  */
-function attachmentUploadsDir({ agent, runtime, plan }: AcpPromptTurn): string | null {
-  if (plan.spec.remote || isChatConductor(agent)) return null
+export function attachmentUploadsDir({ agent, runtime, plan }: Pick<AcpPromptTurn, 'agent' | 'runtime' | 'plan'>): string | null {
+  if (plan.spec.remote) return null
+  if (isChatConductor(agent)) {
+    const context = conductorContext(agent)
+    return context.toolPolicy === 'workspace' ? chatUploadsDir(context.path) : null
+  }
   return agentUploadsDir(agent.id, runtime.type === 'folder' && runtime.folder.kind === 'kit' && !isDevelopmentAgent(agent) ? runtime.folder.path : null)
 }
 

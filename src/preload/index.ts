@@ -369,6 +369,8 @@ export interface ChatModeData extends ChatModeRuntime {
   adminManaged: boolean
   /** Effective local enable state (managed modes can be toggled off per profile). */
   enabled: boolean
+  /** Runtime modes only: the engine and whether it can start a chat now. */
+  runtime?: import('../shared/chatModeRuntime').ChatModeRuntimeStatus
   createdAt: Date
 }
 
@@ -572,11 +574,15 @@ const api = {
       ipcRenderer.invoke('chat:list-summaries'),
     markResultRead: (chatId: string, runId: string): Promise<void> =>
       ipcRenderer.invoke('chat:mark-result-read', chatId, runId),
-    get: (chatId: string): Promise<(ChatData & { messages: MessageData[] }) | null> =>
+    /** `workspace`: the chat's own runtime works in its folder (the policy it captured, not its mode's current one). */
+    get: (chatId: string): Promise<(ChatData & { messages: MessageData[]; workspace?: boolean }) | null> =>
       ipcRenderer.invoke('chat:get', chatId),
     create: (): Promise<ChatData> => ipcRenderer.invoke('chat:create'),
     delete: (chatId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:delete', chatId),
+    /** Open a Workspace chat's folder; main resolves the path from the chat id. */
+    openFolder: (chatId: string): Promise<{ success: true } | { success: false; error: string }> =>
+      ipcRenderer.invoke('chat:open-folder', chatId),
     trashList: (): Promise<ChatData[]> => ipcRenderer.invoke('chat:trash-list'),
     restore: (chatId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:restore', chatId),
@@ -765,10 +771,13 @@ const api = {
       engine?: AgentEngine | null
       systemPrompt?: string
       toolPolicy?: import('../shared/chatModeRuntime').ChatToolPolicy
+      complexity?: import('../shared/modelFamilies').WorkComplexity | null
       mcpProviderIds?: string[]
       colorPreset?: string
       isDefault?: boolean
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('chatmode:upsert', data),
+    /** Restore a runtime mode's defaults; whether it is the default is kept. */
+    reset: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:reset', id),
     delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
   },
 

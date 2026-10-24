@@ -513,6 +513,8 @@ async function resolveAndRun(
   lifecycle.context({ userId: profileUserId, chatId, agentId: null })
   // The conductor row lives under the chat's owner, like the chat.
   if (!chat.agentId && chat.router !== 'human' && !lifecycle.agentId) chat = chatConductorService.bind(ownerOfVisible(profileUserId, chat), chat)
+  // A mode whose Tools changed since this chat's runtime was set up applies from this turn.
+  else if (chat.agentId && (!lifecycle.agentId || lifecycle.agentId === chat.agentId)) chatConductorService.syncToolPolicy(ownerOfVisible(profileUserId, chat), chat)
   const routing = routingOf(chat)
   const target: RunTarget = lifecycle.agentId
     ? { kind: 'agent' as const, agentId: lifecycle.agentId }

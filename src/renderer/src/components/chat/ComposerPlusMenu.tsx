@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   Plus,
   Paperclip,
@@ -9,9 +9,11 @@ import {
   Loader2,
   Workflow,
   Zap,
-  Lightbulb
+  Lightbulb,
+  FolderOpen
 } from 'lucide-react'
 import type { ChatModeData } from '../../constants/chatModeColors'
+import { composerModeGroup } from '../../utils/composerModes'
 
 export interface PlusModeMenu {
   modes: ChatModeData[]
@@ -44,6 +46,8 @@ export interface PlusAction {
 export interface PlusActions {
   /** Send a cloud bundle agent's conversation to the bundle's publisher. */
   improvementRequest?: PlusAction
+  /** Open the folder a Workspace chat's runtime works in. */
+  openChatFolder?: PlusAction
 }
 
 interface ComposerPlusMenuProps {
@@ -117,7 +121,7 @@ export function ComposerPlusMenu({
   }, [open])
 
   const hasModes = !!modeMenu && modeMenu.modes.length > 0
-  const hasActions = !!actions?.improvementRequest
+  const hasActions = !!actions?.improvementRequest || !!actions?.openChatFolder
   // Nothing to offer → no button at all.
   if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle && !autonomousRun && !hasActions) return null
 
@@ -279,6 +283,26 @@ export function ComposerPlusMenu({
                   </button>
                 )
               })()}
+              {actions?.openChatFolder && (() => {
+                const item = actions.openChatFolder
+                return (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    aria-disabled={item.disabled || undefined}
+                    title={item.disabled ? item.reason : undefined}
+                    onClick={() => {
+                      if (item.disabled) return
+                      item.onOpen()
+                      setOpen(false)
+                    }}
+                    className={`${rowCls} aria-disabled:opacity-40 aria-disabled:cursor-not-allowed`}
+                  >
+                    <FolderOpen size={16} className={iconCls} />
+                    <span>Open Chat Folder</span>
+                  </button>
+                )
+              })()}
             </div>
           ) : (
             modeMenu && (
@@ -293,12 +317,19 @@ export function ComposerPlusMenu({
                   <ChevronLeft size={14} />
                   <span>Chat mode</span>
                 </button>
-                {modeMenu.modes.map((mode) => {
+                {modeMenu.modes.map((mode, index) => {
                   const isActive = modeMenu.activeId === mode.id
                   const secondary = modeMenu.composeSecondary?.(mode)
+                  const group = composerModeGroup(mode, modeMenu.modes)
+                  const groupStarts = group !== null && (index === 0 || composerModeGroup(modeMenu.modes[index - 1], modeMenu.modes) !== group)
                   return (
+                    <Fragment key={mode.id}>
+                    {groupStarts && (
+                      <div role="presentation" className={`px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] ${index > 0 ? 'mt-1 border-t border-[var(--color-border)]' : ''}`}>
+                        {group}
+                      </div>
+                    )}
                     <button
-                      key={mode.id}
                       type="button"
                       role="menuitemradio"
                       aria-checked={isActive}
@@ -324,6 +355,7 @@ export function ComposerPlusMenu({
                         <Check size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
                       )}
                     </button>
+                    </Fragment>
                   )
                 })}
               </div>

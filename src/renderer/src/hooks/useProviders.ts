@@ -71,6 +71,8 @@ export function useUpsertProvider() {
       // been added, and leave the section's offer row on screen after its own
       // button had done its job.
       queryClient.invalidateQueries({ queryKey: ['ollama-detection'] })
+      // OpenCode's runtime mode is offered only while a usable credential exists.
+      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
       // A credential's on/off switch and its default model both change which
       // credential a folder agent resolves to, so the sidebar's status dot and
       // the "would this stop anything" question behind the switch are stale the
@@ -92,6 +94,8 @@ export function useDeleteProvider() {
       queryClient.invalidateQueries({ queryKey: ['models'] })
       // Deleting the Ollama credential makes the offer worth showing again.
       queryClient.invalidateQueries({ queryKey: ['ollama-detection'] })
+      // OpenCode's runtime mode is offered only while a usable credential exists.
+      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
       // A key, the on/off switch, the default model or a deletion each change
       // where AI Functions run (Settings → Features "Runs on").

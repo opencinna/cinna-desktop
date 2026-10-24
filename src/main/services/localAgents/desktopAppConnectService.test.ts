@@ -19,6 +19,8 @@ interface Mode {
   toolPolicy?: string
   mcpProviderIds?: string[]
   colorPreset?: string
+  complexity?: string | null
+  builtinEngine?: string | null
 }
 
 const state = vi.hoisted(() => ({
@@ -27,7 +29,8 @@ const state = vi.hoisted(() => ({
   modes: [] as Mode[],
   effective: null as Mode | null,
   prioritize: false,
-  upserts: [] as unknown[]
+  upserts: [] as unknown[],
+  ensured: [] as string[]
 }))
 
 vi.mock('../appSettingsService', () => ({
@@ -42,6 +45,16 @@ vi.mock('../chatModeService', () => ({
   chatModeService: {
     resolveEffectiveDefault: () => state.effective,
     list: () => state.modes,
+    ensureRuntimeModes: (userId: string) => {
+      state.ensured.push(userId)
+      for (const engine of ['claude', 'codex', 'antigravity', 'opencode']) {
+        if (state.modes.some((mode) => mode.builtinEngine === engine)) continue
+        state.modes.push({
+          id: `rt-${engine}`, name: `${engine} runtime`, engine, builtinEngine: engine, providerId: null, managed: false, isDefault: false,
+          modelId: null, systemPrompt: '', toolPolicy: 'connectors', complexity: 'medium', mcpProviderIds: [], colorPreset: 'orange'
+        })
+      }
+    },
     upsert: (_userId: string, input: unknown) => {
       state.upserts.push(input)
       return { id: (input as { id?: string }).id ?? 'new-mode' }
@@ -67,6 +80,7 @@ beforeEach(() => {
   state.effective = null
   state.prioritize = false
   state.upserts = []
+  state.ensured = []
 })
 
 function deps(overrides: {
@@ -166,28 +180,32 @@ describe('adoptDesktopEngine', () => {
     expect(state.rescans).toBe(1)
   })
 
-  it('makes a new engine mode the default when the default names another engine', () => {
+  it('stars the engine’s runtime mode when the default names another engine, making the runtime modes first', () => {
     state.modes = [apiDefault]
     state.effective = apiDefault
     adoptDesktopEngine('claude')
+    expect(state.ensured).toEqual(['u1'])
     expect(state.upserts).toEqual([
-      { name: 'Claude', engine: 'claude', providerId: null, colorPreset: 'amber', isDefault: true }
+      {
+        id: 'rt-claude', name: 'claude runtime', providerId: null, modelId: null, engine: 'claude', systemPrompt: '',
+        toolPolicy: 'connectors', complexity: 'medium', mcpProviderIds: [], colorPreset: 'orange', isDefault: true
+      }
     ])
   })
 
-  it('reuses a local mode on that engine with no credential, keeping its fields', () => {
-    const existing: Mode = {
-      id: 'm-codex', name: 'My Codex', engine: 'codex', providerId: null, managed: false, isDefault: false,
-      modelId: 'gpt-x', systemPrompt: 'be brief', toolPolicy: 'none', mcpProviderIds: ['mcp1'], colorPreset: 'rose'
+  it('keeps the runtime mode’s own edits, and leaves a mode an earlier offer created alone', () => {
+    const earlier: Mode = { id: 'm-codex', name: 'Codex', engine: 'codex', providerId: null, managed: false, isDefault: false, colorPreset: 'emerald' }
+    const runtime: Mode = {
+      id: 'rt-codex', name: 'Codex', engine: 'codex', builtinEngine: 'codex', providerId: null, managed: false, isDefault: false,
+      modelId: 'gpt-x', systemPrompt: 'be brief', toolPolicy: 'none', complexity: 'complex', mcpProviderIds: ['mcp1'], colorPreset: 'rose'
     }
-    const withKey: Mode = { ...existing, id: 'm-codex-key', providerId: 'p2' }
-    state.modes = [apiDefault, withKey, existing]
+    state.modes = [apiDefault, earlier, runtime]
     state.effective = apiDefault
     adoptDesktopEngine('codex')
     expect(state.upserts).toEqual([
       {
-        id: 'm-codex', name: 'My Codex', providerId: null, modelId: 'gpt-x', engine: 'codex', systemPrompt: 'be brief',
-        toolPolicy: 'none', mcpProviderIds: ['mcp1'], colorPreset: 'rose', isDefault: true
+        id: 'rt-codex', name: 'Codex', providerId: null, modelId: 'gpt-x', engine: 'codex', systemPrompt: 'be brief',
+        toolPolicy: 'none', complexity: 'complex', mcpProviderIds: ['mcp1'], colorPreset: 'rose', isDefault: true
       }
     ])
   })

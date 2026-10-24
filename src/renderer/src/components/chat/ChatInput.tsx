@@ -30,6 +30,7 @@ import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/us
 import { useChatNotes } from '../../hooks/useChatNotes'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
+import { composerModeGroup } from '../../utils/composerModes'
 import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { ActiveMcpChips } from './ActiveMcpChips'
@@ -100,6 +101,8 @@ interface ChatInputProps {
    */
   chatModeMenu?: PlusModeMenu
   modeColor?: ColorPreset | null
+  /** The glyph the chat's hidden runtime chip shows instead of the bot (a runtime mode's terminal). */
+  conductorIcon?: React.ReactNode
   /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
   selectedAgent?: AgentData | null
   /**
@@ -149,6 +152,8 @@ interface ChatInputProps {
    * ChatInput owns the popup rendering, keyboard navigation, and Enter-to-send
    * suppression — the parent only orchestrates open/close state and selection.
    */
+  /** A Workspace chat: the `[+]` Actions menu offers Open Chat Folder. */
+  onOpenChatFolder?: () => void
   tildeModePopup?: {
     open: boolean
     modes: ChatModeData[]
@@ -227,6 +232,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChat,
     chatModeMenu,
     modeColor,
+    conductorIcon,
     selectedAgent,
     pendingMcpIds,
     onTogglePendingMcp,
@@ -238,6 +244,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     routerInfo,
     onDoubleEscape,
     tildeModePopup,
+    onOpenChatFolder,
     sendHold = null
   },
   ref
@@ -1834,6 +1841,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           getKey={(m) => m.id}
           getPrimary={(m) => m.name}
           getSecondary={tildeModePopup.composeSecondary}
+          getGroup={(m) => composerModeGroup(m, tildeModePopup.modes)}
         />
       )}
 
@@ -1990,12 +1998,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               coordinateToggle={coordinateToggle}
               autonomousRun={chatId && (chatRouting.router === 'coordinator' || soloAgent)
                 ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
-              actions={chatId && improvementTargets.length > 0 ? {
-                improvementRequest: {
+              actions={chatId && (improvementTargets.length > 0 || onOpenChatFolder) ? {
+                ...(improvementTargets.length > 0 ? { improvementRequest: {
                   disabled: isStreaming,
                   reason: 'Available once the agent has finished replying',
                   onOpen: () => { resetImprovementSend(); setImprovementChatId(chatId) }
-                }
+                } } : {}),
+                ...(onOpenChatFolder ? { openChatFolder: { disabled: false, onOpen: onOpenChatFolder } } : {})
               } : undefined}
               activeModeColor={modeColor ? { border: modeColor.border } : null}
             />
@@ -2014,6 +2023,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 // The hidden runtime has no identity to colour by; an agent the
                 // user picked keeps its own colour as coordinator too.
                 colors={boundAgent.conductor ? ACCENT_CHIP : colorOf(boundAgent.id)}
+                icon={boundAgent.conductor ? conductorIcon : undefined}
                 coordinator={chatRouting.router === 'coordinator'}
                 label={chatRouting.router === 'coordinator' ? `${boundAgent.name} — Coordinator` : boundAgent.name}
                 // A hidden runtime conductor has no page, no folder and no role to hand over.

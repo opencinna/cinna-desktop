@@ -91,6 +91,15 @@ export class CodexAuthProbe {
   }
 
   /**
+   * The last answer kept, however old, or null — **never asks**. For a list
+   * that may say "not logged in" from what is already known (runtime modes'
+   * availability) without spawning a CLI to find out.
+   */
+  lastKnown(): CodexAuthStatus | null {
+    return this.cached?.value ?? null
+  }
+
+  /**
    * Forget the answer **without asking again** — the binary it was asked of is
    * no longer the one in use (the Codex Path in Settings changed). The cache
    * holds for thirty seconds whatever the path, so without this the Runtime row

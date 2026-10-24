@@ -77,8 +77,8 @@ export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
   // **Always available, and that is why it is the fallback.** Cinna downloads
   // and verifies its own `opencode` the first time an agent needs one, so this
   // is the only choice that is true on a machine with no developer tooling at
-  // all. "Custom" because what it runs on is the credential named below it.
-  { id: 'opencode', label: 'Custom OpenCode', tool: null, engine: 'opencode' }
+  // all. What it runs on is the credential named below it.
+  { id: 'opencode', label: 'OpenCode', tool: null, engine: 'opencode' }
 ]
 
 /**

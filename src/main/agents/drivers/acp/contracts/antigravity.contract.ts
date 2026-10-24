@@ -232,6 +232,27 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
     flow: NO_FLOW
   },
 
+  {
+    id: 'antigravity.policy.workspace-native-tools', area: 'restricted chat policy', surface: '_meta key', name: '_meta.agy (workspace)',
+    expectation: 'Under the `workspace` policy (`disabledTools` the sealed-folder denylist alone, no `enabledTools`, mode `default`) the model is offered the built-ins — `run_command`, `write_to_file`, `replace_file_content`, `view_file` — beside the MCP tools, and the instructions reach it in the first prompt’s opening block with no `AGENTS.md` in the chat folder.',
+    owners: [`${POLICY}#applyConductorToolPolicy`, 'src/main/services/chatConductorService.ts#ensure'],
+    feature: 'A workspace chat on Antigravity has no file or shell tools, or runs without its instructions.',
+    flow: NO_FLOW
+  },
+  {
+    id: 'antigravity.policy.workspace-asks', area: 'restricted chat policy', surface: 'ACP method', name: 'workspace run_command / write_to_file → session/request_permission',
+    expectation: 'In mode `default` a workspace chat’s `run_command` and `write_to_file` each raise `session/request_permission`, and the once-allow runs them.',
+    owners: [`${POLICY}#applyConductorToolPolicy`, 'src/main/agents/drivers/index.ts#settings'],
+    feature: 'A workspace chat runs commands or writes files without asking.',
+    flow: NO_FLOW
+  },
+  {
+    id: 'antigravity.policy.workspace-cwd', area: 'restricted chat policy', surface: 'provider request', name: 'Command Working Directory',
+    expectation: 'With the session in the chat folder `<conductors>/<chatId>` and the shared home from `antigravitySharedHome(…, true)` (`<conductors>/~workspace-homes/<hash>.agyhome`), the server names the chat folder the Command Working Directory, and a command run there prints it — for a chat id sorting before `processes` and one after it. Control: with the plain-chat home beside the process folder, a chat id after `processes` gets `<home>/antigravity-cli/skills`, which does not exist.',
+    owners: [`${LAUNCHER}#antigravitySharedHome`, 'src/main/agents/drivers/index.ts#acpLauncherFor'],
+    feature: 'Commands of one chat in six fail with “no such directory”, or run outside the chat’s folder.',
+    flow: NO_FLOW
+  },
   /* -------------------------------------------------------- provider traffic */
   {
     id: 'antigravity.provider.requests', area: 'provider traffic', surface: 'provider request', name: 'POST /v1beta/models/<model>:streamGenerateContent',

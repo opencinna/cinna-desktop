@@ -557,7 +557,8 @@ function AskBody({
           // `InputRequest` and nothing here needs to invent one.
           savable: [],
           callId: request.callId,
-          ...(request.allowRemember === false ? { allowRemember: false } : {})
+          ...(request.allowRemember === false ? { allowRemember: false } : {}),
+          ...(request.rememberScope === 'chat' ? { rememberScope: 'chat' as const } : {})
         }}
         requestId={entry.requestId}
         // False only once this row has settled — a live ask is always

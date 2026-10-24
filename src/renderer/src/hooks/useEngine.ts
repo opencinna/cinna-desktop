@@ -40,15 +40,19 @@ export function useEngineWatch(): void {
     })
     // The managed Codex CLI pushes on its own channel, download progress
     // included — one subscription beside the engine's, for the same lifetime.
-    const offCodex = window.api.engine.onCodexState((state) => {
-      queryClient.setQueryData(CODEX_BINARY_KEY, state)
-    })
-    const offClaude = window.api.engine.onClaudeState((state) => {
-      queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
-    })
-    const offAntigravity = window.api.engine.onAntigravityState((state) => {
-      queryClient.setQueryData(ANTIGRAVITY_BINARY_KEY, state)
-    })
+    /**
+     * Runtime modes carry each CLI's availability, so a binary that changes
+     * state (installed, failed, started resolving) re-reads them. Only on a
+     * change of state: download progress pushes many times a second.
+     */
+    const setBinary = (key: readonly string[], state: EngineBinaryState): void => {
+      const previous = queryClient.getQueryData<EngineBinaryState>(key)
+      queryClient.setQueryData(key, state)
+      if (previous?.state !== state.state) void queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
+    }
+    const offCodex = window.api.engine.onCodexState((state) => setBinary(CODEX_BINARY_KEY, state))
+    const offClaude = window.api.engine.onClaudeState((state) => setBinary(CLAUDE_BINARY_KEY, state))
+    const offAntigravity = window.api.engine.onAntigravityState((state) => setBinary(ANTIGRAVITY_BINARY_KEY, state))
     return () => {
       offEngine()
       offCodex()

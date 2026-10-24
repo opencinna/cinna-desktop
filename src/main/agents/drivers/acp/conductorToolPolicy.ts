@@ -1,12 +1,19 @@
 import type { AgentEngine } from '../../../../shared/engine'
+import type { ChatToolPolicy } from '../../../../shared/chatModeRuntime'
 import type { AcpLaunchPlan } from './acpLaunchers'
-import { ANTIGRAVITY_FILTER_TOOLS } from './antigravityLauncher'
+import { ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS } from './antigravityLauncher'
 
 /** The one built-in an Antigravity chat runtime keeps: reading its MCP tools' schema files. */
 export const ANTIGRAVITY_CONDUCTOR_TOOLS: readonly string[] = ['view_file']
 
-/** Restrict native coding tools before starting a plain-chat/utility session. */
-export function applyConductorToolPolicy(plan: AcpLaunchPlan, engine: AgentEngine): AcpLaunchPlan {
+/**
+ * Restrict native coding tools before starting a plain-chat/utility session,
+ * or — for a chat whose mode's policy is `workspace` — open them, in the chat's
+ * own folder, behind the engine's permission asks. AI functions pass no policy
+ * and stay restricted.
+ */
+export function applyConductorToolPolicy(plan: AcpLaunchPlan, engine: AgentEngine, policy: ChatToolPolicy = 'connectors'): AcpLaunchPlan {
+  if (policy === 'workspace') return applyWorkspacePolicy(plan, engine)
   if (engine === 'claude') {
     const meta = plan.session.meta ?? {}
     const claude = meta.claudeCode as { options?: Record<string, unknown> } | undefined
@@ -41,6 +48,54 @@ export function applyConductorToolPolicy(plan: AcpLaunchPlan, engine: AgentEngin
   }
   // OpenCode's generated agent entry already carries permission {'*':'deny'};
   // its caller owns generation, because the file participates in the spec key.
+  if (engine === 'opencode') return plan
+  throw new Error('This runtime has no verified chat tool policy.')
+}
+
+/**
+ * The `workspace` policy: Cinna's tools and the chat's MCPs, plus the engine's
+ * own file and shell tools with the chat's folder as the session cwd. **The
+ * folder is a cwd, not a sandbox** — a shell reaches outside it — so what
+ * protects the user is the permission ask each engine is left on.
+ */
+function applyWorkspacePolicy(plan: AcpLaunchPlan, engine: AgentEngine): AcpLaunchPlan {
+  if (engine === 'claude') {
+    // The native tools stay on (no `tools`), and the user's own `~/.claude`
+    // settings, hooks, skills and MCP servers load (`settingSources:
+    // ['user']`, no `strictMcpConfig`, no `mcpServers` override); Cinna's MCP
+    // server is still added on the session's `mcpServers`. Never `project` or
+    // `local`: the chat folder holds the user's work, not settings. The
+    // `claude_code` preset with the instructions appended, as a native folder
+    // runs. `agents: {}`: no user subagent runs behind Cinna's back. A user
+    // allow list or `defaultMode` in those settings can pre-approve an action
+    // Cinna would otherwise ask about: Cinna's ask covers what the CLI forwards.
+    const meta = plan.session.meta ?? {}
+    const claude = meta.claudeCode as { options?: Record<string, unknown> } | undefined
+    const { tools: _tools, settingSources: _sources, strictMcpConfig: _strict, mcpServers: _mcp, systemPrompt, ...options } = claude?.options ?? {}
+    void _tools; void _sources; void _strict; void _mcp
+    const append = typeof systemPrompt === 'string' ? systemPrompt
+      : systemPrompt && typeof systemPrompt === 'object' && typeof (systemPrompt as { append?: unknown }).append === 'string'
+        ? (systemPrompt as { append: string }).append : ''
+    return { ...plan, session: { ...plan.session, meta: { ...meta, claudeCode: {
+      ...claude, options: { ...options, systemPrompt: { type: 'preset', preset: 'claude_code', ...(append ? { append } : {}) },
+        settingSources: ['user'], agents: {} }
+    } } } }
+  }
+  if (engine === 'codex') {
+    if (plan.conductorPolicy === 'workspace') return plan
+    throw new Error('Codex workspace chats were not verified. Choose the Connectors tool policy for this chat mode, or another runtime.')
+  }
+  if (engine === 'antigravity') {
+    // The built-ins are on: the conductor filter (`enabledTools` and its
+    // denylist) is dropped, and what remains is the launcher's own isolated
+    // denylist — `schedule` and `start_subagent`, work Cinna cannot show.
+    const meta = plan.session.meta ?? {}
+    const { enabledTools: _enabled, ...agy } = (meta.agy as Record<string, unknown> | undefined) ?? {}
+    void _enabled
+    return { ...plan, session: { ...plan.session, meta: { ...meta, agy: { ...agy, disabledTools: [...ANTIGRAVITY_ISOLATED_DISABLED_TOOLS] } } } }
+  }
+  // OpenCode's generated agent entry carries the asking policy
+  // (`chatRuntimePermissions`); its caller owns generation.
   if (engine === 'opencode') return plan
   throw new Error('This runtime has no verified chat tool policy.')
 }

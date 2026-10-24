@@ -66,6 +66,7 @@ export function useUpsertChatMode(modeId?: string) {
       engine?: import('../../../shared/engine').AgentEngine | null
       systemPrompt?: string
       toolPolicy?: import('../../../shared/chatModeRuntime').ChatToolPolicy
+      complexity?: import('../../../shared/modelFamilies').WorkComplexity | null
       mcpProviderIds?: string[]
       colorPreset?: string
       isDefault?: boolean
@@ -99,6 +100,19 @@ export function useDeleteChatMode() {
       // The *default* chat mode is the last rung of an agent's runtime chain,
       // so editing, deleting or re-defaulting a mode can change which credential
       // an agent resolves to — and whether the sidebar should call it inactive.
+      queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+    }
+  })
+}
+
+/** Restore a runtime mode's defaults. Scoped with the card's saves, so a reset waits for them. */
+export function useResetChatMode(modeId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    scope: { id: `chat-mode:${modeId}` },
+    mutationFn: () => window.api.chatModes.reset(modeId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
     }
   })

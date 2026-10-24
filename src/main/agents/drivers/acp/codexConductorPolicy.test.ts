@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prepareCodexConductorPolicy, type CodexConductorPolicyDeps } from './codexConductorPolicy'
+import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy, type CodexConductorPolicyDeps } from './codexConductorPolicy'
 import type { AcpLaunchPlan } from './acpLaunchers'
 import adapterPatch from './codexAdapterPatch.json'
 import { RUNTIME_PINS } from '../../../../shared/runtimePins'
@@ -212,5 +212,28 @@ else {
     await rejected
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow())
     await expect(stat(s.configuration)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+describe('sealed Codex workspace policy', () => {
+  it('keeps the launcher’s plan, its instructions and its config, and holds it to workspace-write in the Default collaboration mode', async () => {
+    const s = await subject()
+    const auto = { ...s.plan, spec: { ...s.plan.spec, env: { ...s.plan.spec.env, INITIAL_AGENT_MODE: 'agent' } }, setup: { ...s.plan.setup, modeId: 'agent' } }
+    const sealed = await prepareCodexWorkspacePolicy(auto, { deps: s.deps })
+    // Mutation: keep the plan's own mode and an `agent` launch approves through its reviewer.
+    expect(sealed).toMatchObject({ conductorPolicy: 'workspace', setup: { modeId: 'workspace-write', configOptions: [{ configId: 'collaboration_mode', value: 'default' }] } })
+    expect(sealed.spec.env.INITIAL_AGENT_MODE).toBe('workspace-write')
+    expect(sealed.spec.env.CODEX_CONFIG).toBe(s.plan.spec.env.CODEX_CONFIG)
+    expect(sealed.spec.env.CODEX_PATH).toBe(s.plan.spec.env.CODEX_PATH)
+    expect(sealed.spec.key).not.toBe(s.plan.spec.key)
+    // Never the restricted seal's process.
+    expect(sealed.spec.key).not.toBe((await s.prepare()).spec.key)
+  })
+  it('refuses another CLI version, an unpatched adapter or missing instructions', async () => {
+    const s = await subject()
+    await expect(prepareCodexWorkspacePolicy(s.plan, { deps: { ...s.deps, run: vi.fn(async () => 'codex-cli 0.0.1\n') } })).rejects.toThrow(/only .* has been verified/)
+    await expect(prepareCodexWorkspacePolicy(s.plan, { deps: { ...s.deps, adapterDigest: vi.fn(async () => 'other') } })).rejects.toThrow(/adapter patch is missing/)
+    const bare = { ...s.plan, spec: { ...s.plan.spec, env: { ...s.plan.spec.env, CODEX_CONFIG: '{}' } } }
+    await expect(prepareCodexWorkspacePolicy(bare, { deps: s.deps })).rejects.toThrow(/session instructions were missing/)
   })
 })

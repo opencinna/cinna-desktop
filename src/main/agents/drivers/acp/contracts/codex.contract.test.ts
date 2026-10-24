@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
-import { prepareCodexConductorPolicy } from '../codexConductorPolicy'
+import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy } from '../codexConductorPolicy'
 import { cinnaToolName } from '../conductorToolPolicy'
 import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
@@ -140,6 +140,9 @@ const seen = {
    * prompt made, and whether the target file was written.
    */
   deny: [] as { name: string; asks: AdapterMessage[]; sent: (string | null)[]; answer: Json | null; requests: number; written: boolean }[],
+  /** Scenario F: two `workspace` chats on one process, its cwd profile-owned, each session in its chat folder. */
+  workspace: { error: null as unknown, prepared: null as AcpLaunchPlan | null, chats: [] as string[], processDir: '',
+    steps: {} as Record<string, { asks: number; outputs: string[]; tools: string[]; systemText: string; wrote: boolean | null }>, mcpCalls: 0 },
   permission: null as AdapterMessage | null,
   permissionCount: 0, mcpCalls: 0,
   toolCall: null as Json | null,
@@ -583,6 +586,90 @@ async function denyScenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario F */
+
+const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_INSTRUCTIONS_c61'
+
+/**
+ * Two `workspace` chats on one adapter, prepared by the production
+ * `prepareCodexWorkspacePolicy` from a plan shaped as the launcher shapes a
+ * chat runtime's: the process cwd a profile-owned folder (`codexProcessCwd`),
+ * each session's cwd its own chat folder beside it, no `AGENTS.md` in either.
+ * Kept out of the snapshot: what it observes is these entries' alone.
+ */
+async function workspaceScenario(binary: string): Promise<void> {
+  // Not under a temp root: the sandbox lets every session write there.
+  const scratch = makeScratch('.cinna-contract-workspace-', process.cwd())
+  const mcp = new ConductorMcpServer()
+  let provider: FakeProvider | undefined
+  let connection: AdapterConnection | undefined
+  const log = seen.workspace
+  try {
+    const cinna = await mcp.ensureSession('cinna', mcpProvider(() => ['probe'], () => { log.mcpCalls++ }))
+    let script: ProviderReply[] = []
+    provider = await startFakeProvider((turn): ProviderReply => turn.kind !== 'conversation' ? ownRequestReply(turn) : (script.shift() ?? { kind: 'text', text: 'OK' }))
+    writeProviderConfig(scratch.codexHome, provider.port, MODEL)
+    const processDir = join(scratch.home, 'chat-conductors', 'processes', 'contract')
+    const chatPaths = ['chat-one', 'chat-two'].map((id) => join(scratch.home, 'chat-conductors', id))
+    for (const dir of [processDir, ...chatPaths]) mkdirSync(dir, { recursive: true })
+    const chats = chatPaths.map((dir) => realpathSync(dir))
+    log.processDir = processDir
+    log.chats = chats
+    const plan = {
+      spec: { command: process.execPath, args: [adapter], cwd: processDir, key: 'contract',
+        env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'agent', MODEL_PROVIDER: 'probe',
+          CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe', developer_instructions: WORKSPACE_MARKER, model_reasoning_effort: 'medium' }) } },
+      init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'agent' }, sessionToolsFixed: true
+    } as unknown as AcpLaunchPlan
+    const prepared = await prepareCodexWorkspacePolicy(plan, candidate ? {
+      // As in scenario B: a candidate is told what the version gate expects to hear.
+      deps: { run: async (input, args) => args[0] === '--version' ? RUNTIME_PINS.codex.versionOutput : runCli(input.binary, args, input.env, input.cwd).stdout }
+    } : {})
+    log.prepared = prepared
+    connection = spawnAdapter({ adapterPath: adapter, cwd: prepared.spec.cwd, env: prepared.spec.env, answer: allowOnce })
+    await connection.rpc('initialize', { protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+    const exec = (cmd: string, escalate = false): ProviderReply => ({ kind: 'tool', name: 'exec_command', args: JSON.stringify({ cmd, yield_time_ms: 1000, max_output_tokens: 1000,
+      ...(escalate ? { sandbox_permissions: 'require_escalated', justification: 'Write outside the chat folder.' } : {}) }) })
+    const sessions: string[] = []
+    for (const chat of chats) {
+      const created = await connection.rpc('session/new', { cwd: chat, mcpServers: [cinna.descriptor] }, 60_000)
+      const sessionId = String(created.result?.sessionId ?? '')
+      if (!sessionId) { log.error = created.error ?? 'no session'; return }
+      sessions.push(sessionId)
+      // The driver's setup after new and load: config options, then the mode.
+      for (const option of prepared.setup.configOptions ?? []) await connection.rpc('session/set_config_option', { sessionId, configId: option.configId, value: option.value })
+      if (prepared.setup.modeId) await connection.rpc('session/set_mode', { sessionId, modeId: prepared.setup.modeId })
+    }
+    const step = async (name: string, session: number, replies: ProviderReply[], target?: string): Promise<void> => {
+      const asksAt = connection!.clientRequests.length, turnsAt = provider!.turns.length
+      script = [...replies]
+      const answer = await connection!.rpc('session/prompt', { sessionId: sessions[session], prompt: [{ type: 'text', text: `Do ${name}.` }] }, 90_000)
+      if (answer.error) log.error ??= answer.error
+      await sleep(500)
+      const turns = provider!.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+      log.steps[name] = { asks: connection!.clientRequests.slice(asksAt).filter((request) => request.method === 'session/request_permission').length,
+        outputs: turns.flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : []),
+        tools: turns[0]?.tools ?? [], systemText: turns[0]?.systemText ?? '', wrote: target ? existsSync(target) : null }
+    }
+    await step('pwd', 0, [exec('pwd -P')])
+    await step('write-inside', 0, [exec(`printf X > '${join(chats[0], 'inside.txt')}'`)], join(chats[0], 'inside.txt'))
+    // The process cwd is outside every session's workspace.
+    await step('write-process', 0, [exec(`printf X > '${join(processDir, 'process.txt')}'`)], join(processDir, 'process.txt'))
+    // So is the other chat's folder, though the process is shared.
+    await step('write-other-chat', 1, [exec(`printf X > '${join(chats[0], 'other.txt')}'`)], join(chats[0], 'other.txt'))
+    await step('escalate', 0, [exec(`printf X > '${join(processDir, 'escalated.txt')}'`, true)], join(processDir, 'escalated.txt'))
+    await step('mcp', 0, [{ kind: 'tool-search', args: { query: 'cinna probe', limit: 1 } }, { kind: 'tool', name: 'probe' }])
+  } catch (error) {
+    log.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    await connection?.close()
+    await mcp.dispose()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 /** Shapes only: no paths, ids, ports, tokens or timestamps, keys sorted, so two versions diff cleanly. */
@@ -759,8 +846,36 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     await subagentScenario(binary)
     await subagentScenario(binary, 'v1')
     await denyScenario(binary)
+    await workspaceScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
-  }, 300_000)
+  }, 420_000)
+
+  it(entry('codex.policy.workspace-native-tools'), () => {
+    expect(seen.workspace.error).toBeNull()
+    expect(seen.workspace.prepared).toMatchObject({ conductorPolicy: 'workspace', setup: { modeId: 'workspace-write' } })
+    expect(seen.workspace.prepared?.spec.env.INITIAL_AGENT_MODE).toBe('workspace-write')
+    const pwd = seen.workspace.steps['pwd']
+    expect(pwd?.tools.some((name) => name.endsWith('exec_command'))).toBe(true)
+    expect(pwd?.tools.some((name) => name.endsWith('apply_patch'))).toBe(true)
+    // The instructions arrive as developer instructions, with no AGENTS.md in the session folder.
+    expect(pwd?.systemText).toContain(WORKSPACE_MARKER)
+    // Cinna's tools still go through, found with tool_search.
+    expect(seen.workspace.mcpCalls).toBe(1)
+  })
+  it(entry('codex.policy.workspace-asks'), () => {
+    const steps = seen.workspace.steps
+    // Inside the chat folder: no ask, written. Outside it — the process cwd, the other chat's folder — refused by the sandbox, no ask.
+    expect(steps['write-inside']).toMatchObject({ asks: 0, wrote: true })
+    for (const name of ['write-process', 'write-other-chat']) {
+      expect(steps[name], name).toMatchObject({ asks: 0, wrote: false })
+      expect(steps[name]?.outputs.join(' '), name).toMatch(/operation not permitted|permission denied/i)
+    }
+    // An escalation outside it asks, and the once-allow runs it.
+    expect(steps['escalate']).toMatchObject({ asks: 1, wrote: true })
+  })
+  it(entry('codex.policy.workspace-cwd'), () => {
+    expect(seen.workspace.steps['pwd']?.outputs.join(' ')).toContain(seen.workspace.chats[0])
+  })
 
 
   it(entry('codex.launch.version-output'), () => {

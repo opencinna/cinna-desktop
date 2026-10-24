@@ -17,7 +17,7 @@ vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./cinnaApiService', () => ({ getCinnaServerUrl: () => null, cinnaApiService: {} }))
 vi.mock('./syncService', () => ({ syncService: { markDirty() {} } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
-vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (_user: string, chat: { id: string }) => {
+vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, syncToolPolicy: () => false, bind: (_user: string, chat: { id: string }) => {
   state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
   return { ...chat, agentId: 'runtime' }
 } } }))

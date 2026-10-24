@@ -129,7 +129,7 @@ describe('RuntimeChoiceButtons', () => {
 
   it('reserves no label room: the overlay never touches the card layout', () => {
     render(<RuntimeChoiceButtons {...props} selected="claude" chips={{ claude: { kind: 'log_in' } }} />)
-    for (const name of [/^Claude Agent/, /^Codex/, /^Antigravity/, /^Custom OpenCode/]) {
+    for (const name of [/^Claude Agent/, /^Codex/, /^Antigravity/, /^OpenCode/]) {
       const [labelLine, subLine] = Array.from(screen.getByRole('button', { name }).children)
       expect(labelLine.className).not.toMatch(/\bpr-/)
       expect(subLine.className).not.toMatch(/\bpr-/)

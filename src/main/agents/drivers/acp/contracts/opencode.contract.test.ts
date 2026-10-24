@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,7 @@ import { startAcpConnection } from '../acpConnection'
 import { pickPermissionOption } from '../acpPermissions'
 import { toElicitationContent, toInputQuestions } from '../acpQuestions'
 import { codeModeCinnaTools, isCodeModeCall } from '../conductorToolPolicy'
+import { chatRuntimePermissions } from '../../../../engine/configGenerator'
 import { OPENCODE_CONTRACT } from './opencode.contract'
 import { lineDiff, sorted } from './snapshotTools'
 import { startEgressTrap, type EgressTrap } from './claudeHarness'
@@ -140,7 +141,12 @@ const seen = {
   resume: emptyPrompt(),
   egress: [] as string[],
   otherProviderRequests: [] as string[],
-  auxiliaryRequests: 0
+  auxiliaryRequests: 0,
+  /** The `workspace` chat runtime's session, on its generated replace policy: one observation per prompt. */
+  workspace: { error: null as string | null, cwd: '', outside: '', written: null as string | null, otherCwd: '', otherWritten: null as string | null,
+    bash: emptyPrompt(), write: emptyPrompt(), readInside: emptyPrompt(), readOutside: emptyPrompt(),
+    /** Session A reading session B's folder; session B, on A's process, reading its own folder, A's (the process cwd), and writing. */
+    readOther: emptyPrompt(), otherReadInside: emptyPrompt(), otherReadProcess: emptyPrompt(), otherWrite: emptyPrompt() }
 }
 
 const shellTool = (turn: OpenAiTurn): string | undefined => turn.tools.find((name) => name === 'bash' || name === 'shell')
@@ -387,6 +393,153 @@ async function scenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------- workspace chat */
+
+const WORKSPACE_AGENT_ID = 'chat-runtime:contract'
+const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_PROMPT_8a4'
+const WORKSPACE_WRITE = 'CONTRACT_WORKSPACE_WRITE_8a4'
+const WS_BASH = 'CONTRACT_WS_BASH: print the directory.'
+const WS_WRITE = 'CONTRACT_WS_WRITE: write made.txt.'
+const WS_READ_INSIDE = 'CONTRACT_WS_READ_INSIDE: read readme.txt.'
+const WS_READ_OUTSIDE = 'CONTRACT_WS_READ_OUTSIDE: read the outside file.'
+const WS_READ_OTHER = 'CONTRACT_WS_READ_OTHER: read the other chat\'s file.'
+const WS_READ_PROCESS = 'CONTRACT_WS_READ_PROCESS: read the first chat\'s file.'
+const WS_READ_OWN = 'CONTRACT_WS_READ_OWN: read own.txt.'
+
+/** The workspace chat's scripted model: one native call per prompt, then a text answer. */
+function decideWorkspace(outside: string, files: { other: string; first: string }): (turn: OpenAiTurn) => OpenAiReply {
+  return (turn) => {
+    if (turn.kind === 'auxiliary') return { kind: 'text', text: 'Contract title' }
+    if (turn.pendingToolResults.length > 0) return { kind: 'text', text: 'WS_DONE' }
+    const about = turn.lastUserText
+    const params = (name: string): string[] => turn.toolParams[name] ?? []
+    const pathKey = (name: string): string => params(name).includes('path') ? 'path' : 'filePath'
+    if (about.includes('CONTRACT_WS_BASH')) {
+      const shell = shellTool(turn)
+      if (!shell) return { kind: 'text', text: 'NO_SHELL' }
+      return { kind: 'tool', name: shell, args: { command: 'pwd -P', ...(params(shell).includes('description') ? { description: 'contract' } : {}) } }
+    }
+    if (about.includes('CONTRACT_WS_WRITE')) {
+      if (!turn.tools.includes('write')) return { kind: 'text', text: 'NO_WRITE' }
+      return { kind: 'tool', name: 'write', args: { [pathKey('write')]: 'made.txt', content: WORKSPACE_WRITE } }
+    }
+    const readOf = about.includes('CONTRACT_WS_READ_INSIDE') ? 'readme.txt' : about.includes('CONTRACT_WS_READ_OUTSIDE') ? outside
+      : about.includes('CONTRACT_WS_READ_OTHER') ? files.other : about.includes('CONTRACT_WS_READ_PROCESS') ? files.first
+        : about.includes('CONTRACT_WS_READ_OWN') ? 'own.txt' : null
+    if (readOf) {
+      if (!turn.tools.includes('read')) return { kind: 'text', text: 'NO_READ' }
+      return { kind: 'tool', name: 'read', args: { [pathKey('read')]: readOf } }
+    }
+    return { kind: 'text', text: 'OK' }
+  }
+}
+
+/**
+ * A `workspace` chat runtime on the production launcher and config generator:
+ * its agent entry is the chat runtime's replace policy
+ * (`chatRuntimePermissions('workspace')`), its prompt the entry's alone — the
+ * session folder has no `AGENTS.md` — and every ask is answered allow-once.
+ * Kept out of the snapshot: what it observes is these entries' alone.
+ */
+async function workspaceScenario(binary: string): Promise<void> {
+  let trap: EgressTrap | undefined
+  let provider: FakeOpenAi | undefined
+  let scratch: OpencodeScratch | undefined
+  let connection: AcpConnection | undefined
+  const mcp = new ConductorMcpServer()
+  try {
+    trap = await startEgressTrap()
+    scratch = makeOpencodeScratch('cinna-contract-opencode-ws-', { trapPort: trap.port })
+    const outsideDir = join(scratch.root, 'outside')
+    mkdirSync(outsideDir, { recursive: true })
+    const outside = join(outsideDir, 'secret.txt')
+    writeFileSync(outside, 'outside\n')
+    writeFileSync(join(scratch.cwd, 'readme.txt'), 'hello\n')
+    // A second chat's folder, served by the same process (one pool key per
+    // mode: production starts it in whichever chat's folder came first).
+    const otherDir = join(scratch.root, 'other-chat')
+    mkdirSync(otherDir, { recursive: true })
+    writeFileSync(join(otherDir, 'own.txt'), 'other chat\n')
+    seen.workspace.cwd = realpathSync(scratch.cwd)
+    seen.workspace.otherCwd = realpathSync(otherDir)
+    seen.workspace.outside = outside
+    provider = await startFakeOpenAi(decideWorkspace(outside, { other: join(otherDir, 'own.txt'), first: join(scratch.cwd, 'readme.txt') }))
+    const port = provider.port
+    const env = scratch.env
+    const launcher = createOpencodeLauncher({
+      binary: async () => ({ path: binary, version: null }),
+      configInput: async () => ({
+        providers: [{ id: PROVIDER_ID, type: 'openai_compatible', name: 'Contract fake', apiKey: 'sk-contract-dummy-not-a-real-key',
+          baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: MODEL_ID, name: 'Contract model' }] }],
+        agents: [{ agentId: WORKSPACE_AGENT_ID, slug: 'chat-runtime', description: 'Chat runtime', prompt: WORKSPACE_MARKER,
+          providerId: PROVIDER_ID, modelId: MODEL_ID, permissionMode: 'replace', permissions: chatRuntimePermissions('workspace') }]
+      }),
+      configRoot: () => scratch!.configRoot,
+      childEnv: async () => ({ ...env })
+    })
+    const planned = await launcher.plan({ userId: 'contract', agentId: WORKSPACE_AGENT_ID,
+      folder: { name: 'Chat', slug: 'chat-runtime', description: '', path: scratch.cwd, kind: 'bare', runtimeMode: 'isolated' } })
+    if (isRefusal(planned)) throw new Error(`the launcher refused: ${planned.error}`)
+    const plan = planned
+    const lease: ConductorMcpSession = await mcp.ensureSession('opencode-contract-ws', { getProviders: () => [{
+      providerType: 'mcp', displayName: 'Contract',
+      getTools: () => [{ name: 'probe', description: 'Return the contract result.', inputSchema: { type: 'object', properties: {} }, mcpProviderId: 'probe', providerType: 'mcp' }],
+      callTool: async () => ({ content: PROBE_RESULT })
+    }] } as never)
+    connection = spawnAcp({ command: plan.spec.command, args: plan.spec.args, cwd: plan.spec.cwd, env: plan.spec.env, answer: (request) => {
+      if (request.method !== 'session/request_permission') return undefined
+      const optionId = pickPermissionOption((request.params?.options ?? []) as PermissionOption[], 'allow')
+      return optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } }
+    } })
+    await connection.rpc('initialize', plan.init as unknown as Json, 60_000)
+    const open = async (cwd: string): Promise<string> => {
+      const mark = lease.toolsListings()
+      const created = await connection!.rpc('session/new', { cwd, mcpServers: [lease.descriptor] }, 60_000)
+      const listedAt = await lease.toolsListed(mark, 10_000)
+      if (listedAt !== null && plan.awaitMcpTools) await sleep(Math.max(0, listedAt + plan.awaitMcpTools.settleMs - Date.now()))
+      const id = String(created.result?.sessionId ?? '')
+      if (!id) return ''
+      for (const option of plan.setup.configOptions ?? []) {
+        await connection!.rpc('session/set_config_option', { sessionId: id, configId: option.configId, value: option.value })
+      }
+      return id
+    }
+    const sessionId = await open(scratch.cwd)
+    if (!sessionId) { seen.workspace.error = 'no session'; return }
+    const prompt = async (text: string, into: PromptObservation, session = sessionId): Promise<void> => {
+      const requestsAt = connection!.clientRequests.length, updatesAt = connection!.updates.length, turnsAt = provider!.turns.length
+      into.answer = await connection!.rpc('session/prompt', { sessionId: session, prompt: [{ type: 'text', text }] }, 90_000)
+      await sleep(300)
+      into.requests = connection!.clientRequests.slice(requestsAt)
+      into.updates = connection!.updates.slice(updatesAt)
+      into.turns = provider!.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+    }
+    await prompt(WS_BASH, seen.workspace.bash)
+    await prompt(WS_WRITE, seen.workspace.write)
+    const made = join(scratch.cwd, 'made.txt')
+    seen.workspace.written = existsSync(made) ? readFileSync(made, 'utf8') : null
+    await prompt(WS_READ_INSIDE, seen.workspace.readInside)
+    await prompt(WS_READ_OUTSIDE, seen.workspace.readOutside)
+    await prompt(WS_READ_OTHER, seen.workspace.readOther)
+    // The second chat's session, on the process the first chat's folder started.
+    const otherSession = await open(otherDir)
+    if (!otherSession) { seen.workspace.error = 'no second session'; return }
+    await prompt(WS_READ_OWN, seen.workspace.otherReadInside, otherSession)
+    await prompt(WS_READ_PROCESS, seen.workspace.otherReadProcess, otherSession)
+    await prompt(WS_WRITE, seen.workspace.otherWrite, otherSession)
+    const otherMade = join(otherDir, 'made.txt')
+    seen.workspace.otherWritten = existsSync(otherMade) ? readFileSync(otherMade, 'utf8') : null
+  } catch (err) {
+    seen.workspace.error = err instanceof Error ? err.message : String(err)
+  } finally {
+    await connection?.close()
+    await mcp.dispose()
+    await provider?.close()
+    await trap?.close()
+    scratch?.dispose()
+  }
+}
+
 /** The causes of the engine log's newest errors (the stderr tail is only a stack): why a start died. */
 function engineErrors(scratch: OpencodeScratch): string {
   try {
@@ -565,7 +718,52 @@ if (!binaryRef && !allowSkip) {
 describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
   beforeAll(async () => {
     await scenario(binaryRef?.path ?? '')
-  }, 300_000)
+    await workspaceScenario(binaryRef?.path ?? '')
+  }, 420_000)
+
+  it(entry('opencode.policy.workspace-native-tools'), () => {
+    expect(seen.workspace.error).toBeNull()
+    const first = seen.workspace.bash.turns[0]
+    expect(first, 'the workspace session reached no provider request').toBeDefined()
+    // Native tools beside Code Mode's `execute`, which carries Cinna's.
+    expect(first!.tools).toEqual(expect.arrayContaining(['read', 'write', 'execute']))
+    expect(shellTool(first!)).toBeDefined()
+    // The instructions arrive from the generated entry, with no AGENTS.md in the folder.
+    expect(existsSync(join(seen.workspace.cwd, 'AGENTS.md'))).toBe(false)
+    expect(first!.systemText).toContain(WORKSPACE_MARKER)
+  })
+
+  it(entry('opencode.policy.workspace-asks'), () => {
+    // The shell and the write each ask, and run once allowed.
+    expect(asks(seen.workspace.bash).map(askCommand)).toEqual(['pwd -P'])
+    expect(asks(seen.workspace.write)).toHaveLength(1)
+    expect(seen.workspace.written).toBe(WORKSPACE_WRITE)
+    // A read inside the folder does not; one outside it asks (`external_directory`).
+    expect(asks(seen.workspace.readInside)).toHaveLength(0)
+    expect(seen.workspace.readInside.turns[1]?.pendingToolResults.join('\n')).toContain('hello')
+    expect(asks(seen.workspace.readOutside).length).toBeGreaterThanOrEqual(1)
+    expect(asks(seen.workspace.readOutside).map((ask) => String((ask.params?.toolCall as Json | undefined)?.title ?? '')).join(' ')).toMatch(/external|outside|secret/i)
+  })
+
+  it(entry('opencode.policy.workspace-session-scope'), () => {
+    expect(seen.workspace.error).toBeNull()
+    const titles = (observation: PromptObservation): string => asks(observation).map((ask) => String((ask.params?.toolCall as Json | undefined)?.title ?? '')).join(' ')
+    // From chat A, chat B's folder is outside: it asks.
+    expect(asks(seen.workspace.readOther).length, 'reading another chat\'s folder ran without an ask').toBeGreaterThanOrEqual(1)
+    expect(titles(seen.workspace.readOther)).toMatch(/external|outside|own/i)
+    // Chat B, on a process started in A's folder, reads its own folder freely…
+    expect(asks(seen.workspace.otherReadInside)).toHaveLength(0)
+    expect(seen.workspace.otherReadInside.turns[1]?.pendingToolResults.join('\n')).toContain('other chat')
+    // …and A's folder, the process cwd, is outside for it: it asks.
+    expect(asks(seen.workspace.otherReadProcess).length, 'the process folder counted as the session\'s').toBeGreaterThanOrEqual(1)
+    // A write asks in the second session too, and lands in its own folder.
+    expect(asks(seen.workspace.otherWrite)).toHaveLength(1)
+    expect(seen.workspace.otherWritten).toBe(WORKSPACE_WRITE)
+  })
+
+  it(entry('opencode.policy.workspace-cwd'), () => {
+    expect(seen.workspace.bash.turns[1]?.pendingToolResults.join('\n')).toContain(seen.workspace.cwd)
+  })
 
   it(entry('opencode.launch.version-output'), () => {
     expect(seen.versionStatus).toBe(0)

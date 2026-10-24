@@ -1,4 +1,5 @@
 import type { ChatModeRuntime } from '../../shared/chatModeRuntime'
+import type { AgentEngine } from '../../shared/engine'
 import { nanoid } from 'nanoid'
 import { and, eq, inArray } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
@@ -76,6 +77,8 @@ export const chatModeRepo = {
         engine: input.engine ?? (input.providerId ? 'opencode' : null),
         systemPrompt: input.systemPrompt ?? '',
         toolPolicy: input.toolPolicy ?? 'connectors',
+        complexity: input.complexity ?? null,
+        builtinEngine: input.builtinEngine ?? null,
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
         isDefault: input.isDefault ?? false,
@@ -104,6 +107,10 @@ export const chatModeRepo = {
         engine: input.engine !== undefined ? input.engine : (existing.engine ?? (input.providerId ? 'opencode' : null)),
         systemPrompt: input.systemPrompt ?? existing.systemPrompt ?? '',
         toolPolicy: input.toolPolicy ?? existing.toolPolicy ?? 'connectors',
+        // Absent keeps the stored tier (callers that predate Effort); null clears it.
+        complexity: input.complexity !== undefined ? input.complexity : (existing.complexity ?? null),
+        // What makes a row a runtime mode is fixed at creation.
+        builtinEngine: existing.builtinEngine ?? null,
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
         isDefault: input.isDefault ?? existing.isDefault,
@@ -113,6 +120,54 @@ export const chatModeRepo = {
       .where(and(eq(chatModes.id, id), eq(chatModes.userId, userId)))
       .run()
     return existing
+  },
+
+  /** The user's runtime mode for `engine`, if it exists. */
+  getRuntimeMode(userId: string, engine: AgentEngine, db: DbOrTx = getDb()): ChatModeRow | undefined {
+    return db
+      .select()
+      .from(chatModes)
+      .where(and(eq(chatModes.userId, userId), eq(chatModes.builtinEngine, engine)))
+      .get()
+  },
+
+  /** Rename a row; used only to keep a runtime mode on its engine's current name. */
+  setName(userId: string, id: string, name: string, db: DbOrTx = getDb()): void {
+    db.update(chatModes).set({ name }).where(and(eq(chatModes.id, id), eq(chatModes.userId, userId))).run()
+  },
+
+  /**
+   * Insert a runtime mode unless the user already has one for its engine. The
+   * partial unique index on `(user_id, builtin_engine)` is what makes two
+   * concurrent calls create one row: the loser's insert is ignored.
+   */
+  insertRuntimeModeIfMissing(
+    userId: string,
+    input: ChatModeUpsertInput & { builtinEngine: AgentEngine },
+    db: DbOrTx = getDb()
+  ): boolean {
+    const result = db.insert(chatModes)
+      .values({
+        id: nanoid(),
+        userId,
+        name: input.name,
+        providerId: null,
+        modelId: null,
+        engine: input.builtinEngine,
+        systemPrompt: input.systemPrompt ?? '',
+        toolPolicy: input.toolPolicy ?? 'connectors',
+        complexity: input.complexity ?? null,
+        builtinEngine: input.builtinEngine,
+        mcpProviderIds: [],
+        colorPreset: input.colorPreset ?? 'slate',
+        isDefault: false,
+        managed: false,
+        adminManaged: false,
+        createdAt: new Date()
+      })
+      .onConflictDoNothing()
+      .run()
+    return result.changes > 0
   },
 
   delete(userId: string, id: string, db: DbOrTx = getDb()): boolean {

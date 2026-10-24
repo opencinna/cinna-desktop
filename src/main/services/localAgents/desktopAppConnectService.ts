@@ -43,14 +43,6 @@ import {
 
 const logger = createLogger('desktop-app-connect')
 
-/** The mode a desktop app's engine gets when one has to be created. Colours as onboarding's providers. */
-const ENGINE_MODE: Record<EngineLoginId, { name: string; colorPreset: string }> = {
-  claude: { name: 'Claude', colorPreset: 'amber' },
-  codex: { name: 'Codex', colorPreset: 'emerald' },
-  // No desktop app stands for it yet; here so the table stays exhaustive.
-  antigravity: { name: 'Antigravity', colorPreset: 'sky' }
-}
-
 /**
  * Make `engine` what chats and agents run on.
  *
@@ -60,9 +52,9 @@ const ENGINE_MODE: Record<EngineLoginId, { name: string; colorPreset: string }> 
  *
  * **Chat modes**, because a chat runs on its mode's engine before the Default
  * runtime: when the effective default mode names a *different* engine
- * explicitly (onboarding's API-key "Default" mode is `opencode`), a local mode
- * on this engine with no credential becomes the default — an existing one if
- * there is one, else a new "Claude" / "Codex". A default that names no engine
+ * explicitly (onboarding's API-key "Default" mode is `opencode`), this engine's
+ * runtime mode (Claude Agent / Codex) is starred. Modes an earlier version of
+ * this offer created are the user's now and are left as they are. A default that names no engine
  * already inherits the Default runtime, and no default at all does too, so
  * both are left alone. An account default that wins because account defaults
  * are prioritized is the account's decision and is left alone as well.
@@ -86,34 +78,27 @@ export function adoptDesktopEngine(engine: EngineLoginId): void {
     return
   }
 
-  const reusable = chatModeService
-    .list(userId)
-    .find((mode) => !mode.managed && mode.engine === engine && !mode.providerId)
-  if (reusable) {
-    // `update` resets any field it is not given, so the row is passed back whole.
-    chatModeService.upsert(userId, {
-      id: reusable.id,
-      name: reusable.name,
-      providerId: null,
-      modelId: reusable.modelId,
-      engine,
-      systemPrompt: reusable.systemPrompt,
-      toolPolicy: reusable.toolPolicy,
-      mcpProviderIds: reusable.mcpProviderIds ?? [],
-      colorPreset: reusable.colorPreset,
-      isDefault: true
-    })
-    logger.info('made an existing chat mode the default', { modeId: reusable.id, engine })
+  chatModeService.ensureRuntimeModes(userId)
+  const runtimeMode = chatModeService.list(userId).find((mode) => mode.builtinEngine === engine)
+  if (!runtimeMode) {
+    logger.warn('no runtime mode to make the default', { engine })
     return
   }
-  const { id } = chatModeService.upsert(userId, {
-    name: ENGINE_MODE[engine].name,
+  // `update` resets any field it is not given, so the row is passed back whole.
+  chatModeService.upsert(userId, {
+    id: runtimeMode.id,
+    name: runtimeMode.name,
+    providerId: runtimeMode.providerId,
+    modelId: runtimeMode.modelId,
     engine,
-    providerId: null,
-    colorPreset: ENGINE_MODE[engine].colorPreset,
+    systemPrompt: runtimeMode.systemPrompt,
+    toolPolicy: runtimeMode.toolPolicy,
+    complexity: runtimeMode.complexity ?? null,
+    mcpProviderIds: runtimeMode.mcpProviderIds ?? [],
+    colorPreset: runtimeMode.colorPreset,
     isDefault: true
   })
-  logger.info('created a default chat mode for a desktop app', { modeId: id, engine })
+  logger.info('made the runtime mode the default', { modeId: runtimeMode.id, engine })
 }
 
 export interface DesktopAppConnectDeps {

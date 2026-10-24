@@ -288,7 +288,7 @@ describe('LocalAgentsSettingsSection', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
       await waitFor(() => expect(runtimeSetup).toHaveBeenCalledWith('codex', { install: true, login: 'auto' }))
       // The picker is still there to choose another runtime from (rule 6).
-      expect(screen.getByRole('button', { name: /Custom OpenCode/ })).toBeTruthy()
+      expect(screen.getByRole('button', { name: /^OpenCode/ })).toBeTruthy()
     })
 
     it('a signed-out Codex: Log in on the card, the line says so, and the chip starts the setup without an install', async () => {
@@ -424,7 +424,7 @@ describe('LocalAgentsSettingsSection', () => {
       await settle()
       expect(runtimeSetup).not.toHaveBeenCalledWith('claude', expect.objectContaining({ install: true }))
       // Closes nothing: another runtime is still one click away (rule 6).
-      expect(screen.getByRole('button', { name: /Custom OpenCode/ })).toBeTruthy()
+      expect(screen.getByRole('button', { name: /^OpenCode/ })).toBeTruthy()
     })
 
     it('does not offer Install now beside a saved path that simply has not been checked yet', () => {

@@ -62,6 +62,8 @@ interface AgentChipProps {
    * Shift+F10 or the ContextMenu key; absent for a chip that is not an agent.
    */
   menu?: AgentChipMenu
+  /** In place of the bot: a chat's runtime chip on a runtime mode carries that mode's glyph. */
+  icon?: React.ReactNode
 }
 
 /**
@@ -82,7 +84,7 @@ interface AgentChipProps {
  * than one overwriting the other.
  */
 export function AgentChip({
-  name, colors, coordinator, addressed, label, onRemove, menu
+  name, colors, coordinator, addressed, label, onRemove, menu, icon
 }: AgentChipProps): React.JSX.Element {
   const chipRef = useRef<HTMLDivElement>(null)
   const host = useContext(MenuHostContext)
@@ -111,7 +113,7 @@ export function AgentChip({
   const style = { color: colors.border, borderColor: colors.border, backgroundColor: colors.bg, '--chip-border': colors.border } as CSSProperties
   const content = (
     <>
-      <Bot size={12} className="shrink-0" aria-hidden="true" />
+      {icon ?? <Bot size={12} className="shrink-0" aria-hidden="true" />}
       {/* No `title` of its own: it would hide the chip's, which carries the role. */}
       <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap">{name}</span>
     </>

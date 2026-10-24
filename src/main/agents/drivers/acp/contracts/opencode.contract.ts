@@ -151,6 +151,34 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
 
   /* ------------------------------------------------- permissions & questions */
   {
+    id: 'opencode.policy.workspace-native-tools', area: 'permissions & questions', surface: 'file', name: 'workspace chat agent entry (permission: \'*\': \'ask\')',
+    expectation: 'A chat runtime entry on the `workspace` replace policy (`\'*\': \'ask\'`, `read` allowed, `external_directory` asking, Cinna’s `execute`/`cinna_*`/`question` allowed) is offered the native shell, `read` and `write` beside `execute`, and its prompt — the entry’s, with no `AGENTS.md` in the session folder — reaches the model.',
+    owners: ['src/main/engine/configGenerator.ts#chatRuntimePermissions', 'src/main/services/chatConductorService.ts#ensure'],
+    feature: 'A workspace chat on OpenCode has no file or shell tools, or runs without its instructions.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'opencode.policy.workspace-asks', area: 'permissions & questions', surface: 'ACP method', name: 'workspace bash / write / outside read → session/request_permission',
+    expectation: 'On that policy a shell command and a `write` each raise `session/request_permission` and run once allowed; a `read` inside the session folder runs without an ask; a `read` of a file outside it asks (`external_directory`). Nothing a pattern misses falls open: the catch-all is `ask`.',
+    owners: ['src/main/engine/configGenerator.ts#chatRuntimePermissions'],
+    feature: 'A workspace chat edits files, runs commands or reads outside its folder without asking.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'opencode.policy.workspace-session-scope', area: 'permissions & questions', surface: 'ACP method', name: 'two workspace sessions on one process → external_directory per session cwd',
+    expectation: 'Two workspace chats share one process (one pool key per mode), started in the first chat’s folder. `external_directory` and the `read` allow are judged against each *session’s* `session/new` cwd, not the process’s: a `read` in a session’s own folder runs without an ask, a `read` of the other chat’s folder asks from either side (the process folder included), and a `write` asks in both.',
+    owners: ['src/main/engine/configGenerator.ts#chatRuntimePermissions', 'src/main/agents/drivers/index.ts#acpLauncherFor'],
+    feature: 'One OpenCode workspace chat reads another chat’s files without asking.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'opencode.policy.workspace-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'session/new cwd',
+    expectation: 'The workspace chat’s shell runs in the `session/new` cwd — the chat’s folder (`pwd -P` returns it).',
+    owners: ['src/main/services/chatConductorService.ts#runtime'],
+    feature: 'Commands run somewhere other than the chat’s folder.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
     id: 'opencode.permission.profile-patterns', area: 'permissions & questions', surface: 'file', name: 'agent permission profile (bash, read)',
     expectation: 'Under the conversation profile a shell `ls` runs without an ask and `cat .env` raises one (the secret-file patterns): the config’s `bash` map governs the `shell` tool. A `read` of `.env` (2.x’s `path` argument) is denied by the `read` map without an ask, and the value never reaches the model, while the same `read` of a file no pattern names completes.',
     owners: [`${CONFIG}#CONVERSATION_PERMISSIONS`, `${CONFIG}#SECRET_FILES`],

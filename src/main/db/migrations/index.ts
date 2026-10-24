@@ -10,7 +10,7 @@ import { migrateChatOrigin } from './chat-origin'
 import { migrateInflightTurns } from './inflight-turns'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
-import { migrateChatModes } from './chat-modes'
+import { migrateChatModes, migrateChatModeRuntimeIndex } from './chat-modes'
 import { migrateAgents } from './agents'
 import { migrateAcpDriver } from './acp-driver'
 import { migrateAgentDrivers } from './agent-drivers'
@@ -139,6 +139,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)
+  // One runtime mode per user and engine; needs the `user_id` backfilled above.
+  migrateChatModeRuntimeIndex(sqlite)
   // One-time AI Functions credential backfill. Reads `chat_modes.user_id`, so
   // it runs after the legacy `user_id` backfill above.
   backfillAiFunctionsCredential(sqlite)

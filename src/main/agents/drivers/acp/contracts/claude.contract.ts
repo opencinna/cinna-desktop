@@ -296,6 +296,27 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     feature: 'A plain chat or an AI function can read and write the user’s files and run commands, in a session the UI presents as unable to.',
     flow: { steps: ['A'] }
   },
+  {
+    id: 'claude.policy.workspace-native-tools', area: 'restricted chat policy', surface: '_meta key', name: 'workspace options (preset, settingSources: [\'user\'])',
+    expectation: 'A `workspace` chat’s options — the `claude_code` preset with the instructions appended, `settingSources: [\'user\']`, `agents: {}`, no `tools`, `strictMcpConfig` or `mcpServers` — offer the native set (Bash, Read, Write, Edit, WebFetch) beside the injected `mcp__cinna__*` tools, carry the instructions in every request’s system prompt with no `CLAUDE.md` or `AGENTS.md` in the cwd, load the user’s own `~/.claude` (their skill is offered), and the re-asserted model wins over the user settings’ `model`.',
+    owners: [`${POLICY}#applyConductorToolPolicy`, 'src/main/services/chatConductorService.ts#ensure'],
+    feature: 'A workspace chat cannot touch its folder, its instructions are lost, or the user’s settings choose its model.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'claude.policy.workspace-asks', area: 'restricted chat policy', surface: 'ACP method', name: 'workspace Write / Bash → session/request_permission',
+    expectation: 'In `default` mode a workspace chat’s native Write and Bash each raise `session/request_permission`, and `allow_once` runs them.',
+    owners: [`${POLICY}#applyConductorToolPolicy`, 'src/main/agents/drivers/index.ts#approval'],
+    feature: 'A workspace chat changes the user’s files or runs commands without asking.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'claude.policy.workspace-cwd', area: 'restricted chat policy', surface: 'ACP method', name: 'session/new cwd',
+    expectation: 'A workspace chat’s Bash runs in the session cwd — the chat’s folder (`pwd -P` returns it).',
+    owners: ['src/main/services/chatConductorService.ts#runtime'],
+    feature: 'Commands run somewhere other than the chat’s folder, and the files the chat shows are not the ones it changed.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
   /* -------------------------------------------------------- provider traffic */
   {
     id: 'claude.provider.base-url', area: 'provider traffic', surface: 'env var', name: 'ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY',

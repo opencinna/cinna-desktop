@@ -176,7 +176,10 @@ export const conductorBridge = {
     const nested = !!input.nested
     if (nested && addons.length === 0) return undefined
     if (addons.length > 0) await agentMcpService.ensureConnected(input.runScope.settingsUserId, agent.id, { signal: input.signal })
-    if (!nested && isChatConductor(agent)) Object.assign(plan, applyConductorToolPolicy(plan, conductorContext(agent).engine))
+    if (!nested && isChatConductor(agent)) {
+      const context = conductorContext(agent)
+      Object.assign(plan, applyConductorToolPolicy(plan, context.engine, context.toolPolicy))
+    }
     // Nested turns of one agent in one chat are serialized (`nestedAgentTurn`),
     // so one nested endpoint per (chat, agent) is never bound twice at once.
     const key = JSON.stringify(nested ? ['nested', input.chatId, agent.id] : [input.chatId, agent.id])

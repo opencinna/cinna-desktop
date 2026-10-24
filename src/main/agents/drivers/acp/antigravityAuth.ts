@@ -169,6 +169,15 @@ export class AntigravityAuthProbe {
   }
 
   /**
+   * The last answer kept, however old, or null — **never asks**. For a list
+   * that may say "not logged in" from what is already known (runtime modes'
+   * availability) without spawning a CLI to find out.
+   */
+  lastKnown(): AntigravityAuthStatus | null {
+    return this.cached?.value ?? null
+  }
+
+  /**
    * Forget the answer without asking again — a login just ran, or the server
    * path changed. A probe already in flight finishes for its own caller and is
    * dropped.

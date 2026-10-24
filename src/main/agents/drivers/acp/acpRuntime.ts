@@ -29,6 +29,8 @@ export interface AcpRuntimeState {
   saveSession(chatId: string, sessionId: string): void
   isGranted(request: LocalPermissionRequest): boolean
   rememberGrant(request: LocalPermissionRequest): boolean
+  /** Where an *Always allow* is kept, when it is not the agent: a chat runtime's grants are the chat's. */
+  rememberScope?: 'chat'
 }
 
 export type AcpRuntimeView = AcpRuntimeState & (

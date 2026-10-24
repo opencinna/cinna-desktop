@@ -1,4 +1,4 @@
-import { setLogValueRedactor } from '../logger/logger'
+import { createLogger, setLogValueRedactor } from '../logger/logger'
 import { redactCredentialValues } from '../security/serviceCredentialRedaction'
 import { installCredentialReadiness } from '../services/localAgents/scannerService'
 import { installCommandCredentialPreparation } from '../services/localAgents/commandService'
@@ -33,6 +33,7 @@ import { conductorBridge } from '../services/conductorBridge'
 import { artifactService } from '../services/artifacts/artifactService'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
+import { chatModeService } from '../services/chatModeService'
 import { shutdownOpencodeBootstraps } from '../agents/drivers/acp/acpLaunchers'
 import { installCloudUpdateFollow } from '../agents/cloudUpdateFollow'
 
@@ -40,6 +41,13 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   setLogValueRedactor(redactCredentialValues)
   initDatabase(openDatabase)
   initSession()
+  // Every runtime is a chat mode (Claude Code, Codex, Antigravity, OpenCode).
+  // Chat modes live in the Default scope; `chatmode:list` makes them too.
+  try {
+    chatModeService.ensureRuntimeModes(getSettingsScopeUserId())
+  } catch (err) {
+    createLogger('chatmode').warn('could not create the runtime modes at startup', { error: err instanceof Error ? err.message : String(err) })
+  }
   installCommandCredentialPreparation(id => serviceCredentialService.prepare(id))
   serviceCredentialService.installUnlockCheck((userId) => userActivation.isUnlocked(userId))
   taskRuntimeService.recover()

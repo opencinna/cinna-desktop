@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { chmodSync, copyFileSync, cpSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import type { AntigravityAuthStatus, ClaudeApproval } from '../../../../shared/engine'
 import type { ReadinessOptions } from '../driver'
@@ -101,6 +101,23 @@ const ISOLATED_SETTINGS = `${JSON.stringify({ auth: { type: 'oauth-personal' } }
  */
 export function antigravityIsolatedHome(folderPath: string): string {
   return join(folderPath, '.cinna', 'antigravity')
+}
+
+/**
+ * The home a chat runtime's (or AI function's) process shares, given its
+ * process folder `<conductors>/processes/<hash>`: beside that folder
+ * (`<process folder>.agyhome`) — except for a **`workspace`** chat, whose
+ * sessions run in `<conductors>/<chatId>` with a shell. The server names the
+ * first entry of its sorted workspace list the command working directory, and
+ * the home's `antigravity-cli/skills` is in that list: beside the process
+ * folder it sorts before every chat id after `processes` (16 % of nanoids,
+ * contract `antigravity.policy.workspace-cwd`), and commands would run in a
+ * folder that does not exist. `~` sorts after every character of a chat id,
+ * so under `<conductors>/~workspace-homes/` the chat folder always comes first.
+ */
+export function antigravitySharedHome(processFolder: string, workspace: boolean): string {
+  if (!workspace) return `${processFolder}.agyhome`
+  return join(dirname(dirname(processFolder)), '~workspace-homes', `${basename(processFolder)}.agyhome`)
 }
 
 export interface PrepareAntigravityHomeInput {

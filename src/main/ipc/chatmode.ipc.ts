@@ -1,6 +1,7 @@
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { chatModeService } from '../services/chatModeService'
+import { listChatModesWithRuntimes } from '../services/localAgents/runtimeModeAvailability'
 import { notifyAccountConfigSynced } from '../services/account-config-sync'
 import { ipcHandle } from './_wrap'
 
@@ -8,8 +9,9 @@ export function registerChatModeHandlers(): void {
   ipcHandle('chatmode:list', async () => {
     userActivation.requireActivated()
     // Unions Default-scope user modes + active-profile managed modes (with the
-    // local enable overlay + account-default precedence applied).
-    return chatModeService.listMerged()
+    // local enable overlay + account-default precedence applied), runtime modes
+    // created where missing and carrying their availability.
+    return listChatModesWithRuntimes()
   })
 
   ipcHandle('chatmode:get', async (_event, id: string) => {
@@ -52,6 +54,7 @@ export function registerChatModeHandlers(): void {
       engine?: import('../../shared/engine').AgentEngine | null
       systemPrompt?: string
       toolPolicy?: import('../../shared/chatModeRuntime').ChatToolPolicy
+      complexity?: import('../../shared/modelFamilies').WorkComplexity | null
         mcpProviderIds?: string[]
         colorPreset?: string
         isDefault?: boolean
@@ -62,6 +65,13 @@ export function registerChatModeHandlers(): void {
       return { id, success: true }
     }
   )
+
+  // Restore a runtime mode's defaults (keeps whether it is the default).
+  ipcHandle('chatmode:reset', async (_event, id: string) => {
+    userActivation.requireActivated()
+    chatModeService.reset(getSettingsScopeUserId(), id)
+    return { success: true }
+  })
 
   ipcHandle('chatmode:delete', async (_event, id: string) => {
     userActivation.requireActivated()

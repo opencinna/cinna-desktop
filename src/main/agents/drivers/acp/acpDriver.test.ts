@@ -2471,6 +2471,26 @@ describe('a refusal the engine answers by ending its prompt', () => {
     expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: 'call_p', text: 'Not allowed in this chat.' }))
   })
 
+  it('asks the user about a native action of a workspace chat, and keeps Always allow for the chat', async () => {
+    // Mutation: drop the workspace exception from the chat-owned refusal and
+    // the edit is refused as "not allowed in this chat", never asked.
+    const grants: unknown[] = []
+    const w = world({ launcher: 'codex', script: { prompt: { emit: [patchCall, askPatch, chunk('Edited.')] } }, deps: {
+      readRuntime: () => ({ type: 'folder', folder: { ...FOLDER, runtime: { engine: 'codex' } }, validate() {},
+        readSession: () => null, saveSession() {}, isGranted: () => false,
+        rememberGrant: (request) => { grants.push(request); return true }, rememberScope: 'chat' })
+    } })
+    const owned = { ...ROW, driverConfig: { ...ROW.driverConfig, conductorChatId: CHAT_ID, conductorToolPolicy: 'workspace' } }
+    const running = w.driver.run(USER_ID, owned, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, onEvent: (event) => void w.events.push(event) })
+    const asked = await waitFor(() => w.events.find((event): event is Extract<RunEvent, { type: 'needs_input' }> => event.type === 'needs_input'), 'the ask')
+    expect(asked.request).toMatchObject({ kind: 'permission', rememberScope: 'chat' })
+    w.driver.respond({ requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission',
+      request: { action: 'edit', resources: ['notes.txt'], savable: [] } }, { kind: 'permission', reply: 'always' })
+    const result = await running
+    expect(grants).toHaveLength(1)
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'tool_result', toolId: asked.requestId, text: 'Allowed, and remembered for this chat.' }))
+  })
+
   it('gives a stall during a continuation prompt its one retry', async () => {
     // Mutation: run the stall retry only before the continuations → the turn fails on the stall.
     const bareCall: FakeAcpStep = {

@@ -16,7 +16,7 @@ vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
 vi.mock('./chatConductorService', () => ({
   isChatConductor: (agent: AgentRow) => typeof agent.driverConfig?.conductorChatId === 'string',
   canConduct: (agent: AgentRow) => agent.driver === 'acp' && agent.driverConfig?.transport !== 'websocket',
-  chatConductorService: { remove() {}, bind: (user: string, chat: { id: string }) => {
+  chatConductorService: { remove() {}, syncToolPolicy: () => false, bind: (user: string, chat: { id: string }) => {
   state.boundUnder.push(user)
   state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
   return { ...chat, agentId: 'runtime' }

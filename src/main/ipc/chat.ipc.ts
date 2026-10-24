@@ -37,6 +37,12 @@ export function registerChatHandlers(): void {
     return { success: true }
   })
 
+  // A Workspace chat's folder; errors come back as data so the reason reaches the renderer.
+  ipcHandle('chat:open-folder', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    return chatService.openFolder(getProfileScopeUserId(), chatId)
+  })
+
   ipcHandle('chat:trash-list', async () => {
     userActivation.requireActivated()
     return chatService.listTrash(getProfileScopeUserId())

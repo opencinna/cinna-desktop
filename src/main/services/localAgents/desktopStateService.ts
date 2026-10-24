@@ -19,7 +19,7 @@ import { runtimeHost } from '../../host/runtimeHost'
  */
 
 import { createHash } from 'node:crypto'
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
@@ -509,6 +509,10 @@ export const desktopStateService = {
     const state = { ...this.readExternal(key), ...patch }
     writeAtomically(externalRuntimeStatePath(key), `${JSON.stringify(state, null, 2)}\n`)
     return state
+  },
+  /** Delete a keyed state file, grants and all. Absent is fine. */
+  removeExternal(key: ExternalRuntimeStateKey): void {
+    rmSync(externalRuntimeStatePath(key), { force: true })
   },
   /** Read the state, or the empty state when the file is absent or unusable. */
   read(agentDir: string, kind: LocalAgentKind): DesktopState {

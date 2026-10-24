@@ -365,6 +365,27 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['A'] }
   },
 
+  {
+    id: 'codex.policy.workspace-native-tools', area: 'restricted chat policy', surface: 'env var', name: 'workspace launch (INITIAL_AGENT_MODE workspace-write)',
+    expectation: 'Under `prepareCodexWorkspacePolicy` (the launcher’s own plan, sealed `workspace`, mode `workspace-write`, Default collaboration mode) the model is offered `exec_command` and `apply_patch`; the instructions arrive as developer instructions with no `AGENTS.md` in the session folder; Cinna’s tool is found with `tool_search` and called.',
+    owners: [`${POLICY}#prepareCodexWorkspacePolicy`, 'src/main/agents/drivers/acp/conductorToolPolicy.ts#applyConductorToolPolicy', 'src/main/services/chatConductorService.ts#ensure'],
+    feature: 'A workspace chat on Codex has no shell or patch tool, runs without its instructions, or cannot call its attached agents.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'codex.policy.workspace-asks', area: 'restricted chat policy', surface: 'ACP method', name: 'workspace exec_command → sandbox / session/request_permission',
+    expectation: 'In a workspace chat a command writing inside its chat folder runs without an ask; one writing the process cwd or another chat’s folder — the same process — is refused by the sandbox without an ask; an escalated one outside asks, and the once-allow runs it.',
+    owners: [`${POLICY}#prepareCodexWorkspacePolicy`],
+    feature: 'A workspace chat on Codex writes outside its folder — into the profile’s process folder or another chat’s — without asking.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
+  {
+    id: 'codex.policy.workspace-cwd', area: 'restricted chat policy', surface: 'ACP method', name: 'session/new cwd vs process cwd',
+    expectation: 'With the adapter started in a profile-owned process folder and `session/new` naming the chat folder, a command runs in the chat folder (`pwd -P`), and the sandbox’s writable root is that session cwd, not the process cwd.',
+    owners: ['src/main/agents/drivers/index.ts#codexProcessCwd', `${POLICY}#prepareCodexWorkspacePolicy`],
+    feature: 'Commands run in the shared process folder, or the sandbox lets one chat change another’s files.',
+    flow: { steps: ['none'], note: 'no flow step runs a workspace chat; the live runs do' }
+  },
   /* -------------------------------------------------------- provider traffic */
   {
     id: 'codex.provider.auxiliary-request', area: 'provider traffic', surface: 'provider request', name: 'POST /v1/responses (thread title, compaction)',

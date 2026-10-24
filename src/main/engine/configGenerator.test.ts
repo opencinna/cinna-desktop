@@ -870,10 +870,20 @@ describe('Code Mode: Cinna’s tools through `execute`', () => {
       built.agents[0] = { ...built.agents[0], permissionMode: 'replace', permissions }
       return Object.entries(agentOf(buildEngineConfig(built)).permission)
     }
-    expect(chat(chatRuntimePermissions(true))).toEqual([
+    expect(chat(chatRuntimePermissions('connectors'))).toEqual([
       ['*', 'deny'], ['cinna_*', 'allow'], ['execute', 'allow'], ['question', 'allow']
     ])
-    expect(chat(chatRuntimePermissions(false))).toEqual([['*', 'deny']])
+    expect(chat(chatRuntimePermissions('none'))).toEqual([['*', 'deny']])
+  })
+
+  it('makes a workspace chat runtime ask by default, with the catch-all first so nothing a pattern misses falls open', () => {
+    const built = input()
+    built.agents[0] = { ...built.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions('workspace') }
+    // Last match wins: `'*': 'ask'` leads, then the reads inside the folder, then Cinna's tools.
+    // Mutation: lead with an allow, or allow `external_directory`, and a read outside the chat folder no longer asks.
+    expect(Object.entries(agentOf(buildEngineConfig(built)).permission)).toEqual([
+      ['*', 'ask'], ['read', 'allow'], ['external_directory', 'ask'], ['cinna_*', 'allow'], ['execute', 'allow'], ['question', 'allow']
+    ])
   })
 })
 
@@ -902,7 +912,7 @@ describe('OpenCode subagents', () => {
 
   it('keeps a replace policy as the subagents’ policy, deny-all and all', () => {
     const chat = input()
-    chat.agents[0] = { ...chat.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions(true) }
+    chat.agents[0] = { ...chat.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions('connectors') }
     expect(Object.entries(buildEngineConfig(chat).config.permission as object)).toEqual([
       ['*', 'deny'], ['cinna_*', 'allow'], ['execute', 'allow'], ['question', 'allow']
     ])
@@ -915,7 +925,7 @@ describe('OpenCode subagents', () => {
     // subagents run looser than their primary.
     const mixed = input()
     mixed.agents = [
-      { ...mixed.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions(true) },
+      { ...mixed.agents[0], permissionMode: 'replace', permissions: chatRuntimePermissions('connectors') },
       { ...mixed.agents[0], agentId: 'utility:chat', slug: 'ai-function', permissionMode: 'replace', permissions: { '*': 'deny' } }
     ]
     expect(buildEngineConfig(mixed).config.permission).toEqual({ '*': 'deny' })
@@ -925,7 +935,7 @@ describe('OpenCode subagents', () => {
     const folderAndChat = input()
     folderAndChat.agents = [
       folderAndChat.agents[0],
-      { ...folderAndChat.agents[0], agentId: 'chat:x', slug: 'chat', permissionMode: 'replace', permissions: chatRuntimePermissions(false) }
+      { ...folderAndChat.agents[0], agentId: 'chat:x', slug: 'chat', permissionMode: 'replace', permissions: chatRuntimePermissions('none') }
     ]
     expect(buildEngineConfig(folderAndChat).config.permission).toEqual({ '*': 'deny' })
     // Two entries with the same policy are one policy.

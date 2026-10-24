@@ -346,12 +346,23 @@ export const CINNA_TOOL_PERMISSIONS: Readonly<Record<string, string>> = {
 
 /**
  * The replace policy of a chat runtime (`EngineAgentInput.permissionMode:
- * 'replace'`): deny everything, then Cinna's tools when it has any, reached
- * through `execute` ({@link CINNA_TOOL_PERMISSIONS}). Under `'*': 'deny'` the
- * driver is never asked, so these entries are what lets Cinna's tools run at all.
+ * 'replace'`), per its mode's tool policy:
+ *
+ * - `none`: deny everything.
+ * - `connectors`: deny everything, then Cinna's tools, reached through
+ *   `execute` ({@link CINNA_TOOL_PERMISSIONS}). Under `'*': 'deny'` the driver
+ *   is never asked, so these entries are what lets Cinna's tools run at all.
+ * - `workspace`: **ask** everything — bash, edit, write, webfetch and every
+ *   tool not named here — then reading inside the chat's folder (the session
+ *   cwd), and Cinna's tools. A read outside it asks `external_directory`,
+ *   which the engine checks before `read` itself. The catch-all leads because
+ *   the last match wins: a pattern that misses lands on `ask`, never `allow`.
+ *   Answers stay `once`: OpenCode's own saved grants are user-global, so the
+ *   desktop keeps *Always allow* per chat instead.
  */
-export function chatRuntimePermissions(cinnaTools: boolean): Record<string, string> {
-  if (!cinnaTools) return { '*': 'deny' }
+export function chatRuntimePermissions(policy: 'none' | 'connectors' | 'workspace'): Record<string, string> {
+  if (policy === 'none') return { '*': 'deny' }
+  if (policy === 'workspace') return { '*': 'ask', read: 'allow', external_directory: 'ask', 'cinna_*': 'allow', ...CINNA_TOOL_PERMISSIONS }
   return { '*': 'deny', 'cinna_*': 'allow', ...CINNA_TOOL_PERMISSIONS }
 }
 
