@@ -36,7 +36,7 @@ describe('MCPSettingsSection and the admin policy', () => {
     renderSection()
     await screen.findByTestId('mcp-add-registry-off')
     expect(screen.queryByRole('button', { name: 'Add from Registry' })).toBeNull()
-    expect(screen.getByTestId('mcp-add-registry-off').textContent).toContain(MCP_SETTINGS_TEXT.adminOff)
+    expect(screen.getByTestId('mcp-add-off').textContent).toBe(`${MCP_SETTINGS_TEXT.adminOff}: Add from Registry`)
     expect(screen.getByRole('button', { name: 'Add Custom MCP' })).toBeTruthy()
   })
 

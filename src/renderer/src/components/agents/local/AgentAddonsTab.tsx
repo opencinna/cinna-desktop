@@ -101,9 +101,9 @@ export function addonListItems(
 }
 
 /** Whether a row counts toward the tab badge's problems: a connector sessions run without, a skill with an issue, a plugin with a problem. */
-function isProblem(item: AddonListItem): boolean {
+function isProblem(item: AddonListItem, providers: readonly McpProviderData[] | undefined): boolean {
   if (item.kind === 'requirement') return true
-  if (item.kind === 'plugin') return pluginHasProblem(item.plugin)
+  if (item.kind === 'plugin') return pluginHasProblem(item.plugin, providers)
   return item.kind === 'mcp' ? mcpProblem(item.provider) !== null : needsAttention(item.skill)
 }
 
@@ -132,7 +132,7 @@ export function useAddonsBadge(
   const items = addonListItems(ids, providers, agentSkills, pluginsOf(pluginStatus), requirements?.items)
   return {
     count: items.length,
-    problems: items.filter(isProblem).length,
+    problems: items.filter((item) => isProblem(item, providers)).length,
     skills: items.filter((item) => item.kind === 'skill').length
   }
 }
@@ -436,7 +436,7 @@ export function AgentAddonsTab({
   const attention = (item: AddonListItem): boolean => {
     if (item.kind === 'requirement') return true
     if (item.kind === 'mcp') return mcpProblem(item.provider) !== null
-    if (item.kind === 'plugin') return pluginNeedsAttention(item.plugin)
+    if (item.kind === 'plugin') return pluginNeedsAttention(item.plugin, providers)
     const skill = item.skill
     if (needsAttention(skill) || skill.updatable) return true
     const status = skill.source === 'marketplace' ? statusOf(skill) : null

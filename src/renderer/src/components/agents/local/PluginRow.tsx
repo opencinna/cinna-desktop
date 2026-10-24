@@ -72,7 +72,7 @@ export interface PluginIssue {
  * what the glyph sums up. Partly compatible is not one: it is a fact of the
  * engine, said in a muted line of its own ({@link pluginFact}).
  */
-export function pluginIssues(plugin: PluginPinStatus): PluginIssue[] {
+export function pluginIssues(plugin: PluginPinStatus, providers?: readonly McpProviderData[]): PluginIssue[] {
   const issues: PluginIssue[] = []
   if (plugin.cache === 'failed') issues.push({ tone: 'error', text: plugin.cacheMessage ?? 'The copy on this computer could not be used.' })
   if (plugin.availability === 'unavailable') issues.push({ tone: 'warning', text: PLUGIN_ROW_TEXT.unavailable })
@@ -80,9 +80,21 @@ export function pluginIssues(plugin: PluginPinStatus): PluginIssue[] {
     if (server.disabled) continue
     if (server.blocked) issues.push({ tone: 'warning', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, server.blocked) })
     else if (server.setup) issues.push({ tone: 'warning', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, PLUGIN_ROW_TEXT.need[server.setup]) })
+    else {
+      const failed = connectorFailure(server, providers)
+      if (failed) issues.push({ tone: 'error', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, failed) })
+    }
   }
   if (plugin.compatibility.level === 'incompatible') issues.push({ tone: 'warning', text: plugin.compatibility.reason })
   return issues
+}
+
+/** A managed connector that is on, needs no step, and whose last connect failed: what its line says; null otherwise. */
+function connectorFailure(server: PluginPinStatus['mcpServers'][number], providers: readonly McpProviderData[] | undefined): string | null {
+  const provider = server.mcpProviderId ? providers?.find((p) => p.id === server.mcpProviderId) : undefined
+  if (!provider) return null
+  const health = mcpHealth(provider)
+  return health.tone === 'error' ? health.label : null
 }
 
 /** What this engine leaves out of a partly compatible plugin, as a muted fact; null otherwise. */
@@ -93,24 +105,23 @@ export function pluginFact(plugin: PluginPinStatus): string | null {
 /**
  * Whether the plugin counts toward the tab badge's problems: its copy here
  * cannot be used, it is no longer available, or a connector of it that is on
- * needs a step or is blocked. Partly compatible is a fact of the engine, not
+ * needs a step, is blocked, or failed to connect. Partly compatible is a fact of the engine, not
  * something to fix, and does not count.
  */
-export function pluginHasProblem(plugin: PluginPinStatus): boolean {
+export function pluginHasProblem(plugin: PluginPinStatus, providers?: readonly McpProviderData[]): boolean {
   return (
     plugin.availability === 'unavailable' ||
     plugin.cache === 'failed' ||
-    plugin.mcpServers.some((server) => !server.disabled && (!!server.blocked || !!server.setup))
+    plugin.mcpServers.some((server) => !server.disabled && (!!server.blocked || !!server.setup || connectorFailure(server, providers) !== null))
   )
 }
 
 /** Whether the row goes to the top of the list: a problem, or an Update waiting. */
-export function pluginNeedsAttention(plugin: PluginPinStatus): boolean {
-  return plugin.availability === 'update_available' || pluginHasProblem(plugin)
+export function pluginNeedsAttention(plugin: PluginPinStatus, providers?: readonly McpProviderData[]): boolean {
+  return plugin.availability === 'update_available' || pluginHasProblem(plugin, providers)
 }
 
-function pluginHealth(plugin: PluginPinStatus): CredentialHealth {
-  const issues = pluginIssues(plugin)
+function pluginHealth(issues: readonly PluginIssue[], plugin: PluginPinStatus): CredentialHealth {
   const error = issues.find((issue) => issue.tone === 'error')
   if (error) return { tone: 'error', label: error.text }
   if (issues.length > 0) return { tone: 'warning', label: issues.map((issue) => issue.text).join('. ') }
@@ -307,7 +318,7 @@ export function PluginRow({
   const [expanded, setExpanded] = useState(false)
   const [setups, setSetups] = useState<Record<string, ConnectorSetup>>({})
   const title = plugin.title || plugin.name
-  const issues = pluginIssues(plugin)
+  const issues = pluginIssues(plugin, providers)
   // Open, a connector says its own problem on its line: the row does not say it again.
   const shownIssues = expanded ? issues.filter((issue) => !issue.part) : issues
   const fact = pluginFact(plugin)
@@ -328,7 +339,7 @@ export function PluginRow({
       source={
         <SettingsBadge title={MARKETPLACE_SKILL_TEXT.fromTitle(plugin.marketplaceName)}>{MARKETPLACE_SKILL_TEXT.from(plugin.marketplaceName)}</SettingsBadge>
       }
-      status={<CredentialStatusGlyph health={pluginHealth(plugin)} />}
+      status={<CredentialStatusGlyph health={pluginHealth(issues, plugin)} />}
       expandable={{ expanded, onToggle: () => setExpanded((open) => !open) }}
       actions={
         <>
@@ -435,7 +446,7 @@ export function PluginRow({
                   <code className="rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">{agent}</code>
                 </span>
               ))}
-              <span className={`${plugin.agents.length ? 'ml-1.5 ' : ''}text-[12px] text-[var(--color-text-muted)]`}>{PLUGIN_ROW_TEXT.agentsDetail}</span>
+              <span className={`${plugin.agents.length ? 'ml-1.5 ' : ''}whitespace-nowrap text-[12px] text-[var(--color-text-muted)]`}>{PLUGIN_ROW_TEXT.agentsDetail}</span>
             </p>
           )}
           {plugin.hasHooks && (
@@ -451,7 +462,7 @@ export function PluginRow({
                   onToggle={() => actions.onSetDisabled({ hooks: !plugin.hooksDisabled })}
                 >
                   {plugin.hookEvents.length > 0 && (
-                    <p data-plugin-hook-events className="truncate pl-0.5 text-[12px] text-[var(--color-text-muted)]">
+                    <p data-plugin-hook-events title={plugin.hookEvents.join(', ')} className="truncate pl-0.5 text-[12px] text-[var(--color-text-muted)]">
                       {plugin.hookEvents.join(', ')}
                     </p>
                   )}

@@ -159,7 +159,7 @@ function RegistryEntryRow({
   const registryLabel = registry?.label ?? entry.registryId
 
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 flex items-center gap-2">
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 flex items-start gap-2">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 mb-0.5">
           {entry.websiteUrl ? (
@@ -225,7 +225,8 @@ function RegistryEntryRow({
       <button
         onClick={onAdd}
         disabled={adding || !remote}
-        className="self-center px-2.5 py-1 rounded-md text-[12px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50 shrink-0"
+        // Top-aligned: a refusal under the description grows the row without moving Connect from under the pointer.
+        className="px-2.5 py-1 rounded-md text-[12px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50 shrink-0"
       >
         {adding ? 'Connecting…' : 'Connect'}
       </button>

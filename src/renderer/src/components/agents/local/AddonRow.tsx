@@ -62,7 +62,8 @@ export function AddonRow({
   const line = (
     <>
       <AddonKindLabel kind={kind} />
-      <span title={titleTooltip ?? title} className="min-w-0 shrink truncate text-[14px] font-medium">
+      {/* Shrink is weighted by width, so a plain `shrink` title would still give way first: a tenth of the weight hands the version and the badge the cut. */}
+      <span title={titleTooltip ?? title} className="min-w-0 shrink-[0.1] truncate text-[14px] font-medium">
         {title}
       </span>
       {version && (

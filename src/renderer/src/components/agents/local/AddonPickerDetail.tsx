@@ -562,8 +562,11 @@ export function EnvSlotFields({
   slots,
   values,
   autoFocus = false,
+  stacked = false,
   onChange
 }: {
+  /** Each name above its field, as the Settings → MCP card lays out its other fields; else a name column beside them. */
+  stacked?: boolean
   /** Prefix of each input's id (`<prefix>-<NAME>`), unique to the surface that shows it. */
   idPrefix: string
   slots: ReadonlyArray<{ name: string; hasValue: boolean }>
@@ -573,10 +576,13 @@ export function EnvSlotFields({
   onChange: (values: Record<string, string>) => void
 }): React.JSX.Element {
   return (
-    <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
+    <div className={stacked ? 'space-y-1.5' : 'grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5'}>
       {slots.map((slot, index) => (
         <Fragment key={slot.name}>
-          <label htmlFor={`${idPrefix}-${slot.name}`} className="font-mono text-[12px] text-[var(--color-text-secondary)]">
+          <label
+            htmlFor={`${idPrefix}-${slot.name}`}
+            className={`font-mono text-[12px] text-[var(--color-text-secondary)]${stacked ? ' -mb-1 block break-all' : ''}`}
+          >
             {slot.name}
           </label>
           <input

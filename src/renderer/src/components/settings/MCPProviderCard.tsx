@@ -226,7 +226,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
                 {slots.length > 0 ? (
                   <div role="group" aria-label={`Settings for ${provider.name}`}>
                     <p className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Settings</p>
-                    <EnvSlotFields idPrefix={`mcp-card-${provider.id}-env`} slots={slots} values={slotValues} onChange={setSlotValues} />
+                    <EnvSlotFields stacked idPrefix={`mcp-card-${provider.id}-env`} slots={slots} values={slotValues} onChange={setSlotValues} />
                   </div>
                 ) : (
                   <div>

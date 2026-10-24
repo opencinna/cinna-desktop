@@ -241,6 +241,22 @@ describe('AgentAddonsTab — plugins', () => {
     expect(within(parts).getByText('Needs settings filled in')).toBeTruthy()
   })
 
+  it('reds the plugin’s glyph and counts it in the badge when its connector failed to connect', async () => {
+    providers = [{ ...MANAGED, status: 'error', error: 'spawn node ENOENT', envSlots: [{ name: 'LEDGER_TOKEN', hasValue: true }] }, OWN]
+    plugins = [pin({ mcpServers: [{ name: 'ledger', transport: 'stdio', disabled: false, mcpProviderId: 'p-ledger' }] })]
+    const seen: Array<ReturnType<typeof useAddonsBadge>> = []
+    function Probe(): null {
+      seen.push(useAddonsBadge('folder:a', []))
+      return null
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(createElement(QueryClientProvider, { client }, createElement(Probe)))
+    await waitFor(() => expect(seen[seen.length - 1]).toMatchObject({ count: 2, problems: 1 }))
+    renderTab()
+    const plugin = await row()
+    expect(await within(plugin).findByText('ledger: spawn node ENOENT')).toBeTruthy()
+  })
+
   it('says a partly compatible plugin’s limit as a muted fact, not a warning', async () => {
     plugins = [pin({ mcpServers: [], compatibility: { level: 'partly_compatible', reason: 'Skills and connectors only on Codex' } })]
     renderTab()
