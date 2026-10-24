@@ -11,6 +11,12 @@ import { agentMcpService } from '../agentMcpService'
 import { catalogSkillService, changeability, changeabilitySentence } from '../catalogSkillService'
 import { activeListing } from '../catalogSkillUpdates'
 import { marketplaceSkillService } from '../marketplaceSkillService'
+import { marketplacePluginService } from '../marketplacePluginService'
+import { pluginPinsOf } from '../pluginSkills'
+import { stdioRuntimes } from '../stdioRuntimes'
+import { defaultEngineService } from '../localAgents/defaultEngineService'
+import { effectiveEngine } from '../../../shared/engine'
+import { addonPolicies } from './policy'
 import { mcpService } from '../mcpService'
 import { createAddonDirectory, type AgentFacts, type McpSetup } from './directory'
 import { createCinnaCoreProvider } from './cinnaCore'
@@ -27,7 +33,13 @@ const pinOutcome = <T extends { ok: boolean }>(outcome: T): { ok: true } | { ok:
 function agentFacts(userId: string, agentId: string): AgentFacts | null {
   try {
     const agent = localAgentService.get(userId, agentId)
-    return { kit: agent.skills !== undefined, skills: agent.skills ?? [] }
+    const kit = agent.skills !== undefined
+    return {
+      kit,
+      skills: agent.skills ?? [],
+      plugins: kit ? pluginPinsOf(agent.manifest).map((pin) => ({ entryUuid: pin.entry_uuid, name: pin.name })) : [],
+      engine: effectiveEngine(agent.runtime, defaultEngineService.current())
+    }
   } catch (err) {
     if (err instanceof LocalAgentError) return null
     throw err
@@ -55,6 +67,13 @@ export const addonDirectory = createAddonDirectory({
   removeCatalogSkill: async (userId, agentId, name) => pinOutcome(await catalogSkillService.remove(userId, agentId, name)),
   addMarketplaceSkill: async (userId, agentId, id) => pinOutcome(await marketplaceSkillService.addToAgent(userId, agentId, id)),
   removeMarketplaceSkill: async (userId, agentId, name) => pinOutcome(await marketplaceSkillService.remove(userId, agentId, name)),
+  addPlugin: async (userId, agentId, id) => {
+    const outcome = await marketplacePluginService.addToAgent(userId, agentId, id)
+    return outcome.ok ? { ok: true, next: outcome.next } : outcome
+  },
+  removePlugin: async (userId, agentId, name) => pinOutcome(await marketplacePluginService.remove(userId, agentId, name)),
+  pluginBlock: (userId, entry) => stdioRuntimes.blockOf(entry.components?.mcpServers ?? [], addonPolicies.get(userId)),
+  policies: addonPolicies.store(),
   attachMcp: (userId, agentId, id) => agentMcpService.attach(userId, agentId, id),
   detachMcp: (userId, agentId, id) => agentMcpService.detach(userId, agentId, id),
   mcpSetup: (userId, id) => thisComputer.setup(userId, id),
@@ -79,6 +98,8 @@ export const addonDirectory = createAddonDirectory({
     }
     return { id: created.id, setup }
   },
-  deleteMcp: (userId, id) => mcpService.delete(userId, id)
+  deleteMcp: async (userId, id) => {
+    await mcpService.delete(userId, id)
+  }
 })
 

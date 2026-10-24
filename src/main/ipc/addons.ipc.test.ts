@@ -29,6 +29,10 @@ const service = vi.hoisted(() => ({
   remove: vi.fn()
 }))
 vi.mock('../services/addonDirectory', () => ({ addonDirectory: service }))
+const plugins = vi.hoisted(() => ({ status: vi.fn(), setDisabled: vi.fn(), update: vi.fn() }))
+vi.mock('../services/marketplacePluginService', () => ({ marketplacePluginService: plugins }))
+const runtimes = vi.hoisted(() => ({ recheck: vi.fn(async () => ({ node: true, docker: false })) }))
+vi.mock('../services/stdioRuntimes', () => ({ stdioRuntimes: runtimes }))
 
 const { registerAddonHandlers } = await import('./addons.ipc')
 registerAddonHandlers()
@@ -39,11 +43,37 @@ const REF = { source: 'core-catalog', id: 'pkg-1' }
 beforeEach(() => {
   activation.activated = true
   for (const fn of Object.values(service)) fn.mockReset()
+  for (const fn of Object.values(plugins)) fn.mockReset()
+  runtimes.recheck.mockClear()
 })
 
 describe('addons IPC', () => {
-  it('registers the four channels', () => {
-    expect([...handlers.keys()].sort()).toEqual(['addons:add', 'addons:directory', 'addons:remove', 'addons:search'])
+  it('registers the channels', () => {
+    expect([...handlers.keys()].sort()).toEqual([
+      'addons:add',
+      'addons:directory',
+      'addons:plugin-status',
+      'addons:recheck-runtimes',
+      'addons:remove',
+      'addons:search',
+      'addons:set-plugin-disabled',
+      'addons:update-plugin'
+    ])
+  })
+
+  it('hands the plugin verbs only well-typed input', async () => {
+    plugins.status.mockResolvedValue({ ok: true, plugins: [] })
+    await call('addons:plugin-status', { agentId: 'folder:a' })
+    expect(plugins.status).toHaveBeenCalledWith('__default__', 'folder:a')
+    plugins.setDisabled.mockResolvedValue({ ok: true, name: 'p', archiveSha256: 'x', next: null })
+    await call('addons:set-plugin-disabled', { agentId: 'folder:a', name: 'p', disabled: { hooks: 'yes', mcpServers: ['a', 3], skills: ['s'], extra: 1 } })
+    expect(plugins.setDisabled).toHaveBeenCalledWith('__default__', 'folder:a', 'p', { mcpServers: ['a'], skills: ['s'] })
+    await call('addons:set-plugin-disabled', { agentId: 'folder:a', name: 'p', disabled: { hooks: true } })
+    expect(plugins.setDisabled).toHaveBeenLastCalledWith('__default__', 'folder:a', 'p', { hooks: true })
+    plugins.update.mockResolvedValue({ ok: true })
+    await call('addons:update-plugin', { agentId: 'folder:a', name: 9 })
+    expect(plugins.update).toHaveBeenCalledWith('__default__', 'folder:a', '')
+    expect(await call('addons:recheck-runtimes')).toEqual({ ok: true, node: true, docker: false })
   })
 
   it('passes the settings scope and only strings, and hands the answer back as it is', async () => {
@@ -91,5 +121,7 @@ describe('addons IPC', () => {
       await expect(async () => call(channel, { agentId: 'folder:a', ref: REF })).rejects.toThrow('not activated')
     }
     expect(service.list).not.toHaveBeenCalled()
+    expect(plugins.status).not.toHaveBeenCalled()
+    expect(runtimes.recheck).not.toHaveBeenCalled()
   })
 })

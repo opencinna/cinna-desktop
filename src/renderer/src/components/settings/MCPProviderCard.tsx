@@ -24,6 +24,8 @@ interface MCPProviderCardProps {
     status: string
     tools: Array<{ name: string; description: string }>
     error?: string
+    /** A plugin owns it: only its settings values, sign-in and on/off are editable. */
+    managedBy?: string
   }
   /**
    * Set where the card lists a connector attached to an agent (its Addons
@@ -78,8 +80,31 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
     authType !== (provider.authType === 'bearer' ? 'bearer' : 'oauth') ||
     bearerToken.trim() !== ''
 
+  // A plugin's connector: what it runs is the plugin's, shown but not editable.
+  const managed = !!provider.managedBy
+
   const handleSave = (): void => {
     const envObj = parseEnvVars(envStr)
+
+    if (managed) {
+      // The stored command and args exactly as they are (never re-split on spaces); only the values change.
+      upsert.mutate(
+        {
+          id: provider.id,
+          name: provider.name,
+          transportType: provider.transportType,
+          command: provider.command,
+          args: provider.args,
+          url: provider.url,
+          env: envObj,
+          enabled: provider.enabled,
+          authType: provider.authType === 'bearer' ? 'bearer' : 'oauth',
+          bearerToken: bearerToken.trim() || undefined
+        },
+        { onSuccess: () => setBearerToken('') }
+      )
+      return
+    }
 
     upsert.mutate(
       {
@@ -146,12 +171,12 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
           <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
             <div>
               <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+              <input value={name} onChange={(e) => setName(e.target.value)} readOnly={managed} className={inputClass} />
             </div>
 
             <div>
                 <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
-                <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
+                <select value={transportType} onChange={(e) => setTransportType(e.target.value)} disabled={managed} className={inputClass}>
                   <option value="stdio">stdio</option>
                   <option value="sse">SSE (deprecated)</option>
                   <option value="streamable-http">Streamable HTTP</option>
@@ -162,11 +187,11 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
               <>
                 <div>
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Command</label>
-                  <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="e.g., npx" className={inputClass} />
+                  <input value={command} onChange={(e) => setCommand(e.target.value)} readOnly={managed} placeholder="e.g., npx" className={inputClass} />
                 </div>
                 <div>
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
-                  <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="space separated" className={inputClass} />
+                  <input value={args} onChange={(e) => setArgs(e.target.value)} readOnly={managed} placeholder="space separated" className={inputClass} />
                 </div>
                 <div>
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
@@ -183,7 +208,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
               <>
                 <div>
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
-                  <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
+                  <input value={url} onChange={(e) => setUrl(e.target.value)} readOnly={managed} placeholder="https://mcp.example.com" className={inputClass} />
                 </div>
                 <div>
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
@@ -193,6 +218,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
                     {(['oauth', 'bearer'] as const).map((t) => (
                       <button
                         key={t}
+                        disabled={managed}
                         onClick={() => setAuthType(t)}
                         className={`flex-1 px-2 py-1 rounded text-[13px] font-medium transition-colors ${
                           authType === t

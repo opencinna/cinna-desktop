@@ -28,6 +28,12 @@ export interface UpsertInput {
    * from. An update never moves it, so a provider stays the entry it came from.
    */
   registryRef?: { source: string; id: string } | null
+  /** Set on insert only: the plugin snapshot that owns this provider (`plugin:<entry_uuid>@<sha256>`). */
+  managedBy?: string | null
+  /** A managed provider's encrypted placeholder values. `undefined` keeps what is stored; `null` clears it. */
+  envSecretEncrypted?: Buffer | null
+  /** A managed provider's spec (`mcp/managed.ts`). `undefined` keeps what is stored. */
+  managedSpec?: import('../mcp/managed').ManagedSpec | null
 }
 
 export interface UpsertResult {
@@ -51,6 +57,15 @@ export const mcpProviderRepo = {
       .list(userId)
       .filter((row) => row.registryRef?.source === ref.source && row.registryRef?.id === ref.id)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0]
+  },
+
+  /** Every scope's providers a plugin owns (`managed_by` set): what garbage collection weighs against the pins. */
+  listAllManaged(): McpProviderRow[] {
+    return getDb()
+      .select()
+      .from(mcpProviders)
+      .all()
+      .filter((row) => typeof row.managedBy === 'string' && row.managedBy !== '')
   },
 
   getOwned(userId: string, id: string): McpProviderRow | undefined {
@@ -84,7 +99,9 @@ export const mcpProviderRepo = {
         const changed = endpointChanged || existing.command !== (input.command ?? null) ||
           JSON.stringify(existing.args) !== JSON.stringify(input.args ?? null) ||
           JSON.stringify(existing.env) !== JSON.stringify(input.env ?? null) ||
-          existing.enabled !== (input.enabled ?? existing.enabled) || input.bearerTokenEncrypted !== undefined
+          existing.enabled !== (input.enabled ?? existing.enabled) || input.bearerTokenEncrypted !== undefined ||
+          input.envSecretEncrypted !== undefined ||
+          (input.managedSpec !== undefined && JSON.stringify(existing.managedSpec) !== JSON.stringify(input.managedSpec))
         tx.update(mcpProviders)
           .set({
             configRevision: existing.configRevision + (changed ? 1 : 0),
@@ -100,7 +117,9 @@ export const mcpProviderRepo = {
             bearerTokenEncrypted:
               input.bearerTokenEncrypted !== undefined
                 ? input.bearerTokenEncrypted
-                : existing.bearerTokenEncrypted
+                : existing.bearerTokenEncrypted,
+            envSecretEncrypted: input.envSecretEncrypted !== undefined ? input.envSecretEncrypted : existing.envSecretEncrypted,
+            managedSpec: input.managedSpec !== undefined ? input.managedSpec : existing.managedSpec
           })
           .where(and(eq(mcpProviders.id, id), eq(mcpProviders.userId, userId)))
           .run()
@@ -120,6 +139,9 @@ export const mcpProviderRepo = {
             authType: input.authType ?? 'oauth',
             bearerTokenEncrypted: input.bearerTokenEncrypted ?? null,
             registryRef: input.registryRef ?? null,
+            managedBy: input.managedBy ?? null,
+            envSecretEncrypted: input.envSecretEncrypted ?? null,
+            managedSpec: input.managedSpec ?? null,
             createdAt: new Date()
           })
           .run()

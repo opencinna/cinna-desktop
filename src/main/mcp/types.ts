@@ -22,6 +22,10 @@ export interface McpProviderConfig {
   oauthDiscoveryState?: import('@modelcontextprotocol/client').OAuthDiscoveryState
   /** Encrypted static bearer token (from DB), used when `authType === 'bearer'` */
   bearerTokenEncrypted?: Buffer
+  /** Extra request headers of a remote server, resolved (a plugin's declared `headers`, `mcp/managed.ts`). */
+  headers?: Record<string, string>
+  /** Set when the provider must not be launched now; the connect ends as `error` with this sentence. */
+  blockedReason?: string
 }
 
 export interface McpTool {

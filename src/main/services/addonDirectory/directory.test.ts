@@ -4,6 +4,7 @@ import {
   CATALOG_SOURCE,
   LOCAL_SOURCE,
   MARKETPLACE_SOURCE,
+  PLUGIN_SOURCE,
   createAddonDirectory,
   mergeLocalProviders,
   type AddonDirectoryDeps,
@@ -48,6 +49,7 @@ function entry(ref: AddonRef, over: Partial<ProviderEntry> = {}): ProviderEntry 
 
 const catalogRef = (id: string): AddonRef => ({ source: CATALOG_SOURCE, id })
 const marketRef = (id: string): AddonRef => ({ source: MARKETPLACE_SOURCE, id })
+const pluginRef = (id: string): AddonRef => ({ source: PLUGIN_SOURCE, id })
 const localRef = (id: string): AddonRef => ({ source: LOCAL_SOURCE, id })
 const registryRef = (id: string): AddonRef => ({ source: 'mcp-registry:cinna-official', id })
 
@@ -249,13 +251,13 @@ describe('addonDirectory.list', () => {
     }
     attached = ['l1']
     const directory = build([
-      provider('cinna-core', [CATALOG_SOURCE, MARKETPLACE_SOURCE], {
+      provider('cinna-core', [CATALOG_SOURCE, MARKETPLACE_SOURCE, PLUGIN_SOURCE], {
         entries: [
           entry(catalogRef('aaaa')),
           entry(marketRef('BBBB')),
           entry(marketRef('pending'), { status: 'pending' }),
           entry(marketRef('broken'), { status: 'unsupported', unsupportedReason: 'no_skill_md' }),
-          entry(marketRef('plugin'), { kind: 'plugin' }),
+          entry(pluginRef('plugin'), { kind: 'plugin' }),
           entry(catalogRef('free'))
         ]
       }),
@@ -267,7 +269,7 @@ describe('addonDirectory.list', () => {
       ['BBBB', 'added', ADDON_STATE_TEXT.added],
       ['pending', 'preparing', 'Being prepared on the server'],
       ['broken', 'blocked', ADDON_STATE_TEXT.unsupported],
-      ['plugin', 'blocked', 'Plugins arrive in a later update'],
+      ['plugin', 'addable', null],
       ['free', 'addable', null],
       ['l1', 'added', ADDON_STATE_TEXT.added],
       ['l2', 'addable_with_setup', 'Needs an access token'],
@@ -284,7 +286,7 @@ describe('addonDirectory.list', () => {
     const states = ok(await directory.list(USER, AGENT)).entries.map((e) => [e.ref.id, e.state, e.stateReason])
     expect(states).toEqual([
       ['c1', 'blocked', 'Needs a cinna-agent.json'],
-      ['p1', 'blocked', 'Plugins arrive in a later update'],
+      ['p1', 'blocked', 'Needs a cinna-agent.json'],
       ['l1', 'addable', null]
     ])
   })
@@ -323,6 +325,70 @@ describe('addonDirectory.list', () => {
     const directory = build([])
     expect(await directory.list(USER, AGENT)).toEqual({ ok: false, code: 'not_found', message: ADDON_STATE_TEXT.agentNotFound })
     expect(await directory.add(USER, AGENT, catalogRef('c1'))).toMatchObject({ ok: false, code: 'not_found' })
+  })
+})
+
+describe('addonDirectory plugins', () => {
+  const components = (over: Partial<NonNullable<ProviderEntry['components']>> = {}): NonNullable<ProviderEntry['components']> => ({
+    skills: [{ name: 's', hasScripts: false }],
+    commands: [],
+    agents: [],
+    hooks: null,
+    mcpServers: [],
+    lspServers: [],
+    ...over
+  })
+
+  it('marks a plugin against the agent’s engine, its pins, and what blocks it here', async () => {
+    agent = { kit: true, skills: [], engine: 'codex', plugins: [{ entryUuid: 'PINNED', name: 'pinned' }] }
+    attached = []
+    const directory = build([
+      provider('cinna-core', [PLUGIN_SOURCE], {
+        entries: [
+          entry(pluginRef('pinned'), { kind: 'plugin', components: components() }),
+          entry(pluginRef('skills-only'), { kind: 'plugin', components: components({ mcpServers: [{ name: 'm', transport: 'http', runtime: null, auth: 'none', env: [] }] }) }),
+          entry(pluginRef('partly'), { kind: 'plugin', components: components({ commands: ['c'], hooks: { events: ['PreToolUse'] } }) }),
+          entry(pluginRef('none'), { kind: 'plugin', components: components({ skills: [], commands: ['c'] }) }),
+          entry(pluginRef('needs-node'), { kind: 'plugin', components: components({ mcpServers: [{ name: 'n', transport: 'stdio', runtime: 'node', auth: 'none', env: [] }] }) }),
+          entry(pluginRef('pending'), { kind: 'plugin', status: 'pending' })
+        ]
+      })
+    ])
+    deps.pluginBlock = vi.fn(async (_user: string, e: ProviderEntry) => (e.ref.id === 'needs-node' ? 'Needs Node.js — install it from nodejs.org' : null))
+    const states = ok(await directory.list(USER, AGENT)).entries.map((e) => [e.ref.id, e.state, e.stateReason])
+    expect(states).toEqual([
+      ['pinned', 'added', ADDON_STATE_TEXT.added],
+      ['skills-only', 'addable', null],
+      ['partly', 'partly_compatible', 'Skills only on Codex'],
+      ['none', 'incompatible', 'Not for Codex'],
+      ['needs-node', 'blocked', 'Needs Node.js — install it from nodejs.org'],
+      ['pending', 'preparing', 'Being prepared on the server']
+    ])
+    // Asked only for a ready plugin, never for a pending one or a skill.
+    expect(vi.mocked(deps.pluginBlock!).mock.calls.map((call) => call[1].ref.id)).not.toContain('pending')
+  })
+
+  it('blocks a plugin on a shared agent whose pins are not the user’s to change', async () => {
+    agent = { kit: true, skills: [], engine: 'claude' }
+    skillAccess = 'This agent is shared with you to use.'
+    const directory = build([provider('cinna-core', [PLUGIN_SOURCE], { entries: [entry(pluginRef('p'), { kind: 'plugin', components: components() })] })])
+    expect(ok(await directory.list(USER, AGENT)).entries[0]).toMatchObject({ state: 'blocked', stateReason: 'This agent is shared with you to use.' })
+  })
+
+  it('pins and unpins a plugin through its service and hands the next step back', async () => {
+    agent = { kit: true, skills: [], plugins: [{ entryUuid: 'e1', name: 'carbone' }] }
+    const directory = build([provider('cinna-core', [PLUGIN_SOURCE], { entries: [] })])
+    deps.addPlugin = vi.fn(async () => ({ ok: true as const, next: 'env' as const }))
+    deps.removePlugin = vi.fn(async () => ({ ok: true as const }))
+    expect(await directory.add(USER, AGENT, pluginRef('e2'))).toEqual({ ok: true, next: 'env' })
+    expect(deps.addPlugin).toHaveBeenCalledWith(USER, AGENT, 'e2')
+    vi.mocked(deps.addPlugin!).mockResolvedValueOnce({ ok: false, code: 'blocked', message: 'Needs Node.js' })
+    expect(await directory.add(USER, AGENT, pluginRef('e3'))).toEqual({ ok: false, code: 'blocked', message: 'Needs Node.js' })
+    expect(await directory.remove(USER, AGENT, pluginRef('E1'))).toEqual({ ok: true, next: null })
+    expect(deps.removePlugin).toHaveBeenCalledWith(USER, AGENT, 'carbone')
+    expect(await directory.remove(USER, AGENT, pluginRef('unpinned'))).toEqual({ ok: true, next: null })
+    expect(deps.removePlugin).toHaveBeenCalledTimes(1)
+    expect(deps.addMarketplaceSkill).not.toHaveBeenCalled()
   })
 })
 
@@ -430,7 +496,7 @@ describe('addonDirectory.add and remove', () => {
         ]
       })
     ])
-    expect(await directory.add(USER, AGENT, registryRef('plugin'))).toMatchObject({ ok: false, code: 'blocked' })
+    expect(await directory.add(USER, AGENT, registryRef('plugin'))).toMatchObject({ ok: false, code: 'unsupported' })
     expect(await directory.add(USER, AGENT, registryRef('pending'))).toMatchObject({ ok: false, code: 'preparing' })
     expect(await directory.add(USER, AGENT, registryRef('nowhere'))).toMatchObject({ ok: false, code: 'unsupported' })
     expect(await directory.add(USER, AGENT, registryRef('gone'))).toMatchObject({ ok: false, code: 'not_found' })

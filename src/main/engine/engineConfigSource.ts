@@ -33,6 +33,8 @@ import { tasksSkillInfo } from '../services/tasksSkillService'
 import { artifactsSkillInfo } from '../services/artifacts/artifactsSkill'
 import { SKILLS_DIR } from '../kit/skills'
 import { ensureKitAgentSkillsPlugin, type KitAgentSkillsPlugin } from '../services/agentSkillsPlugin'
+import { cachedPlugins, type CachedPlugin } from '../services/pluginSkills'
+import { readPluginCommand } from '../services/pluginTree'
 import { join } from 'node:path'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
 import { folderReadinessBlocksTurn } from '../../shared/localAgents'
@@ -279,10 +281,26 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
         agent.runtime?.permissions && typeof agent.runtime.permissions === 'object'
           ? (agent.runtime.permissions as Record<string, unknown>)
           : null,
-      ...ownSkills(ownPlugin)
+      ...ownSkills(ownPlugin),
+      ...pluginCommands(agent.skills ? cachedPlugins(agent.manifest) : [])
     })
   }
   return out
+}
+
+/**
+ * A kit agent's pinned plugins' commands for OpenCode, as core hands a cloud
+ * agent's plugin `commands/*.md` to it: the file's body is the template, its
+ * frontmatter `description` the description. Only plugins on this computer.
+ */
+export function pluginCommands(plugins: readonly CachedPlugin[]): Pick<EngineAgentInput, 'commands'> {
+  const commands = plugins.flatMap((plugin) =>
+    (plugin.tree?.commands ?? []).flatMap((command) => {
+      const read = readPluginCommand(command.path)
+      return read ? [{ name: `${plugin.pin.name}:${command.name}`, template: read.template, description: read.description }] : []
+    })
+  )
+  return commands.length > 0 ? { commands } : {}
 }
 
 /**

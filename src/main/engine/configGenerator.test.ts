@@ -952,3 +952,32 @@ describe('OpenCode subagents', () => {
     expect(buildEngineConfig(input()).config.experimental).toEqual({ subagent_depth: 3 })
   })
 })
+
+describe('a kit agent’s plugin commands', () => {
+  it('writes each agent’s commands under its own key, bound to it, when two agents pin the same plugin', () => {
+    const base = input()
+    const second = { ...base.agents[0], agentId: 'folder:22222222-2222-2222-2222-222222222222', slug: 'reports' }
+    base.agents[0] = {
+      ...base.agents[0],
+      commands: [
+        { name: 'carbone:render', template: 'Render $ARGUMENTS\n', description: 'Render a template' },
+        { name: 'carbone:plain', template: 'Just do it\n', description: null }
+      ]
+    }
+    base.agents.push({ ...second, commands: [{ name: 'carbone:render', template: 'Other\n', description: null }] })
+    const built = buildEngineConfig(base)
+    const first = built.agentKeys.get(base.agents[0].agentId)!
+    const other = built.agentKeys.get(second.agentId)!
+    expect(first).not.toBe(other)
+    expect(built.config.command).toEqual({
+      [`${first}/carbone:render`]: { template: 'Render $ARGUMENTS\n', description: 'Render a template', agent: first },
+      [`${first}/carbone:plain`]: { template: 'Just do it\n', agent: first },
+      // The second agent's own copy, from its own snapshot, run by itself — never the first agent's.
+      [`${other}/carbone:render`]: { template: 'Other\n', agent: other }
+    })
+  })
+
+  it('writes no `command` key when no agent has one', () => {
+    expect('command' in buildEngineConfig(input()).config).toBe(false)
+  })
+})

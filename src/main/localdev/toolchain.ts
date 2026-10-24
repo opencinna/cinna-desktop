@@ -319,6 +319,19 @@ export interface Toolchain {
   ensure(pins: ToolchainPins, onProgress?: ToolchainProgress): Promise<ToolchainResult>
   repair(pins: ToolchainPins, onProgress?: ToolchainProgress): Promise<ToolchainResult>
   toolchainEnv(pins: ToolchainPins): Promise<NodeJS.ProcessEnv>
+  /**
+   * The pinned uv alone, installed on demand — what a plugin's Python MCP
+   * server runs through (`uvx`). No Mutagen, no cinna-cli, no progress: uv is
+   * a few MB, and an install a reconcile already started is joined.
+   */
+  ensureUv(): Promise<ManagedUvLayout>
+}
+
+/** Where the managed uv lives and the `UV_*` environment every process it starts runs under. */
+export interface ManagedUvLayout {
+  uvBin: string
+  uvxBin: string
+  env: Record<string, string>
 }
 
 /**
@@ -412,6 +425,20 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
    * bundle and their locale. A discrepancy between those two would be a
    * miserable thing to debug.
    */
+  async function ensureUvOnly(): Promise<ManagedUvLayout> {
+    const key = deps.platformKey()
+    const asset = deps.uvAssets[key]
+    if (!asset) {
+      throw new ToolchainError('unsupported_platform', `Cinna has no verified uv build for ${key}.`, key, 'uv')
+    }
+    const root = deps.root()
+    await mkdir(root, { recursive: true })
+    // The pins only name Mutagen's and cinna-cli's folders, which this never touches.
+    const pins: ToolchainPins = { cinnaCliVersion: '', mutagenVersion: '' }
+    await once(`uv:${deps.uvVersion}:false`, () => ensureUv(pins, asset))
+    return managedUvLayoutAt(root, deps.uvVersion)
+  }
+
   async function toolchainEnv(pins: ToolchainPins): Promise<NodeJS.ProcessEnv> {
     const p = paths(pins)
     const base = await deps.shellEnv()
@@ -898,8 +925,29 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     paths,
     ensure: (pins, onProgress) => run(pins, false, onProgress),
     repair: (pins, onProgress) => run(pins, true, onProgress),
-    toolchainEnv
+    toolchainEnv,
+    ensureUv: ensureUvOnly
   }
+}
+
+/** The managed uv's files and `UV_*` dirs under `root`, as {@link createToolchain} lays them out. */
+export function managedUvLayoutAt(root: string, uvVersion: string = PINNED_UV_VERSION): ManagedUvLayout {
+  const dir = join(root, `uv-${uvVersion}`)
+  return {
+    uvBin: join(dir, process.platform === 'win32' ? 'uv.exe' : 'uv'),
+    uvxBin: join(dir, process.platform === 'win32' ? 'uvx.exe' : 'uvx'),
+    env: {
+      UV_TOOL_DIR: join(root, 'uv-tools'),
+      UV_TOOL_BIN_DIR: join(root, 'bin'),
+      UV_PYTHON_INSTALL_DIR: join(root, 'python'),
+      UV_CACHE_DIR: join(root, 'uv-cache')
+    }
+  }
+}
+
+/** The process-wide managed uv's layout, installed or not. */
+export function managedUvLayout(): ManagedUvLayout {
+  return managedUvLayoutAt(localDevRootDir())
 }
 
 /** `<userData>/localdev`. Never the agents home, never anywhere on the user's PATH. */

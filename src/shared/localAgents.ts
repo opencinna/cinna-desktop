@@ -398,7 +398,12 @@ export interface FileStamp {
  * platform's skills marketplaces referenced by entry and snapshot digest. A
  * pinned row is deliverable once its cached copy is on this computer.
  */
-export type LocalAgentSkillSource = 'authored' | 'catalog' | 'marketplace'
+/**
+ * Where a skill row comes from. `plugin` rows are a pinned marketplace
+ * plugin's skills: delivered to every engine like a pinned skill, but never in
+ * the agent's scanned skill list — the plugin's own row carries them.
+ */
+export type LocalAgentSkillSource = 'authored' | 'catalog' | 'marketplace' | 'plugin'
 
 /**
  * One condition a skill is flagged with — cinna-core's `skill_manifest.py`
@@ -451,6 +456,8 @@ export interface LocalAgentSkill {
   /** Errors first, then warnings. Empty when the skill is fine. */
   issues: LocalAgentSkillIssue[]
   credentials: LocalAgentSkillCredential[]
+  /** `plugin` rows only: the pinned plugin's name, and its marketplace entry. */
+  pluginName?: string
   /** `catalog` rows only: the pin's `package_id` (`''` when the pin has none that is text). */
   packageId?: string
   /** `catalog` rows only: the pin's `package_uuid`, as written. */

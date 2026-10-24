@@ -1,6 +1,7 @@
 import { McpProviderRow } from '../db/mcpProviders'
 import { McpProviderConfig } from './types'
 import { createLogger } from '../logger/logger'
+import { resolveManagedLaunch } from './managed'
 
 const logger = createLogger('MCP')
 
@@ -27,6 +28,11 @@ function toAuthType(value: string | null, providerId: string): 'oauth' | 'bearer
  * startup.
  */
 export function mcpRowToConfig(row: McpProviderRow): McpProviderConfig {
+  // A plugin's provider (`managed_by`) launches with its `${VAR}`s filled and, under the managed uv, uv's env.
+  return resolveManagedLaunch(rowConfig(row), row)
+}
+
+function rowConfig(row: McpProviderRow): McpProviderConfig {
   return {
     id: row.id,
     userId: row.userId,

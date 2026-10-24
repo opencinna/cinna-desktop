@@ -202,6 +202,21 @@ function segmentsOf(raw: string): string[] {
  * @throws SkillArchiveError for anything outside the rules in this module's header.
  */
 export function readSkillArchive(gz: Buffer, name: string): SkillArchive {
+  return readArchive(gz, name, 'skill')
+}
+
+/**
+ * Parse and check a marketplace plugin's snapshot archive (core's generic
+ * `…/archive`): the same rules, with every member under exactly one root,
+ * `<name>/` — the plugin tree — and no `SKILL.md` required at its top.
+ *
+ * @throws SkillArchiveError for anything outside the rules in this module's header.
+ */
+export function readPluginArchive(gz: Buffer, name: string): SkillArchive {
+  return readArchive(gz, name, 'plugin')
+}
+
+function readArchive(gz: Buffer, name: string, kind: 'skill' | 'plugin'): SkillArchive {
   if (gz.length > MAX_ARCHIVE_BYTES) throw new SkillArchiveError('The skill archive is larger than 16 MB.')
   let tar: Buffer
   try {
@@ -222,9 +237,9 @@ export function readSkillArchive(gz: Buffer, name: string): SkillArchive {
         (entry.type === 'dir' || entry.segments.length > prefix.length) &&
         prefix.every((segment, index) => index >= entry.segments.length || entry.segments[index] === segment)
     )
-  const root = under(['skills', name]) ? ['skills', name] : under([name]) ? [name] : null
+  const root = kind === 'skill' && under(['skills', name]) ? ['skills', name] : under([name]) ? [name] : null
   if (root === null) {
-    throw new SkillArchiveError(`The skill archive does not hold exactly one folder named ${name}.`)
+    throw new SkillArchiveError(`The ${kind} archive does not hold exactly one folder named ${name}.`)
   }
 
   const dirs = new Set<string>()
@@ -256,9 +271,10 @@ export function readSkillArchive(gz: Buffer, name: string): SkillArchive {
       files.push({ path, data: Buffer.from(entry.data), executable: (entry.mode & 0o111) !== 0 })
     }
   }
-  if (!files.some((file) => file.path === 'SKILL.md')) {
+  if (kind === 'skill' && !files.some((file) => file.path === 'SKILL.md')) {
     throw new SkillArchiveError('The skill archive has no SKILL.md at the top of its folder.')
   }
+  if (kind === 'plugin' && files.length === 0) throw new SkillArchiveError('The plugin archive holds no files.')
   return { dirs: [...dirs].sort(), files }
 }
 

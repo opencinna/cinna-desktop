@@ -138,6 +138,20 @@ export const mcpProviders = sqliteTable('mcp_providers', {
    * provider once, as "On this computer", carrying the entry's metadata.
    */
   registryRef: text('registry_ref', { mode: 'json' }).$type<{ source: string; id: string }>(),
+  /**
+   * Who owns a provider the user did not set up by hand:
+   * `plugin:<entry_uuid>@<archive_sha256>` for an MCP server of a pinned
+   * marketplace plugin's snapshot, or null. Created with the pin, deleted once
+   * no pin references the snapshot; only env values and credentials are editable.
+   */
+  managedBy: text('managed_by'),
+  /**
+   * A managed provider's values for its plugin's `${VAR}` placeholders: one
+   * encrypted JSON object (safeStorage), read in main only, at launch.
+   */
+  envSecretEncrypted: blob('env_secret_enc', { mode: 'buffer' }),
+  /** A managed provider's spec: its cached folder, the names the user fills in, declared headers (`mcp/managed.ts`). */
+  managedSpec: text('managed_spec', { mode: 'json' }).$type<import('../mcp/managed').ManagedSpec>(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

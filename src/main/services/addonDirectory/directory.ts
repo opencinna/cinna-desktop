@@ -25,18 +25,21 @@ import {
   type AgentDirectoryEntry
 } from '../../../shared/addons/directory'
 import type { LocalAgentSkill } from '../../../shared/localAgents'
+import type { AgentEngine } from '../../../shared/engine'
+import { compatibilityOf } from '../../../shared/addons/engineSupport'
 import type { DirectoryContext, DirectoryProvider, ProviderEntry, ProviderListing } from './types'
 
 export const LOCAL_SOURCE = 'this-computer'
 export const CATALOG_SOURCE = 'core-catalog'
 export const MARKETPLACE_SOURCE = 'core-marketplace'
+/** A claude- or codex-format marketplace plugin (the entry uuid); pinned by `marketplacePluginService`. */
+export const PLUGIN_SOURCE = 'core-marketplace-plugin'
 
 export const ADDON_STATE_TEXT = {
   added: 'Added to this agent',
   addedNeeds: (need: string) => `Added — ${need.charAt(0).toLowerCase()}${need.slice(1)}`,
   preparing: 'Being prepared on the server',
   unsupported: 'The server could not prepare it for adding',
-  plugin: 'Plugins arrive in a later update',
   needsKit: 'Needs a cinna-agent.json',
   gated: 'Turned off for your account by your admin',
   notFound: 'This addon is no longer listed',
@@ -45,9 +48,13 @@ export const ADDON_STATE_TEXT = {
 
 /** What the directory needs to know about the agent. Null: not a folder agent in this scope. */
 export interface AgentFacts {
-  /** A kit agent (has a `cinna-agent.json`): it can pin skills. */
+  /** A kit agent (has a `cinna-agent.json`): it can pin skills and plugins. */
   kit: boolean
   skills: Pick<LocalAgentSkill, 'source' | 'name' | 'packageUuid' | 'entryUuid'>[]
+  /** The plugins it pins (`marketplace_plugins[]`); absent reads as none. */
+  plugins?: { entryUuid: string; name: string }[]
+  /** The engine it runs on (manifest `runtime.engine`, else this machine's default): what compatibility is judged against. */
+  engine?: AgentEngine
 }
 
 /** Why the agent's skill pins are not the user's to change (a team agent shared to use only), or null. */
@@ -76,6 +83,17 @@ export interface AddonDirectoryDeps {
   removeCatalogSkill(userId: string, agentId: string, name: string): Promise<PinOutcome>
   addMarketplaceSkill(userId: string, agentId: string, entryUuid: string): Promise<PinOutcome>
   removeMarketplaceSkill(userId: string, agentId: string, name: string): Promise<PinOutcome>
+  /** Pin a marketplace plugin; `next` is the step a managed connector of it still needs. */
+  addPlugin?(userId: string, agentId: string, entryUuid: string): Promise<{ ok: true; next: AddonNextStep | null } | AddonRefused>
+  removePlugin?(userId: string, agentId: string, name: string): Promise<PinOutcome>
+  /**
+   * Why a plugin cannot be added on this computer — a local server needs a
+   * runtime it lacks, or the admin's policy forbids local servers — or null.
+   * Asked once per plugin entry per directory read.
+   */
+  pluginBlock?(userId: string, entry: ProviderEntry): Promise<string | null>
+  /** Core's policy per settings scope, shared with the services that honour it; a private map when absent. */
+  policies?: Map<string, AddonPolicy>
   /** Throws a `DomainError` (`not_found`) for an agent or provider outside the scope. */
   attachMcp(userId: string, agentId: string, mcpProviderId: string): void
   detachMcp(userId: string, agentId: string, mcpProviderId: string): void
@@ -145,6 +163,7 @@ export function mergeLocalProviders(entries: ProviderEntry[]): ProviderEntry[] {
 function isAdded(entry: ProviderEntry, agent: AgentFacts, attached: ReadonlySet<string>): boolean {
   if (entry.mcpProviderId) return attached.has(entry.mcpProviderId)
   const id = entry.ref.id.toLowerCase()
+  if (entry.ref.source === PLUGIN_SOURCE) return (agent.plugins ?? []).some((plugin) => plugin.entryUuid.toLowerCase() === id)
   if (entry.ref.source === CATALOG_SOURCE) {
     return agent.skills.some((skill) => skill.source === 'catalog' && skill.packageUuid?.toLowerCase() === id)
   }
@@ -170,16 +189,21 @@ export function stateOf(
   }
   if (entry.status === 'pending') return { state: 'preparing', stateReason: ADDON_STATE_TEXT.preparing }
   if (entry.status === 'unsupported') return { state: 'blocked', stateReason: ADDON_STATE_TEXT.unsupported }
-  if (entry.kind === 'plugin') return { state: 'blocked', stateReason: ADDON_STATE_TEXT.plugin }
-  if (entry.kind === 'skill' && !agent.kit) return { state: 'blocked', stateReason: ADDON_STATE_TEXT.needsKit }
-  if (entry.kind === 'skill' && skillAccess) return { state: 'blocked', stateReason: skillAccess }
+  const pinned = entry.kind === 'skill' || entry.kind === 'plugin'
+  if (pinned && !agent.kit) return { state: 'blocked', stateReason: ADDON_STATE_TEXT.needsKit }
+  if (pinned && skillAccess) return { state: 'blocked', stateReason: skillAccess }
+  if (entry.blockReason) return { state: 'blocked', stateReason: entry.blockReason }
+  if (entry.kind === 'plugin' && entry.components && agent.engine) {
+    const fit = compatibilityOf(entry.components, null, agent.engine)
+    if (fit.level !== 'compatible') return { state: fit.level, stateReason: fit.reason }
+  }
   if (entry.setupReason) return { state: 'addable_with_setup', stateReason: entry.setupReason }
   return { state: 'addable', stateReason: null }
 }
 
 function toAgentEntry(entry: ProviderEntry, agent: AgentFacts, attached: ReadonlySet<string>, skillAccess: SkillAccess): AgentDirectoryEntry {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { registryRef, setupReason, setupStep, mcpProviderId, provider, ...shared } = entry
+  const { registryRef, setupReason, setupStep, mcpProviderId, provider, blockReason, ...shared } = entry
   return {
     ...shared,
     provider: provider ?? '',
@@ -191,7 +215,7 @@ function toAgentEntry(entry: ProviderEntry, agent: AgentFacts, attached: Readonl
 
 export function createAddonDirectory(deps: AddonDirectoryDeps) {
   /** Core's last policy per settings scope; the default until core sends one. */
-  const policies = new Map<string, AddonPolicy>()
+  const policies = deps.policies ?? new Map<string, AddonPolicy>()
   /** Entries only a search found (the official registry), so a detail read or an add can name them. */
   const searched = new Map<string, ProviderEntry>()
 
@@ -281,6 +305,19 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
     return agent.kit ? deps.skillAccess(userId, agentId) : null
   }
 
+  /** Each plugin entry with why it cannot be added here (runtime, policy), asked once per read. */
+  async function withPluginBlocks(userId: string, entries: ProviderEntry[]): Promise<ProviderEntry[]> {
+    const ask = deps.pluginBlock
+    if (!ask) return entries
+    return Promise.all(
+      entries.map(async (entry) => {
+        if (entry.kind !== 'plugin' || entry.status !== 'ready') return entry
+        const reason = await ask(userId, entry).catch(() => null)
+        return reason ? { ...entry, blockReason: reason } : entry
+      })
+    )
+  }
+
   function pinned(outcome: PinOutcome): AddonActionResult {
     return outcome.ok ? { ok: true, next: null } : refused(outcome.code, outcome.message)
   }
@@ -295,7 +332,8 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         const { entries, sources, policy } = await listAll({ settingsUserId: userId, ...(options.refresh ? { refresh: true } : {}) })
         const access = await skillAccessOf(userId, agentId, agent)
         const attached = new Set(deps.attachedMcp(userId, agentId))
-        return { ok: true, entries: entries.map((entry) => toAgentEntry(entry, agent, attached, access)), sources, policy }
+        const checked = await withPluginBlocks(userId, entries)
+        return { ok: true, entries: checked.map((entry) => toAgentEntry(entry, agent, attached, access)), sources, policy }
       } catch (err) {
         return refusalOf(err)
       }
@@ -333,6 +371,11 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         if ('ok' in agent) return agent
         if (ref.source === CATALOG_SOURCE) return pinned(await deps.addCatalogSkill(userId, agentId, ref.id))
         if (ref.source === MARKETPLACE_SOURCE) return pinned(await deps.addMarketplaceSkill(userId, agentId, ref.id))
+        if (ref.source === PLUGIN_SOURCE) {
+          if (!deps.addPlugin) return refused('unsupported', ADDON_STATE_TEXT.unsupported)
+          const outcome = await deps.addPlugin(userId, agentId, ref.id)
+          return outcome.ok ? { ok: true, next: outcome.next } : refused(outcome.code, outcome.message)
+        }
         if (ref.source === LOCAL_SOURCE) return await attachLocal(userId, agentId, ref.id)
 
         const provider = ownerOf(ref)
@@ -342,7 +385,7 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         if (existing) return await attachLocal(userId, agentId, existing)
         const entry = await directoryEntry({ settingsUserId: userId }, ref)
         if (!entry) return refused('not_found', ADDON_STATE_TEXT.notFound)
-        if (entry.kind === 'plugin') return refused('blocked', ADDON_STATE_TEXT.plugin)
+        if (entry.kind === 'plugin') return refused('unsupported', ADDON_STATE_TEXT.unsupported)
         if (entry.status === 'pending') return refused('preparing', ADDON_STATE_TEXT.preparing)
         if (entry.kind !== 'mcp' || entry.status === 'unsupported' || !entry.install || !('mcp' in entry.install)) {
           return refused('unsupported', ADDON_STATE_TEXT.unsupported)
@@ -374,6 +417,10 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         if (ref.source === MARKETPLACE_SOURCE) {
           const pin = agent.skills.find((skill) => skill.source === 'marketplace' && skill.entryUuid?.toLowerCase() === id)
           return pin ? pinned(await deps.removeMarketplaceSkill(userId, agentId, pin.name)) : { ok: true, next: null }
+        }
+        if (ref.source === PLUGIN_SOURCE) {
+          const pin = (agent.plugins ?? []).find((plugin) => plugin.entryUuid.toLowerCase() === id)
+          return pin && deps.removePlugin ? pinned(await deps.removePlugin(userId, agentId, pin.name)) : { ok: true, next: null }
         }
         const mcpProviderId = ref.source === LOCAL_SOURCE ? ref.id : deps.findMcpByRef(userId, ref)
         if (!mcpProviderId) return { ok: true, next: null }

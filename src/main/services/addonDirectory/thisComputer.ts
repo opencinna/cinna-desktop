@@ -7,6 +7,7 @@
 
 import { mcpProviderRepo, type McpProviderRow } from '../../db/mcpProviders'
 import { mcpManager } from '../../mcp/manager'
+import { missingManagedEnv } from '../../mcp/managed'
 import type { AddonNextStep, AddonRef } from '../../../shared/addons/directory'
 import { LOCAL_SOURCE, type McpSetup } from './directory'
 import type { DirectoryProvider, ProviderEntry } from './types'
@@ -46,6 +47,8 @@ const defaultFacts: LocalMcpFacts = {
 export function setupOf(row: McpProviderRow, status: string, needsUser: boolean): AddonNextStep | null {
   if (row.enabled === false) return 'enable'
   if (status === 'connected') return null
+  // A plugin's server with a setting it needs still empty.
+  if (missingManagedEnv(row).length > 0) return 'env'
   if (row.transportType !== 'stdio') {
     if (row.authType === 'bearer' && !row.bearerTokenEncrypted) return 'bearer'
     if (row.authType !== 'bearer' && !row.authTokensEncrypted && (needsUser || status === 'awaiting-auth')) return 'oauth'
@@ -104,7 +107,13 @@ export function createThisComputerProvider(facts: LocalMcpFacts = defaultFacts):
     label: LOCAL_SOURCE_TEXT.label,
     owns: (ref) => ref.source === LOCAL_SOURCE,
     async list(ctx) {
-      return { entries: facts.rows(ctx.settingsUserId).map((row) => localProviderEntry(row, setupFor(row))) }
+      // A plugin's own servers show inside the plugin's row, never as connectors of their own.
+      return {
+        entries: facts
+          .rows(ctx.settingsUserId)
+          .filter((row) => !row.managedBy)
+          .map((row) => localProviderEntry(row, setupFor(row)))
+      }
     },
     setup(userId, id) {
       const row = facts.rows(userId).find((r) => r.id === id)

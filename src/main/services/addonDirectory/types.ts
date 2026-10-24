@@ -23,6 +23,8 @@ export interface ProviderEntry extends DirectoryEntry {
   setupStep?: AddonNextStep
   /** The provider that listed it; the directory sets it. */
   provider?: string
+  /** A plugin that cannot be added on this computer: the sentence why (a missing runtime, the policy). The directory sets it. */
+  blockReason?: string
 }
 
 /** One provider's read: its entries, a sentence when part of it failed, and core's policy when it sends one. */

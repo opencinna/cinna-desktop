@@ -13,8 +13,11 @@ vi.mock('./_wrap', () => ({
 }))
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: () => undefined } }))
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' }))
-const service = vi.hoisted(() => ({ upsert: vi.fn(async () => ({ id: 'm1' })) }))
-vi.mock('../services/mcpService', () => ({ mcpService: service }))
+const service = vi.hoisted(() => ({ upsert: vi.fn(async (): Promise<unknown> => ({ id: 'm1' })), delete: vi.fn(async (): Promise<unknown> => ({ ok: true })) }))
+vi.mock('../services/mcpService', async () => ({
+  mcpService: service,
+  managedRefusalOf: (await vi.importActual<typeof import('../services/mcpService')>('../services/mcpService')).managedRefusalOf
+}))
 vi.mock('../services/mcpRegistryService', () => ({ mcpRegistryService: {} }))
 vi.mock('../services/agentMcpService', () => ({ agentMcpService: {} }))
 
@@ -37,5 +40,19 @@ describe('mcp:upsert registryRef', () => {
       await upsert({ ...BASE, registryRef })
       expect(service.upsert).toHaveBeenLastCalledWith('__default__', BASE)
     }
+  })
+})
+
+describe('a plugin’s connector over mcp:upsert and mcp:delete', () => {
+  it('answers a refused edit as data, not a throw', async () => {
+    const { McpError } = await import('../errors')
+    service.upsert.mockRejectedValueOnce(new McpError('managed_provider', 'This connector comes with a plugin.'))
+    expect(await upsert({ ...BASE, id: 'm1' })).toEqual({ id: 'm1', ok: false, success: false, code: 'managed', message: 'This connector comes with a plugin.' })
+  })
+
+  it('answers a refused delete as data', async () => {
+    service.delete.mockResolvedValueOnce({ ok: false, code: 'managed', message: 'It goes with its plugin.' })
+    expect(await handlers.get('mcp:delete')!({}, 'm1')).toEqual({ ok: false, success: false, code: 'managed', message: 'It goes with its plugin.' })
+    expect(await handlers.get('mcp:delete')!({}, 'm2')).toEqual({ ok: true, success: true })
   })
 })

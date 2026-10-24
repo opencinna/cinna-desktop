@@ -51,8 +51,21 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
     accountConfigService.loadManagedAdapters(profileUserId)
   }
 
+  // A plugin's connector starts only when an agent has it and it can run (values given, not blocked).
+  let plugins: Promise<typeof import('../services/marketplacePluginService')> | null = null
   for (const provider of mcpProviderRepo.list(userId)) {
     if (!provider.enabled) continue
+    if (provider.managedBy) {
+      plugins ??= import('../services/marketplacePluginService')
+      void plugins
+        .then(({ marketplacePluginService }) => marketplacePluginService.startsUnattended(provider))
+        .then((starts) => {
+          if (!starts || !current()) return undefined
+          return mcpManager.connect(mcpRowToConfig(provider))
+        })
+        .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
+      continue
+    }
     mcpManager
       .connect(mcpRowToConfig(provider))
       .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))

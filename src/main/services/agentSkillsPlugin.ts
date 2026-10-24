@@ -48,6 +48,8 @@ import { TASKS_SKILL_NAME } from './tasksSkillService'
 import { catalogSkillCache } from './catalogSkillCache'
 import { marketplaceSkillCache } from './marketplaceSkillCache'
 import { pinnedSkillAutoFetch } from './pinnedSkillAutoFetch'
+import { marketplacePluginCache } from './marketplacePluginCache'
+import { deliveredSkillRows } from './pluginSkills'
 
 const logger = createLogger('agent-skills-plugin')
 
@@ -165,7 +167,7 @@ function readKitManifest(agentDir: string): { slug: string; manifest: CinnaAgent
  * A name is never on both: a pin that clashes with an own skill is an error.
  */
 export function kitAgentDeliverableSkills(agentDir: string, manifest: unknown): LocalAgentSkill[] {
-  return deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve))
+  return deliverableSkills(deliveredSkillRows(agentDir, manifest))
 }
 
 /**
@@ -210,15 +212,17 @@ export function ensureKitAgentSkillsPlugin(agent: { id: string; path: string }):
   const { slug, manifest } = readKitManifest(agent.path)
   const rows = agentSkillRows(agent.path, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve)
   // A pin not on this computer yet is fetched in the background (once per session): this session
-  // goes without it, the next one gets it.
+  // goes without it, the next one gets it. Plugins likewise.
   pinnedSkillAutoFetch.fetchMissing(agent.id, rows)
-  const skills = deliverableSkills(rows)
+  pinnedSkillAutoFetch.fetchMissingPlugins(agent.id, manifest)
+  const skills = deliverableSkills(deliveredSkillRows(agent.path, manifest))
   if (skills.length === 0) return null
   const dir = ensureAgentSkillsPlugin({ agentId: agent.id, slug, agentDir: agent.path, skills })
   if (!dir) return null
   const readPaths = [
     skills.some((skill) => skill.source === 'catalog') ? catalogSkillCache.root() : null,
-    skills.some((skill) => skill.source === 'marketplace') ? marketplaceSkillCache.root() : null
+    skills.some((skill) => skill.source === 'marketplace') ? marketplaceSkillCache.root() : null,
+    skills.some((skill) => skill.source === 'plugin') ? marketplacePluginCache.root() : null
   ].filter((root): root is string => root !== null)
   return { dir, skills: skills.map((skill) => skill.name), ...(readPaths.length > 0 ? { readPaths } : {}) }
 }
@@ -247,7 +251,7 @@ export function ensureAgentSkillsPlugin(input: AgentSkillsPluginInput): string |
       join(staging, '.claude-plugin', 'plugin.json'),
       `${JSON.stringify({
         name: wanted.name,
-        description: 'This agent’s skills: its own skills/ folder and the catalog and marketplace skills it pins. Provided by Cinna Desktop.',
+        description: 'This agent’s skills: its own skills/ folder, the catalog and marketplace skills it pins and its plugins’ skills. Provided by Cinna Desktop.',
         version: '1'
       }, null, 2)}\n`
     )

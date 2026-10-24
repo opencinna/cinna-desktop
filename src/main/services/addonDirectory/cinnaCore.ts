@@ -1,10 +1,11 @@
 /**
  * The `cinna-core` directory provider: what the active profile's Cinna server
- * offers. In U0 it joins two reads that exist already — the catalog listing's
- * skill packages (what the Add skill modal's Catalog view shows, through
- * `libraryService`) and the skills marketplaces' entries
- * (`marketplaceSkillService.discover`). Signed out or local-only: no entries
- * and no error.
+ * offers. It joins three reads that exist already — the catalog listing's
+ * skill packages (through `libraryService`), the skills marketplaces' entries
+ * (`marketplaceSkillService.discover`) and, since U3, the claude- and
+ * codex-format marketplaces' plugins (`marketplacePluginService.discover`,
+ * kind `plugin`, source `core-marketplace-plugin`). Signed out or local-only:
+ * no entries and no error.
  *
  * U4 swaps both reads for core's `GET /api/v1/addons/directory`, which also
  * carries plugins, core MCP entries and the `policy`. That swap is local to
@@ -20,16 +21,17 @@ import { createLogger } from '../../logger/logger'
 import { libraryService } from '../libraryService'
 import { marketplaceSkillService, snapshotDownloadPath } from '../marketplaceSkillService'
 import { skillDownloadPath } from '../catalogSkillService'
+import { componentsOf, marketplacePluginService, pluginArchivePath, PLUGIN_TYPES, type MarketplacePluginEntry } from '../marketplacePluginService'
+import { isCatalogPinName } from '../../kit/skills'
 import type { CatalogItem } from '../../../shared/catalogItems'
 import type { MarketplaceSkillEntry } from '../../../shared/marketplaceSkills'
 import {
   DEFAULT_ADDON_POLICY,
-  type AddonComponents,
   type AddonKind,
   type AddonPolicy,
   type DirectoryEntry
 } from '../../../shared/addons/directory'
-import { CATALOG_SOURCE, MARKETPLACE_SOURCE } from './directory'
+import { CATALOG_SOURCE, MARKETPLACE_SOURCE, PLUGIN_SOURCE } from './directory'
 import type { DirectoryProvider, ProviderEntry, ProviderListing } from './types'
 
 const logger = createLogger('AddonDirectory')
@@ -42,7 +44,8 @@ export const CORE_SOURCE_TEXT = {
   catalogLabel: 'Catalog',
   reauth: 'Your Cinna session expired. Sign in again to see the catalog and marketplace addons.',
   catalogFailed: 'Could not load the catalog.',
-  marketplaceFailed: 'Could not load the marketplace skills.'
+  marketplaceFailed: 'Could not load the marketplace skills.',
+  pluginsFailed: 'Could not load the marketplace plugins.'
 } as const
 
 /** The first sentence (or line) of a description, for the card. */
@@ -113,43 +116,46 @@ export function marketplaceSkillEntry(entry: MarketplaceSkillEntry): ProviderEnt
   }
 }
 
+/**
+ * A claude- or codex-format marketplace plugin as a directory entry (U3):
+ * `pending` while core is still snapshotting it, `unsupported` (with core's
+ * code) when it has no snapshot to pin, else ready to add with its parts.
+ */
+export function marketplacePluginEntry(entry: MarketplacePluginEntry): ProviderEntry {
+  const digest = digestOf(entry.archiveSha256)
+  const pinnable = entry.supported && digest !== null && isCatalogPinName(entry.name) && (PLUGIN_TYPES as readonly string[]).includes(entry.pluginType)
+  const status: DirectoryEntry['status'] =
+    !digest && entry.snapshotStatus === 'pending' && entry.supported ? 'pending' : pinnable ? 'ready' : 'unsupported'
+  const publisher = entry.author ?? entry.marketplaceOwner
+  return {
+    ref: { source: PLUGIN_SOURCE, id: entry.entryUuid },
+    kind: 'plugin',
+    name: entry.name,
+    title: entry.name,
+    summary: summaryOf(entry.description),
+    description: entry.description,
+    category: entry.category,
+    tags: [],
+    iconUrl: null,
+    publisher: publisher ? { name: publisher, verified: false } : null,
+    origin: { label: entry.marketplaceName, kind: 'marketplace', repositoryUrl: entry.repositoryUrl, homepage: entry.homepage },
+    version: entry.version,
+    digest,
+    ...(entry.components ? { components: entry.components } : {}),
+    requires: { credentials: [] },
+    runsCode: entry.runsCode,
+    status,
+    unsupportedReason: status === 'unsupported' ? (entry.snapshotReason ?? entry.unsupportedReason ?? 'unsupported') : null,
+    install: status === 'ready' && entry.archiveSha256 ? { archivePath: pluginArchivePath(entry.entryUuid, entry.archiveSha256) } : null
+  }
+}
+
 /* ------------------------------------------------ core's own shape (U4) */
 
 type Wire = Record<string, unknown>
 const rec = (value: unknown): Wire | null => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Wire) : null)
 const str = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 const strs = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [])
-
-function componentsOf(raw: unknown): AddonComponents | undefined {
-  const c = rec(raw)
-  if (!c) return undefined
-  const hooks = rec(c.hooks)
-  return {
-    skills: (Array.isArray(c.skills) ? c.skills : []).flatMap((s) => {
-      const skill = rec(s)
-      const name = str(skill?.name)
-      return name ? [{ name, hasScripts: skill?.has_scripts === true }] : []
-    }),
-    commands: strs(c.commands),
-    agents: strs(c.agents),
-    hooks: hooks ? { events: strs(hooks.events) } : null,
-    mcpServers: (Array.isArray(c.mcp_servers) ? c.mcp_servers : []).flatMap((s) => {
-      const server = rec(s)
-      const name = str(server?.name)
-      if (!server || !name) return []
-      const transport = server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio'
-      const runtime = server.runtime === 'node' || server.runtime === 'python' || server.runtime === 'docker' ? server.runtime : null
-      const auth = server.auth === 'oauth' || server.auth === 'bearer' || server.auth === 'env' ? server.auth : 'none'
-      const env = (Array.isArray(server.env) ? server.env : []).flatMap((e) => {
-        const item = rec(e)
-        const envName = str(item?.name)
-        return envName ? [{ name: envName, secret: item?.secret === true }] : []
-      })
-      return [{ name, transport, runtime, auth, env }]
-    }),
-    lspServers: strs(c.lsp_servers)
-  }
-}
 
 /** One row of core's `/addons/directory` (snake_case) as a directory entry; null when it is not one. */
 export function fromCoreEntry(raw: unknown): ProviderEntry | null {
@@ -166,7 +172,8 @@ export function fromCoreEntry(raw: unknown): ProviderEntry | null {
   const status = row.status === 'pending' || row.status === 'unsupported' ? row.status : 'ready'
   const originKind = origin?.kind === 'catalog' || origin?.kind === 'directory' ? origin.kind : 'marketplace'
   return {
-    ref: { source, id },
+    // A plugin of a marketplace is pinned through its own service, not as a skill.
+    ref: { source: kind === 'plugin' && source === MARKETPLACE_SOURCE ? PLUGIN_SOURCE : source, id },
     kind: kind as AddonKind,
     name,
     title: str(row.title) ?? name,
@@ -214,6 +221,7 @@ export interface CinnaCoreReads {
   /** `refresh`: read the server, not the cached listing. */
   catalogItems(profile: string, refresh: boolean): Promise<CatalogItem[] | null>
   marketplaceSkills(): ReturnType<typeof marketplaceSkillService.discover>
+  marketplacePlugins(): ReturnType<typeof marketplacePluginService.discover>
   now(): number
 }
 
@@ -225,6 +233,7 @@ const defaultReads: CinnaCoreReads = {
     return listing ? listing.items : null
   },
   marketplaceSkills: () => marketplaceSkillService.discover(),
+  marketplacePlugins: () => marketplacePluginService.discover(),
   now: () => Date.now()
 }
 
@@ -244,16 +253,24 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
     if (marketplaceCache && marketplaceCache.key === key && reads.now() - marketplaceCache.at < CORE_DIRECTORY_TTL_MS) {
       return { entries: marketplaceCache.entries }
     }
-    const answer = await reads.marketplaceSkills()
-    if (!answer.ok) {
-      if (answer.code === 'no_account') return { entries: [] }
-      return answer.code === 'reauth_required'
-        ? { entries: [], error: CORE_SOURCE_TEXT.reauth, reauth: true }
-        : { entries: [], error: CORE_SOURCE_TEXT.marketplaceFailed }
+    const [skills, plugins] = await Promise.all([reads.marketplaceSkills(), reads.marketplacePlugins()])
+    const failed = (answer: { ok: false; code: string }, sentence: string): Part =>
+      answer.code === 'no_account'
+        ? { entries: [] }
+        : answer.code === 'reauth_required'
+          ? { entries: [], error: CORE_SOURCE_TEXT.reauth, reauth: true }
+          : { entries: [], error: sentence }
+    const fromSkills: Part = skills.ok ? { entries: skills.entries.map(marketplaceSkillEntry) } : failed(skills, CORE_SOURCE_TEXT.marketplaceFailed)
+    const fromPlugins: Part = plugins.ok ? { entries: plugins.entries.map(marketplacePluginEntry) } : failed(plugins, CORE_SOURCE_TEXT.pluginsFailed)
+    const entries = [...fromSkills.entries, ...fromPlugins.entries]
+    const errors = [...new Set([fromSkills.error, fromPlugins.error].filter((e): e is string => !!e))]
+    // Only a whole answer is reused; a part that failed is asked again next time.
+    if (errors.length === 0) marketplaceCache = { key, at: reads.now(), entries }
+    return {
+      entries,
+      ...(errors.length ? { error: errors.join(' ') } : {}),
+      ...(fromSkills.reauth || fromPlugins.reauth ? { reauth: true } : {})
     }
-    const entries = answer.entries.map(marketplaceSkillEntry)
-    marketplaceCache = { key, at: reads.now(), entries }
-    return { entries }
   }
 
   async function catalog(profile: string, refresh: boolean): Promise<Part> {
@@ -269,7 +286,7 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
   return {
     id: 'cinna-core',
     label: CORE_SOURCE_TEXT.label,
-    owns: (ref) => ref.source === CATALOG_SOURCE || ref.source === MARKETPLACE_SOURCE,
+    owns: (ref) => ref.source === CATALOG_SOURCE || ref.source === MARKETPLACE_SOURCE || ref.source === PLUGIN_SOURCE,
     invalidate,
     async list(ctx): Promise<ProviderListing> {
       const profile = reads.profile()

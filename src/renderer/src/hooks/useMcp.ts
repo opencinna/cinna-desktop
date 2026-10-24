@@ -39,7 +39,7 @@ export function useMcpProviders() {
 export function useUpsertMcpProvider() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: {
+    mutationFn: async (data: {
       id?: string
       name: string
       transportType: string
@@ -51,7 +51,12 @@ export function useUpsertMcpProvider() {
       authType?: 'oauth' | 'bearer'
       bearerToken?: string
       registryRef?: { source: string; id: string }
-    }) => window.api.mcp.upsert(data),
+    }) => {
+      const result = await window.api.mcp.upsert(data)
+      // A plugin's connector refuses an edit of what the plugin owns, as data.
+      if (!result.success) throw new Error(result.message ?? 'That connector could not be saved.')
+      return result
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })
     }
@@ -61,7 +66,12 @@ export function useUpsertMcpProvider() {
 export function useDeleteMcpProvider() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (providerId: string) => window.api.mcp.delete(providerId),
+    mutationFn: async (providerId: string) => {
+      const result = await window.api.mcp.delete(providerId)
+      // A plugin's connector is refused as data: it goes with its plugin.
+      if (!result.success) throw new Error(result.message ?? 'That connector could not be deleted.')
+      return result
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })
       // The delete cascades to every agent the connector was attached to.

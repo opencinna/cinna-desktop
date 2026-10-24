@@ -477,6 +477,24 @@ export interface EngineAgentInput {
    * quoting the real cache path would otherwise stop the turn for a click.
    */
   skillReadPaths?: string[]
+  /**
+   * Its pinned marketplace plugins' commands (`commands/*.md`), each a slash
+   * command bound to this agent — the config-side counterpart of core's
+   * `get_opencode_plugin_artifacts` command files. Named `<plugin>:<command>`
+   * as Claude names a plugin's commands. The config is one for every agent,
+   * so each is written as `<agent key>/<plugin>:<command>`: two agents
+   * pinning the same plugin each get their own, from their own snapshot, run
+   * by themselves.
+   */
+  commands?: EngineCommandInput[]
+}
+
+/** One slash command for the legacy `command` config key (2.0.27 normalises it to `commands`). */
+export interface EngineCommandInput {
+  name: string
+  /** The command file's body, frontmatter removed: the prompt template (`$ARGUMENTS` placeholders as written). */
+  template: string
+  description: string | null
 }
 
 export interface EngineConfigInput {
@@ -795,6 +813,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
   const skillPaths = [...(input.skillPaths ?? [])]
   /** Every distinct entry policy, by its serialised bytes — see {@link subagentPermission}. */
   const policies = new Map<string, Record<string, unknown>>()
+  /** Slash commands of the agents' plugins, each under its agent's key and bound to that agent. */
+  const commands: Record<string, unknown> = {}
 
   for (const agent of [...input.agents].sort((a, b) => a.agentId.localeCompare(b.agentId))) {
     const providerKey = providerKeys.get(agent.providerId)
@@ -828,6 +848,15 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       permission
     }
     for (const path of agent.skillPaths ?? []) if (!skillPaths.includes(path)) skillPaths.push(path)
+    for (const command of agent.commands ?? []) {
+      const name = `${key}/${command.name}`
+      if (name in commands) continue
+      commands[name] = {
+        template: command.template,
+        ...(command.description ? { description: command.description } : {}),
+        agent: key
+      }
+    }
   }
 
   return {
@@ -837,7 +866,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       agent: agents,
       permission: subagentPermission(policies),
       experimental: { subagent_depth: OPENCODE_SUBAGENT_DEPTH },
-      ...(skillPaths.length ? { skills: { paths: skillPaths } } : {})
+      ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
+      ...(Object.keys(commands).length ? { command: commands } : {})
     },
     env,
     providerKeys,

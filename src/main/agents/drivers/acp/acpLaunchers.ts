@@ -786,6 +786,13 @@ export interface ClaudeLauncherDeps {
    * is an isolated folder too.
    */
   agentSkillsPlugin?(userId: string, agentId: string): string | null
+  /**
+   * A kit agent's pinned marketplace plugins as Claude wrapper plugins
+   * (`agentPluginWrappers.ensureAgentPluginWrappers`): commands, agents and
+   * hooks, never a `.mcp.json` (their servers are Cinna-managed providers).
+   * Asked on the isolated branch only, like {@link agentSkillsPlugin}.
+   */
+  agentAddonPlugins?(userId: string, agentId: string): string[]
 }
 
 const SUBSCRIPTION_LAUNCH: ClaudeLaunchAuth = { mode: 'subscription', fingerprint: 'subscription' }
@@ -913,7 +920,9 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // local plugins load together, proven on 2.1.276 / adapter 0.76.0).
       const agentSkillsPath = native ? null : safely(() => deps.agentSkillsPlugin?.(ctx.userId, ctx.agentId) ?? null, null)
       const artifactsPluginPath = safely(() => deps.artifactsSkillPlugin?.() ?? null, null)
-      const pluginPaths = [pluginPath, artifactsPluginPath, agentSkillsPath].filter((path): path is string => !!path)
+      // The agent's pinned plugins, each its own wrapper, after its skills plugin.
+      const addonPluginPaths = native ? [] : safely(() => deps.agentAddonPlugins?.(ctx.userId, ctx.agentId) ?? [], [] as string[])
+      const pluginPaths = [pluginPath, artifactsPluginPath, agentSkillsPath, ...addonPluginPaths].filter((path): path is string => !!path)
       const plugins = pluginPaths.length > 0
         ? { plugins: pluginPaths.map((path) => ({ type: 'local' as const, path })) }
         : {}

@@ -4,6 +4,7 @@ import { mcpManager } from '../mcp/manager'
 import { McpError } from '../errors'
 import { mcpRowToConfig } from '../mcp/config'
 import { encryptApiKey } from '../security/keystore'
+import { encryptManagedSecrets, managedSecrets, managedSlotStates, missingManagedEnv } from '../mcp/managed'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('MCP')
@@ -27,6 +28,14 @@ export interface McpProviderDto {
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
+  /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, credentials and on/off are editable. */
+  managedBy?: string
+  /**
+   * A managed provider's settings the user fills in, and whether each has a
+   * value — never the value. Its `env` then lists the same names, each `''`
+   * (an empty value sent back keeps what is stored), and not the plugin's own.
+   */
+  envSlots?: Array<{ name: string; hasValue: boolean }>
 }
 
 export interface UpsertMcpInput {
@@ -67,15 +76,112 @@ function toDto(row: McpProviderRow): McpProviderDto {
     command: row.command ?? undefined,
     args: (row.args as string[] | null) ?? undefined,
     url: row.url ?? undefined,
-    env: (row.env as Record<string, string> | null) ?? undefined,
+    env: row.managedBy ? managedEnvView(row) : ((row.env as Record<string, string> | null) ?? undefined),
     enabled: row.enabled,
     createdAt: row.createdAt,
     hasAuth: !!(row.authTokensEncrypted || row.clientInfo || row.bearerTokenEncrypted),
     authType: row.authType ?? 'oauth',
     status: conn?.status ?? 'disconnected',
     tools: conn?.tools ?? [],
-    error: conn?.error
+    error: conn?.error,
+    ...(row.managedBy ? { managedBy: row.managedBy, envSlots: managedSlotStates(row) } : {})
   }
+}
+
+/** A managed provider's env as the renderer sees it: the names the user fills in, no values. */
+function managedEnvView(row: McpProviderRow): Record<string, string> | undefined {
+  const names = row.managedSpec?.slots ?? []
+  return names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : undefined
+}
+
+/** The sentence an edit of a managed provider's own fields is refused with. */
+export const MANAGED_PROVIDER_EDIT_REFUSED =
+  'This connector comes with a plugin. Only its settings values, its sign-in and whether it is on can be changed here.'
+
+/** The sentence a delete of a managed provider is refused with. */
+export const MANAGED_PROVIDER_DELETE_REFUSED =
+  'This connector comes with a plugin. Remove the plugin from its agents, and the connector goes with it.'
+
+const sameArgs = (a: readonly string[] | null | undefined, b: readonly string[] | null | undefined): boolean => {
+  const left = a ?? []
+  const right = b ?? []
+  return left.length === right.length && left.every((arg, at) => arg === right[at])
+}
+
+/**
+ * Refuse an upsert that would change what a plugin owns on its provider:
+ * the name, the transport, the command and its args (compared element by
+ * element, as parsed), the URL and the auth kind. The values of the names the
+ * user fills in, a bearer token and `enabled` are the user's; the plugin's
+ * own env literals are never taken from the input.
+ */
+function assertManagedEdit(existing: McpProviderRow, input: UpsertMcpInput): void {
+  const unchanged =
+    existing.name === input.name &&
+    existing.transportType === input.transportType &&
+    (existing.command ?? null) === (input.command ?? null) &&
+    sameArgs(existing.args as string[] | null, input.args) &&
+    (existing.url ?? null) === (input.url ?? null) &&
+    (input.authType === undefined || input.authType === existing.authType)
+  if (!unchanged) throw new McpError('managed_provider', MANAGED_PROVIDER_EDIT_REFUSED)
+}
+
+/**
+ * The user's values after an edit of a managed provider: a non-empty value
+ * for one of its names replaces the stored one; an empty or absent one keeps
+ * it (the renderer never had it). Other names are not the user's and are
+ * ignored. Null when nothing changed.
+ */
+function editedSecrets(existing: McpProviderRow, env: Record<string, string> | undefined): Buffer | null | undefined {
+  const values = managedSecrets(existing)
+  let changed = false
+  for (const name of existing.managedSpec?.slots ?? []) {
+    const typed = env?.[name]
+    if (typeof typed === 'string' && typed !== '' && typed !== values[name]) {
+      values[name] = typed
+      changed = true
+    }
+  }
+  return changed ? encryptManagedSecrets(values) : undefined
+}
+
+/** A refusal the IPC answers as data (a thrown code does not reach the renderer). */
+export interface McpRefusal {
+  ok: false
+  code: 'managed'
+  message: string
+}
+
+/** The upsert's refusal of a managed provider's edit, as data; anything else is rethrown. */
+export function managedRefusalOf(err: unknown): McpRefusal | null {
+  return err instanceof McpError && err.code === 'managed_provider' ? { ok: false, code: 'managed', message: err.message } : null
+}
+
+/**
+ * An edit of a plugin's provider: only `enabled`, a bearer token and the
+ * values of its names change; command, args, URL, the plugin's env and the
+ * auth kind stay the plugin's. Connected once it has every value it needs.
+ */
+async function upsertManaged(userId: string, existing: McpProviderRow, input: UpsertMcpInput): Promise<{ id: string; row: McpProviderDto }> {
+  assertManagedEdit(existing, input)
+  const secrets = editedSecrets(existing, input.env)
+  const { id, row } = mcpProviderRepo.upsert(userId, {
+    id: existing.id,
+    name: existing.name,
+    transportType: existing.transportType as 'stdio' | 'sse' | 'streamable-http',
+    command: existing.command,
+    args: (existing.args as string[] | null) ?? null,
+    url: existing.url,
+    env: (existing.env as Record<string, string> | null) ?? null,
+    enabled: input.enabled,
+    authType: existing.authType === 'bearer' ? 'bearer' : 'oauth',
+    bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined,
+    ...(secrets !== undefined ? { envSecretEncrypted: secrets } : {})
+  })
+  logger.info('managed mcp updated', { providerId: id, enabled: row.enabled, valuesChanged: secrets !== undefined })
+  if (row.enabled && missingManagedEnv(row).length === 0) await mcpManager.connect(mcpRowToConfig(row))
+  else await mcpManager.disconnect(row.id)
+  return { id, row: toDto(row) }
 }
 
 export const mcpService = {
@@ -89,6 +195,10 @@ export const mcpService = {
   ): Promise<{ id: string; row: McpProviderDto }> {
     assertTransport(input.transportType)
     if (input.authType !== undefined) assertAuthType(input.authType)
+    if (input.id !== undefined) {
+      const existing = mcpProviderRepo.getOwned(userId, input.id)
+      if (existing?.managedBy) return upsertManaged(userId, existing, input)
+    }
 
     const { id, created, row } = mcpProviderRepo.upsert(userId, {
       id: input.id,
@@ -159,9 +269,11 @@ export const mcpService = {
     }
   },
 
-  async delete(userId: string, id: string): Promise<void> {
+  /** Delete a connector. A plugin's (managed) one is refused, as data: it goes with its plugin. */
+  async delete(userId: string, id: string): Promise<{ ok: true } | McpRefusal> {
     const row = mcpProviderRepo.getOwned(userId, id)
     if (!row) throw new McpError('not_found', 'MCP provider not found')
+    if (row.managedBy) return { ok: false, code: 'managed', message: MANAGED_PROVIDER_DELETE_REFUSED }
     await mcpManager.disconnect(id)
     mcpProviderRepo.delete(userId, id)
     // `chat_mcp_providers` is cleaned up by the FK cascade in the schema, but
@@ -170,6 +282,7 @@ export const mcpService = {
     // crash on `chat:set-mcp-providers` with SQLITE_CONSTRAINT_FOREIGNKEY.
     const touchedModes = chatModeRepo.stripMcpProviderId(userId, id)
     logger.info('mcp deleted', { providerId: id, touchedModes })
+    return { ok: true }
   },
 
   async connect(

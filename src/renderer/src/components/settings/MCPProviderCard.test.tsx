@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
+const upsertMutate = vi.hoisted(() => vi.fn())
 vi.mock('../../hooks/useMcp', () => ({
-  useUpsertMcpProvider: () => ({ mutate: vi.fn() }), useDeleteMcpProvider: () => ({ mutate: vi.fn() }),
+  useUpsertMcpProvider: () => ({ mutate: upsertMutate }), useDeleteMcpProvider: () => ({ mutate: vi.fn() }),
   useConnectMcp: () => ({ mutate: vi.fn() }), useDisconnectMcp: () => ({ mutate: vi.fn() })
 }))
 vi.mock('../ui/AnimatedCollapse', () => ({ AnimatedCollapse: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? children : null }))
@@ -36,4 +37,16 @@ it('opens its form from a button that says whether it is open, in Settings too',
   fireEvent.click(header)
   expect(header.getAttribute('aria-expanded')).toBe('true')
   expect(screen.getByRole('combobox')).toBeTruthy()
+})
+
+it('saves a plugin’s connector with its stored args unsplit and its fields read-only; only the values change', () => {
+  const args = ['/Users/me/Library/Application Support/cinna/plugins/carbone/server.mjs', '--port', '0']
+  render(<MCPProviderCard provider={{ id: 'p1', name: 'carbone', transportType: 'stdio', command: 'node', args,
+    env: { API_KEY: '' }, enabled: true, hasAuth: false, authType: 'oauth', status: 'disconnected', tools: [],
+    managedBy: 'plugin:e@s' }} />)
+  fireEvent.click(screen.getByText('carbone'))
+  expect((screen.getByDisplayValue(args.join(' ')) as HTMLInputElement).readOnly).toBe(true)
+  fireEvent.change(screen.getByPlaceholderText('API_KEY=xxx'), { target: { value: 'API_KEY=sk-1' } })
+  fireEvent.click(screen.getByText('Save'))
+  expect(upsertMutate.mock.calls[0][0]).toMatchObject({ id: 'p1', name: 'carbone', command: 'node', args, env: { API_KEY: 'sk-1' } })
 })

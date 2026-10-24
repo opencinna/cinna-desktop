@@ -21,6 +21,7 @@ import { installUserCommandWorkspace, userCommandService } from '../services/use
 import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
 import { marketplaceSkillService } from '../services/marketplaceSkillService'
+import { marketplacePluginService } from '../services/marketplacePluginService'
 import { pinnedSkillAutoFetch } from '../services/pinnedSkillAutoFetch'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
@@ -87,6 +88,7 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   setImmediate(() => {
     catalogSkillService.collectGarbage()
     marketplaceSkillService.collectGarbage()
+    marketplacePluginService.collectGarbage()
   })
   userActivation.onProfileReady(() => { pinnedSkillAutoFetch.retryAllMissing() })
 }

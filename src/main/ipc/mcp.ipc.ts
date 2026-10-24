@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
-import { mcpService } from '../services/mcpService'
+import { managedRefusalOf, mcpService } from '../services/mcpService'
 import { mcpRegistryService } from '../services/mcpRegistryService'
 import { agentMcpService } from '../services/agentMcpService'
 import { ipcErrorShape } from '../errors'
@@ -35,15 +35,24 @@ export function registerMcpHandlers(): void {
       userActivation.requireActivated()
       const { registryRef, ...rest } = data
       const ref = isAddonRef(registryRef) ? { source: registryRef.source, id: registryRef.id } : undefined
-      const { id } = await mcpService.upsert(getSettingsScopeUserId(), { ...rest, ...(ref ? { registryRef: ref } : {}) })
-      return { id, success: true }
+      try {
+        const { id } = await mcpService.upsert(getSettingsScopeUserId(), { ...rest, ...(ref ? { registryRef: ref } : {}) })
+        return { id, success: true }
+      } catch (err) {
+        // A plugin's connector refuses an edit of what the plugin owns: answered as data.
+        const refusal = managedRefusalOf(err)
+        // Only an edit (an id) can be refused, so the answer still names the connector.
+        if (refusal) return { id: rest.id ?? '', ...refusal, success: false as const }
+        throw err
+      }
     }
   )
 
+  // A plugin's connector is refused as data ({ ok: false, code: 'managed', message }): it goes with its plugin.
   ipcHandle('mcp:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
-    await mcpService.delete(getSettingsScopeUserId(), providerId)
-    return { success: true }
+    const result = await mcpService.delete(getSettingsScopeUserId(), providerId)
+    return result.ok ? { ok: true as const, success: true as const } : { ...result, success: false as const }
   })
 
   // mcp:connect returns error inline — settings UI surfaces the message

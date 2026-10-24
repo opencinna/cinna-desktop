@@ -50,6 +50,7 @@ import {
 import { catalogLocalInstalls } from '../catalogLocalInstalls'
 import { catalogSkillService } from '../catalogSkillService'
 import { marketplaceSkillService } from '../marketplaceSkillService'
+import { marketplacePluginService } from '../marketplacePluginService'
 import { beginTeamBehindRead, noteTeamBehind } from '../catalogSkillUpdates'
 import { createLogger } from '../../logger/logger'
 import { AGENTS_SUBDIR, LOCAL_AGENT_CHANGED_CHANNEL, folderAgentId } from '../../../shared/localAgents'
@@ -1206,6 +1207,7 @@ export const sharingService = {
       // The team's version may pin catalog skills this computer does not have yet.
       catalogSkillService.ensurePinnedInBackground(userId, agentId)
       marketplaceSkillService.ensurePinnedInBackground(userId, agentId)
+      marketplacePluginService.ensurePinnedInBackground(userId, agentId)
       return { ...result(action, status), ...setup }
     }
     return result(action, await statusOf(agentId, shared, false))
@@ -1314,6 +1316,7 @@ export const sharingService = {
     reportInstall(shared, status.headSha)
     catalogSkillService.ensurePinnedInBackground(userId, agentId)
     marketplaceSkillService.ensurePinnedInBackground(userId, agentId)
+    marketplacePluginService.ensurePinnedInBackground(userId, agentId)
     return {
       ...result({ done: true, refusal: null, detail: missedDetail(missed) }, status, folderAgentId(copyId)),
       ...setup
@@ -1376,6 +1379,7 @@ export const sharingService = {
     const status = await statusOf(agentId, shared, false)
     catalogSkillService.ensurePinnedInBackground(userId, agentId)
     marketplaceSkillService.ensurePinnedInBackground(userId, agentId)
+    marketplacePluginService.ensurePinnedInBackground(userId, agentId)
     return { ...result(action, status), ...setup, brief }
   },
 
@@ -1814,6 +1818,7 @@ export const sharingService = {
     // Every catalog skill the agent pins, fetched in the background (U7); a refusal is an issue on its row, never a failed Get.
     catalogSkillService.ensurePinnedInBackground(userId, agentId)
     marketplaceSkillService.ensurePinnedInBackground(userId, agentId)
+    marketplacePluginService.ensurePinnedInBackground(userId, agentId)
     return { ...result({ done: true, refusal: null }, status, agentId), ...setup }
   },
 

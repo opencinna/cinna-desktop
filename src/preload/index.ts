@@ -234,6 +234,7 @@ import type {
   AddonRef,
   AddonSearchResult
 } from '../shared/addons/directory'
+import type { PluginActionResult, PluginDisabledInput, PluginStatusResult, RecheckRuntimesResult } from '../shared/addons/plugins'
 import {
   ARTIFACTS_APPROVALS_CHANNEL,
   ARTIFACTS_CHANGED_CHANNEL,
@@ -460,6 +461,10 @@ export interface McpProviderData {
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
+  /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, sign-in and on/off can change. */
+  managedBy?: string
+  /** A managed connector's settings and whether each has a value (never the value); `env` lists the same names as `''`. */
+  envSlots?: Array<{ name: string; hasValue: boolean }>
 }
 
 const api = {
@@ -982,8 +987,9 @@ const api = {
       bearerToken?: string
       /** The MCP registry entry a new connector is made from (written on insert only). */
       registryRef?: { source: string; id: string }
-    }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('mcp:upsert', data),
-    delete: (providerId: string): Promise<{ success: boolean }> =>
+    }): Promise<{ id: string; success: boolean; ok?: false; code?: 'managed'; message?: string }> => ipcRenderer.invoke('mcp:upsert', data),
+    /** A plugin's connector is refused as data: `{ ok: false, code: 'managed', message }`. */
+    delete: (providerId: string): Promise<{ success: boolean; ok?: boolean; code?: 'managed'; message?: string }> =>
       ipcRenderer.invoke('mcp:delete', providerId),
     connect: (
       providerId: string
@@ -2242,7 +2248,16 @@ const api = {
       ipcRenderer.invoke('addons:search', { agentId, query }),
     add: (agentId: string, ref: AddonRef): Promise<AddonActionResult> => ipcRenderer.invoke('addons:add', { agentId, ref }),
     remove: (agentId: string, ref: AddonRef): Promise<AddonActionResult> =>
-      ipcRenderer.invoke('addons:remove', { agentId, ref })
+      ipcRenderer.invoke('addons:remove', { agentId, ref }),
+    /** The agent's pinned marketplace plugins, part by part. */
+    pluginStatus: (agentId: string): Promise<PluginStatusResult> => ipcRenderer.invoke('addons:plugin-status', { agentId }),
+    /** Turn a pinned plugin's skills, connectors or hooks off or on; each key given replaces the pin's. */
+    setPluginDisabled: (agentId: string, name: string, disabled: PluginDisabledInput): Promise<PluginActionResult> =>
+      ipcRenderer.invoke('addons:set-plugin-disabled', { agentId, name, disabled }),
+    updatePlugin: (agentId: string, name: string): Promise<PluginActionResult> =>
+      ipcRenderer.invoke('addons:update-plugin', { agentId, name }),
+    /** Look for Node.js and Docker again (Check again). */
+    recheckRuntimes: (): Promise<RecheckRuntimesResult> => ipcRenderer.invoke('addons:recheck-runtimes')
   },
 
   /**

@@ -112,7 +112,10 @@ import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
 import { ARTIFACTS_SKILL_NAME, artifactsSkillInfo, ensureArtifactsSkillPlugin } from '../../services/artifacts/artifactsSkill'
-import { ensureKitAgentSkillsPlugin, kitAgentPinnedSkillFolders } from '../../services/agentSkillsPlugin'
+import { agentSkillsPluginName, ensureKitAgentSkillsPlugin, kitAgentPinnedSkillFolders } from '../../services/agentSkillsPlugin'
+import { ensureAgentPluginWrappers } from '../../services/agentPluginWrappers'
+import { cachedPlugins } from '../../services/pluginSkills'
+import { addonPolicies } from '../../services/addonDirectory/policy'
 import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
@@ -936,6 +939,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
     artifactsSkillPlugin: () => ensureArtifactsSkillPlugin(),
     agentSkillsPlugin: kitAgentSkillsPlugin,
+    agentAddonPlugins: kitAgentAddonPlugins,
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.
@@ -1027,6 +1031,25 @@ function kitAgentSkillsPlugin(userId: string, agentId: string): string | null {
   if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return null
   const { agentDir } = localAgentService.locate(userId, agentId)
   return ensureKitAgentSkillsPlugin({ id: agentId, path: agentDir })?.dir ?? null
+}
+
+/**
+ * A kit agent's pinned marketplace plugins as Claude wrappers, for the same
+ * sessions {@link kitAgentSkillsPlugin} answers: commands, agents and hooks
+ * (unless turned off on the pin or by the admin's `policy.pluginHooks`).
+ */
+function kitAgentAddonPlugins(userId: string, agentId: string): string[] {
+  if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return []
+  const row = agentRepo.getOwned(userId, agentId)
+  if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return []
+  const agent = localAgentService.get(userId, agentId)
+  if (agent.skills === undefined) return []
+  const plugins = cachedPlugins(agent.manifest)
+  if (plugins.length === 0) return []
+  return ensureAgentPluginWrappers(agentId, plugins, {
+    hooksAllowed: addonPolicies.get(userId).pluginHooks,
+    reserved: [agentSkillsPluginName(agent.slug)]
+  })
 }
 
 /**

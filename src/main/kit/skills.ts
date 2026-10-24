@@ -981,9 +981,9 @@ export function marketplaceSkillRows(
   return rows
 }
 
-/** Whether a skill row reads from a pinned cache (catalog or marketplace) rather than the agent's `skills/`. */
+/** Whether a skill row reads from a pinned cache (catalog, marketplace or a plugin's) rather than the agent's `skills/`. */
 export function isPinnedSkill(skill: Pick<LocalAgentSkill, 'source'>): boolean {
-  return skill.source === 'catalog' || skill.source === 'marketplace'
+  return skill.source === 'catalog' || skill.source === 'marketplace' || skill.source === 'plugin'
 }
 
 /**

@@ -5,6 +5,7 @@ import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { mcpManager } from '../mcp/manager'
 import { mcpRowToConfig } from '../mcp/config'
 import { LocalAgentError, McpError } from '../errors'
+import { managedHeadersOnly, missingManagedEnv } from '../mcp/managed'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('agent-mcp')
@@ -55,10 +56,13 @@ function ownedProvider(ownerId: string, mcpProviderId: string): McpProviderRow {
  */
 function connectsUnattended(row: McpProviderRow): boolean {
   if (!row.enabled) return false
+  // A plugin's server whose settings are not filled in yet would only fail.
+  if (missingManagedEnv(row).length > 0) return false
   const status = mcpManager.getConnection(row.id)?.status
   if (status === 'connected' || status === 'awaiting-auth') return false
   if (row.transportType === 'stdio') return true
-  if (row.authType === 'bearer') return !!row.bearerTokenEncrypted
+  // A plugin's server whose declared headers are its whole auth needs no token of the user's.
+  if (row.authType === 'bearer') return !!row.bearerTokenEncrypted || managedHeadersOnly(row)
   return !!row.authTokensEncrypted
 }
 

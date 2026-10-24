@@ -4,6 +4,8 @@ import type Database from 'better-sqlite3'
 import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
 import { migrateMcpRegistryRef } from './mcp-registry-ref'
+import { migrateMcpManagedBy } from './mcp-managed-by'
+import { migrateMcpManagedEnv } from './mcp-managed-env'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
 import { migrateChatRunResults } from './chat-run-results'
@@ -77,6 +79,10 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateMcp(sqlite)
   // `mcp_providers.registry_ref`: a nullable column on the table just created; no DML.
   migrateMcpRegistryRef(sqlite)
+  // `mcp_providers.managed_by`: a nullable column on the same table; no DML.
+  migrateMcpManagedBy(sqlite)
+  // `mcp_providers.env_secret_enc` + `managed_spec`: nullable columns on the same table; no DML.
+  migrateMcpManagedEnv(sqlite)
   migrateAgents(sqlite)
   // `agent_roots` before anything that reads it. It creates only its own table
   // (no FK, no cross-table DML), so its position here is about keeping it

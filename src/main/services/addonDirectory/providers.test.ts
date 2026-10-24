@@ -1,3 +1,4 @@
+import type { MarketplacePluginEntry } from '../marketplacePluginService'
 import { describe, it, expect, vi } from 'vitest'
 import type { CatalogItem } from '../../../shared/catalogItems'
 import type { MarketplaceSkillEntry } from '../../../shared/marketplaceSkills'
@@ -160,6 +161,7 @@ describe('cinnaCore provider', () => {
       hostOf: () => 'https://cinna.example',
       catalogItems: vi.fn(async () => [catalogItem(), catalogItem({ kind: 'agent', uuid: 'agent-1' })]),
       marketplaceSkills: vi.fn(async () => ({ ok: true as const, entries: [marketEntry()] })),
+      marketplacePlugins: vi.fn(async () => ({ ok: true as const, entries: [] as MarketplacePluginEntry[] })),
       now: () => now,
       advance: (ms: number) => {
         now += ms
@@ -251,6 +253,9 @@ function row(over: Partial<McpProviderRow> = {}): McpProviderRow {
     bearerTokenEncrypted: null,
     createdBySync: false,
     registryRef: null,
+    managedBy: null,
+    envSecretEncrypted: null,
+    managedSpec: null,
     createdAt: new Date(0),
     ...over
   }

@@ -106,6 +106,31 @@ export const pinnedSkillAutoFetch = {
   },
 
   /**
+   * {@link fetchMissing} for a kit agent's pinned marketplace plugins
+   * (`marketplace_plugins[]`): when one is not on this computer and was not
+   * tried yet this session, the plugin service brings every missing one
+   * (and the managed connectors they carry) in the background.
+   */
+  fetchMissingPlugins(agentId: string, manifest: unknown): boolean {
+    try {
+      const record = manifest && typeof manifest === 'object' ? (manifest as Record<string, unknown>) : null
+      const pins = Array.isArray(record?.marketplace_plugins) ? (record.marketplace_plugins as unknown[]) : []
+      if (pins.length === 0 || !hasAccount()) return false
+      const key = `${agentId}|plugins|${JSON.stringify(pins.map((pin) => [(pin as Record<string, unknown>)?.entry_uuid, (pin as Record<string, unknown>)?.archive_sha256]))}`
+      if (tried.has(key)) return false
+      tried.add(key)
+      const userId = getSettingsScopeUserId()
+      void import('./marketplacePluginService')
+        .then(({ marketplacePluginService }) => marketplacePluginService.ensurePinnedInBackground(userId, agentId))
+        .catch((err) => logger.warn('marketplace plugins could not be fetched', { agentId, error: String(err) }))
+      return true
+    } catch (err) {
+      logger.warn('missing pinned plugins could not be checked', { agentId, error: err instanceof Error ? err.message : String(err) })
+      return false
+    }
+  },
+
+  /**
    * {@link fetchMissing} for every kit agent the agents list scans (cached),
    * through {@link retryAllMissing} when a profile becomes ready. Background only.
    */

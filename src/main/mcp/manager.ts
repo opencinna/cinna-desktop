@@ -203,6 +203,8 @@ export class MCPManager {
     this.connections.set(config.id, connection)
     try {
       this.assertCurrent(connection)
+      // A plugin's server whose cached files changed, or that the policy forbids, is never started.
+      if (config.blockedReason) throw new Error(config.blockedReason)
       let transport: AnyTransport
 
       if (config.transportType === 'stdio') {
@@ -374,11 +376,14 @@ export class MCPManager {
 
   /** Static bearer-token auth: no DCR, no browser round-trip — just a header. */
   private bearerAuthHeaders(config: McpProviderConfig): Record<string, string> {
+    const declared = config.headers ?? {}
     if (!config.bearerTokenEncrypted) {
+      // A plugin's server whose declared headers are its whole auth needs no token of the user's.
+      if (Object.keys(declared).length > 0) return { ...declared }
       throw new Error('Bearer token is required for bearer auth')
     }
     const token = decryptApiKey(config.bearerTokenEncrypted)
-    return { Authorization: `Bearer ${token}` }
+    return { ...declared, Authorization: `Bearer ${token}` }
   }
 
   /**

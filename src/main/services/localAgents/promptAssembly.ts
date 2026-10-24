@@ -39,9 +39,8 @@ import {
 import { resolveBareInstructionsFile } from './externalScan'
 import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillService'
 import { artifactsFolderRole, artifactsSkillDeliveryFor, cinnaArtifactsSection, type ArtifactsSkillDelivery } from '../artifacts/artifactsSkill'
-import { agentSkillRows, deliverableSkills } from '../../kit/skills'
-import { catalogSkillCache } from '../catalogSkillCache'
-import { marketplaceSkillCache } from '../marketplaceSkillCache'
+import { deliverableSkills } from '../../kit/skills'
+import { deliveredSkillRows } from '../pluginSkills'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -228,13 +227,17 @@ export function listKnowledgeTopics(agentDir: string): string[] {
  * agent-relative path of an own skill, the absolute path of a cached pinned one.
  */
 function skillsSection(agentDir: string, manifest: CinnaAgentManifest, context: DesktopPromptContext): string | null {
-  const skills = deliverableSkills(agentSkillRows(agentDir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve))
+  const skills = deliverableSkills(deliveredSkillRows(agentDir, manifest))
   if (skills.length === 0) return null
   const kinds = [
     skills.some((skill) => skill.source === 'catalog') ? 'catalog' : null,
     skills.some((skill) => skill.source === 'marketplace') ? 'marketplace' : null
   ].filter((kind): kind is string => kind !== null)
-  const pinned = kinds.length > 0 ? `the ${kinds.join(' and ')} skills this agent pins` : null
+  const pinnedParts = [
+    kinds.length > 0 ? `the ${kinds.join(' and ')} skills this agent pins` : null,
+    skills.some((skill) => skill.source === 'plugin') ? 'the skills of the plugins it pins' : null
+  ].filter((part): part is string => part !== null)
+  const pinned = pinnedParts.length > 0 ? pinnedParts.join(' and ') : null
   if (context.ownSkills === 'skill') {
     return [
       '## Your skills',
