@@ -291,7 +291,7 @@ test('an existing desktop task hands off once and preserves its recipient and no
     expect(fake.state.localSends).toBe(0)
     expect(fake.state.authorized).toBe(true)
     expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
-    expect(await cinna.page.evaluate(() => window.api.chatModes.list())).toEqual([])
+    expect(await cinna.page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
   } finally {
     fake.server.closeAllConnections()
     await new Promise<void>((resolve) => fake.server.close(() => resolve()))

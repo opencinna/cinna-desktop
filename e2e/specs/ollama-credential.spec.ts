@@ -228,7 +228,7 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
     // AI credentials are what the OpenCode runtime runs on, so the picker is
     // there only for it; the machine's default runtime is not the spec's to assume.
     await form.getByLabel('Runtime', { exact: true }).selectOption({ label: 'OpenCode' })
-    const credential = form.getByLabel('AI Credentials')
+    const credential = form.getByLabel('AI credential', { exact: true })
     await expect(credential.locator('option')).toHaveText(['None (use default)', OLLAMA])
 
     await credential.selectOption({ label: OLLAMA })

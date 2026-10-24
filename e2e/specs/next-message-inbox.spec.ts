@@ -133,7 +133,7 @@ async function answer(cinna: CinnaApp, question: string, text: string): Promise<
 
 async function assertNoModel(cinna: CinnaApp): Promise<void> {
   expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
-  expect(await cinna.page.evaluate(() => window.api.chatModes.list())).toEqual([])
+  expect(await cinna.page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
 }
 
 function assertContinuation(fake: FakeAgent, expectedAnswers: string[]): void {

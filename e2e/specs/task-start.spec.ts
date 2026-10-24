@@ -238,7 +238,7 @@ test('a remote task is claimed without execution, then Continue starts its chose
       .toEqual([running.chatId])
     expect(await cinna.page.evaluate(() => window.api.jobs.list())).toEqual([])
     expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
-    expect(await cinna.page.evaluate(() => window.api.chatModes.list())).toEqual([])
+    expect(await cinna.page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
     expect(fake.authorized()).toBe(true)
     expect(fake.requests.some((request) => request.startsWith('GET /api/v1/tasks/?status=active&'))).toBe(true)
   } finally {

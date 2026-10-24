@@ -157,7 +157,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
     // spends AI credentials; which runtime is the default depends on the CLIs
     // this machine has, so the spec picks it, as a user pinning a credential would.
     await form.getByLabel('Runtime', { exact: true }).selectOption({ label: 'OpenCode' })
-    const credential = form.getByLabel('AI Credentials', { exact: true })
+    const credential = form.getByLabel('AI credential', { exact: true })
     // Both credentials are offered: `enabledProviders` is the "may be picked"
     // list, and at this point both may be.
     await expect(credential.locator('option')).toHaveText([
@@ -242,7 +242,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
     // the browser shows the first option, so the mode reads as
     // "None (use default)" — a card that will not admit what it is set to.
     await expect(
-      page.getByLabel('AI Credentials', { exact: true }).locator('option:checked')
+      page.getByLabel('AI credential', { exact: true }).locator('option:checked')
     ).toHaveText(`${KEYED} — inactive`)
   })
 

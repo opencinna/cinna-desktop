@@ -114,7 +114,7 @@ for (const streaming of [true, false]) {
       await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
       expect(fake.requests).toEqual([{ method: streaming ? 'message/stream' : 'message/send', text: PROMPT }])
       expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
-      expect(await cinna.page.evaluate(() => window.api.chatModes.list())).toEqual([])
+      expect(await cinna.page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
     } finally { fake.server.closeAllConnections(); await new Promise<void>((resolve) => fake.server.close(() => resolve())) }
   })
 }

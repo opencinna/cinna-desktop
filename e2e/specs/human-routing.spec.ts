@@ -216,7 +216,7 @@ test('two agents in one chat, routed by the user, with no LLM provider configure
     await test.step('the profile has no LLM provider at all', async () => {
       const page = cinna.page
       expect(await page.evaluate(() => window.api.providers.list())).toEqual([])
-      expect(await page.evaluate(() => window.api.chatModes.list())).toEqual([])
+      expect(await page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
     })
 
     await test.step('picking a second agent moves the badge from Remote to You route', async () => {
@@ -330,7 +330,7 @@ test('two agents in one chat, routed by the user, with no LLM provider configure
       ])
       // Still true after two turns: nothing configured a provider on the way.
       expect(await page.evaluate(() => window.api.providers.list())).toEqual([])
-      expect(await page.evaluate(() => window.api.chatModes.list())).toEqual([])
+      expect(await page.evaluate(() => window.api.chatModes.list().then((modes) => modes.filter((mode) => !mode.builtinEngine)))).toEqual([])
     })
   } finally {
     for (const agent of agents) {
