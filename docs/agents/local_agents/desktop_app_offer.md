@@ -8,7 +8,7 @@ A Mac with **Claude Desktop** or the **ChatGPT** app belongs to someone who alre
 
 - **Detected app** — a vendor bundle found under `/Applications` or `~/Applications` whose `Info.plist` carries the vendor's bundle id. Two are known: Claude Desktop (`Claude.app`, engine `claude`) and ChatGPT (`ChatGPT.app` or `Codex.app`, engine `codex`; the current ChatGPT app ships as `com.openai.codex`). Only the id, the display name and the engine leave main — the bundle path does not
 - **Connect** — the one sequence *Use …* starts in main: **installing** (ensure the [pinned CLI](../../development/runtime_pins/runtime_pins_llm.md)), **checking** (drop the cached login answer and ask the CLI again), **signing-in** (only when not logged in: the engine's own in-app login, the same one the agent panel runs), then **adopt**
-- **Adopt** — make the engine the **Default runtime** (`localAgentsDefaultEngine`) and, when the effective default chat mode names a *different* engine, move the default chat mode onto this one
+- **Adopt** — make the engine the **Default runtime** (`localAgentsDefaultEngine`) and, when the effective default chat mode names a *different* engine, star this engine's [runtime mode](../../chat/chat_modes/chat_modes.md#runtime-modes) as the default chat mode
 - **Dismissal** — a per-install list of app ids the user has waved away, by the X or by connecting
 
 ## User Stories / Flows
@@ -45,7 +45,7 @@ The reason appears in red on the button row — for example *"Set a Claude path 
 - **One connect at a time.** A second press for the same app joins the running connect; a press for the other app while one runs is refused with *"Another app is being set up. Try again when it finishes."* All buttons, the X included, are disabled while a connect runs
 - **Outcomes are data.** `enabled`, `cancelled` or `failed` with a reason, never a thrown error — a thrown error's code does not survive IPC
 - **Adopt writes the same setting the Settings picker writes**, through the same validated write, followed by the same agent re-index. It is the one writer of `localAgentsDefaultEngine` outside Settings → Agents and the first-launch settling pass
-- **Adopt moves the default chat mode only when it has to.** A chat runs on its mode's engine before the Default runtime, so when the effective default names a different engine explicitly, a local, credential-less mode on this engine becomes the default — an existing one if there is one, otherwise a new **"Claude"** (amber) or **"Codex"** (emerald). A default that names no engine, or no default at all, already follows the Default runtime and is left alone
+- **Adopt moves the default chat mode only when it has to.** A chat runs on its mode's engine before the Default runtime, so when the effective default names a different engine explicitly, the engine's **runtime mode** (Claude Agent or Codex) is starred. The app creates those four modes itself, so there is never a new mode to name or colour; a "Claude" or "Codex" mode an earlier version of the offer made is the user's now and is left as it is. A default that names no engine, or no default at all, already follows the Default runtime and is left alone
 - **Dismissal is per install, in `localStorage`**, not `app_settings` — a cosmetic flag has no business widening the settings schema, as with [hints](../../ui/hints/hints.md). It does not sync and is not per profile
 
 ### Known limits
@@ -75,7 +75,7 @@ ChatWorkspace (new-chat screen, not embedded)
 
 - [The Local Engine](engine.md) — the Default runtime this writes, and the first-launch settling pass that usually sets it first
 - [The Claude Engine](claude_engine.md) / [The Codex Engine](codex_engine.md) — the pinned binaries, login probes and in-app logins the connect reuses; Cancel is `local-tools:engine-login-cancel`
-- [Chat Modes](../../chat/chat_modes/chat_modes.md) — adopt may make an existing mode the default or create a "Claude"/"Codex" one
+- [Chat Modes](../../chat/chat_modes/chat_modes.md) — adopt stars the Claude Agent or Codex runtime mode
 - [Onboarding](../../auth/onboarding/onboarding.md) — the offer appears only after first run; onboarding's API-key "Default" mode on `opencode` is why adopt moves the default chat mode
 - [Bare-Mac Tests](../../development/bare_mac/bare_mac.md) — detects both apps in a real `/Applications` with no system dialog
 - Technical reference: [desktop_app_offer_tech.md](desktop_app_offer_tech.md)

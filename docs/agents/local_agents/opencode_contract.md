@@ -963,6 +963,10 @@ are now confirmed against a real credential: an Anthropic second credential as a
 `@ai-sdk/anthropic` entry, and Gemini as a custom `@ai-sdk/openai-compatible` entry here. An
 `openai` custom entry has still never been exercised on the wire against the real provider.
 
+## Workspace chats — 2026-10
+
+A chat mode on the Workspace tool policy runs OpenCode with its native shell, `read` and `write` in the chat's folder. The generated agent entry's `permission` is `'*': 'ask'` first — the last matching rule wins, so a pattern that misses lands on `ask`, never on `allow` — then `read: allow`, `external_directory: ask` and Cinna's `cinna_*` / `execute` allowed. Measured (entries `opencode.policy.workspace-*` in [the generated table](contracts/opencode_interface.md)): a shell command and a `write` ask; a `read` inside the session's folder runs unasked; a `read` outside asks as `external_directory`; and with one process shared by two chats `external_directory` and `read` are judged against each *session's* `session/new` cwd, not the process's. Answers go back as once; OpenCode's saved grants are user-global (§4), so the desktop keeps *Always allow* per chat. The folder is a cwd, not a sandbox.
+
 ## Native-folder handover probe — 2026-09-19
 
 The isolated [reproduction](../../../scripts/probes/handover-folder-opencode.mjs), with

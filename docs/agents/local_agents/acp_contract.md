@@ -635,6 +635,16 @@ That is what the desktop reads, by `rawInput` alone. Under 1.11.0 the same calls
 | Command-line (custom) | `asyncTasks` | Only the Claude adapter's shape of native subagent sessions is routed back |
 | OpenCode | `_meta["opencode/child-session-updates"]` | Not AIR. Without it a child's traffic is flattened onto the root session with no start and no end; with it, `opencode/session/child_update` ([Session Activity (tech)](../session_activity/session_activity_tech.md#opencode-subagents-opencodechildrents)) |
 
+## Workspace chats — the native tools of a chat runtime
+
+A chat mode on the **Workspace** tool policy gives its chat-owned session the engine's own file and shell tools, working in the chat's folder. **The folder is a cwd, not a sandbox**; the protection is each engine's ask, and on Codex a `workspace-write` sandbox that asks only on escalation. The evidence is the `<engine>.policy.workspace-*` entries of the generated tables in [`contracts/`](contracts/); this section keeps the reasoning.
+
+- **Claude** — preset prompt with the instructions appended, `settingSources: ['user']`, native tools offered, `default` mode so Write and Bash ask, cwd honoured; the settings' `model` loses to the re-asserted one.
+- **Codex** — `workspace-write`: an edit inside the chat folder runs unasked, the process folder and another chat's folder are refused by the sandbox, an escalation asks. The sandbox root is the session cwd, not the process cwd (`codex.policy.workspace-cwd`).
+- **Antigravity** — built-ins offered minus `schedule` and `start_subagent`; `run_command` and `write_to_file` ask; the shared home lives under `~workspace-homes` so the chat folder sorts first and becomes the command directory.
+- **OpenCode** — the generated agent entry's `permission` leads with `'*': 'ask'` (last match wins, so a pattern that misses asks, never allows), then `read` allow and `external_directory` ask. The engine judges both against **each session's own folder** even with one shared process (`opencode.policy.workspace-session-scope`). OpenCode's own saved grants are user-global, so the desktop answers once and keeps *Always allow* per chat.
+- **Instructions** never sit in the folder on any engine: `AGENTS.md` and `CLAUDE.md` are removed before every Workspace session and the prompt rides each engine's own channel (Claude `systemPrompt`, Codex developer instructions, Antigravity's opening block, OpenCode's agent entry).
+
 ## 5. Corrections, and what a fake could not have caught
 
 Worth stating plainly, because it generalises past this feature.

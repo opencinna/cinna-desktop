@@ -85,7 +85,7 @@
 - `setup` after **new and load**: `modeId` `yolo` for `auto`, else `default`; `configOptions: [{configId: 'model', value, optional: true}]` when a model resolves. The load re-assertion is required: the contract watched a loaded session come back on the first model offered.
 - `firstPromptPreamble = antigravityPreamble(instructions)` when instructions are non-empty. `acpDriver` prepends it to the first `session/prompt` of a fresh session only, holds the new session in `withheldSession`, and saves it through `primeSession` on the first turn-content update or the prompt's answer. `finish` reports no `contextId` for a session still withheld.
 - `settings(userId, agentId)`: chat-mode runtimes, AI Function profiles, chat conductors and development sessions return their own model with `approval: 'ask'`. A folder agent returns `runtimeService.resolve(...).modelId` (declared model, else the tier's Flash level, else null) and `antigravityApproval ?? 'ask'`, plus `autoApprove: {scriptRoots}` when that is `ask`. `scriptRoots` is `kitAgentPinnedSkillFolders(path, manifest)` (`agentSkillsPlugin.ts`: the cache folders of the kit agent's deliverable catalog and marketplace skills), empty for a bare folder and on any read error. The launcher copies it into the plan as `autoApprove: {folder: ctx.folder.path, scriptRoots}` (`AcpLaunchPlan.autoApprove`) only under `ask`.
-- `home(userId, agentId, folderPath)`: `${folderPath}.agyhome` for a chat-mode or AI Function profile, else `antigravityIsolatedHome`.
+- `home(userId, agentId, folderPath)`: `antigravitySharedHome(folderPath, workspace)` for a chat-mode or AI Function profile — `${folderPath}.agyhome`, or for a Workspace chat `<conductors>/~workspace-homes/<hash>.agyhome` so the chat folder is first in the server's sorted workspace list and becomes the command directory — else `antigravityIsolatedHome`.
 
 ### Chat runtimes and AI Functions
 
@@ -95,6 +95,7 @@
   - The filter takes the server's internal `BuiltinTools` names, not the declared function names. A declared name such as `send_message` is rejected and removes nothing. `start_subagent` removes `define_subagent`, `invoke_subagent`, `manage_subagents` and `send_message`.
   - MCP tools are not governed by this filter.
 - `prepareAiFunctionRuntime` treats Antigravity like Codex: a live chat conductor's process may serve the utility session, the process folder is stable, the instruction files are removed from it, the plan's preamble is the function's own `systemPrompt`, and the session cwd is the plan's own. `aiFunctionRuntimeService` prepends the preamble to every utility prompt.
+- **Workspace policy.** `applyWorkspacePolicy` (`conductorToolPolicy.ts`) drops `enabledTools` and sets `disabledTools` to `ANTIGRAVITY_ISOLATED_DISABLED_TOOLS`; `acpLauncherFor` sets the plan's `sessionCwd` to the chat folder instead of the process folder for a Workspace chat; asks are the server's `default` mode.
 - **The `.agyhome` of a shared process holds every sharing chat's conversations.** `view_file` reads the cwd and the whole home, so a conductor can read them (accepted; see [the product doc](antigravity_engine.md#cinnas-tools-and-the-chat-mode-policy)).
 
 ### Login and auth

@@ -261,6 +261,12 @@ This has a cost worth stating rather than discovering: the user's own skills, `C
 
 The system prompt is that assembled prompt as a plain string, never the SDK's coding-assistant preset — the preset would talk over the folder, which already says what this agent is.
 
+### A Workspace chat is the one non-agent session that loads the user's own setup
+
+The isolated branch above exists because a Cinna *agent* must not be redefined by files the desktop did not write. A chat on the **Workspace** tool policy is not an agent: it is the user's own terminal-style session in a folder of the chat's own. It therefore runs with the `claude_code` preset (the instructions appended), the native tools on, `settingSources: ['user']` and **no** `strictMcpConfig` or `mcpServers` override — the user's `~/.claude` settings, hooks, skills and MCP servers load, with Cinna's own MCP server added beside them. It never reads `project` or `local` sources: the chat folder holds the user's work, and a settings file the model wrote there must not govern the next session. `agents: {}` stays, so no user subagent runs behind Cinna's back.
+
+Two consequences are accepted and stated, not hidden. A user allow list or `defaultMode` in those settings can pre-approve an action Cinna would otherwise ask about, because Cinna sees only the asks the CLI forwards. And the settings' `model` overrides the session's, so the desktop re-asserts the mode's model after every `session/new` and `session/load`. Approval is forced to `ask`. Contract entries: `claude.policy.workspace-native-tools`, `claude.policy.workspace-asks`, `claude.policy.workspace-cwd`.
+
 ### The folder's own subagents are handed over, and the boundary stays the desktop's
 
 **This rule is the isolated branch too.** A native session loads `.claude/agents/` from the settings it keeps enabled — watched, 2026-09-17 — so the launcher does not read them and does not pass the option; handing them over as well would state every definition twice.

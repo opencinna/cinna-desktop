@@ -19,7 +19,7 @@ Business rules: [desktop_app_offer.md](desktop_app_offer.md).
 
 ## Database Schema
 
-None of its own. Adopt writes `app_settings.localAgentsDefaultEngine` and may insert or update a `chat_modes` row; dismissals are in `localStorage`.
+None of its own. Adopt writes `app_settings.localAgentsDefaultEngine` and may update a `chat_modes` row (the engine's runtime mode: its `isDefault`); dismissals are in `localStorage`.
 
 ## IPC Channels
 
@@ -37,7 +37,7 @@ All three call `userActivation.requireActivated()`.
 - `desktopAppsService.ts:desktopAppsService.list()` — memoizes the promise for the process's life
 - `desktopAppConnectService.ts:createDesktopAppConnect(deps)` — one `ConnectEntry` at a time: same app joins `entry.done`, the other app is refused. `run()` sets the phase `installing` → `checking` → `signing-in` (only if the probe did not answer `logged_in`; a probe that throws is logged and treated as not logged in) → adopt. Every step's failure becomes `{ outcome: 'failed', reason }`; a login's non-success reason is `loginFailureLead()`, falling back to *"Sign-in didn't finish."*
 - Production deps: `ensureBinary` → `claudeBinaryService` / `codexBinaryService` `.ensure()`, rethrowing a `ManagedAssetError`'s message or `CLAUDE_NOT_INSTALLED` / `CODEX_NOT_INSTALLED`; `refreshAuth` → `claudeAuthProbe` / `codexAuthProbe` `invalidate()` then `refresh()`; `login` → `engineLogins[engine].start()`
-- `desktopAppConnectService.ts:adoptDesktopEngine(engine)` — `appSettingsService.set('localAgentsDefaultEngine', engine)`, then `localAgentService.rescan()` (a failure is logged; the setting stands, as with `settings:set`). Then `chatModeService.resolveEffectiveDefault()`: return when there is none, it has no engine, or it is already this engine; return when it is `managed` and `prioritizeAccountDefaults` is on. Otherwise reuse the first non-managed mode with this engine and no `providerId` — passed back **whole** to `chatModeService.upsert` with `isDefault: true`, because `update` resets any field it is not given — or create one from `ENGINE_MODE` (`Claude`/amber, `Codex`/emerald)
+- `desktopAppConnectService.ts:adoptDesktopEngine(engine)` — `appSettingsService.set('localAgentsDefaultEngine', engine)`, then `localAgentService.rescan()` (a failure is logged; the setting stands, as with `settings:set`). Then `chatModeService.resolveEffectiveDefault()`: return when there is none, it has no engine, or it is already this engine; return when it is `managed` and `prioritizeAccountDefaults` is on. Otherwise `chatModeService.ensureRuntimeModes` and the runtime mode whose `builtinEngine` is this engine — passed back **whole** to `chatModeService.upsert` with `isDefault: true`, because `update` resets any field it is not given. Nothing is created here any more (the table of mode names and colours is gone); with no such row it logs and returns
 
 ## Renderer Components
 

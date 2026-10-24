@@ -88,7 +88,7 @@ A session with a conductor lease — Cinna's MCP server attached and answering f
 
 Anything else — a custom command, an engine this build does not know, a call whose evidence is missing, a tool the server did not offer, or **a session with no lease at all** — is left to the ordinary path (standing grant, else the block). That includes a chat-owned runtime without a lease: being chat-owned allows nothing by itself. The silent allow is decided per ask and records nothing, so no permission outlives the turn.
 
-A **chat-owned** runtime has a second, earlier gate: an ask that does not name a Cinna tool at all is **rejected** silently, since that runtime may only ever use Cinna's tools. That gate is the older, looser predicate (the adapter's name, or the title when the engine reports none), so an ask it lets through but the adapter evidence or the offered list does not confirm falls through to the ordinary path rather than being allowed.
+A **chat-owned** runtime has a second, earlier gate: an ask that does not name a Cinna tool at all is **rejected** silently, since that runtime may only ever use Cinna's tools. That gate is the older, looser predicate (the adapter's name, or the title when the engine reports none), so an ask it lets through but the adapter evidence or the offered list does not confirm falls through to the ordinary path rather than being allowed. **A chat in the Workspace tool policy is the exception:** its runtime has the engine's own file and shell tools, so this gate is skipped and its native asks take the ordinary path below — standing grant, else the block. See [Workspace chats](#workspace-chats).
 
 ### An agent works freely inside its own folder
 
@@ -275,6 +275,18 @@ Nothing is lost that the agent cannot ask for again, which is what the empty sta
 The receiving kit agent owns **Delegations**; the agent sending the brief owns **Cloud delegations**, because it chooses the content leaving the machine and the work that may cost money. Delegations reads Ask before running / Run automatically, like Handovers; Cloud delegations reads Ask before sending / Send without asking. They are separate from engine approvals: admitting a turn does not authorize every operation inside it. The grant decides and the request can only take it away: `execution: ask` always opens the gate, while `auto` and a request that names no `execution` both follow the grant. A rule that also required the request to say `auto` left a granted agent gating every request written from a template that said `ask`.
 
 Both grants are stored in a desktop-state `.delegations` sidecar under `userData`, for kit and bare agents alike. Only literal `auto` grants permission. A manifest, pulled folder or synced task cannot grant them; removing the agent's local state removes the sidecar. Bare incoming work retains **Handovers** and its git checks.
+
+
+### Workspace chats
+
+A chat whose mode uses the **Workspace** tool policy ([Chat Modes](../../chat/chat_modes/chat_modes.md#workspace-tool-policy)) runs the engine's file and shell tools in a folder of the chat's own. **That folder is a working directory, not a sandbox**: a shell started in it can reach any path the user can, so the protection is the ask, not the folder. The block is the ordinary one, with one difference.
+
+- **"Always allow" is kept for this chat.** The grant is stored with the chat's runtime, keyed by its agent id and chat, in the same store local agents use, and deleted with the chat; it is never user-global and never reaches another chat. The block says "remembered for this chat" (and "Always allow remembers … for this chat only") where an agent's says "agent". The reason it is per chat: a chat runtime is generated, not something the user chose to trust, and a grant that outlived the chat or leaked into the next one would be an approval nobody remembers giving. Every other chat policy keeps nothing: it is asked about Cinna's tools alone, and those are allowed silently.
+- **Every engine is held to asking.** Claude is forced to `ask` whatever the CLI's own default would be; Codex runs `workspace-write`; OpenCode's rule list leads with `'*': 'ask'`, so a pattern that misses asks instead of allowing; Antigravity runs in its asking mode. Cinna's own tools stay silent, as above.
+- **Codex asks less than the others, on purpose.** Its sandbox lets a command or patch *inside* the chat folder run **without an ask**, refuses a write outside it, and asks when the model escalates. A Codex Workspace chat can therefore change its own folder's files with no block in the transcript. It never uses Codex's `agent` approval mode: the reviewer that mode runs would approve on the user's behalf.
+- **A user's own settings can pre-approve.** A Claude Workspace chat loads the user's `~/.claude`; an allow list or default mode there can approve an action Cinna would otherwise ask about, because Cinna sees only the asks the CLI forwards. A Codex one loads `~/.codex/config.toml` likewise. A block that never appears may be the user's own rule.
+- **OpenCode saves nothing itself.** Its own saved grants are user-global, so answers go to the engine as once and the desktop keeps the per-chat grant.
+- **Antigravity chats of one user, profile and mode share a process**, so its native tools can read and change other chats' folders; each action asks.
 
 ## What this deliberately does not do
 

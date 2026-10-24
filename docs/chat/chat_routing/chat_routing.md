@@ -39,6 +39,8 @@ Choose who answers the next message from one persisted router. A local runtime c
 - Router changes do not delete `(chat, agent)` sessions, and they release only what changed: each agent that left the chat, plus the old root when another agent now coordinates (its role changed, so it rejoins as a participant with a fresh session and catch-up). Everyone still in the chat keeps their session — in particular a root moved to the attached set by direct → human keeps answering. Release is per `(chat, agent)`, never per role. Releasing every agent on any router change is what once cut a running conductor's tools off when an agent was attached mid-turn ([Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md)).
 - A router change (and Set as Coordinator) is refused while a turn runs — "Interrupt the session before changing who answers." — because the turn holds the root's session and tool endpoint. That includes attaching an agent to a **direct** chat mid-turn, which needs a router change first; attaching to a human or coordinated chat does not, and works mid-turn. A change is also refused while an autonomous task holds the chat.
 - The UI's one-way action does not remove internal routing transitions needed by the runner and chip cleanup.
+- **A chat with no agent is answered by its own runtime, and a runtime mode is one.** The hidden Default-runtime root is bound from the chat's mode: a runtime mode (Claude Agent, Codex, Antigravity, OpenCode — see [Chat Modes](../chat_modes/chat_modes.md#runtime-modes)) binds that engine, attached to no agent the user made. Its chip carries the mode's terminal glyph instead of the generic bot. When its Tools are Workspace, the chat has a folder of its own: the `[+]` Actions menu offers **Open Chat Folder**, attachments are copied into it and listed by path (a coordinating agent's uploads are unaffected), and message **Run** commands are refused, because that runtime is not a local agent with a folder they belong to.
+- **Changing the mode's Tools reaches the chat on its next turn**, not mid-turn: the runtime row is refreshed and its sessions released. The other mode fields stay as the chat captured them.
 - The Local Development builder flow retains its guarded, direct agent binding; it does not inherit a chat mode merely because the global preference changed.
 
 ## Architecture Overview
@@ -48,7 +50,7 @@ Composer selection → shared routing helper → chat update/normalization → m
 ## Integration Points
 
 - [Runtime orchestration](../orchestrated_agents/orchestrated_agents.md) — tool transport, child calls, Inbox and continuity.
-- [Chat modes](../chat_modes/chat_modes.md) — runtime, instructions and no-native-tools policy.
+- [Chat modes](../chat_modes/chat_modes.md) — runtime, instructions and tool policy (Workspace, Connected tools, No tools).
 - [Technical routing reference](chat_routing_tech.md) — state, IPC and caches.
 - [File attachments](../file_attachments/file_attachments.md) — capability-driven storage and prompt conversion.
 - [Autonomous tasks](../../jobs/tasks/autonomous_tasks.md) — runner-owned internal routing and control tools.
