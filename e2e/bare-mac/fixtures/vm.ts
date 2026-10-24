@@ -91,6 +91,15 @@ export interface BareVm {
   pollWindows(): Promise<GuestWindow[]>
   /** Every nag seen so far. */
   nags(): readonly Nag[]
+  /**
+   * Make a server on the host's loopback reachable in the guest at
+   * `127.0.0.1:<guestPort>`, through the test's SSH connection. A loopback
+   * address in the guest is what a host-side fake needs: the guest's NAT
+   * gateway is a local-network address, which macOS may answer with its
+   * Local Network prompt for the app — a dialog of the fixture, not of the
+   * product under test.
+   */
+  reverseForward(hostPort: number, guestPort: number): Promise<void>
 }
 
 function sshBase(controlPath: string): string[] {
@@ -321,7 +330,10 @@ export const test = base.extend<{ vm: BareVm }>({
         },
         sh,
         pollWindows,
-        nags: () => nags
+        nags: () => nags,
+        async reverseForward(hostPort: number, guestPort: number) {
+          await execFileP('ssh', [...opts, '-O', 'forward', '-R', `127.0.0.1:${guestPort}:127.0.0.1:${hostPort}`, target], { env: sshEnv })
+        }
       })
 
       currentStep = 'end of test'

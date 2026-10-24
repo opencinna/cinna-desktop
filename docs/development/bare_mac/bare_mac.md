@@ -35,6 +35,7 @@ Install the packaged app on a Mac with nothing installed — no Command Line Too
 - `codex-agent-session` (~1.6 min) — a Codex folder agent with a dummy API-key `~/.codex/auth.json`, which `codex login status` reads as logged in: the pinned Codex and its adapter are downloaded and spawned in the agent folder, start a session, and the turn ends at the provider refusing the key (OpenAI's `Incorrect API key provided`, or the adapter's `Authentication required`; the text shown is kept as the `refusal` annotation), followed by 30 s idle
 - `opencode-agent-session` (~1.5 min, **billed**, only with `make bare-mac LIVE=1`, which sets `CINNA_E2E_LIVE=1` as the main suite's live specs need) — an OpenCode folder agent on the real `OPENAI_API_KEY` from `.env` (skipped without one), on the main suite's model order: `CINNA_E2E_LIVE_MODEL`, then `gpt-5.6-luna`, then the minis: the pinned OpenCode is downloaded from npm, bootstraps its database, runs one short turn in the agent folder and answers, followed by 30 s idle
 - `finder-mention` — Settings → Features → OS Integration installs the **Mention in Cinna** Quick Action; the installed workflow is run with `automator -i` (a Finder right-click cannot be driven over SSH) on a folder, which reaches the new-chat composer as a chip through the real `open -b`, and on a folder in `~/Documents`, a guarded location where a Files-and-Folders prompt would fail the test. See [Path Mentions](../../chat/path_mentions/path_mentions_tech.md#testing-and-verified-behaviour)
+- `addon-plugins` (~1.2 min) — marketplace plugins from a fake cinna-core on the host (`fixtures/addonCore.ts`, reached through `vm.reverseForward`): the Add picker shows `node-tools` blocked with `Needs Node.js — install it from nodejs.org` and Check again keeps it blocked; `py-tools` (a `uv.lock`) and `py-tools-nolock` (none) add, the managed uv is installed on demand, and each connector reaches connected from Settings → MCP Providers with its tool listed on a Python uv fetched itself. **Marked `test.fail`**: the first server launch raises the Command Line Tools dialog, because the managed uv searches `PATH` for a Python before downloading one and falls through the `tool-shims/python3` stand-in (exit 127) to `/usr/bin/python3`
 - `antigravity-agent-session` (~1.2 min) — an Antigravity folder agent with no Google login: the login is read before any download (the keychain asked by attributes only) and the app shows readiness's sign-in sentence, so no turn fetches the server; the spec then installs the pinned agy-acp-server through `window.api.engine.resolveAntigravity()`, as Settings does, followed by 20 s idle. Sign-in is never pressed
 
 The per-engine specs share `fixtures/agentSession.ts` (agents home, Default runtime, New agent, first message). The whole suite takes about 10 minutes on Apple silicon, plus packaging. The 15-minute test timeout is headroom for a slow download, not an expected duration
@@ -52,7 +53,7 @@ The per-engine specs share `fixtures/agentSession.ts` (agents home, Default runt
 
 - **Main-process stubbing.** Playwright connects over CDP through an SSH tunnel; there is no `electronApp`. A spec can do what a user can, plus `window.api` calls from the page
 - **Claude's and Antigravity's session start.** Without a login no engine child is spawned for them — the launcher refuses on the login check — so their session-start `git` never runs here. Codex and OpenCode do spawn theirs (`codex-agent-session`, `opencode-agent-session`), so their session start in the agent folder is covered
-- **Local development** (`uv`, mutagen, cinna-cli) — it needs a reachable cinna-core, which the guest does not have yet
+- **Local development** (`uv`, mutagen, cinna-cli) — it needs a reachable cinna-core, which the guest does not have yet. A fake core on the host, as `addon-plugins` serves one, covers only the reads it fakes
 
 ## Architecture Overview
 
@@ -76,7 +77,8 @@ make bare-mac -> package-app.sh (or APP=) -> playwright -c e2e/bare-mac/playwrig
 - `e2e/bare-mac/playwright.config.ts` — one worker, no retries, 15-minute test timeout, 1-minute action timeout (a missing control fails in a minute, not at the test timeout)
 - `e2e/bare-mac/fixtures/vm.ts` — the `vm` fixture: clone, install, launch, nag watch, teardown
 - `e2e/bare-mac/fixtures/agentSession.ts` — shared steps of the per-engine agent specs
-- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`, `desktop-apps-offer`, `codex-agent-session`, `opencode-agent-session`, `antigravity-agent-session`, `finder-mention`
+- `e2e/bare-mac/fixtures/addonCore.ts` — a fake cinna-core for the addon specs: the unified addon directory, the plugin batch lookup and real tar.gz archives
+- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`, `desktop-apps-offer`, `codex-agent-session`, `opencode-agent-session`, `antigravity-agent-session`, `finder-mention`, `addon-plugins`
 
 ## Integration Points
 
