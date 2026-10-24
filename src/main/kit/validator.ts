@@ -45,7 +45,9 @@ import {
   MANIFEST_FILE,
   RUN_REFERENCE_PATTERN,
   SLUG_PATTERN,
-  type CinnaAgentManifest
+  type CinnaAgentManifest,
+  type McpServerAuth,
+  type McpServerTransport
 } from '../../shared/kit/manifest'
 import { checkContractCompatibility, compareVersionStrings } from '../../shared/kit/contractVersion'
 import { isWorkComplexity } from '../../shared/modelFamilies'
@@ -907,6 +909,256 @@ function checkMarketplaceSkills(report: Report, manifest: CinnaAgentManifest): v
   })
 }
 
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+/**
+ * `marketplace_plugins[]` (contract 1.17.0) — `kit.py`'s
+ * `_validate_marketplace_plugins`, field by field, each malformed field an
+ * error coded under the field. One pin per marketplace entry and one per
+ * plugin name. A plugin is not a skill, so its name is not checked against the
+ * skill name space (`skills/`, `catalog_skills[]`, `marketplace_skills[]`).
+ */
+function checkMarketplacePlugins(report: Report, manifest: CinnaAgentManifest): void {
+  const pins = manifest.marketplace_plugins
+  if (pins === undefined || pins === null) return
+  if (!Array.isArray(pins)) {
+    report.error('manifest.marketplace_plugins.type', '`marketplace_plugins` must be an array.', MANIFEST_FILE)
+    return
+  }
+  const seenEntries = new Set<string>()
+  const seenNames = new Set<string>()
+  pins.forEach((raw: unknown, index) => {
+    const label = `marketplace_plugins[${index}]`
+    if (!isRecord(raw)) {
+      report.error('manifest.marketplace_plugins.item', `\`${label}\` must be an object.`, MANIFEST_FILE)
+      return
+    }
+    for (const [key, what] of [['entry_uuid', 'marketplace entry'], ['marketplace_uuid', 'marketplace']] as const) {
+      const canonical = canonicalUuid(raw[key])
+      if (canonical === null) {
+        report.error(`manifest.marketplace_plugins.${key}`, `\`${label}.${key}\` must be the ${what}'s UUID.`, MANIFEST_FILE)
+      } else if (key === 'entry_uuid') {
+        if (seenEntries.has(canonical)) {
+          report.error(
+            'manifest.marketplace_plugins.entry_uuid.duplicate',
+            `\`${label}.entry_uuid\` pins the same marketplace plugin twice.`,
+            MANIFEST_FILE
+          )
+        }
+        seenEntries.add(canonical)
+      }
+    }
+    if (typeof raw.marketplace_name !== 'string') {
+      report.error('manifest.marketplace_plugins.marketplace_name', `\`${label}.marketplace_name\` must be a string.`, MANIFEST_FILE)
+    }
+    const name = raw.name
+    if (!isCatalogPinName(name)) {
+      report.error(
+        'manifest.marketplace_plugins.name',
+        `\`${label}.name\` must be the plugin's name: lowercase words joined by single hyphens, at most 64 characters.`,
+        MANIFEST_FILE
+      )
+    } else {
+      if (seenNames.has(name)) {
+        report.error(
+          'manifest.marketplace_plugins.name.duplicate',
+          `\`${label}.name\` pins a second marketplace plugin named \`${name}\`; an agent holds one plugin per name.`,
+          MANIFEST_FILE
+        )
+      }
+      seenNames.add(name)
+    }
+    if (typeof raw.archive_sha256 !== 'string' || !SHA256_HEX_PATTERN.test(raw.archive_sha256)) {
+      report.error(
+        'manifest.marketplace_plugins.archive_sha256',
+        `\`${label}.archive_sha256\` must be 64 lowercase hex characters.`,
+        MANIFEST_FILE
+      )
+    }
+    for (const key of ['commit_hash', 'version'] as const) {
+      const value = raw[key]
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        report.error(`manifest.marketplace_plugins.${key}`, `\`${label}.${key}\` must be a string or null.`, MANIFEST_FILE)
+      }
+    }
+    const disabled = raw.disabled
+    if (disabled === undefined || disabled === null) return
+    if (!isRecord(disabled)) {
+      report.error('manifest.marketplace_plugins.disabled', `\`${label}.disabled\` must be an object.`, MANIFEST_FILE)
+      return
+    }
+    if (Object.hasOwn(disabled, 'hooks') && typeof disabled.hooks !== 'boolean') {
+      report.error('manifest.marketplace_plugins.disabled.hooks', `\`${label}.disabled.hooks\` must be true or false.`, MANIFEST_FILE)
+    }
+    for (const key of ['mcp_servers', 'skills'] as const) {
+      if (Object.hasOwn(disabled, key) && !isStringList(disabled[key])) {
+        report.error(
+          `manifest.marketplace_plugins.disabled.${key}`,
+          `\`${label}.disabled.${key}\` must be an array of names.`,
+          MANIFEST_FILE
+        )
+      }
+    }
+  })
+}
+
+const MCP_TRANSPORTS: readonly McpServerTransport[] = ['stdio', 'http', 'sse']
+const MCP_AUTH_KINDS: readonly McpServerAuth[] = ['none', 'oauth', 'bearer', 'env']
+const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const MCP_SERVER_NAME_MAX_LENGTH = 64
+const ENV_VAR_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * `mcp_servers[]` (contract 1.17.0) — `kit.py`'s `_validate_mcp_servers`,
+ * field by field. An entry says what a server needs, never a secret: an `env`
+ * item that carries a `value` is an error whatever the value (coded
+ * `mcp_servers.env.value`). `url` belongs to http and sse, `command` and
+ * `args` to stdio, and each transport needs its own; an explicit null, and an
+ * empty `args`, are the same as the key being absent.
+ */
+function checkMcpServers(report: Report, manifest: CinnaAgentManifest): void {
+  const servers = manifest.mcp_servers
+  if (servers === undefined || servers === null) return
+  if (!Array.isArray(servers)) {
+    report.error('manifest.mcp_servers.type', '`mcp_servers` must be an array.', MANIFEST_FILE)
+    return
+  }
+  const seenNames = new Set<string>()
+  servers.forEach((raw: unknown, index) => {
+    const label = `mcp_servers[${index}]`
+    if (!isRecord(raw)) {
+      report.error('manifest.mcp_servers.item', `\`${label}\` must be an object.`, MANIFEST_FILE)
+      return
+    }
+    const name = raw.name
+    if (typeof name !== 'string' || name.length > MCP_SERVER_NAME_MAX_LENGTH || !MCP_SERVER_NAME_PATTERN.test(name)) {
+      report.error(
+        'manifest.mcp_servers.name',
+        `\`${label}.name\` must be the server's name: letters, digits, dots, _ and -, starting with a letter or digit, at most ${MCP_SERVER_NAME_MAX_LENGTH} characters.`,
+        MANIFEST_FILE
+      )
+    } else {
+      if (seenNames.has(name)) {
+        report.error(
+          'manifest.mcp_servers.name.duplicate',
+          `\`${label}.name\` is a second MCP server named \`${name}\`; an agent holds one server per name.`,
+          MANIFEST_FILE
+        )
+      }
+      seenNames.add(name)
+    }
+
+    const ref = raw.ref
+    if (ref !== undefined && ref !== null) {
+      if (!isRecord(ref)) {
+        report.error(
+          'manifest.mcp_servers.ref',
+          `\`${label}.ref\` must be an object with a source and an id, or null for a custom server.`,
+          MANIFEST_FILE
+        )
+      } else {
+        for (const key of ['source', 'id'] as const) {
+          const value = ref[key]
+          if (typeof value !== 'string' || value === '') {
+            report.error(`manifest.mcp_servers.ref.${key}`, `\`${label}.ref.${key}\` must be a non-empty string.`, MANIFEST_FILE)
+          }
+        }
+      }
+    }
+
+    const transport = raw.transport
+    if (typeof transport !== 'string' || !(MCP_TRANSPORTS as readonly string[]).includes(transport)) {
+      report.error('manifest.mcp_servers.transport', `\`${label}.transport\` must be one of ${MCP_TRANSPORTS.join(', ')}.`, MANIFEST_FILE)
+    }
+    const { url, command, args } = raw
+    const hasUrl = url !== undefined && url !== null
+    const hasCommand = command !== undefined && command !== null
+    const hasArgs = args !== undefined && args !== null && !(Array.isArray(args) && args.length === 0)
+    if (hasUrl && (typeof url !== 'string' || url === '')) {
+      report.error('manifest.mcp_servers.url.type', `\`${label}.url\` must be a non-empty string or null.`, MANIFEST_FILE)
+    }
+    if (hasCommand && (typeof command !== 'string' || command === '')) {
+      report.error('manifest.mcp_servers.command.type', `\`${label}.command\` must be a non-empty string or null.`, MANIFEST_FILE)
+    }
+    if (hasArgs && !isStringList(args)) {
+      report.error('manifest.mcp_servers.args.type', `\`${label}.args\` must be an array of strings or null.`, MANIFEST_FILE)
+    }
+    if (transport === 'stdio') {
+      if (!hasCommand) {
+        report.error(
+          'manifest.mcp_servers.command.missing',
+          `\`${label}.command\` is required: a stdio server is started locally.`,
+          MANIFEST_FILE
+        )
+      }
+      if (hasUrl) {
+        report.error(
+          'manifest.mcp_servers.url.wrong_transport',
+          `\`${label}.url\` belongs to an http or sse server; a stdio server has a command instead.`,
+          MANIFEST_FILE
+        )
+      }
+    } else if (transport === 'http' || transport === 'sse') {
+      if (!hasUrl) {
+        report.error(
+          'manifest.mcp_servers.url.missing',
+          `\`${label}.url\` is required: an ${transport} server is reached over the network.`,
+          MANIFEST_FILE
+        )
+      }
+      for (const [key, present] of [['command', hasCommand], ['args', hasArgs]] as const) {
+        if (present) {
+          report.error(
+            `manifest.mcp_servers.${key}.wrong_transport`,
+            `\`${label}.${key}\` belongs to a stdio server; an ${transport} server has a url instead.`,
+            MANIFEST_FILE
+          )
+        }
+      }
+    }
+
+    const auth = raw.auth
+    if (auth !== undefined && auth !== null && (typeof auth !== 'string' || !(MCP_AUTH_KINDS as readonly string[]).includes(auth))) {
+      report.error('manifest.mcp_servers.auth', `\`${label}.auth\` must be one of ${MCP_AUTH_KINDS.join(', ')}.`, MANIFEST_FILE)
+    }
+
+    const env = raw.env
+    if (env === undefined || env === null) return
+    if (!Array.isArray(env)) {
+      report.error('manifest.mcp_servers.env.type', `\`${label}.env\` must be an array.`, MANIFEST_FILE)
+      return
+    }
+    const seenEnv = new Set<string>()
+    env.forEach((item: unknown, envIndex) => {
+      const envLabel = `${label}.env[${envIndex}]`
+      if (!isRecord(item)) {
+        report.error('manifest.mcp_servers.env.item', `\`${envLabel}\` must be an object with a name.`, MANIFEST_FILE)
+        return
+      }
+      if (Object.hasOwn(item, 'value')) {
+        report.error(
+          'manifest.mcp_servers.env.value',
+          `\`${envLabel}.value\` must not be written: an MCP server entry names what it needs and never carries a value. Remove it; each user enters the value on their own computer.`,
+          MANIFEST_FILE
+        )
+      }
+      const envName = item.name
+      if (typeof envName !== 'string' || !ENV_VAR_NAME_PATTERN.test(envName)) {
+        report.error('manifest.mcp_servers.env.name', `\`${envLabel}.name\` must be an environment variable name.`, MANIFEST_FILE)
+      } else if (seenEnv.has(envName)) {
+        report.error('manifest.mcp_servers.env.name.duplicate', `\`${envLabel}.name\` names \`${envName}\` twice.`, MANIFEST_FILE)
+      } else {
+        seenEnv.add(envName)
+      }
+      if (Object.hasOwn(item, 'secret') && typeof item.secret !== 'boolean') {
+        report.error('manifest.mcp_servers.env.secret', `\`${envLabel}.secret\` must be true or false.`, MANIFEST_FILE)
+      }
+    })
+  })
+}
+
 /**
  * Validate the manifest object alone — every check that needs no filesystem.
  * Exported so a caller holding a manifest in memory (an editor, a scaffolder)
@@ -977,6 +1229,8 @@ export function validateManifest(
   checkHandovers(report, doc, options.agentDir)
   checkCatalogSkills(report, doc)
   checkMarketplaceSkills(report, doc)
+  checkMarketplacePlugins(report, doc)
+  checkMcpServers(report, doc)
   checkPublications(report, doc, options.agentDir)
 
   return report.toReport()

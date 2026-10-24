@@ -173,6 +173,83 @@ export interface MarketplaceSkillPin {
   [key: string]: unknown
 }
 
+/**
+ * A whole plugin from one of the platform's plugin marketplaces (claude or
+ * codex format), pinned by content (contract 1.17.0). Its files live outside
+ * the agent folder; a host delivers the plugin's skills, MCP servers and hooks
+ * to the engine, less whatever `disabled` turns off. A plugin is not a skill:
+ * its name shares no name space with `skills/` or the skill pins.
+ */
+export interface MarketplacePluginPin {
+  /** The marketplace entry's (plugin's) id on the instance it came from. */
+  entry_uuid: string
+  /** The marketplace's id on the instance it came from. */
+  marketplace_uuid: string
+  /** The marketplace's name when the pin was written, for display only. */
+  marketplace_name: string
+  /** The plugin's name in its marketplace. One pin per name. */
+  name: string
+  archive_sha256: string
+  /** The entry's version label when the pin was written, for display only. */
+  version?: string | null
+  /** The marketplace repository commit the snapshot was taken from, for display only. */
+  commit_hash?: string | null
+  /** Components the user turned off. Absent means everything is on. */
+  disabled?: MarketplacePluginDisabled
+  [key: string]: unknown
+}
+
+export interface MarketplacePluginDisabled {
+  /** true turns off every hook the plugin ships. */
+  hooks?: boolean
+  /** Names of the plugin's MCP servers that are not started. */
+  mcp_servers?: string[]
+  /** Names of the plugin's skills that are not given to the engine. */
+  skills?: string[]
+  [key: string]: unknown
+}
+
+export type McpServerTransport = 'stdio' | 'http' | 'sse'
+export type McpServerAuth = 'none' | 'oauth' | 'bearer' | 'env'
+
+/** The directory entry an `mcp_servers[]` requirement came from. */
+export interface McpServerRef {
+  source: string
+  id: string
+  [key: string]: unknown
+}
+
+/** One environment variable an MCP server needs — the name only, never a value. */
+export interface McpServerEnvName {
+  name: string
+  /** true when the value is a secret a host must store as one. */
+  secret?: boolean
+  [key: string]: unknown
+}
+
+/**
+ * An MCP server the agent needs (contract 1.17.0): a requirement, never a
+ * secret. Values for `auth` and `env` are asked of each user and kept outside
+ * the agent folder. An explicit null on `url`, `command`, `args` or `auth`, and
+ * an empty `args`, mean the same as the key being absent.
+ */
+export interface McpServerRequirement {
+  /** The key the engine knows the server by. One entry per name; may carry dots. */
+  name: string
+  /** The directory entry it came from, or null for a custom server. */
+  ref?: McpServerRef | null
+  transport: McpServerTransport
+  /** http and sse only, kept as written (may carry `${VAR}` placeholders). */
+  url?: string | null
+  /** stdio only. */
+  command?: string | null
+  /** stdio only. */
+  args?: string[] | null
+  auth?: McpServerAuth | null
+  env?: McpServerEnvName[]
+  [key: string]: unknown
+}
+
 /** DEPRECATED predecessor of `publications[]`, still parsed. */
 export interface AgentCloudStamp {
   platform_url?: string | null
@@ -209,6 +286,10 @@ export interface CinnaAgentManifest {
   catalog_skills?: CatalogSkillPin[]
   /** Pinned marketplace skills (contract 1.15.0). */
   marketplace_skills?: MarketplaceSkillPin[]
+  /** Pinned marketplace plugins (contract 1.17.0). */
+  marketplace_plugins?: MarketplacePluginPin[]
+  /** MCP servers the agent needs, by requirement (contract 1.17.0). */
+  mcp_servers?: McpServerRequirement[]
   /** Legacy embedded history; new publishers write the sibling publications.json ledger. */
   publications?: AgentPublication[]
   cloud?: AgentCloudStamp

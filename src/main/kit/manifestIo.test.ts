@@ -18,6 +18,7 @@ vi.mock('../logger/logger', () => ({
 }))
 
 import { KitError } from '../errors'
+import type { CinnaAgentManifest } from '../../shared/kit/manifest'
 import {
   manifestPath,
   readStamp,
@@ -77,6 +78,40 @@ describe('manifestIo', () => {
     const after = readWithStamp(path).manifest
     expect(after.description).toBe('Now it also checks totals.')
     expect(after.future_field).toEqual({ nested: [1, 2, 3] })
+  })
+
+  it('round-trips marketplace_plugins[] and mcp_servers[] untouched, through an edit of another field', () => {
+    const plugins = [
+      {
+        entry_uuid: '7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+        marketplace_uuid: '9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e',
+        marketplace_name: 'Team plugins',
+        name: 'carbone-skill',
+        archive_sha256: 'b'.repeat(64),
+        version: null,
+        disabled: { hooks: true, mcp_servers: ['carbone-render'], skills: [], future: 1 },
+        x_host_note: 'kept'
+      }
+    ]
+    const servers = [
+      { name: 'context7.com', ref: { source: 'core', id: 'context7', extra: true }, transport: 'stdio', command: 'npx', args: [], url: null, auth: null, env: [{ name: 'TOKEN', secret: true, x: 1 }] },
+      { name: 'team_metrics', ref: null, transport: 'sse', url: 'https://${METRICS_HOST}/sse', x_host_note: 'kept' }
+    ]
+    const path = manifestPath(dir)
+    writeManifest(path, { ...MANIFEST, marketplace_plugins: plugins, mcp_servers: servers } as CinnaAgentManifest)
+    const raw = readFileSync(path, 'utf8')
+
+    const { manifest, stamp } = readWithStamp(path)
+    expect(manifest.marketplace_plugins).toEqual(plugins)
+    expect(manifest.mcp_servers).toEqual(servers)
+    writeIfUnchanged(path, manifest, stamp)
+    expect(readFileSync(path, 'utf8')).toBe(raw)
+
+    const again = readWithStamp(path)
+    writeIfUnchanged(path, { ...again.manifest, description: 'Edited.' }, again.stamp)
+    const after = readWithStamp(path).manifest
+    expect(after.marketplace_plugins).toEqual(plugins)
+    expect(after.mcp_servers).toEqual(servers)
   })
 
   it('refuses to write over a file that changed underneath', () => {

@@ -126,7 +126,9 @@ Announce the switch in one short line so the user knows which hat you are wearin
 - **Run the ladder check after every substantive change** (`.cinna-kit/README.md`).
 - **Keep docs in sync with code.** A new script means a new entry in
   `scripts/README.md` in the same change, not later.
-- **One step per script.** Small, composable, parameterised.
+- **One step per script.** Small, composable, parameterised. Each opens with a
+  docstring carrying a `Usage:` line and gives every argument a `help=`
+  (`guides/03-scripts-and-data.md`).
 
 ## 6. When the user says "move it to the cloud"
 
@@ -149,4 +151,4 @@ It compares `.cinna-kit/VERSION` against `https://opencinna.io/api/agent-start/v
 
 ---
 
-Kit version c3c26d2b45a349ea · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html
+Kit version 979f64ba3d9b86a7 · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html

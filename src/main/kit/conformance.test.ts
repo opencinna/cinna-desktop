@@ -18,7 +18,9 @@ import { validateManifest, type ValidationReport } from './validator'
  * **Finding code → field path.** Drop the `manifest.` prefix, then keep the
  * longest run of leading segments that names a field in the bundled schema
  * (object `properties`, through array `items`); what follows is a sub-code
- * (`slug.missing` → `slug`, `runtime.engine.type` → `runtime.engine`). The
+ * (`slug.missing` → `slug`, `runtime.engine.type` → `runtime.engine`). A key
+ * the schema forbids by name (`not: { required: [...] }`, as on
+ * `mcp_servers[].env[].value`) names a field too, and ends the path. The
  * schema is the oracle, so no code is special-cased here — a finding whose code
  * does not name its field is a validator bug, fixed in the validator. Codes
  * outside `manifest.` (`cloud.*`, `contract.*`) name no manifest field and
@@ -30,7 +32,7 @@ const bundle = join(repoRoot, 'resources/cinna-agent-kit')
 const casesDir = join(bundle, 'conformance/manifests')
 const CONTRACT_VERSION = readFileSync(join(bundle, 'CONTRACT_VERSION'), 'utf8').trim()
 
-type SchemaNode = { properties?: Record<string, SchemaNode>; items?: SchemaNode }
+type SchemaNode = { properties?: Record<string, SchemaNode>; items?: SchemaNode; not?: { required?: string[] } }
 const schema = JSON.parse(readFileSync(join(bundle, 'schema/cinna-agent.schema.json'), 'utf8')) as SchemaNode
 
 interface ConformanceCase {
@@ -45,6 +47,11 @@ function fieldPath(code: string): string | null {
   let node: SchemaNode | undefined = schema
   for (const segment of code.slice('manifest.'.length).split('.')) {
     const properties: Record<string, SchemaNode> | undefined = node?.properties ?? node?.items?.properties
+    const forbidden = node?.not?.required ?? node?.items?.not?.required ?? []
+    if (forbidden.includes(segment)) {
+      path.push(segment)
+      break
+    }
     if (!properties || !Object.hasOwn(properties, segment)) break
     path.push(segment)
     node = properties[segment]
@@ -77,6 +84,8 @@ describe('the contract conformance set', () => {
     expect(fieldPath('manifest.runtime.engine')).toBe('runtime.engine')
     expect(fieldPath('manifest.runtime.engine.type')).toBe('runtime.engine')
     expect(fieldPath('manifest.handovers.target_kind.coordinator_target')).toBe('handovers.target_kind')
+    expect(fieldPath('manifest.mcp_servers.env.value')).toBe('mcp_servers.env.value')
+    expect(fieldPath('manifest.mcp_servers.env.name.duplicate')).toBe('mcp_servers.env.name')
     expect(fieldPath('cloud.unroutable')).toBeNull()
   })
 

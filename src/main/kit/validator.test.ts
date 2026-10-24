@@ -945,3 +945,80 @@ describe('skills (contract 1.10.0, kit.py validate parity)', () => {
     expect(codes(report.warnings)).toContain('publications.missing')
   })
 })
+
+describe('marketplace plugins and MCP servers (contract 1.17.0, kit.py validate parity)', () => {
+  const PLUGIN = {
+    entry_uuid: '7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+    marketplace_uuid: '9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e',
+    marketplace_name: 'Team plugins',
+    name: 'pdf-report',
+    archive_sha256: 'a'.repeat(64)
+  }
+
+  it('reports a second plugin pin of the same entry or name, but not one named like a skill', () => {
+    mkdirSync(join(agentDir, 'skills', 'pdf-report'), { recursive: true })
+    writeFileSync(join(agentDir, 'skills', 'pdf-report', 'SKILL.md'), '---\nname: pdf-report\ndescription: Reports.\n---\n')
+    patchManifest(agentDir, (m) => {
+      m.marketplace_plugins = [
+        PLUGIN,
+        { ...PLUGIN, entry_uuid: PLUGIN.entry_uuid.toUpperCase(), name: 'ledger' },
+        { ...PLUGIN, entry_uuid: '2f3e4d5c-6b7a-4980-a1b2-c3d4e5f6a7b8' },
+        { ...PLUGIN, entry_uuid: '3a4b5c6d-7e8f-4a0b-9c1d-2e3f4a5b6c7d', name: 'cinna-tasks', disabled: { hooks: true, skills: [], extra: 1 } }
+      ]
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors).sort()).toEqual([
+      'manifest.marketplace_plugins.entry_uuid.duplicate',
+      'manifest.marketplace_plugins.name.duplicate'
+    ])
+  })
+
+  it('reports a plugin pin that is not an object, and a disabled entry of the wrong type', () => {
+    const check = (pins: unknown): string[] =>
+      codes(validateManifest({ ...readManifest(agentDir), marketplace_plugins: pins }, OPTIONS).errors)
+    expect(check('nope')).toEqual(['manifest.marketplace_plugins.type'])
+    expect(check([7])).toEqual(['manifest.marketplace_plugins.item'])
+    expect(check([{ ...PLUGIN, disabled: null }])).toEqual([])
+    expect(check([{ ...PLUGIN, disabled: { hooks: null } }])).toEqual(['manifest.marketplace_plugins.disabled.hooks'])
+  })
+
+  const server = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    name: 'docs',
+    transport: 'stdio',
+    command: 'npx',
+    ...extra
+  })
+  const check = (servers: unknown): string[] =>
+    codes(validateManifest({ ...readManifest(agentDir), mcp_servers: servers }, OPTIONS).errors).sort()
+
+  it('reports a second server of the same name and an env name given twice', () => {
+    expect(
+      check([
+        server({ env: [{ name: 'TOKEN' }, { name: 'TOKEN', secret: true }] }),
+        server({ transport: 'http', command: null, url: 'https://x.test/mcp' }),
+        server({ name: 'Docs' })
+      ])
+    ).toEqual(['manifest.mcp_servers.env.name.duplicate', 'manifest.mcp_servers.name.duplicate'])
+  })
+
+  it('treats null and an empty args as absent, and matches each transport to its own fields', () => {
+    expect(check([server({ url: null, args: [], auth: null, ref: null })])).toEqual([])
+    expect(check([server({ command: null })])).toEqual(['manifest.mcp_servers.command.missing'])
+    expect(check([server({ command: '', args: [1] })])).toEqual(['manifest.mcp_servers.args.type', 'manifest.mcp_servers.command.type'])
+    expect(check([server({ transport: 'sse', command: null, url: '' })])).toEqual(['manifest.mcp_servers.url.type'])
+    expect(check([server({ transport: 'sse', command: null, args: ['x'], url: 'https://${HOST}/sse' })])).toEqual([
+      'manifest.mcp_servers.args.wrong_transport'
+    ])
+    expect(check([{ name: 'docs', transport: 'websocket', url: 'https://x.test', command: 'npx' }])).toEqual([
+      'manifest.mcp_servers.transport'
+    ])
+  })
+
+  it('refuses an env value of any kind, even null, and a server or env item that is not an object', () => {
+    expect(check([server({ env: [{ name: 'LEVEL', value: null }] })])).toEqual(['manifest.mcp_servers.env.value'])
+    expect(check([server({ env: ['LEVEL'] })])).toEqual(['manifest.mcp_servers.env.item'])
+    expect(check([server({ env: 'LEVEL' })])).toEqual(['manifest.mcp_servers.env.type'])
+    expect(check(['docs'])).toEqual(['manifest.mcp_servers.item'])
+    expect(check({ docs: {} })).toEqual(['manifest.mcp_servers.type'])
+  })
+})
