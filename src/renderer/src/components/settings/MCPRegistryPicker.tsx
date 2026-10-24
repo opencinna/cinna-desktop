@@ -21,6 +21,8 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
   const [query, setQuery] = useState('')
   const upsertMcp = useUpsertMcpProvider()
   const [addingId, setAddingId] = useState<string | null>(null)
+  // A refused add (the admin's policy, a bad entry) stays on the row it was asked from.
+  const [addError, setAddError] = useState<{ id: string; message: string } | null>(null)
 
   const search = useMcpRegistrySearchAll(query)
   const entries: McpRegistryEntry[] = search.data?.entries ?? []
@@ -33,6 +35,7 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
     // Composite id avoids cross-registry collisions in the spinner state when
     // the same server name appears in more than one registry.
     setAddingId(`${entry.registryId}::${entry.id}`)
+    setAddError(null)
     // mcp:upsert with enabled:true triggers the same mcpManager.connect()
     // path the explicit Connect button uses. Closing the picker on success
     // surfaces the freshly-created card (with its live status) right away.
@@ -47,7 +50,16 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
         // The registry entry it is made from: the agent's addon picker then shows it once, as this connector.
         registryRef: mcpRegistryRef(entry.registryId, entry.id)
       }
-    ).then((result) => { onCreated?.(result.id); onClose() }, () => setAddingId(null))
+    ).then(
+      (result) => { onCreated?.(result.id); onClose() },
+      (err: unknown) => {
+        setAddingId(null)
+        setAddError({
+          id: `${entry.registryId}::${entry.id}`,
+          message: err instanceof Error ? err.message : 'That connector could not be added.'
+        })
+      }
+    )
   }
 
   const inputClass =
@@ -121,6 +133,7 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
             adding={
               addingId === `${entry.registryId}::${entry.id}` && upsertMcp.isPending
             }
+            error={addError?.id === `${entry.registryId}::${entry.id}` ? addError.message : null}
           />
         ))}
       </div>
@@ -132,12 +145,14 @@ function RegistryEntryRow({
   entry,
   registry,
   onAdd,
-  adding
+  adding,
+  error
 }: {
   entry: McpRegistryEntry
   registry: McpRegistryInfo | undefined
   onAdd: () => void
   adding: boolean
+  error: string | null
 }): React.JSX.Element {
   const remote = entry.remotes[0]
   const displayName = entry.title?.trim() || entry.name
@@ -200,6 +215,11 @@ function RegistryEntryRow({
               {remote.url}
             </a>
           </div>
+        )}
+        {error && (
+          <p role="alert" className="mt-1 text-[12px] text-[var(--color-danger)]">
+            {error}
+          </p>
         )}
       </div>
       <button
