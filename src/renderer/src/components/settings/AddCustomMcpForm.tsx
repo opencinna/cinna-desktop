@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUpsertMcpProvider } from '../../hooks/useMcp'
+import { unwrapIpcError } from '../../utils/ipcError'
 
 const inputClass =
   'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
@@ -7,8 +8,17 @@ const inputClass =
 type AuthType = 'oauth' | 'bearer'
 
 /** `onCreated` gets the new connector's id once it is saved, before `onClose`. */
-export function AddCustomMcpForm({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }): React.JSX.Element {
-  const [name, setName] = useState('')
+export function AddCustomMcpForm({
+  onClose,
+  onCreated,
+  initialName = ''
+}: {
+  onClose: () => void
+  onCreated?: (id: string) => void
+  /** The name to start with (a manifest connector set up from the Addons tab). */
+  initialName?: string
+}): React.JSX.Element {
+  const [name, setName] = useState(initialName)
   const [url, setUrl] = useState('')
   const [authType, setAuthType] = useState<AuthType>('oauth')
   const [bearerToken, setBearerToken] = useState('')
@@ -109,6 +119,12 @@ export function AddCustomMcpForm({ onClose, onCreated }: { onClose: () => void; 
           {upsertMcp.isPending ? 'Connecting...' : 'Connect'}
         </button>
       </div>
+      {/* A refusal (the admin's policy, …) stays in the form, under its Connect; nothing typed is lost (rule 6). */}
+      {upsertMcp.error && (
+        <p role="alert" className="text-[13px] text-[var(--color-danger)]">
+          {unwrapIpcError(upsertMcp.error, 'That connector could not be saved.')}
+        </p>
+      )}
     </div>
   )
 }

@@ -7,7 +7,7 @@
 
 import { mcpProviderRepo, type McpProviderRow } from '../../db/mcpProviders'
 import { mcpManager } from '../../mcp/manager'
-import { missingManagedEnv } from '../../mcp/managed'
+import { missingEnvOf } from '../../mcp/managed'
 import type { AddonNextStep, AddonRef } from '../../../shared/addons/directory'
 import { LOCAL_SOURCE, type McpSetup } from './directory'
 import type { DirectoryProvider, ProviderEntry } from './types'
@@ -47,8 +47,8 @@ const defaultFacts: LocalMcpFacts = {
 export function setupOf(row: McpProviderRow, status: string, needsUser: boolean): AddonNextStep | null {
   if (row.enabled === false) return 'enable'
   if (status === 'connected') return null
-  // A plugin's server with a setting it needs still empty.
-  if (missingManagedEnv(row).length > 0) return 'env'
+  // A plugin's or a directory server with a setting it needs still empty.
+  if (missingEnvOf(row).length > 0) return 'env'
   if (row.transportType !== 'stdio') {
     if (row.authType === 'bearer' && !row.bearerTokenEncrypted) return 'bearer'
     if (row.authType !== 'bearer' && !row.authTokensEncrypted && (needsUser || status === 'awaiting-auth')) return 'oauth'

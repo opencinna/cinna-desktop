@@ -6,8 +6,14 @@ import { mcpHealth } from './mcpPresentation'
 import { DeleteMcpProviderDialog } from './DeleteMcpProviderDialog'
 import { formatEnvVars, parseEnvVars } from '../../utils/envVars'
 import { AddonRow } from '../agents/local/AddonRow'
+import { EnvSlotFields } from '../agents/local/AddonPickerDetail'
 import { CredentialStatusGlyph } from './CredentialRow'
 import { SettingsBadge, SettingsButton, SettingsIconButton } from './SettingsLayout'
+
+export const MCP_CARD_TEXT = {
+  fromPlugin: (title: string | undefined) => (title ? `From ${title}` : 'From a plugin'),
+  fromPluginTitle: 'A plugin on an agent added it; it goes when the plugin is removed from the agent’s Addons tab'
+} as const
 
 interface MCPProviderCardProps {
   provider: {
@@ -26,6 +32,14 @@ interface MCPProviderCardProps {
     error?: string
     /** A plugin owns it: only its settings values, sign-in and on/off are editable. */
     managedBy?: string
+    /** The owning plugin's title, when main sends it; the badge says "From a plugin" otherwise. */
+    managedByTitle?: string
+    /**
+     * Its settings whose values main keeps to itself (a plugin's connector, or
+     * a local one made from a directory entry), with whether each has one: the
+     * form asks one password field per name instead of KEY=VALUE text.
+     */
+    envSlots?: Array<{ name: string; hasValue: boolean }>
   }
   /**
    * Set where the card lists a connector attached to an agent (its Addons
@@ -46,6 +60,9 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
   const [args, setArgs] = useState((provider.args ?? []).join(' '))
   const [url, setUrl] = useState(provider.url ?? '')
   const [envStr, setEnvStr] = useState(formatEnvVars(provider.env))
+  // Typed values for `envSlots`, never prefilled — empty keeps the stored value.
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({})
+  const slots = provider.envSlots ?? []
   const [authType, setAuthType] = useState(provider.authType === 'bearer' ? 'bearer' : 'oauth')
   // Never prefilled with the stored token — write-only, left blank to keep it.
   const [bearerToken, setBearerToken] = useState('')
@@ -77,6 +94,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
     args !== (provider.args ?? []).join(' ') ||
     url !== (provider.url ?? '') ||
     envStr !== formatEnvVars(provider.env) ||
+    Object.values(slotValues).some((value) => value !== '') ||
     authType !== (provider.authType === 'bearer' ? 'bearer' : 'oauth') ||
     bearerToken.trim() !== ''
 
@@ -84,7 +102,13 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
   const managed = !!provider.managedBy
 
   const handleSave = (): void => {
-    const envObj = parseEnvVars(envStr)
+    // With slots, every name is sent (a name left out is dropped); an empty value keeps the stored one.
+    const envObj =
+      slots.length > 0 ? Object.fromEntries(slots.map((slot) => [slot.name, slotValues[slot.name] ?? ''])) : parseEnvVars(envStr)
+    const saved = (): void => {
+      setBearerToken('')
+      setSlotValues({})
+    }
 
     if (managed) {
       // The stored command and args exactly as they are (never re-split on spaces); only the values change.
@@ -101,7 +125,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
           authType: provider.authType === 'bearer' ? 'bearer' : 'oauth',
           bearerToken: bearerToken.trim() || undefined
         },
-        { onSuccess: () => setBearerToken('') }
+        { onSuccess: saved }
       )
       return
     }
@@ -120,7 +144,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
         authType: transportType !== 'stdio' ? (authType as 'oauth' | 'bearer') : undefined,
         bearerToken: bearerToken.trim() || undefined
       },
-      { onSuccess: () => setBearerToken('') }
+      { onSuccess: saved }
     )
   }
 
@@ -148,11 +172,17 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
   const inputClass =
     'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
+  // This switch is the connector's own, for every agent on this computer (a plugin row's is per agent).
+  const toggleTitle = isDirty
+    ? 'Save or discard your edits first'
+    : provider.enabled
+      ? `Turn off ${provider.name} on this computer`
+      : `Turn on ${provider.name} on this computer`
   const toggle = (
     <button
       onClick={(e) => { e.stopPropagation(); if (!isDirty) handleToggle() }}
       disabled={isDirty}
-      title={isDirty ? 'Save or discard your edits first' : undefined}
+      title={toggleTitle}
       aria-label={provider.enabled ? `Turn off ${provider.name}` : `Turn on ${provider.name}`}
       className={`relative w-9 h-5 shrink-0 rounded-full transition-colors ${
         provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -193,16 +223,23 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
                   <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
                   <input value={args} onChange={(e) => setArgs(e.target.value)} readOnly={managed} placeholder="space separated" className={inputClass} />
                 </div>
-                <div>
-                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
-                  <textarea
-                    value={envStr}
-                    onChange={(e) => setEnvStr(e.target.value)}
-                    rows={2}
-                    placeholder="API_KEY=xxx"
-                    className={`${inputClass} resize-none font-mono`}
-                  />
-                </div>
+                {slots.length > 0 ? (
+                  <div role="group" aria-label={`Settings for ${provider.name}`}>
+                    <p className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Settings</p>
+                    <EnvSlotFields idPrefix={`mcp-card-${provider.id}-env`} slots={slots} values={slotValues} onChange={setSlotValues} />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
+                    <textarea
+                      value={envStr}
+                      onChange={(e) => setEnvStr(e.target.value)}
+                      rows={2}
+                      placeholder="API_KEY=xxx"
+                      className={`${inputClass} resize-none font-mono`}
+                    />
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -381,6 +418,9 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
           className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
         >
           <span className="min-w-0 truncate font-medium text-[14px]">{provider.name}</span>
+          {managed && (
+            <SettingsBadge title={MCP_CARD_TEXT.fromPluginTitle}>{MCP_CARD_TEXT.fromPlugin(provider.managedByTitle)}</SettingsBadge>
+          )}
           {statusGlyph}
         </button>
 
@@ -396,13 +436,16 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
 
         {toggle}
 
-        <button
-          onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true) }}
-          aria-label={`Delete MCP ${provider.name}`}
-          className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
-        >
-          <Trash2 size={12} />
-        </button>
+        {/* A plugin's connector goes with its plugin: it is removed from the agent's Addons tab, not here. */}
+        {!managed && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true) }}
+            aria-label={`Delete MCP ${provider.name}`}
+            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
 
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />

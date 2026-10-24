@@ -231,10 +231,11 @@ import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome
 import type {
   AddonActionResult,
   AddonDirectoryResult,
+  AddonMcpRequirementsResult,
   AddonRef,
   AddonSearchResult
 } from '../shared/addons/directory'
-import type { PluginActionResult, PluginDisabledInput, PluginStatusResult, RecheckRuntimesResult } from '../shared/addons/plugins'
+import type { PluginActionResult, PluginDisabledInput, PluginRevealResult, PluginStatusResult, RecheckRuntimesResult } from '../shared/addons/plugins'
 import {
   ARTIFACTS_APPROVALS_CHANNEL,
   ARTIFACTS_CHANGED_CHANNEL,
@@ -463,7 +464,9 @@ export interface McpProviderData {
   error?: string
   /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, sign-in and on/off can change. */
   managedBy?: string
-  /** A managed connector's settings and whether each has a value (never the value); `env` lists the same names as `''`. */
+  /** The owning plugin’s title (its cached manifest’s display name), for the “From <plugin>” badge. */
+  managedByTitle?: string
+  /** A managed connector’s or a local directory connector’s (`registry_ref`) settings and whether each has a value (never the value); `env` lists the same names as `''`. */
   envSlots?: Array<{ name: string; hasValue: boolean }>
 }
 
@@ -985,9 +988,12 @@ const api = {
       enabled?: boolean
       authType?: 'oauth' | 'bearer'
       bearerToken?: string
-      /** The MCP registry entry a new connector is made from (written on insert only). */
+      /**
+       * The MCP registry entry a new connector is made from (written on insert only).
+       * A new connector with none is the user's own: refused as data (`code: 'policy'`) while the admin forbids them.
+       */
       registryRef?: { source: string; id: string }
-    }): Promise<{ id: string; success: boolean; ok?: false; code?: 'managed'; message?: string }> => ipcRenderer.invoke('mcp:upsert', data),
+    }): Promise<{ id: string; success: boolean; ok?: false; code?: 'managed' | 'policy'; message?: string }> => ipcRenderer.invoke('mcp:upsert', data),
     /** A plugin's connector is refused as data: `{ ok: false, code: 'managed', message }`. */
     delete: (providerId: string): Promise<{ success: boolean; ok?: boolean; code?: 'managed'; message?: string }> =>
       ipcRenderer.invoke('mcp:delete', providerId),
@@ -2256,8 +2262,15 @@ const api = {
       ipcRenderer.invoke('addons:set-plugin-disabled', { agentId, name, disabled }),
     updatePlugin: (agentId: string, name: string): Promise<PluginActionResult> =>
       ipcRenderer.invoke('addons:update-plugin', { agentId, name }),
-    /** Look for Node.js and Docker again (Check again). */
-    recheckRuntimes: (): Promise<RecheckRuntimesResult> => ipcRenderer.invoke('addons:recheck-runtimes')
+    /** Show a pinned plugin's cached folder in the file manager. */
+    revealPlugin: (agentId: string, name: string): Promise<PluginRevealResult> => ipcRenderer.invoke('addons:reveal-plugin', { agentId, name }),
+    /** Look for Node.js and Docker again (Check again), re-reading the login shell's PATH first. */
+    recheckRuntimes: (): Promise<RecheckRuntimesResult> => ipcRenderer.invoke('addons:recheck-runtimes'),
+    /** The kit agent's `mcp_servers[]` requirements, each with where it stands on this computer. */
+    mcpRequirements: (agentId: string): Promise<AddonMcpRequirementsResult> => ipcRenderer.invoke('addons:mcp-requirements', { agentId }),
+    /** Remove the requirement `name` from the kit agent's `mcp_servers[]`; refusals (read-only team agent, not a kit agent) are data. */
+    removeRequirement: (agentId: string, name: string): Promise<AddonActionResult> =>
+      ipcRenderer.invoke('addons:remove-requirement', { agentId, name })
   },
 
   /**

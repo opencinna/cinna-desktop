@@ -32,6 +32,7 @@ export type McpErrorCode =
   | 'registry_unknown'
   | 'registry_unreachable'
   | 'managed_provider'
+  | 'custom_mcp_forbidden'
 
 export type ChatErrorCode =
   | 'not_found'

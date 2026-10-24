@@ -4,9 +4,12 @@ import { AlertTriangle, ArrowLeft, Loader2, Plus, RefreshCw, Search, Terminal, X
 import {
   DEFAULT_ADDON_POLICY,
   addonRefKey,
+  sameAddonRef,
   type AddonKind,
+  type AddonRef,
   type AgentDirectoryEntry
 } from '../../../../../shared/addons/directory'
+import type { AgentEngine } from '../../../../../shared/engine'
 import {
   useAddAddon,
   useAddonAdds,
@@ -121,6 +124,8 @@ export function addFlowOf(run: AddonAddRun | undefined, settledAtOpen: ReadonlyS
   if (result.next && result.mcpProviderId) {
     return { phase: 'setup', next: result.next, mcpProviderId: result.mcpProviderId, ...(result.message ? { message: result.message } : {}) }
   }
+  // A plugin's add names no connector: its status says which of its connectors needs the step.
+  if (result.next) return { phase: 'pluginSetup', next: result.next }
   return { phase: 'ready' }
 }
 
@@ -147,12 +152,22 @@ export function addFlowOf(run: AddonAddRun | undefined, settledAtOpen: ReadonlyS
 export function AddonPicker({
   agent,
   skillBlock = null,
+  initial,
   onClose,
   onAttachCreated
 }: {
-  agent: { id: string; name: string; kit: boolean }
+  /** `engine`: what the agent runs on, which a plugin's "Works with" lists first. */
+  agent: { id: string; name: string; kit: boolean; engine?: AgentEngine | null }
   /** Why no skill can be added to this agent now (a team agent shared to use only), or null. */
   skillBlock?: string | null
+  /**
+   * Open straight at this entry's detail once the directory is read (a
+   * manifest connector that needs setup); when the directory does not list
+   * it, the search starts with `query` instead. `custom`: a manifest
+   * connector no directory lists — the picker opens at Custom connector…,
+   * on the form for its transport, with its name filled in.
+   */
+  initial?: { ref: AddonRef | null; query: string; custom?: { name: string; transport: 'stdio' | 'http' | 'sse' } }
   onClose: () => void
   /** Attach a connector created from Custom connector…; rejects with the reason. */
   onAttachCreated: (mcpProviderId: string) => Promise<void>
@@ -170,7 +185,9 @@ export function AddonPicker({
   const [settledAtOpen] = useState(() => settledAddonAdds(queryClient, agent.id))
   const adds = useAddonAdds(agent.id)
   const [localFlows, setLocalFlows] = useState<Record<string, AddFlow>>({})
-  const [panel, setPanel] = useState<CustomPanel | null>(null)
+  const [panel, setPanel] = useState<CustomPanel | null>(() =>
+    initial?.custom ? (initial.custom.transport === 'stdio' ? 'local' : 'remote') : null
+  )
   const [stepDirty, setStepDirty] = useState(false)
   const [createError, setCreateError] = useState('')
   const add = useAddAddon()
@@ -190,6 +207,28 @@ export function AddonPicker({
   const debounced = useDebounced(query.trim(), REGISTRY_DEBOUNCE_MS)
   const registryOn = policy.externalDirectories && needle.length >= REGISTRY_MIN_QUERY
   const registry = useAddonSearch(registryOn && debounced.length >= REGISTRY_MIN_QUERY ? agent.id : null, debounced)
+
+  // The entry this opening was asked to show, once: found, its detail opens; not listed, the search starts with its name.
+  const initialDone = useRef(!initial || !!initial.custom)
+  useEffect(() => {
+    if (initialDone.current || directory.data === undefined || !initial) return
+    initialDone.current = true
+    const found = initial.ref ? entries.find((entry) => sameAddonRef(entry.ref, initial.ref)) : undefined
+    if (found) setSelected(found)
+    else setQuery(initial.query)
+  }, [directory.data, entries, initial])
+
+  // A custom manifest connector opened its form at once; a policy that turns custom (or local) connectors off sends it to the search instead.
+  const customChecked = useRef(!initial?.custom)
+  useEffect(() => {
+    if (customChecked.current || directory.data === undefined || !initial?.custom) return
+    customChecked.current = true
+    const allowed = directory.data.policy
+    if (!allowed.customMcp || (initial.custom.transport === 'stdio' && !allowed.stdioMcp)) {
+      setPanel(null)
+      setQuery(initial.query)
+    }
+  }, [directory.data, initial])
 
   const keyOf = (entry: AgentDirectoryEntry): string => addonRefKey(entry.ref)
   const listed = useMemo(() => new Set(entries.map((entry) => addonRefKey(entry.ref))), [entries])
@@ -415,7 +454,7 @@ export function AddonPicker({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   aria-label="Search addons"
-                  placeholder="Search skills and connectors…"
+                  placeholder={agent.kit ? 'Search skills, plugins and connectors…' : 'Search connectors…'}
                   className={`${TOOL_INPUT} w-full py-1.5 pl-8 pr-2.5 placeholder:text-[var(--color-text-muted)]`}
                 />
               </div>
@@ -455,8 +494,10 @@ export function AddonPicker({
             <AddonPickerDetail
               key={selectedKey}
               entry={current}
+              agentId={agent.id}
               agentName={agent.name}
               agentKit={agent.kit}
+              agentEngine={agent.engine ?? null}
               {...gated(current)}
               flow={flowOf(selectedKey)}
               holdsInput={holdsInput}
@@ -492,9 +533,9 @@ export function AddonPicker({
                   </div>
                 </div>
               ) : panel === 'remote' ? (
-                <AddCustomMcpForm onClose={() => setPanel(null)} onCreated={created} />
+                <AddCustomMcpForm onClose={() => setPanel(null)} onCreated={created} initialName={initial?.custom?.name} />
               ) : (
-                <AddLocalMcpForm onClose={() => setPanel(null)} onCreated={created} />
+                <AddLocalMcpForm onClose={() => setPanel(null)} onCreated={created} initialName={initial?.custom?.name} />
               )}
             </div>
           )}

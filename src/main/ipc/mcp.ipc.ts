@@ -39,9 +39,9 @@ export function registerMcpHandlers(): void {
         const { id } = await mcpService.upsert(getSettingsScopeUserId(), { ...rest, ...(ref ? { registryRef: ref } : {}) })
         return { id, success: true }
       } catch (err) {
-        // A plugin's connector refuses an edit of what the plugin owns: answered as data.
+        // A plugin’s connector refuses an edit of what the plugin owns, and the policy a new connector of the user’s own: answered as data.
         const refusal = managedRefusalOf(err)
-        // Only an edit (an id) can be refused, so the answer still names the connector.
+        // An edit’s refusal still names the connector; a new one’s id is empty.
         if (refusal) return { id: rest.id ?? '', ...refusal, success: false as const }
         throw err
       }

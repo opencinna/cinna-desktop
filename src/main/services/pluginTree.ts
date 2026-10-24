@@ -44,7 +44,11 @@ export interface PluginTree {
   skills: string[]
   commands: PluginCommand[]
   hasAgents: boolean
+  /** Its agents by name (`agents/*.md`: the frontmatter `name`, else the file's name), sorted. */
+  agents: string[]
   hasHooks: boolean
+  /** The events `hooks/hooks.json` registers a hook for, sorted. */
+  hookEvents: string[]
   mcpServers: PluginMcpServerSpec[]
 }
 
@@ -135,6 +139,39 @@ function serversOf(dir: string, manifest: Json | null): PluginMcpServerSpec[] {
   return Object.entries(map).flatMap(([name, raw]) => mcpServerSpecOf(name, raw) ?? [])
 }
 
+/** The name an agent file gives itself in its frontmatter (`name:`), else its file name without `.md`. */
+function agentNameOf(path: string, file: string): string {
+  try {
+    const raw = readFileSync(path, 'utf8').slice(0, 4096)
+    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)
+    const named = front ? /^name:\s*(.+)$/m.exec(front[1])?.[1]?.trim().replace(/^["']|["']$/g, '') : null
+    if (named) return named.slice(0, 200)
+  } catch {
+    /* the file's name */
+  }
+  return file.slice(0, -3)
+}
+
+/** The events of `hooks/hooks.json` (`{ "hooks": { "<Event>": [...] } }`, or the bare map) with at least one entry. */
+function hookEventsOf(dir: string): string[] {
+  const file = readJson(join(dir, 'hooks', 'hooks.json'))
+  const map = rec(file?.hooks) ?? (file && !('hooks' in file) ? file : null)
+  if (!map) return []
+  return Object.entries(map)
+    .filter(([name, value]) => name.trim() !== '' && Array.isArray(value) && value.length > 0)
+    .map(([name]) => name)
+    .sort()
+}
+
+/**
+ * What a plugin calls itself, read from its cached folder: the manifest's
+ * `displayName`, else its `name`; null when it gives neither.
+ */
+export function pluginTitleOf(dir: string): string | null {
+  const manifest = readManifest(dir)
+  return text(manifest?.displayName) ?? text(manifest?.name)
+}
+
 /** What a cached plugin folder holds. */
 export function readPluginTree(dir: string): PluginTree {
   const manifest = readManifest(dir)
@@ -147,13 +184,18 @@ export function readPluginTree(dir: string): PluginTree {
     .filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name.length > 3)
     .map((entry) => ({ name: entry.name.slice(0, -3), path: join(commandsDir, entry.name) }))
   const agentsDir = join(dir, 'agents')
+  const agents = realDir(agentsDir)
+    ? [...new Set(entries(agentsDir).filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name.length > 3).map((entry) => agentNameOf(join(agentsDir, entry.name), entry.name)))].sort()
+    : []
   return {
     dir,
     manifest: { name: text(manifest?.name), description: text(manifest?.description), version: text(manifest?.version) },
     skills,
     commands,
-    hasAgents: realDir(agentsDir) && entries(agentsDir).some((entry) => entry.isFile() && entry.name.endsWith('.md')),
+    hasAgents: agents.length > 0,
+    agents,
     hasHooks: realFile(join(dir, 'hooks', 'hooks.json')),
+    hookEvents: hookEventsOf(dir),
     mcpServers: serversOf(dir, manifest)
   }
 }

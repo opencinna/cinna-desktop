@@ -4,21 +4,23 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { test, expect } from '../fixtures/app'
+import { test, expect, type CinnaApp } from '../fixtures/app'
 import { linkSandboxAccount } from '../fixtures/jobRemoteService'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL } from '../fixtures/scriptAcpEngine'
 
 /**
  * A marketplace plugin on a kit agent, against a fake cinna-core and the
- * scripted engine: Add pins the plugin's snapshot, unpacks it into the
- * read-only cache and turns its stdio MCP server into a managed connector
- * attached to the agent ("Needs settings filled in" until its token is
- * given); the connector refuses edits to what the plugin owns; the token
- * reaches the server through `${LEDGER_TOKEN}`; a chat with the agent is
- * offered the server's tool through Cinna's `cinna` MCP server and calls it;
- * OpenCode's config carries the plugin's command and skill; Remove takes the
- * pin and the connector away.
+ * scripted engine, driven through the Addons tab: the picker shows the plugin
+ * with what it adds and its runs-code Add; Add pins the plugin's snapshot,
+ * unpacks it into the read-only cache and turns its stdio MCP server into a
+ * managed connector attached to the agent, whose token the picker asks for in
+ * place; the tab draws the plugin as one row with the connector nested inside
+ * it, and a part's switch writes the pin's `disabled`; the connector refuses
+ * edits to what the plugin owns; the token reaches the server through
+ * `${LEDGER_TOKEN}`; a chat with the agent is offered the server's tool
+ * through Cinna's `cinna` MCP server and calls it; OpenCode's config carries
+ * the plugin's command and skill; Remove takes the pin and the connector away.
  *
  * ## What is real and what is not
  *
@@ -33,9 +35,8 @@ import { scriptAcpEngine, SCRIPT_MODEL } from '../fixtures/scriptAcpEngine'
  * ## What it does not prove
  *
  * That a real engine runs the plugin's command or skill, Claude's wrapper
- * plugin, hooks, the managed uv for a Python server (unit-tested in
- * `pluginMcpProviders.test.ts` / `stdioRuntimes.test.ts`), or the renderer's
- * plugin rows, which a later change builds.
+ * plugin, hooks, or the managed uv for a Python server (unit-tested in
+ * `pluginMcpProviders.test.ts` / `stdioRuntimes.test.ts`).
  */
 
 const AGENT = 'Ledger Clerk'
@@ -189,6 +190,16 @@ async function fakeCore(archive: Buffer) {
   }
 }
 
+/** Agents tab → the agent's row → its Settings → Addons. */
+async function openAddons(cinna: CinnaApp): Promise<void> {
+  const page = cinna.page
+  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await page.getByRole('button', { name: AGENT, exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: /^Addons/ }).click()
+}
+
 const agentKey = (agentId: string): string => createHash('sha256').update(agentId).digest('hex').slice(0, 16)
 
 /* ---------------------------------------------------------------- test */
@@ -224,8 +235,21 @@ test('a marketplace plugin’s stdio MCP server reaches the agent’s turn as a 
     })
 
     let providerId = ''
-    await test.step('Add pins the snapshot, caches it, and makes a managed connector that needs its token', async () => {
-      expect(await page.evaluate(({ agentId, ref }) => window.api.addons.add(agentId, ref), { agentId: agent.id, ref })).toEqual({ ok: true, next: 'env' })
+    await test.step('the picker shows the plugin with what it adds, and Add carries the runs-code consent', async () => {
+      await openAddons(cinna)
+      await page.getByRole('button', { name: 'Add', exact: true }).click()
+      const picker = page.getByRole('dialog', { name: `Addons for ${AGENT}` })
+      await picker.getByRole('button', { name: PLUGIN, exact: true }).click()
+      const detail = picker.locator('[data-addon-detail]')
+      await expect(detail.getByText('1 connector: ledger (Node.js)')).toBeVisible()
+      // One line per local engine; which comes first is the agent's engine (unit-tested in AddonPicker.plugins.test.tsx).
+      await expect(detail.locator('[data-addon-works-with] li')).toHaveCount(4)
+      await expect(detail.getByText('Node.js on this computer')).toBeVisible()
+      await detail.getByRole('button', { name: 'Add — runs code on this computer' }).click()
+      // The connector's token, asked in place: one field per name, never showing a stored value.
+      const env = detail.getByLabel('LEDGER_TOKEN', { exact: true })
+      await expect(env).toHaveValue('')
+      await expect(env).toHaveAttribute('type', 'password')
       expect(manifest().marketplace_plugins).toEqual([
         { entry_uuid: core.id, marketplace_uuid: MARKETPLACE.id, marketplace_name: MARKETPLACE.name, name: PLUGIN, archive_sha256: sha256(archive), version: '1.0.0', commit_hash: 'abc123' }
       ])
@@ -239,10 +263,35 @@ test('a marketplace plugin’s stdio MCP server reaches the agent’s turn as a 
       expect(managed[0].args?.[0]).toMatch(/marketplace-plugins\/.+\/ledger-tools\/server\.mjs$/)
       providerId = managed[0].id
       expect(await page.evaluate((agentId) => window.api.localAgents.listMcpProviders(agentId), agent.id)).toEqual([providerId])
+      await env.fill(TOKEN)
+      await detail.getByRole('button', { name: 'Save' }).click()
+      await expect(detail.getByText('Ready in the next chat')).toBeVisible({ timeout: 30_000 })
+      await detail.getByRole('button', { name: 'Done' }).click()
+      await expect(picker).toHaveCount(0)
       const status = await page.evaluate((agentId) => window.api.addons.pluginStatus(agentId), agent.id)
-      expect(status.ok && status.plugins[0].mcpServers).toEqual([
-        { name: SERVER, transport: 'stdio', disabled: false, mcpProviderId: providerId, setup: 'env', missingEnv: ['LEDGER_TOKEN'] }
-      ])
+      expect(status.ok && status.plugins[0].mcpServers).toEqual([{ name: SERVER, transport: 'stdio', disabled: false, mcpProviderId: providerId }])
+    })
+
+    await test.step('the tab draws the plugin as one row, its connector nested in it, and a part’s switch writes disabled', async () => {
+      const row = page.locator(`[data-plugin-row="${PLUGIN}"]`)
+      await expect(row.locator('[data-plugin-summary]')).toHaveText('1 skill · 1 connector · 1 command')
+      // Its copy on this computer can be shown (not clicked here: it would open the file manager).
+      await expect(row.getByRole('button', { name: `Show the files of ${PLUGIN}` })).toBeVisible()
+      // The managed connector is not a top-level row.
+      await expect(page.locator(`[data-mcp-row="${providerId}"]`)).toHaveCount(0)
+      await row.getByRole('button', { expanded: false }).click()
+      const parts = row.locator('[data-plugin-parts]')
+      await expect(parts.getByRole('switch', { name: SERVER, exact: true })).toHaveAttribute('aria-checked', 'true')
+      const skill = parts.getByRole('switch', { name: 'ledger-howto', exact: true })
+      await expect(skill).toHaveAttribute('aria-checked', 'true')
+      await skill.click()
+      await expect(skill).toHaveAttribute('aria-checked', 'false')
+      expect((manifest().marketplace_plugins as { disabled?: unknown }[])[0].disabled).toEqual({ skills: ['ledger-howto'] })
+      await skill.click()
+      await expect(skill).toHaveAttribute('aria-checked', 'true')
+      expect((manifest().marketplace_plugins as { disabled?: unknown }[])[0].disabled).toBeUndefined()
+      // Turning the skill off and on again left the connector attached.
+      expect(await page.evaluate((agentId) => window.api.localAgents.listMcpProviders(agentId), agent.id)).toEqual([providerId])
     })
 
     await test.step('only the token is the user’s to change', async () => {
@@ -253,9 +302,8 @@ test('a marketplace plugin’s stdio MCP server reaches the agent’s turn as a 
       expect(refused).toMatchObject({ success: false, ok: false, code: 'managed' })
       expect(refused.message).toContain('comes with a plugin')
       expect(await page.evaluate((id) => window.api.mcp.delete(id), providerId)).toMatchObject({ success: false, ok: false, code: 'managed' })
-      expect(await page.evaluate((input) => window.api.mcp.upsert(input), { ...base, env: { LEDGER_TOKEN: TOKEN }, enabled: true })).toMatchObject({ success: true })
-      const status = await page.evaluate((agentId) => window.api.addons.pluginStatus(agentId), agent.id)
-      expect(status.ok && status.plugins[0].mcpServers[0]).toEqual({ name: SERVER, transport: 'stdio', disabled: false, mcpProviderId: providerId })
+      // An empty value sent back keeps the stored one.
+      expect(await page.evaluate((input) => window.api.mcp.upsert(input), { ...base, env: { LEDGER_TOKEN: '' }, enabled: true })).toMatchObject({ success: true })
       const listed = (await page.evaluate(() => window.api.mcp.list())).find((p) => p.id === providerId)!
       expect(listed.envSlots).toEqual([{ name: 'LEDGER_TOKEN', hasValue: true }])
       expect(JSON.stringify(listed)).not.toContain(TOKEN)

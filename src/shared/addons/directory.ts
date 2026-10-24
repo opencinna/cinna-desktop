@@ -22,8 +22,10 @@ export type AddonKind = 'skill' | 'plugin' | 'mcp'
 /**
  * An entry's stable reference, opaque per source. Sources this build knows:
  * `core-catalog` (id = the catalog package uuid), `core-marketplace` (the
- * marketplace entry uuid), `this-computer` (the local MCP provider id) and
- * `mcp-registry:<registryId>` (the server id in that registry).
+ * marketplace entry uuid), `core-marketplace-plugin` (a marketplace plugin's
+ * entry uuid), `core-mcp-directory` (a server of core's MCP directory),
+ * `this-computer` (the local MCP provider id) and `mcp-registry:<registryId>`
+ * (the server id in that registry).
  */
 export interface AddonRef {
   source: string
@@ -61,8 +63,15 @@ export interface AddonComponents {
   lspServers: string[]
 }
 
-/** How a directory MCP entry connects, enough to create a local provider from it. */
-export interface AddonMcpConnect {
+/** A named value a directory MCP server needs on this computer (its env); never the value itself. */
+export interface AddonMcpEnvName {
+  name: string
+  secret: boolean
+  description: string | null
+}
+
+/** How a directory MCP entry connects over the network, enough to create a local provider from it. */
+export interface AddonMcpRemoteConnect {
   transport: 'streamable-http' | 'sse'
   url: string
   /** `oauth` also covers a server that needs no auth at all (the OAuth-capable transport never meets a 401). */
@@ -70,6 +79,27 @@ export interface AddonMcpConnect {
   /** The registry says the server wants auth headers: a key or a sign-in follows the add. */
   requiresAuth: boolean
 }
+
+/** The package a local (stdio) directory MCP server runs (core's MCP directory). */
+export interface AddonMcpPackage {
+  /** npm → `npx`, pypi → the managed `uvx`, oci → `docker run`. */
+  registry: 'npm' | 'pypi' | 'oci'
+  name: string
+  version: string | null
+  args: string[]
+}
+
+/** A local-process directory MCP server: the package it runs and the values it needs. */
+export interface AddonMcpLocalConnect {
+  transport: 'stdio'
+  package: AddonMcpPackage
+  auth: 'none' | 'env'
+  requiresAuth: boolean
+  env: AddonMcpEnvName[]
+}
+
+/** How a directory MCP entry connects. */
+export type AddonMcpConnect = AddonMcpRemoteConnect | AddonMcpLocalConnect
 
 export type AddonInstall = { archivePath: string } | { mcp: AddonMcpConnect } | null
 
@@ -188,6 +218,28 @@ export type AddonActionResult =
   /** `message`: why the connector is not connected yet (with `next: 'connect'`). */
   | { ok: true; next: AddonNextStep | null; mcpProviderId?: string; message?: string }
   | AddonRefused
+
+/**
+ * One of a kit agent's `mcp_servers[]` requirements as this computer meets it
+ * (`addons:mcp-requirements`): `ready` — its local connector is attached and
+ * needs nothing; `needs_setup` — a connector is still to be made, added or
+ * finished (`entryRef` is what the picker opens for it); `unavailable` — no
+ * source the account may use lists it any more.
+ */
+export interface AddonMcpRequirement {
+  name: string
+  /** The directory entry it was added from; null for a custom connector. */
+  ref: AddonRef | null
+  transport: 'stdio' | 'http' | 'sse'
+  state: 'ready' | 'needs_setup' | 'unavailable'
+  reason: string | null
+  /** The local provider that meets it, when there is one. */
+  mcpProviderId: string | null
+  /** The directory entry to set it up from (a local provider's own ref when one exists); null when there is none. */
+  entryRef: AddonRef | null
+}
+
+export type AddonMcpRequirementsResult = { ok: true; items: AddonMcpRequirement[] } | AddonRefused
 
 /** Same entry, whichever source answered it. */
 export function addonRefKey(ref: AddonRef): string {

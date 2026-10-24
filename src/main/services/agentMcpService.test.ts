@@ -18,6 +18,8 @@ vi.mock('../mcp/manager', () => ({ mcpManager: {
   needsUser: state.needsUser
 } }))
 vi.mock('./conductorBridge', () => ({ conductorBridge: { refreshAgent: state.refreshAgent } }))
+const requirements = vi.hoisted(() => ({ dropRequirementOfProvider: vi.fn(async () => {}) }))
+vi.mock('./addonDirectory/requirements', () => requirements)
 
 const { agentMcpService } = await import('./agentMcpService')
 const { agentRepo } = await import('../db/agents')
@@ -62,6 +64,21 @@ describe('agentMcpService', () => {
     await flush()
     expect(agentMcpService.list(OWNER, 'folder:a')).toEqual([])
     expect(state.refreshAgent).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops the connector’s mcp_servers[] requirement on every detach, after the detach itself', async () => {
+    agentMcpService.attach(OWNER, 'folder:a', 'm1')
+    requirements.dropRequirementOfProvider.mockClear()
+    let attachedThen: string[] | null = null
+    requirements.dropRequirementOfProvider.mockImplementationOnce(async () => {
+      attachedThen = agentMcpService.list(OWNER, 'folder:a')
+    })
+    await agentMcpService.detach(OWNER, 'folder:a', 'm1')
+    expect(requirements.dropRequirementOfProvider).toHaveBeenCalledWith(OWNER, 'folder:a', 'm1')
+    expect(attachedThen).toEqual([])
+    // A failed manifest write never fails the detach.
+    requirements.dropRequirementOfProvider.mockRejectedValueOnce(new Error('disk'))
+    await expect(agentMcpService.detach(OWNER, 'folder:a', 'm1')).resolves.toBeUndefined()
   })
 
   it('refuses an agent or connector outside the owner’s scope', () => {

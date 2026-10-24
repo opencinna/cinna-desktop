@@ -2,7 +2,10 @@
  * The `mcp-registries` directory provider, over `mcpRegistryService`: the
  * Cinna-curated opencinna index as `list()` (small, read whole and cached
  * there), the official registry (thousands of servers) as `search()` only.
- * Gated by `policy.externalDirectories`.
+ * Gated by `policy.externalDirectories`. The opencinna index is not listed
+ * when core's unified index answered: core's MCP directory is seeded from it,
+ * so each of its servers would show twice. A ref of it still resolves
+ * (`find`), and the official registry's search is unchanged.
  */
 
 import { mcpRegistryService } from '../mcpRegistryService'
@@ -88,7 +91,9 @@ export function createMcpRegistriesProvider(reads: RegistryReads = defaultReads)
     label: REGISTRY_SOURCE_TEXT.label,
     gate: 'externalDirectories',
     owns: (ref) => ref.source.startsWith(REGISTRY_SOURCE_PREFIX),
-    async list() {
+    async list(ctx) {
+      // Core's MCP directory is seeded from this index and already answered: one listing, not two.
+      if (ctx.coreMcpDirectory) return { entries: [] }
       return { entries: entriesOf(await reads.search(LISTED_REGISTRY, '', LIST_LIMIT)) }
     },
     async search(_ctx, query) {

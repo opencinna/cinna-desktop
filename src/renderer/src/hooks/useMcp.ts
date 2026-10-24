@@ -53,7 +53,9 @@ export function useUpsertMcpProvider() {
       registryRef?: { source: string; id: string }
     }) => {
       const result = await window.api.mcp.upsert(data)
-      // A plugin's connector refuses an edit of what the plugin owns, as data.
+      // Refusals come as data: a plugin's connector refuses an edit of what the plugin owns
+      // (`managed`), and the admin's policy a new connector of the user's own (`policy`).
+      // Thrown with main's sentence, so the form that asked shows it as its error.
       if (!result.success) throw new Error(result.message ?? 'That connector could not be saved.')
       return result
     },
@@ -240,6 +242,8 @@ function useAgentMcpMutation(
     onSuccess: (_data, { agentId, mcpProviderId }) => {
       queryClient.invalidateQueries({ queryKey: ['agent-mcp', agentId] })
       queryClient.invalidateQueries({ queryKey: ['mcp-agents-using', mcpProviderId] })
+      // The addon directory and a kit agent's manifest connectors (`mcp_servers[]`, which a detach drops) follow the link.
+      queryClient.invalidateQueries({ queryKey: ['addons'] })
     },
     onError: (error, { agentId, mcpProviderId }) => {
       agentAddonLog.error(`${action} failed`, {

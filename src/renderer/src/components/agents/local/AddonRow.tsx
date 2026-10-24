@@ -66,11 +66,12 @@ export function AddonRow({
         {title}
       </span>
       {version && (
-        <span title={version} className="min-w-0 max-w-[10rem] shrink-[2] truncate text-[12px] text-[var(--color-text-muted)]">
+        <span title={version} className="min-w-0 max-w-[10rem] shrink-[6] truncate text-[12px] text-[var(--color-text-muted)]">
           {version}
         </span>
       )}
-      {source}
+      {/* In a narrow row the version and the badge give way first; the title keeps its room. */}
+      {source && <span className="flex min-w-[3rem] shrink-[6] overflow-hidden [&>*]:min-w-0 [&>*]:shrink [&>*]:truncate">{source}</span>}
       {status}
     </>
   )

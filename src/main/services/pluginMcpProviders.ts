@@ -37,6 +37,7 @@ import {
   managedSecrets,
   pluginManagedBy,
   pluginOfManagedBy,
+  pluginWorkDir,
   missingManagedEnv,
   snapshotKeyOfManagedBy,
   type ManagedSpec
@@ -109,7 +110,13 @@ export type ManagedRowSpec = Pick<UpsertInput, 'transportType' | 'command' | 'ar
  * values are its own (literals, and templates such as `${API_KEY}` filled at
  * launch); the user's values live apart, by the slot names this answers.
  */
-export function managedRowSpec(spec: PluginMcpServerSpec, dir: string, uv: Pick<ManagedUvLayout, 'uvBin' | 'uvxBin'>): ManagedRowSpec {
+export function managedRowSpec(
+  spec: PluginMcpServerSpec,
+  dir: string,
+  uv: Pick<ManagedUvLayout, 'uvBin' | 'uvxBin'>,
+  /** This snapshot's writable working copy (`pluginWorkDir`), for a uv project with no lock; null: none. */
+  work: string | null = null
+): ManagedRowSpec {
   const env: Record<string, string> = {}
   const slots = new Set<string>()
   for (const [name, raw] of Object.entries(spec.env)) {
@@ -121,8 +128,16 @@ export function managedRowSpec(spec: PluginMcpServerSpec, dir: string, uv: Pick<
   if (spec.transport === 'stdio') {
     const command = rootFilled(spec.command ?? '', dir)
     const args = spec.args.map((arg) => rootFilled(arg, dir))
-    const run = runtimeOfCommand(command) === 'python' ? throughManagedUv(command, args, uv, dir) : { command, args }
-    return { transportType: 'stdio', command: run.command, args: run.args, url: null, env, managedSpec: { root: dir, slots: [...slots].sort() } }
+    const run = runtimeOfCommand(command) === 'python' ? throughManagedUv(command, args, uv, dir, work) : { command, args }
+    const usesWork = 'usesWork' in run && run.usesWork === true && work !== null
+    return {
+      transportType: 'stdio',
+      command: run.command,
+      args: run.args,
+      url: null,
+      env,
+      managedSpec: { root: dir, slots: [...slots].sort(), ...(usesWork ? { work } : {}) }
+    }
   }
   const headers: Record<string, string> = {}
   let bearer = false
@@ -218,7 +233,7 @@ export function createPluginMcpProviders(deps: PluginMcpDeps) {
             outcomes.push({ entryUuid: plugin.entryUuid, name: spec.name, blocked, missingEnv: [] })
             continue
           }
-          const wanted = managedRowSpec(spec, plugin.dir, deps.uv())
+          const wanted = managedRowSpec(spec, plugin.dir, deps.uv(), pluginWorkDir(managedBy))
           let current = row
           if (!row) {
             current = deps.upsert(userId, {

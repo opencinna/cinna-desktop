@@ -103,6 +103,8 @@ export interface PluginServerStatus {
 
 export interface PluginPinStatus {
   name: string
+  /** What the row calls it: the marketplace's display title, else the pin's name. */
+  title: string
   entryUuid: string
   marketplaceName: string
   version: string | null
@@ -125,15 +127,24 @@ export interface PluginPinStatus {
   skills: PluginSkillStatus[]
   commands: string[]
   hasAgents: boolean
+  /** The plugin's agents by name (`agents/*.md` frontmatter `name`, else the file name), sorted; `[]` when none. */
+  agents: string[]
   /** The plugin ships hooks; {@link hooksDelivered} says whether the engine runs them. */
   hasHooks: boolean
   hooksDisabled: boolean
   hooksDelivered: boolean
   /** Why hooks do not run when they are on (not Claude, admin policy), or absent. */
   hooksReason?: string
+  /** The plugin's hooks are on but the admin's policy (`plugin_hooks`) keeps them from running. */
+  hooksBlockedByPolicy: boolean
+  /** The hook events it registers (`hooks/hooks.json` keys with a non-empty list), sorted; `[]` when none. */
+  hookEvents: string[]
   mcpServers: PluginServerStatus[]
 }
 
 export type PluginStatusResult = { ok: true; plugins: PluginPinStatus[] } | PluginRefused
+
+/** `addons:reveal-plugin`: the pinned plugin's cached folder was shown in the file manager, or why not. */
+export type PluginRevealResult = { ok: true } | PluginRefused
 
 export type RecheckRuntimesResult = { ok: true; node: boolean; docker: boolean }

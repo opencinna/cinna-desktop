@@ -5,6 +5,12 @@ export interface DirectoryContext {
   settingsUserId: string
   /** Re-read what the provider caches (the picker's once-per-opening read). */
   refresh?: boolean
+  /**
+   * Core's own MCP directory is in this read (its unified index answered):
+   * it is seeded from the Cinna-curated registry index, so that index is not
+   * listed a second time. The directory sets it for the gated providers.
+   */
+  coreMcpDirectory?: boolean
 }
 
 /**
@@ -35,6 +41,8 @@ export interface ProviderListing {
   /** `reauth`: the error is an expired session. */
   errorCode?: 'reauth'
   policy?: AddonPolicy
+  /** These entries are core's unified index, its MCP directory among them (`DirectoryContext.coreMcpDirectory`). */
+  mcpDirectory?: boolean
 }
 
 /**

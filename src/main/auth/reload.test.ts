@@ -11,6 +11,11 @@ vi.mock('../llm/factory', () => ({ createAdapter: () => ({}) }))
 vi.mock('../security/keystore', () => ({ decryptApiKey: () => '' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { disconnectAll: state.disconnect, connect: state.connect } }))
 vi.mock('../mcp/config', () => ({ mcpRowToConfig: (value: unknown) => value }))
+const attached = vi.hoisted(() => ({ ids: new Set<string>() }))
+vi.mock('../db/agentMcp', () => ({ agentMcpRepo: { agentIdsFor: (id: string) => (attached.ids.has(id) ? ['agent'] : []) } }))
+vi.mock('../mcp/managed', () => ({
+  missingEnvOf: (row: { env?: Record<string, string> }) => Object.entries(row.env ?? {}).filter(([, value]) => value === '').map(([name]) => name)
+}))
 vi.mock('./scope', () => ({ getSettingsScopeUserId: () => 'settings', getProfileScopeUserId: () => state.profile, DEFAULT_SCOPE_USER_ID: 'settings' }))
 vi.mock('../services/accountConfigService', () => ({ accountConfigService: { loadManagedAdapters: state.managed } }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ error() {} }) }))
@@ -43,4 +48,18 @@ it('starts a plugin’s connector only when it can run unattended (an agent has 
   await vi.waitFor(() => expect(starts).toHaveBeenCalledTimes(2))
   await new Promise((done) => setTimeout(done, 0))
   expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['mcp', 'ready'])
+})
+it('starts a connector made from a directory entry only once an agent has it and its settings are filled in', async () => {
+  const ref = { source: 'core-mcp-directory', id: 'x' }
+  mcpRows.rows = [
+    { id: 'mcp', enabled: true },
+    { id: 'dir-ready', enabled: true, registryRef: ref, env: { TOKEN: '' } },
+    { id: 'dir-empty', enabled: true, registryRef: ref, env: { TOKEN: '' } },
+    { id: 'dir-unused', enabled: true, registryRef: ref }
+  ]
+  attached.ids = new Set(['dir-ready', 'dir-empty'])
+  // `dir-ready`'s value is stored (the mock reads `''` as missing): give it one.
+  ;(mcpRows.rows[1] as { env: Record<string, string> }).env = { TOKEN: 'set' }
+  await reloadUserProviders(() => true)
+  expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['dir-ready', 'mcp'])
 })

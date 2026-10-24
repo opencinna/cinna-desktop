@@ -2,7 +2,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createStdioRuntimes, runtimeOfCommand, STDIO_RUNTIME_TEXT, throughManagedUv } from './stdioRuntimes'
+const shell = vi.hoisted(() => ({ which: vi.fn(async (_bin: string): Promise<string | null> => null), resetShellEnv: vi.fn(), clearToolCache: vi.fn() }))
+vi.mock('../shell/env', async (importOriginal) => ({ ...(await importOriginal<typeof import('../shell/env')>()), ...shell }))
+
+import { createStdioRuntimes, runtimeOfCommand, STDIO_RUNTIME_TEXT, stdioRuntimes, throughManagedUv } from './stdioRuntimes'
+
+describe('stdioRuntimes as the app runs it', () => {
+  it('reads the login shell’s PATH again on Check again, so a Node installed into a new PATH entry is found', async () => {
+    shell.which.mockImplementation(async () => null)
+    expect(await stdioRuntimes.available('node')).toBe(false)
+    shell.which.mockImplementation(async (bin: string) => (bin === 'node' ? '/new/bin/node' : null))
+    expect(await stdioRuntimes.recheck()).toEqual({ node: true, docker: false })
+    expect(shell.resetShellEnv).toHaveBeenCalledTimes(1)
+    stdioRuntimes._reset()
+  })
+})
 
 /**
  * A plugin's local servers on this computer: Python through the managed uv
@@ -47,6 +61,36 @@ describe('stdioRuntimes', () => {
       expect(throughManagedUv('uv', ['run', '--locked', '--directory', dir, 'x'], UV, root).args).toEqual(['run', '--locked', '--directory', dir, 'x'])
       // No uv.lock at the root itself: nothing to freeze.
       expect(throughManagedUv('uv', ['run', 'x'], UV, root).args).toEqual(['run', 'x'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('points a `uv run` of an unlocked project in the cache, and a `uvx --from` of a cached folder, at the working copy', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cinna-uv-unlocked-'))
+    const work = join(tmpdir(), 'cinna-work-copy', 'e', 's')
+    try {
+      mkdirSync(join(root, 'server'))
+      writeFileSync(join(root, 'server', 'pyproject.toml'), '[project]\nname = "srv"\n')
+      const dir = join(root, 'server')
+      expect(throughManagedUv('uv', ['run', '--directory', dir, 'srv'], UV, root, work)).toEqual({
+        command: UV.uvBin,
+        args: ['run', '--directory', join(work, 'server'), 'srv'],
+        usesWork: true
+      })
+      expect(throughManagedUv('uv', ['run', `--project=${dir}`, 'srv'], UV, root, work).args).toEqual(['run', `--project=${join(work, 'server')}`, 'srv'])
+      // Relative to the plugin root.
+      expect(throughManagedUv('uv', ['run', '--directory', 'server', 'srv'], UV, root, work).args).toEqual(['run', '--directory', join(work, 'server'), 'srv'])
+      expect(throughManagedUv('uvx', ['--from', root, 'srv'], UV, root, work)).toEqual({ command: UV.uvxBin, args: ['--from', work, 'srv'], usesWork: true })
+      expect(throughManagedUv('uvx', [`--from=${dir}`, 'srv'], UV, root, work).args).toEqual([`--from=${join(work, 'server')}`, 'srv'])
+      // A package from an index, a project outside the cache, an explicit --no-project, or no working copy: as written.
+      expect(throughManagedUv('uvx', ['--from', 'carbone-mcp==1.0', 'srv'], UV, root, work)).toEqual({ command: UV.uvxBin, args: ['--from', 'carbone-mcp==1.0', 'srv'] })
+      expect(throughManagedUv('uv', ['run', '--directory', '/elsewhere', 'srv'], UV, root, work).args).toEqual(['run', '--directory', '/elsewhere', 'srv'])
+      expect(throughManagedUv('uv', ['run', '--no-project', '--directory', dir, 'x'], UV, root, work).args).toEqual(['run', '--no-project', '--directory', dir, 'x'])
+      expect(throughManagedUv('uv', ['run', '--directory', dir, 'srv'], UV, root)).toEqual({ command: UV.uvBin, args: ['run', '--directory', dir, 'srv'] })
+      // A locked project stays in the cache, frozen.
+      writeFileSync(join(root, 'server', 'uv.lock'), 'version = 1\n')
+      expect(throughManagedUv('uv', ['run', '--directory', dir, 'srv'], UV, root, work).args).toEqual(['run', '--frozen', '--directory', dir, 'srv'])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

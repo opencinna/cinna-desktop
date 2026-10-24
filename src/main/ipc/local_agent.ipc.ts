@@ -431,9 +431,10 @@ export function registerLocalAgentHandlers(): void {
 
   ipcHandle(
     'local-agent:mcp-detach',
-    (_event, data?: { agentId: string; mcpProviderId: string }): { success: true } => {
+    async (_event, data?: { agentId: string; mcpProviderId: string }): Promise<{ success: true }> => {
       userActivation.requireActivated()
-      agentMcpService.detach(getSettingsScopeUserId(), data?.agentId as string, data?.mcpProviderId as string)
+      // On a kit agent this also drops the connector's `mcp_servers[]` requirement (answered once written).
+      await agentMcpService.detach(getSettingsScopeUserId(), data?.agentId as string, data?.mcpProviderId as string)
       return { success: true }
     }
   )

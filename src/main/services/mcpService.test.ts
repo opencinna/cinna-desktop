@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 /**
  * `mcpService.upsert` and the directory ref: a connector created from an MCP
@@ -21,7 +21,10 @@ vi.mock('../mcp/manager', () => ({
 vi.mock('../mcp/config', () => ({ mcpRowToConfig: (row: unknown) => row }))
 vi.mock('../security/keystore', () => ({ encryptApiKey: (value: string) => Buffer.from(value), decryptApiKey: (value: Buffer) => value.toString('utf8') }))
 
-const { mcpService, MANAGED_PROVIDER_DELETE_REFUSED } = await import('./mcpService')
+const policy = vi.hoisted(() => ({ customMcp: true }))
+vi.mock('./addonDirectory/policy', () => ({ addonPolicies: { get: () => ({ externalDirectories: true, customMcp: policy.customMcp, pluginHooks: true, stdioMcp: true }) } }))
+
+const { mcpService, MANAGED_PROVIDER_DELETE_REFUSED, CUSTOM_MCP_REFUSED, managedRefusalOf } = await import('./mcpService')
 
 const REF = { source: 'mcp-registry:cinna-official', id: 'granola' }
 const BASE = { name: 'Granola', transportType: 'streamable-http', url: 'https://g.example/mcp', enabled: false }
@@ -100,6 +103,12 @@ describe('mcpService and a plugin’s provider', () => {
     expect(repo.upsert).not.toHaveBeenCalled()
   })
 
+  it('names the plugin it comes with, from the cached folder, else the folder’s name', () => {
+    repo.list.mockImplementation(() => [managed])
+    expect(mcpService.list('u')[0].managedByTitle).toBe('carbone')
+    expect(mcpService.list('u')[0].envSlots).toEqual([{ name: 'API_KEY', hasValue: false }])
+  })
+
   it('shows the renderer the names to fill in and whether each has a value — never a value', () => {
     managed.envSecretEncrypted = Buffer.from(JSON.stringify({ API_KEY: 'sk-secret' }))
     repo.list.mockReturnValue([managed])
@@ -112,5 +121,99 @@ describe('mcpService and a plugin’s provider', () => {
   it('refuses a delete as data: the connector goes with its plugin', async () => {
     expect(await mcpService.delete('u', 'm1')).toEqual({ ok: false, code: 'managed', message: MANAGED_PROVIDER_DELETE_REFUSED })
     expect(repo.delete).not.toHaveBeenCalled()
+  })
+})
+
+describe('mcpService and the admin’s custom_mcp policy', () => {
+  afterEach(() => {
+    policy.customMcp = true
+  })
+
+  it('refuses a new connector of the user’s own as data while the admin forbids them, and writes nothing', async () => {
+    policy.customMcp = false
+    const err = await mcpService.upsert('u', BASE).catch((e: unknown) => e)
+    expect(managedRefusalOf(err)).toEqual({ ok: false, code: 'policy', message: CUSTOM_MCP_REFUSED })
+    expect(repo.upsert).not.toHaveBeenCalled()
+  })
+
+  it('still creates one from a directory entry, and edits an existing one', async () => {
+    policy.customMcp = false
+    repo.getOwned.mockImplementation(() => undefined)
+    await mcpService.upsert('u', { ...BASE, registryRef: REF })
+    await mcpService.upsert('u', { ...BASE, id: 'm1' })
+    expect(repo.upsert).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('mcpService and a local connector made from a directory entry', () => {
+  const ref = { source: 'core-mcp-directory', id: 'fs' }
+  const row = (env: Record<string, string>, secrets: Record<string, string> | null) => ({
+    id: 'd1',
+    userId: 'u',
+    name: 'File System',
+    transportType: 'stdio',
+    command: 'npx',
+    args: ['-y', '@mcp/fs@1.0'],
+    url: null,
+    env,
+    enabled: true,
+    authType: 'oauth',
+    managedBy: null,
+    managedSpec: null,
+    registryRef: ref,
+    envSecretEncrypted: secrets ? Buffer.from(JSON.stringify(secrets)) : null,
+    bearerTokenEncrypted: null,
+    authTokensEncrypted: null,
+    clientInfo: null,
+    createdAt: new Date(0)
+  })
+  const INPUT = { id: 'd1', name: 'File System', transportType: 'stdio', command: 'npx', args: ['-y', '@mcp/fs@1.0'] }
+
+  it('stores what the user types encrypted, the names only in the plain env; an empty value keeps the stored one', async () => {
+    repo.getOwned.mockImplementation(() => row({ ROOT: '', TOKEN: '' }, { TOKEN: 'sk-old' }))
+    await mcpService.upsert('u', { ...INPUT, env: { ROOT: '/srv', TOKEN: '' } })
+    const written = repo.upsert.mock.calls[0][1]
+    expect(written.env).toEqual({ ROOT: '', TOKEN: '' })
+    expect(JSON.parse(String(written.envSecretEncrypted))).toEqual({ ROOT: '/srv', TOKEN: 'sk-old' })
+  })
+
+  it('shows the renderer names and whether each has a value, never a value', () => {
+    repo.list.mockImplementation(() => [row({ ROOT: '', TOKEN: '' }, { TOKEN: 'sk-1' })])
+    const [dto] = mcpService.list('u')
+    expect(dto.env).toEqual({ ROOT: '', TOKEN: '' })
+    expect(dto).not.toHaveProperty('envSecretEncrypted')
+    expect(dto.envSlots).toEqual([
+      { name: 'ROOT', hasValue: false },
+      { name: 'TOKEN', hasValue: true }
+    ])
+    expect(JSON.stringify(dto)).not.toContain('sk-1')
+    // Nothing plain to move: no write on a read.
+    expect(repo.upsert).not.toHaveBeenCalled()
+  })
+
+  it('moves values stored in the plain env before they were encrypted on the first read', () => {
+    repo.list.mockImplementation(() => [row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null)])
+    repo.upsert.mockImplementation((_userId: string, input: { env: Record<string, string>; envSecretEncrypted: Buffer }) => ({
+      id: 'd1',
+      created: false,
+      row: { ...row(input.env, JSON.parse(String(input.envSecretEncrypted)) as Record<string, string>) }
+    }))
+    const [dto] = mcpService.list('u')
+    const written = repo.upsert.mock.calls[0][1]
+    expect(written.env).toEqual({ ROOT: '', TOKEN: '' })
+    expect(JSON.parse(String(written.envSecretEncrypted))).toEqual({ ROOT: '/srv', TOKEN: 'sk-plain' })
+    expect(JSON.stringify(dto)).not.toContain('sk-plain')
+    expect(dto.envSlots?.every((slot) => slot.hasValue)).toBe(true)
+  })
+
+  it('never shows a plain value, even when moving it fails', () => {
+    repo.list.mockImplementation(() => [row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null)])
+    repo.upsert.mockImplementation(() => {
+      throw new Error('database is locked')
+    })
+    const [dto] = mcpService.list('u')
+    expect(dto.env).toEqual({ ROOT: '', TOKEN: '' })
+    expect(JSON.stringify(dto)).not.toContain('sk-plain')
+    expect(JSON.stringify(dto)).not.toContain('/srv')
   })
 })

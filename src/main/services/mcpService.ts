@@ -4,7 +4,20 @@ import { mcpManager } from '../mcp/manager'
 import { McpError } from '../errors'
 import { mcpRowToConfig } from '../mcp/config'
 import { encryptApiKey } from '../security/keystore'
-import { encryptManagedSecrets, managedSecrets, managedSlotStates, missingManagedEnv } from '../mcp/managed'
+import {
+  directoryEnvNames,
+  directoryEnvToSeal,
+  directorySecrets,
+  directorySlotStates,
+  encryptManagedSecrets,
+  isDirectorySecretRow,
+  managedSecrets,
+  managedSlotStates,
+  missingManagedEnv
+} from '../mcp/managed'
+import { addonPolicies } from './addonDirectory/policy'
+import { pluginTitleOf } from './pluginTree'
+import { basename } from 'node:path'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('MCP')
@@ -30,10 +43,14 @@ export interface McpProviderDto {
   error?: string
   /** A pinned plugin owns it (`plugin:<entry_uuid>@<sha>`): only its env values, credentials and on/off are editable. */
   managedBy?: string
+  /** What the plugin that owns it calls itself (its cached manifest's `displayName`, else `name`, else its folder's name). */
+  managedByTitle?: string
   /**
-   * A managed provider's settings the user fills in, and whether each has a
-   * value — never the value. Its `env` then lists the same names, each `''`
-   * (an empty value sent back keeps what is stored), and not the plugin's own.
+   * The settings the user fills in, and whether each has a value — never the
+   * value: a managed provider's, and a local connector's made from a
+   * directory entry (`registry_ref`). Its `env` then lists the same names,
+   * each `''` (an empty value sent back keeps what is stored), and not a
+   * plugin's own literals.
    */
   envSlots?: Array<{ name: string; hasValue: boolean }>
 }
@@ -76,7 +93,7 @@ function toDto(row: McpProviderRow): McpProviderDto {
     command: row.command ?? undefined,
     args: (row.args as string[] | null) ?? undefined,
     url: row.url ?? undefined,
-    env: row.managedBy ? managedEnvView(row) : ((row.env as Record<string, string> | null) ?? undefined),
+    env: row.managedBy ? managedEnvView(row) : isDirectorySecretRow(row) ? directoryEnvView(row) : ((row.env as Record<string, string> | null) ?? undefined),
     enabled: row.enabled,
     createdAt: row.createdAt,
     hasAuth: !!(row.authTokensEncrypted || row.clientInfo || row.bearerTokenEncrypted),
@@ -84,8 +101,76 @@ function toDto(row: McpProviderRow): McpProviderDto {
     status: conn?.status ?? 'disconnected',
     tools: conn?.tools ?? [],
     error: conn?.error,
-    ...(row.managedBy ? { managedBy: row.managedBy, envSlots: managedSlotStates(row) } : {})
+    ...(row.managedBy ? { managedBy: row.managedBy, managedByTitle: managedTitleOf(row), envSlots: managedSlotStates(row) } : {}),
+    ...(isDirectorySecretRow(row) ? { envSlots: directorySlotStates(row) } : {})
   }
+}
+
+/** The owning plugin's title, read from its cached folder; the connector's name when there is none. */
+function managedTitleOf(row: McpProviderRow): string {
+  const root = row.managedSpec?.root
+  return (root ? (pluginTitleOf(root) ?? basename(root)) : null) || row.name
+}
+
+/** A directory connector's env as the renderer sees it: its setting names, no values. */
+function directoryEnvView(row: McpProviderRow): Record<string, string> | undefined {
+  const names = directoryEnvNames(row)
+  return names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : undefined
+}
+
+/**
+ * Move a directory connector's values still in the plain `env` (stored
+ * before they were encrypted) into the encrypted column, leaving the names.
+ * The row as it is now; unchanged when nothing was plain.
+ */
+function sealDirectoryEnv(userId: string, row: McpProviderRow): McpProviderRow {
+  const sealed = directoryEnvToSeal(row)
+  if (!sealed) return row
+  try {
+    return writeSealed(userId, row, sealed)
+  } catch (err) {
+    // Tried again on the next read; the renderer's view is names only either way.
+    logger.warn('directory connector settings could not be moved to encrypted storage', { providerId: row.id, error: String(err) })
+    return row
+  }
+}
+
+function writeSealed(userId: string, row: McpProviderRow, sealed: NonNullable<ReturnType<typeof directoryEnvToSeal>>): McpProviderRow {
+  const { row: next } = mcpProviderRepo.upsert(userId, {
+    id: row.id,
+    name: row.name,
+    transportType: row.transportType as 'stdio' | 'sse' | 'streamable-http',
+    command: row.command,
+    args: (row.args as string[] | null) ?? null,
+    url: row.url,
+    env: sealed.env,
+    enabled: row.enabled,
+    authType: row.authType === 'bearer' ? 'bearer' : 'oauth',
+    envSecretEncrypted: sealed.envSecretEncrypted
+  })
+  logger.info('directory connector settings moved to encrypted storage', { providerId: row.id })
+  return next
+}
+
+/**
+ * A directory connector's settings after an edit: the names sent (all of
+ * them kept when no `env` is sent), a non-empty value replacing the stored
+ * one, an empty one keeping it. Values are encrypted; the plain `env` keeps
+ * the names, each `''`.
+ */
+function directoryEnvEdit(existing: Pick<McpProviderRow, 'env' | 'envSecretEncrypted' | 'managedBy' | 'registryRef' | 'transportType'>, env: Record<string, string> | undefined): {
+  env: Record<string, string> | null
+  envSecretEncrypted: Buffer | null
+} {
+  const stored = directorySecrets(existing)
+  const names = env ? Object.keys(env) : directoryEnvNames(existing)
+  const values: Record<string, string> = {}
+  for (const name of names) {
+    const typed = env?.[name]
+    const value = typeof typed === 'string' && typed !== '' ? typed : stored[name]
+    if (typeof value === 'string' && value !== '') values[name] = value
+  }
+  return { env: names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : null, envSecretEncrypted: encryptManagedSecrets(values) }
 }
 
 /** A managed provider's env as the renderer sees it: the names the user fills in, no values. */
@@ -148,13 +233,20 @@ function editedSecrets(existing: McpProviderRow, env: Record<string, string> | u
 /** A refusal the IPC answers as data (a thrown code does not reach the renderer). */
 export interface McpRefusal {
   ok: false
-  code: 'managed'
+  /** `managed`: a plugin owns it; `policy`: the account's admin does not allow the user's own connectors. */
+  code: 'managed' | 'policy'
   message: string
 }
 
-/** The upsert's refusal of a managed provider's edit, as data; anything else is rethrown. */
+/** The sentence a new connector of the user's own is refused with while the admin forbids them (`policy.custom_mcp`). */
+export const CUSTOM_MCP_REFUSED = 'Your admin does not allow adding your own connectors.'
+
+/** The upsert's refusal of a managed provider's edit or of a connector the policy forbids, as data; anything else is rethrown. */
 export function managedRefusalOf(err: unknown): McpRefusal | null {
-  return err instanceof McpError && err.code === 'managed_provider' ? { ok: false, code: 'managed', message: err.message } : null
+  if (!(err instanceof McpError)) return null
+  if (err.code === 'managed_provider') return { ok: false, code: 'managed', message: err.message }
+  if (err.code === 'custom_mcp_forbidden') return { ok: false, code: 'policy', message: err.message }
+  return null
 }
 
 /**
@@ -186,7 +278,7 @@ async function upsertManaged(userId: string, existing: McpProviderRow, input: Up
 
 export const mcpService = {
   list(userId: string): McpProviderDto[] {
-    return mcpProviderRepo.list(userId).map(toDto)
+    return mcpProviderRepo.list(userId).map((row) => toDto(sealDirectoryEnv(userId, row)))
   },
 
   async upsert(
@@ -195,10 +287,18 @@ export const mcpService = {
   ): Promise<{ id: string; row: McpProviderDto }> {
     assertTransport(input.transportType)
     if (input.authType !== undefined) assertAuthType(input.authType)
-    if (input.id !== undefined) {
-      const existing = mcpProviderRepo.getOwned(userId, input.id)
-      if (existing?.managedBy) return upsertManaged(userId, existing, input)
+    const existing = input.id !== undefined ? mcpProviderRepo.getOwned(userId, input.id) : undefined
+    if (existing?.managedBy) return upsertManaged(userId, existing, input)
+    const registryRef = input.id === undefined && input.registryRef ? input.registryRef : null
+    // A connector of the user's own (not a plugin's, not from a directory entry) only while the admin allows them.
+    if (input.id === undefined && !registryRef && !addonPolicies.get(userId).customMcp) {
+      throw new McpError('custom_mcp_forbidden', CUSTOM_MCP_REFUSED)
     }
+    // A local connector made from a directory entry keeps its values encrypted, as a plugin's.
+    const secretEnv =
+      input.transportType === 'stdio' && (existing ? isDirectorySecretRow(existing) : !!registryRef)
+        ? directoryEnvEdit(existing ?? { env: null, envSecretEncrypted: null, managedBy: null, registryRef, transportType: 'stdio' }, input.env)
+        : null
 
     const { id, created, row } = mcpProviderRepo.upsert(userId, {
       id: input.id,
@@ -207,11 +307,12 @@ export const mcpService = {
       command: input.command ?? null,
       args: input.args ?? null,
       url: input.url ?? null,
-      env: input.env ?? null,
+      env: secretEnv ? secretEnv.env : (input.env ?? null),
+      ...(secretEnv ? { envSecretEncrypted: secretEnv.envSecretEncrypted } : existing && isDirectorySecretRow(existing) ? { envSecretEncrypted: null } : {}),
       enabled: input.enabled,
       authType: input.authType,
       bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined,
-      ...(input.id === undefined && input.registryRef ? { registryRef: input.registryRef } : {})
+      ...(registryRef ? { registryRef } : {})
     })
 
     logger.info(created ? 'mcp created' : 'mcp updated', {
@@ -239,22 +340,23 @@ export const mcpService = {
    */
   async createFromDirectory(
     userId: string,
-    input: {
+    input: (
+      | { transportType: 'sse' | 'streamable-http'; url: string; authType: 'oauth' | 'bearer' }
+      /** A local server of core's MCP directory: its command, and the setting names it needs (stored empty). */
+      | { transportType: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+    ) & {
       name: string
-      transportType: 'sse' | 'streamable-http'
-      url: string
-      authType: 'oauth' | 'bearer'
       registryRef: { source: string; id: string }
-      /** Skip the first connect (a bearer server with no token yet). */
+      /** Skip the first connect (a bearer server with no token yet, a local one with settings to fill in). */
       connect: boolean
     }
   ): Promise<{ id: string; status: string; needsUser: boolean; error?: string }> {
     const { id, row } = mcpProviderRepo.upsert(userId, {
       name: input.name,
-      transportType: input.transportType,
-      url: input.url,
+      ...(input.transportType === 'stdio'
+        ? { transportType: 'stdio' as const, command: input.command, args: input.args, env: Object.keys(input.env).length > 0 ? input.env : null, authType: 'oauth' as const }
+        : { transportType: input.transportType, url: input.url, authType: input.authType }),
       enabled: true,
-      authType: input.authType,
       registryRef: input.registryRef
     })
     logger.info('mcp created from directory', { providerId: id, source: input.registryRef.source, authType: row.authType })

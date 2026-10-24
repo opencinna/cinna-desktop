@@ -287,7 +287,14 @@ export interface CinnaSendResult {
 export async function cinnaSend(
   userId: string,
   path: string,
-  opts: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; json?: unknown; bytes?: { data: Uint8Array; contentType: string }; signal?: AbortSignal }
+  opts: {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+    json?: unknown
+    bytes?: { data: Uint8Array; contentType: string }
+    signal?: AbortSignal
+    /** Extra request headers (`If-None-Match`); they never replace Authorization, Accept or Content-Type. */
+    headers?: Record<string, string>
+  }
 ): Promise<CinnaSendResult> {
   if (!path.startsWith('/')) throw new CinnaApiError('request_failed', 'Only a path on the profile’s own server is used.')
   opts.signal?.throwIfAborted()
@@ -297,7 +304,7 @@ export async function cinnaSend(
   opts.signal?.throwIfAborted()
   if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) throw new CinnaSessionChanged()
   const url = `${baseUrl}${path}`
-  const headers: Record<string, string> = { Authorization: authHeader, Accept: 'application/json' }
+  const headers: Record<string, string> = { ...(opts.headers ?? {}), Authorization: authHeader, Accept: 'application/json' }
   let body: BodyInit | undefined
   if (opts.bytes) {
     headers['Content-Type'] = opts.bytes.contentType
@@ -316,7 +323,7 @@ export async function cinnaSend(
     throw new CinnaApiError('request_failed', msg)
   }
   const text = await response.text().catch(() => '')
-  if (!response.ok) {
+  if (!response.ok && response.status !== 304) {
     logger.warn('request refused', { userId, url, method: opts.method, status: response.status, durationMs: Date.now() - started })
   }
   if (response.status === 401) {

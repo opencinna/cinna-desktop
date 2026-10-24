@@ -129,6 +129,13 @@ describe('managedRowSpec', () => {
     expect(wanted.env).toEqual({ DEBUG: '', MODE: 'fast' })
   })
 
+  it('runs a `uvx --from` of the plugin folder from the snapshot’s working copy, and records it to be made at launch', () => {
+    const wanted = managedRowSpec(spec({ command: 'uvx', args: ['--from', '${CLAUDE_PLUGIN_ROOT}', 'carbone'] }), '/cache/carbone', UV, '/ud/plugin-work/e/s')
+    expect(wanted).toMatchObject({ command: UV.uvxBin, args: ['--from', '/ud/plugin-work/e/s', 'carbone'], managedSpec: { root: '/cache/carbone', work: '/ud/plugin-work/e/s' } })
+    // A package from an index needs no copy.
+    expect(managedRowSpec(spec({ command: 'uvx', args: ['carbone-mcp'] }), '/cache/carbone', UV, '/ud/plugin-work/e/s').managedSpec).not.toHaveProperty('work')
+  })
+
   it('runs a Python server through the managed uv', () => {
     expect(managedRowSpec(spec({ command: 'uvx', args: ['carbone-mcp', '--port', '0'] }), '/c', UV)).toMatchObject({
       command: UV.uvxBin,

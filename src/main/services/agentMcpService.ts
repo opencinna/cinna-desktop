@@ -5,7 +5,7 @@ import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { mcpManager } from '../mcp/manager'
 import { mcpRowToConfig } from '../mcp/config'
 import { LocalAgentError, McpError } from '../errors'
-import { managedHeadersOnly, missingManagedEnv } from '../mcp/managed'
+import { managedHeadersOnly, missingEnvOf } from '../mcp/managed'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('agent-mcp')
@@ -56,8 +56,8 @@ function ownedProvider(ownerId: string, mcpProviderId: string): McpProviderRow {
  */
 function connectsUnattended(row: McpProviderRow): boolean {
   if (!row.enabled) return false
-  // A plugin's server whose settings are not filled in yet would only fail.
-  if (missingManagedEnv(row).length > 0) return false
+  // A plugin's or a directory server whose settings are not filled in yet would only fail.
+  if (missingEnvOf(row).length > 0) return false
   const status = mcpManager.getConnection(row.id)?.status
   if (status === 'connected' || status === 'awaiting-auth') return false
   if (row.transportType === 'stdio') return true
@@ -94,11 +94,23 @@ export const agentMcpService = {
     }
   },
 
-  detach(ownerId: string, agentId: string, mcpProviderId: string): void {
+  /**
+   * Detach, then — on a kit agent — drop the `mcp_servers[]` requirement the
+   * connector was written as (by its directory ref), through the manifest
+   * guard, so no detach path leaves a requirement behind. The detach itself
+   * is done before the first await; the manifest write never fails it.
+   */
+  async detach(ownerId: string, agentId: string, mcpProviderId: string): Promise<void> {
     folderAgent(ownerId, agentId)
     if (agentMcpRepo.detach(agentId, mcpProviderId)) {
       logger.info('mcp detached from agent', { agentId, mcpProviderId })
       refreshAgent(agentId)
+    }
+    try {
+      const { dropRequirementOfProvider } = await import('./addonDirectory/requirements')
+      await dropRequirementOfProvider(ownerId, agentId, mcpProviderId)
+    } catch (error) {
+      logger.warn('Could not drop the connector from the agent’s requirements', { agentId, mcpProviderId, error: String(error) })
     }
   },
 

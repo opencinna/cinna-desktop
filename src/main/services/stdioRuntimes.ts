@@ -11,15 +11,16 @@
  *   are looked up once per app session on the login-shell PATH — the same
  *   resolution `mcp/manager.ts` launches with — and a missing one blocks the
  *   Add with the sentence why. {@link stdioRuntimes.recheck} looks again
- *   without a restart (the picker's Check again).
+ *   without a restart (the picker's Check again), re-reading the login
+ *   shell's PATH first.
  * * **Policy**: with core's `stdio_mcp` off, no stdio server is installed.
  *
  * Core: no Electron.
  */
 
 import { existsSync } from 'node:fs'
-import { basename, isAbsolute, join } from 'node:path'
-import { clearToolCache, which } from '../shell/env'
+import { basename, isAbsolute, join, sep } from 'node:path'
+import { resetShellEnv, which } from '../shell/env'
 import { toolchain, type ManagedUvLayout } from '../localdev/toolchain'
 import type { AddonMcpServerComponent, AddonPolicy } from '../../shared/addons/directory'
 
@@ -45,20 +46,40 @@ export function runtimeOfCommand(command: string | null | undefined): StdioRunti
   return null
 }
 
-/** The project folder a `uv run …` names (`--directory` / `--project`, else `root`). */
-function uvProjectDir(args: readonly string[], root: string | null): string | null {
-  for (let at = 1; at < args.length; at++) {
+/** Where a path flag's value sits in `args`: the index of the value (or of the `--flag=value` arg) and the value. */
+interface FlagValue {
+  at: number
+  inline: string | null
+  value: string
+}
+
+/** The first of `flags` in `args` before `--`, from index `from`. */
+function flagValue(args: readonly string[], flags: readonly string[], from: number): FlagValue | null {
+  for (let at = from; at < args.length; at++) {
     const arg = args[at]
     if (arg === '--') break
-    for (const flag of ['--directory', '--project']) {
-      if (arg === flag && typeof args[at + 1] === 'string') return isAbsolute(args[at + 1]) || !root ? args[at + 1] : join(root, args[at + 1])
-      if (arg.startsWith(`${flag}=`)) {
-        const value = arg.slice(flag.length + 1)
-        return isAbsolute(value) || !root ? value : join(root, value)
-      }
+    for (const flag of flags) {
+      if (arg === flag && typeof args[at + 1] === 'string') return { at: at + 1, inline: null, value: args[at + 1] }
+      if (arg.startsWith(`${flag}=`)) return { at, inline: flag, value: arg.slice(flag.length + 1) }
     }
   }
-  return root
+  return null
+}
+
+const resolved = (value: string, root: string | null): string => (isAbsolute(value) || !root ? value : join(root, value))
+
+/** The project folder a `uv run …` names (`--directory` / `--project`, else `root`). */
+function uvProjectDir(args: readonly string[], root: string | null): string | null {
+  const found = flagValue(args, ['--directory', '--project'], 1)
+  return found ? resolved(found.value, root) : root
+}
+
+const inside = (path: string, root: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)
+
+/** `args` with the flag value `found` pointing at the same place in the working copy `work` of `root`. */
+function intoWork(args: readonly string[], found: FlagValue, path: string, root: string, work: string): string[] {
+  const moved = join(work, path.slice(root.length))
+  return args.map((arg, at) => (at !== found.at ? arg : found.inline ? `${found.inline}=${moved}` : moved))
 }
 
 /**
@@ -71,19 +92,37 @@ function uvProjectDir(args: readonly string[], root: string | null): string | nu
  * `--frozen` when the project has a `uv.lock`: uv then reads the lock and
  * never rewrites it, and its environment goes to `UV_PROJECT_ENVIRONMENT`
  * (set at launch, `mcp/managed.ts`) rather than a `.venv` inside the cache.
+ *
+ * A project there with **no** `uv.lock` would make uv write one into the
+ * read-only cache, and a `uvx --from <folder>` there builds the package in
+ * the folder (setuptools writes `build/` and `*.egg-info`). Both are pointed
+ * at the same place in `work` instead — a writable working copy of the
+ * cached tree for this snapshot, made at launch (`mcp/managed.ts`
+ * `ensurePluginWorkCopy`) — and answer `usesWork`. With no `work`, they are
+ * left as written.
  */
 export function throughManagedUv(
   command: string,
   args: readonly string[],
   uv: Pick<ManagedUvLayout, 'uvBin' | 'uvxBin'>,
-  root: string | null = null
-): { command: string; args: string[] } {
+  root: string | null = null,
+  work: string | null = null
+): { command: string; args: string[]; usesWork?: true } {
   const bin = basename(command).replace(/\.exe$/i, '')
-  if (bin === 'uvx') return { command: uv.uvxBin, args: [...args] }
+  if (bin === 'uvx') {
+    const from = root && work ? flagValue(args, ['--from'], 0) : null
+    const source = from && isAbsolute(from.value) ? from.value : null
+    if (from && source && root && work && inside(source, root)) return { command: uv.uvxBin, args: intoWork(args, from, source, root, work), usesWork: true }
+    return { command: uv.uvxBin, args: [...args] }
+  }
   if (bin === 'uv') {
     const project = args[0] === 'run' ? uvProjectDir(args, root) : null
     const pinned = args.some((arg) => arg === '--frozen' || arg === '--locked' || arg === '--no-project')
     if (project && !pinned && existsSync(join(project, 'uv.lock'))) return { command: uv.uvBin, args: ['run', '--frozen', ...args.slice(1)] }
+    const flag = args[0] === 'run' ? flagValue(args, ['--directory', '--project'], 1) : null
+    if (flag && project && !pinned && root && work && inside(project, root)) {
+      return { command: uv.uvBin, args: intoWork(args, flag, project, root, work), usesWork: true }
+    }
     return { command: uv.uvBin, args: [...args] }
   }
   if (bin === 'python' || bin === 'python3') return { command: uv.uvBin, args: ['run', '--no-project', 'python', ...args] }
@@ -148,6 +187,8 @@ export function createStdioRuntimes(deps: { which: ToolLookup; clear: () => void
 
 export const stdioRuntimes = createStdioRuntimes({
   which: (bin) => which(bin),
-  clear: () => clearToolCache(),
+  // Check again comes after the user installed Node or Docker, whose installer may have added a PATH entry:
+  // the login shell's PATH is read again, not only the lookups under the old one.
+  clear: () => resetShellEnv(),
   ensureUv: () => toolchain.ensureUv()
 })

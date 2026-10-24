@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   ADDON_STATE_TEXT,
   CATALOG_SOURCE,
+  CORE_MCP_SOURCE,
   LOCAL_SOURCE,
+  MCP_REQUIREMENT_TEXT,
   MARKETPLACE_SOURCE,
   PLUGIN_SOURCE,
   createAddonDirectory,
@@ -320,6 +322,30 @@ describe('addonDirectory.list', () => {
     expect(deps.createMcpFromDirectory).not.toHaveBeenCalled()
   })
 
+  it('files core’s policy under the account the read started for, even when the profile switched while core answered', async () => {
+    const policy = { externalDirectories: false, customMcp: false, pluginHooks: true, stdioMcp: true }
+    let active = 'a@https://cinna.example'
+    const set = vi.fn()
+    const store = { get: () => undefined, set, account: () => active }
+    const slow = provider('cinna-core', [CATALOG_SOURCE], async () => {
+      active = 'b@https://cinna.example'
+      return { entries: [], policy }
+    })
+    const directory = createAddonDirectory({ ...(build([slow]), deps), policies: store })
+    await directory.list(USER, AGENT)
+    expect(set).toHaveBeenCalledWith(USER, policy, 'a@https://cinna.example')
+  })
+
+  it('tells the gated sources when core’s MCP directory answered, so the index it is seeded from is not listed twice', async () => {
+    const registries = provider('mcp-registries', ['mcp-registry:'], { entries: [] }, { gate: 'externalDirectories' })
+    build([provider('cinna-core', [CATALOG_SOURCE], { entries: [], mcpDirectory: true }), registries])
+    await createAddonDirectory(deps).list(USER, AGENT)
+    expect(registries.list).toHaveBeenLastCalledWith(expect.objectContaining({ coreMcpDirectory: true }))
+    const older = provider('mcp-registries', ['mcp-registry:'], { entries: [] }, { gate: 'externalDirectories' })
+    await build([provider('cinna-core', [CATALOG_SOURCE], { entries: [] }), older]).list(USER, AGENT)
+    expect(older.list).toHaveBeenLastCalledWith(expect.not.objectContaining({ coreMcpDirectory: true }))
+  })
+
   it('refuses an agent that is not a folder agent here, as data', async () => {
     agent = null
     const directory = build([])
@@ -510,5 +536,175 @@ describe('addonDirectory.add and remove', () => {
       throw Object.assign(new Error('MCP provider not found'), { code: 'not_found' })
     })
     expect(await directory.add(USER, AGENT, localRef('l9'))).toEqual({ ok: false, code: 'not_found', message: 'MCP provider not found' })
+  })
+})
+
+// A plain object type: it is both an AddonRef and a manifest requirement's ref.
+const coreMcpRef = (id: string): { source: string; id: string } => ({ source: CORE_MCP_SOURCE, id })
+
+function stdioEntry(id: string, registry: 'npm' | 'pypi' | 'oci' = 'npm'): ProviderEntry {
+  return mcpEntry(coreMcpRef(id), {
+    install: { mcp: { transport: 'stdio', package: { registry, name: id, version: '1.0.0', args: [] }, auth: 'none', requiresAuth: false, env: [] } }
+  })
+}
+
+describe('addonDirectory local MCP servers from core', () => {
+  it('blocks a local server the admin or this computer cannot run, and refuses its add without creating anything', async () => {
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [stdioEntry('fs'), stdioEntry('web')] })])
+    deps.mcpBlock = vi.fn(async (_user, e: ProviderEntry) => (e.ref.id === 'fs' ? 'Blocked by your admin' : null))
+    const listed = await dir.list(USER, AGENT)
+    if (!listed.ok) throw new Error('refused')
+    expect(listed.entries.map((e) => [e.ref.id, e.state, e.stateReason])).toEqual([
+      ['fs', 'blocked', 'Blocked by your admin'],
+      ['web', 'addable', null]
+    ])
+    expect(await dir.add(USER, AGENT, coreMcpRef('fs'))).toEqual({ ok: false, code: 'blocked', message: 'Blocked by your admin' })
+    expect(deps.createMcpFromDirectory).not.toHaveBeenCalled()
+    expect(await dir.add(USER, AGENT, coreMcpRef('web'))).toMatchObject({ ok: true, mcpProviderId: 'new-mcp' })
+  })
+
+  it('never asks the MCP block of a remote server', async () => {
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('remote'))] })])
+    deps.mcpBlock = vi.fn(async () => 'nope')
+    const listed = await dir.list(USER, AGENT)
+    expect(listed.ok && listed.entries[0].state).toBe('addable')
+    expect(deps.mcpBlock).not.toHaveBeenCalled()
+  })
+})
+
+describe('addonDirectory mcp_servers[] requirements', () => {
+  it('notes the requirement after an MCP add on a kit agent — new, existing or local — and never on a bare folder', async () => {
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('gh'))] }), provider(LOCAL_SOURCE, [LOCAL_SOURCE], { entries: [] })])
+    deps.noteMcpRequirement = vi.fn(async () => undefined)
+    await dir.add(USER, AGENT, coreMcpRef('gh'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('gh'))
+    deps.findMcpByRef = vi.fn(() => 'm-existing')
+    await dir.add(USER, AGENT, coreMcpRef('gh'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'm-existing', coreMcpRef('gh'))
+    await dir.add(USER, AGENT, localRef('m-local'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'm-local', null)
+    expect(deps.noteMcpRequirement).toHaveBeenCalledTimes(3)
+
+    agent = { kit: false, skills: [] }
+    await dir.add(USER, AGENT, localRef('m-local'))
+    expect(deps.noteMcpRequirement).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not note a requirement for a skill pin or a refused add', async () => {
+    const dir = build([provider('cinna-core', [CATALOG_SOURCE, CORE_MCP_SOURCE], { entries: [entry(catalogRef('pdf')), stdioEntry('fs')] })])
+    deps.noteMcpRequirement = vi.fn(async () => undefined)
+    deps.mcpBlock = vi.fn(async () => 'Blocked by your admin')
+    await dir.add(USER, AGENT, catalogRef('pdf'))
+    await dir.add(USER, AGENT, coreMcpRef('fs'))
+    expect(deps.noteMcpRequirement).not.toHaveBeenCalled()
+  })
+
+  it('drops the requirement on remove, even when there is no local provider to detach', async () => {
+    const dir = build([provider(LOCAL_SOURCE, [LOCAL_SOURCE], { entries: [] })])
+    deps.dropMcpRequirement = vi.fn(async () => undefined)
+    expect(await dir.remove(USER, AGENT, coreMcpRef('gone'))).toEqual({ ok: true, next: null })
+    expect(deps.dropMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, coreMcpRef('gone'))
+    await dir.remove(USER, AGENT, localRef('m1'))
+    expect(deps.dropMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, localRef('m1'))
+    expect(deps.detachMcp).toHaveBeenLastCalledWith(USER, AGENT, 'm1')
+  })
+
+  it('a requirement with no local provider does not make its entry added', async () => {
+    agent = { kit: true, skills: [], mcpServers: [{ name: 'gh', ref: coreMcpRef('gh'), transport: 'http', url: 'https://g.example/mcp' }] }
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('gh'))] })])
+    const listed = await dir.list(USER, AGENT)
+    expect(listed.ok && listed.entries[0].state).toBe('addable')
+  })
+
+  it('says where each requirement stands: a shared folder that arrived with mcp_servers[] and no providers', async () => {
+    agent = {
+      kit: true,
+      skills: [],
+      mcpServers: [
+        { name: 'gh', ref: coreMcpRef('gh'), transport: 'http', url: 'https://g.example/mcp', auth: 'oauth' },
+        { name: 'fs', ref: coreMcpRef('fs'), transport: 'stdio', command: 'npx', args: ['-y', 'fs@1'] },
+        { name: 'gone', ref: coreMcpRef('gone'), transport: 'sse', url: 'https://x.example/sse' },
+        { name: 'mine', ref: null, transport: 'stdio', command: './server' }
+      ]
+    }
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('gh')), stdioEntry('fs')] })])
+    const answer = await dir.mcpRequirements(USER, AGENT)
+    expect(answer).toEqual({
+      ok: true,
+      items: [
+        { name: 'gh', ref: coreMcpRef('gh'), transport: 'http', state: 'needs_setup', reason: MCP_REQUIREMENT_TEXT.needsSetup, mcpProviderId: null, entryRef: coreMcpRef('gh') },
+        { name: 'fs', ref: coreMcpRef('fs'), transport: 'stdio', state: 'needs_setup', reason: MCP_REQUIREMENT_TEXT.needsSetup, mcpProviderId: null, entryRef: coreMcpRef('fs') },
+        { name: 'gone', ref: coreMcpRef('gone'), transport: 'sse', state: 'unavailable', reason: 'No longer available to you', mcpProviderId: null, entryRef: null },
+        { name: 'mine', ref: null, transport: 'stdio', state: 'needs_setup', reason: 'Set it up as a custom connector', mcpProviderId: null, entryRef: null }
+      ]
+    })
+  })
+
+  it('is ready when its local provider is attached and needs nothing; else names the step, or that it is not added', async () => {
+    agent = {
+      kit: true,
+      skills: [],
+      mcpServers: [
+        { name: 'a', ref: coreMcpRef('a'), transport: 'http', url: 'https://a.example' },
+        { name: 'b', ref: coreMcpRef('b'), transport: 'http', url: 'https://b.example' },
+        { name: 'c', ref: coreMcpRef('c'), transport: 'http', url: 'https://c.example' }
+      ]
+    }
+    attached = ['m-a', 'm-b']
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [] })])
+    deps.findMcpByRef = vi.fn((_user, ref: AddonRef) => `m-${ref.id}`)
+    deps.mcpSetup = vi.fn((_user, id: string) => (id === 'm-b' ? { next: 'oauth' as const } : null))
+    const answer = await dir.mcpRequirements(USER, AGENT)
+    if (!answer.ok) throw new Error('refused')
+    expect(answer.items.map((item) => [item.name, item.state, item.reason, item.mcpProviderId, item.entryRef])).toEqual([
+      ['a', 'ready', null, 'm-a', localRef('m-a')],
+      ['b', 'needs_setup', 'Needs you to sign in', 'm-b', localRef('m-b')],
+      ['c', 'needs_setup', MCP_REQUIREMENT_TEXT.notAttached, 'm-c', localRef('m-c')]
+    ])
+    // Every requirement had a provider: no source was read.
+    expect(deps.providers[0].list).not.toHaveBeenCalled()
+  })
+
+  it('finds a search-only entry by ref, calls a policy-gated one unavailable, and does not call one gone while its source failed', async () => {
+    agent = {
+      kit: true,
+      skills: [],
+      mcpServers: [
+        { name: 'reg', ref: { source: 'mcp-registry:official', id: 'r1' }, transport: 'http', url: 'https://r.example' },
+        { name: 'core', ref: coreMcpRef('x'), transport: 'http', url: 'https://x.example' }
+      ]
+    }
+    const registries = provider('mcp-registries', ['mcp-registry:'], { entries: [] }, {
+      gate: 'externalDirectories',
+      find: vi.fn(async (_ctx, ref: AddonRef) => mcpEntry(ref))
+    })
+    const core = provider('cinna-core', [CORE_MCP_SOURCE], { entries: [], error: 'Could not load the addons from Cinna.' })
+    const dir = build([core, registries])
+    let answer = await dir.mcpRequirements(USER, AGENT)
+    if (!answer.ok) throw new Error('refused')
+    expect(answer.items.map((item) => [item.name, item.state, item.reason, item.entryRef])).toEqual([
+      ['reg', 'needs_setup', MCP_REQUIREMENT_TEXT.needsSetup, { source: 'mcp-registry:official', id: 'r1' }],
+      ['core', 'needs_setup', MCP_REQUIREMENT_TEXT.unchecked, coreMcpRef('x')]
+    ])
+
+    const gatedCore = provider('cinna-core', [CORE_MCP_SOURCE], {
+      entries: [],
+      policy: { externalDirectories: false, customMcp: true, pluginHooks: true, stdioMcp: true }
+    })
+    const gatedDir = build([gatedCore, registries])
+    answer = await gatedDir.mcpRequirements(USER, AGENT)
+    if (!answer.ok) throw new Error('refused')
+    expect(answer.items.map((item) => [item.name, item.state, item.reason])).toEqual([
+      ['reg', 'unavailable', ADDON_STATE_TEXT.gated],
+      ['core', 'unavailable', 'No longer available to you']
+    ])
+  })
+
+  it('answers no items for a bare folder agent, and refuses an unknown agent as data', async () => {
+    agent = { kit: false, skills: [], mcpServers: [{ name: 'gh', ref: coreMcpRef('gh'), transport: 'http' }] }
+    const dir = build([])
+    expect(await dir.mcpRequirements(USER, AGENT)).toEqual({ ok: true, items: [] })
+    agent = null
+    expect(await dir.mcpRequirements(USER, AGENT)).toMatchObject({ ok: false, code: 'not_found' })
   })
 })

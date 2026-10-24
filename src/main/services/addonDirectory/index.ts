@@ -1,7 +1,8 @@
 /**
- * The addon directory as the app runs it: the three U0 providers in display
+ * The addon directory as the app runs it: the three providers in display
  * order (Cinna, this computer, the MCP registries) over the services that
- * already pin skills and attach connectors. Core service — no Electron.
+ * already pin skills and attach connectors, and the kit manifest's
+ * `mcp_servers[]` requirements (`directoryMcp.ts`). Core service — no Electron.
  */
 
 import { LocalAgentError } from '../../errors'
@@ -13,15 +14,21 @@ import { activeListing } from '../catalogSkillUpdates'
 import { marketplaceSkillService } from '../marketplaceSkillService'
 import { marketplacePluginService } from '../marketplacePluginService'
 import { pluginPinsOf } from '../pluginSkills'
-import { stdioRuntimes } from '../stdioRuntimes'
+import { stdioRuntimes, STDIO_RUNTIME_TEXT } from '../stdioRuntimes'
+import { managedUvLayout } from '../../localdev/toolchain'
+import { createLogger } from '../../logger/logger'
+import { DIRECTORY_PACKAGE_REFUSED, directoryStdioLaunch, requirementOf, runtimeOfPackage, withoutRequirement, withRequirement, type UvBins } from './directoryMcp'
+import { changeRequirements, registryRefOfRow } from './requirements'
 import { defaultEngineService } from '../localAgents/defaultEngineService'
 import { effectiveEngine } from '../../../shared/engine'
 import { addonPolicies } from './policy'
 import { mcpService } from '../mcpService'
-import { createAddonDirectory, type AgentFacts, type McpSetup } from './directory'
+import { createAddonDirectory, LOCAL_SOURCE, type AgentFacts, type McpSetup } from './directory'
 import { createCinnaCoreProvider } from './cinnaCore'
 import { createThisComputerProvider } from './thisComputer'
 import { createMcpRegistriesProvider } from './mcpRegistries'
+
+const logger = createLogger('AddonDirectory')
 
 const cinnaCore = createCinnaCoreProvider()
 const thisComputer = createThisComputerProvider()
@@ -38,7 +45,8 @@ function agentFacts(userId: string, agentId: string): AgentFacts | null {
       kit,
       skills: agent.skills ?? [],
       plugins: kit ? pluginPinsOf(agent.manifest).map((pin) => ({ entryUuid: pin.entry_uuid, name: pin.name })) : [],
-      engine: effectiveEngine(agent.runtime, defaultEngineService.current())
+      engine: effectiveEngine(agent.runtime, defaultEngineService.current()),
+      mcpServers: kit && Array.isArray(agent.manifest?.mcp_servers) ? agent.manifest.mcp_servers : []
     }
   } catch (err) {
     if (err instanceof LocalAgentError) return null
@@ -58,6 +66,18 @@ async function skillAccess(userId: string, agentId: string): Promise<string | nu
   }
 }
 
+/** The managed uv's binaries, or null on a host with no userData (they are then no stored command either). */
+function uvBins(): UvBins | null {
+  try {
+    return managedUvLayout()
+  } catch {
+    return null
+  }
+}
+
+/** A refusal `refusalOf` reads as data: the code and the sentence. */
+const coded = (code: string, message: string): Error => Object.assign(new Error(message), { code })
+
 export const addonDirectory = createAddonDirectory({
   providers: [cinnaCore, thisComputer, mcpRegistries],
   agent: agentFacts,
@@ -73,7 +93,26 @@ export const addonDirectory = createAddonDirectory({
   },
   removePlugin: async (userId, agentId, name) => pinOutcome(await marketplacePluginService.remove(userId, agentId, name)),
   pluginBlock: (userId, entry) => stdioRuntimes.blockOf(entry.components?.mcpServers ?? [], addonPolicies.get(userId)),
+  mcpBlock: async (userId, entry) => {
+    const connect = entry.install && 'mcp' in entry.install ? entry.install.mcp : null
+    if (!connect || connect.transport !== 'stdio') return null
+    return stdioRuntimes.blockOf([{ transport: 'stdio', runtime: runtimeOfPackage(connect.package.registry) }], addonPolicies.get(userId))
+  },
   policies: addonPolicies.store(),
+  noteMcpRequirement: async (userId, agentId, mcpProviderId, ref) => {
+    const row = mcpProviderRepo.getOwned(userId, mcpProviderId)
+    // A plugin's own server is carried by its pin; a custom connector stays on this computer.
+    if (!row || row.managedBy) return
+    const from = registryRefOfRow(row) ?? (ref && ref.source !== LOCAL_SOURCE ? ref : null)
+    if (!from) return
+    const requirement = requirementOf(row, from, uvBins())
+    await changeRequirements(userId, agentId, (list) => withRequirement(list, requirement))
+  },
+  dropMcpRequirement: async (userId, agentId, ref) => {
+    const target = ref.source === LOCAL_SOURCE ? registryRefOfRow(mcpProviderRepo.getOwned(userId, ref.id)) : ref
+    if (!target) return
+    await changeRequirements(userId, agentId, (list) => withoutRequirement(list, target))
+  },
   attachMcp: (userId, agentId, id) => agentMcpService.attach(userId, agentId, id),
   detachMcp: (userId, agentId, id) => agentMcpService.detach(userId, agentId, id),
   mcpSetup: (userId, id) => thisComputer.setup(userId, id),
@@ -81,6 +120,31 @@ export const addonDirectory = createAddonDirectory({
   createMcpFromDirectory: async (userId, entry) => {
     const connect = entry.install && 'mcp' in entry.install ? entry.install.mcp : null
     if (!connect) throw new Error('This entry has nothing to connect to.')
+    if (connect.transport === 'stdio') {
+      if (connect.package.registry === 'pypi') {
+        try {
+          await stdioRuntimes.ensureUv()
+        } catch (err) {
+          logger.warn('the managed uv could not be installed for a directory server', { error: err instanceof Error ? err.message : String(err) })
+          throw coded('runtime_failed', STDIO_RUNTIME_TEXT.uvFailed)
+        }
+      }
+      const launch = directoryStdioLaunch(connect, managedUvLayout())
+      if (!launch) throw coded('unsupported', DIRECTORY_PACKAGE_REFUSED)
+      const env = Object.fromEntries(connect.env.map((item) => [item.name, '']))
+      const local = await mcpService.createFromDirectory(userId, {
+        name: entry.title || entry.name,
+        transportType: 'stdio',
+        command: launch.command,
+        args: launch.args,
+        env,
+        registryRef: entry.ref,
+        connect: connect.env.length === 0
+      })
+      const setup: McpSetup | null =
+        connect.env.length > 0 ? { next: 'env' } : local.status === 'connected' ? null : { next: 'connect', ...(local.error ? { message: local.error } : {}) }
+      return { id: local.id, setup }
+    }
     const created = await mcpService.createFromDirectory(userId, {
       name: entry.title || entry.name,
       transportType: connect.transport,

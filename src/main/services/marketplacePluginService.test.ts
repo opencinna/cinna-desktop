@@ -34,7 +34,10 @@ const tables = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], links:
 const path = vi.hoisted(() => ({ found: {} as Record<string, string | null> }))
 const ensureUv = vi.hoisted(() => vi.fn(async () => ({ uvBin: '/ud/uv', uvxBin: '/ud/uvx', env: {} })))
 
-vi.mock('../host/runtimeHost', () => ({ runtimeHost: { getPath: () => host.userData, keystore: { isEncryptionAvailable: () => false } } }))
+const reveal = vi.hoisted(() => ({ showItemInFolder: vi.fn() }))
+vi.mock('../host/runtimeHost', () => ({
+  runtimeHost: { getPath: () => host.userData, keystore: { isEncryptionAvailable: () => false }, shell: { showItemInFolder: reveal.showItemInFolder } }
+}))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }) }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => PROFILE, getSettingsScopeUserId: () => USER }))
 vi.mock('../host/events', () => ({ publishEvent: vi.fn() }))
@@ -100,12 +103,13 @@ vi.mock('../db/agentMcp', () => ({
 }))
 
 const { marketplacePluginService, toPluginEntry } = await import('./marketplacePluginService')
+const { addonPolicies } = await import('./addonDirectory/policy')
 const { marketplacePluginCache } = await import('./marketplacePluginCache')
 const { removeTree } = await import('./catalogSkillCache')
 const { deliveredSkillRows } = await import('./pluginSkills')
 const { stdioRuntimes } = await import('./stdioRuntimes')
 const { CinnaApiError } = await import('../errors')
-const { encryptManagedSecrets, managedSecrets, managedLaunchBlock } = await import('../mcp/managed')
+const { encryptManagedSecrets, managedSecrets, managedLaunchBlock, pluginManagedBy, pluginWorkDir } = await import('../mcp/managed')
 
 let root: string
 let agentDir: string
@@ -378,10 +382,16 @@ describe('setDisabled and remove', () => {
     expect(managedSecrets(tables.rows[0] as never)).toEqual({ CARBONE_KEY: 'sk-typed' })
     expect(deliveredSkillRows(agentDir, manifest()).some((row) => row.source === 'plugin')).toBe(false)
 
+    // A working copy made at a launch goes with the last pin of its snapshot.
+    const work = pluginWorkDir(tables.rows[0].managedBy as string)!
+    mkdirSync(work, { recursive: true })
+    writeFileSync(`${work}.source`, '{}')
     expect(await marketplacePluginService.remove(USER, AGENT_ID, 'carbone')).toMatchObject({ ok: true })
     expect(manifest().marketplace_plugins).toEqual([])
     expect(tables.rows).toEqual([])
     expect(tables.links).toEqual([])
+    expect(existsSync(work)).toBe(false)
+    expect(existsSync(`${work}.source`)).toBe(false)
   })
 })
 
@@ -395,6 +405,11 @@ describe('a pin core no longer serves', () => {
     const status = await marketplacePluginService.status(USER, AGENT_ID)
     expect(status.ok && status.plugins[0]).toMatchObject({ availability: 'unavailable', availabilityText: 'No longer available to you', cache: 'ready' })
     expect(deliveredSkillRows(agentDir, manifest()).filter((row) => row.source === 'plugin').map((row) => row.name)).toEqual(['report'])
+    // A banned or no-longer-allowed entry (core K5): Update and a re-add are refused, and the pin stays as it was.
+    const notVisible = { ok: false, code: 'not_found', message: 'This plugin is no longer in a marketplace you can see.' }
+    expect(await marketplacePluginService.update(USER, AGENT_ID, 'carbone')).toEqual(notVisible)
+    expect(await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)).toEqual(notVisible)
+    expect(manifest().marketplace_plugins).toEqual([pinOf(archive)])
   })
 
   it('reads update available when core moved on and no longer keeps the pinned snapshot', async () => {
@@ -430,7 +445,10 @@ describe('status', () => {
   it('reports each part: skills (an own skill wins a clash), commands, hooks by engine, and the connector’s step', async () => {
     mkdirSync(join(agentDir, 'skills', 'report'), { recursive: true })
     writeFileSync(join(agentDir, 'skills', 'report', 'SKILL.md'), '---\nname: report\ndescription: Mine.\n---\n')
-    const archive = pluginTgz('1.0.0', [{ name: 'carbone/hooks/hooks.json', body: '{"hooks":{}}' }])
+    const archive = pluginTgz('1.0.0', [
+      { name: 'carbone/hooks/hooks.json', body: '{"hooks":{"PostToolUse":[{"hooks":[]}],"SessionStart":[{"hooks":[]}]}}' },
+      { name: 'carbone/agents/layout.md', body: '---\nname: layout-checker\n---\nChecks layouts.\n' }
+    ])
     serve([entry(archive)], [archive])
     await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
     const status = await marketplacePluginService.status(USER, AGENT_ID)
@@ -441,11 +459,62 @@ describe('status', () => {
       compatibility: { level: 'compatible' },
       skills: [{ name: 'report', disabled: false, delivered: false, reason: 'This agent already has a skill with this name, which wins.' }],
       commands: ['render'],
+      hasAgents: true,
+      agents: ['layout-checker'],
       hasHooks: true,
+      hookEvents: ['PostToolUse', 'SessionStart'],
       hooksDelivered: true,
       mcpServers: [{ name: 'carbone', transport: 'stdio', disabled: false, setup: 'env', missingEnv: ['CARBONE_KEY'] }]
     })
     expect(deliveredSkillRows(agentDir, manifest()).filter((row) => row.name === 'report').map((row) => row.source)).toEqual(['authored'])
+  })
+
+  it('titles the row from the marketplace’s display title, else the pin’s name, and flags hooks the admin forbids', async () => {
+    const archive = pluginTgz('1.0.0', [{ name: 'carbone/hooks/hooks.json', body: '{"hooks":{}}' }])
+    serve([entry(archive, { title: 'Carbone Reports' })], [archive])
+    await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
+    let status = await marketplacePluginService.status(USER, AGENT_ID)
+    expect(status.ok && status.plugins[0]).toMatchObject({ name: 'carbone', title: 'Carbone Reports', hooksBlockedByPolicy: false, hooksDelivered: true })
+
+    // The entry left the person's view: the pin's own name stands in.
+    serve([], [])
+    addonPolicies._configure({
+      account: () => 'profile@https://cinna.test',
+      load: () => ({ externalDirectories: true, customMcp: true, pluginHooks: false, stdioMcp: true }),
+      save: () => undefined
+    })
+    try {
+      status = await marketplacePluginService.status(USER, AGENT_ID)
+      expect(status.ok && status.plugins[0]).toMatchObject({
+        title: 'carbone',
+        hooksBlockedByPolicy: true,
+        hooksDelivered: false,
+        hooksReason: 'Plugin hooks are turned off by your admin.'
+      })
+      // Turned off on the pin, the policy blocks nothing.
+      await marketplacePluginService.setDisabled(USER, AGENT_ID, 'carbone', { hooks: true })
+      status = await marketplacePluginService.status(USER, AGENT_ID)
+      expect(status.ok && status.plugins[0]).toMatchObject({ hooksBlockedByPolicy: false })
+    } finally {
+      addonPolicies._reset()
+    }
+  })
+})
+
+describe('reveal', () => {
+  it('shows the pinned plugin’s cached folder through the host, and refuses as data what is not there', async () => {
+    reveal.showItemInFolder.mockClear()
+    expect(marketplacePluginService.reveal(USER, AGENT_ID, 'carbone')).toMatchObject({ ok: false, code: 'not_found' })
+    const archive = pluginTgz()
+    serve([entry(archive)], [archive])
+    await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
+    expect(marketplacePluginService.reveal(USER, AGENT_ID, 'carbone')).toEqual({ ok: true })
+    expect(reveal.showItemInFolder).toHaveBeenCalledWith(snapshotDir(archive))
+
+    marketplacePluginCache._reset()
+    removeTree(join(host.userData, 'marketplace-plugins'))
+    expect(marketplacePluginService.reveal(USER, AGENT_ID, 'carbone')).toEqual({ ok: false, code: 'not_found', message: 'This plugin is not on this computer yet.' })
+    expect(reveal.showItemInFolder).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -504,8 +573,12 @@ describe('managed connectors over time', () => {
     const status = await marketplacePluginService.status(USER, AGENT_ID)
     expect(status.ok && status.plugins[0]).toMatchObject({ cache: 'failed', cacheMessage: 'The cached copy was changed on disk — Update to restore it' })
     expect(managedLaunchBlock(tables.rows[0] as never)).toBe('The cached copy was changed on disk — Update to restore it')
+    const work = pluginWorkDir(pluginManagedBy(ENTRY, sha256Of(archive)))!
+    mkdirSync(work, { recursive: true })
     expect(await marketplacePluginService.update(USER, AGENT_ID, 'carbone')).toMatchObject({ ok: true, archiveSha256: sha256Of(archive) })
     expect(readFileSync(server, 'utf8')).toBe('console.log("hi")\n')
+    // Its working copy was made from the changed tree: discarded, copied again at the next launch.
+    expect(existsSync(work)).toBe(false)
     expect(managedLaunchBlock(tables.rows[0] as never)).toBeNull()
     expect(deliveredSkillRows(agentDir, manifest()).filter((row) => row.source === 'plugin').map((row) => row.name)).toEqual(['report'])
     // A file added beside the plugin's own is a change too.
@@ -523,16 +596,26 @@ describe('managed connectors over time', () => {
     tables.links.push({ agentId: 'folder:other', id: oldRow as string })
     const latest = pluginTgz('2.0.0')
     serve([entry(latest, { version: '2.0.0' })], [latest])
+    const oldWork = pluginWorkDir(pluginManagedBy(ENTRY, sha256Of(old)))!
+    const strayWork = pluginWorkDir(pluginManagedBy(ENTRY, 'f'.repeat(64)))!
+    mkdirSync(oldWork, { recursive: true })
     await marketplacePluginService.update(USER, AGENT_ID, 'carbone')
     expect(tables.rows.map((row) => row.id)).toContain(oldRow)
+    // The old snapshot's connector still runs: its working copy stays.
+    expect(existsSync(oldWork)).toBe(true)
+    mkdirSync(strayWork, { recursive: true })
     expect(marketplacePluginService.collectGarbage()).toMatchObject({ ok: true, removed: 0 })
     expect(existsSync(snapshotDir(old))).toBe(true)
+    expect(existsSync(oldWork)).toBe(true)
+    // A copy of a snapshot nothing references any more is swept at start.
+    expect(existsSync(strayWork)).toBe(false)
     // Once nothing uses it, the connector goes, and its snapshot with it.
     tables.links = tables.links.filter((link) => link.agentId !== 'folder:other')
     expect(marketplacePluginService.collectGarbage()).toMatchObject({ ok: true, removed: 1 })
     expect(tables.rows.map((row) => row.id)).not.toContain(oldRow)
     expect(existsSync(snapshotDir(old))).toBe(false)
     expect(existsSync(snapshotDir(latest))).toBe(true)
+    expect(existsSync(oldWork)).toBe(false)
   })
 
   it('starts a connector at app start only when an agent has it and it can run', async () => {

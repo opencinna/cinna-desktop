@@ -210,3 +210,113 @@ export function useRemoveAddon() {
     onSettled: (_result, _error, { agentId }) => refreshAfterAddonChange(queryClient, agentId)
   })
 }
+
+/* ---------------------------------------------------- marketplace plugins (U3b) */
+
+type PluginStatusResult = import('../../../shared/addons/plugins').PluginStatusResult
+type PluginActionResult = import('../../../shared/addons/plugins').PluginActionResult
+type PluginDisabledInput = import('../../../shared/addons/plugins').PluginDisabledInput
+type RecheckRuntimesResult = import('../../../shared/addons/plugins').RecheckRuntimesResult
+
+/** One agent's pinned plugins, part by part; under {@link ADDONS_KEY}, so every add or remove reads it again. */
+export function addonPluginStatusKey(agentId: string): readonly unknown[] {
+  return [...ADDONS_KEY, 'plugin-status', agentId]
+}
+
+/**
+ * Where each of a kit agent's pinned plugins stands (`addons:plugin-status`):
+ * availability against its marketplace, the cached copy, and each part
+ * (skills, managed connectors, commands, hooks). A refusal is the query's
+ * `data`, as main answers it. Read again each time the tab mounts and when
+ * the window regains focus, so a marketplace that moved on shows Update.
+ */
+export function useAddonPluginStatus(agentId: string | null, options: { enabled?: boolean } = {}) {
+  return useQuery<PluginStatusResult>({
+    queryKey: addonPluginStatusKey(agentId ?? ''),
+    queryFn: () => window.api.addons.pluginStatus(agentId as string),
+    enabled: !!agentId && options.enabled !== false,
+    staleTime: 60_000,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    retry: false
+  })
+}
+
+/** Turn a pinned plugin's skills, connectors or hooks off or on; each key given replaces the pin's own. */
+export function useSetPluginDisabled() {
+  const queryClient = useQueryClient()
+  return useMutation<PluginActionResult, Error, { agentId: string; name: string; disabled: PluginDisabledInput }>({
+    mutationFn: ({ agentId, name, disabled }) => window.api.addons.setPluginDisabled(agentId, name, disabled),
+    onSettled: (_result, _error, { agentId }) => refreshAfterAddonChange(queryClient, agentId)
+  })
+}
+
+/** Move a pinned plugin to its marketplace's current snapshot. */
+export function useUpdatePlugin() {
+  const queryClient = useQueryClient()
+  return useMutation<PluginActionResult, Error, { agentId: string; name: string }>({
+    mutationFn: ({ agentId, name }) => window.api.addons.updatePlugin(agentId, name),
+    onSettled: (_result, _error, { agentId }) => refreshAfterAddonChange(queryClient, agentId)
+  })
+}
+
+/** Look for Node.js and Docker again (the picker's Check again), then read the directory again for the states that follow. */
+export function useRecheckRuntimes() {
+  const queryClient = useQueryClient()
+  return useMutation<RecheckRuntimesResult, Error, void>({
+    mutationFn: () => window.api.addons.recheckRuntimes(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ADDONS_KEY })
+  })
+}
+
+type AddonMcpRequirementsAnswer = Extract<import('../../../shared/addons/directory').AddonMcpRequirementsResult, { ok: true }>
+
+export function addonMcpRequirementsKey(agentId: string, profileId: string | null): readonly unknown[] {
+  return [...ADDONS_KEY, 'mcp-requirements', agentId, profileId]
+}
+
+/**
+ * A kit agent's `mcp_servers[]` requirements, each with where it stands on
+ * this computer (`ready`, `needs_setup` with the entry to set it up from, or
+ * `unavailable`). Under {@link ADDONS_KEY}, so every add and remove reads it
+ * again; `data` keeps the last good answer when a read is refused.
+ */
+export function useAddonMcpRequirements(agentId: string | null) {
+  const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
+  return useQuery<AddonMcpRequirementsAnswer>({
+    queryKey: addonMcpRequirementsKey(agentId ?? '', profileId),
+    queryFn: async () => {
+      const result = await window.api.addons.mcpRequirements(agentId as string)
+      if (!result.ok) throw new AddonDirectoryReadError(result.code, result.message)
+      return result
+    },
+    enabled: !!agentId,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false
+  })
+}
+
+/**
+ * Show a pinned plugin's cached folder in the file manager. A refusal (no
+ * such pin, not on this computer yet) is the mutation's `data` with main's
+ * sentence, not its error.
+ */
+export function useRevealPlugin() {
+  return useMutation<import('../../../shared/addons/plugins').PluginRevealResult, Error, { agentId: string; name: string }>({
+    mutationFn: ({ agentId, name }) => window.api.addons.revealPlugin(agentId, name)
+  })
+}
+
+/**
+ * Drop a requirement from a kit agent's `mcp_servers[]` (`addons:remove-requirement`):
+ * one no source lists any more, or a custom one the user will not set up. A
+ * refusal is the mutation's `data` with main's sentence, not its error.
+ */
+export function useRemoveRequirement() {
+  const queryClient = useQueryClient()
+  return useMutation<AddonActionResult, Error, { agentId: string; name: string }>({
+    mutationFn: ({ agentId, name }) => window.api.addons.removeRequirement(agentId, name),
+    onSettled: (_result, _error, { agentId }) => refreshAfterAddonChange(queryClient, agentId)
+  })
+}

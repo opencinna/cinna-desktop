@@ -26,13 +26,16 @@ const service = vi.hoisted(() => ({
   list: vi.fn(),
   search: vi.fn(),
   add: vi.fn(),
-  remove: vi.fn()
+  remove: vi.fn(),
+  mcpRequirements: vi.fn()
 }))
 vi.mock('../services/addonDirectory', () => ({ addonDirectory: service }))
-const plugins = vi.hoisted(() => ({ status: vi.fn(), setDisabled: vi.fn(), update: vi.fn() }))
+const plugins = vi.hoisted(() => ({ status: vi.fn(), setDisabled: vi.fn(), update: vi.fn(), reveal: vi.fn() }))
 vi.mock('../services/marketplacePluginService', () => ({ marketplacePluginService: plugins }))
 const runtimes = vi.hoisted(() => ({ recheck: vi.fn(async () => ({ node: true, docker: false })) }))
 vi.mock('../services/stdioRuntimes', () => ({ stdioRuntimes: runtimes }))
+const requirements = vi.hoisted(() => ({ removeRequirementByName: vi.fn() }))
+vi.mock('../services/addonDirectory/requirements', () => requirements)
 
 const { registerAddonHandlers } = await import('./addons.ipc')
 registerAddonHandlers()
@@ -45,6 +48,19 @@ beforeEach(() => {
   for (const fn of Object.values(service)) fn.mockReset()
   for (const fn of Object.values(plugins)) fn.mockReset()
   runtimes.recheck.mockClear()
+  requirements.removeRequirementByName.mockReset()
+})
+
+describe('addons:remove-requirement', () => {
+  it('hands the service the agent and the name, and answers a missing name as data', async () => {
+    requirements.removeRequirementByName.mockResolvedValue({ ok: true, next: null })
+    expect(await call('addons:remove-requirement', { agentId: 'folder:a', name: 'fs', extra: 1 })).toEqual({ ok: true, next: null })
+    expect(requirements.removeRequirementByName).toHaveBeenCalledWith('__default__', 'folder:a', 'fs')
+    expect(await call('addons:remove-requirement', { agentId: 'folder:a', name: 7 })).toMatchObject({ ok: false, code: 'invalid_name' })
+    expect(requirements.removeRequirementByName).toHaveBeenCalledTimes(1)
+    activation.activated = false
+    expect(() => call('addons:remove-requirement', { agentId: 'folder:a', name: 'fs' })).toThrow('not activated')
+  })
 })
 
 describe('addons IPC', () => {
@@ -52,9 +68,12 @@ describe('addons IPC', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'addons:add',
       'addons:directory',
+      'addons:mcp-requirements',
       'addons:plugin-status',
       'addons:recheck-runtimes',
       'addons:remove',
+      'addons:remove-requirement',
+      'addons:reveal-plugin',
       'addons:search',
       'addons:set-plugin-disabled',
       'addons:update-plugin'
@@ -107,6 +126,23 @@ describe('addons IPC', () => {
     }
     expect(service.add).not.toHaveBeenCalled()
     expect(service.remove).not.toHaveBeenCalled()
+  })
+
+  it('asks the requirements of one agent by a string id, and hands the answer back as it is', async () => {
+    const answer = { ok: true, items: [] }
+    service.mcpRequirements.mockResolvedValue(answer)
+    expect(await call('addons:mcp-requirements', { agentId: 'a1' })).toBe(answer)
+    expect(service.mcpRequirements).toHaveBeenLastCalledWith('__default__', 'a1')
+    await call('addons:mcp-requirements', { agentId: { evil: true } })
+    expect(service.mcpRequirements).toHaveBeenLastCalledWith('__default__', '')
+  })
+
+  it('reveals a plugin by string agent id and name only, answering as data', async () => {
+    plugins.reveal.mockReturnValue({ ok: true })
+    expect(await call('addons:reveal-plugin', { agentId: 'a1', name: 'carbone' })).toEqual({ ok: true })
+    expect(plugins.reveal).toHaveBeenLastCalledWith('__default__', 'a1', 'carbone')
+    await call('addons:reveal-plugin', { agentId: 1, name: ['x'] })
+    expect(plugins.reveal).toHaveBeenLastCalledWith('__default__', '', '')
   })
 
   it('caps the query', async () => {

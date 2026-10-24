@@ -1,17 +1,22 @@
 /**
  * The `cinna-core` directory provider: what the active profile's Cinna server
- * offers. It joins three reads that exist already — the catalog listing's
- * skill packages (through `libraryService`), the skills marketplaces' entries
- * (`marketplaceSkillService.discover`) and, since U3, the claude- and
- * codex-format marketplaces' plugins (`marketplacePluginService.discover`,
- * kind `plugin`, source `core-marketplace-plugin`). Signed out or local-only:
- * no entries and no error.
+ * offers. Signed out or local-only: no entries and no error.
  *
- * U4 swaps both reads for core's `GET /api/v1/addons/directory`, which also
- * carries plugins, core MCP entries and the `policy`. That swap is local to
- * this file: {@link fromCoreEntry} and {@link fromCorePolicy} already map
- * core's snake_case shape (README §3.1/§3.2), and nothing outside reads the
- * per-source mappers below.
+ * **Core's directory (U4).** One read of `GET /api/v1/addons/directory?runs_on=desktop`
+ * — the full compact index (catalog skills, marketplace skills and plugins,
+ * core's MCP directory) and the account's `policy` — mapped by
+ * {@link fromCoreEntry} / {@link fromCorePolicy}. The answer is reused for
+ * {@link CORE_DIRECTORY_TTL_MS}; after that, or on the picker's refresh, it is
+ * asked again with `If-None-Match`, and a 304 keeps the cached index. The
+ * policy goes back to the directory, which stores it for the account.
+ *
+ * **Older core.** A 404 from that endpoint falls back to the three reads that
+ * came before it — the catalog listing's skill packages (`libraryService`),
+ * the skills marketplaces (`marketplaceSkillService.discover`) and the
+ * plugin marketplaces (`marketplacePluginService.discover`) — and no
+ * policy (the account's stored one stands), until the next refresh tries the
+ * endpoint again. Both
+ * paths produce the same refs, so pins and add / remove do not care which.
  */
 
 import { getProfileScopeUserId } from '../../auth/scope'
@@ -22,22 +27,29 @@ import { libraryService } from '../libraryService'
 import { marketplaceSkillService, snapshotDownloadPath } from '../marketplaceSkillService'
 import { skillDownloadPath } from '../catalogSkillService'
 import { componentsOf, marketplacePluginService, pluginArchivePath, PLUGIN_TYPES, type MarketplacePluginEntry } from '../marketplacePluginService'
+import { cinnaSend } from '../cinna-http'
 import { isCatalogPinName } from '../../kit/skills'
 import type { CatalogItem } from '../../../shared/catalogItems'
 import type { MarketplaceSkillEntry } from '../../../shared/marketplaceSkills'
 import {
   DEFAULT_ADDON_POLICY,
+  type AddonInstall,
   type AddonKind,
+  type AddonMcpConnect,
+  type AddonMcpEnvName,
   type AddonPolicy,
   type DirectoryEntry
 } from '../../../shared/addons/directory'
-import { CATALOG_SOURCE, MARKETPLACE_SOURCE, PLUGIN_SOURCE } from './directory'
+import { CATALOG_SOURCE, CORE_MCP_SOURCE, MARKETPLACE_SOURCE, PLUGIN_SOURCE } from './directory'
 import type { DirectoryProvider, ProviderEntry, ProviderListing } from './types'
 
 const logger = createLogger('AddonDirectory')
 
-/** The marketplace list is read whole; this long it is reused before reading again. */
+/** The index (or, on an older core, the marketplace list) is read whole; this long it is reused before asking again. */
 export const CORE_DIRECTORY_TTL_MS = 60_000
+
+/** Core's unified directory, the whole index for this computer. */
+export const CORE_DIRECTORY_PATH = '/api/v1/addons/directory?runs_on=desktop'
 
 export const CORE_SOURCE_TEXT = {
   label: 'Cinna',
@@ -45,7 +57,10 @@ export const CORE_SOURCE_TEXT = {
   reauth: 'Your Cinna session expired. Sign in again to see the catalog and marketplace addons.',
   catalogFailed: 'Could not load the catalog.',
   marketplaceFailed: 'Could not load the marketplace skills.',
-  pluginsFailed: 'Could not load the marketplace plugins.'
+  pluginsFailed: 'Could not load the marketplace plugins.',
+  directoryFailed: 'Could not load the addons from Cinna.',
+  needsAuth: 'Needs a sign-in or an access token after adding',
+  needsEnv: 'Needs settings filled in after adding'
 } as const
 
 /** The first sentence (or line) of a description, for the card. */
@@ -157,6 +172,64 @@ const rec = (value: unknown): Wire | null => (value && typeof value === 'object'
 const str = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 const strs = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [])
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** core's `install.mcp.env` items: the names a server needs, never a value. */
+function envNamesOf(raw: unknown): AddonMcpEnvName[] {
+  const seen = new Set<string>()
+  return (Array.isArray(raw) ? raw : []).flatMap((item): AddonMcpEnvName[] => {
+    const env = rec(item)
+    const name = str(env?.name)
+    if (!env || !name || !ENV_NAME.test(name) || seen.has(name)) return []
+    seen.add(name)
+    return [{ name, secret: env.secret !== false, description: str(env.description) }]
+  })
+}
+
+/**
+ * core's MCP connect descriptor (`install.mcp`: transport, url or package,
+ * auth, env names) as the desktop's; null when it cannot be run here (no
+ * URL, no package, a registry this build does not know).
+ */
+export function fromCoreMcpConnect(raw: unknown): AddonMcpConnect | null {
+  const mcp = rec(raw)
+  if (!mcp) return null
+  const env = envNamesOf(mcp.env)
+  const auth = mcp.auth === 'oauth' || mcp.auth === 'bearer' || mcp.auth === 'env' ? mcp.auth : 'none'
+  if (mcp.transport === 'http' || mcp.transport === 'sse') {
+    const url = str(mcp.url)
+    if (!url || !/^https?:\/\//i.test(url)) return null
+    // A remote server's `env` names have nowhere to go on this computer: its auth is a sign-in or a token.
+    return { transport: mcp.transport === 'sse' ? 'sse' : 'streamable-http', url, auth: auth === 'bearer' ? 'bearer' : 'oauth', requiresAuth: auth !== 'none' }
+  }
+  if (mcp.transport !== 'stdio') return null
+  const pkg = rec(mcp.package)
+  const registry = pkg?.registry
+  const name = str(pkg?.name)?.trim()
+  if (!pkg || !name || (registry !== 'npm' && registry !== 'pypi' && registry !== 'oci')) return null
+  return {
+    transport: 'stdio',
+    package: { registry, name, version: str(pkg.version)?.trim() || null, args: strs(pkg.args) },
+    auth: env.length > 0 || auth === 'env' ? 'env' : 'none',
+    requiresAuth: env.length > 0,
+    env
+  }
+}
+
+/** The step after an add that core's connect descriptor implies, as the card's sentence. */
+function mcpSetupReason(connect: AddonMcpConnect | null): string | undefined {
+  if (!connect) return undefined
+  if (connect.transport === 'stdio') return connect.env.length > 0 ? CORE_SOURCE_TEXT.needsEnv : undefined
+  return connect.requiresAuth ? CORE_SOURCE_TEXT.needsAuth : undefined
+}
+
+/** Which kinds each core source lists; a row of another kind is not one the desktop can add. */
+const KINDS_OF_SOURCE: Record<string, readonly AddonKind[]> = {
+  [CATALOG_SOURCE]: ['skill'],
+  [MARKETPLACE_SOURCE]: ['skill', 'plugin'],
+  [CORE_MCP_SOURCE]: ['mcp']
+}
+
 /** One row of core's `/addons/directory` (snake_case) as a directory entry; null when it is not one. */
 export function fromCoreEntry(raw: unknown): ProviderEntry | null {
   const row = rec(raw)
@@ -169,8 +242,15 @@ export function fromCoreEntry(raw: unknown): ProviderEntry | null {
   const origin = rec(row.origin)
   const publisher = rec(row.publisher)
   const install = rec(row.install)
-  const status = row.status === 'pending' || row.status === 'unsupported' ? row.status : 'ready'
+  const allowedKinds = KINDS_OF_SOURCE[source]
+  if (allowedKinds && !allowedKinds.includes(kind)) return null
+  const connect = kind === 'mcp' ? fromCoreMcpConnect(install?.mcp) : null
+  // An MCP row with no connect descriptor this build can run is listed, but cannot be added.
+  const status = row.status === 'pending' || row.status === 'unsupported' ? row.status : kind === 'mcp' && !connect ? 'unsupported' : 'ready'
   const originKind = origin?.kind === 'catalog' || origin?.kind === 'directory' ? origin.kind : 'marketplace'
+  const archivePath = str(install?.archive_path)
+  const installOf: AddonInstall = connect ? { mcp: connect } : archivePath ? { archivePath } : null
+  const setupReason = status === 'ready' ? mcpSetupReason(connect) : undefined
   return {
     // A plugin of a marketplace is pinned through its own service, not as a skill.
     ref: { source: kind === 'plugin' && source === MARKETPLACE_SOURCE ? PLUGIN_SOURCE : source, id },
@@ -195,8 +275,9 @@ export function fromCoreEntry(raw: unknown): ProviderEntry | null {
     requires: { credentials: (Array.isArray(rec(row.requires)?.credentials) ? (rec(row.requires)!.credentials as unknown[]) : []).flatMap((c) => (rec(c) ? [rec(c)!] : [])) },
     runsCode: typeof row.runs_code === 'boolean' ? row.runs_code : null,
     status,
-    unsupportedReason: str(row.unsupported_reason),
-    install: str(install?.archive_path) ? { archivePath: str(install!.archive_path)! } : null
+    unsupportedReason: status === 'unsupported' ? (str(row.unsupported_reason) ?? (kind === 'mcp' && !connect ? 'unknown_source' : null)) : null,
+    install: installOf,
+    ...(setupReason ? { setupReason } : {})
   }
 }
 
@@ -222,6 +303,12 @@ export interface CinnaCoreReads {
   catalogItems(profile: string, refresh: boolean): Promise<CatalogItem[] | null>
   marketplaceSkills(): ReturnType<typeof marketplaceSkillService.discover>
   marketplacePlugins(): ReturnType<typeof marketplacePluginService.discover>
+  /**
+   * Core's `/addons/directory`, conditional on `etag` when given: the status
+   * and the parsed body. Absent: this core has no unified directory (the
+   * three reads above are the index). Throws as `cinnaSend` does (a 401).
+   */
+  directory?(profile: string, etag: string | null): Promise<{ status: number; body: unknown }>
   now(): number
 }
 
@@ -234,6 +321,10 @@ const defaultReads: CinnaCoreReads = {
   },
   marketplaceSkills: () => marketplaceSkillService.discover(),
   marketplacePlugins: () => marketplacePluginService.discover(),
+  directory: async (profile, etag) => {
+    const answer = await cinnaSend(profile, CORE_DIRECTORY_PATH, { method: 'GET', ...(etag ? { headers: { 'If-None-Match': etag } } : {}) })
+    return { status: answer.status, body: answer.body }
+  },
   now: () => Date.now()
 }
 
@@ -243,8 +334,15 @@ function isReauth(err: unknown): boolean {
 
 export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): DirectoryProvider & { invalidate(): void } {
   let marketplaceCache: { key: string; at: number; entries: ProviderEntry[] } | null = null
+  /** Core's last whole index answer, per account; its ETag asks whether it changed. */
+  let indexCache: { key: string; at: number; etag: string | null; entries: ProviderEntry[]; policy: AddonPolicy } | null = null
+  /** Accounts whose core answered 404: the older reads until the next refresh. */
+  const legacy = new Set<string>()
   const invalidate = (): void => {
     marketplaceCache = null
+    legacy.clear()
+    // The index is kept for its ETag: the next read asks the server, and a 304 reuses it.
+    if (indexCache) indexCache = { ...indexCache, at: Number.NEGATIVE_INFINITY }
   }
 
   type Part = { entries: ProviderEntry[]; error?: string; reauth?: boolean }
@@ -283,28 +381,74 @@ export function createCinnaCoreProvider(reads: CinnaCoreReads = defaultReads): D
     }
   }
 
+  /** What the cached index still offers when a read failed: its entries (no policy — the stored one stands). */
+  const staleListing = (key: string): Pick<ProviderListing, 'entries' | 'mcpDirectory'> =>
+    indexCache && indexCache.key === key ? { entries: indexCache.entries, mcpDirectory: true } : { entries: [] }
+
+  /** core's unified index, or `legacy` when this core has none (404). */
+  async function unified(profile: string, key: string, read: NonNullable<CinnaCoreReads['directory']>): Promise<ProviderListing | 'legacy'> {
+    if (indexCache && indexCache.key === key && reads.now() - indexCache.at < CORE_DIRECTORY_TTL_MS) {
+      return { entries: indexCache.entries, policy: indexCache.policy, mcpDirectory: true }
+    }
+    const etag = indexCache && indexCache.key === key ? indexCache.etag : null
+    let answer: { status: number; body: unknown }
+    try {
+      answer = await read(profile, etag)
+    } catch (err) {
+      logger.warn('the Cinna addon directory could not be read', { error: err instanceof Error ? err.message : String(err) })
+      return isReauth(err)
+        ? { entries: [], error: CORE_SOURCE_TEXT.reauth, errorCode: 'reauth' }
+        : { ...staleListing(key), error: CORE_SOURCE_TEXT.directoryFailed }
+    }
+    if (answer.status === 404) return 'legacy'
+    if (answer.status === 304 && indexCache && indexCache.key === key) {
+      indexCache = { ...indexCache, at: reads.now() }
+      return { entries: indexCache.entries, policy: indexCache.policy, mcpDirectory: true }
+    }
+    if (answer.status === 401 || answer.status === 403) return { entries: [], error: CORE_SOURCE_TEXT.reauth, errorCode: 'reauth' }
+    const body = rec(answer.body)
+    if (answer.status !== 200 || !body || !Array.isArray(body.data)) {
+      logger.warn('the Cinna addon directory answered something else', { status: answer.status })
+      return { ...staleListing(key), error: CORE_SOURCE_TEXT.directoryFailed }
+    }
+    const entries = body.data.flatMap((row) => fromCoreEntry(row) ?? [])
+    const policy = fromCorePolicy(body.policy)
+    indexCache = { key, at: reads.now(), etag: str(body.etag), entries, policy }
+    return { entries, policy, mcpDirectory: true }
+  }
+
+  /** The reads an older core answers: catalog skills and the marketplaces, and no policy. */
+  async function older(profile: string, key: string, refresh: boolean): Promise<ProviderListing> {
+    const [fromCatalog, fromMarketplace] = await Promise.all([catalog(profile, refresh), marketplace(key)])
+    const errors = [...new Set([fromCatalog.error, fromMarketplace.error].filter((e): e is string => !!e))]
+    return {
+      entries: [...fromCatalog.entries, ...fromMarketplace.entries],
+      ...(errors.length ? { error: errors.join(' ') } : {}),
+      ...(fromCatalog.reauth || fromMarketplace.reauth ? { errorCode: 'reauth' as const } : {})
+      // No policy: this core sends none, so the one stored for the account (or the default) stands.
+    }
+  }
+
   return {
     id: 'cinna-core',
     label: CORE_SOURCE_TEXT.label,
-    owns: (ref) => ref.source === CATALOG_SOURCE || ref.source === MARKETPLACE_SOURCE || ref.source === PLUGIN_SOURCE,
+    owns: (ref) => ref.source === CATALOG_SOURCE || ref.source === MARKETPLACE_SOURCE || ref.source === PLUGIN_SOURCE || ref.source === CORE_MCP_SOURCE,
     invalidate,
     async list(ctx): Promise<ProviderListing> {
       const profile = reads.profile()
       const host = reads.hostOf(profile)
       // Signed out or local-only: nothing from core, and nothing wrong.
       if (host === null) return { entries: [] }
-      // The picker's once-per-opening read: past the marketplace's TTL and the cached catalog listing.
+      // The picker's once-per-opening read: past the TTLs and the cached catalog listing.
       if (ctx.refresh) invalidate()
-      const [fromCatalog, fromMarketplace] = await Promise.all([
-        catalog(profile, ctx.refresh === true),
-        marketplace(`${profile}\u0000${host}`)
-      ])
-      const errors = [...new Set([fromCatalog.error, fromMarketplace.error].filter((e): e is string => !!e))]
-      return {
-        entries: [...fromCatalog.entries, ...fromMarketplace.entries],
-        ...(errors.length ? { error: errors.join(' ') } : {}),
-        ...(fromCatalog.reauth || fromMarketplace.reauth ? { errorCode: 'reauth' as const } : {})
+      const key = `${profile}\u0000${host}`
+      if (reads.directory && !legacy.has(key)) {
+        const answer = await unified(profile, key, reads.directory)
+        if (answer !== 'legacy') return answer
+        logger.info('this Cinna server has no addon directory; reading the catalog and marketplaces')
+        legacy.add(key)
       }
+      return older(profile, key, ctx.refresh === true)
     }
   }
 }

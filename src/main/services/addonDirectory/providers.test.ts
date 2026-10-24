@@ -277,6 +277,10 @@ describe('thisComputer provider', () => {
     // Turned off on this computer: it never connects, so turning it on comes first.
     expect(setupOf(row({ enabled: false }), 'disconnected', false)).toBe('enable')
     expect(setupOf(row({ enabled: false, authType: 'bearer' }), 'disconnected', false)).toBe('enable')
+    // A server from a directory with a setting still empty needs it filled in; a hand-made one is as the user typed it.
+    const stdio = { transportType: 'stdio', command: 'npx', url: null, env: { ROOT: '' } }
+    expect(setupOf(row({ ...stdio, registryRef: { source: 'core-mcp-directory', id: 'fs' } }), 'disconnected', false)).toBe('env')
+    expect(setupOf(row({ ...stdio, registryRef: null }), 'disconnected', false)).toBeNull()
   })
 
   it('says an attached connector that is turned off is added and turned off', () => {
@@ -353,6 +357,18 @@ describe('mcpRegistries provider', () => {
     expect(search).not.toHaveBeenCalled()
   })
 
+  it('leaves the curated index out when core’s MCP directory (seeded from it) answered, and still searches the official one', async () => {
+    const search = vi.fn(async (registryId: string, query: string) =>
+      registryId === 'cinna-official' ? [server('cinna-official', 'granola')] : [server('official', `io.x/${query}`)]
+    )
+    const provider = createMcpRegistriesProvider({ registries: () => info, search })
+    expect(await provider.list({ ...CTX, coreMcpDirectory: true })).toEqual({ entries: [] })
+    expect(search).not.toHaveBeenCalled()
+    expect((await provider.search!({ ...CTX, coreMcpDirectory: true }, 'pdf')).entries).toHaveLength(1)
+    // A ref of it a connector or a requirement already names still resolves.
+    expect((await provider.find!({ ...CTX, coreMcpDirectory: true }, { source: 'mcp-registry:cinna-official', id: 'granola' }))?.ref.id).toBe('granola')
+  })
+
   it('finds one entry by ref, in either registry', async () => {
     const search = vi.fn(async (registryId: string, query: string) =>
       registryId === 'cinna-official' ? [server('cinna-official', 'granola')] : [server('official', query), server('official', `${query}-other`)]
@@ -372,5 +388,139 @@ describe('mcpRegistries provider', () => {
   it('summarises a server with no description by its host, not its URL', () => {
     expect(registryEntry({ ...server('official', 'x'), description: undefined }, undefined)?.summary).toBe('x.example')
     expect(registryEntry(server('official', 'x'), undefined)?.summary).toBe('A server.')
+  })
+})
+
+describe('cinnaCore provider over core’s /addons/directory (U4)', () => {
+  const POLICY = { external_directories: false, custom_mcp: true, plugin_hooks: false, stdio_mcp: true }
+  const rows = [
+    { ref: { source: 'core-catalog', id: 'pkg-1' }, kind: 'skill', name: 'pdf', digest: `sha256:${SHA}`, install: { archive_path: '/api/v1/catalog/pkg-1/archive' } },
+    { ref: { source: 'core-catalog', id: 'agent-1' }, kind: 'plugin', name: 'not-a-skill' },
+    { ref: { source: 'core-marketplace', id: 'entry-1' }, kind: 'skill', name: 'docx' },
+    { ref: { source: 'core-marketplace', id: 'plug-1' }, kind: 'plugin', name: 'carbone', install: { archive_path: `/api/v1/llm-plugins/plugins/plug-1/archive?sha256=${SHA}` } },
+    {
+      ref: { source: 'core-mcp-directory', id: 'fs' },
+      kind: 'mcp',
+      name: 'filesystem',
+      publisher: { name: 'Anyone', verified: false },
+      install: { mcp: { transport: 'stdio', url: null, package: { registry: 'npm', name: '@mcp/fs', version: '1.2.0', args: ['--ro'] }, auth: 'env', env: [{ name: 'ROOT', secret: false, description: 'Folder' }] } }
+    },
+    { ref: { source: 'core-mcp-directory', id: 'gh' }, kind: 'mcp', name: 'github', install: { mcp: { transport: 'http', url: 'https://gh.example/mcp', package: null, auth: 'bearer', env: [] } } },
+    { ref: { source: 'core-mcp-directory', id: 'odd' }, kind: 'mcp', name: 'odd', install: { mcp: { transport: 'stdio', package: { registry: 'cargo', name: 'x', version: '1', args: [] }, auth: 'none', env: [] } } }
+  ]
+
+  function reads(answers: Array<{ status: number; body?: unknown } | Error>) {
+    let now = 0
+    const directory = vi.fn(async (_profile: string, _etag: string | null) => {
+      const next = answers.shift()
+      if (!next) throw new Error('no more answers')
+      if (next instanceof Error) throw next
+      return { status: next.status, body: next.body ?? null }
+    })
+    return {
+      profile: () => 'profile',
+      hostOf: () => 'https://cinna.example',
+      catalogItems: vi.fn(async () => [catalogItem()]),
+      marketplaceSkills: vi.fn(async () => ({ ok: true as const, entries: [marketEntry()] })),
+      marketplacePlugins: vi.fn(async () => ({ ok: true as const, entries: [] as MarketplacePluginEntry[] })),
+      directory,
+      now: () => now,
+      advance: (ms: number) => {
+        now += ms
+      }
+    }
+  }
+
+  it('maps the whole index and its policy in one read, with the refs the older reads produced', async () => {
+    const r = reads([{ status: 200, body: { data: rows, count: rows.length, policy: POLICY, etag: '"v1"' } }])
+    const listing = await createCinnaCoreProvider(r).list(CTX)
+    expect(listing.entries.map((e) => `${e.ref.source}/${e.ref.id}`)).toEqual([
+      'core-catalog/pkg-1',
+      'core-marketplace/entry-1',
+      // A marketplace plugin is pinned by its own service: the same ref the discover path gives it.
+      'core-marketplace-plugin/plug-1',
+      'core-mcp-directory/fs',
+      'core-mcp-directory/gh',
+      'core-mcp-directory/odd'
+    ])
+    expect(listing.policy).toEqual({ externalDirectories: false, customMcp: true, pluginHooks: false, stdioMcp: true })
+    // Core's MCP directory answered: the registries provider leaves out the index it is seeded from.
+    expect(listing.mcpDirectory).toBe(true)
+    expect(r.catalogItems).not.toHaveBeenCalled()
+    expect(r.marketplaceSkills).not.toHaveBeenCalled()
+    const byId = new Map(listing.entries.map((e) => [e.ref.id, e]))
+    expect(byId.get('fs')).toMatchObject({
+      status: 'ready',
+      publisher: { name: 'Anyone', verified: false },
+      install: { mcp: { transport: 'stdio', package: { registry: 'npm', name: '@mcp/fs', version: '1.2.0', args: ['--ro'] }, auth: 'env', env: [{ name: 'ROOT', secret: false, description: 'Folder' }] } },
+      setupReason: CORE_SOURCE_TEXT.needsEnv
+    })
+    expect(byId.get('gh')).toMatchObject({
+      install: { mcp: { transport: 'streamable-http', url: 'https://gh.example/mcp', auth: 'bearer', requiresAuth: true } },
+      setupReason: CORE_SOURCE_TEXT.needsAuth
+    })
+    // A package registry this build cannot run is listed, but not addable.
+    expect(byId.get('odd')).toMatchObject({ status: 'unsupported', install: null })
+    expect(byId.get('pkg-1')).toMatchObject({ digest: `sha256:${SHA}`, install: { archivePath: '/api/v1/catalog/pkg-1/archive' } })
+  })
+
+  it('asks again with If-None-Match after the TTL or on a refresh, and reuses the cached index on a 304', async () => {
+    const r = reads([
+      { status: 200, body: { data: rows.slice(0, 1), policy: POLICY, etag: '"v1"' } },
+      { status: 304 },
+      { status: 304 }
+    ])
+    const provider = createCinnaCoreProvider(r)
+    const first = await provider.list(CTX)
+    expect(r.directory).toHaveBeenLastCalledWith('profile', null)
+    await provider.list(CTX)
+    expect(r.directory).toHaveBeenCalledTimes(1)
+    r.advance(CORE_DIRECTORY_TTL_MS)
+    const second = await provider.list(CTX)
+    expect(r.directory).toHaveBeenLastCalledWith('profile', '"v1"')
+    expect(second.entries).toEqual(first.entries)
+    expect(second.policy).toEqual(first.policy)
+    const third = await provider.list({ ...CTX, refresh: true })
+    expect(r.directory).toHaveBeenCalledTimes(3)
+    expect(third.entries.map((e) => e.ref.id)).toEqual(['pkg-1'])
+  })
+
+  it('falls back to the catalog and marketplace reads on a 404, with no policy (the stored one stands), until a refresh', async () => {
+    const r = reads([{ status: 404 }, { status: 404 }])
+    const provider = createCinnaCoreProvider(r)
+    const listing = await provider.list(CTX)
+    expect(listing.entries.map((e) => `${e.ref.source}/${e.ref.id}`)).toEqual(['core-catalog/pkg-1', 'core-marketplace/entry-1'])
+    expect(listing).not.toHaveProperty('policy')
+    // An older core has no MCP directory: the Cinna registry index is still listed.
+    expect(listing).not.toHaveProperty('mcpDirectory')
+    r.advance(CORE_DIRECTORY_TTL_MS)
+    await provider.list(CTX)
+    expect(r.directory).toHaveBeenCalledTimes(1)
+    await provider.list({ ...CTX, refresh: true })
+    expect(r.directory).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the last index but sends no policy when the read fails, and marks an expired session', async () => {
+    const r = reads([{ status: 200, body: { data: rows.slice(0, 1), policy: POLICY, etag: '"v1"' } }, new Error('offline'), { status: 500 }])
+    const provider = createCinnaCoreProvider(r)
+    await provider.list(CTX)
+    const failed = await provider.list({ ...CTX, refresh: true })
+    expect(failed).toEqual({ entries: expect.any(Array), error: CORE_SOURCE_TEXT.directoryFailed, mcpDirectory: true })
+    expect(failed.entries.map((e) => e.ref.id)).toEqual(['pkg-1'])
+    expect(failed).not.toHaveProperty('policy')
+    expect(await provider.list({ ...CTX, refresh: true })).not.toHaveProperty('policy')
+
+    const expired = reads([new CinnaApiError('reauth_required', 'Cinna 401')])
+    expect(await createCinnaCoreProvider(expired).list(CTX)).toEqual({ entries: [], error: CORE_SOURCE_TEXT.reauth, errorCode: 'reauth' })
+  })
+
+  it('answers nothing when signed out, without asking the directory', async () => {
+    const r = { ...reads([]), hostOf: () => null }
+    expect(await createCinnaCoreProvider(r).list(CTX)).toEqual({ entries: [] })
+    expect(r.directory).not.toHaveBeenCalled()
+  })
+
+  it('owns core’s MCP directory refs', () => {
+    expect(createCinnaCoreProvider(reads([])).owns({ source: 'core-mcp-directory', id: 'x' })).toBe(true)
   })
 })

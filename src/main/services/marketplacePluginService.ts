@@ -37,6 +37,7 @@ import { CinnaApiError, KitError } from '../errors'
 import { CinnaSessionChanged } from '../auth/cinna-session'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
+import { runtimeHost } from '../host/runtimeHost'
 import { cinnaFetch, cinnaFetchBytes } from './cinna-http'
 import { libraryService } from './libraryService'
 import { instanceKey } from './pinnedSkillCache'
@@ -67,7 +68,7 @@ import { marketplaceSkillCache } from './marketplaceSkillCache'
 import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { agentMcpRepo } from '../db/agentMcp'
 import { mcpManager } from '../mcp/manager'
-import { managedLaunchBlock, managedNeedsBearer, missingManagedEnv, pluginManagedBy, snapshotKeyOfManagedBy } from '../mcp/managed'
+import { collectPluginWork, discardPluginWork, managedLaunchBlock, managedNeedsBearer, missingManagedEnv, pluginManagedBy, snapshotKeyOfManagedBy } from '../mcp/managed'
 import { managedUvLayout } from '../localdev/toolchain'
 import { effectiveEngine, type AgentEngine } from '../../shared/engine'
 import { compatibilityOf, engineSupports, ENGINE_LABELS } from '../../shared/addons/engineSupport'
@@ -79,6 +80,7 @@ import type {
   PluginPinStatus,
   PluginRefusal,
   PluginRefused,
+  PluginRevealResult,
   PluginServerStatus,
   PluginStatusResult
 } from '../../shared/addons/plugins'
@@ -125,7 +127,8 @@ export const PLUGIN_STATUS_TEXT = {
   update: 'Update available',
   notVisible: 'This plugin is no longer in a marketplace you can see.',
   hooksEngine: (engine: AgentEngine) => `Hooks run on Claude only, not on ${ENGINE_LABELS[engine]}.`,
-  hooksPolicy: 'Plugin hooks are turned off by your admin.'
+  hooksPolicy: 'Plugin hooks are turned off by your admin.',
+  notCached: 'This plugin is not on this computer yet.'
 } as const
 
 /** "This agent already has …": the same entry, or another marketplace's plugin of the same name. */
@@ -188,6 +191,8 @@ export function componentsOf(raw: unknown): AddonComponents | undefined {
 export interface MarketplacePluginEntry {
   entryUuid: string
   name: string
+  /** The marketplace's display title, when it sends one. */
+  title: string | null
   description: string
   pluginType: string
   marketplaceUuid: string
@@ -220,6 +225,7 @@ export function toPluginEntry(raw: unknown): MarketplacePluginEntry | null {
   return {
     entryUuid,
     name: textOrNull(row.name) ?? '',
+    title: textOrNull(row.title) ?? textOrNull(row.display_name),
     description: textOrNull(row.description) ?? '',
     pluginType: textOrNull(row.plugin_type) ?? '',
     marketplaceUuid: textOrNull(row.marketplace_id) ?? '',
@@ -466,6 +472,28 @@ const managedProviders: PluginMcpProviders = createPluginMcpProviders({
   },
   uv: () => managedUvLayout()
 })
+
+/**
+ * Remove the writable working copies (`plugin-work/<entry>/<sha>`) of every
+ * snapshot no pin anywhere references and no managed connector still runs
+ * (after an Update or a Remove). Skipped when any agent's pins cannot be
+ * read. Never throws.
+ */
+function pruneWorkCopies(): void {
+  try {
+    const pinned = pinnedKeys((manifest) => pinsOf(manifest).map(pluginSnapshotKeyOf))
+    if (!pinned.ok) return
+    const keep = new Set(pinned.keep)
+    for (const row of mcpProviderRepo.listAllManaged()) {
+      const key = snapshotKeyOfManagedBy(row.managedBy)
+      if (key !== null) keep.add(key)
+    }
+    const removed = collectPluginWork(keep)
+    if (removed > 0) logger.info('plugin working copies removed', { removed })
+  } catch (err) {
+    logger.warn('plugin working copies could not be pruned', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
 
 /**
  * One chain of pin writes and syncs per agent: an add, update, remove,
@@ -729,6 +757,8 @@ export const marketplacePluginService = {
         if (state.state !== 'ready' || verifyPluginTree(state.dir)) return { ok: true as const, name, archiveSha256: latest, next: null }
         logger.warn('a cached marketplace plugin was changed on disk; downloading it again', { agentId, name })
         marketplacePluginCache.discard(target)
+        // Its working copy was made from the changed tree: copied again from the restored one at the next launch.
+        discardPluginWork(pluginManagedBy(target.entryUuid, latest))
         const restored = phrased(await fetchSnapshot(who.profile, who.host, target))
         if (!restored.ok) return restored
         settle(kit.rootId, agentId)
@@ -749,6 +779,7 @@ export const marketplacePluginService = {
       settle(kit.rootId, agentId)
       logger.info('marketplace plugin updated', { agentId, name })
       const outcomes = await syncServers(userId, agentId, kit.dir)
+      pruneWorkCopies()
       return { ok: true as const, name, archiveSha256: latest, next: nextOf(outcomes, current.entry_uuid) }
     }))
   },
@@ -776,6 +807,7 @@ export const marketplacePluginService = {
       const pin = dropped as MarketplacePluginPin | null
       // The sync releases what no remaining pin wants (and deletes a row no pin anywhere references).
       await syncServers(userId, agentId, kit.dir)
+      pruneWorkCopies()
       logger.info('marketplace plugin removed', { agentId, name })
       return { ok: true as const, name, archiveSha256: typeof pin?.archive_sha256 === 'string' ? pin.archive_sha256 : '', next: null }
     }))
@@ -901,8 +933,8 @@ export const marketplacePluginService = {
           const components: AddonComponents = {
             skills: (tree?.skills ?? []).map((skill) => ({ name: skill, hasScripts: false })),
             commands: (tree?.commands ?? []).map((command) => command.name),
-            agents: tree?.hasAgents ? ['agents'] : [],
-            hooks: tree?.hasHooks ? { events: ['hooks'] } : null,
+            agents: tree?.hasAgents ? (tree.agents.length > 0 ? tree.agents : ['agents']) : [],
+            hooks: tree?.hasHooks ? { events: tree.hookEvents.length > 0 ? tree.hookEvents : ['hooks'] } : null,
             mcpServers: (tree?.mcpServers ?? []).map((spec) => ({ name: spec.name, transport: spec.transport, runtime: null, auth: 'none', env: [] })),
             lspServers: []
           }
@@ -930,6 +962,7 @@ export const marketplacePluginService = {
           const state = plugin.modified ? { state: 'failed' as const, message: PLUGIN_TREE_MODIFIED_SENTENCE } : resolved
           return {
             name: pin.name,
+            title: entry?.title ?? pin.name,
             entryUuid: pin.entry_uuid,
             marketplaceName: typeof pin.marketplace_name === 'string' ? pin.marketplace_name : '',
             version: typeof pin.version === 'string' ? pin.version : null,
@@ -955,10 +988,13 @@ export const marketplacePluginService = {
             }),
             commands: (tree?.commands ?? []).map((command) => command.name),
             hasAgents: !!tree?.hasAgents,
+            agents: tree?.agents ?? [],
             hasHooks: !!tree?.hasHooks,
+            hookEvents: tree?.hookEvents ?? [],
             hooksDisabled: off.hooks,
             hooksDelivered: hooksOn && !hooksReason,
             ...(hooksReason ? { hooksReason } : {}),
+            hooksBlockedByPolicy: hooksOn && !policy.pluginHooks,
             mcpServers: servers
           }
         })
@@ -970,6 +1006,27 @@ export const marketplacePluginService = {
   },
 
   /**
+   * Show the pinned plugin `name`'s cached folder in the file manager,
+   * through the host. Refused as data when the agent has no such pin or the
+   * snapshot is not (validly) on this computer.
+   */
+  reveal(userId: string, agentId: string, name: string): PluginRevealResult {
+    try {
+      const kit = locate(userId, agentId)
+      if ('ok' in kit) return kit
+      const pin = pluginPinsOf(readManifest(manifestPath(kit.dir))).find((candidate) => candidate.name === name)
+      if (!pin) return refused('not_found')
+      const state = marketplacePluginCache.resolve(marketplacePluginRefOf(pin))
+      if (state.state !== 'ready') return refused('not_found', PLUGIN_STATUS_TEXT.notCached)
+      runtimeHost.shell.showItemInFolder(state.dir)
+      return { ok: true }
+    } catch (err) {
+      logger.warn('a pinned plugin could not be revealed', { agentId, error: err instanceof Error ? err.message : String(err) })
+      return refused('write_failed', 'The plugin’s folder could not be shown.')
+    }
+  },
+
+  /**
    * Remove every cached snapshot no registered kit agent pins. Skipped when
    * any agent's pins cannot be read. Run once per app start, beside the
    * skills caches'. **Never throws.**
@@ -977,7 +1034,11 @@ export const marketplacePluginService = {
   collectGarbage(): { ok: true; removed: number } | { ok: false; reason: string } {
     try {
       const managed = mcpProviderRepo.listAllManaged()
-      if (marketplacePluginCache.isEmpty() && managed.length === 0) return { ok: true, removed: 0 }
+      if (marketplacePluginCache.isEmpty() && managed.length === 0) {
+        // No snapshot is cached and no connector runs one: no working copy is of any use.
+        collectPluginWork(new Set())
+        return { ok: true, removed: 0 }
+      }
       const pinned = pinnedKeys((manifest) => pinsOf(manifest).map(pluginSnapshotKeyOf))
       if (!pinned.ok) return pinned
       // A managed connector no pin references and no agent uses goes first; one still standing keeps its folder.
@@ -999,6 +1060,9 @@ export const marketplacePluginService = {
         }
         if (key !== null) keep.add(key)
       }
+      // A working copy goes with its snapshot: kept exactly where the cached folder is.
+      const work = collectPluginWork(keep)
+      if (work > 0) logger.info('unreferenced plugin working copies removed', { removed: work })
       return { ok: true, ...marketplacePluginCache.collectGarbage(keep) }
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : String(err) }

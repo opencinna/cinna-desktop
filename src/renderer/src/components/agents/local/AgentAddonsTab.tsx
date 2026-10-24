@@ -31,27 +31,61 @@ import { mcpProblem } from '../../settings/mcpPresentation'
 import { ADDON_KIND } from './AddonRow'
 import { AddonPicker } from './AddonPicker'
 import { SkillRow, needsAttention, type CatalogRowActions, type CatalogVerb } from './SkillRow'
+import { PluginRow, pluginHasProblem, pluginNeedsAttention, type PluginRowActions } from './PluginRow'
+import type { PluginPinStatus } from '../../../../../shared/addons/plugins'
+import { DEFAULT_AGENT_ENGINE, effectiveEngine } from '../../../../../shared/engine'
+import { useDefaultRuntime } from '../../../hooks/useEngine'
+import {
+  useAddonMcpRequirements,
+  useAddonPluginStatus,
+  useRemoveAddon,
+  useRemoveRequirement,
+  useRevealPlugin,
+  useSetPluginDisabled,
+  useUpdatePlugin
+} from '../../../hooks/useAddonDirectory'
+import type { AddonMcpRequirement, AddonRef } from '../../../../../shared/addons/directory'
+import { RequirementRow, type RequirementRowActions } from './RequirementRow'
 
-/** One row of the Addons tab's single list. Plugin rows join in U3. */
+/** One row of the Addons tab's single list. */
 export type AddonListItem =
   | { kind: 'skill'; key: string; title: string; skill: LocalAgentSkill }
   | { kind: 'mcp'; key: string; title: string; provider: McpProviderData }
+  | { kind: 'plugin'; key: string; title: string; plugin: PluginPinStatus }
+  /** A connector the manifest's `mcp_servers[]` names that this computer does not meet yet (a Connector row). */
+  | { kind: 'requirement'; key: string; title: string; requirement: AddonMcpRequirement }
+
+/** The kind a row is filtered and counted under: a manifest connector is a connector. */
+export function addonItemKind(item: AddonListItem): AddonKind {
+  return item.kind === 'requirement' ? 'mcp' : item.kind
+}
+
+/** The ref a plugin pin is added and removed by in the addon directory. */
+export const PLUGIN_REF_SOURCE = 'core-marketplace-plugin'
 
 /**
  * Everything the Addons tab lists, in one list: the attached connectors (in
  * attach order; a link whose connector is gone is never drawn — the delete
- * cascades, and the provider list may simply not have caught up) and a kit
- * agent's skills. The tab and its badge count the same list.
+ * cascades, and the provider list may simply not have caught up), a kit
+ * agent's skills and its pinned plugins, and the connectors its manifest
+ * names (`mcp_servers[]`) that this computer does not meet yet. A connector a
+ * plugin manages is drawn inside its plugin's row, never as a row of its own;
+ * a manifest connector that is met is the connector's own row, and one whose
+ * connector is attached already is that row too (never listed twice). The tab
+ * and its badge count the same list.
  */
 export function addonListItems(
   ids: readonly string[] | undefined,
   providers: readonly McpProviderData[] | undefined,
-  skills: readonly LocalAgentSkill[] | undefined
+  skills: readonly LocalAgentSkill[] | undefined,
+  plugins: readonly PluginPinStatus[] = [],
+  requirements: readonly AddonMcpRequirement[] = []
 ): AddonListItem[] {
   const connectors: AddonListItem[] = (ids ?? []).flatMap((id) => {
     const provider = providers?.find((p) => p.id === id)
-    return provider ? [{ kind: 'mcp' as const, key: `mcp:${id}`, title: provider.name, provider }] : []
+    return provider && !provider.managedBy ? [{ kind: 'mcp' as const, key: `mcp:${id}`, title: provider.name, provider }] : []
   })
+  const pluginRows: AddonListItem[] = plugins.map((plugin) => ({ kind: 'plugin' as const, key: `plugin:${plugin.name}`, title: plugin.title || plugin.name, plugin }))
   // An own skill and a pin may share a name (an error the row shows), and so may two pins.
   const skillRows: AddonListItem[] = (skills ?? []).map((skill, index) => ({
     kind: 'skill' as const,
@@ -59,12 +93,23 @@ export function addonListItems(
     title: skill.source !== 'authored' && skill.title ? skill.title : skill.name,
     skill
   }))
-  return [...connectors, ...skillRows]
+  const shownIds = new Set(connectors.map((item) => (item.kind === 'mcp' ? item.provider.id : '')))
+  const requirementRows: AddonListItem[] = requirements
+    .filter((requirement) => requirement.state !== 'ready' && !(requirement.mcpProviderId && shownIds.has(requirement.mcpProviderId)))
+    .map((requirement) => ({ kind: 'requirement' as const, key: `requirement:${requirement.name}`, title: requirement.name, requirement }))
+  return [...connectors, ...skillRows, ...pluginRows, ...requirementRows]
 }
 
-/** Whether a row counts toward the tab badge's problems: a connector sessions run without, or a skill with an issue. */
+/** Whether a row counts toward the tab badge's problems: a connector sessions run without, a skill with an issue, a plugin with a problem. */
 function isProblem(item: AddonListItem): boolean {
+  if (item.kind === 'requirement') return true
+  if (item.kind === 'plugin') return pluginHasProblem(item.plugin)
   return item.kind === 'mcp' ? mcpProblem(item.provider) !== null : needsAttention(item.skill)
+}
+
+/** A kit agent's pinned plugins, once read; none while the read is out or refused. */
+function pluginsOf(result: ReturnType<typeof useAddonPluginStatus>['data']): PluginPinStatus[] {
+  return result?.ok ? result.plugins : []
 }
 
 /**
@@ -81,7 +126,10 @@ export function useAddonsBadge(
 ): { count: number; problems: number; skills: number } {
   const { data: ids } = useAgentMcpProviders(agentId)
   const { data: providers } = useMcpProviders()
-  const items = addonListItems(ids, providers, agentSkills)
+  // Only a kit agent pins plugins; the tab reads the same query.
+  const { data: pluginStatus } = useAddonPluginStatus(agentId, { enabled: agentSkills !== undefined })
+  const { data: requirements } = useAddonMcpRequirements(agentSkills !== undefined ? agentId : null)
+  const items = addonListItems(ids, providers, agentSkills, pluginsOf(pluginStatus), requirements?.items)
   return {
     count: items.length,
     problems: items.filter(isProblem).length,
@@ -114,6 +162,14 @@ export const ADDON_FILTER_THRESHOLD = 8
 
 const KIND_ORDER: AddonKind[] = ['skill', 'plugin', 'mcp']
 
+const PLUGIN_TEXT = {
+  updateFailed: 'The plugin could not be updated.',
+  removeFailed: 'The plugin could not be removed.',
+  partsFailed: 'The change could not be saved.',
+  revealFailed: 'The plugin’s folder could not be shown.',
+  requirementRemoveFailed: 'It could not be removed from cinna-agent.json.'
+} as const
+
 /**
  * What a local agent runs with beyond its own instructions, as one list:
  * MCP connectors and a kit agent's skills (plugins join in U3), each in the
@@ -138,7 +194,11 @@ export function AgentAddonsTab({
   const attach = useAttachAgentMcp()
   const detach = useDetachAgentMcp()
   const openPath = useOpenAgentPath()
-  const [picking, setPicking] = useState(false)
+  // Open, and at which entry: a manifest connector's Set up opens it straight at that entry's detail.
+  const [picking, setPicking] = useState<false | { initial?: { ref: AddonRef | null; query: string } }>(false)
+  // The engine the agent runs on, as the launcher decides it: a plugin's "Works with" lists it first.
+  const { data: defaultRuntime } = useDefaultRuntime()
+  const engine = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE)
   const [kindFilter, setKindFilter] = useState<AddonKind | 'all'>('all')
   // A failed Detach is shown in that connector's card (rule 6).
   const [detachError, setDetachError] = useState<{ id: string; message: string } | null>(null)
@@ -157,6 +217,39 @@ export function AgentAddonsTab({
   const statusOf = (skill: LocalAgentSkill): MarketplaceSkillPinStatus | null => {
     const result = marketplaceStatus.data
     return result?.ok ? (result.pins.find((pin) => pin.name === skill.name) ?? null) : null
+  }
+  // Plugin rows: the pins' status, and their verbs owned here like the skill rows' (rule 5).
+  const pluginStatus = useAddonPluginStatus(agent.id, { enabled: agent.skills !== undefined })
+  // The connectors the manifest names (`mcp_servers[]`), as this computer meets them; a kit agent only.
+  const requirements = useAddonMcpRequirements(agent.skills !== undefined ? agent.id : null)
+  const setPluginDisabled = useSetPluginDisabled()
+  const updatePlugin = useUpdatePlugin()
+  const removeAddon = useRemoveAddon()
+  const [pluginBusy, setPluginBusy] = useState<{ name: string; verb: 'update' | 'remove' | 'parts' } | null>(null)
+  const [pluginError, setPluginError] = useState<{ name: string; message: string } | null>(null)
+  const [confirmingPlugin, setConfirmingPlugin] = useState<string | null>(null)
+  const revealPlugin = useRevealPlugin()
+  // Manifest connectors: removing one from `mcp_servers[]`, owned here like the rows' other verbs (rule 5).
+  const removeRequirement = useRemoveRequirement()
+  const [requirementBusy, setRequirementBusy] = useState<string | null>(null)
+  const [requirementError, setRequirementError] = useState<{ name: string; message: string } | null>(null)
+  const [confirmingRequirement, setConfirmingRequirement] = useState<string | null>(null)
+  const runPluginVerb = (
+    name: string,
+    verb: 'update' | 'remove' | 'parts',
+    run: () => Promise<{ ok: true } | { ok: false; message: string }>,
+    fallback: string
+  ): void => {
+    if (pluginBusy) return
+    setPluginError(null)
+    setPluginBusy({ name, verb })
+    run()
+      .then((result) => {
+        if (!result.ok) setPluginError({ name, message: result.message || fallback })
+        else if (verb === 'remove') setConfirmingPlugin(null)
+      })
+      .catch((err) => setPluginError({ name, message: unwrapIpcError(err, fallback) }))
+      .finally(() => setPluginBusy(null))
   }
   const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb } | null>(null)
   const [skillError, setSkillError] = useState<{ name: string; message: string } | null>(null)
@@ -267,9 +360,83 @@ export function AgentAddonsTab({
     }
   }
 
-  const items = addonListItems(ids, providers, agent.skills)
+  const pluginActionsFor = (plugin: PluginPinStatus): PluginRowActions => {
+    const ref = { source: PLUGIN_REF_SOURCE, id: plugin.entryUuid }
+    const busy = pluginBusy?.name === plugin.name ? pluginBusy.verb : null
+    return {
+      readOnly,
+      busy,
+      locked: pluginBusy !== null && busy === null,
+      error: pluginError?.name === plugin.name ? pluginError.message : null,
+      confirming: confirmingPlugin === plugin.name,
+      onUpdate: () =>
+        runPluginVerb(plugin.name, 'update', () => updatePlugin.mutateAsync({ agentId: agent.id, name: plugin.name }), PLUGIN_TEXT.updateFailed),
+      onAskRemove: () => {
+        setPluginError(null)
+        setConfirmingPlugin(plugin.name)
+      },
+      onCancelRemove: () => setConfirmingPlugin(null),
+      onRemove: () =>
+        runPluginVerb(plugin.name, 'remove', () => removeAddon.mutateAsync({ agentId: agent.id, ref }), PLUGIN_TEXT.removeFailed),
+      onSetDisabled: (disabled) =>
+        runPluginVerb(
+          plugin.name,
+          'parts',
+          () => setPluginDisabled.mutateAsync({ agentId: agent.id, name: plugin.name, disabled }),
+          PLUGIN_TEXT.partsFailed
+        ),
+      onReveal: () => {
+        setPluginError(null)
+        revealPlugin
+          .mutateAsync({ agentId: agent.id, name: plugin.name })
+          .then((result) => {
+            if (!result.ok) setPluginError({ name: plugin.name, message: result.message || PLUGIN_TEXT.revealFailed })
+          })
+          .catch((err) => setPluginError({ name: plugin.name, message: unwrapIpcError(err, PLUGIN_TEXT.revealFailed) }))
+      }
+    }
+  }
+
+  const requirementActionsFor = (requirement: AddonMcpRequirement): RequirementRowActions => ({
+    readOnly,
+    busy: requirementBusy === requirement.name,
+    error: requirementError?.name === requirement.name ? requirementError.message : null,
+    confirming: confirmingRequirement === requirement.name,
+    // From its directory entry when one lists it; a custom one at Custom connector…, its name filled in.
+    onSetUp: () =>
+      setPicking({
+        initial: {
+          ref: requirement.entryRef,
+          query: requirement.name,
+          ...(requirement.ref === null && requirement.entryRef === null ? { custom: { name: requirement.name, transport: requirement.transport } } : {})
+        }
+      }),
+    onAskRemove: () => {
+      setRequirementError(null)
+      setConfirmingRequirement(requirement.name)
+    },
+    onCancelRemove: () => setConfirmingRequirement(null),
+    onRemove: () => {
+      if (requirementBusy) return
+      const name = requirement.name
+      setRequirementError(null)
+      setRequirementBusy(name)
+      removeRequirement
+        .mutateAsync({ agentId: agent.id, name })
+        .then((result) => {
+          if (result.ok) setConfirmingRequirement(null)
+          else setRequirementError({ name, message: result.message || PLUGIN_TEXT.requirementRemoveFailed })
+        })
+        .catch((err) => setRequirementError({ name, message: unwrapIpcError(err, PLUGIN_TEXT.requirementRemoveFailed) }))
+        .finally(() => setRequirementBusy(null))
+    }
+  })
+
+  const items = addonListItems(ids, providers, agent.skills, pluginsOf(pluginStatus.data), requirements.data?.items)
   const attention = (item: AddonListItem): boolean => {
+    if (item.kind === 'requirement') return true
     if (item.kind === 'mcp') return mcpProblem(item.provider) !== null
+    if (item.kind === 'plugin') return pluginNeedsAttention(item.plugin)
     const skill = item.skill
     if (needsAttention(skill) || skill.updatable) return true
     const status = skill.source === 'marketplace' ? statusOf(skill) : null
@@ -279,10 +446,10 @@ export function AgentAddonsTab({
   // the tab opens and when an add or a remove changes what is listed, never while the user works a
   // row: a toggle, an update or a connect does not move the row from under the pointer (rule 1).
   const sorted = useFrozenOrder(items, attention, marketplaceStatus.data !== undefined)
-  const kinds = KIND_ORDER.filter((kind) => items.some((item) => item.kind === kind))
+  const kinds = KIND_ORDER.filter((kind) => items.some((item) => addonItemKind(item) === kind))
   const filtering = items.length > ADDON_FILTER_THRESHOLD && kinds.length > 1
   const filter = filtering && kinds.includes(kindFilter as AddonKind) ? kindFilter : 'all'
-  const shown = filter === 'all' ? sorted : sorted.filter((item) => item.kind === filter)
+  const shown = filter === 'all' ? sorted : sorted.filter((item) => addonItemKind(item) === filter)
 
   const skillRow = (skill: LocalAgentSkill): React.JSX.Element => (
     <SkillRow
@@ -327,13 +494,14 @@ export function AgentAddonsTab({
               <>
                 <p className="mt-2">A skill is a folder under <code>skills/</code> in this agent’s folder, with a <code>SKILL.md</code> whose name matches the folder and which says what the skill is for. Claude and OpenCode load skills as skills; Codex is told where each one’s SKILL.md is. A skill with an error is left out of every session until its SKILL.md is fixed.</p>
                 <p className="mt-2">A skill from the catalog, or from a skills marketplace an admin connected in Cinna, is pinned in <code>cinna-agent.json</code> rather than kept in the folder. Cinna downloads the pinned version once and gives it to every session. A marketplace skill offers Update when its marketplace has a newer copy; one that is no longer available to you keeps working from the copy on this computer.</p>
+                <p className="mt-2">A plugin from a marketplace is pinned the same way and brings several parts: skills, commands, hooks and connectors. Open its row to turn a part off for this agent. Its connectors are set up here, inside the plugin, and Remove takes them away with it.</p>
               </>
             )}
             <p className="mt-2">Add searches every source you may use: Cinna’s catalog and marketplaces, the connectors on this computer and the public MCP registries.</p>
           </SettingsInfoTip>
         }
         action={
-          <SettingsButton onClick={() => setPicking(true)} title="Add a skill or a connector">
+          <SettingsButton onClick={() => setPicking({})} title={agent.skills ? 'Add a skill, a plugin or a connector' : 'Add a connector'}>
             <Plus size={14} />
             Add
           </SettingsButton>
@@ -343,7 +511,7 @@ export function AgentAddonsTab({
           <div role="group" aria-label="Show addons of kind" className="flex flex-wrap gap-1.5">
             {(['all', ...kinds] as const).map((kind) => {
               const label = kind === 'all' ? 'All' : ADDON_KIND[kind].plural
-              const count = kind === 'all' ? items.length : items.filter((item) => item.kind === kind).length
+              const count = kind === 'all' ? items.length : items.filter((item) => addonItemKind(item) === kind).length
               return (
                 <button
                   key={kind}
@@ -369,6 +537,10 @@ export function AgentAddonsTab({
               <li key={item.key}>
                 {item.kind === 'skill' ? (
                   skillRow(item.skill)
+                ) : item.kind === 'plugin' ? (
+                  <PluginRow plugin={item.plugin} providers={providers} actions={pluginActionsFor(item.plugin)} />
+                ) : item.kind === 'requirement' ? (
+                  <RequirementRow requirement={item.requirement} actions={requirementActionsFor(item.requirement)} />
                 ) : (
                   <MCPProviderCard
                     provider={item.provider}
@@ -392,6 +564,9 @@ export function AgentAddonsTab({
       </SettingsSection>
       {idsError && (
         <p role="alert" className="text-[var(--color-danger)]">{unwrapIpcError(idsError)}</p>
+      )}
+      {pluginStatus.data && !pluginStatus.data.ok && (
+        <p role="alert" className="text-[var(--color-danger)]">{pluginStatus.data.message}</p>
       )}
       {sharingRow && (
         <ShareSkillDialog
@@ -419,7 +594,8 @@ export function AgentAddonsTab({
       )}
       {picking && (
         <AddonPicker
-          agent={{ id: agent.id, name: agent.name, kit: agent.skills !== undefined }}
+          initial={picking.initial}
+          agent={{ id: agent.id, name: agent.name, kit: agent.skills !== undefined, engine }}
           skillBlock={skillBlock}
           onClose={() => setPicking(false)}
           onAttachCreated={async (mcpProviderId) => {

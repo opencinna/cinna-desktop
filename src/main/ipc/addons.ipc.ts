@@ -1,13 +1,15 @@
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { addonDirectory } from '../services/addonDirectory'
+import { removeRequirementByName } from '../services/addonDirectory/requirements'
 import { marketplacePluginService } from '../services/marketplacePluginService'
 import { stdioRuntimes } from '../services/stdioRuntimes'
-import type { PluginActionResult, PluginDisabledInput, PluginStatusResult, RecheckRuntimesResult } from '../../shared/addons/plugins'
+import type { PluginActionResult, PluginDisabledInput, PluginRevealResult, PluginStatusResult, RecheckRuntimesResult } from '../../shared/addons/plugins'
 import {
   isAddonRef,
   type AddonActionResult,
   type AddonDirectoryResult,
+  type AddonMcpRequirementsResult,
   type AddonRef,
   type AddonSearchResult
 } from '../../shared/addons/directory'
@@ -65,6 +67,20 @@ export function registerAddonHandlers(): void {
     return addonDirectory.remove(getSettingsScopeUserId(), str(input?.agentId), ref)
   })
 
+  /** A kit agent's `mcp_servers[]` requirements, each with where it stands on this computer (D6). */
+  ipcHandle('addons:mcp-requirements', (_event, input?: { agentId?: unknown }): Promise<AddonMcpRequirementsResult> => {
+    userActivation.requireActivated()
+    return addonDirectory.mcpRequirements(getSettingsScopeUserId(), str(input?.agentId))
+  })
+
+  /** Remove one of a kit agent's `mcp_servers[]` requirements by name (one no source lists any more, or a custom one). */
+  ipcHandle('addons:remove-requirement', (_event, input?: { agentId?: unknown; name?: unknown }): Promise<AddonActionResult> => {
+    userActivation.requireActivated()
+    const name = str(input?.name).slice(0, 200)
+    if (!name) return Promise.resolve({ ok: false, code: 'invalid_name', message: 'No connector was named.' })
+    return removeRequirementByName(getSettingsScopeUserId(), str(input?.agentId), name)
+  })
+
   /** A kit agent's pinned plugins, part by part (`src/shared/addons/plugins.ts`). */
   ipcHandle('addons:plugin-status', (_event, input?: { agentId?: unknown }): Promise<PluginStatusResult> => {
     userActivation.requireActivated()
@@ -86,7 +102,13 @@ export function registerAddonHandlers(): void {
     return marketplacePluginService.update(getSettingsScopeUserId(), str(input?.agentId), str(input?.name))
   })
 
-  /** Look for Node.js and Docker again (a plugin's Check again), without a restart. */
+  /** Show a pinned plugin's cached folder in the file manager. */
+  ipcHandle('addons:reveal-plugin', (_event, input?: { agentId?: unknown; name?: unknown }): PluginRevealResult => {
+    userActivation.requireActivated()
+    return marketplacePluginService.reveal(getSettingsScopeUserId(), str(input?.agentId), str(input?.name))
+  })
+
+  /** Look for Node.js and Docker again (a plugin's Check again), without a restart: the login shell's PATH is read again first. */
   ipcHandle('addons:recheck-runtimes', async (): Promise<RecheckRuntimesResult> => {
     userActivation.requireActivated()
     return { ok: true, ...(await stdioRuntimes.recheck()) }

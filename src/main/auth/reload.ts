@@ -6,6 +6,8 @@ import { createAdapter } from '../llm/factory'
 import { decryptApiKey } from '../security/keystore'
 import { mcpManager } from '../mcp/manager'
 import { mcpRowToConfig } from '../mcp/config'
+import { missingEnvOf } from '../mcp/managed'
+import { agentMcpRepo } from '../db/agentMcp'
 import { getSettingsScopeUserId, getProfileScopeUserId, DEFAULT_SCOPE_USER_ID } from './scope'
 import { accountConfigService } from '../services/accountConfigService'
 import { createLogger } from '../logger/logger'
@@ -66,6 +68,8 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
         .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
       continue
     }
+    // One made from a directory entry is an agent's addon: started only once an agent has it and its settings are filled in.
+    if (provider.registryRef && (missingEnvOf(provider).length > 0 || agentMcpRepo.agentIdsFor(provider.id).length === 0)) continue
     mcpManager
       .connect(mcpRowToConfig(provider))
       .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
