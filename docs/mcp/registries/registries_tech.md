@@ -17,6 +17,7 @@
 **Renderer**
 - `src/renderer/src/hooks/useMcp.ts` — `useMcpRegistries()`, `useMcpRegistrySearchAll(query)`
 - `src/renderer/src/components/settings/MCPRegistryPicker.tsx` — picker UI: single search input, unified result list with per-row registry badge, inline per-registry warning when one registry fails, Connect button per row
+- `src/main/services/addonDirectory/mcpRegistries.ts` — the `mcp-registries` directory provider over `mcpRegistryService`: `list()` is `cinna-official` (limit 100), `search()` is `official` (limit 50), gated by the account policy's `externalDirectories`; `registryRef(registryId, id)` builds `{source: 'mcp-registry:<registryId>', id}` (shared `mcpRegistryRef`). See [Agent Addons — Technical Details](../../agents/local_agents/addons_tech.md)
 - `src/renderer/src/components/settings/MCPSettingsSection.tsx` — hosts the "Add from Registry" entry point and mounts the picker
 - `src/renderer/src/components/settings/AddCustomMcpForm.tsx` — sibling form (referenced for the Custom MCP entry point only; not part of registries)
 - `src/renderer/src/components/settings/AddLocalMcpForm.tsx` — sibling form (Local MCP entry point only; not part of registries)
@@ -87,7 +88,7 @@ To add/remove a server: edit the JSON in `cinna-web`, redeploy. Desktop clients 
   - `registriesById` is a `Map` built from the `useMcpRegistries()` result and used to resolve each row's badge label / homepage from `entry.registryId`
   - Per-registry failures from `searchAll` render as inline `AlertTriangle` warnings above the result list — results from healthy registries still show below
   - Subcomponent `RegistryEntryRow` renders one server row: clickable server name (links to `entry.websiteUrl` when available), clickable registry badge (links to the registry's homepage), clickable remote URL, and the Connect button
-  - On Connect: calls `useUpsertMcpProvider` with `enabled: true`, then closes the picker via `onClose` on success
+  - On Connect: calls `useUpsertMcpProvider` with `enabled: true` and `registryRef: mcpRegistryRef(entry.registryId, entry.id)` (written on insert only), then closes the picker via `onClose` on success
 - `MCPSettingsSection.tsx`
   - Renders three entry buttons ("Add from Registry", "Add Custom MCP", "Add Local MCP") and mounts the appropriate panel based on local `panel` state
 

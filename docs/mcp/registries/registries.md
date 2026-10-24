@@ -22,7 +22,7 @@ Let users browse public catalogs of MCP servers from the Settings UI and one-cli
 4. If a single registry fails (network error, 5xx), the picker still renders results from the others and shows a small inline warning naming the failed registry
 5. User clicks "Connect" on a row
 6. The picker creates a new MCP provider (using the row's first HTTP(S) remote, `enabled: true`) — the same `mcp:upsert` path the explicit Add forms use, so `mcpManager.connect()` runs immediately
-7. Picker closes; the new MCP card appears in the providers list above with its live status indicator (`connected`, `awaiting-auth`, or `error`)
+7. The new connector records the registry entry it was made from (`registry_ref`, see below). Picker closes; the new MCP card appears in the providers list above with its live status indicator (`connected`, `awaiting-auth`, or `error`)
 8. If the server requires OAuth, the OS browser opens for authorization — see [MCP Connections](../connections/connections.md) for the DCR flow
 
 ### Visiting a server's website / the registry homepage
@@ -47,6 +47,12 @@ All these links route through Electron's `setWindowOpenHandler`, which only forw
 - The `limit` parameter is clamped to `[1, 100]` before the wire request — renderer values outside that range are coerced
 - The Connect button uses the row's **first** remote endpoint; entries with multiple endpoints are not currently exposed in the UI for selection
 - After a successful Connect, the picker closes so the user sees the freshly-created card and its status
+
+### Reaching an agent through the addon picker
+
+The same registries are also a source of the agent's **Add** ([Agent Addons](../../agents/local_agents/addons.md)), not only of Settings → MCP. The addon directory's **MCP registries** provider lists the Cinna Official index whole and searches the MCP Official registry only (after a 300 ms pause and at least two characters, since it holds thousands of servers). Adding an entry there creates the connector and attaches it to the agent in one step, and the connector carries the entry's `registry_ref` (`mcp-registry:<registryId>` plus the server id) — the Settings picker records the same ref. The ref is what keeps the connector from being listed twice afterwards, as the registry entry and as a connector on this computer; a connector that came from a registry shows once, under "On this computer". Only entries with an HTTP(S) remote are offered, as here, and a registry that is switched off by the account's policy is not offered at all.
+
+The picker's add differs from Settings' in one respect: its first connect is non-interactive, so a server needing a sign-in never opens a browser from the add; the picker offers the sign-in as the next step. Settings' Connect still opens the browser at once.
 
 ## Architecture Overview
 
@@ -79,4 +85,5 @@ Adding another registry is a developer-only change — see [registries_tech.md](
 ## Integration Points
 
 - [MCP Connections](../connections/connections.md) — the Connect button reuses the standard `mcp:upsert` → `mcpManager.connect` path, including OAuth DCR for servers that need it
+- [Agent Addons](../../agents/local_agents/addons.md) — the addon picker lists and searches the registries and records `registry_ref` on what it creates
 - [Settings UI](../../ui/settings/settings.md) — the picker lives in the MCP Providers section of the Settings screen alongside the Add Custom and Add Local forms
