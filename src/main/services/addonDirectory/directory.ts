@@ -19,6 +19,7 @@ import {
   DEFAULT_ADDON_POLICY,
   addonRefKey,
   isAddonRef,
+  type AddonMcpConnect,
   type AddonMcpRequirement,
   type AddonMcpRequirementsResult,
   type AddonActionResult,
@@ -33,7 +34,7 @@ import {
   type AgentDirectoryEntry
 } from '../../../shared/addons/directory'
 import type { LocalAgentSkill } from '../../../shared/localAgents'
-import type { McpServerRequirement } from '../../../shared/kit/manifest'
+import type { McpServerAuth, McpServerRequirement } from '../../../shared/kit/manifest'
 import type { AgentEngine } from '../../../shared/engine'
 import { compatibilityOf } from '../../../shared/addons/engineSupport'
 import type { DirectoryContext, DirectoryProvider, ProviderEntry, ProviderListing } from './types'
@@ -142,9 +143,11 @@ export interface AddonDirectoryDeps {
    * Record in a kit agent's manifest that it uses the local provider
    * `mcpProviderId` (an `mcp_servers[]` requirement under the provider's
    * directory ref, else `ref`). Nothing for a custom or a plugin's connector,
-   * or an agent whose manifest is not the user's to change. Never throws.
+   * or an agent whose manifest is not the user's to change. `auth` is the
+   * entry's own auth when the add read the entry (a remote server that needs
+   * none is `none`, though its connector is OAuth-capable). Never throws.
    */
-  noteMcpRequirement?(userId: string, agentId: string, mcpProviderId: string, ref: AddonRef | null): Promise<void>
+  noteMcpRequirement?(userId: string, agentId: string, mcpProviderId: string, ref: AddonRef | null, auth?: McpServerAuth): Promise<void>
   /** Drop the requirement for `ref` (a local provider's ref names its directory ref) from the manifest. Never throws. */
   dropMcpRequirement?(userId: string, agentId: string, ref: AddonRef): Promise<void>
   /** Throws a `DomainError` (`not_found`) for an agent or provider outside the scope. */
@@ -284,6 +287,15 @@ function toAgentEntry(entry: ProviderEntry, agent: AgentFacts, attached: Readonl
   }
 }
 
+/**
+ * The `mcp_servers[]` auth of a core MCP directory entry's connect: a remote
+ * server with no auth is `none`, though the desktop connects it OAuth-capable.
+ */
+function requirementAuth(connect: AddonMcpConnect): McpServerAuth {
+  if (connect.transport === 'stdio') return connect.auth
+  return connect.requiresAuth ? connect.auth : 'none'
+}
+
 export function createAddonDirectory(deps: AddonDirectoryDeps) {
   /** Core's last policy per settings scope; the default until core sends one. */
   const policies: AddonPolicyStore = deps.policies ?? new Map<string, AddonPolicy>()
@@ -400,9 +412,9 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
   }
 
   /** Write the requirement after an MCP add; a failure never fails the add. */
-  async function noted(userId: string, agentId: string, agent: AgentFacts, result: AddonActionResult, ref: AddonRef | null): Promise<AddonActionResult> {
+  async function noted(userId: string, agentId: string, agent: AgentFacts, result: AddonActionResult, ref: AddonRef | null, auth?: McpServerAuth): Promise<AddonActionResult> {
     if (result.ok && result.mcpProviderId && agent.kit && deps.noteMcpRequirement) {
-      await deps.noteMcpRequirement(userId, agentId, result.mcpProviderId, ref).catch(() => undefined)
+      await deps.noteMcpRequirement(userId, agentId, result.mcpProviderId, ref, ...(auth ? [auth] : [])).catch(() => undefined)
     }
     return result
   }
@@ -482,7 +494,9 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         }
         // The same server is already on this computer (typed in, or from the opencinna list): attach it, never a second one.
         const same = ref.source === CORE_MCP_SOURCE && deps.findMcpByServer ? deps.findMcpByServer(userId, entry) : null
-        if (same) return await noted(userId, agentId, agent, await attachLocal(userId, agentId, same), ref)
+        // Core's MCP directory states its auth; a public registry may not declare a sign-in it needs.
+        const auth = ref.source === CORE_MCP_SOURCE ? requirementAuth(entry.install.mcp) : undefined
+        if (same) return await noted(userId, agentId, agent, await attachLocal(userId, agentId, same), ref, auth)
         const block = await blockOf(userId, entry)
         if (block) return refused('blocked', block)
         const created = await deps.createMcpFromDirectory(userId, entry)
@@ -493,7 +507,7 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
           await deps.deleteMcp(userId, created.id).catch(() => undefined)
           throw err
         }
-        return await noted(userId, agentId, agent, setupResult(created.id, created.setup), ref)
+        return await noted(userId, agentId, agent, setupResult(created.id, created.setup), ref, auth)
       } catch (err) {
         return refusalOf(err)
       }

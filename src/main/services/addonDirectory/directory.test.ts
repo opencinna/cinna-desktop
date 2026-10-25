@@ -610,7 +610,8 @@ describe('addonDirectory mcp_servers[] requirements', () => {
     const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [mcpEntry(coreMcpRef('gh'))] }), provider(LOCAL_SOURCE, [LOCAL_SOURCE], { entries: [] })])
     deps.noteMcpRequirement = vi.fn(async () => undefined)
     await dir.add(USER, AGENT, coreMcpRef('gh'))
-    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('gh'))
+    // Core's entry needs no auth (requiresAuth false): the requirement says none, not the OAuth-capable connector's oauth.
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('gh'), 'none')
     deps.findMcpByRef = vi.fn(() => 'm-existing')
     await dir.add(USER, AGENT, coreMcpRef('gh'))
     expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'm-existing', coreMcpRef('gh'))
@@ -621,6 +622,19 @@ describe('addonDirectory mcp_servers[] requirements', () => {
     agent = { kit: false, skills: [] }
     await dir.add(USER, AGENT, localRef('m-local'))
     expect(deps.noteMcpRequirement).toHaveBeenCalledTimes(3)
+  })
+
+  it('notes the auth core states for its entry: oauth or bearer when it asks for one, a stdio entry’s own', async () => {
+    const remote = (id: string, auth: 'oauth' | 'bearer') =>
+      mcpEntry(coreMcpRef(id), { install: { mcp: { transport: 'streamable-http', url: `https://${id}.example/mcp`, auth, requiresAuth: true } } })
+    const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [remote('signin', 'oauth'), remote('token', 'bearer'), stdioEntry('fs')] })])
+    deps.noteMcpRequirement = vi.fn(async () => undefined)
+    await dir.add(USER, AGENT, coreMcpRef('signin'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('signin'), 'oauth')
+    await dir.add(USER, AGENT, coreMcpRef('token'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('token'), 'bearer')
+    await dir.add(USER, AGENT, coreMcpRef('fs'))
+    expect(deps.noteMcpRequirement).toHaveBeenLastCalledWith(USER, AGENT, 'new-mcp', coreMcpRef('fs'), 'none')
   })
 
   it('does not note a requirement for a skill pin or a refused add', async () => {

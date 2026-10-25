@@ -100,13 +100,13 @@ export const addonDirectory = createAddonDirectory({
     return stdioRuntimes.blockOf([{ transport: 'stdio', runtime: runtimeOfPackage(connect.package.registry) }], addonPolicies.get(userId))
   },
   policies: addonPolicies.store(),
-  noteMcpRequirement: async (userId, agentId, mcpProviderId, ref) => {
+  noteMcpRequirement: async (userId, agentId, mcpProviderId, ref, auth) => {
     const row = mcpProviderRepo.getOwned(userId, mcpProviderId)
     // A plugin's own server is carried by its pin; a custom connector stays on this computer.
     if (!row || row.managedBy) return
     const from = registryRefOfRow(row) ?? (ref && ref.source !== LOCAL_SOURCE ? ref : null)
     if (!from) return
-    const requirement = requirementOf(row, from, uvBins())
+    const requirement = requirementOf(row, from, uvBins(), auth)
     await changeRequirements(userId, agentId, (list) => withRequirement(list, requirement))
   },
   dropMcpRequirement: async (userId, agentId, ref) => {
