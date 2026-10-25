@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UseMutationResult } from '@tanstack/react-query'
 
 const users = vi.hoisted(() => ({ current: { isPending: false, isError: false, data: [] as { id: string; name: string }[] } }))
+vi.mock('../../hooks/useAddonDirectory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../hooks/useAddonDirectory')>()),
+  useAddonPolicy: () => ({ data: undefined })
+}))
 vi.mock('../../hooks/useMcp', () => ({
   useMcpAgentsUsing: () => users.current,
   useUpsertMcpProvider: () => ({ mutate: vi.fn() }), useConnectMcp: () => ({ mutate: vi.fn() }),

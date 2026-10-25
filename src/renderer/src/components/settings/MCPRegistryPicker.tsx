@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Search, Loader2, AlertTriangle } from 'lucide-react'
 import {
   useMcpRegistries,
@@ -7,6 +8,8 @@ import {
 } from '../../hooks/useMcp'
 import type { McpRegistryEntry, McpRegistryInfo } from '../../../../shared/mcpRegistries'
 import { mcpRegistryRef } from '../../../../shared/addons/directory'
+import { addonPolicyKey, useAddonPolicy } from '../../hooks/useAddonDirectory'
+import { useAuthStore } from '../../stores/auth.store'
 
 interface Props {
   onClose: () => void
@@ -23,6 +26,19 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
   const [addingId, setAddingId] = useState<string | null>(null)
   // A refused add (the admin's policy, a bad entry) stays on the row it was asked from.
   const [addError, setAddError] = useState<{ id: string; message: string } | null>(null)
+  // The admin's policy refused an add: its sentence stays on that row, whatever row is tried next, until the
+  // stored policy, once read as forbidding public directories, allows them again (or the picker closes).
+  const [refusal, setRefusal] = useState<{ id: string; message: string; sawOff: boolean } | null>(null)
+  const queryClient = useQueryClient()
+  const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
+  const policy = useAddonPolicy()
+  // Every registry here is a public one: while the stored policy turns those off, no row's Connect is offered.
+  const directoriesOff = policy.data?.externalDirectories === false
+  const directoriesOn = policy.data?.externalDirectories === true
+  useEffect(() => {
+    if (directoriesOff) setRefusal((before) => (before && !before.sawOff ? { ...before, sawOff: true } : before))
+    else if (directoriesOn) setRefusal((before) => (before?.sawOff ? null : before))
+  }, [directoriesOff, directoriesOn])
 
   const search = useMcpRegistrySearchAll(query)
   const entries: McpRegistryEntry[] = search.data?.entries ?? []
@@ -53,11 +69,17 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
     ).then(
       (result) => { onCreated?.(result.id); onClose() },
       (err: unknown) => {
+        const rowId = `${entry.registryId}::${entry.id}`
+        const message = err instanceof Error ? err.message : 'That connector could not be added.'
         setAddingId(null)
-        setAddError({
-          id: `${entry.registryId}::${entry.id}`,
-          message: err instanceof Error ? err.message : 'That connector could not be added.'
-        })
+        // A policy refusal: the stored policy is read again, and Connect follows it (off on every row while it
+        // forbids public directories). Anything else (a bad entry, the network) leaves Connect on for a retry.
+        if (isPolicyRefusal(err)) {
+          setRefusal({ id: rowId, message, sawOff: directoriesOff })
+          void queryClient.invalidateQueries({ queryKey: addonPolicyKey(profileId) })
+        } else {
+          setAddError({ id: rowId, message })
+        }
       }
     )
   }
@@ -133,7 +155,14 @@ export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: 
             adding={
               addingId === `${entry.registryId}::${entry.id}` && upsertMcp.isPending
             }
-            error={addError?.id === `${entry.registryId}::${entry.id}` ? addError.message : null}
+            error={
+              refusal?.id === `${entry.registryId}::${entry.id}`
+                ? refusal.message
+                : addError?.id === `${entry.registryId}::${entry.id}`
+                  ? addError.message
+                  : null
+            }
+            directoriesOff={directoriesOff}
           />
         ))}
       </div>
@@ -146,13 +175,16 @@ function RegistryEntryRow({
   registry,
   onAdd,
   adding,
-  error
+  error,
+  directoriesOff
 }: {
   entry: McpRegistryEntry
   registry: McpRegistryInfo | undefined
   onAdd: () => void
   adding: boolean
   error: string | null
+  /** The admin's policy turns public directories off: Connect is not offered. */
+  directoriesOff: boolean
 }): React.JSX.Element {
   const remote = entry.remotes[0]
   const displayName = entry.title?.trim() || entry.name
@@ -224,7 +256,7 @@ function RegistryEntryRow({
       </div>
       <button
         onClick={onAdd}
-        disabled={adding || !remote}
+        disabled={adding || !remote || directoriesOff}
         // Top-aligned: a refusal under the description grows the row without moving Connect from under the pointer.
         className="px-2.5 py-1 rounded-md text-[12px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50 shrink-0"
       >
@@ -232,4 +264,9 @@ function RegistryEntryRow({
       </button>
     </div>
   )
+}
+
+/** The upsert's refusal by the admin's policy (`code: 'policy'`, carried on the error `useUpsertMcpProvider` throws). */
+function isPolicyRefusal(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'policy'
 }

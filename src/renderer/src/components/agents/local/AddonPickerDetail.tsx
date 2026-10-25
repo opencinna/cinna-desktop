@@ -157,7 +157,7 @@ export function pluginNeeds(entry: AgentDirectoryEntry): Array<{ key: string; te
   return needs
 }
 
-/** Where to get the runtime a blocked plugin says it lacks, from main's sentence. */
+/** Where to get the runtime a blocked plugin or directory connector says it lacks, from main's sentence. */
 export function runtimeLink(reason: string | null): RuntimeLink | null {
   if (!reason) return null
   if (/Node\.js/.test(reason)) return { runtime: 'node', href: 'https://nodejs.org', label: 'nodejs.org' }
@@ -246,8 +246,9 @@ export function AddonPickerDetail({
   const link = entry.origin.repositoryUrl ?? entry.origin.homepage
   const parts = componentLines(entry)
   const worksWith = worksWithLines(entry, agentEngine)
-  // A runtime the blocked plugin lacks is said once, beside its Add, with where to get it; not again under What it needs.
-  const missingRuntime = entry.kind === 'plugin' && state === 'blocked' ? runtimeLink(reason) : null
+  // A runtime the blocked plugin or directory connector lacks is said once, beside its Add, with where to get it and
+  // a Check again; not again under What it needs (a connector's needs list never names a runtime).
+  const missingRuntime = state === 'blocked' ? runtimeLink(reason) : null
   const needs = pluginNeeds(entry).filter((need) => need.key !== missingRuntime?.runtime)
   const credentials = entry.requires.credentials
   const needsKit = !agentKit && entry.kind !== 'mcp'

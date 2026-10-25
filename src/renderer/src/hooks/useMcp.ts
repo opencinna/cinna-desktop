@@ -55,8 +55,9 @@ export function useUpsertMcpProvider() {
       const result = await window.api.mcp.upsert(data)
       // Refusals come as data: a plugin's connector refuses an edit of what the plugin owns
       // (`managed`), and the admin's policy a new connector of the user's own (`policy`).
-      // Thrown with main's sentence, so the form that asked shows it as its error.
-      if (!result.success) throw new Error(result.message ?? 'That connector could not be saved.')
+      // Thrown with main's sentence, so the form that asked shows it as its error, and its `code`,
+      // so a policy refusal is told from one worth retrying.
+      if (!result.success) throw Object.assign(new Error(result.message ?? 'That connector could not be saved.'), { code: result.code })
       return result
     },
     onSuccess: () => {

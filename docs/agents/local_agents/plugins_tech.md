@@ -26,7 +26,7 @@ Implementation reference for [Marketplace Plugins on a Local Agent](plugins.md).
 - `src/main/services/pluginCommandExpansion.ts`: `expandPluginCommand(text, commands, {agentKey?})` → the prompt or null; `shellMarker`, `SHELL_LEAD_IN`. Pure
 - `src/main/agents/drivers/acp/acpDriver.ts`: `expandPluginCommandInput(launcherId, input, commands)` (engines in `EXPANDS_PLUGIN_COMMANDS`: opencode, codex, antigravity), called in the turn before `placeTurnContext`; `AcpDriverDeps.pluginCommands`. `src/main/agents/drivers/index.ts`: `kitAgentCommandTemplates(userId, agentId)` supplies it
 - `src/main/services/localAgents/sharingService.ts`: `ensurePinnedInBackground` after a team Get, Update and Use
-- `src/main/auth/reload.ts`: a managed connector is started at app start only if `startsUnattended`; `src/main/hub/core.ts`: `collectGarbage()` at start
+- `src/main/auth/reload.ts`: a managed connector is started at app start if `startsUnattended`, or if `launchBlockOf(row)` is non-null so the manager refuses it with the reason; `src/main/hub/core.ts`: `collectGarbage()` at start
 - `src/main/mcp/config.ts`, `src/main/mcp/manager.ts`: `mcpRowToConfig` returns `resolveManagedLaunch(...)`; the manager throws `config.blockedReason` before it starts a server and sends a server's declared headers
 - `src/main/services/mcpService.ts`: `upsertManaged` / `assertManagedEdit`, `managedByTitle`, `McpProviderDto.envSlots`
 - `src/main/ipc/addons.ipc.ts`: the plugin channels below
@@ -84,6 +84,7 @@ Refusal codes (`PluginRefusal`): the marketplace skills' (`no_account`, `not_fou
 - `ensurePinned(userId, agentId)`: downloads every pin not in the cache, installs the managed uv when a server is Python, then reconciles. **Never throws.** `ensurePinnedInBackground` is the same, never awaited
 - `status(userId, agentId)`: builds the `PluginPinStatus` list; a copy changed on disk reads `failed` with `PLUGIN_TREE_MODIFIED_SENTENCE`; hooks are `hooksBlockedByPolicy` when on and forbidden, else `hooksReason` names the engine
 - `reveal(userId, agentId, name)`
+- `launchBlockOf(row)`: the sentence a connector that `startsUnattended` holds back is refused with, when a launch block alone holds it back (attached, no value or bearer missing); null otherwise. `PluginRow.pluginIssues` skips a connector failure equal to the plugin's `cacheMessage` when `cache === 'failed'`
 - `startsUnattended(row)`: the app-start gate for a managed connector — attached to some agent, no empty slot, no bearer missing, `managedLaunchBlock` null, and Node or Docker present for a command that needs it
 - `collectGarbage()`: once per app start; skipped when any agent's pins cannot be read. Removes the snapshots no registered agent pins, then the working copies (`collectPluginWork`) whose `entry/sha` no pin and no remaining managed row names. A managed row no pin references and no agent uses goes first; one still standing keeps its folder
 

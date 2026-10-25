@@ -153,6 +153,32 @@ describe('AddonPicker — plugins', () => {
     expect(within(detail()).queryByRole('button', { name: 'Check again' })).toBeNull()
   })
 
+  it('disables Add on a core directory connector that needs Docker, links to docker.com, and Check again makes it addable without a restart', async () => {
+    const oci = (over: Partial<AgentDirectoryEntry> = {}): AgentDirectoryEntry =>
+      plugin({ ref: { source: 'core-mcp-directory', id: 'grafana' }, kind: 'mcp', name: 'grafana', title: 'Grafana', components: undefined, runsCode: true,
+        origin: { label: 'Cinna MCP directory', kind: 'directory', repositoryUrl: null, homepage: null }, ...over })
+    answer = { ...answer, entries: [oci({ state: 'blocked', stateReason: 'Needs Docker — install it from docker.com' })] }
+    recheckRuntimes.mockImplementation(async () => {
+      answer = { ...answer, entries: [oci()] }
+      return { ok: true, node: false, docker: true }
+    })
+    mount()
+    fireEvent.click(await within(dialog()).findByRole('button', { name: 'Grafana' }))
+    const view = within(detail())
+    const addButton = (): HTMLButtonElement => within(detail()).getByRole('button', { name: /^Add/ }) as HTMLButtonElement
+    expect(addButton().disabled).toBe(true)
+    expect(view.getByText('Needs Docker — install it from docker.com')).toBeTruthy()
+    fireEvent.click(view.getByRole('link', { name: 'docker.com' }))
+    expect(window.api.system.openExternal).toHaveBeenCalledWith('https://www.docker.com')
+    const reads = directory.mock.calls.length
+    fireEvent.click(view.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(recheckRuntimes).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(directory.mock.calls.length).toBeGreaterThan(reads))
+    await waitFor(() => expect(addButton().disabled).toBe(false))
+    expect(within(detail()).queryByRole('button', { name: 'Check again' })).toBeNull()
+    expect(within(detail()).queryByText('Needs Docker — install it from docker.com')).toBeNull()
+  })
+
   it('keeps Add disabled on a plugin still being prepared, saying so', async () => {
     answer = { ...answer, entries: [plugin({ status: 'pending', state: 'preparing', stateReason: 'Being prepared on the server' })] }
     mount()

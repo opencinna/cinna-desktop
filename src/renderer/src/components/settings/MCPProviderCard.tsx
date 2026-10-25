@@ -9,6 +9,8 @@ import { AddonRow } from '../agents/local/AddonRow'
 import { EnvSlotFields } from '../agents/local/AddonPickerDetail'
 import { CredentialStatusGlyph } from './CredentialRow'
 import { SettingsBadge, SettingsButton, SettingsIconButton } from './SettingsLayout'
+import { STDIO_RUNTIME_TEXT } from '../../../../shared/stdioRuntimeText'
+import { useAddonPolicy } from '../../hooks/useAddonDirectory'
 
 export const MCP_CARD_TEXT = {
   fromPlugin: (title: string | undefined) => (title ? `From ${title}` : 'From a plugin'),
@@ -161,6 +163,12 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
     })
   }
 
+  // Refused by the admin's policy: while it still forbids local servers Reconnect could only repeat the refusal,
+  // so none is offered; once it allows them, Reconnect clears a refusal recorded in a race with the change.
+  // Needs Node.js or Docker keeps it, as the retry once the runtime is installed.
+  const stdioAllowed = useAddonPolicy().data?.stdioMcp !== false
+  const policyBlocked = provider.status === 'error' && provider.error === STDIO_RUNTIME_TEXT.policy && !stdioAllowed
+
   const handleReconnect = (): void => {
     connectMcp.mutate(provider.id)
   }
@@ -297,7 +305,7 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
                 >
                   Disconnect
                 </button>
-              ) : provider.status !== 'awaiting-auth' ? (
+              ) : provider.status !== 'awaiting-auth' && !policyBlocked ? (
                 <button
                   onClick={handleReconnect}
                   disabled={connectMcp.isPending}

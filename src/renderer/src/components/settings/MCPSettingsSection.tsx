@@ -26,7 +26,10 @@ export function MCPSettingsSection(): React.JSX.Element {
     // A local server is the user's own command: it needs both.
     local: policy.customMcp && policy.stdioMcp
   }
-  const panel = openPanel !== null && allowed[openPanel] ? openPanel : null
+  // An open panel stays until its own Close, whatever the policy says meanwhile: closing it under the user would
+  // drop what they typed and the refusal it shows (ux_rules 1 and 6). Main refuses a submit the policy forbids, and
+  // each panel says so where it was asked; `allowed` only decides which Add buttons are offered.
+  const panel = openPanel
 
   const buttonClass =
     'flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg ' +

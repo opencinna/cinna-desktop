@@ -376,8 +376,11 @@ export class MCPManager {
       releaseWorkCopies(config.id)
       connection.needsUser = err instanceof McpReauthorizationRequiredError ||
         (err instanceof Error && err.cause instanceof McpReauthorizationRequiredError)
-      this.setStatus(config.id, connection, 'error', String(err))
-      logger.error(`Connect failed for ${config.name}`, err)
+      // A launch block is a sentence for the user's card, not an exception: recorded as it is, without `Error: `.
+      const blocked = config.blockedReason !== undefined && err instanceof Error && err.message === config.blockedReason
+      this.setStatus(config.id, connection, 'error', blocked ? config.blockedReason : String(err))
+      if (blocked) logger.warn(`Not started, blocked: ${config.name}`, { reason: config.blockedReason })
+      else logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
     }
   }

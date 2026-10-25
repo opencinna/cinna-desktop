@@ -23,15 +23,11 @@ import { basename, isAbsolute, join, sep } from 'node:path'
 import { resetShellEnv, which } from '../shell/env'
 import { toolchain, type ManagedUvLayout } from '../localdev/toolchain'
 import type { AddonMcpServerComponent, AddonPolicy } from '../../shared/addons/directory'
+import { STDIO_RUNTIME_TEXT } from '../../shared/stdioRuntimeText'
 
 export type StdioRuntime = 'python' | 'node' | 'docker'
 
-export const STDIO_RUNTIME_TEXT = {
-  node: 'Needs Node.js — install it from nodejs.org',
-  docker: 'Needs Docker — install it from docker.com',
-  policy: 'Blocked by your admin',
-  uvFailed: 'Python could not be set up on this computer.'
-} as const
+export { STDIO_RUNTIME_TEXT } from '../../shared/stdioRuntimeText'
 
 const PYTHON_COMMANDS = new Set(['uvx', 'uv', 'python', 'python3'])
 const NODE_COMMANDS = new Set(['node', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn'])

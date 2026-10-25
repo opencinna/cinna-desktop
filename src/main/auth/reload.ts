@@ -53,16 +53,23 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
   }
 
   // A plugin's connector starts only when an agent has it and it can run (values given, not blocked).
+  // One held back by a launch block alone (the policy, its files changed) goes to the manager anyway:
+  // it refuses it before anything runs, so the connector's card reads why instead of a bare "disconnected".
   let plugins: Promise<typeof import('../services/marketplacePluginService')> | null = null
   for (const provider of mcpProviderRepo.list(userId)) {
     if (!provider.enabled) continue
     if (provider.managedBy) {
       plugins ??= import('../services/marketplacePluginService')
       void plugins
-        .then(({ marketplacePluginService }) => marketplacePluginService.startsUnattended(provider))
-        .then((starts) => {
-          if (!starts || !current()) return undefined
-          return mcpManager.connect(mcpRowToConfig(provider))
+        .then(async ({ marketplacePluginService }) => {
+          const runs = await marketplacePluginService.startsUnattended(provider)
+          if (!current()) return undefined
+          // The block and the config read together, in this tick: a policy that changed meanwhile can neither
+          // start a row past startsUnattended's Node/Docker check nor connect one whose config lost its block.
+          const blocked = marketplacePluginService.launchBlockOf(provider)
+          const config = mcpRowToConfig(provider)
+          if (!runs && blocked === null) return undefined
+          return mcpManager.connect(config)
         })
         .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
       continue

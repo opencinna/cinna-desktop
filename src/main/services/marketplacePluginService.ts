@@ -924,6 +924,22 @@ export const marketplacePluginService = {
     return runtime === 'node' || runtime === 'docker' ? stdioRuntimes.available(runtime) : true
   },
 
+  /**
+   * The sentence a plugin's connector that {@link startsUnattended} holds
+   * back is refused with, when what holds it back is a launch block alone
+   * (the policy forbids local servers, its cached files changed): attached
+   * to some agent and every value it needs given. App start connects such a
+   * row anyway, so the manager refuses it before anything runs and its card
+   * reads why. Null for anything else (not attached, a value or token still
+   * to give, nothing blocking it).
+   */
+  launchBlockOf(row: McpProviderRow): string | null {
+    if (!row.managedBy) return null
+    if (agentMcpRepo.agentIdsFor(row.id).length === 0) return null
+    if (missingManagedEnv(row).length > 0 || managedNeedsBearer(row)) return null
+    return managedLaunchBlock(row)
+  },
+
   /** {@link ensurePinned} in the background, never awaited and never failing the caller. */
   ensurePinnedInBackground(userId: string, agentId: string): void {
     void marketplacePluginService.ensurePinned(userId, agentId).catch(() => undefined)

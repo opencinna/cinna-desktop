@@ -674,7 +674,27 @@ describe('managed connectors over time', () => {
     const row = () => tables.rows[0] as never
     // Its key not given yet.
     expect(await marketplacePluginService.startsUnattended(row())).toBe(false)
+    expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
     tables.rows[0].envSecretEncrypted = encryptManagedSecrets({ CARBONE_KEY: 'sk' })
+    expect(await marketplacePluginService.startsUnattended(row())).toBe(true)
+    expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
+    // The policy forbids local servers: not started, but its block is what app start hands the manager.
+    addonPolicies._configure({
+      account: () => 'profile@https://cinna.test',
+      load: () => ({ externalDirectories: true, customMcp: true, pluginHooks: true, stdioMcp: false }),
+      save: () => undefined
+    })
+    try {
+      expect(await marketplacePluginService.startsUnattended(row())).toBe(false)
+      expect(marketplacePluginService.launchBlockOf(row())).toBe('Blocked by your admin')
+      // Its key not given: needs setup first, whatever the policy.
+      const key = tables.rows[0].envSecretEncrypted
+      tables.rows[0].envSecretEncrypted = null
+      expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
+      tables.rows[0].envSecretEncrypted = key
+    } finally {
+      addonPolicies._reset()
+    }
     expect(await marketplacePluginService.startsUnattended(row())).toBe(true)
     // No Node.js this session.
     path.found = {}

@@ -82,7 +82,8 @@ export function pluginIssues(plugin: PluginPinStatus, providers?: readonly McpPr
     else if (server.setup) issues.push({ tone: 'warning', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, PLUGIN_ROW_TEXT.need[server.setup]) })
     else {
       const failed = connectorFailure(server, providers)
-      if (failed) issues.push({ tone: 'error', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, failed) })
+      // Refused with the plugin's own cache sentence (its files changed): said once, on the plugin's line above.
+      if (failed && !(plugin.cache === 'failed' && failed === plugin.cacheMessage)) issues.push({ tone: 'error', part: true, text: PLUGIN_ROW_TEXT.connectorNeeds(server.name, failed) })
     }
   }
   if (plugin.compatibility.level === 'incompatible') issues.push({ tone: 'warning', text: plugin.compatibility.reason })

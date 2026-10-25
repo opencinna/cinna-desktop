@@ -118,6 +118,17 @@ describe('MCPManager through the real v2 SDK', () => {
     expect(readFileSync(join(workCopy.work, 'main.py'), 'utf8')).toBe('print(1)\n')
   })
 
+  it('refuses a launch-blocked server before anything runs, and records the bare sentence as its error', async () => {
+    const marker = join(temporary, 'spawned')
+    const blockedReason = 'Blocked by your admin'
+    const refused = await manager.connect(config({ transportType: 'stdio', command: process.execPath, authType: 'oauth', bearerTokenEncrypted: undefined,
+      args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`], blockedReason }))
+    expect(refused).toMatchObject({ status: 'error', error: blockedReason })
+    expect(manager.getConnection('peer-provider')).toMatchObject({ status: 'error', error: blockedReason })
+    await new Promise((done) => setTimeout(done, 200))
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('falls back from method-not-found discovery to the real legacy HTTP handshake', async () => {
     const remote = await peer({ protocol: 'legacy' })
     expect((await manager.connect(config({ url: remote.url }))).status).toBe('connected')

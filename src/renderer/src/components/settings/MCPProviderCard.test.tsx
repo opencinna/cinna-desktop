@@ -5,6 +5,11 @@ vi.mock('../../hooks/useMcp', () => ({
   useUpsertMcpProvider: () => ({ mutate: upsertMutate }), useDeleteMcpProvider: () => ({ mutate: vi.fn() }),
   useConnectMcp: () => ({ mutate: vi.fn() }), useDisconnectMcp: () => ({ mutate: vi.fn() })
 }))
+let policy: { stdioMcp: boolean } | undefined = { stdioMcp: false }
+vi.mock('../../hooks/useAddonDirectory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../hooks/useAddonDirectory')>()),
+  useAddonPolicy: () => ({ data: policy })
+}))
 vi.mock('../ui/AnimatedCollapse', () => ({ AnimatedCollapse: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? children : null }))
 import { MCPProviderCard } from './MCPProviderCard'
 it('keeps Transport available when moving from stdio to SSE and back', () => {
@@ -99,4 +104,31 @@ it('asks per-slot fields for a directory connector of the user’s own too, keep
   fireEvent.change(screen.getByLabelText('ROOT'), { target: { value: '/data' } })
   fireEvent.click(screen.getByText('Save'))
   expect(upsertMutate.mock.calls[0][0]).toMatchObject({ id: 'd1', command: 'uvx', env: { ROOT: '/data' } })
+})
+
+it('offers no Reconnect on a connector the admin’s policy refused, and keeps it for one that needs Node.js', () => {
+  const local = { id: 'p1', name: 'ledger', transportType: 'stdio', command: 'node', enabled: true, hasAuth: false,
+    authType: 'oauth', status: 'error', tools: [], managedBy: 'plugin:e@s' }
+  const { unmount } = render(<MCPProviderCard provider={{ ...local, error: 'Blocked by your admin' }} />)
+  fireEvent.click(screen.getByRole('button', { name: /ledger/, expanded: false }))
+  expect(screen.getAllByText('Blocked by your admin').length).toBeGreaterThan(0)
+  expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
+  unmount()
+  render(<MCPProviderCard provider={{ ...local, error: 'Needs Node.js — install it from nodejs.org' }} />)
+  fireEvent.click(screen.getByRole('button', { name: /ledger/, expanded: false }))
+  expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy()
+})
+
+it('offers Reconnect again on a policy refusal once the policy allows local servers', () => {
+  // A refusal recorded in a race with the policy turning local servers back on must not be left without a way out.
+  policy = { stdioMcp: true }
+  try {
+    const local = { id: 'p1', name: 'ledger', transportType: 'stdio', command: 'node', enabled: true, hasAuth: false,
+      authType: 'oauth', status: 'error', tools: [], managedBy: 'plugin:e@s', error: 'Blocked by your admin' }
+    render(<MCPProviderCard provider={local} />)
+    fireEvent.click(screen.getByRole('button', { name: /ledger/, expanded: false }))
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy()
+  } finally {
+    policy = { stdioMcp: false }
+  }
 })
