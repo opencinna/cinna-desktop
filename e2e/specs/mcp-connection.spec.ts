@@ -67,7 +67,7 @@ test('MCP HTTP refusal preserves one provider and reconnects with modern tools; 
     remote.release(true)
     await expect(cinna.page.getByText(NAME, { exact: true })).toBeVisible()
     await cinna.page.getByText(NAME, { exact: true }).click()
-    const card = cinna.page.getByText(NAME, { exact: true }).locator('../..')
+    const card = cinna.page.getByText(NAME, { exact: true }).locator('xpath=ancestor::div[contains(@class, "rounded-lg")][1]')
     await expect(card.getByRole('button', { name: 'Reconnect', exact: true })).toBeVisible()
     await expect(card.getByText(/503|temporarily unavailable/)).toBeVisible()
     const failed = (await cinna.page.evaluate(() => window.api.mcp.list())).filter(p => p.name === NAME)
@@ -87,7 +87,7 @@ test('MCP HTTP refusal preserves one provider and reconnects with modern tools; 
     expect(remote.methods).toEqual(['server/discover', 'server/discover', 'tools/list'])
 
     await cinna.page.getByText('Legacy transport choice', { exact: true }).click()
-    const legacy = cinna.page.getByText('Legacy transport choice', { exact: true }).locator('../..')
+    const legacy = cinna.page.getByText('Legacy transport choice', { exact: true }).locator('xpath=ancestor::div[contains(@class, "rounded-lg")][1]')
     const transport = legacy.getByRole('combobox')
     await expect(transport.locator('option')).toHaveText(['stdio', 'SSE (deprecated)', 'Streamable HTTP'])
     await transport.selectOption('sse')

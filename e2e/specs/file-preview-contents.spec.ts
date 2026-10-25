@@ -312,7 +312,7 @@ test('a long markdown preview offers Contents beside the body, navigates by head
     await expect(entries.first()).toHaveAttribute('aria-current', 'location')
   })
 
-  await test.step('at 1600px the panel sits beside the body; toggling it moves neither the body nor its width', async () => {
+  await test.step('at 1600px the panel sits beside the body; toggling it keeps the card centred and the body’s width', async () => {
     await expect.poll(async () => (await layoutBox(card)).width).toBe(CLOSED_WIDTH + PANEL_WIDTH)
     const openBody = await layoutBox(body)
     const panelBox = await layoutBox(panel)
@@ -324,7 +324,9 @@ test('a long markdown preview offers Contents beside the body, navigates by head
     await expect(contents).toHaveAttribute('aria-expanded', 'false')
     await expect(panel).toHaveCount(0)
     await expect.poll(async () => (await layoutBox(card)).width).toBe(CLOSED_WIDTH)
-    expect(await layoutBox(body)).toEqual(openBody)
+    // The card stays centred (`contentsGeometry`), so closing the panel moves
+    // the body right by half the panel and leaves its width alone.
+    expect(await layoutBox(body)).toEqual({ left: openBody.left + PANEL_WIDTH / 2, width: openBody.width })
 
     await contents.click()
     await expect(contents).toHaveAttribute('aria-expanded', 'true')

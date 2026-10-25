@@ -276,7 +276,11 @@ test('Use the team’s version keeps this computer’s .env and attachments', as
 
   writeFileSync(join(bAgent.path, 'knowledge/acme.md'), '# Acme\n\nAcme sells roller skates (from B).\n')
   await refreshLibrary(b)
-  await shareChanges(b, name, 'B says roller skates')
+  // Both sides moved, so Share changes… opens on its Bring together step; the
+  // same lines changed on both sides answer with the collision dialog.
+  await openAgent(b, name)
+  await b.page.getByRole('button', { name: 'Share changes…', exact: true }).click()
+  await b.page.getByRole('dialog', { name: 'Share changes' }).getByRole('button', { name: 'Bring together', exact: true }).click()
   const conflict = b.page.getByRole('dialog', { name: 'The team changed this agent too' })
   await expect(conflict).toBeVisible({ timeout: 60_000 })
   await conflict.getByRole('button', { name: 'Use the team’s version (keep mine as a copy)', exact: true }).click()

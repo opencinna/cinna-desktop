@@ -284,7 +284,7 @@ test('an existing desktop task hands off once and preserves its recipient and no
     // The row's status is an icon, so the word is in its accessible name and
     // nowhere in its text — the name is the one place both the reader and this
     // assertion can find it.
-    await expect(recent.getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — Done`)
+    await expect(recent.getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — Done, in ${TITLE}`)
     expect((await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))[0])
       .toMatchObject({ status: 'succeeded', taskId: original.id, localChatId: original.chatId })
     expect((await cinna.page.evaluate(() => window.api.jobs.list())).find((job) => job.id === jobId)?.inProgressRunsCount).toBe(0)

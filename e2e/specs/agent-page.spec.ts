@@ -80,6 +80,7 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
       'Credentials',
       'Commands1',
       'Schedules',
+      'Tasks',
       'Permissions',
       'Folder2',
       'Interface'
