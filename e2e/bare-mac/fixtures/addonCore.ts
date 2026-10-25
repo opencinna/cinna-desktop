@@ -12,7 +12,9 @@ import { gzipSync } from 'node:zlib'
  * servers), the batch lookup `/api/v1/llm-plugins/plugins?ids=`, the old
  * `/discover` read, and each plugin's `/archive` with its `X-Archive-Sha256`.
  * The archives are real tar.gz files built here, with every member under
- * `<plugin-name>/`, as core serves them.
+ * `<plugin-name>/`, as core serves them. The directory also lists entries of
+ * core's MCP directory (`core-mcp-directory`), each a published package with
+ * the connect descriptor core sends in `install.mcp`.
  */
 
 export interface FakePlugin {
@@ -23,10 +25,18 @@ export interface FakePlugin {
   servers: Array<{ name: string; runtime: 'node' | 'python' | 'docker' }>
 }
 
+/** An entry of core's MCP directory: a local server run from a published package. */
+export interface FakeConnector {
+  name: string
+  title: string
+  description: string
+  package: { registry: 'npm' | 'pypi' | 'oci'; name: string; version: string }
+}
+
 export interface AddonCore {
   /** Host port the server listens on (loopback). */
   port: number
-  /** Entry id of each plugin, by name. */
+  /** Entry id of each plugin and connector, by name. */
   ids: Record<string, string>
   /** Every request, `METHOD /path?query`. */
   requests: string[]
@@ -67,7 +77,7 @@ export function pluginArchive(name: string, files: FakePlugin['files']): Buffer 
 }
 
 /** `origin`: where the app reaches this server (the guest end of the forward), for discovery's endpoints. */
-export async function startAddonCore(plugins: readonly FakePlugin[], origin: string): Promise<AddonCore> {
+export async function startAddonCore(plugins: readonly FakePlugin[], origin: string, connectors: readonly FakeConnector[] = []): Promise<AddonCore> {
   const requests: string[] = []
   const built = plugins.map((plugin) => {
     const archive = pluginArchive(plugin.name, plugin.files)
@@ -123,6 +133,27 @@ export async function startAddonCore(plugins: readonly FakePlugin[], origin: str
     install: { archive_path: archivePath(b) }
   })
 
+  const connectorRows = connectors.map((connector) => ({ connector, id: randomUUID() }))
+  // A row of core's MCP directory, as `/addons/directory` lists it.
+  const connectorRow = ({ connector, id }: (typeof connectorRows)[number]) => ({
+    ref: { source: 'core-mcp-directory', id },
+    kind: 'mcp',
+    name: connector.name,
+    title: connector.title,
+    summary: connector.description,
+    description: connector.description,
+    category: null,
+    tags: [],
+    icon_url: null,
+    publisher: null,
+    origin: { label: 'Cinna MCP directory', kind: 'directory', repository_url: null, homepage: null },
+    version: connector.package.version,
+    digest: null,
+    runs_code: true,
+    status: 'ready',
+    install: { mcp: { transport: 'stdio', auth: 'none', package: connector.package, env: [] } }
+  })
+
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     requests.push(`${req.method} ${url.pathname}${url.search}`)
@@ -137,7 +168,7 @@ export async function startAddonCore(plugins: readonly FakePlugin[], origin: str
     }
     if (url.pathname === '/api/v1/addons/directory') {
       return send({
-        data: built.map(directoryRow),
+        data: [...built.map(directoryRow), ...connectorRows.map(connectorRow)],
         policy: { external_directories: true, custom_mcp: true, plugin_hooks: true, stdio_mcp: true },
         etag: '"bare-mac-1"'
       })
@@ -169,7 +200,7 @@ export async function startAddonCore(plugins: readonly FakePlugin[], origin: str
   const port = (server.address() as AddressInfo).port
   return {
     port,
-    ids: Object.fromEntries(built.map((b) => [b.plugin.name, b.id])),
+    ids: Object.fromEntries([...built.map((b) => [b.plugin.name, b.id]), ...connectorRows.map((c) => [c.connector.name, c.id])]),
     requests,
     async close(): Promise<void> {
       server.closeAllConnections()
