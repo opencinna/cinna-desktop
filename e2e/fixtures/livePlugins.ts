@@ -46,7 +46,7 @@ export interface Turn {
   bridged: Array<{ toolName: string | null; toolProvider: string | null; toolError: unknown; content: string }>
 }
 
-export async function turnOf(cinna: CinnaApp, prompt: string): Promise<Turn | null> {
+export async function turnOf(cinna: Pick<CinnaApp, 'page'>, prompt: string): Promise<Turn | null> {
   return cinna.page.evaluate(async (first) => {
     for (const row of await window.api.chat.list()) {
       const chat = await window.api.chat.get(row.id)
@@ -128,8 +128,8 @@ export async function openAddons(cinna: CinnaApp): Promise<Locator> {
     .filter({ has: page.getByRole('heading', { level: 2, name: 'Addons', exact: true }) })
 }
 
-export function picker(cinna: CinnaApp): { dialog: Locator; tile: (name: string) => Locator; detail: Locator; search: Locator } {
-  const dialog = cinna.page.getByRole('dialog', { name: `Addons for ${AGENT}`, exact: true })
+export function picker(cinna: Pick<CinnaApp, 'page'>, agent: string = AGENT): { dialog: Locator; tile: (name: string) => Locator; detail: Locator; search: Locator } {
+  const dialog = cinna.page.getByRole('dialog', { name: `Addons for ${agent}`, exact: true })
   const list = dialog.locator('[data-addon-list] [data-addon-results]')
   return {
     dialog,
@@ -140,8 +140,8 @@ export function picker(cinna: CinnaApp): { dialog: Locator; tile: (name: string)
 }
 
 /** Opens the picker, searches `query`, opens `title`'s tile; the tile's kind is checked. */
-export async function openTile(cinna: CinnaApp, section: Locator, query: string, title: string, kind: string): Promise<void> {
-  const { dialog, tile, search } = picker(cinna)
+export async function openTile(cinna: Pick<CinnaApp, 'page'>, section: Locator, query: string, title: string, kind: string, agent: string = AGENT): Promise<void> {
+  const { dialog, tile, search } = picker(cinna, agent)
   await section.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(dialog).toBeVisible()
   await search.fill(query)
@@ -159,14 +159,17 @@ export interface AskOptions {
   allow?: (askText: string) => boolean
   /** When the turn counts as settled once its run ended; default: the reply is not empty. */
   settled?: (turn: Turn) => boolean
+  /** The agent to ask, by name; default {@link AGENT}. */
+  agent?: string
 }
 
 /** The agent's composer, a new chat, the prompt sent; then the turn to its end. */
-export async function askAgent(cinna: CinnaApp, agentPath: string, prompt: string, options: AskOptions = {}): Promise<{ turn: Turn; asks: string[] }> {
+export async function askAgent(cinna: Pick<CinnaApp, 'page'>, agentPath: string, prompt: string, options: AskOptions = {}): Promise<{ turn: Turn; asks: string[] }> {
   const page = cinna.page
+  const agent = options.agent ?? AGENT
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  await page.getByRole('button', { name: AGENT, exact: true }).click()
-  await page.getByRole('button', { name: `Start a new chat with ${AGENT}` }).click()
+  await page.getByRole('button', { name: agent, exact: true }).click()
+  await page.getByRole('button', { name: `Start a new chat with ${agent}` }).click()
   const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await input.fill(prompt)
   await input.press('Enter')
