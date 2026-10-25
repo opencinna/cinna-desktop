@@ -1048,7 +1048,8 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     const state = createAcpActivityState()
     const changes = updates.flatMap((update) => translateActivity({ sessionId: 'root', update } as unknown as SessionNotification, state, 'root'))
     expect(changes).toEqual([
-      { type: 'upsert', id: `root:${child}`, kind: 'subagent', title: 'Answer done.', detail: null },
+      // Named "Adjective Colour Animal" from the child's thread id (a0ba001f); the spawn prompt is the detail.
+      { type: 'upsert', id: `root:${child}`, kind: 'subagent', title: expect.stringMatching(/^[A-Z][a-z]+ [A-Z][a-z]+ [A-Z][a-z]+$/), detail: 'Answer done.' },
       { type: 'end', id: `root:${child}`, state: 'completed', summary: SUBAGENT_REPORT }
     ])
     expect(foldParts(updates).filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool_result').map((part) => part.text)).toContain(SUBAGENT_REPORT)
