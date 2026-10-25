@@ -8,6 +8,7 @@ import type { AcpConnection } from '../agents/drivers/acp/types'
 import type { MessageAttachment } from '../../shared/attachments'
 import { attachmentToMediaPart, resolveFileStore } from './fileStore'
 import { createLogger } from '../logger/logger'
+import { turnContextBlock, turnPromptText } from './threadContextService'
 
 const logger = createLogger('acp-attachments')
 
@@ -28,16 +29,26 @@ const MAX_INLINE_BYTES = 20 * 1024 * 1024
  * Never an embedded resource: both adapters advertise `embeddedContext`, but
  * the Claude adapter drops a `blob` resource and the Codex adapter pastes its
  * base64 into the prompt, so neither model ever saw a PDF that way.
+ *
+ * What is left of the turn's wire-only context leads the first block, except
+ * where the driver kept a slash command's context apart (`contextBlock`,
+ * {@link turnPromptText}): then the first block is the command alone — the
+ * engine reads it and its arguments from there — the file list follows in a
+ * block of its own, and the context is the last block.
  */
-export async function buildAcpPrompt(userId: string, input: Pick<RunInput, 'wireContent' | 'attachments' | 'runScope'>, connection: AcpConnection, uploadsDir: string | null): Promise<ContentBlock[]> {
+export async function buildAcpPrompt(userId: string, input: Pick<RunInput, 'wireContent' | 'turnContext' | 'contextBlock' | 'attachments' | 'runScope'>, connection: AcpConnection, uploadsDir: string | null): Promise<ContentBlock[]> {
+  const { text, trailing } = turnPromptText(input)
+  const tail: ContentBlock[] = trailing ? [turnContextBlock(input, trailing)] : []
   const attachments = input.attachments ?? []
-  if (!attachments.length) return [{ type: 'text', text: input.wireContent }]
+  if (!attachments.length) return [{ type: 'text', text }, ...tail]
   const nativeImages = !!connection.initialized.agentCapabilities?.promptCapabilities?.image
   const owner = input.runScope?.profileUserId ?? userId
-  return uploadsDir ? uploadedPrompt(owner, input.wireContent, attachments, nativeImages, uploadsDir) : inlinePrompt(owner, input.wireContent, attachments, nativeImages)
+  const prompt = uploadsDir ? await uploadedPrompt(owner, text, !!input.contextBlock, attachments, nativeImages, uploadsDir) : await inlinePrompt(owner, text, attachments, nativeImages)
+  return [...prompt, ...tail]
 }
 
-async function uploadedPrompt(userId: string, wireContent: string, attachments: MessageAttachment[], nativeImages: boolean, uploadsDir: string): Promise<ContentBlock[]> {
+/** `separate`: the file list in a block of its own after `wireContent`, which must stay alone in the first (a slash command). */
+async function uploadedPrompt(userId: string, wireContent: string, separate: boolean, attachments: MessageAttachment[], nativeImages: boolean, uploadsDir: string): Promise<ContentBlock[]> {
   const listed: string[] = []
   const images: ContentBlock[] = []
   for (const attachment of attachments) {
@@ -50,7 +61,9 @@ async function uploadedPrompt(userId: string, wireContent: string, attachments: 
     listed.push(`- ${path}`)
     if (nativeImages && file.mimeType.startsWith('image/') && file.bytes.length <= MAX_INLINE_BYTES) images.push({ type: 'image', data: file.bytes.toString('base64'), mimeType: file.mimeType })
   }
-  return [{ type: 'text', text: `Uploaded files:\n${listed.join('\n')}\n---\n\n${wireContent}` }, ...images]
+  const uploaded = `Uploaded files:\n${listed.join('\n')}\n---`
+  if (separate) return [{ type: 'text', text: wireContent }, { type: 'text', text: uploaded }, ...images]
+  return [{ type: 'text', text: `${uploaded}\n\n${wireContent}` }, ...images]
 }
 
 async function inlinePrompt(userId: string, wireContent: string, attachments: MessageAttachment[], nativeImages: boolean): Promise<ContentBlock[]> {

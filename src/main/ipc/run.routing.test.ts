@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
+import { withCatchUp } from '../services/threadContextService'
 const runnerTask = vi.hoisted(() => vi.fn())
 const openRunRequests = vi.hoisted(() => vi.fn(() => [] as { id: string; resume: 'reply' | 'next_message' }[]))
 const chatTask = vi.hoisted(() => vi.fn((): { id: string; title?: string; dispatchAgentId?: string | null; jobRunId?: string | null } | undefined => undefined))
@@ -203,23 +204,27 @@ async function send(
   return port
 }
 
-/** What the driver was actually told to say, on the last turn that reached it. */
+/**
+ * What the driver was actually told to say, on the last turn that reached it:
+ * the turn's context in front of the user's text, as a driver that sends one
+ * string sends it (`withCatchUp`).
+ */
 async function wireContent(): Promise<string> {
-  const input = streamToAgent.mock.calls.at(-1)![0] as {
-    run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
-  }
-  await input.run({ signal: new AbortController().signal, onEvent: vi.fn() })
-  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string }])[2]
-    .wireContent
+  return sent(await driverInput())
 }
 
 /** Everything the driver was handed on the last turn that reached it. */
-async function driverInput(): Promise<{ wireContent: string; messageId?: string }> {
+async function driverInput(): Promise<{ wireContent: string; turnContext?: string | null; messageId?: string }> {
   const input = streamToAgent.mock.calls.at(-1)![0] as {
     run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
   }
   await input.run({ signal: new AbortController().signal, onEvent: vi.fn() })
-  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string; messageId?: string }])[2]
+  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string; turnContext?: string | null; messageId?: string }])[2]
+}
+
+/** A driver input as one string: its context, then the user's text. */
+function sent(input: { wireContent: string; turnContext?: string | null }): string {
+  return withCatchUp(input.turnContext ?? null, input.wireContent)
 }
 
 /** Which agent the turn was routed to. */
@@ -894,7 +899,10 @@ describe('the wire-only turn header', () => {
     chatTask.mockReturnValue({ id: 'task-9', title: 'Add retry', dispatchAgentId: null, jobRunId: null })
     handoverOfTask.mockReturnValue({ depth: 1 })
     await send({ chatId: 'chat-1', content: 'hello' })
-    const { wireContent } = await driverInput()
+    const input = await driverInput()
+    // Beside the user's text, never inside it: the driver places it.
+    expect(input.wireContent).toBe('hello')
+    const wireContent = sent(input)
     expect(wireContent).toBe(
       [
         'Cinna task context (not part of the conversation):',
@@ -926,7 +934,7 @@ describe('the wire-only turn header', () => {
       chatTask.mockReturnValue({ id: 'task-9', title: 'Add retry', ...fields })
       handoverOfTask.mockReturnValue(delegation)
       await send({ chatId: 'chat-1', content: 'hello' })
-      expect((await driverInput()).wireContent, JSON.stringify(fields)).toContain(`"Add retry" (report required: ${expected})`)
+      expect(sent(await driverInput()), JSON.stringify(fields)).toContain(`"Add retry" (report required: ${expected})`)
       portGivenToTheStream().close()
     }
     chatTask.mockReset()
@@ -936,7 +944,7 @@ describe('the wire-only turn header', () => {
   it('says none and zero for a chat with no task, and nothing at all to a remote agent', async () => {
     caps.cwd = true
     await send({ chatId: 'chat-1', content: 'hello' })
-    expect((await driverInput()).wireContent).toContain('- current task: none\n- tasks skill: cinna-tasks v1\n\nhello')
+    expect(sent(await driverInput())).toContain('- current task: none\n- tasks skill: cinna-tasks v1\n\nhello')
     // The chat is busy until this turn's port closes; a second send on it would
     // be refused and read back as the first turn's own input.
     portGivenToTheStream().close()
@@ -944,7 +952,7 @@ describe('the wire-only turn header', () => {
     // header would be noise it cannot act on.
     caps.cwd = false
     await send({ chatId: 'chat-1', content: 'hello again' })
-    expect((await driverInput()).wireContent).toBe('hello again')
+    expect(sent(await driverInput())).toBe('hello again')
   })
 
   it('goes in front of the catch-up packet, so the missed thread reads as one block', async () => {
@@ -954,7 +962,7 @@ describe('the wire-only turn header', () => {
     lastAddressedAgentId.mockReturnValue('a-1')
     history = [message({ role: 'assistant', content: 'earlier answer', sourceAgentId: 'a-2' })]
     await send({ chatId: 'chat-1', content: 'and now?' })
-    const { wireContent } = await driverInput()
+    const wireContent = sent(await driverInput())
     expect(wireContent.indexOf('Cinna task context (not part of the conversation):')).toBe(0)
     expect(wireContent.indexOf('earlier answer')).toBeGreaterThan(0)
     expect(wireContent.endsWith('and now?')).toBe(true)
@@ -966,7 +974,7 @@ describe('the wire-only turn header', () => {
       throw new Error('the database is locked')
     })
     await send({ chatId: 'chat-1', content: 'hello' })
-    expect((await driverInput()).wireContent).toContain('- current task: none')
+    expect(sent(await driverInput())).toContain('- current task: none')
     chatTask.mockReset()
   })
 })

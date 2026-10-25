@@ -13,7 +13,10 @@ import { startAcpConnection } from '../acpConnection'
 import { pickPermissionOption } from '../acpPermissions'
 import { toElicitationContent, toInputQuestions } from '../acpQuestions'
 import { codeModeCinnaTools, isCodeModeCall } from '../conductorToolPolicy'
-import { chatRuntimePermissions } from '../../../../engine/configGenerator'
+import { chatRuntimePermissions, engineAgentKey } from '../../../../engine/configGenerator'
+import { buildAcpPrompt } from '../../../../services/acpAttachments'
+import { placeTurnContext } from '../acpDriver'
+import type { AcpConnection as DriverConnection } from '../types'
 import { OPENCODE_CONTRACT } from './opencode.contract'
 import { lineDiff, sorted } from './snapshotTools'
 import { startEgressTrap, type EgressTrap } from './claudeHarness'
@@ -146,7 +149,9 @@ const seen = {
   workspace: { error: null as string | null, cwd: '', outside: '', written: null as string | null, otherCwd: '', otherWritten: null as string | null,
     bash: emptyPrompt(), write: emptyPrompt(), readInside: emptyPrompt(), readOutside: emptyPrompt(),
     /** Session A reading session B's folder; session B, on A's process, reading its own folder, A's (the process cwd), and writing. */
-    readOther: emptyPrompt(), otherReadInside: emptyPrompt(), otherReadProcess: emptyPrompt(), otherWrite: emptyPrompt() }
+    readOther: emptyPrompt(), otherReadInside: emptyPrompt(), otherReadProcess: emptyPrompt(), otherWrite: emptyPrompt() },
+  /** A plugin slash command with the turn context after it: as the driver sends it on OpenCode (annotated block), and as a plain second block. */
+  command: { error: null as string | null, annotatedBlocks: [] as Json[], annotated: [] as OpenAiTurn[], plain: [] as OpenAiTurn[] }
 }
 
 const shellTool = (turn: OpenAiTurn): string | undefined => turn.tools.find((name) => name === 'bash' || name === 'shell')
@@ -540,6 +545,75 @@ async function workspaceScenario(binary: string): Promise<void> {
   }
 }
 
+const COMMAND_AGENT_ID = 'contract-command-agent'
+const COMMAND_MARKER = 'CONTRACT_OC_COMMAND_4a1'
+const COMMAND_ARG_MARKER = 'CONTRACT_OC_ARG_7b2'
+const COMMAND_CONTEXT_MARKER = 'CONTRACT_OC_CONTEXT_8c3'
+
+/**
+ * A plugin's slash command, configured as `configGenerator` writes one
+ * (`<agent key>/<plugin>:<command>`), typed with the turn context the driver
+ * adds: once as `placeTurnContext` + `buildAcpPrompt` send it on OpenCode —
+ * the context in a block for the assistant only — and once with the context
+ * as a plain second block, the layout that fails. Kept out of the snapshot.
+ */
+async function commandScenario(binary: string): Promise<void> {
+  let trap: EgressTrap | undefined
+  let provider: FakeOpenAi | undefined
+  let scratch: OpencodeScratch | undefined
+  let connection: AcpConnection | undefined
+  try {
+    trap = await startEgressTrap()
+    scratch = makeOpencodeScratch('cinna-contract-opencode-cmd-', { trapPort: trap.port })
+    provider = await startFakeOpenAi((turn) => turn.kind === 'auxiliary' ? { kind: 'text', text: 'Contract title' } : { kind: 'text', text: 'OK' })
+    const port = provider.port
+    const env = scratch.env
+    const launcher = createOpencodeLauncher({
+      binary: async () => ({ path: binary, version: null }),
+      configInput: async () => ({
+        providers: [{ id: PROVIDER_ID, type: 'openai_compatible', name: 'Contract fake', apiKey: 'sk-contract-dummy-not-a-real-key',
+          baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: MODEL_ID, name: 'Contract model' }] }],
+        agents: [{ agentId: COMMAND_AGENT_ID, slug: 'command-agent', description: 'Command agent', prompt: 'Contract command agent.',
+          providerId: PROVIDER_ID, modelId: MODEL_ID,
+          commands: [{ name: 'contract-market:contract-cmd', template: `${COMMAND_MARKER} Reply OK. $ARGUMENTS`, description: 'A contract command.' }] }]
+      }),
+      configRoot: () => scratch!.configRoot,
+      childEnv: async () => ({ ...env })
+    })
+    const planned = await launcher.plan({ userId: 'contract', agentId: COMMAND_AGENT_ID,
+      folder: { name: 'Command agent', slug: 'command-agent', description: '', path: scratch.cwd, kind: 'bare', runtimeMode: 'isolated' } })
+    if (isRefusal(planned)) throw new Error(`the launcher refused: ${planned.error}`)
+    connection = spawnAcp({ command: planned.spec.command, args: planned.spec.args, cwd: planned.spec.cwd, env: planned.spec.env, answer })
+    await connection.rpc('initialize', planned.init as unknown as Json, 60_000)
+    const run = async (prompt: Json[]): Promise<OpenAiTurn[]> => {
+      const created = await connection!.rpc('session/new', { cwd: scratch!.cwd, mcpServers: [] }, 60_000)
+      const sessionId = String(created.result?.sessionId ?? '')
+      if (!sessionId) { seen.command.error ??= JSON.stringify(created.error ?? 'no session'); return [] }
+      for (const option of planned.setup.configOptions ?? []) {
+        await connection!.rpc('session/set_config_option', { sessionId, configId: option.configId, value: option.value })
+      }
+      const turnsAt = provider!.turns.length
+      const answered = await connection!.rpc('session/prompt', { sessionId, prompt }, 90_000)
+      if (answered.error) seen.command.error ??= JSON.stringify(answered.error)
+      await sleep(300)
+      return provider!.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+    }
+    const command = `/${engineAgentKey(COMMAND_AGENT_ID, 'command-agent')}/contract-market:contract-cmd ${COMMAND_ARG_MARKER}`
+    const context = `Cinna task context (not part of the conversation):\n- here: ${COMMAND_CONTEXT_MARKER}`
+    const placed = placeTurnContext('opencode', { chatId: 'contract', wireContent: command, turnContext: context, signal: new AbortController().signal })
+    seen.command.annotatedBlocks = await buildAcpPrompt('contract', placed, null as unknown as DriverConnection, null) as unknown as Json[]
+    seen.command.annotated = await run(seen.command.annotatedBlocks)
+    seen.command.plain = await run([{ type: 'text', text: command }, { type: 'text', text: context }])
+  } catch (err) {
+    seen.command.error = err instanceof Error ? err.message : String(err)
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    await trap?.close()
+    scratch?.dispose()
+  }
+}
+
 /** The causes of the engine log's newest errors (the stderr tail is only a stack): why a start died. */
 function engineErrors(scratch: OpencodeScratch): string {
   try {
@@ -719,7 +793,24 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
   beforeAll(async () => {
     await scenario(binaryRef?.path ?? '')
     await workspaceScenario(binaryRef?.path ?? '')
-  }, 420_000)
+    await commandScenario(binaryRef?.path ?? '')
+  }, 540_000)
+
+  it(entry('opencode.session.slash-command-context'), () => {
+    expect(seen.command.error).toBeNull()
+    // As the driver sends it: the command alone, then the context for the assistant only.
+    expect(seen.command.annotatedBlocks).toHaveLength(2)
+    expect(seen.command.annotatedBlocks[1]).toMatchObject({ annotations: { audience: ['assistant'] } })
+    const ran = seen.command.annotated.find((turn) => turn.mentions(COMMAND_MARKER))
+    expect(ran, 'the command did not run with an annotated context block after it').toBeDefined()
+    // `$ARGUMENTS` is the command's own argument alone…
+    expect(ran!.lastUserText.trim(), 'the context became the command’s arguments').toBe(`${COMMAND_MARKER} Reply OK. ${COMMAND_ARG_MARKER}`)
+    // …and the context still reached the model, as embedded context.
+    expect(ran!.mentions(COMMAND_CONTEXT_MARKER), 'the context block never reached the model').toBe(true)
+    // A plain second block is joined into the arguments: why the driver annotates it.
+    const plain = seen.command.plain.find((turn) => turn.mentions(COMMAND_MARKER))
+    expect(plain?.userText ?? '', 'a plain second block no longer joins the arguments').toMatch(new RegExp(`${COMMAND_ARG_MARKER}\\s+Cinna task context`))
+  })
 
   it(entry('opencode.policy.workspace-native-tools'), () => {
     expect(seen.workspace.error).toBeNull()

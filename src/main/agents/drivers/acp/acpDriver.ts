@@ -107,6 +107,7 @@ import type { SessionActivityReporter } from '../../../../shared/sessionActivity
 import { childUpdateOf, opencodeChildrenFor, trackedOpencodeChildren } from './opencodeChildren'
 import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
 import type { SessionActivityHub } from '../../../services/sessionActivityHub'
+import { isSlashCommand, turnContextBlock, turnPromptText } from '../../../services/threadContextService'
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
@@ -291,6 +292,58 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
 
 function canceled(): RunAgentTurnResult {
   return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
+}
+
+/**
+ * Where an engine takes a slash command's wire-only context, so the command
+ * still runs (`threadContextService.turnPromptText` builds the blocks):
+ * - Codex: a plain text block after the command's — codex-acp parses a
+ *   command from `prompt[0]` alone.
+ * - OpenCode: a text block after it for the assistant only
+ *   (`annotations.audience: ['assistant']`), which OpenCode leaves out of the
+ *   command parse and sends as embedded context; a plain block would be
+ *   joined into the command's arguments.
+ * - Claude: one block, the context after the command. The CLI runs a command
+ *   only from a single-block prompt, so the context lands in its
+ *   `$ARGUMENTS`; the model still sees it.
+ * Every other engine, and any message that is not a command: the context in
+ * front, one block.
+ */
+const COMMAND_CONTEXT: Partial<Record<AcpLauncherId, 'block' | 'assistant-block' | 'after'>> = {
+  codex: 'block',
+  opencode: 'assistant-block',
+  claude: 'after'
+}
+
+/**
+ * The run input with its `turnContext` placed for this engine: kept apart,
+ * marked `contextBlock`, only for an engine that takes a command's context as
+ * a block of its own; otherwise folded into `wireContent` — in front, or
+ * after a Claude command.
+ */
+export function placeTurnContext(launcherId: AcpLauncherId, input: RunInput): RunInput {
+  const context = input.turnContext || null
+  const layout = isSlashCommand(input.wireContent) ? COMMAND_CONTEXT[launcherId] : undefined
+  if (layout === 'block' || layout === 'assistant-block') return { ...input, turnContext: context, contextBlock: layout === 'block' ? 'plain' : 'assistant' }
+  const { contextBlock: _ignored, ...rest } = input
+  if (!context) return { ...rest, turnContext: null }
+  return { ...rest, wireContent: layout === 'after' ? `${input.wireContent}\n\n${context}` : `${context}\n\n${input.wireContent}`, turnContext: null }
+}
+
+/** The prompt without a `buildPrompt` dep: the turn's text, and a command's context block after it. */
+function textPrompt(input: RunInput): ContentBlock[] {
+  const { text, trailing } = turnPromptText(input)
+  return [{ type: 'text', text }, ...(trailing ? [turnContextBlock(input, trailing)] : [])]
+}
+
+/**
+ * The agent's credentials line, after the user's text — or, where a command's
+ * context is a block of its own, at its end, so it never becomes the
+ * command's arguments.
+ */
+function withCredentialPrompt(input: RunInput, credentialPrompt: string): RunInput {
+  if (!input.contextBlock) return { ...input, wireContent: input.wireContent + '\n' + credentialPrompt }
+  return { ...input, turnContext: input.turnContext ? input.turnContext + '\n' + credentialPrompt : credentialPrompt.trimStart() }
 }
 
 /** Stop waiting without canceling restoration that other turns may share. */
@@ -656,6 +709,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         })
         return fail('This agent runs on an engine this version of Cinna does not support.')
       }
+      // Where this engine takes the turn's wire-only context, decided once.
+      input = placeTurnContext(launcherId, input)
       // A prompt this engine must never be sent (Antigravity's `/logout`
       // signs out every home on the computer): refused in words, unsent.
       const refusedPrompt = launcher.refusePrompt?.(input.wireContent) ?? null
@@ -694,7 +749,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           }
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()
-          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
+          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? withCredentialPrompt(input, prepared.credentialPrompt) : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
         }, input.queueWhenBusy ? input.signal : undefined, input.signal)
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -1788,7 +1843,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       runtime.validate(chatId)
       startingSession = false
       const promptTurn: AcpPromptTurn = { agent, runtime, plan, cwd: sessionCwd }
-      const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection, promptTurn) : [{ type: 'text' as const, text: input.wireContent }]
+      const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection, promptTurn) : textPrompt(input)
       if (freshSession && !input.nested && input.runScope && deps.replayTranscript) {
         const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId, agent.id, promptTurn)
         if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }

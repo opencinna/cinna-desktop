@@ -24,6 +24,7 @@ import {
   CINNA_SESSION_EXPIRED_MESSAGE
 } from '../../../shared/cinnaErrors'
 import { capabilitiesFor } from './capabilities'
+import { withCatchUp } from '../../services/threadContextService'
 import { authRejectionStatus } from './a2aErrors'
 import type { AgentDriver, AgentReadiness } from './driver'
 
@@ -227,7 +228,9 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           endpointUrl,
           cardUrl,
           accessToken,
-          wireContent,
+          // The turn's wire-only context in front of the text, a command's
+          // too: a remote agent's own parser reads one string.
+          wireContent: withCatchUp(input.turnContext ?? null, wireContent),
           fileIds,
           ...(input.messageId ? { messageId: input.messageId } : {}),
           // Synced agents authenticate with a Cinna-issued JWT — a stream-level

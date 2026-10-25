@@ -18,7 +18,7 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
 import { messageRoutingService } from './messageRoutingService'
 import { a2aStreamingService } from './a2aStreamingService'
-import { buildCatchUpPacket, buildTurnHeader, withCatchUp } from './threadContextService'
+import { buildCatchUpPacket, buildTurnHeader, joinTurnContext } from './threadContextService'
 import { driverFor } from '../agents/drivers'
 import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
 import { resolveCommandRunner } from './localAgents/commandService'
@@ -800,7 +800,7 @@ function bindTurn(input: {
   queueWhenBusy?: boolean
   handbackEligible?: boolean
   registerSteer?: (steer: SteerFn | null) => void
-  /** Wire-only turn context, in front of everything else. */
+  /** Wire-only turn context, in front of the catch-up packet (`RunInput.turnContext`). */
   turnHeader?: string | null
   /** The chat's scope, for a follow-up turn the agent starts after this one. */
   runScope?: FollowUpScope
@@ -817,10 +817,12 @@ function bindTurn(input: {
         nested: input.nested,
         toolCallBudget: input.toolCallBudget,
         coordinator: input.coordinator,
-        // Header, then the catch-up packet, then what the user sent. Both
-        // prefixes are wire-only by construction: the row was persisted from
-        // `wireContent` alone, before this call.
-        wireContent: withCatchUp(input.turnHeader ?? null, withCatchUp(input.packet, wireContent)),
+        // What the user sent, and beside it the header and the catch-up
+        // packet, which the driver places (`RunInput.turnContext`). Both are
+        // wire-only by construction: the row was persisted from `wireContent`
+        // alone, before this call.
+        wireContent,
+        turnContext: joinTurnContext(input.turnHeader ?? null, input.packet),
         fileIds: input.fileIds,
         attachments: input.attachments,
         ...(input.messageId ? { messageId: input.messageId } : {}),

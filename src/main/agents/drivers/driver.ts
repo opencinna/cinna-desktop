@@ -52,7 +52,21 @@ export interface RunInput {
   /** Internal autonomous admission; interactive turns keep immediate busy refusal. */
   queueWhenBusy?: boolean
   chatId: string
+  /** What the user sent, as the transcript row holds it. */
   wireContent: string
+  /**
+   * Wire-only context for this turn — the turn header, then the catch-up
+   * packet — never persisted. A driver sends it in front of `wireContent`
+   * (`withCatchUp`), except where the ACP driver places a slash command's
+   * context by engine (`acpDriver.placeTurnContext`).
+   */
+  turnContext?: string | null
+  /**
+   * Set by the ACP driver alone: this turn's `turnContext` goes in a text
+   * block of its own after a slash command's, `assistant` marking it for the
+   * assistant only (OpenCode). Absent, the context is already in `wireContent`.
+   */
+  contextBlock?: 'plain' | 'assistant'
   /** Cinna file ids to attach (A2A `metadata.cinna_file_ids`). */
   fileIds?: string[]
   /**

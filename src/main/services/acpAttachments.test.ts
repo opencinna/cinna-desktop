@@ -82,3 +82,32 @@ describe('ACP attachments inline, for an engine that cannot open files', () => {
     expect(prompt).toContainEqual({ type: 'text', text: '[Attachment z.bin could not be read by this runtime.]' })
   })
 })
+
+describe('the turn context', () => {
+  it('leads the first block of any other message, attachments or not', async () => {
+    expect(await buildAcpPrompt('u', { wireContent: 'hi', turnContext: 'CTX' }, caps(true), uploads)).toEqual([{ type: 'text', text: 'CTX\n\nhi' }])
+    fixtures.files.set('a', '%PDF-1')
+    const prompt = await buildAcpPrompt('u', { wireContent: 'read this', turnContext: 'CTX', attachments: [pdf('a', 'r.pdf')] }, caps(true), uploads)
+    expect(prompt).toEqual([{ type: 'text', text: `Uploaded files:\n- ${join(uploads, 'r.pdf')}\n---\n\nCTX\n\nread this` }])
+  })
+
+  // An engine reads a command and its arguments from the first block only.
+  it('follows a slash command in a block of its own where the driver kept it apart', async () => {
+    expect(await buildAcpPrompt('u', { wireContent: '/goal clear', turnContext: 'CTX', contextBlock: 'plain' }, caps(true), uploads)).toEqual([{ type: 'text', text: '/goal clear' }, { type: 'text', text: 'CTX' }])
+    expect(await buildAcpPrompt('u', { wireContent: '/c x', turnContext: 'CTX', contextBlock: 'assistant' }, caps(true), uploads))
+      .toEqual([{ type: 'text', text: '/c x' }, { type: 'text', text: 'CTX', annotations: { audience: ['assistant'] } }])
+    expect(await buildAcpPrompt('u', { wireContent: '/plan', turnContext: null, contextBlock: 'plain' }, caps(true), uploads)).toEqual([{ type: 'text', text: '/plan' }])
+  })
+
+  it('keeps a command alone in front of its uploaded files, and the context last', async () => {
+    fixtures.files.set('a', '%PDF-1')
+    const prompt = await buildAcpPrompt('u', { wireContent: '/review this', turnContext: 'CTX', contextBlock: 'plain', attachments: [pdf('a', 'r.pdf')] }, caps(true), uploads)
+    expect(prompt).toEqual([{ type: 'text', text: '/review this' }, { type: 'text', text: `Uploaded files:\n- ${join(uploads, 'r.pdf')}\n---` }, { type: 'text', text: 'CTX' }])
+  })
+
+  it('puts the context after inlined attachments of a command', async () => {
+    fixtures.media.mockResolvedValue({ kind: 'text', text: 'Invoice 42', mimeType: 'application/pdf' })
+    const prompt = await buildAcpPrompt('u', { wireContent: '/review', turnContext: 'CTX', contextBlock: 'plain', attachments: [pdf('a', 'r.pdf')] }, caps(true), null)
+    expect(prompt).toEqual([{ type: 'text', text: '/review' }, { type: 'text', text: '[Attachment: r.pdf]\nInvoice 42' }, { type: 'text', text: 'CTX' }])
+  })
+})

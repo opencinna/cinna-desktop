@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCatchUpPacket, buildTurnHeader, withCatchUp, CATCH_UP_CAP } from './threadContextService'
+import { buildCatchUpPacket, buildTurnHeader, isSlashCommand, joinTurnContext, turnContextBlock, turnPromptText, withCatchUp, CATCH_UP_CAP } from './threadContextService'
 import type { MessageRow } from '../db/messages'
 
 /**
@@ -236,6 +236,54 @@ describe('buildCatchUpPacket', () => {
 describe('withCatchUp', () => {
   it('puts the packet in front of the user’s text', () => {
     expect(withCatchUp('CONTEXT', 'do the thing')).toBe('CONTEXT\n\ndo the thing')
+  })
+})
+
+describe('joinTurnContext', () => {
+  it('is the header, then the packet, or null when there is neither', () => {
+    expect(joinTurnContext('HEADER', 'PACKET')).toBe('HEADER\n\nPACKET')
+    expect(joinTurnContext('HEADER', null)).toBe('HEADER')
+    expect(joinTurnContext(null, 'PACKET')).toBe('PACKET')
+    expect(joinTurnContext(null, null)).toBeNull()
+  })
+})
+
+describe('isSlashCommand', () => {
+  it.each([
+    '/commit-commands:commit',
+    '/compact',
+    '/doc-desk-b92816d4/commit-commands:commit',
+    '/review the last change',
+    '/plan\nwith a second line',
+    // One or two segments read as a command; harmless, since the context still goes in a block of its own.
+    '/tmp/x what',
+    '/etc/hosts'
+  ])('reads %j as a command', (message) => {
+    expect(isSlashCommand(message)).toBe(true)
+  })
+
+  it.each(['/', '/\nsomething', '//c', '/Users/me/notes/a.txt — what is this?', 'run /commit please', ' /commit', '//comment', ''])('reads %j as text', (message) => {
+    expect(isSlashCommand(message)).toBe(false)
+  })
+})
+
+describe('turnPromptText', () => {
+  it('puts the context in front of any other message, in one text', () => {
+    expect(turnPromptText({ wireContent: 'do the thing', turnContext: 'HEADER\n\nPACKET' })).toEqual({ text: 'HEADER\n\nPACKET\n\ndo the thing', trailing: null })
+    expect(turnPromptText({ wireContent: 'do the thing', turnContext: null })).toEqual({ text: 'do the thing', trailing: null })
+    expect(turnPromptText({ wireContent: 'do the thing' })).toEqual({ text: 'do the thing', trailing: null })
+  })
+
+  it('keeps the context apart only where the driver marked it so', () => {
+    expect(turnPromptText({ wireContent: '/goal clear', turnContext: 'HEADER', contextBlock: 'plain' })).toEqual({ text: '/goal clear', trailing: 'HEADER' })
+    expect(turnPromptText({ wireContent: '/plan', turnContext: null, contextBlock: 'plain' })).toEqual({ text: '/plan', trailing: null })
+    // Unmarked, a command is text like any other: the context leads it.
+    expect(turnPromptText({ wireContent: '/goal clear', turnContext: 'HEADER' })).toEqual({ text: 'HEADER\n\n/goal clear', trailing: null })
+  })
+
+  it('marks the block for the assistant only when asked', () => {
+    expect(turnContextBlock({ contextBlock: 'plain' }, 'C')).toEqual({ type: 'text', text: 'C' })
+    expect(turnContextBlock({ contextBlock: 'assistant' }, 'C')).toEqual({ type: 'text', text: 'C', annotations: { audience: ['assistant'] } })
   })
 })
 

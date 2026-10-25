@@ -290,7 +290,9 @@ describe('autonomous coordinator runner', () => {
     expect(chatRunResultRepo.list(USER).get(chatId)?.unread).toBe(true)
     expect(driverRun).toHaveBeenCalledTimes(2)
     expect(driverRun.mock.calls.find((call) => call[1].id === 'analyst')![2].handbackEligible).toBeUndefined()
-    const writer = driverRun.mock.calls.find((call) => call[1].id === 'writer')![2].wireContent
+    // The handoff's catch-up travels beside the prompt, as the turn's wire-only context.
+    const writerInput = driverRun.mock.calls.find((call) => call[1].id === 'writer')![2]
+    const writer = `${writerInput.turnContext ?? ''}\n\n${writerInput.wireContent}`
     for (const phrase of ['Ship the feature', 'Analyst result', 'main', 'Use the analysis']) expect(writer).toContain(phrase)
     expect(stream).toHaveBeenCalledTimes(4)
     expect(stream.mock.calls[3][0].messages.some((row) => row.role === 'system' && row.content.includes('Writer handed the task back to the coordinator.'))).toBe(true)

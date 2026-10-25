@@ -6,6 +6,7 @@ import type { ManagedAgentConfig } from '../../../../shared/managedAgents'
 import { PERMISSION_TOOL_NAME, type RequestResolution } from '../../../../shared/localAgentRequests'
 import type { MessagePart } from '../../../../shared/messageParts'
 import type { RunInput, RunResult } from '../driver'
+import { withCatchUp } from '../../../services/threadContextService'
 import type { pendingRequests } from '../pendingRequests'
 import { createLogger } from '../../../logger/logger'
 import { ManagedEvents, type ManagedEffect, type ManagedEvent, type ManagedPermissionTool } from './managedEvents'
@@ -68,7 +69,7 @@ export function runManagedSession(
   input: RunInput,
   deps: ManagedRunDeps
 ): Promise<ManagedRunResult> {
-  return managedSession(binding, agentId, input, deps, { kind: 'turn', wireContent: input.wireContent })
+  return managedSession(binding, agentId, input, deps, { kind: 'turn', wireContent: withCatchUp(input.turnContext ?? null, input.wireContent) })
 }
 
 /**

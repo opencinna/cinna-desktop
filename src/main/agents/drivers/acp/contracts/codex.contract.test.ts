@@ -14,6 +14,9 @@ import { airClientMeta, createAcpActivityState, translateActivity } from '../acp
 import { parsePromptTelemetry } from '../acpTelemetry'
 import { AcpMessageStream } from '../acpMessages'
 import { pickPermissionOption } from '../acpPermissions'
+import { placeTurnContext } from '../acpDriver'
+import { buildAcpPrompt } from '../../../../services/acpAttachments'
+import type { AcpConnection as DriverConnection } from '../types'
 import { KIND_METADATA_KEY, TOOL_NAME_METADATA_KEY, type PartLike } from '../../../streamPartsAccumulator'
 import type { PermissionOption, SessionNotification } from '@agentclientprotocol/sdk'
 import type { AcpLaunchPlan } from '../acpLaunchers'
@@ -151,6 +154,8 @@ const seen = {
   toolsAfterListChanged: [] as string[],
   cancel: { stopReason: null as unknown, ms: 0 },
   load: { ok: false, modeBefore: null as unknown, modeAfter: null as unknown },
+  /** `/plan` typed with the turn context after it, as the driver sends it on Codex: the blocks, the mode after, the model requests it made. */
+  planCommand: { blocks: [] as Json[], error: null as unknown, modeAfter: null as unknown, requests: -1 },
   /** Every provider request of the folder session, and the ones from the model change on. */
   folderTurns: [] as ProviderTurn[],
   afterModelChange: [] as ProviderTurn[],
@@ -290,6 +295,17 @@ async function folderScenario(binary: string): Promise<void> {
     const loaded = await connection.rpc('session/load', { sessionId, cwd: scratch.cwd, mcpServers: [] })
     seen.load.ok = !loaded.error
     seen.load.modeAfter = configOption(loaded, 'collaboration_mode')?.currentValue ?? null
+    await connection.rpc('session/set_config_option', { sessionId, configId: 'collaboration_mode', value: 'default' })
+
+    // `/plan` with the turn context after it, built by the production driver code.
+    const placed = placeTurnContext('codex', { chatId: 'contract', wireContent: '/plan', turnContext: 'Cinna task context (not part of the conversation):\n- here: contract', signal: new AbortController().signal })
+    seen.planCommand.blocks = await buildAcpPrompt('contract', placed, null as unknown as DriverConnection, null) as unknown as Json[]
+    const planAt = provider.turns.length
+    const planned = await connection.rpc('session/prompt', { sessionId, prompt: seen.planCommand.blocks }, 60_000)
+    seen.planCommand.error = planned.error ?? null
+    seen.planCommand.requests = requestsSince(planAt)
+    const afterPlan = await connection.rpc('session/load', { sessionId, cwd: scratch.cwd, mcpServers: [] })
+    seen.planCommand.modeAfter = configOption(afterPlan, 'collaboration_mode')?.currentValue ?? null
     await connection.rpc('session/set_config_option', { sessionId, configId: 'collaboration_mode', value: 'default' })
 
     await connection.rpc('session/set_config_option', { sessionId, configId: 'model', value: NEXT_MODEL })
@@ -917,6 +933,15 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     const ids = (((seen.sessionNew?.result?.modes as Json | undefined)?.availableModes as Json[] | undefined) ?? []).map((mode) => mode.id)
     expect(ids).toEqual(expect.arrayContaining(['read-only', 'workspace-write', 'agent', 'agent-full-access']))
     expect(seen.setModes).toEqual({ agent: true, 'workspace-write': true })
+  })
+
+  it(entry('codex.session.slash-command-context'), () => {
+    // As the driver sends it on Codex: the command alone, then the context as a plain block.
+    expect(seen.planCommand.blocks).toEqual([{ type: 'text', text: '/plan' }, { type: 'text', text: expect.stringContaining('Cinna task context') }])
+    expect(seen.planCommand.error).toBeNull()
+    // `/plan` takes no arguments: had the context been its arguments it would refuse. It toggled plan mode, with no model request.
+    expect(seen.planCommand.modeAfter, 'the /plan command did not run with a context block after it').toBe('plan')
+    expect(seen.planCommand.requests).toBe(0)
   })
 
   it(entry('codex.session.load'), () => {

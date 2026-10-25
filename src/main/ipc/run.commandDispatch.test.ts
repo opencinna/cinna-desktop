@@ -194,14 +194,13 @@ describe('run:send — the /run: dispatch call site', () => {
       chatId: 'chat-1',
       // The wire carries the turn header, because a folder agent runs in a
       // folder on this machine (`capabilities.cwd`). The `/run:` match above
-      // was made on the *typed* text, which is the property that matters here:
-      // a command prefixed by wire-only context is still the command.
-      wireContent: [
+      // was made on the *typed* text, which the driver gets as `wireContent`;
+      // the wire-only context travels beside it, for the driver to place.
+      wireContent: '/run:check',
+      turnContext: [
         'Cinna task context (not part of the conversation):',
         `- here: Cinna Desktop, folder agent \`${FOLDER_AGENT.id}\` · chat \`chat-1\``,
-        '- current task: none',
-        '',
-        '/run:check'
+        '- current task: none'
       ].join('\n'),
       fileIds: [],
       signal: io.signal,

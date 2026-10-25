@@ -1,3 +1,4 @@
+import type { ContentBlock } from '@agentclientprotocol/sdk'
 import type { MessageRow } from '../db/messages'
 
 /**
@@ -166,6 +167,50 @@ export function withCatchUp(packet: string | null, userContent: string): string 
   return packet ? `${packet}\n\n${userContent}` : userContent
 }
 
+/**
+ * A message that is an engine slash command — `/name`, `/plugin:command`,
+ * OpenCode's `/<agent key>/<plugin>:<command>` — followed by its arguments or
+ * nothing. Two segments at most, so a deeper absolute path
+ * (`/Users/me/a.txt`) is not one; a shorter one (`/etc/hosts`) is, which costs
+ * little: the engine reads it as text, and the context still reaches the model.
+ */
+const SLASH_COMMAND = /^\/[\w][\w.:-]*(?:\/[\w][\w.:-]*)?(?=\s|$)/
+
+/** Whether the user's message starts with an engine slash command ({@link SLASH_COMMAND}). */
+export function isSlashCommand(userContent: string): boolean {
+  return SLASH_COMMAND.test(userContent)
+}
+
+/**
+ * A turn's wire-only context — the turn header, then the catch-up packet — as
+ * one text, or null when there is neither. It travels beside the user's text
+ * (`RunInput.turnContext`), never inside it, so each driver can place it.
+ */
+export function joinTurnContext(header: string | null, packet: string | null): string | null {
+  return [header, packet].filter((part): part is string => !!part).join('\n\n') || null
+}
+
+/**
+ * Where one ACP turn's text goes: `text` is the prompt's first text block,
+ * `trailing` a separate block after everything else, or null.
+ *
+ * Separate only where the ACP driver kept a slash command's context apart
+ * (`contextBlock`, set by `acpDriver.placeTurnContext` for Codex and
+ * OpenCode), because the engine reads the command and its arguments from the
+ * first block. Otherwise the context, if any is left, leads the one block
+ * ({@link withCatchUp}).
+ */
+export function turnPromptText(input: { wireContent: string; turnContext?: string | null; contextBlock?: 'plain' | 'assistant' }): { text: string; trailing: string | null } {
+  const context = input.turnContext || null
+  if (context && input.contextBlock) return { text: input.wireContent, trailing: context }
+  return { text: withCatchUp(context, input.wireContent), trailing: null }
+}
+
+/** A command's context block: for the assistant only when `contextBlock` says so (OpenCode leaves such a block out of its command parse). */
+export function turnContextBlock(input: { contextBlock?: 'plain' | 'assistant' }, text: string): ContentBlock {
+  return { type: 'text', text, ...(input.contextBlock === 'assistant' ? { annotations: { audience: ['assistant'] } } : {}) }
+}
+
 /** First line of the turn header — the Cinna Task Protocol's `context_block`. */
 export const TURN_HEADER_TITLE = 'Cinna task context (not part of the conversation):'
 
@@ -179,8 +224,11 @@ export const TURN_HEADER_TITLE = 'Cinna task context (not part of the conversati
  * turn belongs to, which task if any, and how deep in a chain it is — all of
  * which change per turn, and a chat id in a system prompt would start one
  * pooled Codex process per chat. So they travel the way the catch-up packet
- * does: prepended to the wire content, never persisted (the transcript row is
- * written from the user's text alone, in `messageRoutingService`).
+ * does: wire-only beside the user's text (`RunInput.turnContext`), in front of
+ * it — or, on an ACP engine, in a text block of its own after a message that
+ * starts with a slash command ({@link turnPromptText}) — and never persisted
+ * (the transcript row is written from the user's text alone, in
+ * `messageRoutingService`).
  *
  * Only agents that run *in a folder on this machine* are told: a brief names a
  * path, and a remote agent has no path to write one in.

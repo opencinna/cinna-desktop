@@ -100,6 +100,13 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
     flow: NO_FLOW
   },
   {
+    id: 'opencode.session.slash-command-context', area: 'session lifecycle', surface: 'ACP method', name: 'session/prompt (slash command + annotated context)',
+    expectation: 'A prompt whose first text block is a configured `/<agent key>/<plugin>:<command> <args>` and whose second block is Cinna’s turn context marked `annotations.audience: ["assistant"]` (`placeTurnContext` + `buildAcpPrompt` on OpenCode) runs that command with `$ARGUMENTS` equal to `<args>` alone, and the context still reaches the model. A plain second block is joined into the command’s arguments.',
+    owners: [`${DRIVER}#placeTurnContext`, 'src/main/services/threadContextService.ts#turnContextBlock', 'src/main/services/acpAttachments.ts#buildAcpPrompt'],
+    feature: 'A plugin command typed to an OpenCode agent gets Cinna’s task context as its arguments, or does not run.',
+    flow: NO_FLOW
+  },
+  {
     id: 'opencode.session.load-replay', area: 'session lifecycle', surface: 'ACP method', name: 'session/load',
     expectation: 'In a fresh process, `session/load` of a session the previous process created succeeds, replays its history as `session/update`s (user, agent, thought and tool updates), and the next prompt’s request carries the earlier turns.',
     owners: [`${DRIVER}#session/load`],

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -24,6 +24,14 @@ import {
 } from './claudeHarness'
 import { lineDiff, sorted } from './snapshotTools'
 import { probeFolderHandovers, handoverProbeSnapshot, type HandoverProbe } from './handoverProbes'
+import { installRuntimeHost, type RuntimeHost } from '../../../../host/runtimeHost'
+import { ensureAgentPluginWrappers } from '../../../../services/agentPluginWrappers'
+import { readPluginTree } from '../../../../services/pluginTree'
+import type { CachedPlugin } from '../../../../services/pluginSkills'
+import { withCatchUp } from '../../../../services/threadContextService'
+import { buildAcpPrompt } from '../../../../services/acpAttachments'
+import type { AcpConnection } from '../types'
+import { placeTurnContext } from '../acpDriver'
 
 /**
  * The Claude Code interface contract, checked against the **real** CLI.
@@ -151,7 +159,11 @@ const seen = {
   scrub: { on: null as ScrubRun | null, off: null as ScrubRun | null },
   /** Scenario G: a `workspace` chat, its options produced by the production policy helper. */
   workspace: { error: null as unknown, options: null as Json | null, turns: [] as ClaudeProviderTurn[],
-    asks: [] as AdapterMessage[], written: null as string | null, pwd: '', cwd: '', model: null as string | null }
+    asks: [] as AdapterMessage[], written: null as string | null, pwd: '', cwd: '', model: null as string | null },
+  /** Scenario H: a marketplace plugin's Claude wrapper, as `ensureAgentPluginWrappers` builds it. */
+  wrapper: { error: null as unknown, built: [] as string[], linked: [] as string[], linkedOff: [] as string[],
+    /** Each session's conversation requests: the command with the context after it in one block (`placeTurnContext` for Claude), the command behind the context, hooks off. */
+    leading: [] as ClaudeProviderTurn[], leadingBlocks: 0, trailing: [] as ClaudeProviderTurn[], hooksOff: [] as ClaudeProviderTurn[] }
 }
 
 /** The CLI's own title request gets a title; only the conversation is scripted, so it cannot consume a step. */
@@ -608,6 +620,83 @@ async function workspaceScenario(binary: string, trap: EgressTrap): Promise<void
   }
 }
 
+/* -------------------------------------------------------------- scenario H */
+
+const WRAPPED_PLUGIN = 'contract-market'
+const WRAPPED_COMMAND = 'contract-cmd'
+const WRAPPED_COMMAND_MARKER = 'CONTRACT_WRAPPER_COMMAND_2c8'
+const WRAPPED_ARG_MARKER = 'CONTRACT_WRAPPER_ARG_5e0'
+const WRAPPED_HOOK_MARKER = 'CONTRACT_WRAPPER_HOOK_6f1'
+const TURN_CONTEXT_MARKER = 'CONTRACT_TURN_CONTEXT_9d3'
+const TURN_HEADER = `Cinna task context (not part of the conversation):\n- here: ${TURN_CONTEXT_MARKER}`
+
+/**
+ * A marketplace plugin as `marketplacePluginCache` leaves it (a command, a
+ * SessionStart hook whose script is reached through `${CLAUDE_PLUGIN_ROOT}`),
+ * wrapped by the production `ensureAgentPluginWrappers` and passed as the
+ * isolated branch passes it. Three sessions: the prompt the production
+ * `placeTurnContext` and `buildAcpPrompt` build for a command on Claude — one
+ * block, the turn context after the command (a second block would stop the
+ * CLI from running it); the same command behind the turn header (how any
+ * other message is sent); and, after a rebuild with the pin's `disabled.hooks`, a
+ * plain prompt. Kept out of the snapshot, like scenarios C–G.
+ */
+async function wrapperScenario(binary: string, trap: EgressTrap): Promise<void> {
+  let provider: FakeAnthropic | undefined
+  let connection: AdapterConnection | undefined
+  provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : { kind: 'text', text: 'OK' })
+  const scratch = makeClaudeScratch('cinna-contract-claude-wrapper-', { providerPort: provider.port, trapPort: trap.port })
+  try {
+    const cache = join(scratch.home, 'marketplace-plugins', WRAPPED_PLUGIN)
+    const put = (rel: string, body: string): void => {
+      mkdirSync(dirname(join(cache, rel)), { recursive: true })
+      writeFileSync(join(cache, rel), body)
+    }
+    put('.claude-plugin/plugin.json', JSON.stringify({ name: WRAPPED_PLUGIN, description: 'Contract marketplace plugin.', version: '1.0.0' }))
+    put(`commands/${WRAPPED_COMMAND}.md`, `---\ndescription: A contract command.\n---\n\n${WRAPPED_COMMAND_MARKER} Reply OK. $ARGUMENTS\n`)
+    put('hooks/hooks.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/start.sh"' }] }] } }))
+    put('hooks-handlers/start.sh', `#!/usr/bin/env bash\necho '${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `${WRAPPED_HOOK_MARKER} is in effect.` } })}'\n`)
+    installRuntimeHost({ getPath: () => join(scratch.home, 'userData') } as unknown as RuntimeHost)
+    const pin = { entry_uuid: '00000000-0000-4000-8000-000000000001', marketplace_uuid: 'm', marketplace_name: 'contract', name: WRAPPED_PLUGIN, archive_sha256: 'a'.repeat(64) }
+    const plugin: CachedPlugin = { pin, dir: cache, tree: readPluginTree(cache) }
+    const linkedOf = (dir: string | undefined): string[] => (dir ? readdirSync(dir).filter((name) => lstatSync(join(dir, name)).isSymbolicLink()).sort() : [])
+
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env: { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary } })
+    await connection.rpc('initialize', initParams)
+    const session = async (wrapper: string, prompt: Json[]): Promise<ClaudeProviderTurn[]> => {
+      const before = provider!.turns.length
+      const created = await connection!.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+        systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {}, plugins: [{ type: 'local', path: wrapper }] } } } }, 60_000)
+      const sessionId = String(created.result?.sessionId ?? '')
+      if (!sessionId) { seen.wrapper.error ??= created.error ?? 'no session'; return [] }
+      await connection!.rpc('session/set_mode', { sessionId, modeId: 'default' })
+      const answer = await connection!.rpc('session/prompt', { sessionId, prompt }, 90_000)
+      if (answer.error) seen.wrapper.error ??= answer.error
+      return conversation(provider!.turns.slice(before))
+    }
+
+    const command = `/${WRAPPED_PLUGIN}:${WRAPPED_COMMAND} ${WRAPPED_ARG_MARKER}`
+    seen.wrapper.built = ensureAgentPluginWrappers('contract-agent', [plugin], { hooksAllowed: true })
+    seen.wrapper.linked = linkedOf(seen.wrapper.built[0])
+    if (!seen.wrapper.built[0]) return
+    // No attachments, so the connection is never read.
+    const placed = placeTurnContext('claude', { chatId: 'contract', wireContent: command, turnContext: TURN_HEADER, signal: new AbortController().signal })
+    const blocks = await buildAcpPrompt('contract-user', placed, null as unknown as AcpConnection, null)
+    seen.wrapper.leadingBlocks = blocks.length
+    seen.wrapper.leading = await session(seen.wrapper.built[0], blocks as unknown as Json[])
+    seen.wrapper.trailing = await session(seen.wrapper.built[0], [{ type: 'text', text: withCatchUp(TURN_HEADER, command) }])
+    const off = ensureAgentPluginWrappers('contract-agent', [{ ...plugin, pin: { ...pin, disabled: { hooks: true } } }], { hooksAllowed: true })
+    seen.wrapper.linkedOff = linkedOf(off[0])
+    if (off[0]) seen.wrapper.hooksOff = await session(off[0], [{ type: 'text', text: 'Answer OK.' }])
+  } catch (error) {
+    seen.wrapper.error ??= error instanceof Error ? error.message : String(error)
+  } finally {
+    await connection?.close()
+    await provider?.close()
+    scratch.dispose()
+  }
+}
+
 /* -------------------------------------------------------------- scenario F */
 
 /** What one API-mode session observed. Kept out of the snapshot, like scenarios C and D. */
@@ -871,6 +960,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       seen.scrub.off = await scrubScenario(binary, trap, false)
       seen.scrub.on = await scrubScenario(binary, trap, true)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
+      await wrapperScenario(binary, trap)
     } finally {
       seen.egress = [...trap.attempts]
       await trap.close()
@@ -991,6 +1081,34 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   it(entry('claude.session.options-plugins-agent-skills'), () => {
     expect(seen.pluginSkill.isolated, 'cinna-tasks no longer loads beside a second plugin').toBe(true)
     expect(seen.agentSkillOffered, `the linked skill was not offered as \`${AGENT_SKILL_QUALIFIED}\` in an isolated session`).toBe(true)
+  })
+
+  it(entry('claude.session.options-plugins-wrapper'), () => {
+    expect(seen.wrapper.error, JSON.stringify(seen.wrapper.error)).toBeNull()
+    // The wrapper as built: links into the cache for everything Claude takes, hooks included.
+    expect(seen.wrapper.linked).toEqual(['commands', 'hooks', 'hooks-handlers'])
+    // The command, from the linked commands/, with its argument.
+    expect(seen.wrapper.leading.some((turn) => turn.mentions(WRAPPED_COMMAND_MARKER) && turn.mentions(WRAPPED_ARG_MARKER)),
+      'the command the wrapper links was not expanded').toBe(true)
+    // The hook's script, reached through ${CLAUDE_PLUGIN_ROOT} in the wrapper, ran and its context reached the model.
+    expect(seen.wrapper.leading.some((turn) => turn.mentions(WRAPPED_HOOK_MARKER)), 'the SessionStart hook’s context never reached the model').toBe(true)
+    // Rebuilt with disabled.hooks: no hooks/ link, and no hook context in the next session.
+    expect(seen.wrapper.linkedOff).toEqual(['commands', 'hooks-handlers'])
+    expect(seen.wrapper.hooksOff.length).toBeGreaterThan(0)
+    expect(seen.wrapper.hooksOff.some((turn) => turn.mentions(WRAPPED_HOOK_MARKER)), 'a switched-off hook still ran').toBe(false)
+  })
+
+  it(entry('claude.session.slash-command-leads'), () => {
+    expect(seen.wrapper.error, JSON.stringify(seen.wrapper.error)).toBeNull()
+    expect(seen.wrapper.leadingBlocks, 'a command’s prompt on Claude is not one block').toBe(1)
+    // The command ran with its argument, and the context after it — which lands in `$ARGUMENTS` — still reached the model.
+    const ran = seen.wrapper.leading.find((turn) => turn.mentions(WRAPPED_COMMAND_MARKER))
+    expect(ran, 'a slash command followed by the turn context was not run').toBeDefined()
+    expect(ran!.lastUserText).toContain(`${WRAPPED_COMMAND_MARKER} Reply OK. ${WRAPPED_ARG_MARKER}`)
+    expect(ran!.mentions(TURN_CONTEXT_MARKER), 'the turn context after the command never reached the model').toBe(true)
+    expect(seen.wrapper.trailing.length).toBeGreaterThan(0)
+    expect(seen.wrapper.trailing.some((turn) => turn.mentions(WRAPPED_COMMAND_MARKER)), 'a command behind text was run after all').toBe(false)
+    expect(seen.wrapper.trailing.some((turn) => turn.mentions(`/${WRAPPED_PLUGIN}:${WRAPPED_COMMAND}`)), 'the raw text never reached the model').toBe(true)
   })
 
   it(entry('claude.session.set-mode'), () => {

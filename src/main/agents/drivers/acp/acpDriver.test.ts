@@ -109,6 +109,8 @@ interface World {
     registerSteer?: (steer: SteerFn | null) => void
     registerSnapshot?: RunInput['registerSnapshot']
     runScope?: RunInput['runScope']
+    wireContent?: string
+    turnContext?: string | null
   }): ReturnType<AgentDriver['run']>
   cleanup(): void
 }
@@ -221,7 +223,8 @@ function makeWorld(options: WorldOptions = {}): World {
       driver.run(USER_ID, ROW, {
         chatId: overrides.chatId ?? CHAT_ID,
         handbackEligible: overrides.handbackEligible,
-        wireContent: 'hello',
+        wireContent: overrides.wireContent ?? 'hello',
+        ...(overrides.turnContext !== undefined ? { turnContext: overrides.turnContext } : {}),
         signal: overrides.signal ?? new AbortController().signal,
         onEvent: overrides.onEvent ?? ((event) => void events.push(event)),
         ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {}),
@@ -4433,6 +4436,38 @@ describe('an Antigravity session', () => {
       { type: 'text', text: 'hello' }
     ])
     expect(second.params?.prompt).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('places a slash command’s context by engine, and any other message’s in front', async () => {
+    // Mutation: one layout for every engine, and Codex reads the context as
+    // `/goal` arguments, OpenCode joins it into them, or Claude runs nothing.
+    const expected: Record<string, unknown[]> = {
+      codex: [{ type: 'text', text: '/goal clear' }, { type: 'text', text: 'CTX' }],
+      opencode: [{ type: 'text', text: '/goal clear' }, { type: 'text', text: 'CTX', annotations: { audience: ['assistant'] } }],
+      claude: [{ type: 'text', text: '/goal clear\n\nCTX' }],
+      antigravity: [{ type: 'text', text: 'CTX\n\n/goal clear' }]
+    }
+    for (const [launcher, prompt] of Object.entries(expected)) {
+      const w = world({ launcher: launcher as AcpLauncherId, script: SAYS_HELLO })
+      await w.run({ wireContent: '/goal clear', turnContext: 'CTX' })
+      await w.run({ wireContent: 'hello', turnContext: 'CTX' })
+      const [command, text] = w.fake.received('session/prompt')
+      expect(command.params?.prompt, launcher).toEqual(prompt)
+      expect(text.params?.prompt, launcher).toEqual([{ type: 'text', text: 'CTX\n\nhello' }])
+    }
+  })
+
+  it('adds the credentials line after the text, or to a command’s context block', async () => {
+    // Mutation: append it to a command's text and it becomes the command's arguments.
+    const credentials = '\nAttached credentials (values are private):\nX'
+    const w = world({ launcher: 'codex', script: SAYS_HELLO, deps: { prepareCredentials: async (_agent, plan) => ({ ...plan, credentialPrompt: credentials }) } })
+    await w.run({ wireContent: '/goal clear', turnContext: 'CTX' })
+    await w.run({ wireContent: '/goal clear', turnContext: null })
+    await w.run({ wireContent: 'hello', turnContext: 'CTX' })
+    const [command, bare, text] = w.fake.received('session/prompt')
+    expect(command.params?.prompt).toEqual([{ type: 'text', text: '/goal clear' }, { type: 'text', text: `CTX\n${credentials}` }])
+    expect(bare.params?.prompt).toEqual([{ type: 'text', text: '/goal clear' }, { type: 'text', text: credentials.trimStart() }])
+    expect(text.params?.prompt).toEqual([{ type: 'text', text: `CTX\n\nhello\n${credentials}` }])
   })
 
   it('names the plan’s own session cwd on new and load, when it sets one', async () => {

@@ -76,6 +76,17 @@ describe('a2a driver — run', () => {
     })
   })
 
+  it('sends the turn context in front of the text, a slash command’s too', async () => {
+    // A remote agent's parser reads one string; its commands are not split out
+    // (that is an ACP engine's prompt). Mutation: pass `wireContent` alone and
+    // the remote agent is never told what it missed.
+    for (const text of ['hello', '/run:check']) {
+      const d = deps()
+      await createA2aDriver(d).run('owner-1', REMOTE, { ...input(), wireContent: text, turnContext: 'CTX' })
+      expect(d.runTurn.mock.calls[0][0].wireContent).toBe(`CTX\n\n${text}`)
+    }
+  })
+
   it('hands runAgentTurn a token renewal that resolves again, and reads a needed sign-in as a 401', async () => {
     // Mutation: omit `renewAccessToken` → a refused poll ends a collected turn.
     let reauth = false

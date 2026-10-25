@@ -160,6 +160,20 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'no step uses a folder with its own skills' }
   },
   {
+    id: 'claude.session.options-plugins-wrapper', area: 'session lifecycle', surface: '_meta key', name: '_meta.claudeCode.options.plugins (marketplace wrapper)',
+    expectation: 'A marketplace plugin’s **wrapper** as `ensureAgentPluginWrappers` builds it — Cinna’s own `.claude-plugin/plugin.json` beside a symlink per top-level entry of the cached plugin — loads under `settingSources: []`: a prompt `/<plugin>:<command> <args>` is expanded from the linked `commands/<command>.md`, and its `hooks/hooks.json` SessionStart command `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/…"` runs and its `additionalContext` reaches the model. Rebuilt with the pin’s `disabled.hooks`, the wrapper links no `hooks/` and the next session’s requests carry no hook context.',
+    owners: [`${LAUNCHERS}#agentAddonPlugins`, 'src/main/services/agentPluginWrappers.ts#ensureAgentPluginWrappers', 'src/main/services/agentPluginWrappers.ts#wrapperLinks'],
+    feature: 'A plugin added to a kit agent loses its slash commands and hooks on Claude, or its hooks keep running after the user switched them off.',
+    flow: { steps: ['none'], note: 'no step pins a marketplace plugin; e2e live-plugin-commands-hooks runs it on the real CLI and model' }
+  },
+  {
+    id: 'claude.session.slash-command-leads', area: 'session lifecycle', surface: 'ACP method', name: 'session/prompt (slash command)',
+    expectation: 'A one-block prompt that **starts** with `/<plugin>:<command> <args>` and carries Cinna’s wire-only turn context after it (`placeTurnContext` for Claude) runs that command — the context lands in its `$ARGUMENTS` — and the context reaches the model. The same command behind the context is not a command: the model receives the raw text.',
+    owners: ['src/main/agents/drivers/acp/acpDriver.ts#placeTurnContext', 'src/main/services/acpAttachments.ts#buildAcpPrompt'],
+    feature: 'A plugin or engine slash command the user types reaches the model as plain text: nothing runs, or the model guesses at it.',
+    flow: { steps: ['none'], note: 'no step types a slash command' }
+  },
+  {
     id: 'claude.session.set-mode', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_mode',
     expectation: '`default` and `auto` are both accepted modes, and `session/new` reports the session’s `currentModeId`.',
     owners: [`${LAUNCHERS}#modeId`],

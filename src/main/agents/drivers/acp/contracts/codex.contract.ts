@@ -194,6 +194,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['A', 'B', 'D'], note: 'applied at session setup; the mode is not asserted' }
   },
   {
+    id: 'codex.session.slash-command-context', area: 'session lifecycle', surface: 'ACP method', name: 'session/prompt (slash command + context block)',
+    expectation: 'A prompt whose first text block is a built-in command (`/plan`) and whose second is Cinna’s turn context as a plain text block (`placeTurnContext` + `buildAcpPrompt` on Codex) runs the command with no arguments: `/plan` switches `collaboration_mode` to `plan` without a model request. codex-acp parses a command from `prompt[0]` alone.',
+    owners: [`${DRIVER}#placeTurnContext`, 'src/main/services/acpAttachments.ts#buildAcpPrompt'],
+    feature: 'A Codex command typed in Cinna gets Cinna’s task context as its arguments: `/plan` refuses, `/goal clear` sets the goal to the context.',
+    flow: { steps: ['none'], note: 'no step types a slash command' }
+  },
+  {
     id: 'codex.session.load', area: 'session lifecycle', surface: 'ACP method', name: 'session/load',
     expectation: 'Loading a session in the same process succeeds and **keeps the collaboration mode it was left in**, so setup must be re-applied after every load.',
     owners: [`${POLICY}#collaboration_mode`, `${DRIVER}#session/load`],
