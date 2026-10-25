@@ -108,6 +108,7 @@ import { childUpdateOf, opencodeChildrenFor, trackedOpencodeChildren } from './o
 import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
 import type { SessionActivityHub } from '../../../services/sessionActivityHub'
 import { isSlashCommand, turnContextBlock, turnPromptText } from '../../../services/threadContextService'
+import { expandPluginCommand, type PluginCommandTemplate } from '../../../services/pluginCommandExpansion'
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
@@ -165,6 +166,13 @@ export const ACP_FOLDER_MOVED = 'This agent’s folder was renamed while the tur
 export interface ConductorOutcome { control?: import('../../../services/coordinatorToolProvider').CoordinatorControl; budget?: boolean; needsInput?: boolean }
 
 export interface AcpDriverDeps {
+  /**
+   * The agent's marketplace plugin commands (`<plugin>:<command>` and its
+   * template) and its OpenCode agent key, for the engines whose plugin slash
+   * commands Cinna expands itself ({@link EXPANDS_PLUGIN_COMMANDS}). Null or
+   * absent: none.
+   */
+  pluginCommands?(userId: string, agent: AgentRow): { agentKey: string; commands: readonly PluginCommandTemplate[] } | null
   prepareCredentials?(agent: AgentRow, plan: AcpLaunchPlan): Promise<AcpLaunchPlan>
   prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
   /** A between-turn follow-up was dropped: conductor tool calls waiting for it must fail, not hang. */
@@ -313,6 +321,34 @@ const COMMAND_CONTEXT: Partial<Record<AcpLauncherId, 'block' | 'assistant-block'
   codex: 'block',
   opencode: 'assistant-block',
   claude: 'after'
+}
+
+/**
+ * The engines whose marketplace plugin commands Cinna expands into a plain
+ * prompt (`pluginCommandExpansion`). OpenCode runs a configured command
+ * detached — its turn ends at once and streams nothing — and Codex and
+ * Antigravity take none. Claude runs them natively through the wrapper plugin
+ * (`agentPluginWrappers.ts`); a custom launcher has no pins.
+ */
+const EXPANDS_PLUGIN_COMMANDS: ReadonlySet<AcpLauncherId> = new Set<AcpLauncherId>(['opencode', 'codex', 'antigravity'])
+
+/**
+ * The run input with a leading plugin command replaced by the prompt it
+ * stands for, on an engine in {@link EXPANDS_PLUGIN_COMMANDS}; otherwise as
+ * it was. Any other slash text — the engine's own commands, an unknown name —
+ * is left for the engine. Expanded, the text is no longer a command, so
+ * `placeTurnContext` puts the context in front as for any message.
+ */
+export function expandPluginCommandInput(
+  launcherId: AcpLauncherId,
+  input: RunInput,
+  commands: () => { agentKey: string; commands: readonly PluginCommandTemplate[] } | null | undefined
+): RunInput {
+  if (!EXPANDS_PLUGIN_COMMANDS.has(launcherId) || !isSlashCommand(input.wireContent.trimStart())) return input
+  const found = commands()
+  if (!found || found.commands.length === 0) return input
+  const expanded = expandPluginCommand(input.wireContent, found.commands, launcherId === 'opencode' ? { agentKey: found.agentKey } : {})
+  return expanded === null ? input : { ...input, wireContent: expanded }
 }
 
 /**
@@ -709,10 +745,27 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         })
         return fail('This agent runs on an engine this version of Cinna does not support.')
       }
+      // A prompt this engine must never be sent (Antigravity's `/logout`
+      // signs out every home on the computer): refused in words, unsent —
+      // asked of what the user typed, before a plugin command is expanded,
+      // and of what goes on the wire.
+      const refusedTyped = launcher.refusePrompt?.(input.wireContent) ?? null
+      if (refusedTyped) return fail(refusedTyped)
+      // A plugin's slash command, as the prompt it stands for, on the engines
+      // that do not run it themselves.
+      input = expandPluginCommandInput(launcherId, input, () => {
+        try {
+          return deps.pluginCommands?.(userId, agent) ?? null
+        } catch (err) {
+          logger.warn('an agent’s plugin commands could not be read; sending the slash text as typed', {
+            agentId: agent.id,
+            error: err instanceof Error ? err.message : String(err)
+          })
+          return null
+        }
+      })
       // Where this engine takes the turn's wire-only context, decided once.
       input = placeTurnContext(launcherId, input)
-      // A prompt this engine must never be sent (Antigravity's `/logout`
-      // signs out every home on the computer): refused in words, unsent.
       const refusedPrompt = launcher.refusePrompt?.(input.wireContent) ?? null
       if (refusedPrompt) return fail(refusedPrompt)
 

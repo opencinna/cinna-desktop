@@ -25,11 +25,11 @@ import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy } from './acp/
 import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
 import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
-import { chatRuntimePermissions, engineAgentKey } from '../../engine/configGenerator'
+import { chatRuntimePermissions, engineAgentKey, type EngineCommandInput } from '../../engine/configGenerator'
 import { join } from 'node:path'
 import { antigravityBinaryService, claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
-import { collectEngineConfigInput, getCachedEngineModels } from '../../engine/engineConfigSource'
+import { collectEngineConfigInput, getCachedEngineModels, kitAgentPluginCommands } from '../../engine/engineConfigSource'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { localAgentService } from '../../services/localAgents/localAgentService'
@@ -1053,6 +1053,22 @@ function kitAgentAddonPlugins(userId: string, agentId: string): string[] {
 }
 
 /**
+ * A kit folder agent's plugin commands and its OpenCode agent key, for the
+ * driver's own expansion of a plugin slash command (`expandPluginCommandInput`).
+ * The same set, gated the same way, as OpenCode's config lists
+ * (`kitAgentPluginCommands`). Null for anything but a kit folder agent.
+ */
+function kitAgentCommandTemplates(userId: string, agentId: string): { agentKey: string; commands: EngineCommandInput[] } | null {
+  if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return null
+  const row = agentRepo.getOwned(userId, agentId)
+  if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return null
+  if (row.source === 'local' && row.driverConfig?.launcher === 'custom') return null
+  const agent = localAgentService.get(userId, agentId)
+  const commands = kitAgentPluginCommands(agent).commands ?? []
+  return commands.length > 0 ? { agentKey: engineAgentKey(agent.id, agent.slug), commands } : null
+}
+
+/**
  * The folder as it is on disk, for the driver's reconcile, its readiness and
  * its launcher's plan.
  *
@@ -1260,6 +1276,7 @@ export const acpDriver = createAcpDriver({
   replayTranscript: (chatId, messageId, connection, userId, agentId, turn) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId, attachmentUploadsDir(turn))),
   launcher: (id) => acpLauncherFor(id),
   readRuntime: readAcpRuntime,
+  pluginCommands: (userId, agent) => kitAgentCommandTemplates(userId, agent.id),
   // Read again under the turn lock: a kit agent's folder can be renamed while
   // a turn planned in it waits behind the rename.
   currentFolderPath: (userId, agent) => {

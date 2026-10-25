@@ -33,6 +33,7 @@ import {
 import { goldenRow } from '../__golden__/driverWorld'
 import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, folderReadiness, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
+import { SHELL_LEAD_IN } from '../../../services/pluginCommandExpansion'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
@@ -4455,6 +4456,61 @@ describe('an Antigravity session', () => {
       expect(command.params?.prompt, launcher).toEqual(prompt)
       expect(text.params?.prompt, launcher).toEqual([{ type: 'text', text: 'CTX\n\nhello' }])
     }
+  })
+
+  describe('a marketplace plugin’s slash command', () => {
+    const commands = { agentKey: 'agent-1234', commands: [{ name: 'commit-commands:commit', template: 'Commit: !`git status`\nNote: $ARGUMENTS' }] }
+    const expanded = (args: string) =>
+      'The user ran the command /commit-commands:commit. Follow its instructions:\n\n' + SHELL_LEAD_IN +
+      `\n\nCommit: [run \`git status\` and use its output here]\nNote: ${args}`
+
+    it('goes to OpenCode, Codex and Antigravity as the prompt it stands for, the context in front', async () => {
+      // Mutation: skip `expandPluginCommandInput` and each engine gets the
+      // slash text, which OpenCode runs detached and the others do not know.
+      const typed: Record<string, string> = { opencode: '/agent-1234/commit-commands:commit tidy', codex: '/commit-commands:commit tidy', antigravity: '/commit-commands:commit tidy' }
+      for (const [launcher, wireContent] of Object.entries(typed)) {
+        const w = world({ launcher: launcher as AcpLauncherId, script: SAYS_HELLO, deps: { pluginCommands: () => commands } })
+        await w.run({ wireContent, turnContext: 'CTX' })
+        expect(w.fake.received('session/prompt')[0].params?.prompt, launcher).toEqual([{ type: 'text', text: `CTX\n\n${expanded('tidy')}` }])
+      }
+    })
+
+    it('stays a slash command on Claude, and any slash text that names no plugin command stays as typed', async () => {
+      // Mutation: expand on Claude too, and its native command (the wrapper
+      // plugin) is replaced by text; match loosely, and `/goal` is swallowed.
+      const pluginCommands = vi.fn(() => commands)
+      const claude = world({ launcher: 'claude', script: SAYS_HELLO, deps: { pluginCommands } })
+      await claude.run({ wireContent: '/commit-commands:commit', turnContext: 'CTX' })
+      expect(claude.fake.received('session/prompt')[0].params?.prompt).toEqual([{ type: 'text', text: '/commit-commands:commit\n\nCTX' }])
+      expect(pluginCommands).not.toHaveBeenCalled()
+      const codex = world({ launcher: 'codex', script: SAYS_HELLO, deps: { pluginCommands } })
+      await codex.run({ wireContent: '/goal clear', turnContext: 'CTX' })
+      await codex.run({ wireContent: '/commit-commands:push', turnContext: 'CTX' })
+      await codex.run({ wireContent: '/agent-1234/commit-commands:commit', turnContext: 'CTX' })
+      const [goal, unknown, keyed] = codex.fake.received('session/prompt')
+      expect(goal.params?.prompt).toEqual([{ type: 'text', text: '/goal clear' }, { type: 'text', text: 'CTX' }])
+      expect(unknown.params?.prompt).toEqual([{ type: 'text', text: '/commit-commands:push' }, { type: 'text', text: 'CTX' }])
+      // OpenCode's keyed form is OpenCode's alone.
+      expect(keyed.params?.prompt).toEqual([{ type: 'text', text: '/agent-1234/commit-commands:commit' }, { type: 'text', text: 'CTX' }])
+    })
+
+    it('is refused on what the user typed before it is expanded', async () => {
+      // Mutation: ask `refusePrompt` only of the expanded text and the typed
+      // command is sent although the launcher refuses it.
+      const w = world({ launcher: 'antigravity', script: SAYS_HELLO, deps: { pluginCommands: () => commands },
+        launcherExtra: { refusePrompt: (text) => (text.trim() === '/commit-commands:commit' ? 'Not sent.' : null) } })
+      const result = await w.run({ wireContent: '/commit-commands:commit' })
+      expect(result.error?.message).toBe('Not sent.')
+      expect(w.fake.received('initialize')).toHaveLength(0)
+    })
+  })
+
+  it('refuses a prompt the launcher bans although the turn context goes in front of it', async () => {
+    // Mutation: ask `refusePrompt` only of the wire text, and `CTX\n\n/logout` is sent.
+    const w = world({ launcher: 'antigravity', script: SAYS_HELLO, launcherExtra: { refusePrompt: (text) => (text.trim() === '/logout' ? 'Not sent.' : null) } })
+    const result = await w.run({ wireContent: '/logout', turnContext: 'CTX' })
+    expect(result.error?.message).toBe('Not sent.')
+    expect(w.fake.received('session/prompt')).toHaveLength(0)
   })
 
   it('adds the credentials line after the text, or to a command’s context block', async () => {

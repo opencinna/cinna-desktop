@@ -108,10 +108,10 @@ describe('AddonPicker — plugins', () => {
     // Works with: the agent's engine first, then the rest in the matrix's order.
     const lines = [...detail().querySelectorAll('[data-addon-works-with] li')].map((li) => li.textContent)
     expect(lines).toEqual([
-      'Codex: skills and connectors only',
+      'Codex: skills, connectors and commands only',
       'Claude: everything',
       'OpenCode: skills, connectors and commands only',
-      'Antigravity: skills and connectors only'
+      'Antigravity: skills, connectors and commands only'
     ])
     // What it needs: Node.js and the connector's value, by name.
     expect(view.getByText('Node.js on this computer')).toBeTruthy()

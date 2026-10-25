@@ -282,10 +282,20 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
           ? (agent.runtime.permissions as Record<string, unknown>)
           : null,
       ...ownSkills(ownPlugin),
-      ...pluginCommands(agent.skills ? cachedPlugins(agent.manifest) : [])
+      ...kitAgentPluginCommands(agent)
     })
   }
   return out
+}
+
+/**
+ * A folder agent's plugin commands: what OpenCode's config lists, and what
+ * `acpDriver` expands itself on OpenCode, Codex and Antigravity
+ * (`pluginCommandExpansion`). Only a kit agent's DTO carries `skills`; a bare
+ * one has no pins.
+ */
+export function kitAgentPluginCommands(agent: { skills?: unknown; manifest: unknown }): Pick<EngineAgentInput, 'commands'> {
+  return pluginCommands(agent.skills ? cachedPlugins(agent.manifest) : [])
 }
 
 /**

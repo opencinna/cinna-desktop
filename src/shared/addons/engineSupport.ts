@@ -7,7 +7,7 @@
  * |-------------|-----------------|---------------|----------------|----------------|
  * | skills      | plugin          | skills.paths  | prompt pointer | prompt pointer |
  * | MCP servers | Cinna provider  | Cinna provider| Cinna provider | Cinna provider |
- * | commands    | native (plugin) | native        | —              | —              |
+ * | commands    | native (plugin) | Cinna expands | Cinna expands  | Cinna expands  |
  * | agents      | native          | —             | —              | —              |
  * | hooks       | native          | —             | —              | —              |
  * | LSP         | native          | —             | —              | —              |
@@ -15,7 +15,9 @@
  * MCP is never the reason an entry is not compatible: every local engine is a
  * stdio ACP launch the conductor bridge reaches, and a plugin's servers are
  * delivered as Cinna MCP providers. OpenCode's agent format does not map from
- * Claude's (`agents/*.md`), so agents are Claude only.
+ * Claude's (`agents/*.md`), so agents are Claude only. A plugin's commands run
+ * natively only on Claude; elsewhere the ACP driver expands a typed one into
+ * a plain prompt (`pluginCommandExpansion`).
  */
 
 import type { AgentEngine } from '../engine'
@@ -31,7 +33,7 @@ export const ADDON_ENGINES: readonly AgentEngine[] = ['claude', 'opencode', 'cod
 const SUPPORT: Readonly<Record<AddonPart, ReadonlySet<AgentEngine>>> = {
   skills: new Set<AgentEngine>(['claude', 'opencode', 'codex', 'antigravity']),
   mcpServers: new Set<AgentEngine>(['claude', 'opencode', 'codex', 'antigravity']),
-  commands: new Set<AgentEngine>(['claude', 'opencode']),
+  commands: new Set<AgentEngine>(['claude', 'opencode', 'codex', 'antigravity']),
   agents: new Set<AgentEngine>(['claude']),
   hooks: new Set<AgentEngine>(['claude']),
   lspServers: new Set<AgentEngine>(['claude'])

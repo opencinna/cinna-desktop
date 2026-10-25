@@ -374,7 +374,7 @@ describe('addonDirectory plugins', () => {
           entry(pluginRef('pinned'), { kind: 'plugin', components: components() }),
           entry(pluginRef('skills-only'), { kind: 'plugin', components: components({ mcpServers: [{ name: 'm', transport: 'http', runtime: null, auth: 'none', env: [] }] }) }),
           entry(pluginRef('partly'), { kind: 'plugin', components: components({ commands: ['c'], hooks: { events: ['PreToolUse'] } }) }),
-          entry(pluginRef('none'), { kind: 'plugin', components: components({ skills: [], commands: ['c'] }) }),
+          entry(pluginRef('none'), { kind: 'plugin', components: components({ skills: [], agents: ['a'] }) }),
           entry(pluginRef('needs-node'), { kind: 'plugin', components: components({ mcpServers: [{ name: 'n', transport: 'stdio', runtime: 'node', auth: 'none', env: [] }] }) }),
           entry(pluginRef('pending'), { kind: 'plugin', status: 'pending' })
         ]
@@ -385,7 +385,7 @@ describe('addonDirectory plugins', () => {
     expect(states).toEqual([
       ['pinned', 'added', ADDON_STATE_TEXT.added],
       ['skills-only', 'addable', null],
-      ['partly', 'partly_compatible', 'Skills only on Codex'],
+      ['partly', 'partly_compatible', 'Skills and commands only on Codex'],
       ['none', 'incompatible', 'Not for Codex'],
       ['needs-node', 'blocked', 'Needs Node.js — install it from nodejs.org'],
       ['pending', 'preparing', 'Being prepared on the server']

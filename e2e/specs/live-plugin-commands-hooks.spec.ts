@@ -23,17 +23,23 @@ import { AGENT, arrangeAgent, askAgent, coreDirectory, findFiles, liveSession, m
  *   own session transcript shows the CLI took it as the command and expanded
  *   its template (its `!`git status`` line run); the command's instructions
  *   commit: HEAD moves on and holds the witness.
- * - **C2 `commit-commands`, OpenCode.** The generated `opencode.json` lists
- *   the command under its `command` key as `<agent key>/commit-commands:commit`
- *   bound to the agent; that slash name in a chat is expanded by OpenCode (its
- *   own session store holds the template with the git status) and commits.
- * - **C2b, `test.fail`.** That OpenCode turn leaves only the user's row in
- *   Cinna's chat: no reply, no tool part, though a commit was made. OpenCode
- *   answers the command's `session/prompt` with `end_turn` at once and streams
- *   no `session/update` for it (see the test).
+ * - **C2 `commit-commands`, OpenCode.** The generated `opencode.json` still
+ *   lists the command under its `command` key as
+ *   `<agent key>/commit-commands:commit` bound to the agent, but that slash
+ *   name in a chat never reaches OpenCode as a command: Cinna expands it
+ *   itself (`pluginCommandExpansion.ts`, from `acpDriver`) and sends the
+ *   template as a plain prompt, each `!`git …`` line a command the model is
+ *   told to run first. OpenCode's own session store holds that prompt, not an
+ *   already-run git status, and the agent commits.
+ * - **C2b, OpenCode.** The same turn streams into Cinna's chat: its git
+ *   commit is a tool part of the transcript, and the turn holds until the
+ *   agent is done. (OpenCode runs a command of its own detached: its
+ *   `session/prompt` answers `end_turn` at once and nothing is streamed —
+ *   which is why Cinna expands a plugin's.)
  *
- * Both C1 and C2 need the slash text to lead the prompt: Cinna's wire-only
- * task context follows a slash command (`threadContextService.withTurnContext`).
+ * C1 needs the slash text to lead the prompt: Cinna's wire-only task context
+ * follows a Claude slash command (`acpDriver.placeTurnContext`). C2's
+ * expanded prompt is an ordinary message, the context in front of it.
  * - **H1 `explanatory-output-style`, Claude.** Its only part is a
  *   SessionStart hook, `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/session-start.sh"`,
  *   which injects "You are in 'explanatory' output style mode …" as context.
@@ -55,7 +61,8 @@ import { AGENT, arrangeAgent, askAgent, coreDirectory, findFiles, liveSession, m
  *
  * ## What it does not prove
  *
- * Commands or hooks on Codex or Antigravity (not delivered there); a hook
+ * Commands on Codex or Antigravity (expanded by Cinna as on OpenCode, unit-
+ * tested only); hooks there (not delivered); a hook
  * event other than SessionStart; declared (non-default) command paths; a
  * plugin's agents or LSP servers; the admin's `plugin_hooks` flag (the local
  * core allows hooks; that switch is unit-tested).
@@ -155,10 +162,9 @@ const ranATool = (turn: Turn): boolean => turn.tools.length > 0 || turn.reply.tr
 
 /**
  * OpenCode's own record of the turn (`<userData>/acp/opencode-data/opencode.db`,
- * `session_message` rows): each `user` row's text — for a slash command, the
- * command's template as OpenCode expanded it, its `!`…`` shell lines already
- * run — and whether an `idle` row followed the last one (the turn is over,
- * even one that ended with no text and no tool).
+ * `session_message` rows): each `user` row's text — for a plugin command,
+ * the prompt Cinna expanded it to — and whether an `idle` row followed the
+ * last one (OpenCode is done with the turn).
  */
 function openCodeSession(cinna: CinnaApp): { users: string[]; idle: boolean } {
   const file = join(cinna.sandbox.userData, 'acp', 'opencode-data', 'opencode.db')
@@ -225,7 +231,7 @@ test('@live C1 Claude runs a plugin slash command, /commit-commands:commit, deli
   })
 })
 
-/** C2's arrange and turn: the plugin added, the repo with its witness, `/<agent key>/commit-commands:commit` sent. */
+/** C2's arrange and turn: the plugin added, the repo with its witness, `/<agent key>/commit-commands:commit` sent; git asks answered. */
 async function openCodeCommandTurn(cinna: CinnaApp): Promise<{ agent: { id: string; path: string }; key: string; command: string; prompt: string; witness: string; head: string; turn: Turn }> {
   const { config, token, entry } = await directoryPlugin(COMMITS)
   const agent = await arrangeAgent(cinna, config, token)
@@ -235,12 +241,11 @@ async function openCodeCommandTurn(cinna: CinnaApp): Promise<{ agent: { id: stri
   const command = `${key}/${COMMITS}:${COMMIT_COMMAND}`
   const { witness, head } = arrangeRepo(agent.path)
   const prompt = `/${command}`
-  // The turn may end with no text and no tool in Cinna's transcript (C2b): OpenCode's idle row ends it too.
-  const { turn } = await askAgent(cinna, agent.path, prompt, { settled: (t) => ranATool(t) || openCodeSession(cinna).idle })
+  const { turn } = await askAgent(cinna, agent.path, prompt, { allow: gitAsk(agent.path), settled: ranATool })
   return { agent, key, command, prompt, witness, head, turn }
 }
 
-test('@live C2 OpenCode lists the plugin command as <agent key>/commit-commands:commit and runs it', async ({ cinna }) => {
+test('@live C2 OpenCode lists the plugin command as <agent key>/commit-commands:commit, and Cinna sends it expanded', async ({ cinna }) => {
   test.skip(LIVE_ENGINE.name !== 'opencode', 'C2 is the OpenCode pass; Claude runs C1')
   test.setTimeout(8 * 60_000)
   const { agent, key, command, prompt, witness, head, turn } = await openCodeCommandTurn(cinna)
@@ -257,15 +262,16 @@ test('@live C2 OpenCode lists the plugin command as <agent key>/commit-commands:
     expect(cached).toContain(generated.command?.[command]?.template?.trim().split('\n')[0] ?? '<no template>')
   })
 
-  await test.step('OpenCode ran the command: its template, with the git status it gathered, is the turn’s message', async () => {
+  await test.step('OpenCode’s message is Cinna’s expansion of the command: its template, the git status left for the model to run', async () => {
     const messages = openCodeSession(cinna).users
-    console.log(`live-plugin-commands-hooks C2 OpenCode messages: ${JSON.stringify(messages.map((m) => m.slice(0, 600)))}`)
+    console.log(`live-plugin-commands-hooks C2 OpenCode messages: ${JSON.stringify(messages.map((m) => m.slice(0, 1500)))}`)
     expect(messages).toHaveLength(1)
-    // Not the slash text: the template, its `!`git status`` line already run (it names the untracked notes/).
-    // Before withTurnContext, Cinna's task context led the prompt and OpenCode read the slash text as chat.
+    // Not the slash text, and not OpenCode's own expansion (which would hold the git status already run).
     expect(messages[0]).not.toContain(prompt)
+    expect(messages[0]).toContain(`The user ran the command /${COMMITS}:${COMMIT_COMMAND}. Follow its instructions:`)
     expect(messages[0]).toContain('Based on the above changes, create a single git commit.')
-    expect(messages[0]).toMatch(/- Current git status: On branch \S+\nUntracked files:[\s\S]*\tnotes\//)
+    expect(messages[0]).toContain('- Current git status: [run `git status` and use its output here]')
+    expect(messages[0]).not.toMatch(/Untracked files:/)
   })
 
   await test.step('the command committed the witness file in the agent folder', async () => {
@@ -278,18 +284,17 @@ test('@live C2 OpenCode lists the plugin command as <agent key>/commit-commands:
   })
 })
 
-test('@live C2b the OpenCode command turn shows its git commit in Cinna’s transcript', async ({ cinna }) => {
+test('@live C2b the OpenCode command turn streams its git commit into Cinna’s transcript', async ({ cinna }) => {
   test.skip(LIVE_ENGINE.name !== 'opencode', 'C2b is the OpenCode pass')
-  // OpenCode 2.0.27 defect, not Cinna's: for a prompt that is one of its commands, `session/prompt`
-  // answers `{"stopReason":"end_turn"}` about 80 ms after it is sent, before the model has run, and
-  // no `session/update` for the turn ever reaches the wire (a raw tap in acpClient.ts's transport saw
-  // only the session's `available_commands_update`). The command then runs on detached: OpenCode's
-  // store holds a `shell` call `git add notes && git commit -m "…"` and the commit is made. So Cinna's
-  // chat keeps only the user's row, and the turn ends while the agent is still working.
-  test.fail()
+  // OpenCode 2.0.27 runs a prompt that is one of its own commands detached: `session/prompt` answers
+  // `end_turn` about 80 ms after it is sent and no `session/update` for the turn reaches the wire.
+  // Cinna expands a plugin's command itself, so the turn is an ordinary prompt: it streams, and it
+  // ends only once the agent has committed.
   test.setTimeout(8 * 60_000)
   const { agent, head, witness, turn } = await openCodeCommandTurn(cinna)
-  expect(committedSince(agent.path, head, witness).holdsWitness, 'the command committed (as in C2)').toBe(true)
+  expect(turn.errors).toEqual([])
+  expect(committedSince(agent.path, head, witness).holdsWitness, 'the commit is made by the time the turn ends').toBe(true)
+  await expect.poll(() => openCodeSession(cinna).idle, { message: 'OpenCode is done with the turn Cinna ended', timeout: 15_000 }).toBe(true)
   const commits = turn.tools.filter((tool) => /git commit/.test(JSON.stringify(tool.toolInput ?? '') + tool.text))
   console.log(`live-plugin-commands-hooks C2b the commit was made; Cinna's transcript: ${turn.tools.length} tool parts, reply ${JSON.stringify(turn.reply.slice(0, 200))}`)
   expect(commits.length, 'the transcript shows the git commit the agent ran').toBeGreaterThan(0)

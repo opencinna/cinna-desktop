@@ -43,7 +43,7 @@ A kit agent can add a **plugin** from a plugin marketplace connected to Cinna's 
 |---|---|---|---|---|
 | Skills | the agent's skills plugin | `skills.paths` | prompt listing with paths | prompt listing with paths |
 | MCP servers | Cinna MCP provider | Cinna MCP provider | Cinna MCP provider | Cinna MCP provider |
-| Commands | wrapper plugin | `command` in the generated config | — | — |
+| Commands | wrapper plugin | expanded by Cinna into a prompt (and `command` in the generated config) | expanded by Cinna | expanded by Cinna |
 | Agents | wrapper plugin | — | — | — |
 | Hooks | wrapper plugin | — | — | — |
 | Language servers | wrapper plugin | — | — | — |
@@ -53,7 +53,11 @@ A kit agent can add a **plugin** from a plugin marketplace connected to Cinna's 
 - **A plugin's MCP servers are never loaded from its `.mcp.json`.** They are managed Cinna providers, so every engine gets one delivery path, one permission ask and one credential form — and a server never starts twice. The Claude wrapper deliberately does not link `.mcp.json`
 - **Skills join the agent's own skill delivery**, and a clash is decided there: the agent's own, catalog, marketplace and platform skills win a name over a plugin's, and the first of two plugins' skills wins ([Agent Skills](skills.md#plugin-skills)). The loser is not delivered and the row says why. A skill turned off on the pin is not delivered
 - **Claude gets a wrapper, not the plugin.** The wrapper's manifest is Cinna's own (name, description, version and nothing else from the plugin's), so no inline `mcpServers` or `hooks` ride along; it links every other top-level entry of the cached folder, which is what makes `${CLAUDE_PLUGIN_ROOT}` resolve whichever way Claude resolves it. `hooks/` is left out when the user turned the plugin's hooks off or the admin forbids plugin hooks. A wrapper exists only when it carries something for Claude
-- **OpenCode's commands are bound to the agent.** The generated config is one for every agent, so a command is written as `<agent key>/<plugin>:<command>` with that agent attached: two agents pinning the same plugin each get their own, from their own snapshot, run by themselves
+- **OpenCode's commands are bound to the agent.** The generated config is one for every agent, so a command is written as `<agent key>/<plugin>:<command>` with that agent attached: two agents pinning the same plugin each get their own, from their own snapshot, run by themselves. The config entry stays, but a chat message no longer reaches OpenCode as that command (next rule)
+- **Off Claude, Cinna expands a plugin's command itself.** A chat message that starts with `/<plugin>:<command>` (on OpenCode also `/<agent key>/<plugin>:<command>`) naming a command of one of the agent's pinned plugins is sent to OpenCode, Codex and Antigravity as the command's template with `$ARGUMENTS` and `$1`…`$9` filled in, as an ordinary prompt: "The user ran the command /<plugin>:<command>. Follow its instructions:" and the template. Claude is not touched: it runs the command natively through the wrapper. It exists because OpenCode 2.0.27 runs a prompt that is one of its commands detached — the turn ended in about 80 ms with nothing streamed while the command ran on unseen, so the chat showed an empty turn and a commit nobody could follow. Codex and Antigravity took no plugin commands at all. An expanded prompt streams, shows its tool calls and asks, and ends when the agent is done
+- **A `` !`cmd` `` line is never run by Cinna.** It becomes a marker ("[run `cmd` and use its output here]") under one sentence telling the model to run those commands first, so the command runs as a visible, permissioned tool call of the engine. Running it in Cinna would execute plugin-authored shell outside the engine's ask, which is the thing the permission model exists to prevent. Arguments are substituted inside a marker with their backticks turned into quotes, and arguments are never read as a shell line or a placeholder themselves
+- **Anything else stays as typed.** Another slash text (`/goal`, an engine's own command, a name no pinned plugin has, OpenCode's keyed form on Codex) goes to the engine unchanged. An expanded command is no longer a slash command, so the turn context goes in front of it like any message ([Turn Completion](../../chat/messaging/turn_completion.md)). The prompt the launcher may refuse (Antigravity's `/logout`) is checked on the typed text before expansion, and again on what goes on the wire
+- **Known limits of the expansion.** A plugin command typed while a turn is running (a steer) goes out unexpanded, as typed. A plugin literally named `run` collides with Cinna's `/run:` catalog commands ([Local Agent Commands](commands.md)). Plugins have no Commands switch: only hooks, connectors and skills can be turned off on the pin. Not proven live on Codex or Antigravity (unit-tested only)
 
 ### Pins, not copies
 
@@ -89,6 +93,7 @@ a session is built for the agent
   ├─ skills            ──► deliveredSkillRows (own + catalog + marketplace + plugin) ─► Claude plugin / OpenCode skills.paths / prompt
   ├─ Claude            ──► agentPluginWrappers (commands · agents · hooks · LSP) ─► session `plugins[]`
   ├─ OpenCode          ──► generated config `command` (<agent key>/<plugin>:<command>)
+  ├─ OpenCode · Codex · Antigravity ──► the slash message expanded by Cinna into a plain prompt (acpDriver.expandPluginCommandInput)
   └─ MCP servers       ──► Cinna MCP endpoint (conductor bridge) ──► every engine
 ```
 

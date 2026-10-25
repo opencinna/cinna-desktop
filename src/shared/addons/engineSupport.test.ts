@@ -19,7 +19,7 @@ describe('engineSupport', () => {
   it('holds the matrix', () => {
     expect(['claude', 'opencode', 'codex', 'antigravity'].map((e) => engineSupports(e as never, 'skills'))).toEqual([true, true, true, true])
     expect(['claude', 'opencode', 'codex', 'antigravity'].map((e) => engineSupports(e as never, 'mcpServers'))).toEqual([true, true, true, true])
-    expect(['claude', 'opencode', 'codex', 'antigravity'].map((e) => engineSupports(e as never, 'commands'))).toEqual([true, true, false, false])
+    expect(['claude', 'opencode', 'codex', 'antigravity'].map((e) => engineSupports(e as never, 'commands'))).toEqual([true, true, true, true])
     for (const part of ['agents', 'hooks', 'lspServers'] as const) {
       expect(['claude', 'opencode', 'codex', 'antigravity'].map((e) => engineSupports(e as never, part))).toEqual([true, false, false, false])
     }
@@ -34,12 +34,12 @@ describe('engineSupport', () => {
 
   it('says which parts work when only some do', () => {
     const plugin = components({ skills: [SKILL], mcpServers: [SERVER], commands: ['c'], hooks: { events: ['Stop'] } })
-    expect(compatibilityOf(plugin, null, 'codex')).toEqual({ level: 'partly_compatible', reason: 'Skills and connectors only on Codex' })
+    expect(compatibilityOf(plugin, null, 'codex')).toEqual({ level: 'partly_compatible', reason: 'Skills, connectors and commands only on Codex' })
     expect(compatibilityOf(plugin, null, 'opencode')).toEqual({ level: 'partly_compatible', reason: 'Skills, connectors and commands only on OpenCode' })
   })
 
   it('is incompatible when no enabled part works', () => {
-    expect(compatibilityOf(components({ commands: ['c'], agents: ['a'] }), null, 'antigravity')).toEqual({ level: 'incompatible', reason: 'Not for Antigravity' })
+    expect(compatibilityOf(components({ agents: ['a'], hooks: { events: ['Stop'] } }), null, 'antigravity')).toEqual({ level: 'incompatible', reason: 'Not for Antigravity' })
   })
 
   it('judges only what is turned on', () => {
@@ -51,13 +51,13 @@ describe('engineSupport', () => {
   })
 
   it('lists every engine, the agent’s own first', () => {
-    const details = engineDetails(components({ skills: [SKILL], commands: ['c'] }), null, 'codex')
+    const details = engineDetails(components({ skills: [SKILL], commands: ['c'], agents: ['a'] }), null, 'codex')
     expect(details.map((d) => [d.engine, d.level])).toEqual([
       ['codex', 'partly_compatible'],
       ['claude', 'compatible'],
-      ['opencode', 'compatible'],
+      ['opencode', 'partly_compatible'],
       ['antigravity', 'partly_compatible']
     ])
-    expect(details[0]).toMatchObject({ label: 'Codex', supported: ['skills'], unsupported: ['commands'] })
+    expect(details[0]).toMatchObject({ label: 'Codex', supported: ['skills', 'commands'], unsupported: ['agents'] })
   })
 })
