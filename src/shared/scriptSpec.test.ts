@@ -47,14 +47,35 @@ if __name__ == "__main__":
 `
 
 /**
- * A hostile source no larger than main reads (512 KB) answers null in under
- * 200 ms: one parse per timing, so a loaded machine does not sum several.
+ * The wall-clock budget for one parse of a hostile source, as a performance
+ * guard rather than a latency promise. A bounded parse of these inputs takes a
+ * few ms; a superlinear one (quadratic over 100K+ characters, or unbounded
+ * recursion) takes seconds. So the budget sits far above the first and far
+ * below the second, and a loaded suite stalling a parse for a few hundred ms
+ * does not fail it. The fastest of {@link PARSE_TRIES} parses is what is
+ * compared, so one scheduling stall does not count either.
  */
+const PARSE_BUDGET_MS = 500
+const PARSE_TRIES = 3
+
+/** Parse `source` {@link PARSE_TRIES} times; the spec and the fastest time. */
+const timed = (source: string, script = 'x.py'): { spec: unknown; ms: number } => {
+  let spec: unknown = null
+  let ms = Infinity
+  for (let i = 0; i < PARSE_TRIES; i++) {
+    const started = performance.now()
+    spec = parseScriptSpec(source, { script })
+    ms = Math.min(ms, performance.now() - started)
+  }
+  return { spec, ms }
+}
+
+/** A hostile source no larger than main reads (512 KB) answers null within budget. */
 const nullInTime = (source: string, script = 'x.py'): void => {
   expect(source.length).toBeLessThanOrEqual(SCRIPT_SPEC_MAX_BYTES)
-  const started = performance.now()
-  expect(parseScriptSpec(source, { script })).toBeNull()
-  expect(performance.now() - started).toBeLessThan(200)
+  const { spec, ms } = timed(source, script)
+  expect(spec).toBeNull()
+  expect(ms).toBeLessThan(PARSE_BUDGET_MS)
 }
 
 const param = (spec: ScriptSpec | null, id: string): ScriptParam => {
@@ -458,17 +479,12 @@ parser.parse_args()
 
 describe('parseScriptSpec: bounded on main\'s thread', () => {
   const wrap = (body: string): string => `import argparse\nparser = argparse.ArgumentParser()\n${body}\nparser.parse_args()\n`
-  const timed = (source: string, script = 'x.py'): { spec: unknown; ms: number } => {
-    const started = performance.now()
-    const spec = parseScriptSpec(source, { script })
-    return { spec, ms: performance.now() - started }
-  }
 
-  it('a 240 KB nested literal → null in under 200 ms', () => {
+  it('a 240 KB nested literal → null within the parse budget', () => {
     const depth = 120_000
     const { spec, ms } = timed(wrap(`parser.add_argument("--x", default=${'['.repeat(depth)}${']'.repeat(depth)})`))
     expect(spec).toBeNull()
-    expect(ms).toBeLessThan(200)
+    expect(ms).toBeLessThan(PARSE_BUDGET_MS)
   })
 
   it('nesting deeper than 8 in a short call → null; 8 deep still reads', () => {
@@ -477,11 +493,11 @@ describe('parseScriptSpec: bounded on main\'s thread', () => {
     expect(timed(wrap(`parser.add_argument("--x", default=${nested(8)})`)).spec).not.toBeNull()
   })
 
-  it('a 400 KB Usage block → null in under 200 ms', () => {
+  it('a 400 KB Usage block → null within the parse budget', () => {
     const lines = Array.from({ length: 20_000 }, (_, i) => `    x.py [--flag-${i}]`).join('\n')
     const { spec, ms } = timed(`"""Tool.\n\nUsage:\n${lines}\n"""\nimport sys\n`)
     expect(spec).toBeNull()
-    expect(ms).toBeLessThan(200)
+    expect(ms).toBeLessThan(PARSE_BUDGET_MS)
   })
 
   it('a Usage block over 50 lines is ignored, beside argparse too', () => {
@@ -491,10 +507,10 @@ describe('parseScriptSpec: bounded on main\'s thread', () => {
     expect(spec!.usage).toBeNull()
   })
 
-  it('a 200 KB line of parser names → null in under 200 ms', () => {
+  it('a 200 KB line of parser names → null within the parse budget', () => {
     const { spec, ms } = timed(wrap(`${'parser, '.repeat(25_000)}x = 1`))
     expect(spec).toBeNull()
-    expect(ms).toBeLessThan(200)
+    expect(ms).toBeLessThan(PARSE_BUDGET_MS)
   })
 
   it('a call of more than 400 tokens, or more than 200 calls → null', () => {
@@ -598,7 +614,7 @@ if __name__ == "__main__":
     expect(spec!.params.map((p) => p.id)).toEqual(['y'])
   })
 
-  it('a hostile stack → null in under 200 ms', () => {
+  it('a hostile stack → null within the parse budget', () => {
     const many = Array.from({ length: 20_000 }, (_, i) => `@click.option("--f${i}")`).join('\n')
     nullInTime(`import click\n@click.command()\n${many}\ndef cli(**kw):\n    pass\ncli()\n`)
     const deep = `@click.option("--x", default=${'['.repeat(100_000)}${']'.repeat(100_000)})`
@@ -716,7 +732,7 @@ if __name__ == "__main__":
     expect(parseScriptSpec('import typer\napp = typer.Typer(help="x")\n@app.command(help="y")\ndef a(x: str):\n    pass\napp()\n', { script: 'x.py' })).not.toBeNull()
   })
 
-  it('a hostile signature → null in under 200 ms', () => {
+  it('a hostile signature → null within the parse budget', () => {
     nullInTime(RUN(Array.from({ length: 20_000 }, (_, i) => `p${i}: int = ${i}`).join(', ')))
     nullInTime(RUN(`x: List[str] = ${'['.repeat(100_000)}${']'.repeat(100_000)}`))
     nullInTime(RUN(`x: ${'Optional['.repeat(20_000)}str${']'.repeat(20_000)} = None`))
@@ -822,7 +838,7 @@ echo "$@"
     expect(parseScriptSpec(`${before}while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n`, { script: 't.sh' })!.params.map((p) => p.id)).toEqual(['x'])
   })
 
-  it('hostile input → null in under 200 ms', () => {
+  it('hostile input → null within the parse budget', () => {
     nullInTime(SCRIPT('', 'a', Array.from({ length: 20_000 }, () => '    a) x=1 ;;').join('\n')), 't.sh')
     nullInTime(`while getopts "a" opt; do\n  case "$opt" in\n    a) x=$(${'$('.repeat(50_000)}\n`, 't.sh')
     nullInTime(`${'cat <<EOF\n'.repeat(20_000)}while getopts "a" opt; do :; done\n`, 't.sh')
@@ -830,7 +846,7 @@ echo "$@"
   })
 })
 
-describe('parseScriptSpec: hostile input stays under 200 ms on main\'s thread', () => {
+describe('parseScriptSpec: hostile input stays within the parse budget on main\'s thread', () => {
   const LOOP = 'while getopts "a" opt; do\n  case "$opt" in\n    a) x=1 ;;\n  esac\ndone\n'
   const CASES: [string, string, string][] = [
     // click
@@ -860,8 +876,8 @@ describe('parseScriptSpec: hostile input stays under 200 ms on main\'s thread', 
   })
 
   it('shell: 200 000 semicolons before the loop still read it, in time', () => {
-    const started = performance.now()
-    expect(parseScriptSpec(`${';'.repeat(200_000)}\n${LOOP}`, { script: 't.sh' })!.params.map((p) => p.id)).toEqual(['x'])
-    expect(performance.now() - started).toBeLessThan(200)
+    const { spec, ms } = timed(`${';'.repeat(200_000)}\n${LOOP}`, 't.sh')
+    expect((spec as ScriptSpec).params.map((p) => p.id)).toEqual(['x'])
+    expect(ms).toBeLessThan(PARSE_BUDGET_MS)
   })
 })

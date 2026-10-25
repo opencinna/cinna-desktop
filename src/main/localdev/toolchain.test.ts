@@ -327,6 +327,12 @@ describe('ensure', () => {
     const started = new Promise<void>((resolve) => {
       downloading = resolve
     })
+    // The first pass's uv install has settled once cinna-cli's install begins:
+    // that branch only reaches `ensureCli` after uv's `once` entry is dropped.
+    let cliBegun = (): void => {}
+    const uvSettled = new Promise<void>((resolve) => {
+      cliBegun = resolve
+    })
     const base = deps()
     const tc = createToolchain(
       deps({
@@ -336,6 +342,10 @@ describe('ensure', () => {
             await held
           }
           await base.download(url, dest, onProgress)
+        },
+        cliSourceOverride: () => {
+          cliBegun()
+          return base.cliSourceOverride()
         }
       })
     )
@@ -343,16 +353,24 @@ describe('ensure', () => {
     const first = tc.ensure(PINS, () => {})
     // Not a tick count: wait until the first pass is genuinely inside the
     // Mutagen download, or the second pass may be the one that starts it and
-    // the test proves nothing.
-    await started
+    // the test proves nothing — and until its uv is done, so the second pass
+    // runs a uv check of its own instead of joining the first's.
+    await Promise.all([started, uvSettled])
 
     const seen: string[] = []
+    let sawUv = (): void => {}
+    const secondReachedUv = new Promise<void>((resolve) => {
+      sawUv = resolve
+    })
     const second = tc.ensure(PINS, ({ tool }) => {
       if (tool) seen.push(tool)
+      if (tool === 'uv') sawUv()
     })
-    // Long enough for the second pass to reach its own `once('mutagen')` and
-    // join the download the first pass is holding.
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The second pass calls `once('mutagen')` synchronously right after its
+    // own `once('uv')`, and its uv check reports only after an `await`. So its
+    // uv report proves it has already joined the held Mutagen download.
+    await secondReachedUv
+    expect(seen).not.toContain('mutagen')
     release()
     await Promise.all([first, second])
 

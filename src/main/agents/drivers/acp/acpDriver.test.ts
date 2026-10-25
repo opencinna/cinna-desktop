@@ -92,6 +92,12 @@ const ROW = goldenRow({
 
 interface World {
   driver: AgentDriver
+  /**
+   * The deps the driver holds. It reads a test's timer overrides as each turn
+   * starts, so a test can shorten one once the process is up: a ceiling armed
+   * before the spawn would otherwise race a start that a loaded machine slows.
+   */
+  deps: AcpDriverDeps
   pool: AcpProcessPool
   fake: FakeAcp
   /** Session ids the driver handed to `saveSession`, in order. */
@@ -214,6 +220,7 @@ function makeWorld(options: WorldOptions = {}): World {
   const driver = createAcpDriver(deps)
   return {
     driver,
+    deps,
     pool: deps.pool,
     fake,
     saved,
@@ -3731,13 +3738,16 @@ describe('a tool call the agent opened and never filled in', () => {
 
   it('fails a ceiling the agent answers end_turn with the ceiling’s reason', async () => {
     const w = world({
-      script: { prompt: { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'end_turn' } } },
-      deps: { toolStallMs: 300, turnCeilingMs: 300 }
+      script: { prompt: { sequence: [{ ...SAYS_HELLO.prompt }, { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'end_turn' } }] } },
+      deps: { toolStallMs: 300 }
     })
+    // The ceiling is for the prompt, not the spawn: warm the process first.
+    await w.run()
+    w.deps.turnCeilingMs = 300
     const result = await w.run()
     expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
     expect(result.taskState).not.toBe('canceled')
-    expect(w.fake.received('session/prompt')).toHaveLength(1)
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
   })
 
   /** The agent takes its time to answer the cancel, so a Stop can land inside the grace. */
@@ -3762,9 +3772,12 @@ describe('a tool call the agent opened and never filled in', () => {
 
   it('takes the user’s Stop during the ceiling’s grace as a stop', async () => {
     const w = world({
-      script: { prompt: { emit: [chunk('Working.'), { kind: 'awaitCancel' }, { kind: 'delay', ms: 400 }], response: { stopReason: 'cancelled' } } },
-      deps: { toolStallMs: 300, turnCeilingMs: 300, cancelGraceMs: 2_000 }
+      script: { prompt: { sequence: [{ ...SAYS_HELLO.prompt }, { emit: [chunk('Working.'), { kind: 'awaitCancel' }, { kind: 'delay', ms: 400 }], response: { stopReason: 'cancelled' } }] } },
+      deps: { toolStallMs: 300, cancelGraceMs: 2_000 }
     })
+    // The ceiling is for the prompt, not the spawn: warm the process first.
+    await w.run()
+    w.deps.turnCeilingMs = 300
     const controller = new AbortController()
     const running = w.run({ signal: controller.signal })
     await waitFor(() => w.fake.received('session/cancel').length > 0 || undefined, 'the ceiling’s cancel')
@@ -3944,9 +3957,11 @@ describe('a tool call the agent opened and never filled in', () => {
         { kind: 'delay', ms: 400 },
         COSTED_USAGE
       ]),
-      deps: { followUpQuietMs: 100, turnCeilingMs: 300, cancelGraceMs: 2_000 }
+      deps: { followUpQuietMs: 100, cancelGraceMs: 2_000 }
     })
     await w.run({ runScope: RUN_SCOPE })
+    // The follow-up's ceiling, set once the prompted turn (and the spawn) is over.
+    w.deps.turnCeilingMs = 300
     const request = await waitFor(() => w.requests[0], 'the follow-up request')
     const f = followUpIo()
     const running = request.run(f.io)
@@ -3978,9 +3993,11 @@ describe('a tool call the agent opened and never filled in', () => {
         { kind: 'awaitCancel', sessionId: 'ses_fake' },
         COSTED_USAGE
       ]),
-      deps: { followUpQuietMs: 100, turnCeilingMs: 300 }
+      deps: { followUpQuietMs: 100 }
     })
     await w.run({ runScope: RUN_SCOPE })
+    // The follow-up's ceiling, set once the prompted turn (and the spawn) is over.
+    w.deps.turnCeilingMs = 300
     const request = await waitFor(() => w.requests[0], 'the follow-up request')
     const result = await request.run(followUpIo().io)
     expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
