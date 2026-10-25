@@ -78,6 +78,7 @@ export function refreshAfterAddonChange(queryClient: QueryClient, agentId: strin
  * Later reads (after an add) use the caches again.
  */
 export function useAddonDirectory(agentId: string | null, options: { enabled?: boolean; refreshOnMount?: boolean } = {}) {
+  const queryClient = useQueryClient()
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   const refreshed = useRef(!options.refreshOnMount)
   return useQuery<Extract<AddonDirectoryResult, { ok: true }>>({
@@ -87,6 +88,7 @@ export function useAddonDirectory(agentId: string | null, options: { enabled?: b
       refreshed.current = true
       const result = await window.api.addons.directory(agentId as string, refresh ? { refresh: true } : {})
       if (!result.ok) throw new AddonDirectoryReadError(result.code, result.message)
+      queryClient.setQueryData(addonPolicyKey(profileId), result.policy)
       return result
     },
     enabled: !!agentId && options.enabled !== false,
@@ -107,21 +109,28 @@ export function useRefreshAddonDirectory(agentId: string): () => Promise<unknown
       queryFn: async () => {
         const result = await window.api.addons.directory(agentId, { refresh: true })
         if (!result.ok) throw new AddonDirectoryReadError(result.code, result.message)
+        queryClient.setQueryData(addonPolicyKey(profileId), result.policy)
         return result
       },
       staleTime: 0
     })
 }
 
+export function addonPolicyKey(profileId: string | null): readonly unknown[] {
+  return [...ADDONS_KEY, 'policy', profileId]
+}
+
 /**
  * The active account's stored admin policy (everything allowed without one),
  * for surfaces with no agent to read the directory for (Settings → MCP).
- * Under {@link ADDONS_KEY}, so it re-reads with the directory.
+ * Each directory answer carries the policy main just stored and writes it
+ * here, so a policy core changed shows at once rather than after this query
+ * goes stale; it is also re-read with the rest of {@link ADDONS_KEY}.
  */
 export function useAddonPolicy() {
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   return useQuery<AddonPolicy>({
-    queryKey: [...ADDONS_KEY, 'policy', profileId],
+    queryKey: addonPolicyKey(profileId),
     queryFn: () => window.api.addons.policy(),
     refetchOnWindowFocus: false
   })
