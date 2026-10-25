@@ -26,7 +26,7 @@ export interface DirectoryEntry {
   title: string
   digest: string | null
   status: string
-  install: { mcp?: { transport: string; url?: string | null; auth: string } } | null
+  install: { mcp?: { transport: string; url?: string | null; auth: string; package?: { registry: string; name: string; version: string | null } | null } } | null
 }
 
 export async function coreDirectory(config: LiveCinnaConfig, token: string): Promise<DirectoryEntry[]> {

@@ -331,7 +331,18 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       } catch {
         // nothing read-only, or already gone
       }
-      rmSync(sandbox.root, { recursive: true, force: true })
+      // Claude's CLI still writes its MCP log (`~/Library/Caches/claude-cli-nodejs/…/mcp-logs-cinna/`)
+      // under the sandbox HOME for a moment after the app closed, while rmSync is emptying a large
+      // userData; the folder then fills again under it (ENOTEMPTY). A second pass finds it settled.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          rmSync(sandbox.root, { recursive: true, force: true })
+          break
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOTEMPTY' || attempt >= 10) throw err
+          await new Promise((resolve) => setTimeout(resolve, 300))
+        }
+      }
     } else {
       testInfo.annotations.push({ type: 'sandbox', description: sandbox.root })
       // The main process's own account of the failure, beside the trace.
