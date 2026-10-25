@@ -56,7 +56,7 @@ vi.mock('./conductorMcpServer', () => ({ ConductorMcpServer: class {
     const refreshTools = existing?.refreshTools ?? vi.fn(async () => {})
     state.sessions.set(key, { options, refreshTools })
     return { descriptor: { name: 'cinna', type: 'http', url: `http://127.0.0.1:1/${key}`, headers: [] }, abortCalls: vi.fn(), refreshTools, dispose: vi.fn(),
-      offers: () => false }
+      offers: () => false, toolsListings: () => 0 }
   }
 } }))
 const { conductorBridge } = await import('./conductorBridge')

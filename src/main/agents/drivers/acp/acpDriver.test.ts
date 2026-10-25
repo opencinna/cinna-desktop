@@ -330,7 +330,7 @@ describe('conductor session integration', () => {
     } })
     const running = w.run()
     await waitFor(() => release !== undefined, 'the wait')
-    expect(toolsListed).toHaveBeenCalledWith(3, 10_000)
+    expect(toolsListed).toHaveBeenCalledWith(3, 10_000, expect.any(AbortSignal))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(w.fake.received('session/prompt')).toHaveLength(0)
     release!(Date.now())
@@ -370,8 +370,169 @@ describe('conductor session integration', () => {
       }
     } })
     expect((await timedOut.run()).error).toBeUndefined()
-    expect(never).toHaveBeenCalledWith(0, 30)
+    expect(never).toHaveBeenCalledWith(0, 30, expect.any(AbortSignal))
     expect(timedOut.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  describe('a fresh session on a process that listed Cinna’s endpoint before', () => {
+    // OpenCode's Code Mode catalog holds a tool only the settle after the
+    // listing that carried it; on a reused process the prompt used to go at
+    // once (~40 ms after the re-list) and the model was told no tools existed.
+    // The bridge announces the turn's tools after binding it and hands the
+    // driver the listing count of that moment (`toolsRefreshMark`).
+    // A stand-in for the session's listing counter, as `ConductorMcpServer` keeps it.
+    const listings = () => {
+      const state = { listings: 0, listedAt: 0, listeners: new Set<() => void>() }
+      const list = (): void => {
+        state.listings++
+        state.listedAt = Date.now()
+        for (const listener of [...state.listeners]) listener()
+      }
+      const toolsListed = vi.fn((after: number, ms: number, signal?: AbortSignal) => new Promise<number | null>((resolve) => {
+        if (state.listings > after) { resolve(state.listedAt); return }
+        if (signal?.aborted) { resolve(null); return }
+        const done = (value: number | null): void => { state.listeners.delete(check); clearTimeout(timer); resolve(value) }
+        const check = (): void => { if (state.listings > after) done(state.listedAt) }
+        const timer = setTimeout(() => done(null), ms)
+        state.listeners.add(check)
+        signal?.addEventListener('abort', () => done(null), { once: true })
+      }))
+      return { state, list, toolsListed, lease: { toolsListings: () => state.listings, toolsListed } }
+    }
+    const descriptor = { type: 'http' as const, name: 'cinna', url: 'http://127.0.0.1:12345/mcp/fresh', headers: [] }
+    /**
+     * Turn 1 holds the endpoint for the connection. Turn 2's lease is fresh
+     * (or not); `stale` listings are answered while it is prepared, before the
+     * bridge's mark (the attach-time re-list, which predates the binding, or
+     * one still naming a tool detached since); `relists` are the listings
+     * answered after the mark, the first `firstAfterMs` from turn 2's
+     * `session/new`, then 100 ms apart.
+     */
+    const twoTurns = (second: { freshSession: boolean; stale?: number; relists: number; firstAfterMs?: number }, waitMs?: number) => {
+      const counter = listings()
+      let turn = 0
+      const w: World = world({ script: SAYS_HELLO, deps: {
+        ...(waitMs !== undefined ? { cinnaToolsWaitMs: waitMs } : {}),
+        prepareConductor: async (_user, _agent, _input, plan) => {
+          plan.session.mcpServers = [descriptor]
+          plan.awaitMcpTools = { settleMs: 200 }
+          turn++
+          if (turn === 1) {
+            // The connection's first listing, answered once the driver waits for it.
+            return { close() {}, hasCalls: () => false, freshSession: true, toolsRefreshMark: 0, ...counter.lease,
+              toolsListed: async () => { counter.list(); return counter.state.listedAt } }
+          }
+          for (let index = 0; index < (second.stale ?? 0); index++) counter.list()
+          if (second.relists > 0) {
+            void waitFor(() => w.fake.received('session/new').length === 2, 'turn 2’s session/new').then(async () => {
+              await new Promise((resolve) => setTimeout(resolve, second.firstAfterMs ?? 0))
+              for (let index = 0; index < second.relists; index++) {
+                if (index > 0) await new Promise((resolve) => setTimeout(resolve, 100))
+                counter.list()
+              }
+            })
+          }
+          return { close() {}, hasCalls: () => false, freshSession: second.freshSession,
+            ...(second.freshSession ? { toolsRefreshMark: counter.state.listings } : {}), ...counter.lease }
+        }
+      } })
+      return { w, counter }
+    }
+    // The fake's own clock: from its turn-2 `session/new` to its turn-2 prompt.
+    const gap = (w: World): number => w.fake.received('session/prompt')[1].t - w.fake.received('session/new')[1].t
+    const warnings = async () => {
+      const { setLogSink } = await import('../../../logger/logger')
+      const warn = vi.fn()
+      setLogSink((entry) => { if (entry.level === 'warn') warn(entry.message, entry.data) })
+      return { warn, restore: () => setLogSink(null) }
+    }
+
+    it('holds the prompt until the settle after the listing that follows the refresh', async () => {
+      // Mutation: skip the wait when the connection holds the URL (as before)
+      // and the prompt follows `session/new` at once.
+      const { w, counter } = twoTurns({ freshSession: true, relists: 1, firstAfterMs: 100 })
+      expect((await w.run()).error).toBeUndefined()
+      expect((await w.run()).error).toBeUndefined()
+      expect(w.fake.received('session/new')).toHaveLength(2)
+      expect(counter.state.listings).toBe(2)
+      expect(counter.toolsListed).toHaveBeenLastCalledWith(1, 10_000, expect.any(AbortSignal))
+      expect(gap(w)).toBeGreaterThanOrEqual(290)
+    })
+
+    it('does not settle from a listing that predates the refresh', async () => {
+      // The attach-time re-list ran before the binding existed and lacks its
+      // own tools. Mutation: wait from the driver's own mark minus one (the
+      // last listing) and the prompt goes ~200 ms after the stale one.
+      const { w, counter } = twoTurns({ freshSession: true, stale: 1, relists: 1, firstAfterMs: 300 })
+      expect((await w.run()).error).toBeUndefined()
+      expect((await w.run()).error).toBeUndefined()
+      expect(counter.state.listings).toBe(3)
+      expect(gap(w)).toBeGreaterThanOrEqual(490)
+    })
+
+    it('still needs a listing after the refresh when tools were only detached', async () => {
+      // Turn 1's listing named {A, B}; B is detached, and the attach-time
+      // re-list of {A} plus turn 1's both predate the mark. Every name the new
+      // session expects was already offered — that must not do. Mutation:
+      // skip the wait when nothing was added (the old expected-names check).
+      const { w, counter } = twoTurns({ freshSession: true, stale: 2, relists: 1, firstAfterMs: 300 })
+      expect((await w.run()).error).toBeUndefined()
+      expect((await w.run()).error).toBeUndefined()
+      expect(counter.state.listings).toBe(4)
+      expect(counter.toolsListed).toHaveBeenLastCalledWith(3, 10_000, expect.any(AbortSignal))
+      expect(gap(w)).toBeGreaterThanOrEqual(490)
+    })
+
+    it('does not wait on a turn that keeps its session', async () => {
+      // Mutation: wait whenever the connection holds the URL, fresh or not,
+      // and this turn costs the whole bounded wait.
+      const { w, counter } = twoTurns({ freshSession: false, relists: 0 }, 2_000)
+      expect((await w.run()).error).toBeUndefined()
+      const calls = counter.toolsListed.mock.calls.length
+      const started = Date.now()
+      expect((await w.run()).error).toBeUndefined()
+      expect(Date.now() - started).toBeLessThan(1_000)
+      expect(counter.toolsListed).toHaveBeenCalledTimes(calls)
+    })
+
+    it('prompts after the bounded wait, with a warning, when no listing follows the refresh', async () => {
+      const { warn, restore } = await warnings()
+      try {
+        const { w } = twoTurns({ freshSession: true, stale: 1, relists: 0 }, 300)
+        expect((await w.run()).error).toBeUndefined()
+        const started = Date.now()
+        expect((await w.run()).error).toBeUndefined()
+        const waited = Date.now() - started
+        expect(waited).toBeGreaterThanOrEqual(280)
+        expect(waited).toBeLessThan(2_000)
+        expect(w.fake.received('session/prompt')).toHaveLength(2)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('fresh session’s Cinna tools'), expect.objectContaining({ waitedMs: 300 }))
+      } finally {
+        restore()
+      }
+    })
+
+    it('ends the turn on a Stop during the wait, quietly', async () => {
+      // Mutation: do not hand the turn's signal to `toolsListed`, and the
+      // abandoned wait logs its warning once the bound runs out.
+      const { warn, restore } = await warnings()
+      try {
+        const { w } = twoTurns({ freshSession: true, relists: 0 }, 400)
+        expect((await w.run()).error).toBeUndefined()
+        const controller = new AbortController()
+        const running = w.run({ signal: controller.signal })
+        await waitFor(() => w.fake.received('session/new').length === 2, 'turn 2’s session/new')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        controller.abort()
+        const result = await running
+        expect(result.error).toBeUndefined()
+        expect(w.fake.received('session/prompt')).toHaveLength(1)
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Cinna tools'), expect.anything())
+      } finally {
+        restore()
+      }
+    })
   })
 
   it('never waits for a session given no Cinna server, or on an engine that connects before answering', async () => {

@@ -181,8 +181,17 @@ export interface AcpLaunchPlan {
    * The engine reads a session's MCP tools once, when the session starts, and
    * ignores `tools/list_changed` (observed on an authenticated Codex
    * 0.154.0-alpha.6.2: a specialist attached mid-chat never became callable).
-   * A conductor on such an engine gets a new session, with the transcript
-   * replayed, when its tool list changes.
+   * OpenCode 2 is the same in effect (probed on 2.0.27 with a fake provider):
+   * its Code Mode system prompt, tool catalog included, is fixed for the
+   * session once its first prompt has run (it holds what was listed at least
+   * the settle before that prompt — `awaitHeldCinnaTools` waits for it on a
+   * reused process), and a `tools/list_changed` mid-session reaches the model at
+   * most as a user-role `<system-update>` — only when the re-list lands before
+   * the prompt — so a chat that started with no Cinna tools keeps "No Code
+   * Mode tools are currently available" and a forced call fails as an unknown
+   * tool. A conductor on such an engine gets a new session, with the
+   * transcript replayed, when its tool list changes; a nested specialist gets
+   * a new in-memory session the same way.
    */
   sessionToolsFixed?: boolean
   /**
@@ -538,6 +547,9 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
         init,
         session: { mcpServers: [] },
         awaitMcpTools: { settleMs: OPENCODE_MCP_SETTLE_MS },
+        // The Code Mode tool catalog is fixed for the session once its first
+        // prompt has run; see {@link AcpLaunchPlan.sessionToolsFixed}.
+        sessionToolsFixed: true,
         setup: {
           configOptions: [
             // The agent definition first: it carries the prompt and the

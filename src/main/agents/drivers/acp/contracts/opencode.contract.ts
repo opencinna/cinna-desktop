@@ -155,6 +155,13 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
     feature: 'The first turn of a chat cannot call Cinna’s tools: a coordinator says it will ask a specialist and never does.',
     flow: NO_FLOW
   },
+  {
+    id: 'opencode.mcp.list-changed', area: 'tools & MCP', surface: 'MCP request', name: 'notifications/tools/list_changed',
+    expectation: 'A session’s system prompt, with its Code Mode tool catalog, is fixed for the session once its first prompt has run (it holds the tools listed at least the settle time before that prompt): a tool Cinna’s server adds mid-session and announces with `tools/list_changed` never enters it. Once the engine has re-listed, the next prompt carries the change only as a user-role `<system-update>` naming `tools.cinna.<tool>` ahead of the user’s text — so only when the re-list lands before the prompt. A new session’s system prompt lists the tool, and its call runs. A process that holds the endpoint does not list again for a new session unless told: a `tools/list_changed` between `session/new` and that session’s first prompt is re-listed and lands in its catalog, with no `<system-update>`.',
+    owners: [`${LAUNCHERS}#sessionToolsFixed`, 'src/main/services/conductorBridge.ts#toolsRefreshMark', `${DRIVER}#awaitHeldCinnaTools`],
+    feature: 'While it holds, dropping the launcher’s `sessionToolsFixed` makes an agent or MCP server @-attached after a chat’s first turn uncallable: Send announces it a few ms before the prompt and the engine answers `Unknown tool`. If a release renders the catalog per prompt, the new-session workaround is dead weight; if a warm process stops honouring the announcement before the first prompt, a fresh session waits the bounded 10 s and its catalog lacks the turn’s own tools.',
+    flow: NO_FLOW
+  },
 
   /* ------------------------------------------------- permissions & questions */
   {

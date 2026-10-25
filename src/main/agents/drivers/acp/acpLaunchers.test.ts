@@ -358,6 +358,12 @@ describe('the OpenCode launcher', () => {
     expect(plan(await launcher().plan(CTX)).awaitMcpTools).toEqual({ settleMs: 300 })
   })
 
+  it('starts a new session when Cinna’s tools change: OpenCode 2 fixes its Code Mode catalog at `session/new`', async () => {
+    // Mutation: drop `sessionToolsFixed` and an agent or MCP server attached
+    // after a chat's first turn is never callable on OpenCode (live D2).
+    expect(plan(await launcher().plan(CTX)).sessionToolsFixed).toBe(true)
+  })
+
   it('emits Code Mode’s permissions for every agent, after the profile’s `*` ask', async () => {
     // Mutation: drop `CINNA_TOOL_PERMISSIONS` from the profile and every Cinna
     // call asks twice — the `execute` and the inner `cinna_<tool>`.

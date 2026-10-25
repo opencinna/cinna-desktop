@@ -129,6 +129,16 @@ export interface ConductorLease {
   toolsListings?(): number
   /** {@link ConductorMcpSession.toolsListed} of this lease's session. */
   toolsListed?(after: number, timeoutMs: number, signal?: AbortSignal): Promise<number | null>
+  /**
+   * A fresh session on an engine that fixes its tools for the session
+   * ({@link AcpLaunchPlan.sessionToolsFixed}): the listing count taken when the
+   * bridge announced this turn's tools with `tools/list_changed`, after the
+   * turn's binding was set. On a process that listed this endpoint before, the
+   * driver holds the first prompt until a listing after this mark, and the
+   * plan's settle from it (`awaitCinnaTools`): only such a listing carries the
+   * binding's tools and nothing detached since.
+   */
+  toolsRefreshMark?: number
   close(): void
   hasCalls(): boolean
 }
@@ -271,8 +281,22 @@ export const conductorBridge = {
     // at creation and they (or the endpoint) changed since this agent's last
     // nested session in this chat. Nothing durable — see `nestedDigests`.
     const durable = nested ? null : { fresh: conductorSessionRepo.get(input.chatId, agent.id) !== hash }
+    const freshSession = durable ? durable.fresh : !!plan.sessionToolsFixed && nestedDigests.get(key) !== hash
+    // The attach-time re-list ran before this binding existed, so it lacked the
+    // binding's own tools (controls, `tasks_*`, artifacts). A process that holds
+    // the endpoint lists again only when told: announce the set the new
+    // session's catalog must hold. Marked first, so the re-list cannot land
+    // before the mark; every listing answered from here reads this binding.
+    // Only an engine the driver waits on (`awaitMcpTools`) needs it: Codex
+    // reads its tools at `session/new` and is not told.
+    let toolsRefreshMark: number | undefined
+    if (freshSession && plan.sessionToolsFixed && plan.awaitMcpTools) {
+      toolsRefreshMark = session.toolsListings()
+      await session.refreshTools()
+    }
     return {
-      freshSession: durable ? durable.fresh : !!plan.sessionToolsFixed && nestedDigests.get(key) !== hash,
+      freshSession,
+      ...(toolsRefreshMark !== undefined ? { toolsRefreshMark } : {}),
       ...(nested && plan.sessionToolsFixed ? { session: {
         read: () => nestedSessions.get(key) ?? null,
         save: (sessionId: string) => { nestedSessions.set(key, sessionId) }

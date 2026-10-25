@@ -1868,7 +1868,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (toolsMark !== null && cinnaUrl !== null && conductor) {
       try {
         await duringStart(awaitCinnaTools(connection, cinnaUrl, conductor, toolsMark, {
-          waitMs: deps.cinnaToolsWaitMs ?? CINNA_TOOLS_WAIT_MS, settleMs: plan.awaitMcpTools?.settleMs ?? 0, agentId: agent.id, chatId
+          waitMs: deps.cinnaToolsWaitMs ?? CINNA_TOOLS_WAIT_MS, settleMs: plan.awaitMcpTools?.settleMs ?? 0, agentId: agent.id, chatId,
+          refreshMark: conductor.freshSession ? conductor.toolsRefreshMark ?? null : null, signal: input.signal
         }))
       } catch {
         // Stopped, or the ceiling, while waiting: the same as during the setup.
@@ -3115,24 +3116,61 @@ function cinnaDescriptorUrl(servers: readonly McpServer[]): string | null {
  * `execute` got "Unknown tool 'cinna.probe'"). So until Cinna's server has answered a `tools/list` since the
  * session was asked for, and the plan's `settleMs` since, the prompt waits.
  * Bounded: after {@link CINNA_TOOLS_WAIT_MS} the turn goes on and says so in
- * the log. No wait when this connection has listed the endpoint before.
+ * the log. No wait when this connection has listed the endpoint before —
+ * unless the lease starts a fresh session because the tools changed
+ * (`refreshMark`, see {@link awaitHeldCinnaTools}). A Stop ends the wait
+ * quietly: the turn is over, and the engine was not slow.
  */
 async function awaitCinnaTools(
   connection: AcpConnection,
   url: string,
   lease: Pick<import('../../../services/conductorBridge').ConductorLease, 'toolsListed'>,
   mark: number,
-  options: { waitMs: number; settleMs: number; agentId: string; chatId: string }
+  options: { waitMs: number; settleMs: number; agentId: string; chatId: string; refreshMark: number | null; signal: AbortSignal }
 ): Promise<void> {
   const held = cinnaToolsHeld.get(connection) ?? new Set<string>()
   cinnaToolsHeld.set(connection, held)
-  if (held.has(url) || !lease.toolsListed) return
-  const listedAt = await lease.toolsListed(mark, options.waitMs)
+  if (!lease.toolsListed) return
+  if (held.has(url)) {
+    if (options.refreshMark !== null) await awaitHeldCinnaTools(lease.toolsListed, options.refreshMark, options)
+    return
+  }
+  const listedAt = await lease.toolsListed(mark, options.waitMs, options.signal)
+  if (options.signal.aborted) return
   // Remembered either way: an engine that did not list in time will not on
   // this connection's next turn either, and must not cost that turn the wait.
   held.add(url)
   if (listedAt === null) {
     logger.warn('the engine had not listed Cinna’s tools; prompting without waiting longer', {
+      agentId: options.agentId, chatId: options.chatId, waitedMs: options.waitMs
+    })
+    return
+  }
+  const remaining = listedAt + options.settleMs - Date.now()
+  if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining))
+}
+
+/**
+ * A fresh session, started because its tools changed, on a process that has
+ * listed Cinna's endpoint before. OpenCode's Code Mode catalog holds a tool
+ * only `settleMs` after the listing that carried it, and is fixed for the
+ * session once its first prompt has run: a prompt sent at once (the re-list
+ * ~40 ms before) told the model no tools were available. The bridge announced
+ * the turn's tools after binding it (`ConductorLease.toolsRefreshMark`); only a
+ * listing after that mark counts — an earlier one predates the binding's own
+ * tools, or still names a tool detached since. So: wait, bounded by `waitMs`,
+ * for that listing, then the settle from it. None in time: a warning, and the
+ * prompt goes.
+ */
+async function awaitHeldCinnaTools(
+  toolsListed: NonNullable<import('../../../services/conductorBridge').ConductorLease['toolsListed']>,
+  refreshMark: number,
+  options: { waitMs: number; settleMs: number; agentId: string; chatId: string; signal: AbortSignal }
+): Promise<void> {
+  const listedAt = await toolsListed(refreshMark, options.waitMs, options.signal)
+  if (options.signal.aborted) return
+  if (listedAt === null) {
+    logger.warn('the engine had not listed the fresh session’s Cinna tools; prompting without waiting longer', {
       agentId: options.agentId, chatId: options.chatId, waitedMs: options.waitMs
     })
     return

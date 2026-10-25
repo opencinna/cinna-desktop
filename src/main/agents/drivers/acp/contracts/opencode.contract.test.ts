@@ -151,7 +151,20 @@ const seen = {
     /** Session A reading session B's folder; session B, on A's process, reading its own folder, A's (the process cwd), and writing. */
     readOther: emptyPrompt(), otherReadInside: emptyPrompt(), otherReadProcess: emptyPrompt(), otherWrite: emptyPrompt() },
   /** A plugin slash command with the turn context after it: as the driver sends it on OpenCode (annotated block), and as a plain second block. */
-  command: { error: null as string | null, annotatedBlocks: [] as Json[], annotated: [] as OpenAiTurn[], plain: [] as OpenAiTurn[] }
+  command: { error: null as string | null, annotatedBlocks: [] as Json[], annotated: [] as OpenAiTurn[], plain: [] as OpenAiTurn[] },
+  /**
+   * `opencode.mcp.list-changed`: a session started with Cinna's server offering
+   * no tool, prompted (`before`); a tool added and announced with
+   * `tools/list_changed`, re-listed, and the session prompted to call it
+   * (`after`); then a new session on the same process prompted the same way
+   * (`fresh`). `relisted`: the engine re-listed after the announcement;
+   * `freshListed`: it listed again on that `session/new`, unannounced.
+   * `late`: a new session on the same process, a second tool added and
+   * announced after its `session/new` and before its first prompt;
+   * `lateRelisted`: re-listed on that announcement.
+   */
+  listChanged: { error: null as string | null, relisted: false, freshListed: false, lateRelisted: false, before: emptyPrompt(), after: emptyPrompt(),
+    fresh: emptyPrompt(), late: emptyPrompt(), afterCalls: 0, freshCalls: 0, lateCalls: 0 }
 }
 
 const shellTool = (turn: OpenAiTurn): string | undefined => turn.tools.find((name) => name === 'bash' || name === 'shell')
@@ -614,6 +627,132 @@ async function commandScenario(binary: string): Promise<void> {
   }
 }
 
+const LIST_CHANGED_AGENT_ID = 'contract-list-changed-agent'
+const LC_BEFORE = 'CONTRACT_LC_BEFORE: just answer.'
+const LC_CALL = 'CONTRACT_LC_CALL: call the added tool.'
+const LC_LATE = 'CONTRACT_LC_LATE: call the tool added last.'
+/** The tool Cinna's server offers only after the session started. */
+const LC_TOOL = 'added_probe'
+/** The tool added after the `late` session's `session/new`, before its first prompt. */
+const LC_LATE_TOOL = 'late_probe'
+
+/**
+ * `opencode.mcp.list-changed`: what a tool added to Cinna's server mid-session
+ * reaches. The production launcher's plan; Cinna's real server, offering no
+ * tool at `session/new` (a chat that started with nothing attached), then
+ * {@link LC_TOOL} announced by `refreshTools`. The re-list is awaited, and the
+ * launcher's settle time, before the next prompt — the most a live session
+ * could get. Kept out of the snapshot.
+ */
+async function listChangedScenario(binary: string): Promise<void> {
+  let trap: EgressTrap | undefined
+  let provider: FakeOpenAi | undefined
+  let scratch: OpencodeScratch | undefined
+  let connection: AcpConnection | undefined
+  const mcp = new ConductorMcpServer()
+  const observed = seen.listChanged
+  try {
+    trap = await startEgressTrap()
+    scratch = makeOpencodeScratch('cinna-contract-opencode-lc-', { trapPort: trap.port })
+    provider = await startFakeOpenAi((turn) => {
+      if (turn.kind === 'auxiliary') return { kind: 'text', text: 'Contract title' }
+      const late = turn.lastUserText.includes('CONTRACT_LC_LATE')
+      if (!(late || turn.lastUserText.includes('CONTRACT_LC_CALL')) || turn.pendingToolResults.length > 0 || !turn.tools.includes('execute')) return { kind: 'text', text: 'OK' }
+      return { kind: 'tool', name: 'execute', args: { code: `return await tools["cinna"].${late ? LC_LATE_TOOL : LC_TOOL}({})` } }
+    })
+    const port = provider.port
+    const env = scratch.env
+    const launcher = createOpencodeLauncher({
+      binary: async () => ({ path: binary, version: null }),
+      configInput: async () => ({
+        providers: [{ id: PROVIDER_ID, type: 'openai_compatible', name: 'Contract fake', apiKey: 'sk-contract-dummy-not-a-real-key',
+          baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: MODEL_ID, name: 'Contract model' }] }],
+        agents: [{ agentId: LIST_CHANGED_AGENT_ID, slug: 'list-changed', description: 'List changed', prompt: 'Contract list-changed agent.',
+          providerId: PROVIDER_ID, modelId: MODEL_ID }]
+      }),
+      configRoot: () => scratch!.configRoot,
+      childEnv: async () => ({ ...env })
+    })
+    const planned = await launcher.plan({ userId: 'contract', agentId: LIST_CHANGED_AGENT_ID,
+      folder: { name: 'List changed', slug: 'list-changed', description: '', path: scratch.cwd, kind: 'bare', runtimeMode: 'isolated' } })
+    if (isRefusal(planned)) throw new Error(`the launcher refused: ${planned.error}`)
+    const plan = planned
+    const calls: string[] = []
+    let offered = false, offeredLate = false
+    const tool = (name: string) => ({ name, description: 'Return the contract result.', inputSchema: { type: 'object', properties: {} }, mcpProviderId: 'probe', providerType: 'mcp' })
+    const lease: ConductorMcpSession = await mcp.ensureSession('opencode-contract-lc', { getProviders: () => [{
+      providerType: 'mcp', displayName: 'Contract',
+      getTools: () => [...(offered ? [tool(LC_TOOL)] : []), ...(offeredLate ? [tool(LC_LATE_TOOL)] : [])],
+      callTool: async (name: string) => { calls.push(name); return { content: PROBE_RESULT } }
+    }] } as never)
+    const settle = async (listedAt: number | null): Promise<void> => {
+      if (listedAt !== null && plan.awaitMcpTools) await sleep(Math.max(0, listedAt + plan.awaitMcpTools.settleMs - Date.now()))
+    }
+    connection = spawnAcp({ command: plan.spec.command, args: plan.spec.args, cwd: plan.spec.cwd, env: plan.spec.env, answer })
+    await connection.rpc('initialize', plan.init as unknown as Json, 60_000)
+    /** `session/new`, waiting `listWaitMs` for a listing it causes; whether one came. */
+    const open = async (listWaitMs = 10_000): Promise<{ id: string; listed: boolean }> => {
+      const mark = lease.toolsListings()
+      const created = await connection!.rpc('session/new', { cwd: scratch!.cwd, mcpServers: [lease.descriptor] }, 60_000)
+      const listedAt = await lease.toolsListed(mark, listWaitMs)
+      await settle(listedAt)
+      const id = String(created.result?.sessionId ?? '')
+      const opened = { id, listed: listedAt !== null }
+      if (!id) { observed.error ??= JSON.stringify(created.error ?? 'no session'); return opened }
+      for (const option of plan.setup.configOptions ?? []) {
+        await connection!.rpc('session/set_config_option', { sessionId: id, configId: option.configId, value: option.value })
+      }
+      return opened
+    }
+    const prompt = async (sessionId: string, text: string, into: PromptObservation): Promise<void> => {
+      const updatesAt = connection!.updates.length, turnsAt = provider!.turns.length
+      into.answer = await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, 90_000)
+      await sleep(300)
+      into.updates = connection!.updates.slice(updatesAt)
+      into.turns = provider!.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+    }
+    const { id: sessionId } = await open()
+    if (!sessionId) return
+    await prompt(sessionId, LC_BEFORE, observed.before)
+    offered = true
+    const mark = lease.toolsListings()
+    await lease.refreshTools()
+    const relistedAt = await lease.toolsListed(mark, 10_000)
+    observed.relisted = relistedAt !== null
+    await settle(relistedAt)
+    let callsAt = calls.length
+    await prompt(sessionId, LC_CALL, observed.after)
+    observed.afterCalls = calls.length - callsAt
+    // A process that holds the endpoint, a new session, nothing announced.
+    const { id: freshId, listed: freshListed } = await open(3_000)
+    observed.freshListed = freshListed
+    if (!freshId) return
+    callsAt = calls.length
+    await prompt(freshId, LC_CALL, observed.fresh)
+    observed.freshCalls = calls.length - callsAt
+    // Announced between `session/new` and the first prompt.
+    const { id: lateId } = await open(3_000)
+    if (!lateId) return
+    offeredLate = true
+    const lateMark = lease.toolsListings()
+    await lease.refreshTools()
+    const lateAt = await lease.toolsListed(lateMark, 10_000)
+    observed.lateRelisted = lateAt !== null
+    await settle(lateAt)
+    callsAt = calls.length
+    await prompt(lateId, LC_LATE, observed.late)
+    observed.lateCalls = calls.length - callsAt
+  } catch (err) {
+    observed.error = err instanceof Error ? err.message : String(err)
+  } finally {
+    await connection?.close()
+    await mcp.dispose()
+    await provider?.close()
+    await trap?.close()
+    scratch?.dispose()
+  }
+}
+
 /** The causes of the engine log's newest errors (the stderr tail is only a stack): why a start died. */
 function engineErrors(scratch: OpencodeScratch): string {
   try {
@@ -794,7 +933,8 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     await scenario(binaryRef?.path ?? '')
     await workspaceScenario(binaryRef?.path ?? '')
     await commandScenario(binaryRef?.path ?? '')
-  }, 540_000)
+    await listChangedScenario(binaryRef?.path ?? '')
+  }, 600_000)
 
   it(entry('opencode.session.slash-command-context'), () => {
     expect(seen.command.error).toBeNull()
@@ -991,6 +1131,37 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     expect(seen.mcp.listedAfter, 'Cinna’s server never answered the session’s tools/list').toBe(true)
     expect(seen.mcp.eagerCalls).toBe(0)
     expect(seen.eager.turns[1]?.pendingToolResults[0]).toMatch(/Unknown tool 'cinna\.probe'/)
+  })
+
+  it(entry('opencode.mcp.list-changed'), () => {
+    const lc = seen.listChanged
+    const added = `tools.cinna.${LC_TOOL}`
+    expect(lc.error).toBeNull()
+    expect(lc.relisted, 'the engine never re-listed Cinna’s tools after tools/list_changed').toBe(true)
+    const before = lc.before.turns[0], after = lc.after.turns[0], fresh = lc.fresh.turns[0]
+    expect(before?.systemText, 'the first prompt sent no system prompt').toContain('# Code Mode')
+    expect(before?.systemText).not.toContain(added)
+    // The session's system prompt — its Code Mode catalog included — is the one
+    // rendered at its first prompt: the added tool is not in it.
+    expect(after?.systemText === before?.systemText, 'the system prompt changed mid-session').toBe(true)
+    expect(after?.systemText).not.toContain(added)
+    // The change reaches the model only as a user-role notice before the prompt.
+    expect(after?.userText).toMatch(new RegExp(`<system-update>[\\s\\S]*${added.replace(/\./g, '\\.')}[\\s\\S]*</system-update>`))
+    // The control: a new session's system prompt lists the tool, and its call runs.
+    expect(fresh?.systemText, 'a new session’s catalog does not list the added tool').toContain(added)
+    expect(fresh?.userText).not.toContain('<system-update>')
+    expect(lc.freshCalls).toBe(1)
+    // A process that holds the endpoint does not list again for a new
+    // session on its own: only an announcement makes it re-list (the bridge
+    // sends one for a fresh session, `toolsRefreshMark`).
+    expect(lc.freshListed, 'a new session on a warm process listed Cinna’s tools unannounced').toBe(false)
+    // Announced after `session/new` and before the first prompt: re-listed,
+    // and the catalog rendered at that prompt holds the tool.
+    const late = lc.late.turns[0], lateTool = `tools.cinna.${LC_LATE_TOOL}`
+    expect(lc.lateRelisted, 'no re-list on an announcement before the session’s first prompt').toBe(true)
+    expect(late?.systemText).toContain(lateTool)
+    expect(late?.userText).not.toContain('<system-update>')
+    expect(lc.lateCalls).toBe(1)
   })
 
   it(entry('opencode.permission.profile-patterns'), () => {

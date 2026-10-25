@@ -342,7 +342,7 @@ Contract](contracts/claude_interface.md).
 
 **Watched by that contract, on the pinned CLI, and worth knowing before changing anything near it:**
 
-- **`tools/list_changed` is adopted mid-session** — the opposite of Codex. A tool added to a
+- **`tools/list_changed` is adopted mid-session** — the opposite of Codex, and of OpenCode 2, whose Code Mode catalog is fixed at the first prompt (`opencode.mcp.list-changed`). A tool added to a
   connected server and announced is offered to the model on the next request of the same session,
   which is why the Claude launcher has no `sessionToolsFixed` and a Claude conductor keeps its
   session when its tools change. Pinned in both directions: a release that stops adopting it makes a

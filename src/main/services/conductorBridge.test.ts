@@ -5,7 +5,8 @@ import type { RunEvent } from '../../shared/runEvents'
 import type { AgentRow } from '../db/agents'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 
-const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[] }))
+const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[],
+  listings: 0, order: [] as string[], refreshed: [] as string[][] }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator' }) } }))
 vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => ({ id: 'delegated-task' }) } }))
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => ({ targetAgentId: 'root' }) } }))
@@ -22,7 +23,13 @@ vi.mock('./chatConductorService', () => ({ canConduct: () => true, isChatConduct
 vi.mock('./conductorMcpServer', () => ({ ConductorMcpServer: class {
   async ensureSession(_key: string, options: ConductorMcpSessionOptions) {
     state.options = options
-    return { descriptor: { name: 'cinna', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }, abortCalls: state.abort, refreshTools: vi.fn(), dispose: vi.fn(),
+    return { descriptor: { name: 'cinna', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }, abortCalls: state.abort, dispose: vi.fn(),
+      // What a listing answered right after the announcement would serve.
+      refreshTools: vi.fn(async () => {
+        state.order.push('refresh')
+        state.refreshed.push((await state.options!.getProviders()).flatMap((provider) => provider.getTools().map((tool) => tool.name)))
+      }),
+      toolsListings: () => { state.order.push('mark'); return state.listings },
       offers: (name: string) => state.tools.includes(name) }
   }
 } }))
@@ -133,11 +140,79 @@ describe('runtime tool integration', () => {
       state.tools = []
       return state.digest.mock.calls.map((call) => call[2] as string)
     }
+    state.refreshed = []
     const [first, same, grown] = await digests(true)
     expect(same).toBe(first)
     expect(grown).not.toBe(first)
-    // Claude and OpenCode adopt `tools/list_changed` in the live session.
+    // Codex reads its tools at `session/new`: no `awaitMcpTools`, so its fresh
+    // sessions are never announced. Mutation: drop that gate and this fills.
+    expect(state.refreshed).toEqual([])
+    // Claude adopts `tools/list_changed` in the live session.
     expect(new Set(await digests(false)).size).toBe(1)
+  })
+
+  it('gives an OpenCode conductor a new session when a tool is attached after its first turn', async () => {
+    // OpenCode 2 fixes its Code Mode tool catalog for a session at the first
+    // prompt; the plan below is what its launcher returns for that.
+    // Mutation: drop the tool names from the session digest and the third
+    // turn keeps the session that has no `reviewer`.
+    const saved = new Map<string, string>()
+    const { conductorSessionRepo } = await import('../db/conductorSessions')
+    vi.mocked(conductorSessionRepo.get).mockImplementation((chatId: string, agentId: string) => saved.get(`${chatId}:${agentId}`) ?? null)
+    state.digest.mockImplementation((chatId: string, agentId: string, hash: string) => { saved.set(`${chatId}:${agentId}`, hash) })
+    const chatId = `bridge-${++counter}`
+    const fresh: boolean[] = []
+    const marks: Array<number | undefined> = []
+    state.refreshed = []
+    try {
+      for (const [index, tools] of [[], [], ['invoice_reader']].entries()) {
+        state.tools = tools
+        state.listings = index * 2
+        const lease = await conductorBridge.prepare('owner', { id: 'root', driver: 'acp' } as AgentRow,
+          { chatId, wireContent: 'Task', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } },
+          { spec: { remote: false }, session: { mcpServers: [] }, awaitMcpTools: { settleMs: 300 }, sessionToolsFixed: true } as unknown as AcpLaunchPlan, vi.fn(), () => true)
+        fresh.push(lease!.freshSession === true)
+        marks.push(lease!.toolsRefreshMark)
+        lease!.sessionReady!()
+        lease!.close()
+      }
+    } finally {
+      state.tools = []
+      vi.mocked(conductorSessionRepo.get).mockReset()
+      state.digest.mockReset()
+    }
+    expect(fresh).toEqual([true, false, true])
+    // A fresh session announces its tools and hands the driver the listing
+    // count of that moment (`awaitCinnaTools`); a kept session does neither.
+    // Mutation: refresh on every turn and the kept one re-lists too.
+    expect(marks).toEqual([0, undefined, 4])
+    expect(state.refreshed).toEqual([[], ['invoice_reader']])
+  })
+
+  it('announces a fresh session’s tools once its turn is bound, with the mark taken first', async () => {
+    // The attach-time re-list ran before the turn existed, without the
+    // binding's own tools (`tasks_*` here). Mutation: refresh before setting
+    // `entry.binding`, and the announced set lacks them.
+    const { conductorSessionRepo } = await import('../db/conductorSessions')
+    vi.mocked(conductorSessionRepo.get).mockReturnValue(null)
+    state.refreshed = []
+    state.order = []
+    state.listings = 5
+    try {
+      const lease = await conductorBridge.prepare('settings', { id: 'root', source: 'folder', localPath: '/tmp/project', driver: 'acp' } as AgentRow,
+        { chatId: `bridge-${++counter}`, wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } },
+        { spec: { remote: false }, session: { mcpServers: [] }, awaitMcpTools: { settleMs: 300 }, sessionToolsFixed: true } as unknown as AcpLaunchPlan, vi.fn(), () => true)
+      expect(lease!.freshSession).toBe(true)
+      expect(lease!.toolsRefreshMark).toBe(5)
+      expect(state.refreshed).toHaveLength(1)
+      expect(state.refreshed[0]).toEqual(expect.arrayContaining(['tasks_create', 'tasks_report']))
+      // Marked before the announcement: a re-list answered while it is sent still counts.
+      expect(state.order).toEqual(['mark', 'refresh'])
+      lease!.close()
+    } finally {
+      vi.mocked(conductorSessionRepo.get).mockReset()
+      state.listings = 0
+    }
   })
 
   it('answers what its server offered from the session, synchronously', async () => {
