@@ -117,6 +117,12 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
 
     let authorizeUrl = ''
     await test.step('Connect starts the real OAuth flow', async () => {
+      // The connect screen's opt-in is ticked by default and Connect records it
+      // as consent. Unticked, it records a decline: nothing installs until the
+      // user asks for it from the sidebar, which is the path this run proves.
+      const optIn = cinna.page.getByRole('checkbox', { name: 'Enable local development', exact: true })
+      await expect(optIn).toBeChecked()
+      await optIn.uncheck()
       await cinna.page.getByRole('button', { name: 'Connect', exact: true }).click()
 
       // The app is now sitting on its loopback callback, which is exactly what
@@ -172,16 +178,16 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
       return
     }
 
-    const state = await test.step('the reconciler asks before it installs anything', async () => {
-      // `consent` is the only phase that may be reached without the user having
-      // agreed to anything — that is the property being asserted, not the copy.
-      const phase = await expect
-        .poll(() => cinna.page.evaluate(() => window.api.localDev.getState()), {
+    const state = await test.step('the declined opt-in installs nothing', async () => {
+      // `declined` (or `consent`, before the answer lands) are the only phases
+      // reachable without the user having agreed — the property being
+      // asserted, not the copy.
+      await expect
+        .poll(async () => (await cinna.page.evaluate(() => window.api.localDev.getState())).phase, {
           timeout: 120_000,
-          message: 'the local-dev reconciler never answered'
+          message: 'the local-dev reconciler never recorded the declined opt-in'
         })
-        .not.toMatchObject({ phase: 'idle' })
-      void phase
+        .toMatch(/^(declined|unsupported)$/)
       return cinna.page.evaluate(() => window.api.localDev.getState())
     })
 
@@ -196,7 +202,7 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
       return
     }
 
-    expect(state).toMatchObject({ phase: 'consent', host })
+    expect(state).toMatchObject({ phase: 'declined', host })
 
     await test.step('Set up installs the toolchain and creates the workspace', async () => {
       // Never asked unprompted: the question opens from the sidebar button.
