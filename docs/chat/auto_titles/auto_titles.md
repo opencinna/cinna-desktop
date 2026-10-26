@@ -171,6 +171,7 @@ Codex root session: session_info_update { title }
 - [Chat Modes](../chat_modes/chat_modes.md) — Features → AI Functions supplies the title backend (`resolveBackend`).
 - [Messaging](../messaging/messaging.md) — Defines the `messages` table the COUNT/first-message queries target. The trigger fires from `prepareAgentSend`, the path every chat's first message takes.
 - [The Codex Engine](../../agents/local_agents/codex_engine.md) — the thread-title request Codex makes on its own, whose answer names a Codex chat.
+- [Pasted Text](../pasted_text/pasted_text.md) — A pasted block is a title's first paste label when nothing was typed; the title model reads `[Pasted text · N lines]` plus, for pastes alone, the first paste's opening (`titleInput`).
 - [Settings](../../ui/settings/settings.md) — The Features tab hosts the toggle.
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — `app_settings` is installation-global (no `user_id` column), matching the scope of Chat Modes and LLM Providers.
 

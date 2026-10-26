@@ -277,6 +277,7 @@ MessageStream
 - [Account Build Sessions](../../agents/local_dev/build_sessions.md) — uses the shared warning and CLI-output presentation while building through local tools
 - [Agent Drivers & Readiness](../../agents/drivers/drivers.md) — owns refusal state, severity and recovery
 - [Session Telemetry](../../agents/session_telemetry/session_telemetry.md) — the cache expiry notice's level, thresholds and price estimate; the strip only presents them
+- [Pasted Text](../pasted_text/pasted_text.md) — long pastes as composer chips and paste cards in the user bubble, and the 300 px clamp with Show more that every long user bubble gets
 - [Messaging](../messaging/messaging.md) — Data flow and streaming protocol that feeds this UI
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — How `thinking`, `tool`, and `tool_result` parts arrive from A2A agents and end up in the rendering layer
 - Theming — All colours reference CSS variables from `src/renderer/src/assets/main.css`

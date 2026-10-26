@@ -53,6 +53,7 @@ Finder -> Quick Action (open -b <bundle id> "$@") -> Launch Services
 ## Integration Points
 
 - [File References](../file_references/file_references.md): Reference in a new chat adds a chip; sent lines render as file references.
+- [Pasted Text](../pasted_text/pasted_text.md): the sibling chip for long pastes; its blocks go before the typed text, reference lines after.
 - [Conversation UI](../conversation_ui/conversation_ui.md): the composer's attachment row and draft hold the chips.
 - [Auto Chat Titles](../auto_titles/auto_titles.md): the fallback title strips reference lines.
 - [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md): `startAgentChat` is shared with the chat-starting shortcuts.
