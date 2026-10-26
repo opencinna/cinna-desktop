@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionTelemetry } from './sessionTelemetry'
-import { cacheHitRatio, cacheState, contextCategoryKind, currentPrices, nextMessageEstimate } from './sessionTelemetryDerived'
+import { CACHE_NOTICE_MIN_CONTEXT_TOKENS, cacheExpiryNotice, cacheHitRatio, cacheState, contextCategoryKind, currentPrices, nextMessageEstimate } from './sessionTelemetryDerived'
 
 const NOW = 1_000_000_000
 const MIN = 60_000
@@ -119,5 +119,117 @@ describe('the cache hit ratio', () => {
     const t = telemetry({ totals: { ...telemetry().totals, lastTurn: { input: 0, output: 5, cacheRead: 3, cacheWrite: 1 } } })
     expect(cacheHitRatio(t)).toEqual({ session: 0.8, lastTurn: 0.75 })
     expect(cacheHitRatio(telemetry({ totals: { ...telemetry().totals, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } }))).toEqual({})
+  })
+})
+
+describe('the cache-expiry notice', () => {
+  const HOUR = 60 * MIN
+  /** A session idle for `idleMs` at NOW, on `engine` and `model`, its cache clock as the reducer leaves it. */
+  const idle = (engine: SessionTelemetry['engine'], model: string, idleMs: number, patch: Partial<SessionTelemetry> = {}): SessionTelemetry =>
+    telemetry({
+      engine,
+      model: { selected: model, source: 'config' },
+      cache: engine === 'claude'
+        ? { lastRequestAt: NOW - idleMs, ttlMs: 5 * MIN, ttlSource: 'assumed', expiresAt: NOW - idleMs + 5 * MIN }
+        : { lastRequestAt: NOW - idleMs, ttlSource: 'assumed' },
+      ...patch
+    })
+
+  /** Each engine and provider at the edges of its typical and longest TTL. */
+  const bounds: { name: string; engine: SessionTelemetry['engine']; model: string; typical: number; max: number }[] = [
+    { name: 'Claude (5m assumed)', engine: 'claude', model: 'claude-sonnet-5', typical: 5 * MIN, max: HOUR },
+    { name: 'Codex', engine: 'codex', model: 'gpt-5.5', typical: HOUR, max: 24 * HOUR },
+    { name: 'Antigravity', engine: 'antigravity', model: 'gemini-3.6-flash-low', typical: HOUR, max: 24 * HOUR },
+    { name: 'OpenCode on Anthropic', engine: 'opencode', model: 'anthropic/claude-sonnet-5', typical: 5 * MIN, max: HOUR },
+    { name: 'OpenCode on a second Anthropic key', engine: 'opencode', model: 'anthropic-1a2b3c4d/claude-sonnet-5', typical: 5 * MIN, max: HOUR },
+    { name: 'OpenCode on OpenAI', engine: 'opencode', model: 'openai/gpt-5.5', typical: HOUR, max: 24 * HOUR },
+    { name: 'OpenCode on Gemini', engine: 'opencode', model: 'gemini-1a2b3c4d/gemini-3.6-flash', typical: HOUR, max: 24 * HOUR },
+    { name: 'OpenCode on a gateway', engine: 'opencode', model: 'openai-compatible-1a2b3c4d/gpt-5.5', typical: HOUR, max: 24 * HOUR }
+  ]
+  for (const { name, engine, model, typical, max } of bounds) {
+    it(`${name}: nothing under its usual TTL, probably past it, expired past its longest`, () => {
+      const level = (idleMs: number) => cacheExpiryNotice(idle(engine, model, idleMs), NOW)?.level ?? null
+      expect(level(typical - 1)).toBeNull()
+      expect(level(typical + 1)).toBe('probably_expired')
+      expect(level(max - 1)).toBe('probably_expired')
+      expect(level(max + 1)).toBe('expired')
+      expect(cacheExpiryNotice(idle(engine, model, max + 1), NOW)).toMatchObject({ reason: 'idle', idleMs: max + 1, contextTokens: 100_000 })
+    })
+  }
+
+  it('Claude with an observed 1h TTL: nothing for an hour, then certainly expired', () => {
+    const observed = (idleMs: number) =>
+      idle('claude', 'claude-sonnet-5', idleMs, { cache: { lastRequestAt: NOW - idleMs, ttlMs: HOUR, ttlSource: 'observed', expiresAt: NOW - idleMs + HOUR } })
+    expect(cacheExpiryNotice(observed(5 * MIN + 1), NOW)).toBeNull()
+    expect(cacheExpiryNotice(observed(HOUR - 1), NOW)).toBeNull()
+    expect(cacheExpiryNotice(observed(HOUR + 1), NOW)?.level).toBe('expired')
+  })
+
+  it('is expired by an invalidation after the last request, whatever the idle time, and names it', () => {
+    const base = idle('claude', 'claude-sonnet-5', MIN)
+    const invalidated = { ...base, cache: { ...base.cache, invalidatedAt: NOW - 30_000, invalidationReason: 'model_change' as const } }
+    expect(cacheExpiryNotice(invalidated, NOW)).toMatchObject({ level: 'expired', reason: 'model_change', idleMs: MIN })
+    // One at the same moment as the request counts too.
+    const same = { ...base, cache: { ...base.cache, invalidatedAt: NOW - MIN, invalidationReason: 'new_session' as const } }
+    expect(cacheExpiryNotice(same, NOW)).toMatchObject({ level: 'expired', reason: 'new_session' })
+  })
+
+  it('is cleared by a new request after the invalidation', () => {
+    const base = idle('claude', 'claude-sonnet-5', MIN)
+    const rewritten = { ...base, cache: { ...base.cache, invalidatedAt: NOW - 2 * MIN, invalidationReason: 'compaction' as const } }
+    expect(cacheExpiryNotice(rewritten, NOW)).toBeNull()
+  })
+
+  it('needs a context of at least 50K tokens', () => {
+    expect(CACHE_NOTICE_MIN_CONTEXT_TOKENS).toBe(50_000)
+    const at = (used: number) => cacheExpiryNotice(idle('codex', 'gpt-5.5', 2 * HOUR, { context: { used, size: 400_000, sizeAuthoritative: true } }), NOW)
+    expect(at(49_999)).toBeNull()
+    expect(at(50_000)).toMatchObject({ level: 'probably_expired', contextTokens: 50_000 })
+  })
+
+  it('is null before any request', () => {
+    expect(cacheExpiryNotice(idle('claude', 'claude-sonnet-5', 0, { cache: { ttlSource: 'assumed' } }), NOW)).toBeNull()
+    expect(cacheExpiryNotice(idle('opencode', 'openai/gpt-5.5', 0, { cache: { ttlSource: 'assumed' } }), NOW)).toBeNull()
+  })
+
+  describe('its estimate', () => {
+    const estimate = (t: SessionTelemetry) => cacheExpiryNotice(t, NOW)?.estimate
+    it('on an API key: Claude cold at the 5m write rate, warm at the cache read', () => {
+      const e = estimate(idle('claude', 'claude-sonnet-5', 2 * HOUR))
+      expect(e?.basis).toBe('api')
+      expect(e?.coldUsd).toBeCloseTo((100_000 * 2.5) / 1_000_000)
+      expect(e?.warmUsd).toBeCloseTo((100_000 * 0.2) / 1_000_000)
+    })
+
+    it('on an API key: Claude with a 1h TTL cold at the 1h write rate', () => {
+      const t = idle('claude', 'claude-sonnet-5', 2 * HOUR, { cache: { lastRequestAt: NOW - 2 * HOUR, ttlMs: HOUR, ttlSource: 'observed', expiresAt: NOW - HOUR } })
+      expect(estimate(t)?.coldUsd).toBeCloseTo((100_000 * 4) / 1_000_000)
+    })
+
+    it('on an API key: OpenAI-priced models cold at the input price, warm at the cache read', () => {
+      for (const t of [idle('codex', 'gpt-5.5', 2 * HOUR), idle('opencode', 'openai/gpt-5.5', 2 * HOUR, { auth: { kind: 'unknown' } })]) {
+        const e = estimate(t)
+        expect(e?.basis).toBe('api')
+        expect(e?.coldUsd).toBeCloseTo((100_000 * 5) / 1_000_000)
+        expect(e?.warmUsd).toBeCloseTo((100_000 * 0.5) / 1_000_000)
+      }
+    })
+
+    it('on OpenCode’s Anthropic key: priced as Claude, at the 5m write rate', () => {
+      expect(estimate(idle('opencode', 'anthropic/claude-sonnet-5', 2 * HOUR))?.coldUsd).toBeCloseTo((100_000 * 2.5) / 1_000_000)
+    })
+
+    it('on a subscription: no dollars, said so', () => {
+      expect(estimate(idle('claude', 'claude-sonnet-5', 2 * HOUR, { auth: { kind: 'subscription', label: 'Claude Max' } }))).toEqual({ basis: 'subscription' })
+      expect(estimate(idle('codex', 'gpt-5.5', 2 * HOUR, { auth: { kind: 'subscription', label: 'ChatGPT' } }))).toEqual({ basis: 'subscription' })
+    })
+
+    it('tokens only for an unknown price, a partner cloud, or an OpenCode provider that resells', () => {
+      expect(estimate(idle('claude', 'claude-unknown-9', 2 * HOUR))).toEqual({ basis: 'none' })
+      expect(estimate(idle('antigravity', 'gemini-3.6-flash-low', 2 * HOUR))).toEqual({ basis: 'none' })
+      expect(estimate(idle('claude', 'claude-sonnet-5', 2 * HOUR, { auth: { kind: 'cloud' } }))).toEqual({ basis: 'none' })
+      expect(estimate(idle('opencode', 'openai-compatible-1a2b3c4d/gpt-5.5', 2 * HOUR))).toEqual({ basis: 'none' })
+      expect(estimate(idle('opencode', 'openrouter/openai/gpt-5.5', 2 * HOUR))).toEqual({ basis: 'none' })
+    })
   })
 })

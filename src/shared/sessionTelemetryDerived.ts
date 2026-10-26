@@ -6,7 +6,8 @@
  */
 
 import { effectivePrices, priceOf, PRICES_CHECKED_AT, type TokenPrices } from './modelPricing'
-import { CACHE_TTL_KNOWN, type SessionTelemetry, type TokenTally } from './sessionTelemetry'
+import { cacheProviderOf, cacheTtlBounds, pricingModelId } from './promptCacheTtl'
+import { CACHE_TTL_KNOWN, type CacheInvalidationReason, type SessionTelemetry, type TokenTally } from './sessionTelemetry'
 
 export type CacheWarmth = 'warm' | 'cold' | 'unknown'
 
@@ -57,11 +58,13 @@ function pricedModel(t: SessionTelemetry): string | undefined {
  * The current model's prices per MTok at the session's context size and
  * fast mode, or undefined when the table does not know the model ("price
  * unknown") or cannot price that context size. Fast mode on a model with no
- * listed fast rate keeps the base rates, flagged `fastPriceUnknown`.
+ * listed fast rate keeps the base rates, flagged `fastPriceUnknown`. An
+ * OpenCode model is priced only on Anthropic's or OpenAI's own API
+ * (`pricingModelId`): any other provider resells at its own prices.
  */
 export function currentPrices(t: SessionTelemetry): CurrentPrices | undefined {
   const model = pricedModel(t)
-  const price = priceOf(model)
+  const price = priceOf(pricingModelId(t.engine, model))
   if (!model || !price) return undefined
   const fast = t.runtime?.fastMode === 'on'
   const fastPriceUnknown = fast && !price.fast
@@ -125,6 +128,74 @@ export function nextMessageEstimate(t: SessionTelemetry, now: number): NextMessa
     basis,
     note: REQUEST_NOTE
   }
+}
+
+/** Below this context (`context.used`) no cache-expiry notice is raised, whatever the idle time. */
+export const CACHE_NOTICE_MIN_CONTEXT_TOKENS = 50_000
+
+/**
+ * What re-reading the context would cost, beside what a warm cache would have.
+ *
+ * - `api` — `coldUsd` and `warmUsd` are list-price dollars.
+ * - `subscription` — no dollars: a plan pays, and a cold read uses more of its limits.
+ * - `none` — no price is known (an unknown model, a partner cloud, an OpenCode
+ *   provider that resells, fast mode without a listed rate): tokens only.
+ */
+export interface CacheExpiryEstimate {
+  warmUsd?: number
+  coldUsd?: number
+  basis: 'api' | 'subscription' | 'none'
+}
+
+export interface CacheExpiryNotice {
+  /** `expired`: past the provider's longest TTL, or reset by something Cinna saw. `probably_expired`: past its usual one. */
+  level: 'expired' | 'probably_expired'
+  /** `idle`, or why the cache was reset after the last request. */
+  reason: 'idle' | CacheInvalidationReason
+  /** `now − cache.lastRequestAt`. */
+  idleMs: number
+  /** `context.used`: what the next message re-reads. */
+  contextTokens: number
+  estimate: CacheExpiryEstimate
+}
+
+function cacheExpiryEstimate(t: SessionTelemetry): CacheExpiryEstimate {
+  if (t.auth.kind === 'subscription') return { basis: 'subscription' }
+  if (t.auth.kind === 'cloud') return { basis: 'none' }
+  const current = currentPrices(t)
+  if (!current || current.fastPriceUnknown) return { basis: 'none' }
+  const used = t.context.used
+  const { prices } = current
+  // Anthropic writes the context back into the cache at the write rate of the
+  // TTL in use; OpenAI (and anything priced like it) reads it uncached.
+  const anthropic = cacheProviderOf(t.engine, pricedModel(t)) === 'anthropic'
+  const coldRate = anthropic ? (t.cache.ttlMs !== undefined && t.cache.ttlMs >= 60 * 60_000 ? prices.cacheWrite1h : prices.cacheWrite5m) : prices.input
+  return { warmUsd: (used * prices.cacheRead) / 1_000_000, coldUsd: (used * coldRate) / 1_000_000, basis: 'api' }
+}
+
+/**
+ * Whether the session's prompt cache has (probably) expired at `now`, for a
+ * context big enough to matter; null otherwise.
+ *
+ * Certain about cold, never about warm: `expired` past the provider's longest
+ * TTL (`promptCacheTtl.ts`), or after an invalidation Cinna saw following the
+ * last request (Claude only today); `probably_expired` past its usual TTL.
+ * Null with no request yet (`cache.lastRequestAt`) or under
+ * {@link CACHE_NOTICE_MIN_CONTEXT_TOKENS}.
+ */
+export function cacheExpiryNotice(t: SessionTelemetry, now: number): CacheExpiryNotice | null {
+  const { lastRequestAt, invalidatedAt, invalidationReason } = t.cache
+  if (lastRequestAt === undefined) return null
+  const contextTokens = t.context.used
+  if (contextTokens < CACHE_NOTICE_MIN_CONTEXT_TOKENS) return null
+  const idleMs = Math.max(0, now - lastRequestAt)
+  const notice = (level: CacheExpiryNotice['level'], reason: CacheExpiryNotice['reason']): CacheExpiryNotice =>
+    ({ level, reason, idleMs, contextTokens, estimate: cacheExpiryEstimate(t) })
+  if (invalidatedAt !== undefined && invalidationReason !== undefined && invalidatedAt >= lastRequestAt) return notice('expired', invalidationReason)
+  const bounds = cacheTtlBounds(t)
+  if (idleMs > bounds.maxMs) return notice('expired', 'idle')
+  if (idleMs > bounds.typicalMs) return notice('probably_expired', 'idle')
+  return null
 }
 
 function hitRatio(tokens: TokenTally | undefined): number | undefined {
