@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ComposerAttachment } from '../../../shared/attachments'
 import type { ComposerPathRef } from '../../../shared/pathMentions'
+import type { DefaultMultiAgentRouting } from '../../../shared/chatRouting'
 
 export interface ComposerDraft {
   sending: boolean
@@ -20,13 +21,19 @@ export interface ComposerDraft {
   coordinate: boolean
   /** The agent picked to conduct with "Set as Coordinator"; null for the default conductor. */
   conductorId: string | null
+  /**
+   * Who routes a chat of several agents with no MCP server, in place of the
+   * Settings default; null is the default. Set by New chat from a `human` chat,
+   * so the copy is not coordinated because the default is.
+   */
+  multiAgentRouting: DefaultMultiAgentRouting | null
 }
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   sending: false,
   text: '', notes: [], pathRefs: [],
   files: { attachments: [], uploading: false, error: null, token: null },
-  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false, conductorId: null
+  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false, conductorId: null, multiAgentRouting: null
 }
 
 /**

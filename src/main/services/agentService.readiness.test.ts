@@ -105,12 +105,12 @@ beforeEach(() => {
 
 describe('agentService readiness', () => {
   it('resolves and checks a synthetic chat runtime in its owning profile only', () => {
-    const conductor = row('conductor', 'local', { userId: 'alice', driver: 'acp', driverConfig: { launcher: 'claude', conductorChatId: 'chat' } })
+    const conductor = row('conductor', 'local', { userId: 'alice', driver: 'acp', driverConfig: { launcher: 'claude', conductorChatId: 'chat', conductorEngine: 'claude' } })
     db.rows.set('alice', [conductor])
     db.getOwned.mockImplementation((owner: string, id: string) => owner === 'alice' && id === 'conductor' ? conductor : undefined)
     expect(agentService.findAgent('default', 'alice', 'conductor')).toEqual({ row: conductor, userId: 'alice' })
     expect(agentService.findAgent('default', 'bob', 'conductor')).toBeNull()
-    expect(agentService.listMerged('default', 'alice')[0]).toMatchObject({ id: 'conductor', conductor: true })
+    expect(agentService.listMerged('default', 'alice')[0]).toMatchObject({ id: 'conductor', conductor: true, conductorEngine: 'claude' })
     expect(readiness.kick).toHaveBeenCalledWith([{ userId: 'alice', row: conductor }])
     expect(agentService.listMerged('default', 'bob')).toEqual([])
   })

@@ -385,6 +385,8 @@ export interface ChatModeData extends ChatModeRuntime {
 export interface AgentData {
   /** Internal root owned by one chat, never a selectable participant. */
   conductor?: boolean
+  /** A chat runtime's engine (with `conductor`). */
+  conductorEngine?: AgentEngine
   /** Internal account-bound builder, configured through Local Development. */
   development?: boolean
   /** Saved runtime for an account-bound builder. */

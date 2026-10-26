@@ -18,6 +18,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { useApplyChatMode } from '../../hooks/useApplyChatMode'
+import { useNewChatLike } from '../../hooks/useNewChatLike'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAppSettings } from '../../hooks/useAppSettings'
 import { canConduct, newChatRouter } from '../../../../shared/chatRouting'
@@ -72,6 +73,10 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // flushes them onto the created chat.
   const [coordinate, setCoordinate] = useComposerDraftField(newChatDraftKey, 'coordinate')
   const [conductorPick, setConductorPick] = useComposerDraftField(newChatDraftKey, 'conductorId')
+  // Who routes several agents: the draft's own pick (New chat from a `human`
+  // chat) until the agent set is edited, else the Settings default.
+  const [routingPick, setRoutingPick] = useComposerDraftField(newChatDraftKey, 'multiAgentRouting')
+  const multiAgentRouting = routingPick ?? appSettings?.defaultMultiAgentRouting
   const [pendingMcpIds, setPendingMcpIds] = useComposerDraftField(newChatDraftKey, 'pendingMcpIds')
   // The new-chat agent set — a single ordered list. Both the `[+]` capability
   // picker and the `@` popup toggle into it; the "primary" agent (first picked)
@@ -95,11 +100,13 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       const curr = stored ?? initialAgentIds
       return curr.includes(agentId) ? curr.filter((id) => id !== agentId) : [...curr, agentId]
     })
-  }, [initialAgentIds, setPendingAgentIds])
+    setRoutingPick(null)
+  }, [initialAgentIds, setPendingAgentIds, setRoutingPick])
 
   const removePendingAgent = useCallback((agentId: string) => {
     setPendingAgentIds((curr) => (curr ?? initialAgentIds).filter((id) => id !== agentId))
-  }, [initialAgentIds, setPendingAgentIds])
+    setRoutingPick(null)
+  }, [initialAgentIds, setPendingAgentIds, setRoutingPick])
   // Primary new-chat agent — the first one picked. Sources example prompts and
   // the comm-pattern badge; replaces the old standalone AgentSelector pick.
   const selectedAgent = useMemo(
@@ -183,8 +190,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // The router this selection would create — the same call `startNewChat`
   // makes, so the badge cannot promise a shape the send does not build.
   const newRouter = useMemo(
-    () => newChatRouter({ agentIds: combinedAgentIds, mcpIds: [...activeModeMcpIds, ...pendingMcpIds], defaultMultiAgentRouting: appSettings?.defaultMultiAgentRouting, coordinate }),
-    [combinedAgentIds, pendingMcpIds, activeModeMcpIds, appSettings?.defaultMultiAgentRouting, coordinate]
+    () => newChatRouter({ agentIds: combinedAgentIds, mcpIds: [...activeModeMcpIds, ...pendingMcpIds], defaultMultiAgentRouting: multiAgentRouting, coordinate }),
+    [combinedAgentIds, pendingMcpIds, activeModeMcpIds, multiAgentRouting, coordinate]
   )
 
   const routerInfo = useMemo(() => {
@@ -245,10 +252,11 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     }
     setActiveChatId(null)
     setPendingAgentIds([agent.id])
+    setRoutingPick(null)
     setPendingAgentId(null)
     // Focus after the new-chat screen mounts the input.
     requestAnimationFrame(() => chatInputRef.current?.focus())
-  }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds])
+  }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds, setRoutingPick])
 
   // The same, for a chat mode (a Chats-list mode group's start button): the
   // new-chat screen in that mode, with no agents. `NO_CHAT_MODE` is a plain
@@ -270,10 +278,11 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     }
     setActiveChatId(null)
     setPendingAgentIds([])
+    setRoutingPick(null)
     setModeSelection(pendingModeId === NO_CHAT_MODE ? 'none' : { id: pendingModeId })
     setPendingModeId(null)
     requestAnimationFrame(() => chatInputRef.current?.focus())
-  }, [embedded, pendingModeId, pendingAgentId, chatModes, setActiveChatId, setPendingModeId, setPendingAgentIds, setModeSelection])
+  }, [embedded, pendingModeId, pendingAgentId, chatModes, setActiveChatId, setPendingModeId, setPendingAgentIds, setModeSelection, setRoutingPick])
 
   // When the agent-status overlay closes and we're on the chat view (new-chat
   // form or active chat), return focus to the chat input so the user can keep
@@ -299,7 +308,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       const started = await startNewChat({
         message,
         agentIds: combinedAgentIds,
-        defaultMultiAgentRouting: appSettings?.defaultMultiAgentRouting,
+        defaultMultiAgentRouting: multiAgentRouting,
         coordinate,
         conductorId: conductorAgent?.id ?? null,
         mode: activeMode,
@@ -321,6 +330,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       useComposerDraftStore.getState().update(newChatDraftKey, (draft) => ({
         ...(draft.coordinate === coordinate ? { coordinate: false } : {}),
         ...(draft.conductorId === conductorPick ? { conductorId: null } : {}),
+        ...(draft.multiAgentRouting === routingPick ? { multiAgentRouting: null } : {}),
         ...(draft.modeSelection === modeSelection ? { modeSelection: 'auto' as const } : {}),
         ...(draft.pendingMcpIds === pendingMcpIds ? { pendingMcpIds: [] } : {}),
         ...(draft.pendingAgentIds === storedPendingAgentIds ? { pendingAgentIds: null } : {})
@@ -331,7 +341,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       startNewChat,
       embedded,
       combinedAgentIds,
-      appSettings?.defaultMultiAgentRouting,
+      multiAgentRouting,
+      routingPick,
       coordinate,
       conductorAgent,
       conductorPick,
@@ -353,6 +364,15 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const activeChatMode = activeChatData?.modeId
     ? (chatModes ?? []).find((m) => m.id === activeChatData.modeId) ?? null
     : null
+
+  // The prompt-cache notice's New chat: the new-chat screen set up like the
+  // open chat, its composer focused once it mounts. Nothing is sent.
+  const newChatLike = useNewChatLike(activeChatId, embedded ? agentId : undefined)
+  const handleNewChatLike = useCallback(() => {
+    void newChatLike()
+      .then(() => requestAnimationFrame(() => chatInputRef.current?.focus()))
+      .catch((error: unknown) => setSendError(unwrapIpcError(error, 'Could not set up a new chat like this one.')))
+  }, [newChatLike, setSendError])
 
   // Multi-agent routing lives entirely inside ChatInput (via useChatComposer).
   // MainArea no longer needs to thread active-agent / catchup / rewrite state
@@ -525,6 +545,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           <ChatInput
             ref={chatInputRef}
             chatId={activeChatId}
+            onNewChatLike={handleNewChatLike}
             modeColor={activeChatModeColor}
             // A runtime mode's chat: the runtime chip carries the mode's glyph, not the generic bot.
             conductorIcon={activeChatMode?.builtinEngine ? <ChatModeGlyph mode={activeChatMode} dot={10} /> : undefined}

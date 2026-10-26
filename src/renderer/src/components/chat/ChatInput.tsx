@@ -59,6 +59,8 @@ import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
 import { ComposerNoticePanel } from './ComposerNoticePanel'
+import { CacheExpiryNotice } from './CacheExpiryNotice'
+import { useCacheExpiryNotice } from '../../hooks/useCacheExpiryNotice'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
@@ -154,6 +156,11 @@ interface ChatInputProps {
    */
   /** A Workspace chat: the `[+]` Actions menu offers Open Chat Folder. */
   onOpenChatFolder?: () => void
+  /**
+   * An open chat: the prompt-cache notice's **New chat** — the new-chat screen
+   * set up like this chat (`useNewChatLike`). Absent: the notice offers only ✕.
+   */
+  onNewChatLike?: () => void
   tildeModePopup?: {
     open: boolean
     modes: ChatModeData[]
@@ -245,6 +252,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onDoubleEscape,
     tildeModePopup,
     onOpenChatFolder,
+    onNewChatLike,
     sendHold = null
   },
   ref
@@ -995,6 +1003,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     ? (pendingAgentIds ?? []).map((id) => ({ id, name: agents?.find((agent) => agent.id === id)?.name ?? 'This agent' }))
     : [])
   const notices = [...readinessNotices, ...sessionNotices]
+  // An open chat whose prompt cache has gone cold over a large context. In the
+  // notice slot only when nothing there says the turn cannot run, nor has since
+  // the hook's last snapshot (no swap under the pointer when readiness clears).
+  const cacheNotice = useCacheExpiryNotice(chatId, { draftKey, streaming: isStreaming, blocked: notices.length > 0 })
   // Check again removes itself when its check clears the warning, and the focus
   // it held falls to the page body; hand it to the message box, where the user
   // goes next. Only from the body: a warning cleared in the background never
@@ -1845,7 +1857,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
-      <ComposerNoticePanel notices={notices} />
+      {notices.length > 0
+        ? <ComposerNoticePanel notices={notices} />
+        : cacheNotice && <CacheExpiryNotice notice={cacheNotice.notice} onNewChat={onNewChatLike} onDismiss={cacheNotice.dismiss} />}
       {finishSetupDialog}
 
       <div

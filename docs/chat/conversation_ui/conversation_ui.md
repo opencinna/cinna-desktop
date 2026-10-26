@@ -147,6 +147,25 @@ The panel is drawn by every `ChatInput`: the main New chat screen, an existing c
    A login action (Log in, whose label becomes *Waiting for sign-in…* beside **Cancel**) sits on its own line under the sentence, not at the end of it. Its width changes while it runs; at the end of the line that would take width from the sentence and move the text, so under the sentence it widens into free space and nothing moves. Other actions stay at the end of the line.
 3. Each row goes away by itself once its cause is fixed. When the last one goes, the panel goes too
 
+### The prompt cache notice
+
+A strip in the same slot, shell and scale as the notice panel, saying that this chat's prompt cache has (probably) gone cold over a large context: *Prompt cache probably expired (idle 25 min). Next message ~$0.68, not $0.05. A new chat starts without history.* Its reasons and thresholds are in [Session Telemetry](../../agents/session_telemetry/session_telemetry.md); this is what the composer does with them.
+
+1. The user opens a chat that sat idle past its provider's cache lifetime and holds at least 50K tokens of context. The strip shows above the message box: a title (*expired* when certain, *probably expired* when past the usual lifetime, or *reset* with the reason: the model changed, settings changed, context compacted, a new session started), what the next message costs (dollars against the warm price on an API login; only the uncached token count on a subscription or when no price is known), and **New chat** and a dismiss button
+2. **New chat** opens the new-chat screen set up like this chat and focuses its composer. It sends nothing and leaves the old chat alone
+3. Dismissing hides it for that chat until the chat has been used and gone idle again; the dismissal is remembered across restarts. Sending a message removes it at once
+
+Rules:
+- **The strip is a snapshot, never a clock.** It is judged when the chat is opened and when the window regains focus, and the focus snapshot is taken only with an empty composer (no text, file, note, path reference or upload) and no running turn. A cache that expires while the user sits in the chat inserts nothing above the composer under their cursor ([UX rule 1](../../development/ui_guidelines/ux_rules.md)); they meet it the next time they come back
+- **Never while a turn streams, and gone from the moment a send starts.** The send rebuilds the cache and moves the chat's last request past the snapshot
+- **The readiness strip wins the slot, and keeps it.** When the notice panel has shown since the last snapshot, the cache strip stays hidden until the next one, so a readiness row that clears in place (**Check again**) does not leave **New chat** under the pointer where its button was
+- **Dismissal is keyed by chat and last request**, so the strip returns only after the chat has been used and gone idle again. It is stored in localStorage (a cosmetic per-install flag, as the hints are), the newest 200 chats kept
+- **It informs and offers; it never blocks Send.**
+- **Not on the agent page's embedded composer.** That composer has no open chat, so there is no cache to speak of. The same screen's new-chat draft is the target of **New chat** when it is used from there
+- **What New chat carries.** The chat's agents (its root when it is one of the user's, then its on-demand agents; ones no longer listed are dropped), human routing (a `human` chat keeps it whatever the Settings default is), coordinator and conductor (the conductor only when it is a user agent), the chat's mode, and its on-demand MCP servers. A chat with no mode carries none (`none`, not `auto`, which would bring today's default mode and turn an agent chat into a coordinated one), except a chat on a runtime: it takes that engine's built-in runtime mode, unless the default already runs on that engine
+- **What it does not carry.** The model and effort chosen in a mode that was edited since: the new chat uses the mode's current values. The runtime's folder. The baseline MCP set (it comes with the mode). Development agents are not filtered out specially. The draft's text, notes, path references and files are kept as they are; only its routing fields are replaced
+- **A failure is said, not hidden**: if the chat's agents or servers cannot be read, the send-error line says *Could not set up a new chat like this one.*
+
 ## Business Rules
 
 - **The notice panel says; it never refuses.** Whether Send works is decided by the readiness rules alone ([Agent Drivers & Readiness](../../agents/drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not)). Missing credentials, the AI credential and validation findings are rows beside a live Send. A folder an assistant is still editing routinely fails a check for a while, and refusing on that stopped turns the engine would have run.
@@ -257,6 +276,7 @@ MessageStream
 - [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) — which blocks open by default in which mode
 - [Account Build Sessions](../../agents/local_dev/build_sessions.md) — uses the shared warning and CLI-output presentation while building through local tools
 - [Agent Drivers & Readiness](../../agents/drivers/drivers.md) — owns refusal state, severity and recovery
+- [Session Telemetry](../../agents/session_telemetry/session_telemetry.md) — the cache expiry notice's level, thresholds and price estimate; the strip only presents them
 - [Messaging](../messaging/messaging.md) — Data flow and streaming protocol that feeds this UI
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — How `thinking`, `tool`, and `tool_result` parts arrive from A2A agents and end up in the rendering layer
 - Theming — All colours reference CSS variables from `src/renderer/src/assets/main.css`

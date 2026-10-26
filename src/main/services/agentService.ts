@@ -87,6 +87,8 @@ export interface AgentDto {
   acpTransport?: 'stdio' | 'websocket'
   /** Account-bound builder: configured through Local Development, never as a custom command. */
   conductor?: boolean
+  /** A chat runtime's engine, so a chat can be set up again on the same runtime. */
+  conductorEngine?: AgentEngine
   development?: boolean
   /** Runtime captured by this builder, rather than today's development default. */
   developmentEngine?: AgentEngine
@@ -154,7 +156,10 @@ function toDto(row: AgentRow): AgentDto {
     localPath: row.localPath,
     localRootId: row.localRootId,
     driver: row.driver,
-    ...(typeof row.driverConfig?.conductorChatId === 'string' ? { conductor: true } : {}),
+    ...(typeof row.driverConfig?.conductorChatId === 'string' ? {
+      conductor: true,
+      ...(isAgentEngine(row.driverConfig.conductorEngine) ? { conductorEngine: row.driverConfig.conductorEngine } : {})
+    } : {}),
     ...(isDevelopmentAgent(row) ? {
       development: true,
       ...(isAgentEngine(developmentEngine) ? { developmentEngine } : {})
