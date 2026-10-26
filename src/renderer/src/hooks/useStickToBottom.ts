@@ -37,6 +37,20 @@ const WHEEL_SUSPEND_MS = 150
  */
 const MOVED_UP_SLACK_PX = 4
 
+/**
+ * Dispatched on the scroll container by a block that is about to grow
+ * downward from a click — a clamped user bubble's Show more. A pinned view
+ * would follow that growth and push the lines the user clicked to read off the
+ * top (ux_rules §1), so the click counts as the user leaving the bottom: the
+ * view unpins, and growth alone cannot re-pin it until the user scrolls.
+ */
+export const LEAVE_BOTTOM_EVENT = 'cinna:leave-bottom'
+
+/** Ask the transcript that owns `container` to stop following the bottom. */
+export function leaveBottom(container: HTMLElement): void {
+  container.dispatchEvent(new Event(LEAVE_BOTTOM_EVENT))
+}
+
 export interface StickToBottom {
   /** The scrolling element. */
   containerRef: React.RefObject<HTMLDivElement | null>
@@ -139,6 +153,11 @@ export function useStickToBottom(
   // distinguishes a gesture that is scrolling *this* element from one a nested
   // scroller is swallowing.
   const suspendTopRef = useRef(0)
+  // Set by {@link LEAVE_BOTTOM_EVENT}: a resize alone must not re-pin. A block
+  // growing from the bottom band passes through it for a frame or two, which
+  // would otherwise put the view straight back on the bottom it left. The
+  // user's next scroll clears it, as does anything that re-pins deliberately.
+  const leftRef = useRef(false)
 
   const stick = useCallback(() => {
     const el = containerRef.current
@@ -160,6 +179,7 @@ export function useStickToBottom(
 
   const scrollToBottom = useCallback(() => {
     releaseSuspension()
+    leftRef.current = false
     setPinned(true)
     stick()
   }, [releaseSuspension, setPinned, stick])
@@ -246,7 +266,7 @@ export function useStickToBottom(
       // scroll container, so mounting and unmounting it resizes neither — an
       // invariant that lives in MessageStream, not here. Move the pill inside
       // and this becomes resize → settle → setPinned → render → resize.
-      settle()
+      if (!leftRef.current) settle()
     })
     ro.observe(content)
     ro.observe(container)
@@ -315,23 +335,36 @@ export function useStickToBottom(
         arm()
       }
     }
-    el.addEventListener('scroll', settle, { passive: true })
+    const onScroll = (): void => {
+      leftRef.current = false
+      settle()
+    }
+    const onLeave = (): void => {
+      releaseSuspension()
+      leftRef.current = true
+      lastTopRef.current = el.scrollTop
+      setPinned(false)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener(LEAVE_BOTTOM_EVENT, onLeave)
     return () => {
-      el.removeEventListener('scroll', settle)
+      el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
+      el.removeEventListener(LEAVE_BOTTOM_EVENT, onLeave)
       // The flag as well as the timer. Dropping the timer alone would leave a
       // suspension that nothing is left to lift, and sticking would never
       // resume.
       releaseSuspension()
     }
-  }, [releaseSuspension, settle, stick])
+  }, [releaseSuspension, setPinned, settle, stick])
 
   // A different chat is a different transcript: start at its bottom. Any
   // suspension belongs to the transcript being left, and holding it would open
   // the new one at the top and then jump it to the bottom when the timer fired.
   useLayoutEffect(() => {
     releaseSuspension()
+    leftRef.current = false
     setPinned(true)
     stick()
   }, [releaseSuspension, resetKey, setPinned, stick])

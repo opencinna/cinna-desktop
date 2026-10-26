@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
-import { useStickToBottom } from './useStickToBottom'
+import { leaveBottom, useStickToBottom } from './useStickToBottom'
 
 /**
  * jsdom has no layout and no ResizeObserver, so both are supplied here: the
@@ -313,6 +313,37 @@ describe('useStickToBottom', () => {
       fireResize()
     })
 
+    expect(pinnedText()).toBe('pinned')
+  })
+
+  it('unpins on a leave-bottom request, and growth through the band does not re-pin', () => {
+    const { scroller, pinnedText, grow } = setup()
+    act(() => fireResize())
+    const bottom = CONTENT_HEIGHT - VIEWPORT_HEIGHT
+
+    // Show more on a bubble at the bottom: the click leaves the bottom.
+    act(() => leaveBottom(scroller))
+    expect(pinnedText()).toBe('free')
+
+    // The bubble grows a little — still inside the band — then all the way.
+    act(() => {
+      grow(30)
+      fireResize()
+    })
+    expect(pinnedText()).toBe('free')
+    expect(scroller.scrollTop).toBe(bottom)
+    act(() => {
+      grow(800)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(bottom)
+    expect(pinnedText()).toBe('free')
+
+    // The user scrolling back down re-pins as always.
+    act(() => {
+      scroller.scrollTop = 10_000
+      scroller.dispatchEvent(new Event('scroll'))
+    })
     expect(pinnedText()).toBe('pinned')
   })
 

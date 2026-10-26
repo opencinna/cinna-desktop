@@ -1,5 +1,5 @@
 import { memo, useContext, useMemo, useState } from 'react'
-import { Info, Bot, ArrowRight, X } from 'lucide-react'
+import { Info, Bot, ArrowRight, X, ClipboardList, ChevronDown } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -57,6 +57,108 @@ import { useFileDownload } from '../../hooks/useFileDownload'
 import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
 import { attachmentImageRef } from '../../utils/imageDataCache'
 import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
+import { pasteLabel, pasteSizeLabel, splitPastes } from '../../../../shared/pastedText'
+import { PastedTextPreviewModal } from './PastedTextPreviewModal'
+import { useBubbleClamp } from './useBubbleClamp'
+
+/**
+ * A sent paste, one compact row inside the user bubble. Opens the preview
+ * (Copy); a sent card never expands inline.
+ */
+function PasteCard({ text, onOpen }: { text: string; onOpen: () => void }): React.JSX.Element {
+  const label = pasteLabel(text)
+  const size = pasteSizeLabel(text)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={`${label} (pasted text, ${size}) — click to preview`}
+      aria-label={`Open pasted text ${label}`}
+      data-testid="paste-card"
+      className="flex items-center gap-1.5 max-w-full min-w-0 rounded-md border px-2 py-1 text-xs text-left
+        border-[var(--color-border)] bg-[var(--color-bg-secondary)]/60 text-[var(--color-text-secondary)]
+        hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+    >
+      <ClipboardList size={13} className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 whitespace-nowrap text-[var(--color-text-muted)]">· {size}</span>
+    </button>
+  )
+}
+
+/**
+ * A user bubble's content: its pastes as cards and its typed text as markdown,
+ * in order, clamped with Show more / Show less when long (`useBubbleClamp`). A
+ * message with no paste blocks renders exactly as it did before pastes.
+ *
+ * `data-message-markdown` carries what a whole-message Copy takes: the pastes'
+ * raw text and the typed text, no tags.
+ */
+function UserMessageContent({
+  content,
+  markdown,
+  animate
+}: {
+  content: string
+  markdown: string
+  animate?: boolean
+}): React.JSX.Element {
+  const segments = useMemo(() => {
+    const split = splitPastes(content)
+    return split.some((segment) => segment.kind === 'paste')
+      ? split.map((segment) => (segment.kind === 'paste' ? segment : { ...segment, text: repairNestedFences(segment.text) }))
+      : null
+  }, [content])
+  const readable = segments ? segments.map((segment) => segment.text).join('\n\n') : markdown
+  const [preview, setPreview] = useState<string | null>(null)
+  const clamp = useBubbleClamp()
+  return (
+    <>
+      <div ref={clamp.boxRef} className="relative" style={clamp.boxStyle} onTransitionEnd={clamp.onTransitionEnd}>
+        <div ref={clamp.contentRef} data-message-markdown={readable} className={animate ? 'anim-user-bubble-content' : ''}>
+          {segments ? (
+            <div className="flex flex-col items-start gap-1.5">
+              {segments.map((segment, i) =>
+                segment.kind === 'paste' ? (
+                  <PasteCard key={i} text={segment.text} onOpen={() => setPreview(segment.text)} />
+                ) : (
+                  <div key={i} className="self-stretch">
+                    <MarkdownContent content={segment.text} highlight breaks />
+                  </div>
+                )
+              )}
+            </div>
+          ) : (
+            <MarkdownContent content={markdown} highlight breaks />
+          )}
+        </div>
+        {clamp.overflowing && !clamp.expanded && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--color-user-bubble)] to-transparent"
+          />
+        )}
+      </div>
+      {clamp.overflowing && (
+        <button
+          type="button"
+          onClick={clamp.toggle}
+          aria-expanded={clamp.expanded}
+          className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium
+            text-[var(--color-accent)] hover:underline"
+        >
+          <ChevronDown
+            size={12}
+            aria-hidden="true"
+            className={`transition-transform duration-150 ${clamp.expanded ? 'rotate-180' : ''}`}
+          />
+          {clamp.expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+      {preview !== null && <PastedTextPreviewModal text={preview} onClose={() => setPreview(null)} />}
+    </>
+  )
+}
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -152,14 +254,11 @@ export function MessageBubble({
       <div className="flex flex-col items-end gap-1">
         {showsPill && <div className="relative group max-w-[80%]">
           <div
-            data-message-markdown={markdown}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
-            <div className={animate ? 'anim-user-bubble-content' : ''}>
-              <FileRefContext.Provider value={fileRefs}>
-                <MarkdownContent content={markdown} highlight breaks />
-              </FileRefContext.Provider>
-            </div>
+            <FileRefContext.Provider value={fileRefs}>
+              <UserMessageContent content={content} markdown={markdown} animate={animate} />
+            </FileRefContext.Provider>
             {addressedAgentName && (
               <div className="mt-0.5 flex justify-end">
                 <span
