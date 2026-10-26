@@ -210,19 +210,19 @@ describe('its copy', () => {
   it('names the price on an API key', () => {
     expect(cacheNoticeCopy(notice({}))).toEqual({
       title: 'Prompt cache expired (idle 3 h)',
-      body: 'Next message ~$0.68, not $0.05. A new chat starts without history.'
+      body: 'Next message costs ~$0.68 instead of $0.05. A new chat starts without history.'
     })
   })
 
   it('names no price on a subscription', () => {
     expect(cacheNoticeCopy(notice({ level: 'probably_expired', estimate: { basis: 'subscription' } }))).toEqual({
       title: 'Prompt cache probably expired (idle 3 h)',
-      body: 'Next message re-reads ~180K tokens uncached. A new chat starts without history.'
+      body: 'Next message re-reads ~180K tokens uncached and uses much more of your plan. A new chat starts without history.'
     })
   })
 
   it('says tokens only when no price is known', () => {
-    expect(cacheNoticeCopy(notice({ estimate: { basis: 'none' } })).body).toBe('Next message re-reads ~180K tokens without the cache. A new chat starts without history.')
+    expect(cacheNoticeCopy(notice({ estimate: { basis: 'none' } })).body).toBe('Next message re-reads ~180K tokens uncached, which costs more. A new chat starts without history.')
   })
 
   it('names what reset the cache instead of the idle time', () => {

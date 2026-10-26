@@ -30,7 +30,7 @@ const SMALL = 'E2E small chat'
 const MODEL = 'claude-sonnet-4-6'
 const HOUR = 3_600_000
 
-const NOTICE_TEXT = 'Prompt cache expired (idle 3 h). Next message ~$0.45, not $0.04. A new chat starts without history.'
+const NOTICE_TEXT = 'Prompt cache expired (idle 3 h). Next message costs ~$0.45 instead of $0.04. A new chat starts without history.'
 
 /** A Claude API-key session's last reading: `used` tokens of context, last request at `lastRequestAt`. */
 function telemetryOf(chatId: string, used: number, lastRequestAt: number): SessionTelemetry {

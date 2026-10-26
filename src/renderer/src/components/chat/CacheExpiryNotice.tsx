@@ -28,8 +28,8 @@ function aboutUsd(n: number): string {
 
 /**
  * The notice's title and body, by level, reason and pricing basis: what the
- * next message costs, then what a new chat gives up. Within three lines at the
- * 800px minimum window; the strip does not resize while it shows.
+ * next message costs more and by how much where a price is known, then what a
+ * new chat gives up. The strip does not resize while it shows.
  */
 export function cacheNoticeCopy(notice: CacheExpiryNoticeData): { title: string; body: string } {
   const title = notice.reason === 'idle'
@@ -39,10 +39,10 @@ export function cacheNoticeCopy(notice: CacheExpiryNoticeData): { title: string;
   const tokens = `~${formatTokens(Math.round(notice.contextTokens / 1000) * 1000)} tokens`
   const { estimate } = notice
   const cost = estimate.basis === 'subscription'
-    ? `Next message re-reads ${tokens} uncached.`
+    ? `Next message re-reads ${tokens} uncached and uses much more of your plan.`
     : estimate.basis === 'api' && estimate.coldUsd !== undefined && estimate.warmUsd !== undefined
-      ? `Next message ~${aboutUsd(estimate.coldUsd)}, not ${aboutUsd(estimate.warmUsd)}.`
-      : `Next message re-reads ${tokens} without the cache.`
+      ? `Next message costs ~${aboutUsd(estimate.coldUsd)} instead of ${aboutUsd(estimate.warmUsd)}.`
+      : `Next message re-reads ${tokens} uncached, which costs more.`
   return { title, body: `${cost} A new chat starts without history.` }
 }
 

@@ -149,9 +149,9 @@ The panel is drawn by every `ChatInput`: the main New chat screen, an existing c
 
 ### The prompt cache notice
 
-A strip in the same slot, shell and scale as the notice panel, saying that this chat's prompt cache has (probably) gone cold over a large context: *Prompt cache probably expired (idle 25 min). Next message ~$0.68, not $0.05. A new chat starts without history.* Its reasons and thresholds are in [Session Telemetry](../../agents/session_telemetry/session_telemetry.md); this is what the composer does with them.
+A strip in the same slot, shell and scale as the notice panel, saying that this chat's prompt cache has (probably) gone cold over a large context: *Prompt cache probably expired (idle 25 min). Next message costs ~$0.68 instead of $0.05. A new chat starts without history.* Its reasons and thresholds are in [Session Telemetry](../../agents/session_telemetry/session_telemetry.md); this is what the composer does with them.
 
-1. The user opens a chat that sat idle past its provider's cache lifetime and holds at least 50K tokens of context. The strip shows above the message box: a title (*expired* when certain, *probably expired* when past the usual lifetime, or *reset* with the reason: the model changed, settings changed, context compacted, a new session started), what the next message costs (dollars against the warm price on an API login; only the uncached token count on a subscription or when no price is known), and **New chat** and a dismiss button
+1. The user opens a chat that sat idle past its provider's cache lifetime and holds at least 50K tokens of context. The strip shows above the message box: a title (*expired* when certain, *probably expired* when past the usual lifetime, or *reset* with the reason: the model changed, settings changed, context compacted, a new session started), what the next message costs (dollars against the warm price on an API login; the uncached token count and that it uses more of the plan on a subscription, or costs more when no price is known), and **New chat** and a dismiss button
 2. **New chat** opens the new-chat screen set up like this chat and focuses its composer. It sends nothing and leaves the old chat alone
 3. Dismissing hides it for that chat until the chat has been used and gone idle again; the dismissal is remembered across restarts. Sending a message removes it at once
 
