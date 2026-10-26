@@ -64,11 +64,22 @@ function namespace(methods: Record<string, unknown>): unknown {
 
 Element.prototype.scrollIntoView = function scrollIntoView(): void {}
 
+// The dialog stands in as its goal and a "started" button: what the composer
+// hands it, and what it consumes when the run starts.
+vi.mock('../tasks/AutonomousTaskDialog', () => ({
+  AutonomousTaskDialog: ({ initialGoal, onStarted }: { initialGoal: string; onStarted: () => void }) =>
+    createElement('div', { 'data-testid': 'autonomous-goal' }, initialGoal,
+      createElement('button', { type: 'button', onClick: onStarted }, 'started'))
+}))
+
 const { ChatInput } = await import('./ChatInput')
 const { useChatStore } = await import('../../stores/chat.store')
 const { useUIStore } = await import('../../stores/ui.store')
 const { LOCAL_AGENTS_KEY } = await import('../../hooks/useLocalAgents')
 const { presetForAgentId } = await import('../../utils/agentColors')
+const { useComposerDraftStore } = await import('../../stores/composerDraft.store')
+const { withPastes } = await import('../../../../shared/pastedText')
+const { withPathRefs } = await import('../../../../shared/pathMentions')
 
 const FOLDER = 'folder:planner'
 const FOLDER_2 = 'folder:coder'
@@ -378,5 +389,31 @@ describe('the agent chip menu', () => {
     expect(separators[0].previousElementSibling).toBe(item(menu, 'Set as Coordinator'))
     expect(separators[0].nextElementSibling).toBe(item(menu, 'Go to Agent'))
     fireEvent.keyDown(document, { key: 'Escape' })
+  })
+})
+
+describe('Run on its own…', () => {
+  it('takes the chips into the goal, and a started run consumes exactly what went in', async () => {
+    await mount({ router: 'coordinator', agentId: FOLDER, attached: [FOLDER_2] })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '  summarise these  ' } })
+    const [key] = Object.keys(useComposerDraftStore.getState().drafts)
+    const paste = { id: 'p1', text: 'pasted body' }
+    const ref = { path: '/work/notes.md', displayPath: '~/notes.md', kind: 'file' as const }
+    act(() => useComposerDraftStore.getState().update(key, () => ({ pastes: [paste], pathRefs: [ref] })))
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add to chat' })[0])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Run on its own…' }))
+    expect(screen.getByTestId('autonomous-goal').textContent).toBe(
+      `${withPastes(withPathRefs('summarise these', [ref]), [paste])}started`
+    )
+
+    // A chip added while the dialog is open is not part of the run.
+    const later = { id: 'p2', text: 'pasted later' }
+    act(() => useComposerDraftStore.getState().update(key, (draft) => ({ pastes: [...draft.pastes, later] })))
+    fireEvent.click(screen.getByRole('button', { name: 'started' }))
+    const draft = useComposerDraftStore.getState().drafts[key]
+    expect(draft.text).toBe('')
+    expect(draft.pathRefs).toEqual([])
+    expect(draft.pastes).toEqual([later])
   })
 })

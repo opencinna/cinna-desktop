@@ -425,6 +425,7 @@ function startup(): void {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
         { role: 'selectAll' }
       ]
     },

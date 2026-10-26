@@ -28,3 +28,5 @@ export const PASTE_NEEDS_DESTINATION = 'Add an AI provider or sign in to attach 
 export const PASTE_WHILE_STREAMING = 'Files can be attached once the reply finishes.'
 /** The clipboard said files, but main found none it could attach. */
 export const PASTE_NOTHING_USABLE = 'Nothing on the clipboard could be attached.'
+/** A long text paste over `PASTE_MAX_CHARS` (shared/pastedText): refused rather than chipped. */
+export const PASTE_TOO_LONG = 'This paste is too long to send as text — attach it as a file instead.'

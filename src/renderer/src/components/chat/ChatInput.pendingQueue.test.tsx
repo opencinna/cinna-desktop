@@ -392,6 +392,25 @@ describe('message history', () => {
     expect(useChatStore.getState().editingQueued).toBeNull()
   })
 
+  it('pastes a long text inline while editing a queued message: a chip would not be saved', async () => {
+    await mountWithQueue('run-1', [], queued('queued A'))
+    const long = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n')
+    const pasteLong = (): boolean => {
+      box().setSelectionRange(box().value.length, box().value.length)
+      return !fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: () => long, files: [] } })
+    }
+    const draftPastes = () => Object.values(useComposerDraftStore.getState().drafts).flatMap((draft) => draft.pastes)
+    // Outside edit mode the same paste chips.
+    expect(pasteLong()).toBe(true)
+    expect(draftPastes()).toHaveLength(1)
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [] })))
+
+    key('ArrowUp')
+    expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+    expect(pasteLong()).toBe(false)
+    expect(draftPastes()).toEqual([])
+  })
+
   it('saves on a click of Save too', async () => {
     await mountWithQueue('run-1', [], queued('queued A'))
     key('ArrowUp')

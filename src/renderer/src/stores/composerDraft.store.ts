@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ComposerAttachment } from '../../../shared/attachments'
 import type { ComposerPathRef } from '../../../shared/pathMentions'
+import type { ComposerPaste } from '../../../shared/pastedText'
 import type { DefaultMultiAgentRouting } from '../../../shared/chatRouting'
 
 export interface ComposerDraft {
@@ -9,6 +10,8 @@ export interface ComposerDraft {
   notes: { id: string; title: string }[]
   /** Files and folders referenced by path (chips); sent as lines naming each path, never read. Unique by `path`. */
   pathRefs: ComposerPathRef[]
+  /** Long plain-text pastes (chips); sent as `<pasted_text>` blocks before the typed text. Same text twice is two chips. */
+  pastes: ComposerPaste[]
   files: {
     attachments: ComposerAttachment[]
     uploading: boolean
@@ -31,7 +34,7 @@ export interface ComposerDraft {
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   sending: false,
-  text: '', notes: [], pathRefs: [],
+  text: '', notes: [], pathRefs: [], pastes: [],
   files: { attachments: [], uploading: false, error: null, token: null },
   modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false, conductorId: null, multiAgentRouting: null
 }

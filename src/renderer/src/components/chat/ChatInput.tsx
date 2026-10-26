@@ -48,12 +48,16 @@ import {
   PASTE_NEEDS_DESTINATION,
   PASTE_NOTHING_USABLE,
   PASTE_NOT_ACCEPTED,
+  PASTE_TOO_LONG,
   PASTE_WHILE_STREAMING,
   pasteIntent
 } from '../../utils/composerPaste'
 import { NoteBadgeList } from './NoteBadge'
 import { PathRefBadgeList } from './PathRefBadge'
 import { withPathRefs } from '../../../../shared/pathMentions'
+import { PASTE_MAX_CHARS, normalizePaste, shouldChipPaste, withPastes, type ComposerPaste } from '../../../../shared/pastedText'
+import { PasteBadgeList } from './PasteBadge'
+import { PastedTextPreviewModal } from './PastedTextPreviewModal'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
@@ -207,6 +211,16 @@ function caretOnEdgeLine(el: HTMLTextAreaElement, direction: -1 | 1): boolean {
     : !el.value.slice(el.selectionEnd).includes('\n')
 }
 
+/** How long after Cmd/Ctrl+Shift+V its paste event still counts as the plain (always inline) paste. */
+const PLAIN_PASTE_WINDOW_MS = 1000
+
+let pasteSeq = 0
+/** A paste chip's id, unique within the session's drafts. */
+function newPasteId(): string {
+  pasteSeq += 1
+  return `paste-${Date.now().toString(36)}-${pasteSeq}`
+}
+
 /** Find a trigger token (@, #, /, or ?) at the cursor position. */
 function findTriggerToken(
   value: string,
@@ -264,7 +278,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Files and folders referenced by path ("Mention in Cinna", Reference in a
   // new chat): chips that become lines naming each path when the message is sent.
   const [pathRefs, setPathRefs] = useComposerDraftField(draftKey, 'pathRefs')
+  // Long plain-text pastes held as chips; they become `<pasted_text>` blocks
+  // before the typed text when the message is sent.
+  const [pastes, setPastes] = useComposerDraftField(draftKey, 'pastes')
+  const [previewPasteId, setPreviewPasteId] = useState<string | null>(null)
+  // The chip the last paste made, until any other edit: Cmd+Z then removes it
+  // (the textarea's own undo stack never saw that paste).
+  const undoablePasteRef = useRef<{ id: string; text: string } | null>(null)
+  // When Cmd/Ctrl+Shift+V was last pressed: the paste it fires stays inline.
+  const plainPasteAtRef = useRef(0)
   const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
+  // What went into the goal, so a started run consumes exactly that — as a
+  // send does — and leaves anything added meanwhile.
+  const autonomousSourceRef = useRef<{ text: string; paths: Set<string>; pasteIds: Set<string> } | null>(null)
   // The chat whose Improvement request dialog is open; another chat on screen closes it.
   const [improvementChatId, setImprovementChatId] = useState<string | null>(null)
   // Component state on purpose: navigating away drops edit mode and leaves the
@@ -666,15 +692,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // By path, not identity: a mention merged in while the send was in flight
     // makes a new array that still holds the chips just sent.
     const sentPaths = new Set(pathRefs.map((ref) => ref.path))
+    // By id, likewise: a paste chipped during the send survives it.
+    const sentPastes = new Set(pastes.map((paste) => paste.id))
     useComposerDraftStore.getState().update(draftKey, (draft) => ({
       text: draft.text === input ? '' : draft.text,
       notes: draft.notes === pendingNotes ? [] : draft.notes,
       pathRefs: draft.pathRefs.filter((ref) => !sentPaths.has(ref.path)),
+      pastes: draft.pastes.filter((paste) => !sentPastes.has(paste.id)),
       files: draft.files.attachments === pendingAttachments
         ? { ...draft.files, attachments: [], error: null }
         : draft.files
     }))
-  }, [draftKey, input, pendingNotes, pathRefs, pendingAttachments])
+  }, [draftKey, input, pendingNotes, pathRefs, pastes, pendingAttachments])
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
   const fetchNote = useFetchNote()
   const [previewNoteId, setPreviewNoteId] = useState<string | null>(null)
@@ -694,6 +723,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // is also chat-local; navigation restores the draft without reopening popups.
   useEffect(() => {
     setPreviewNoteId(null)
+    setPreviewPasteId(null)
+    undoablePasteRef.current = null
     setPendingExpansionNoteId(null)
     setTriggerChar(null)
     setTriggerFilter('')
@@ -706,7 +737,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // tip under a user who's mid-selection competes for the attention they're
   // already spending. Cleared on unmount so a stale flag can't freeze the bar.
   const composerBusy =
-    triggerChar !== null || tildeActive || capabilityPickerOpen || previewNoteId !== null
+    triggerChar !== null || tildeActive || capabilityPickerOpen || previewNoteId !== null || previewPasteId !== null
   useEffect(() => {
     setHintsBusy(composerBusy)
   }, [composerBusy, setHintsBusy])
@@ -981,7 +1012,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // chat has no turn of its own to stop: while its first send is in flight it
   // keeps a disabled Send (`sending`).
   const hasSendableFiles = (targetSupportsAttachments && pendingAttachments.length > 0) || pendingNotes.length > 0
-  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles && pathRefs.length === 0) || readiness.refusal !== null)
+  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles && pathRefs.length === 0 && pastes.length === 0) || readiness.refusal !== null)
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
@@ -1086,23 +1117,72 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer, observeHint]
   )
 
-  // Paste: files and images attach as a drop does; text pastes natively. See
-  // `pasteIntent` for how an Excel copy and a Finder copy are told apart. A
-  // paste of files the composer cannot take says why, rather than nothing.
+  // A refused oversize paste stops being news once a paste goes through, or a
+  // chip is inserted or removed. Only that error: a file error stays.
+  const clearPasteTooLong = useCallback(() => {
+    if (attachError === PASTE_TOO_LONG) setAttachError(null)
+  }, [attachError, setAttachError])
+
+  // A text paste: long plain text becomes a chip, anything else pastes natively. `isText` is asked last, only for a paste
+  // that would chip: whether a clipboard that also carries files is text.
+  const takeTextPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>, isText: () => boolean = () => true) => {
+      // Cmd/Ctrl+Shift+V always pastes inline.
+      const plain = Date.now() - plainPasteAtRef.current < PLAIN_PASTE_WINDOW_MS
+      plainPasteAtRef.current = 0
+      if (plain) return
+      // Editing a queued message saves its text alone: a chip would be lost.
+      if (editingId) return
+      const el = e.currentTarget
+      // A selection means "replace this"; a trigger token being typed (`@`,
+      // `#`, `/`, `?`) means the paste is its filter.
+      if (el.selectionStart !== el.selectionEnd) return
+      if (findTriggerToken(el.value, el.selectionStart)) return
+      // text/plain only: a Mail or Gmail copy also carries text/html.
+      const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '')
+      if (!shouldChipPaste(text) || !isText()) return
+      e.preventDefault()
+      if (text.length > PASTE_MAX_CHARS) {
+        setAttachError(PASTE_TOO_LONG)
+        return
+      }
+      const paste: ComposerPaste = { id: newPasteId(), text }
+      clearPasteTooLong()
+      setPastes((curr) => [...curr, paste])
+      undoablePasteRef.current = { id: paste.id, text: el.value }
+    },
+    [editingId, setAttachError, setPastes, clearPasteTooLong]
+  )
+
+  // Paste: files and images attach as a drop does; text pastes natively, or as
+  // a chip when long. See `pasteIntent` for how an Excel copy and a Finder copy
+  // are told apart. A paste of files the composer cannot take says why, rather
+  // than nothing.
   const openComposerAttachment = useComposerAttachmentOpen()
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const types = Array.from(e.clipboardData?.types ?? [])
-      if (!types.includes('Files')) return
+      const hasFileRefs = (): boolean => window.api.files.clipboardHasFileRefs()
+      if (!types.includes('Files')) {
+        if (types.includes('text/plain')) takeTextPaste(e)
+        return
+      }
       // Files cannot be taken now: whatever text came with them pastes as
-      // usual; only a paste with no text to fall back on says why.
+      // usual; only a paste with no text to fall back on says why. A Finder
+      // copy's names never chip — main is asked only when the text would.
       if (!canShowAttachButton || attachBlockedByStream) {
-        if (types.includes('text/plain')) return
+        if (types.includes('text/plain')) {
+          takeTextPaste(e, () => pasteIntent(types, hasFileRefs) === 'text')
+          return
+        }
         e.preventDefault()
         setAttachError(attachBlockedByStream ? PASTE_WHILE_STREAMING : chatId ? PASTE_NOT_ACCEPTED : PASTE_NEEDS_DESTINATION)
         return
       }
-      if (pasteIntent(types, () => window.api.files.clipboardHasFileRefs()) === 'text') return
+      if (pasteIntent(types, hasFileRefs) === 'text') {
+        takeTextPaste(e)
+        return
+      }
       e.preventDefault()
       void window.api.files
         .pasteFromClipboard()
@@ -1114,7 +1194,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
         .finally(focusComposer)
     },
-    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer]
+    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer, takeTextPaste]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -1334,6 +1414,40 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [setPathRefs]
   )
 
+  const handleRemovePaste = useCallback(
+    (id: string) => {
+      if (undoablePasteRef.current?.id === id) undoablePasteRef.current = null
+      setPreviewPasteId((curr) => (curr === id ? null : curr))
+      clearPasteTooLong()
+      setPastes((curr) => curr.filter((paste) => paste.id !== id))
+    },
+    [setPastes, clearPasteTooLong]
+  )
+
+  // Insert as text: the paste goes where it would have gone on send — the
+  // start, a blank line before whatever is typed — and the chip goes.
+  const handleInsertPaste = useCallback(
+    (id: string) => {
+      const paste = pastes.find((p) => p.id === id)
+      if (!paste) return
+      handleRemovePaste(id)
+      setInput((curr) => (curr ? `${paste.text}\n\n${curr}` : paste.text))
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        el.style.height = 'auto'
+        el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+        el.setSelectionRange(paste.text.length, paste.text.length)
+      })
+    },
+    [pastes, handleRemovePaste, setInput]
+  )
+  const previewPaste = useMemo(
+    () => pastes.find((p) => p.id === previewPasteId) ?? null,
+    [pastes, previewPasteId]
+  )
+
   const handleRemovePendingNote = useCallback(
     (id: string) => {
       if (pendingExpansionNoteId === id) setPendingExpansionNoteId(null)
@@ -1435,10 +1549,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const hasContent =
       trimmed.length > 0 ||
       pathRefs.length > 0 ||
+      pastes.length > 0 ||
       (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
     if (!hasContent) return
     // Reference chips name their paths in the text itself; nothing is attached.
-    const outgoing = withPathRefs(trimmed, pathRefs)
+    // Paste chips go before it all as blocks: material first, instruction after.
+    const outgoing = withPastes(withPathRefs(trimmed, pathRefs), pastes)
     // A restored draft can render before destination queries finish. Keep its
     // files, and validate on send instead of deleting them during loading.
     if (pendingAttachments.length > 0 && !targetSupportsAttachments) {
@@ -1528,6 +1644,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     composer,
     pendingNotes,
     pathRefs,
+    pastes,
     attachScope,
     attachNotesAsync,
     setAttachError,
@@ -1573,6 +1690,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    const mod = e.metaKey || e.ctrlKey
+    const key = e.key.toLowerCase()
+    if (mod && e.shiftKey && !e.altKey && key === 'v') plainPasteAtRef.current = Date.now()
+    // Cmd+Z right after a chip paste takes that chip back; any other edit in
+    // between hands undo back to the textarea.
+    const undoable = undoablePasteRef.current
+    undoablePasteRef.current = null
+    if (mod && !e.shiftKey && !e.altKey && key === 'z' && undoable && e.currentTarget.value === undoable.text) {
+      e.preventDefault()
+      handleRemovePaste(undoable.id)
+      return
+    }
+    // Modifiers alone, or the paste chord itself, are not an edit.
+    if (undoable && (['Meta', 'Control', 'Shift', 'Alt'].includes(e.key) || (mod && key === 'v'))) undoablePasteRef.current = undoable
     // Tilde-shortcut popup is in progress (open AND textarea still holds the
     // lone "~"): route arrow/enter/tab/esc into the mode popup, identical to
     // the @ / # / / popups.
@@ -1706,6 +1837,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const value = e.target.value
     const prevValue = input
     setInput(value)
+    undoablePasteRef.current = null
     if (!value) {
       clearEditTooLate()
       vanishedEditRef.current = null
@@ -1771,7 +1903,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     (editingId
       ? !input.trim()
       : blocksSend ||
-        (!input.trim() && pathRefs.length === 0 && !(chatId !== null && hasSendableFiles)))
+        (!input.trim() && pathRefs.length === 0 && pastes.length === 0 && !(chatId !== null && hasSendableFiles)))
   // The headphone double click: exactly what a click on Send would do, and
   // nothing where Send is disabled or Stop stands in its place.
   const sendFromHeadphones = (): void => {
@@ -1904,7 +2036,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
-        {(pendingAttachments.length > 0 || pendingNotes.length > 0 || pathRefs.length > 0) && (
+        {(pendingAttachments.length > 0 || pendingNotes.length > 0 || pathRefs.length > 0 || pastes.length > 0) && (
           <div className="px-3 pb-2 pt-1 flex flex-wrap items-end gap-1 justify-end">
             <AttachmentList
               attachments={pendingAttachments}
@@ -1926,6 +2058,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               align="right"
             />
             <PathRefBadgeList refs={pathRefs} onRemove={handleRemovePathRef} align="right" />
+            <PasteBadgeList pastes={pastes} onRemove={handleRemovePaste} onPreview={setPreviewPasteId} align="right" />
           </div>
         )}
         {isDraggingOver && (
@@ -1949,6 +2082,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           onClose={() => setPreviewNoteId(null)}
         />
       )}
+      {previewPaste && (
+        <PastedTextPreviewModal
+          text={previewPaste.text}
+          onClose={() => setPreviewPasteId(null)}
+          onInsert={() => handleInsertPaste(previewPaste.id)}
+          onRemove={() => handleRemovePaste(previewPaste.id)}
+        />
+      )}
 
       {chatId && improvementChatId === chatId && improvementTargets.length > 0 && (
         <ImprovementRequestDialog
@@ -1964,7 +2105,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       )}
       {chatId && autonomousGoal !== null && <AutonomousTaskDialog key={chatId} chatId={chatId} initialGoal={autonomousGoal}
         agentName={soloAgent?.name}
-        onClose={() => setAutonomousGoal(null)} onStarted={() => setInput((current) => current === autonomousGoal ? '' : current)} />}
+        onClose={() => setAutonomousGoal(null)} onStarted={() => {
+          const source = autonomousSourceRef.current
+          if (!source) return
+          useComposerDraftStore.getState().update(draftKey, (draft) => ({
+            text: draft.text === source.text ? '' : draft.text,
+            pathRefs: draft.pathRefs.filter((ref) => !source.paths.has(ref.path)),
+            pastes: draft.pastes.filter((paste) => !source.pasteIds.has(paste.id))
+          }))
+        }} />}
       <AgentPickerModal
         open={capabilityPickerOpen}
         title="Add agents & tools"
@@ -2011,7 +2160,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               modeMenu={hintedModeMenu}
               coordinateToggle={coordinateToggle}
               autonomousRun={chatId && (chatRouting.router === 'coordinator' || soloAgent)
-                ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
+                ? { disabled: isStreaming, onStart: () => {
+                  autonomousSourceRef.current = {
+                    text: input,
+                    paths: new Set(pathRefs.map((ref) => ref.path)),
+                    pasteIds: new Set(pastes.map((paste) => paste.id))
+                  }
+                  setAutonomousGoal(withPastes(withPathRefs(input.trim(), pathRefs), pastes))
+                } } : undefined}
               actions={chatId && (improvementTargets.length > 0 || onOpenChatFolder) ? {
                 ...(improvementTargets.length > 0 ? { improvementRequest: {
                   disabled: isStreaming,

@@ -7,7 +7,7 @@ import { cacheExpiryNotice, type CacheExpiryNotice } from '../../../shared/sessi
 /** Nothing typed or attached, and no send under way. */
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return !draft.sending && draft.text.trim() === '' && draft.files.attachments.length === 0 && !draft.files.uploading &&
-    draft.notes.length === 0 && draft.pathRefs.length === 0
+    draft.notes.length === 0 && draft.pathRefs.length === 0 && draft.pastes.length === 0
 }
 
 export interface CacheExpiryNoticeModel {
