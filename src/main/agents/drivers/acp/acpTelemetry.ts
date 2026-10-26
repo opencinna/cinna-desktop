@@ -36,6 +36,21 @@
  *   whose adapter also resets its tallies per prompt). No cost; no last
  *   request either — the long-context tier is judged by the turn's largest
  *   `usage_update.used`, the standard tier when none arrived.
+ * - **OpenCode (2.0.27, its own ACP server).** The prompt response's `usage`
+ *   is the **whole turn's** — every model request of the root session summed
+ *   (`usage.turn` in its ACP turn state): `inputTokens` uncached,
+ *   `cachedReadTokens` / `cachedWriteTokens` only when the provider reported
+ *   them above 0 (contract `opencode.telemetry.prompt-usage`). So
+ *   `tokenScope: 'turn'`. The turn ends with one `usage_update {used, size,
+ *   cost}`: `used` is the last request's whole input plus its output, `size`
+ *   the model's catalog window, and `cost.amount` the **session's** running
+ *   cost as OpenCode prices it (`session.get().cost`, read from its database,
+ *   so a session loaded into a fresh process carries its whole history's
+ *   cost). A turn's cost is then the growth since this connection's last
+ *   reading; with none (a load into a fresh process), or one above the new
+ *   reading, it is not known and left out rather than charged the whole
+ *   history, and the new reading is the next turn's baseline. An amount of 0 (a model
+ *   OpenCode has no price for) is not a cost and is dropped.
  *
  * - **Claude's raw SDK stream** (`acpSdkTelemetry.ts`, requested by the
  *   launcher) adds what the ACP surface does not carry: the resolved model
@@ -78,7 +93,7 @@ const logger = createLogger('acp-telemetry')
 
 /** The engines whose usage reports are read. Everything else reports none. */
 export function telemetryEngineOf(launcher: AcpLauncherId): TelemetryEngine | null {
-  return launcher === 'claude' || launcher === 'codex' || launcher === 'antigravity' ? launcher : null
+  return launcher === 'claude' || launcher === 'codex' || launcher === 'antigravity' || launcher === 'opencode' ? launcher : null
 }
 
 /* ------------------------------------------------------------------- cost */
@@ -113,6 +128,11 @@ function sessionsOf<T>(readings: WeakMap<AcpConnection, Map<string, T>>, connect
 /** The last cost reading per session, per connection. In memory only. */
 export class CostReadings {
   private readonly readings = new WeakMap<AcpConnection, Map<string, number>>()
+
+  /** The last reading this connection took for the session, or undefined. */
+  last(connection: AcpConnection, sessionId: string): number | undefined {
+    return this.readings.get(connection)?.get(sessionId)
+  }
 
   /** Records `reading` and answers what it added (see {@link costDelta}). */
   take(connection: AcpConnection, sessionId: string, reading: number): number {
@@ -425,6 +445,8 @@ export function mainModel(rows: Record<string, TokenTally>, selected?: string): 
  * are that turn's only (observed 2026-09-30). Codex: `usage`, falling back to
  * `quota.token_count`; both are the whole prompt's (codex-acp 2.x), scope
  * `turn`. Antigravity: the same fields, read as the last request's.
+ * OpenCode: `usage`, the whole turn's (scope `turn`); it sends no `_meta.quota`,
+ * so the turn is the selected model's (`model` and its one `byModel` row).
  */
 export function parsePromptTelemetry(
   response: unknown,
@@ -453,6 +475,11 @@ export function parsePromptTelemetry(
   // Codex's should a later server add `usage`: the last request's.
   const tokens = engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
   if (!tokens) return null
+  // OpenCode names no model in its answer (no `_meta.quota`, observed on
+  // 2.0.27 against OpenAI): the turn ran on the model Cinna selected.
+  if (engine === 'opencode' && !model && selectedModel) {
+    return { model: selectedModel, tokens, byModel: { [selectedModel]: { ...tokens } }, tokenScope: 'turn' }
+  }
   return {
     ...(model ? { model } : {}),
     tokens,
@@ -683,7 +710,10 @@ export class TurnTelemetry {
    * the first turn's cost and API time are its own, and known.
    */
   session(sessionId: string, fresh: boolean, fingerprint: string, connection?: AcpConnection, freshQuery: boolean = fresh): void {
-    if (freshQuery && connection) {
+    // OpenCode's cost reading is the session's own, kept in its database: only
+    // a new session starts it at 0, never a load into a fresh process.
+    if (this.options.engine === 'opencode' && fresh && connection) this.costs.reset(connection, sessionId)
+    if (freshQuery && connection && this.options.engine !== 'opencode') {
       this.costs.reset(connection, sessionId)
       this.modelCosts.reset(connection, sessionId)
       this.apiDurations.record(connection, sessionId, 0)
@@ -693,9 +723,19 @@ export class TurnTelemetry {
 
   /** One `usage_update` of the turn's own session (not a child session's). */
   frame(connection: AcpConnection, sessionId: string, frame: AcpTelemetryFrame): void {
-    const costed = frame.costUsd !== undefined
-    if (frame.costUsd !== undefined) {
-      this.costUsd = (this.costUsd ?? 0) + this.costs.take(connection, sessionId, frame.costUsd)
+    // OpenCode reports 0 for a model it has no price for: no cost at all.
+    const reading = this.options.engine === 'opencode' && frame.costUsd !== undefined && frame.costUsd <= 0 ? undefined : frame.costUsd
+    const costed = reading !== undefined
+    if (reading !== undefined) {
+      // OpenCode's reading is the session's whole cost: with no earlier one on
+      // this connection, what this turn added is not known; nor with one above
+      // it (a total that fell — a reset nobody saw), where charging the whole
+      // reading would charge history. Either way the next turn measures from
+      // this reading.
+      const previous = this.costs.last(connection, sessionId)
+      const known = this.options.engine !== 'opencode' || (previous !== undefined && reading >= previous)
+      const delta = this.costs.take(connection, sessionId, reading)
+      if (known) this.costUsd = (this.costUsd ?? 0) + delta
     }
     if (frame.used !== undefined) {
       this.lastUsed = frame.used
@@ -837,10 +877,10 @@ export class TurnTelemetry {
   }
 
   /**
-   * The turn's prompt usage over every answer. Claude's and Codex's answers
-   * are each their own prompt's (the Claude adapter resets its tallies when a
-   * prompt starts; codex-acp measures from the prompt's start), so they add
-   * up. Antigravity's is read as the last request's, so the last answer's
+   * The turn's prompt usage over every answer. Claude's, Codex's and
+   * OpenCode's answers are each their own prompt's (the Claude adapter resets
+   * its tallies when a prompt starts; codex-acp measures from the prompt's
+   * start; OpenCode keeps a turn state per prompt), so they add up. Antigravity's is read as the last request's, so the last answer's
    * stands alone.
    */
   private promptTelemetry(): PromptTelemetry | null {

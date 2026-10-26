@@ -96,6 +96,25 @@
       "eagerToolResult": "Unknown tool 'cinna.probe'. Use search to find available tools.",
       "listedAfter": true
     },
+    "promptUsage": {
+      "costKeys": [
+        "amount",
+        "currency"
+      ],
+      "usageKeys": [
+        "cachedReadTokens",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens"
+      ],
+      "usageUpdateKeys": [
+        "cost",
+        "sessionUpdate",
+        "size",
+        "used"
+      ],
+      "usageUpdates": 1
+    },
     "question": {
       "answerReachedModel": true,
       "elicitationFields": [

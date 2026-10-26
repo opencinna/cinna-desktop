@@ -20,38 +20,44 @@ export type AuthKind = 'subscription' | 'api_key' | 'gateway' | 'cloud' | 'none'
 /**
  * Antigravity reports `usage_update {used, size}` and nothing else — no cost,
  * no cache counts, no categories — so every capability below is false for it.
+ * OpenCode (2.x, its own ACP server) answers a prompt with the turn's `usage`,
+ * cache reads and writes included when the provider reports them, and sends
+ * one `usage_update {used, size, cost}` at the turn's end; no TTL, no categories.
  */
-export type TelemetryEngine = 'claude' | 'codex' | 'antigravity'
+export type TelemetryEngine = 'claude' | 'codex' | 'antigravity' | 'opencode'
 
 /**
  * Whether the engine's prompt-cache TTL is known, so the cache has an expiry,
  * a warm or cold state and invalidations. Claude's writes show their TTL;
  * Codex caches on its own with a TTL nobody reports.
  */
-export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
+export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false, opencode: false })
 
 /**
  * The context window an engine's adapter streams when it knows none, or null
  * when every size it streams is the model's real window. `claude-agent-acp`
  * streams 200K until a result confirms one and the model id does not name 1M
  * (`DEFAULT_CONTEXT_WINDOW` in its `acp-agent.js`, 0.76.0); Codex reports the
- * real window always.
+ * real window always. OpenCode streams the model's `limit.context` from its
+ * catalog (models.dev, or the limit Cinna writes for a custom provider entry)
+ * and sends no reading at all for a model without one.
  */
-export const GUESSED_CONTEXT_WINDOW: Readonly<Record<TelemetryEngine, number | null>> = Object.freeze({ claude: 200_000, codex: null, antigravity: null })
+export const GUESSED_CONTEXT_WINDOW: Readonly<Record<TelemetryEngine, number | null>> = Object.freeze({ claude: 200_000, codex: null, antigravity: null, opencode: null })
 
 /**
  * Whether the engine reports cache writes at all. Claude's usage splits them
  * out (and prices them); Codex reports cached reads only, so its cache-write
- * count is always 0 and says nothing.
+ * count is always 0 and says nothing. OpenCode passes on what the provider
+ * reports (an absent count is 0), so its writes show where the provider has them.
  */
-export const CACHE_WRITES_REPORTED: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
+export const CACHE_WRITES_REPORTED: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false, opencode: true })
 
 /**
  * Whether the engine can measure its context by category on demand
  * (`sessionTelemetry:measureContext`): Claude, through the patched adapter's
  * `_cinna/contextUsage`. Codex answers `unsupported`.
  */
-export const CONTEXT_CATEGORIES_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false })
+export const CONTEXT_CATEGORIES_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false, antigravity: false, opencode: false })
 
 export interface TokenTally {
   /** Uncached input. */

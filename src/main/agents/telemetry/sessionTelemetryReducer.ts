@@ -28,8 +28,10 @@
  *   seen, else an assumed 5m) and `expiresAt`. A model switch, a new session,
  *   a session reloaded under other params and a compaction mark it cold
  *   (`invalidatedAt`); only a new session and a compaction also reset the
- *   context baseline. Codex gets no TTL, no
- *   expiry and no invalidation: its cache TTL is not reported.
+ *   context baseline. Codex, Antigravity and OpenCode get no TTL, no expiry
+ *   and no invalidation (their cache TTL is not reported); their
+ *   `lastRequestAt` is the time of the last context reading (`usage_update`),
+ *   the idle clock of the cache-expiry notice.
  */
 
 import {

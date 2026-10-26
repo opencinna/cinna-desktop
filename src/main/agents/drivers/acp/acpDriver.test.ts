@@ -3433,9 +3433,21 @@ describe('session telemetry', () => {
     const nested = world({ launcher: 'claude', deps: { telemetry }, script: { prompt: { emit: [usage({ used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } })], response: CLAUDE_ANSWER } } })
     const result = await nested.driver.run(USER_ID, ROW, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, nested: { toolCallId: 'call_1' } })
     expect(result.telemetry?.costUsd).toBe(0.5)
-    const opencode = world({ deps: { telemetry }, script: { prompt: { emit: [usage({ used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } })], response: CLAUDE_ANSWER } } })
-    expect((await opencode.run()).telemetry).toBeUndefined()
+    const gemini = world({ launcher: 'gemini', deps: { telemetry }, script: { prompt: { emit: [usage({ used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } })], response: CLAUDE_ANSWER } } })
+    expect((await gemini.run()).telemetry).toBeUndefined()
     expect(changes).toEqual([])
+  })
+
+  it('reads an OpenCode turn: the answer’s usage as the turn’s, its end-of-turn context, and no cost at 0', async () => {
+    // opencode 2.0.27 (`opencode.telemetry.prompt-usage`): the whole turn's usage, no `_meta.quota`.
+    const OPENCODE_ANSWER = { stopReason: 'end_turn', usage: { inputTokens: 900, outputTokens: 12, cachedReadTokens: 2_100, totalTokens: 3_012 }, _meta: {} }
+    const { changes, telemetry } = reporter()
+    const w = world({ deps: { telemetry }, script: { prompt: { emit: [usage({ used: 2_007, size: 128_000, cost: { amount: 0, currency: 'USD' } })], response: OPENCODE_ANSWER } } })
+    const result = await w.run()
+    expect(result.telemetry).toMatchObject({ tokens: { input: 900, output: 12, cacheRead: 2_100, cacheWrite: 0 }, tokenScope: 'turn', contextUsedAfter: 2_007 })
+    expect(result.telemetry).not.toHaveProperty('costUsd')
+    expect(changes).toContainEqual(expect.objectContaining({ type: 'context', engine: 'opencode', used: 2_007, size: 128_000, costed: false }))
+    expect(changes).toContainEqual(expect.objectContaining({ type: 'turn', engine: 'opencode' }))
   })
 
   it('counts a Codex turn as the prompt’s own usage, on a restored session too, with nothing read back', async () => {

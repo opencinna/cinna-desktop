@@ -85,6 +85,9 @@ const READ_PROMPT = 'CONTRACT_READ_PROMPT: read .env with the read tool.'
 /** The control for {@link READ_PROMPT}: the same `read`, of a file no pattern names. */
 const PLAIN_READ_PROMPT = 'CONTRACT_PLAIN_READ_PROMPT: read readme.txt with the read tool.'
 const CONTROL_PROMPT = 'CONTRACT_CONTROL_PROMPT: just answer.'
+/** `opencode.telemetry.prompt-usage`: two model requests (a `read`, then the answer), each with its own usage and cache reads. */
+const USAGE_PROMPT = 'CONTRACT_USAGE_PROMPT: read readme.txt, then answer.'
+const USAGE_STEPS = [{ prompt: 1000, completion: 5, cached: 600 }, { prompt: 2000, completion: 7, cached: 1500 }] as const
 const RESUME_PROMPT = 'CONTRACT_RESUME_PROMPT: answer after the restart.'
 const AFTER_DENY_TEXT = 'CONTRACT_AFTER_DENY'
 const PROBE_RESULT = 'CONTRACT_PROBE_RESULT_c3'
@@ -128,6 +131,7 @@ const seen = {
   mcp: { listedAfter: false, eagerCalls: 0, calls: [] as string[] },
   setConfig: [] as { configId: string; message: AcpMessage }[],
   shell: emptyPrompt(), cinna: emptyPrompt(), question: emptyPrompt(), think: emptyPrompt(), subagent: emptyPrompt(), eager: emptyPrompt(), read: emptyPrompt(), plainRead: emptyPrompt(),
+  usage: emptyPrompt(),
   /** A session on the generated config with `plugins: []`: the personal-skills control. */
   control: emptyPrompt(),
   /** Per round of concurrent first starts on a fresh database, each process's outcome (`ok` once `session/new` answered). */
@@ -199,6 +203,11 @@ function decide(turn: OpenAiTurn): OpenAiReply {
     return { kind: 'tool', name: 'subagent', args: { agent: 'general', description: CHILD_DESCRIPTION, prompt: CHILD_PROMPT } }
   }
   if (about.includes('CONTRACT_THINK_PROMPT')) return { kind: 'text', text: 'THOUGHT_DONE', reasoning: REASONING_TEXT }
+  if (about.includes('CONTRACT_USAGE_PROMPT')) {
+    if (step > 0 || !turn.tools.includes('read')) return { kind: 'text', text: 'USAGE_DONE', usage: USAGE_STEPS[1] }
+    const params = turn.toolParams['read'] ?? []
+    return { kind: 'tool', name: 'read', args: { [params.includes('path') ? 'path' : 'filePath']: 'readme.txt' }, usage: USAGE_STEPS[0] }
+  }
   const readOf = about.includes('CONTRACT_READ_PROMPT') ? '.env' : about.includes('CONTRACT_PLAIN_READ_PROMPT') ? 'readme.txt' : null
   if (readOf) {
     if (step > 0 || !turn.tools.includes('read')) return { kind: 'text', text: 'READ_DONE' }
@@ -324,6 +333,7 @@ async function scenario(binary: string): Promise<void> {
     await prompt(connection, PLAIN_READ_PROMPT, seen.plainRead, 1000)
     await prompt(connection, READ_PROMPT, seen.read, 1000)
     phase = 'other'
+    await prompt(connection, USAGE_PROMPT, seen.usage, 500)
 
     // The process goes, and the session is resumed on a fresh one the way the
     // driver resumes a chat after a restart.
@@ -830,6 +840,8 @@ const subagentCall = (observation: PromptObservation): { start?: Json; last?: Js
   const input = frames.map((update) => update.rawInput as Json | undefined).filter((raw) => raw && Object.keys(raw).length > 0).at(-1)
   return { start, last: frames.at(-1), input }
 }
+/** The prompt's `usage_update`s. */
+const usageUpdates = (observation: PromptObservation): Json[] => observation.updates.filter((update) => update.sessionUpdate === 'usage_update')
 const childMetaOnRoot = (observation: PromptObservation): number =>
   observation.updates.filter((update) => ((update._meta ?? {}) as Json)['opencode/child-session'] !== undefined).length
 
@@ -899,6 +911,9 @@ function snapshot(): Json {
       readPrompt: { stopReason: seen.read.answer?.result?.stopReason ?? null, readOffered: (seen.read.turns[0]?.tools ?? []).includes('read'),
         readParams: [...(seen.read.turns[0]?.toolParams['read'] ?? [])].sort(), asks: asks(seen.read).length,
         toolStatuses: seen.read.updates.filter((update) => update.sessionUpdate === 'tool_call_update').map((update) => update.status ?? null) },
+      promptUsage: { usageKeys: keys(seen.usage.answer?.result?.usage), usageUpdates: usageUpdates(seen.usage).length,
+        usageUpdateKeys: [...new Set(usageUpdates(seen.usage).flatMap((update) => keys(update)))].sort(),
+        costKeys: [...new Set(usageUpdates(seen.usage).flatMap((update) => keys(update.cost)))].sort() },
       firstStart: { rounds: seen.firstStarts.length, processes: seen.firstStarts[0]?.length ?? 0 },
       kills: seen.kills
     },
@@ -1111,6 +1126,31 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     expect(replies.length).toBeGreaterThan(0)
     expect([...new Set(replies.map((update) => messageIdShape(update.messageId)))]).toEqual(['msg'])
     expect([...new Set(thoughts.map((update) => messageIdShape(update.messageId)))]).toEqual(['msg'])
+  })
+
+  it(entry('opencode.telemetry.prompt-usage'), () => {
+    const [first, last] = USAGE_STEPS
+    expect(seen.usage.turns.length, 'the usage prompt did not make its two model requests').toBe(2)
+    expect(seen.usage.answer?.result?.stopReason).toBe('end_turn')
+    const usage = (seen.usage.answer?.result?.usage ?? {}) as Json
+    // The whole turn: both requests summed, never the last one alone. Input is
+    // the uncached part, so a cached read is never counted twice.
+    expect(usage).toMatchObject({
+      inputTokens: first.prompt - first.cached + last.prompt - last.cached,
+      outputTokens: first.completion + last.completion,
+      cachedReadTokens: first.cached + last.cached
+    })
+    // An OpenAI-compatible provider reports no cache writes, and OpenCode
+    // leaves out a count of 0.
+    expect(usage.cachedWriteTokens).toBeUndefined()
+    const updates = usageUpdates(seen.usage)
+    expect(updates.length, 'no usage_update at the end of the turn').toBe(1)
+    const update = updates[0]
+    // The last request's whole input plus its output: the context as it stands.
+    expect(update.used).toBe(last.prompt + last.completion)
+    expect(update.size).toBeGreaterThan(0)
+    expect(update.cost).toMatchObject({ currency: 'USD' })
+    expect(typeof (update.cost as Json).amount).toBe('number')
   })
 
   it(entry('opencode.mcp.session-tool'), () => {

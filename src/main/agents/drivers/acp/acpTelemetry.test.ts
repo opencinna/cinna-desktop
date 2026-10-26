@@ -639,7 +639,8 @@ describe('the context measured by category', () => {
 describe('Antigravity telemetry', () => {
   it('is read, as its own engine', () => {
     expect(telemetryEngineOf('antigravity')).toBe('antigravity')
-    expect(telemetryEngineOf('opencode')).toBeNull()
+    expect(telemetryEngineOf('gemini')).toBeNull()
+    expect(telemetryEngineOf('custom')).toBeNull()
   })
 
   it('reads no turn usage from a prompt answer that carries only its stop reason', () => {
@@ -657,5 +658,131 @@ describe('Antigravity telemetry', () => {
     expect(changes).toContainEqual(expect.objectContaining({ type: 'context', used: 13187, size: 1048576 }))
     // No tokens and no cost: nothing to put on the message.
     expect(turn.settle('s')).toBeUndefined()
+  })
+})
+
+describe('OpenCode telemetry (opencode 2.0.27)', () => {
+  /**
+   * The literal shapes the pinned binary sent in `opencode.telemetry.prompt-usage`:
+   * a turn of two requests (1000 prompt / 600 cached / 5 out, then 2000 / 1500 / 7)
+   * answered with the turn's sum, uncached input apart, no write count (0 is left out).
+   */
+  const PROMPT_RESPONSE = { stopReason: 'end_turn', usage: { inputTokens: 900, outputTokens: 12, cachedReadTokens: 2_100, totalTokens: 3_012 }, _meta: {} }
+  const USAGE_UPDATE = { used: 2_007, size: 128_000 }
+  const collect = (costs = new CostReadings()) => {
+    const changes: SessionTelemetryChange[] = []
+    const turn = new TurnTelemetry({ engine: 'opencode', chatId: 'chat', costs, reporter: { report: (_chatId, change) => void changes.push(change) } })
+    const settled = () => changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> | undefined
+    return { turn, changes, settled }
+  }
+
+  it('is read, as its own engine', () => {
+    expect(telemetryEngineOf('opencode')).toBe('opencode')
+  })
+
+  it('reads the prompt response’s usage as the whole turn’s, cache reads included and an absent write as 0', () => {
+    expect(parsePromptTelemetry(PROMPT_RESPONSE, 'opencode')).toEqual({
+      tokens: { input: 900, output: 12, cacheRead: 2_100, cacheWrite: 0 },
+      byModel: {},
+      tokenScope: 'turn'
+    })
+    expect(parsePromptTelemetry({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 30, cachedWriteTokens: 40, totalTokens: 82 } }, 'opencode')?.tokens)
+      .toEqual({ input: 10, output: 2, cacheRead: 30, cacheWrite: 40 })
+    expect(parsePromptTelemetry({ stopReason: 'cancelled', _meta: {} }, 'opencode')).toBeNull()
+  })
+
+  it('settles a turn with its tokens and its context, and no cost when OpenCode prices it at 0', () => {
+    const { turn, changes, settled } = collect()
+    const connection = {} as AcpConnection
+    turn.session('s1', true, 'fp', connection)
+    turn.started()
+    turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0 })
+    turn.answered(PROMPT_RESPONSE)
+    expect(changes).toContainEqual(expect.objectContaining({ type: 'context', engine: 'opencode', used: 2_007, size: 128_000, costed: false }))
+    const message = turn.settle('s1')
+    expect(message).toMatchObject({ tokens: { input: 900, output: 12, cacheRead: 2_100, cacheWrite: 0 }, tokenScope: 'turn', contextUsedAfter: 2_007 })
+    expect(message).not.toHaveProperty('costUsd')
+    expect(settled()).toMatchObject({ engine: 'opencode', sessionId: 's1' })
+  })
+
+  it('takes a turn’s cost as what the session’s running cost grew by on this connection', () => {
+    const costs = new CostReadings()
+    const connection = {} as AcpConnection
+    const first = collect(costs)
+    first.turn.session('s1', true, 'fp', connection)
+    first.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0.03 })
+    first.turn.answered(PROMPT_RESPONSE)
+    expect(first.turn.settle('s1')?.costUsd).toBeCloseTo(0.03)
+    const second = collect(costs)
+    second.turn.session('s1', false, 'fp', connection, false)
+    second.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0.05 })
+    second.turn.answered(PROMPT_RESPONSE)
+    expect(second.turn.settle('s1')?.costUsd).toBeCloseTo(0.02)
+  })
+
+  it('leaves the cost out of a loaded session’s first turn in a fresh process, whose reading is the whole history’s', () => {
+    const costs = new CostReadings()
+    const connection = {} as AcpConnection
+    const first = collect(costs)
+    // A load into a fresh process: Claude's totals would restart at 0, OpenCode's do not.
+    first.turn.session('s1', false, 'fp', connection, true)
+    first.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 4.2 })
+    first.turn.answered(PROMPT_RESPONSE)
+    const message = first.turn.settle('s1')
+    expect(message).toMatchObject({ tokens: { cacheRead: 2_100 } })
+    expect(message).not.toHaveProperty('costUsd')
+    // The next turn on the same connection measures from that reading.
+    const second = collect(costs)
+    second.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 4.25 })
+    second.turn.answered(PROMPT_RESPONSE)
+    expect(second.turn.settle('s1')?.costUsd).toBeCloseTo(0.05)
+  })
+
+  it('takes no cost from a running cost that fell, and measures the next turn from the new reading', () => {
+    const costs = new CostReadings()
+    const connection = {} as AcpConnection
+    const first = collect(costs)
+    first.turn.session('s1', true, 'fp', connection)
+    first.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0.5 })
+    first.turn.answered(PROMPT_RESPONSE)
+    expect(first.turn.settle('s1')?.costUsd).toBeCloseTo(0.5)
+    const fell = collect(costs)
+    fell.turn.session('s1', false, 'fp', connection, false)
+    fell.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0.2 })
+    fell.turn.answered(PROMPT_RESPONSE)
+    const message = fell.turn.settle('s1')
+    expect(message).toMatchObject({ tokens: { input: 900 } })
+    expect(message).not.toHaveProperty('costUsd')
+    const next = collect(costs)
+    next.turn.session('s1', false, 'fp', connection, false)
+    next.turn.frame(connection, 's1', { ...USAGE_UPDATE, costUsd: 0.23 })
+    next.turn.answered(PROMPT_RESPONSE)
+    expect(next.turn.settle('s1')?.costUsd).toBeCloseTo(0.03)
+  })
+
+  /** Turn 1 of a live capture on OpenAI (opencode 2.0.27, 2026-10-26): no `_meta.quota`, so no model in the answer. */
+  const LIVE_OPENAI_ANSWER = { stopReason: 'end_turn', usage: { inputTokens: 6, outputTokens: 25, totalTokens: 13156, cachedReadTokens: 6541, cachedWriteTokens: 6584 }, _meta: {} }
+
+  it('attributes a turn whose answer names no model to the selected model', () => {
+    const tokens = { input: 6, output: 25, cacheRead: 6541, cacheWrite: 6584 }
+    expect(parsePromptTelemetry(LIVE_OPENAI_ANSWER, 'opencode', 'openai/gpt-5.6-luna')).toEqual({
+      model: 'openai/gpt-5.6-luna', tokens, byModel: { 'openai/gpt-5.6-luna': tokens }, tokenScope: 'turn'
+    })
+    const { turn, settled } = collect()
+    const connection = {} as AcpConnection
+    turn.session('s1', true, 'fp', connection)
+    turn.model('openai/gpt-5.6-luna')
+    turn.started()
+    turn.frame(connection, 's1', { used: 6594, size: 1_050_000, costUsd: 0.00192922 })
+    turn.answered(LIVE_OPENAI_ANSWER)
+    expect(turn.settle('s1')).toMatchObject({ model: 'openai/gpt-5.6-luna', tokens })
+    expect(settled()).toMatchObject({ byModel: { 'openai/gpt-5.6-luna': tokens }, selectedModel: 'openai/gpt-5.6-luna' })
+  })
+
+  it('estimates no cost of its own from the price table', () => {
+    const { turn } = collect()
+    turn.answered(PROMPT_RESPONSE)
+    turn.model('openai/gpt-5.5')
+    expect(turn.settle('s1')).not.toHaveProperty('costUsd')
   })
 })

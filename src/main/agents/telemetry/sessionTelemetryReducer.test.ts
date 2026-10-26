@@ -206,6 +206,22 @@ describe('the raw stream in the session telemetry', () => {
     expect(codex.cache).toEqual({ lastRequestAt: 3, ttlSource: 'assumed' })
   })
 
+  it('folds an OpenCode turn: its end-of-turn reading starts the cache clock, with no TTL, and its cache writes count', () => {
+    const state = fold([
+      { type: 'model', engine: 'opencode', selected: 'anthropic/claude-sonnet-5' },
+      { type: 'session', engine: 'opencode', sessionId: 's', fresh: true, fingerprint: 'f', at: 2 },
+      { type: 'context', engine: 'opencode', sessionId: 's', used: 52_007, size: 200_000, costed: false, at: 5_000 },
+      { type: 'turn', engine: 'opencode', sessionId: 's', message: { tokens: tally(900, 12, 2_100, 300), tokenScope: 'turn', costSource: 'runtime', contextUsedAfter: 52_007 } }
+    ])
+    expect(state.engine).toBe('opencode')
+    expect(state.cache).toEqual({ lastRequestAt: 5_000, ttlSource: 'assumed' })
+    expect(state.context).toMatchObject({ used: 52_007, size: 200_000, sizeAuthoritative: true, sessionId: 's', model: 'anthropic/claude-sonnet-5' })
+    expect(state.totals).toMatchObject({ tokens: tally(900, 12, 2_100, 300), turns: 1, tokenScope: 'turn' })
+    // A model switch is no invalidation the reducer can date: no TTL is known.
+    const switched = applyTelemetryChange(state, 'chat', { type: 'model', engine: 'opencode', selected: 'openai/gpt-5.5' }, 6_000)
+    expect(switched.cache).not.toHaveProperty('invalidatedAt')
+  })
+
   it('takes the resolved model from the raw stream, and the quota’s once the turn settles', () => {
     const state = fold([
       { type: 'runtime', engine: 'claude', sessionId: 's1', model: 'claude-sonnet-5', cliVersion: '2.1.274', betas: ['b'], effort: null, fastMode: 'off' }

@@ -156,9 +156,16 @@ export interface OpenAiTurn {
   mentions(marker: string): boolean
 }
 
+/**
+ * The `usage` the fake reports at the end of a response: `prompt` and
+ * `completion` tokens, and `cached` as `prompt_tokens_details.cached_tokens`
+ * (an OpenAI-compatible server's cache reads). Default 10 prompt, 2 completion.
+ */
+export interface OpenAiUsage { prompt: number; completion: number; cached?: number }
+
 export type OpenAiReply =
-  | { kind: 'text'; text: string; reasoning?: string }
-  | { kind: 'tool'; name: string; args: Json }
+  | { kind: 'text'; text: string; reasoning?: string; usage?: OpenAiUsage }
+  | { kind: 'tool'; name: string; args: Json; usage?: OpenAiUsage }
   /** Hold the response open until the socket is closed. */
   | { kind: 'stall' }
 
@@ -235,8 +242,10 @@ export async function startFakeOpenAi(decide: (turn: OpenAiTurn) => OpenAiReply)
         chunk({ role: 'assistant', content: reply.text })
         chunk({}, 'stop')
       }
+      const usage = reply.usage ?? { prompt: 10, completion: 2 }
       res.write(`data: ${JSON.stringify({ id: `chatcmpl-contract-${turn.index}`, object: 'chat.completion.chunk', created: 1, model: turn.model,
-        choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } })}\n\n`)
+        choices: [], usage: { prompt_tokens: usage.prompt, completion_tokens: usage.completion, total_tokens: usage.prompt + usage.completion,
+          ...(usage.cached !== undefined ? { prompt_tokens_details: { cached_tokens: usage.cached } } : {}) } })}\n\n`)
       res.end('data: [DONE]\n\n')
     } catch {
       res.writeHead(400)

@@ -139,6 +139,13 @@ export const OPENCODE_CONTRACT: readonly ContractEntry[] = [
     feature: 'Subagents get no activity item and no lane: their tool calls and replies land in the root agent’s own words, or vanish, and nothing shows a subagent running or ending.',
     flow: NO_FLOW
   },
+  {
+    id: 'opencode.telemetry.prompt-usage', area: 'session lifecycle', surface: 'ACP field', name: 'session/prompt usage / usage_update',
+    expectation: 'A prompt response carries `usage` for the **whole turn** — every model request of the root session summed: `inputTokens` (uncached), `outputTokens`, and `cachedReadTokens` / `cachedWriteTokens` only when the provider reported them above 0. The turn ends with one `usage_update {used, size, cost: {amount, currency: "USD"}}`: `used` the last request’s input (cached included) plus its output, `size` the model’s `limit.context`, `cost.amount` the session’s running cost as OpenCode prices it (0 for a model it has no price for).',
+    owners: ['src/main/agents/drivers/acp/acpTelemetry.ts#parsePromptTelemetry', 'src/main/agents/drivers/acp/acpTelemetry.ts#telemetryEngineOf', 'src/main/agents/drivers/acp/acpMessages.ts#usageFrame'],
+    feature: 'An OpenCode chat’s tokens, cache reads, context meter and idle cache clock (the cache-expiry notice): read as a last request, a turn with tool calls undercounts; with no `usage_update`, the context stays empty and the cache clock never starts.',
+    flow: NO_FLOW
+  },
 
   /* ------------------------------------------------------------ tools & MCP */
   {
