@@ -8,6 +8,7 @@
  */
 
 import { pathRefLabel, splitPathRefs } from './pathMentions'
+import { pasteLabel, splitPastes, typedText } from './pastedText'
 
 export const AUTO_TITLE_MAX_FROM_MESSAGE = 50
 
@@ -20,8 +21,14 @@ export function deriveTitleFromMessage(message: string): string {
   // Files and folders sent as reference chips ("Mention in Cinna") are lines
   // naming absolute paths after the typed text; the title is the typed text,
   // or with none the chips' names — never "Referenced file: /Users/…".
+  // Pasted text goes before the typed text as `<pasted_text>` blocks; the
+  // title is the typed text, or with none the first paste's label.
+  const segments = splitPastes(message)
+  const firstPaste = segments.find((segment) => segment.kind === 'paste')
+  if (firstPaste) message = typedText(message).trim()
   const { text, paths } = splitPathRefs(message)
   if (paths.length > 0) message = text.trim() || paths.map(pathRefLabel).join(', ')
+  if (firstPaste && !message.trim()) message = pasteLabel(firstPaste.text)
   if (message.length > AUTO_TITLE_MAX_FROM_MESSAGE) {
     return message.slice(0, AUTO_TITLE_MAX_FROM_MESSAGE) + '…'
   }

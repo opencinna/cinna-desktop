@@ -60,6 +60,7 @@ import { customFieldText, isUnassigned, taskFileName, taskStatusText } from './t
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import type { TaskArtifact, TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
+import { summarizeUserText } from '../../../../shared/pastedText'
 
 /**
  * One task: what the work is, where it stands, and the way back into it.
@@ -503,7 +504,7 @@ function TaskPage({
         <div className="grid gap-6 @2xl:grid-cols-[minmax(0,1fr)_13rem]">
           <div className="min-w-0 space-y-6">
             <Section title="Goal">
-              <Prose>{task.goal}</Prose>
+              <Prose>{summarizeUserText(task.goal)}</Prose>
             </Section>
 
             {task.description && (

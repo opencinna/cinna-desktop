@@ -9,6 +9,7 @@ import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { CHAT_TITLE_UPDATED_CHANNEL } from '../../shared/appSettings'
 import { deriveTitleFromMessage } from '../../shared/chatTitle'
+import { splitPastes, summarizeUserText, typedText } from '../../shared/pastedText'
 import { routingOf } from '../../shared/chatRouting'
 
 const logger = createLogger('chat-title')
@@ -76,6 +77,22 @@ function sanitizeTitle(raw: string): string {
 
 function broadcastTitleUpdate(chatId: string, title: string): void {
   publishEvent(CHAT_TITLE_UPDATED_CHANNEL, { chatId, title })
+}
+
+/** How much of a paste the title model reads when nothing was typed beside it. */
+const PASTE_TITLE_EXCERPT_CHARS = 1_000
+
+/**
+ * The first message as the title model reads it: each paste as
+ * `[Pasted text · 48 lines]`, since the title is about what the user asked.
+ * A message of pastes alone asked nothing in words, so the model gets the
+ * first paste's opening to name the chat by.
+ */
+export function titleInput(firstUserText: string): string {
+  const summary = summarizeUserText(firstUserText)
+  if (typedText(firstUserText).trim()) return summary
+  const first = splitPastes(firstUserText).find((segment) => segment.kind === 'paste')
+  return first ? `${summary}\n\nThe first paste begins:\n${first.text.slice(0, PASTE_TITLE_EXCERPT_CHARS)}` : summary
 }
 
 export const chatTitleService = {
@@ -192,7 +209,9 @@ export const chatTitleService = {
         backend: resolved,
         warmOnly: true,
         systemPrompt: TITLE_SYSTEM_PROMPT,
-        userText: firstUserText,
+        // The untouched-title check above stays on the raw text, as the
+        // renderer derived it; the model gets pastes summarized.
+        userText: titleInput(firstUserText),
         label: 'chat-title',
         maxOutputChars: MAX_TITLE_CHARS
       })

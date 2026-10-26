@@ -19,6 +19,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsInfoTip } from '../settings/SettingsLayout'
 import { Detail } from './DetailParts'
 import { customFieldText, folderMoveTargets, isDispatchFlagged, manualMoveOptions, taskStatusLabel, taskStatusText } from './tasksViewModel'
+import { summarizeUserText } from '../../../../shared/pastedText'
 
 /**
  * The New task and Edit task dialogs, sharing their form parts.
@@ -592,7 +593,7 @@ export function EditTaskDialog({ task, update, setStatus, onClose }: {
         </div>
         <div className="space-y-1.5">
           <div className={LABEL}>Goal</div>
-          <p className="max-h-20 overflow-y-auto whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">{task.goal}</p>
+          <p className="max-h-20 overflow-y-auto whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">{summarizeUserText(task.goal)}</p>
         </div>
         <div className="space-y-1.5">
           <label htmlFor="edit-task-description" className={LABEL}>Description</label>

@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   enabled: true, title: 'New Chat', count: 1,
-  resolve: vi.fn(), run: vi.fn(), update: vi.fn()
+  resolve: vi.fn(), run: vi.fn(), update: vi.fn(), firstUser: 'My first message'
 }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ id: 'chat', title: state.title, router: 'coordinator', agentId: 'root' }), updateMeta: (...args: unknown[]) => state.update(...args) } }))
-vi.mock('../db/messages', () => ({ messageRepo: { countByRole: () => state.count, firstByRole: () => ({ content: 'My first message' }) } }))
+vi.mock('../db/messages', () => ({ messageRepo: { countByRole: () => state.count, firstByRole: () => ({ content: state.firstUser }) } }))
 vi.mock('../db/appSettings', () => ({ appSettingsRepo: { get: () => state.enabled } }))
 vi.mock('../index', () => ({ getMainWindow: () => null }))
 vi.mock('./aiFunctionsService', async () => {
@@ -18,6 +18,7 @@ beforeEach(() => {
   state.enabled = true
   state.title = 'New Chat'
   state.count = 1
+  state.firstUser = 'My first message'
   state.resolve.mockReset().mockReturnValue({ kind: 'runtime', userId: 'user' })
   state.run.mockReset().mockResolvedValue('A helpful title')
   state.update.mockReset()
@@ -28,6 +29,19 @@ describe('automatic titles on AI Functions', () => {
     await chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })
     expect(state.run).toHaveBeenCalledWith(expect.objectContaining({ backend: { kind: 'runtime', userId: 'user' }, warmOnly: true, maxOutputChars: 40 }))
     expect(state.update).toHaveBeenCalledWith('user', 'chat', { title: 'A helpful title' })
+  })
+  it('gives the model pasted text as its summary, and still treats the title derived from the raw text as auto', async () => {
+    state.firstUser = '<pasted_text lines="2">\nDear Bob,\nsee you\n</pasted_text>\n\nreply politely'
+    state.title = 'reply politely'
+    await chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })
+    expect(state.run).toHaveBeenCalledWith(expect.objectContaining({ userText: '[Pasted text · 2 lines]\n\nreply politely' }))
+    expect(state.update).toHaveBeenCalledWith('user', 'chat', { title: 'A helpful title' })
+  })
+  it('gives the model the first paste\'s opening when nothing was typed', async () => {
+    state.firstUser = '<pasted_text lines="2">\nDear Bob,\nsee you\n</pasted_text>'
+    state.title = 'Dear Bob,'
+    await chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })
+    expect(state.run).toHaveBeenCalledWith(expect.objectContaining({ userText: '[Pasted text · 2 lines]\n\nThe first paste begins:\nDear Bob,\nsee you' }))
   })
   it('does not run when background titles are disabled or overwrite a manual rename', async () => {
     state.enabled = false
