@@ -55,7 +55,7 @@ import {
 import { NoteBadgeList } from './NoteBadge'
 import { PathRefBadgeList } from './PathRefBadge'
 import { withPathRefs } from '../../../../shared/pathMentions'
-import { PASTE_MAX_CHARS, normalizePaste, shouldChipPaste, withPastes, type ComposerPaste } from '../../../../shared/pastedText'
+import { PASTE_MAX_CHARS, normalizePaste, shouldChipPaste, splitPastes, typedText, withPastes, type ComposerPaste } from '../../../../shared/pastedText'
 import { PasteBadgeList } from './PasteBadge'
 import { PastedTextPreviewModal } from './PastedTextPreviewModal'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
@@ -190,15 +190,22 @@ export const QUEUED_EDIT_TOO_LATE = 'Sent before your edit was saved — your ed
 
 /**
  * A message recalled into the composer with ArrowUp/ArrowDown: the chat it was
- * recalled in, which history entry, its text as recalled (cycling continues
- * only while the input still holds exactly that), and the queue id when it is
+ * recalled in, which history entry, its typed text as recalled and the ids of
+ * the paste chips it put in the draft (cycling continues only while the input
+ * and the draft's chips are still exactly those), and the queue id when it is
  * a queued message being edited.
  */
 interface Recall {
   chatId: string
   index: number
   text: string
+  pasteIds: string[]
   queuedId?: string
+}
+
+/** Whether the draft's chips are exactly `ids`, in order. */
+function samePasteIds(pastes: readonly ComposerPaste[], ids: readonly string[]): boolean {
+  return pastes.length === ids.length && pastes.every((paste, at) => paste.id === ids[at])
 }
 
 /**
@@ -219,6 +226,19 @@ let pasteSeq = 0
 function newPasteId(): string {
   pasteSeq += 1
   return `paste-${Date.now().toString(36)}-${pasteSeq}`
+}
+
+/**
+ * A sent or queued message back in the composer: its typed text for the input
+ * and its `<pasted_text>` blocks as fresh chips. A message with no blocks comes
+ * back unchanged. Blocks that sat between typed text (a merged queue message)
+ * come back as chips all the same, and go first again on send.
+ */
+function pastesFromContent(content: string): { text: string; pastes: ComposerPaste[] } {
+  const pastes = splitPastes(content).flatMap((segment) =>
+    segment.kind === 'paste' ? [{ id: newPasteId(), text: segment.text }] : []
+  )
+  return { text: pastes.length ? typedText(content) : content, pastes }
 }
 
 /** Find a trigger token (@, #, /, or ?) at the cursor position. */
@@ -513,7 +533,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     void window.api.run.queueTake(chatId)
       .then((items) => {
         if (!items.length) return
-        const texts = items.map((item) => item.content)
+        // Raw contents, to find the edited message by; each split into its
+        // typed text and its pastes, which come back as chips.
+        const contents = items.map((item) => item.content)
+        const split = contents.map(pastesFromContent)
+        const texts = split.map((part) => part.text)
         // A queued message's files come back into the draft's files, after
         // those already there; a files-only message adds no text.
         const files = items.flatMap((item) => item.attachments ?? [])
@@ -522,18 +546,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           const kept = draft.text.replace(/\n+$/, '')
           const index = editedIndex < 0
             ? -1
-            : texts.length === heldItems.length ? editedIndex : texts.indexOf(heldItems[editedIndex].content)
+            : contents.length === heldItems.length ? editedIndex : contents.indexOf(heldItems[editedIndex].content)
           const known = new Set(draft.files.attachments.map((file) => file.id))
           const added = files.filter((file) => !known.has(file.id) && known.add(file.id))
           const filesPatch = added.length
             ? { files: { ...draft.files, attachments: [...draft.files.attachments, ...added] } }
             : {}
           if (index >= 0) {
-            // An emptied edit was never savable; the original stands.
-            return { text: joinText(texts.map((text, at) => (at === index && kept.trim() ? kept : text))), ...filesPatch }
+            // An emptied edit was never savable; the original stands, its
+            // pastes with it. An edit that stands holds its own chips already.
+            const editStands = !!kept.trim() || draft.pastes.length > 0
+            const pastes = split.flatMap((part, at) => (at === index && editStands ? [] : part.pastes))
+            return {
+              text: joinText(texts.map((text, at) => (at === index && editStands ? kept : text))),
+              pastes: [...draft.pastes, ...pastes],
+              ...filesPatch
+            }
           }
           const joined = joinText(texts)
-          return { text: kept && joined ? `${kept}\n\n${joined}` : kept || joined, ...filesPatch }
+          return {
+            text: kept && joined ? `${kept}\n\n${joined}` : kept || joined,
+            pastes: [...draft.pastes, ...split.flatMap((part) => part.pastes)],
+            ...filesPatch
+          }
         })
         requestAnimationFrame(() => {
           const el = textareaRef.current
@@ -603,18 +638,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       return
     }
     // Still listed: the queue has not shown it leaving yet, so it has not come back.
-    if (!vanished.gone || !input.trim()) return
+    if (!vanished.gone || (!input.trim() && pastes.length === 0)) return
     vanishedEditRef.current = null
-    setRecall({ chatId, index, text: historyEntries[index].text, queuedId: vanished.id })
+    // The original's raw content and no chips: the edit never matches it, so
+    // the arrows move the caret rather than replace the edit.
+    setRecall({ chatId, index, text: historyEntries[index].text, pasteIds: [], queuedId: vanished.id })
     clearEditTooLate()
-  }, [chatId, runQueue, historyEntries, activeRecall, sending, input, clearEditTooLate])
+  }, [chatId, runQueue, historyEntries, activeRecall, sending, input, pastes, clearEditTooLate])
 
   const saveQueuedEdit = useCallback(async (targetChatId: string, id: string): Promise<void> => {
     const text = input
-    if (!text.trim() || !useComposerDraftStore.getState().beginSend(draftKey)) return
+    if ((!text.trim() && pastes.length === 0) || !useComposerDraftStore.getState().beginSend(draftKey)) return
+    // By id, as a send consumes them: a chip pasted during the save survives it.
+    const savedPastes = new Set(pastes.map((paste) => paste.id))
     try {
-      if (await window.api.run.queueEdit(targetChatId, id, text)) {
-        useComposerDraftStore.getState().update(draftKey, (draft) => ({ text: draft.text === text ? '' : draft.text }))
+      if (await window.api.run.queueEdit(targetChatId, id, withPastes(text, pastes))) {
+        useComposerDraftStore.getState().update(draftKey, (draft) => ({
+          text: draft.text === text ? '' : draft.text,
+          pastes: draft.pastes.filter((paste) => !savedPastes.has(paste.id))
+        }))
         clearEditTooLate()
         setRecall(null)
       } else {
@@ -640,28 +682,41 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     } finally {
       useComposerDraftStore.getState().endSend(draftKey)
     }
-  }, [input, draftKey, setSendError, clearEditTooLate, queryClient])
+  }, [input, pastes, draftKey, setSendError, clearEditTooLate, queryClient])
 
   /**
    * Step through the history (-1 older, +1 newer). Active only while the input
-   * is empty or still holds the recalled entry unchanged; past the newest the
-   * input empties. Returns whether the key was used.
+   * and chips are empty or still hold the recalled entry unchanged; past the
+   * newest the input and the recalled chips empty. An entry's pastes come back
+   * as chips, replacing the last entry's. Returns whether the key was used.
    */
   const recallHistory = (direction: -1 | 1): boolean => {
     if (!chatId) return false
-    const current = activeRecall && input === activeRecall.text ? activeRecall.index : input === '' ? historyEntries.length : null
+    // A pastes-only entry leaves the input empty too: the chip ids tell it
+    // from the history's end, and a draft's own chip is never recalled over.
+    const current = activeRecall && input === activeRecall.text && samePasteIds(pastes, activeRecall.pasteIds)
+      ? activeRecall.index
+      : input === '' && pastes.length === 0 ? historyEntries.length : null
     if (current === null || !historyEntries.length) return false
     const index = current + direction
     if (index < 0) return true
+    const recalledIds = new Set(activeRecall && current === activeRecall.index ? activeRecall.pasteIds : [])
     if (index >= historyEntries.length) {
       if (current >= historyEntries.length) return false
       setRecall(null)
-      setInput('')
+      useComposerDraftStore.getState().update(draftKey, (draft) => ({
+        text: '',
+        pastes: draft.pastes.filter((paste) => !recalledIds.has(paste.id))
+      }))
       return true
     }
     const entry = historyEntries[index]
-    setRecall({ chatId, index, text: entry.text, queuedId: entry.queuedId })
-    setInput(entry.text)
+    const recalled = pastesFromContent(entry.text)
+    setRecall({ chatId, index, text: recalled.text, pasteIds: recalled.pastes.map((paste) => paste.id), queuedId: entry.queuedId })
+    useComposerDraftStore.getState().update(draftKey, (draft) => ({
+      text: recalled.text,
+      pastes: [...draft.pastes.filter((paste) => !recalledIds.has(paste.id)), ...recalled.pastes]
+    }))
     requestAnimationFrame(() => {
       const el = textareaRef.current
       if (!el) return
@@ -1131,8 +1186,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       const plain = Date.now() - plainPasteAtRef.current < PLAIN_PASTE_WINDOW_MS
       plainPasteAtRef.current = 0
       if (plain) return
-      // Editing a queued message saves its text alone: a chip would be lost.
-      if (editingId) return
       const el = e.currentTarget
       // A selection means "replace this"; a trigger token being typed (`@`,
       // `#`, `/`, `?`) means the paste is its filter.
@@ -1151,7 +1204,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       setPastes((curr) => [...curr, paste])
       undoablePasteRef.current = { id: paste.id, text: el.value }
     },
-    [editingId, setAttachError, setPastes, clearPasteTooLong]
+    [setAttachError, setPastes, clearPasteTooLong]
   )
 
   // Paste: files and images attach as a drop does; text pastes natively, or as
@@ -1772,13 +1825,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
 
-    // Esc while editing a queued message leaves the edit and empties the input.
-    // It is its own gesture: it does not arm the Esc Esc stop.
+    // Esc while editing a queued message leaves the edit and empties the input
+    // and its chips — every chip in the draft is the edit's, as a recall only
+    // starts from a draft with none. It is its own gesture: it does not arm
+    // the Esc Esc stop.
     if (e.key === 'Escape' && chatId && editingId) {
       e.preventDefault()
       lastEscapeAt.current = 0
       setRecall(null)
-      setInput('')
+      useComposerDraftStore.getState().update(draftKey, () => ({ text: '', pastes: [] }))
       clearEditTooLate()
       return
     }
@@ -1838,7 +1893,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const prevValue = input
     setInput(value)
     undoablePasteRef.current = null
-    if (!value) {
+    if (!value && pastes.length === 0) {
       clearEditTooLate()
       vanishedEditRef.current = null
     }
@@ -1901,7 +1956,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const sendDisabled =
     sending ||
     (editingId
-      ? !input.trim()
+      ? !input.trim() && pastes.length === 0
       : blocksSend ||
         (!input.trim() && pathRefs.length === 0 && pastes.length === 0 && !(chatId !== null && hasSendableFiles)))
   // The headphone double click: exactly what a click on Send would do, and

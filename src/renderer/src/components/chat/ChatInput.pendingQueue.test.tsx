@@ -53,6 +53,7 @@ const { ChatInput, QUEUED_EDIT_TOO_LATE } = await import('./ChatInput')
 const { QueuedMessages, useQueuedMessages } = await import('./QueuedMessages')
 const { useChatStore } = await import('../../stores/chat.store')
 const { useComposerDraftStore, composerDraftKey } = await import('../../stores/composerDraft.store')
+const { withPastes } = await import('../../../../shared/pastedText')
 
 const DRAFT_KEY = composerDraftKey(undefined, 'chat:chat-1')
 const RUNNING_PLACEHOLDER = 'Send a follow-up · Esc Esc to stop'
@@ -122,6 +123,11 @@ async function mountWithQueue(
 async function nextFrame(): Promise<void> {
   await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())) })
 }
+
+const LONG = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n')
+const OTHER_LONG = Array.from({ length: 22 }, (_, i) => `row ${i + 1}`).join('\n')
+/** Every draft's chips, so no key can hide one. */
+const draftPastes = () => Object.values(useComposerDraftStore.getState().drafts).flatMap((draft) => draft.pastes)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -392,22 +398,16 @@ describe('message history', () => {
     expect(useChatStore.getState().editingQueued).toBeNull()
   })
 
-  it('pastes a long text inline while editing a queued message: a chip would not be saved', async () => {
+  it('chips a long paste while editing a queued message, and saves it with the edit', async () => {
     await mountWithQueue('run-1', [], queued('queued A'))
-    const long = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n')
-    const pasteLong = (): boolean => {
-      box().setSelectionRange(box().value.length, box().value.length)
-      return !fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: () => long, files: [] } })
-    }
-    const draftPastes = () => Object.values(useComposerDraftStore.getState().drafts).flatMap((draft) => draft.pastes)
-    // Outside edit mode the same paste chips.
-    expect(pasteLong()).toBe(true)
-    expect(draftPastes()).toHaveLength(1)
-    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [] })))
-
     key('ArrowUp')
     expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
-    expect(pasteLong()).toBe(false)
+    box().setSelectionRange(box().value.length, box().value.length)
+    expect(!fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: () => LONG, files: [] } })).toBe(true)
+    expect(draftPastes()).toEqual([{ id: expect.any(String), text: LONG }])
+    key('Enter')
+    await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', withPastes('queued A', [{ text: LONG }])))
+    await waitFor(() => expect(box().value).toBe(''))
     expect(draftPastes()).toEqual([])
   })
 
@@ -595,6 +595,26 @@ describe('message history', () => {
       expect(box().value).toBe('something new')
     })
 
+    it('is edited again when the edit is a chip alone, and saves just the block', async () => {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+      const original = withPastes('queued A', [{ text: LONG }])
+      await mountWithQueue('run-1', [], queued(original))
+      key('ArrowUp')
+      expect(draftPastes()).toHaveLength(1)
+      fireEvent.change(box(), { target: { value: '' } })
+      await queueBecomes(queued())
+      expect(useChatStore.getState().editingQueued).toBeNull()
+
+      await queueBecomes(queued(original))
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      expect(useChatStore.getState().sendError).not.toBe(QUEUED_EDIT_TOO_LATE)
+      expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+
+      key('Enter')
+      await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', withPastes('', [{ text: LONG }])))
+      expect(run.start).not.toHaveBeenCalled()
+    })
+
     it('is edited again after Save found it gone, once the queue has shown it leaving and coming back', async () => {
       run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
       await mountWithQueue('run-1', [], queued('queued A'))
@@ -722,5 +742,158 @@ describe('message history', () => {
     await nextFrame()
     expect(fireEvent.keyDown(box(), { key: 'ArrowDown' })).toBe(false)
     expect(box().value).toBe('')
+  })
+})
+
+describe('a recalled message with pastes', () => {
+  const WITH_PASTE = withPastes('reply politely', [{ text: LONG }])
+  const PASTES_ONLY = withPastes('', [{ text: OTHER_LONG }])
+  const pasteTexts = (): string[] => draftPastes().map((paste) => paste.text)
+
+  it('comes back as chips and its typed text, steps on replacing them, and past the newest clears both', async () => {
+    await mountWithQueue(null, [PASTES_ONLY, WITH_PASTE], queued())
+    key('ArrowUp')
+    expect(box().value).toBe('reply politely')
+    expect(box().value).not.toContain('<pasted_text')
+    expect(pasteTexts()).toEqual([LONG])
+    expect(screen.getAllByTestId('paste-badge')).toHaveLength(1)
+
+    // A pastes-only message: an empty input and its chip, not the history's end.
+    key('ArrowUp')
+    expect(box().value).toBe('')
+    expect(pasteTexts()).toEqual([OTHER_LONG])
+    key('ArrowUp')
+    expect(pasteTexts()).toEqual([OTHER_LONG])
+
+    key('ArrowDown')
+    expect(box().value).toBe('reply politely')
+    expect(pasteTexts()).toEqual([LONG])
+    key('ArrowDown')
+    expect(box().value).toBe('')
+    expect(draftPastes()).toEqual([])
+  })
+
+  it('sends a recalled delivered message with its pastes as blocks again', async () => {
+    run.start.mockResolvedValue({ kind: 'started', runId: 'r' })
+    await mountWithQueue(null, [WITH_PASTE], queued())
+    key('ArrowUp')
+    key('Enter')
+    await waitFor(() => expect(run.start).toHaveBeenCalledWith(expect.objectContaining({ content: WITH_PASTE })))
+  })
+
+  it('does not recall over a draft holding its own chip', async () => {
+    await mountWithQueue(null, ['one'], queued())
+    box().setSelectionRange(0, 0)
+    expect(!fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: () => OTHER_LONG, files: [] } })).toBe(true)
+    key('ArrowUp')
+    expect(box().value).toBe('')
+    expect(pasteTexts()).toEqual([OTHER_LONG])
+  })
+
+  it('stops cycling once a recalled chip is removed', async () => {
+    await mountWithQueue(null, ['one', WITH_PASTE], queued())
+    key('ArrowUp')
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [] })))
+    key('ArrowUp')
+    expect(box().value).toBe('reply politely')
+    expect(draftPastes()).toEqual([])
+  })
+
+  it('edits a queued message with its chip, and saves the chip back as a block', async () => {
+    await mountWithQueue('run-1', [], queued(WITH_PASTE))
+    key('ArrowUp')
+    expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+    expect(box().value).toBe('reply politely')
+    expect(pasteTexts()).toEqual([LONG])
+    fireEvent.change(box(), { target: { value: 'reply firmly' } })
+    key('Enter')
+    await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', withPastes('reply firmly', [{ text: LONG }])))
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(draftPastes()).toEqual([])
+  })
+
+  it('saves an edit that is chips alone, and disables Save only with neither text nor chips', async () => {
+    await mountWithQueue('run-1', [], queued(WITH_PASTE))
+    key('ArrowUp')
+    fireEvent.change(box(), { target: { value: '' } })
+    const save = screen.getByRole('button', { name: 'Save' })
+    expect(save.hasAttribute('disabled')).toBe(false)
+    act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [] })))
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('keeps a chip pasted while the save is in flight', async () => {
+    let answer!: (saved: boolean) => void
+    run.queueEdit.mockImplementation(() => new Promise<boolean>((resolve) => (answer = resolve)))
+    await mountWithQueue('run-1', [], queued(WITH_PASTE))
+    key('ArrowUp')
+    key('Enter')
+    await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', WITH_PASTE))
+    box().setSelectionRange(box().value.length, box().value.length)
+    expect(!fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: () => OTHER_LONG, files: [] } })).toBe(true)
+    expect(pasteTexts()).toEqual([LONG, OTHER_LONG])
+    await act(async () => answer(true))
+    await waitFor(() => expect(pasteTexts()).toEqual([OTHER_LONG]))
+  })
+
+  it('drops the edit’s chips with the edit on Esc', async () => {
+    await mountWithQueue('run-1', [], queued(WITH_PASTE))
+    key('ArrowUp')
+    key('Escape')
+    expect(box().value).toBe('')
+    expect(draftPastes()).toEqual([])
+  })
+
+  describe('in a held queue', () => {
+    let notify!: (payload: { chatId: string; view?: RunQueueView }) => void
+    beforeEach(() => {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+    })
+
+    it('comes back as chips after the draft’s own, in queue order, the typed text joined as before', async () => {
+      mount(null)
+      await waitFor(() => expect(run.queueList).toHaveBeenCalledWith('chat-1'))
+      act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [{ id: 'mine', text: 'mine' }] })))
+      fireEvent.change(box(), { target: { value: 'keep me' } })
+
+      const held = { ...queued(WITH_PASTE, PASTES_ONLY), held: true }
+      run.queueList.mockResolvedValue(held)
+      run.queueTake.mockResolvedValueOnce([{ content: WITH_PASTE }, { content: PASTES_ONLY }])
+      act(() => notify({ chatId: 'chat-1', view: held }))
+
+      await waitFor(() => expect(box().value).toBe('keep me\n\nreply politely'))
+      expect(pasteTexts()).toEqual(['mine', LONG, OTHER_LONG])
+    })
+
+    it('keeps an edit’s chips in its message’s place and does not bring the original’s back', async () => {
+      await mountWithQueue('run-1', [], queued(WITH_PASTE, 'then docs'))
+      key('ArrowUp')
+      key('ArrowUp')
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      fireEvent.change(box(), { target: { value: '' } })
+
+      const held = { ...queued(WITH_PASTE, 'then docs'), held: true }
+      run.queueList.mockResolvedValue(held)
+      run.queueTake.mockResolvedValueOnce([{ content: WITH_PASTE }, { content: 'then docs' }])
+      act(() => notify({ chatId: 'chat-1', view: held }))
+      await waitFor(() => expect(run.queueTake).toHaveBeenCalledWith('chat-1'))
+      // Chips alone are an edit that stands: the original's typed text does not come back either.
+      await waitFor(() => expect(box().value).toBe('then docs'))
+      expect(pasteTexts()).toEqual([LONG])
+    })
+
+    it('brings the original back, chips and all, for an edit emptied of both', async () => {
+      await mountWithQueue('run-1', [], queued(WITH_PASTE))
+      key('ArrowUp')
+      fireEvent.change(box(), { target: { value: '' } })
+      act(() => useComposerDraftStore.getState().update(DRAFT_KEY, () => ({ pastes: [] })))
+
+      const held = { ...queued(WITH_PASTE), held: true }
+      run.queueList.mockResolvedValue(held)
+      run.queueTake.mockResolvedValueOnce([{ content: WITH_PASTE }])
+      act(() => notify({ chatId: 'chat-1', view: held }))
+      await waitFor(() => expect(box().value).toBe('reply politely'))
+      expect(pasteTexts()).toEqual([LONG])
+    })
   })
 })

@@ -8,7 +8,8 @@
 - Renderer composer: `src/renderer/src/components/chat/ChatInput.tsx` (`takeTextPaste`, `handlePaste`, `handleKeyDown`, `handleInsertPaste`, `handleRemovePaste`), `src/renderer/src/components/chat/PasteBadge.tsx`, `src/renderer/src/components/chat/PastedTextPreviewModal.tsx`, `src/renderer/src/utils/composerPaste.ts` (`PASTE_TOO_LONG`), `src/renderer/src/stores/composerDraft.store.ts` (`pastes`), `src/renderer/src/hooks/useCacheExpiryNotice.ts`.
 - Renderer transcript: `src/renderer/src/components/chat/MessageBubble.tsx` (`UserMessageContent`, `PasteCard`), `src/renderer/src/components/chat/useBubbleClamp.ts`.
 - Renderer tasks: `src/renderer/src/components/tasks/TaskView.tsx`, `src/renderer/src/components/tasks/TaskFormDialog.tsx` (goal through `summarizeUserText`).
-- Tests: `ChatInput.paste.test.tsx`, `MessageBubble.pastes.test.tsx`, `chatTitleService.test.ts`.
+- Tests: `ChatInput.paste.test.tsx`, `ChatInput.pendingQueue.test.tsx` (recall, edit and held-restore chips), `MessageBubble.pastes.test.tsx`, `chatTitleService.test.ts`.
+- Live: `e2e/specs/live-pasted-text.spec.ts` (billed, one turn) — a chipped 24-line log with an escaped closing tag, the agent asked for a token in it; passed on OpenCode, Claude and Codex on 2026-10-27, no agent mentioned the tags. Antigravity was not proven: Google refused every prompt that day, `What is 2+2?` included.
 
 ## Database Schema
 
@@ -28,11 +29,14 @@ None added. The only IPC touched is the existing `window.api.files.clipboardHasF
 
 ## Composer behaviour
 
-- `takeTextPaste` returns without acting for Cmd/Ctrl+Shift+V (a timestamp set in `handleKeyDown`, valid 1 s), `editingId` (a recalled queued message is being edited), a non-collapsed selection, or `findTriggerToken` at the caret.
+- `takeTextPaste` returns without acting for Cmd/Ctrl+Shift+V (a timestamp set in `handleKeyDown`, valid 1 s), a non-collapsed selection, or `findTriggerToken` at the caret.
 - With files on the clipboard but attachments unavailable and `text/plain` present, it chips only if `pasteIntent` says the clipboard is text.
 - Undo: `undoablePasteRef` holds the chip id and the textarea value at paste time. `handleKeyDown` clears it on every key except bare modifiers and the paste chord; `handleChange` clears it. Cmd/Ctrl+Z with the ref set and an unchanged textarea value removes the chip and prevents the default.
 - The oversize error is `attachError === PASTE_TOO_LONG`; `clearPasteTooLong` clears only that value, on an accepted chip paste and in `handleRemovePaste` / `handleInsertPaste`.
 - Run on its own: `autonomousRun.onStart` builds the goal with `withPastes(withPathRefs(input.trim(), pathRefs), pastes)` and records text, path and paste ids in `autonomousSourceRef`; `onStarted` removes exactly those.
+- Recall: `pastesFromContent(content)` splits with `splitPastes` into fresh chips (new `newPasteId`) and `typedText`; a content with no block is returned unchanged. `recallHistory` sets `Recall.pasteIds` and writes text and chips in one draft update, replacing the previous entry's chips (by `pasteIds`) and keeping the draft's others. It continues only while the input equals `Recall.text` and `samePasteIds(pastes, pasteIds)`; with no active recall it starts only from an empty input and no chips, so a pastes-only entry (empty input) is told from the history's end by chip ids. Past the newest, the recalled chips are removed with the text. The vanished-edit effect sets `pasteIds: []` so the edit never matches the original and the arrows move the caret.
+- Queue edit: `saveQueuedEdit` is allowed with chips alone and sends `withPastes(text, pastes)`; on success it removes the saved chips by id (a chip pasted during the save stays). Esc in edit mode sets the draft to `{ text: '', pastes: [] }`. Send-disabled in edit mode is `!input.trim() && pastes.length === 0`.
+- Held restore: each taken item goes through `pastesFromContent`; the edited item is found by raw content, and when the edit stands (typed text or chips in the draft) its own chips are kept and the original's pastes are not re-added, otherwise the original's come back. Other items' chips are appended to the draft's. Blocks that sat between typed text in a merged item all come back as chips (order among chips preserved, ahead of the text on send).
 - The send path clears the draft's `pastes` by id; `showStop` and the Send-disabled test count `pastes.length`.
 - The draft field is `pastes` on `ComposerDraft`, defaulted to empty in `EMPTY_COMPOSER_DRAFT`; the preview id is cleared on chat/draft change and counts toward `composerBusy`.
 
@@ -55,5 +59,4 @@ No settings. The model receives the pasted text as part of the user message, wit
 
 ## Known gaps
 
-- Recalling a message into the composer (`recallHistory`, held-queue restore) fills the textarea with the raw blocks; no chips are rebuilt, and editing a block's body breaks `lines`, so `splitPastes` shows it as text.
 - The Edit menu role `pasteAndMatchStyle` in `src/main/index.ts` is what delivers Cmd+Shift+V to the inline path; it has been checked in unit tests only, not with real keystrokes in the built app.
