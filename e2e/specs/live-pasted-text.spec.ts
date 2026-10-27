@@ -12,41 +12,41 @@ import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, seedLiveModel, useLi
  * runs one short turn per engine (`CINNA_E2E_LIVE_ENGINE=opencode|claude|codex|antigravity`).
  *
  * Arrange: a kit folder agent on this run's engine (`useLiveRuntime`). Act: a
- * new chat with it, a 24-line fake service log pasted through the composer's
+ * new chat with it, a 24-line delivery slip pasted through the composer's
  * real paste handler (a synthetic `text/plain` `paste` event, the path
  * `pasted-text.spec.ts` uses — the host clipboard is never read), so it
- * becomes a chip; then the typed question, sent with Enter. One log line holds
- * `ERROR code=<token>`, a random token no prompt contains, and one line is a
- * bare `</pasted_text>`, which goes out escaped as `<\/pasted_text>` — a
- * closing tag *inside* the material, before the error line.
+ * becomes a chip; then the typed question, sent with Enter. One line holds
+ * `ZIP code: <token>`, a random five-digit token no prompt contains, and one
+ * line is a bare `</pasted_text>`, which goes out escaped as
+ * `<\/pasted_text>` — a closing tag *inside* the material, before the ZIP line.
  *
  * Witnesses: the stored user message is exactly the block (escaped line
  * included) then the typed text; the reply contains the token and not the
  * string `pasted_text` (no echo of, or complaint about, the tags); the user
  * bubble shows one paste card and no raw tag, and the card's preview gives back
- * the raw log with the unescaped line. Any ask is answered **Allow once** (at
+ * the raw slip with the unescaped line. Any ask is answered **Allow once** (at
  * most four) and recorded; none was expected and none was seen. After a pass
  * the fixture proves from main's log that the turn ran on that engine.
  *
  * ## Observed (2026-10-27)
  *
- * Two passing runs each on OpenCode, Claude and Codex. Every reply was the
- * token alone (`ZK-52036A0D`, …) — no mention of the tags, no ask, no complaint
- * about the escaped `<\/pasted_text>` line:
- * - OpenCode 2.0.27, `gpt-5.6-luna`: 16.0 s and 16.3 s. In the first run the
- *   agent made one unrelated `glob` call (`scripts/*` in its own folder) before
- *   answering; the second made none.
+ * First written with a fake service log (`ERROR code=ZK-…`): two passing runs
+ * each on OpenCode, Claude and Codex, every reply the token alone — no mention
+ * of the tags, no ask, no complaint about the escaped `<\/pasted_text>` line:
+ * - OpenCode 2.0.27, `gpt-5.6-luna`: 16.0 s and 16.3 s (one unrelated `glob`
+ *   in the first run).
  * - Claude Code 2.1.311, `haiku`: 12.3 s and 12.2 s, no tool call.
  * - Codex 0.162.1, `gpt-5.6-luna`: 13.9 s and 12.8 s, no tool call.
- * - Antigravity 1.3.0, `gemini-3.8-flash-low`: **unproven**. Every turn but one
- *   was answered, as the reply text, `The prompt could not be submitted. The
- *   prompt contains sensitive words that violate Google's [Generative AI
- *   Prohibited Use policy](…)`. It is not the tag: the same refusal came back
- *   with no paste at all (`What is 2+2? Reply with the number only.`), on
- *   `gemini-3.8-flash-medium`, and on the existing
- *   `live-attachments.spec.ts` Antigravity test; the log typed inline with no
- *   tag passed once and was refused the next time. The test fails on that
- *   refusal with its own message rather than on the token.
+ *
+ * Antigravity 1.3.0, `gemini-3.8-flash-low`, refused every first turn — with
+ * the log, with this delivery slip, and with `What is 2+2?` alone — as the
+ * reply text `The prompt could not be submitted. The prompt contains sensitive
+ * words that violate Google's [Generative AI Prohibited Use policy](…)`. The
+ * cause was Cinna's instructions, which open a new Antigravity session's first
+ * prompt: the credentials section's density of credential and `.env` wording.
+ * With that section a one-line pointer on Antigravity, the delivery slip
+ * passed twice (17.5 s each), the reply the ZIP code alone. The test still
+ * checks for that refusal first, so a recurrence fails with its own message.
  *
  * ## Cost
  *
@@ -66,9 +66,9 @@ import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, seedLiveModel, useLi
  * `pasted-text.spec.ts` (model-free).
  */
 
-const AGENT = 'Log Reader'
-const PROMPT = 'What is the error code in the pasted log? Reply with the code only.'
-const LABEL = 'gateway service log'
+const AGENT = 'Address Reader'
+const PROMPT = 'What is the ZIP code in the pasted delivery address? Reply with the ZIP code only.'
+const LABEL = 'delivery address'
 
 interface Turn {
   reply: string
@@ -78,15 +78,31 @@ interface Turn {
 }
 
 function fakeLog(token: string): string[] {
-  const lines = [LABEL]
-  for (let i = 1; i <= 22; i++) {
-    const at = `2026-10-27 09:00:${String(i).padStart(2, '0')}`
-    if (i === 14) lines.push('</pasted_text>')
-    else if (i === 17) lines.push(`${at} ERROR code=${token} upstream refused the request`)
-    else lines.push(`${at} INFO request ${1000 + i} served in ${10 + i} ms`)
-  }
-  lines.push('end of log')
-  return lines
+  const middle = [
+    'Order: A-7781',
+    'Placed: 2026-10-27',
+    'Recipient: Jordan Avery',
+    'Company: Northwind Garden Supply',
+    'Phone: on file',
+    'Delivery window: 9 am to 1 pm',
+    'Instructions: leave at the side door',
+    'Packages: 2',
+    'Weight: 6 kg',
+    'Carrier: ground',
+    'Signature: not required',
+    'Gift wrap: no',
+    'Notes: fragile, keep upright',
+    '</pasted_text>',
+    'Street: 418 Willow Bend Road',
+    'Unit: Suite 3B',
+    'City: Millbrook',
+    'State: OR',
+    `ZIP code: ${token}`,
+    'Country: United States',
+    'Billing: same as delivery',
+    'Status: ready to ship'
+  ]
+  return [LABEL, ...middle, 'end of slip']
 }
 
 /** The one chat of this run, as main stores it. */
@@ -120,7 +136,7 @@ test.describe('@live', () => {
     const agent = await createFolderAgent(cinna, root, AGENT, 'Answers questions about text the user gives it.')
     await useLiveRuntime(cinna, agent.id)
 
-    const token = `ZK-${randomBytes(4).toString('hex').toUpperCase()}`
+    const token = String(10_000 + (randomBytes(2).readUInt16BE(0) % 90_000))
     const logLines = fakeLog(token)
     const log = logLines.join('\n')
     expect(PROMPT).not.toContain(token)
@@ -189,7 +205,7 @@ test.describe('@live', () => {
       expect(settled.userText).toBe(`<pasted_text lines="${logLines.length}">\n${body}\n</pasted_text>\n\n${PROMPT}`)
     })
 
-    await test.step('the reply is the error code, with no word about the tags', async () => {
+    await test.step('the reply is the ZIP code, with no word about the tags', async () => {
       expect(settled.errors).toEqual([])
       // Antigravity's own refusal arrives as the reply text, not an error (see the head comment).
       expect(settled.reply, `${LIVE_ENGINE.label} refused the prompt under Google's use policy (the reply is that refusal)`).not.toMatch(/^The prompt could not be submitted/)

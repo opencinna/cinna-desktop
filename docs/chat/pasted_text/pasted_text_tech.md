@@ -9,7 +9,7 @@
 - Renderer transcript: `src/renderer/src/components/chat/MessageBubble.tsx` (`UserMessageContent`, `PasteCard`), `src/renderer/src/components/chat/useBubbleClamp.ts`.
 - Renderer tasks: `src/renderer/src/components/tasks/TaskView.tsx`, `src/renderer/src/components/tasks/TaskFormDialog.tsx` (goal through `summarizeUserText`).
 - Tests: `ChatInput.paste.test.tsx`, `ChatInput.pendingQueue.test.tsx` (recall, edit and held-restore chips), `MessageBubble.pastes.test.tsx`, `chatTitleService.test.ts`.
-- Live: `e2e/specs/live-pasted-text.spec.ts` (billed, one turn) — a chipped 24-line log with an escaped closing tag, the agent asked for a token in it; passed on OpenCode, Claude and Codex on 2026-10-27, no agent mentioned the tags. Antigravity was not proven: Google refused every prompt that day, `What is 2+2?` included.
+- Live: `e2e/specs/live-pasted-text.spec.ts` (billed, one turn) — a chipped 24-line delivery slip with an escaped closing tag, the agent asked for its ZIP code; passed on OpenCode, Claude, Codex and Antigravity on 2026-10-27, no agent mentioned the tags (Antigravity once its first-prompt credentials section became a pointer).
 
 ## Database Schema
 
