@@ -112,6 +112,15 @@ export interface DesktopPromptContext {
    */
   ownSkills?: 'skill' | 'pointer'
   /**
+   * How the credentials section reaches the agent: `inline`, the rule and
+   * `credentials/README.md` pasted in, or `pointer`, one line naming the file.
+   * Antigravity is `pointer`: its instructions travel in the first prompt,
+   * where Google's filter refuses a prompt dense with credential and `.env`
+   * wording (the inline section tipped every new chat into a refusal). Absent
+   * reads as `inline`.
+   */
+  credentials?: 'inline' | 'pointer'
+  /**
    * How the model calls the `tasks_*` tools; absent reads as `direct`. Only
    * the OpenCode config source sets `codeMode`. Stable per engine, so it may
    * live in the prompt.
@@ -447,7 +456,15 @@ export function assembleAgentPrompt(
   }
 
   const credentials = readTextFile(join(agentDir, 'credentials', 'README.md'))
-  if (credentials) {
+  if (credentials && context.credentials === 'pointer') {
+    sections.push(
+      [
+        '## Your credentials',
+        '',
+        'How this agent reads its credentials, and the rules for them, are in `credentials/README.md`. Read it before you write or run a script that needs one.'
+      ].join('\n')
+    )
+  } else if (credentials) {
     sections.push(
       [
         '## Your credentials',
@@ -818,6 +835,8 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
   // Codex has no skill loader, and Antigravity's reads only its own skill
   // folders; Claude and OpenCode load the agent's skills natively.
   const ownSkills = engine === 'codex' || engine === 'antigravity' ? 'pointer' : 'skill'
+  // Antigravity's instructions are its first prompt, screened by Google's filter.
+  const credentials = engine === 'antigravity' ? 'pointer' : 'inline'
   const artifactsFolder = artifactsSkill ? artifactsFolderRole() : null
-  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills, ...(artifactsSkill ? { artifactsSkill, ...(artifactsFolder ? { artifactsFolder } : {}) } : {}) } : {}) }
+  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills, credentials, ...(artifactsSkill ? { artifactsSkill, ...(artifactsFolder ? { artifactsFolder } : {}) } : {}) } : {}) }
 }

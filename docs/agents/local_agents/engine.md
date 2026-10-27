@@ -422,7 +422,7 @@ The folder already contains everything the agent needs to know; it is just sprea
 
 1. `Local/<slug>/docs/WORKFLOW_PROMPT.md` — the agent itself
 2. `Local/<slug>/scripts/README.md`, under "Your scripts"
-3. `Local/<slug>/credentials/README.md`, under "Your credentials", preceded by the never-read-the-secret-files rule
+3. `Local/<slug>/credentials/README.md`, under "Your credentials", preceded by the never-read-the-secret-files rule. On Antigravity the section is one line naming that file instead (`DesktopPromptContext.credentials: 'pointer'`): its instructions open the first prompt, and Google's filter refuses a prompt that dense with credential and `.env` wording ([Antigravity](antigravity_engine.md))
 4. The **list** of `.md` topics under `Local/<slug>/knowledge/`
 5. "Your skills", when the agent has a deliverable skill of its own ([Agent Skills](skills.md)): on Claude and OpenCode, which load the skills themselves, one sentence saying the skill tool has them; on Codex, or when the links folder those two read could not be written, each skill's name, description and `SKILL.md` path
 6. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none

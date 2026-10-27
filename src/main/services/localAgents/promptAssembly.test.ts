@@ -171,6 +171,20 @@ describe('assembleAgentPrompt', () => {
     expect(prompt).toContain('real text')
   })
 
+  it('names credentials/README.md instead of pasting it when the context asks for a pointer (Antigravity)', () => {
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    write('credentials/README.md', '# Credentials\n\nDeclare the slot first.')
+    const prompt = assembleAgentPrompt(dir, manifest(), { ...CONTEXT, credentials: 'pointer' })
+    expect(prompt).toContain('## Your credentials')
+    expect(prompt).toContain('are in `credentials/README.md`')
+    expect(prompt).not.toContain('Declare the slot first.')
+    expect(prompt).not.toContain('Read a credential only through')
+    // The running-now rule still stands.
+    expect(prompt).toMatch(/never read `credentials\/\.env` yourself/i)
+    expect(resolveDesktopPromptContext('antigravity').credentials).toBe('pointer')
+    expect(resolveDesktopPromptContext('claude').credentials).toBe('inline')
+  })
+
   it('states the never-read-the-secret-files rule even when the folder has no credentials README', () => {
     write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
     // The rule is the desktop's, not the folder's: an agent whose author
