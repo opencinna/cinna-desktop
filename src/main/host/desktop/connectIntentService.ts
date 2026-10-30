@@ -56,7 +56,7 @@ const logger = createLogger('connect-intent')
  * — an origin is tens of characters — and a megabyte argv entry is not worth
  * handing to `new URL`.
  */
-const MAX_URL_LENGTH = 2048
+export const MAX_URL_LENGTH = 2048
 
 /** Hosts allowed to speak plain `http`, for local development only. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
@@ -64,7 +64,23 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 /** The one action the scheme currently carries. */
 const CONNECT_ACTION = 'connect'
 
-export type ConnectIntentSource = 'open-url' | 'second-instance' | 'argv' | 'test-argv'
+export type ConnectIntentSource =
+  | 'open-url'
+  | 'second-instance'
+  | 'argv'
+  | 'test-argv'
+  | 'clipboard'
+  | 'paste'
+
+/** Options for {@link connectIntentService.deliver}. */
+export interface DeliverOptions {
+  /**
+   * Push the accepted intent to the renderer (the default). The clipboard check
+   * passes `false`: the renderer asked for the answer and decides itself whether
+   * it is still in time to show it, and a push would bypass that decision.
+   */
+  push?: boolean
+}
 
 /**
  * Reduce a candidate server URL to its origin, or explain why it is refused.
@@ -175,6 +191,18 @@ export function connectUrlFromArgv(argv: readonly string[]): string | null {
 let pending: ConnectIntent | null = null
 let getWindow: (() => BrowserWindow | null) | null = null
 
+/**
+ * Where the first-run clipboard check reads from. `index.ts` installs it: the
+ * real pasteboard in a normal run, the `CINNA_E2E_CLIPBOARD_TEXT` seam (or
+ * nothing at all) under the E2E sandbox. Null never reads.
+ */
+let clipboardSource: (() => string | undefined) | null = null
+/** Clipboard text worth parsing: a `cinna://connect` link in either spelling. */
+const CLIPBOARD_LINK = new RegExp(`^${CONNECT_SCHEME}:///?${CONNECT_ACTION}(?:[/?#]|$)`, 'i')
+
+/** Set by the first {@link connectIntentService.checkClipboardOnce} of the process. */
+let clipboardChecked = false
+
 export const connectIntentService = {
   /** Called once from `index.ts`, which owns the window. */
   install(resolver: () => BrowserWindow | null): void {
@@ -188,7 +216,11 @@ export const connectIntentService = {
    * Returns the accepted intent so callers can log, but the reaction — focus
    * and push — happens here, so no caller can accidentally skip it.
    */
-  deliver(rawUrl: string, source: ConnectIntentSource): ConnectIntent | null {
+  deliver(
+    rawUrl: string,
+    source: ConnectIntentSource,
+    options: DeliverOptions = {}
+  ): ConnectIntent | null {
     const intent = parseConnectUrl(rawUrl)
     if (!intent) return null
 
@@ -199,6 +231,7 @@ export const connectIntentService = {
     logger.info('connect intent received', { source, serverUrl: intent.serverUrl })
     pending = intent
 
+    if (options.push === false) return intent
     if (isCinnaOAuthInProgress()) {
       logger.info('holding the connect intent until the current authorization ends')
       return intent
@@ -225,16 +258,75 @@ export const connectIntentService = {
     return pending
   },
 
-  /** The renderer has dealt with it — connected, switched, or declined. */
-  consume(): void {
+  /**
+   * The renderer has dealt with it — connected, switched, or declined. With
+   * `receivedAt`, only that intent is dropped: the first-run gate discarding a
+   * late clipboard answer must not take a link clicked a moment later with it.
+   */
+  consume(receivedAt?: number): void {
+    if (receivedAt !== undefined && pending?.receivedAt !== receivedAt) return
     if (pending) logger.debug('connect intent consumed')
     pending = null
+  },
+
+  /** Called once from `index.ts`, which decides whether the sandbox may read it. */
+  installClipboardSource(source: (() => string | undefined) | null): void {
+    clipboardSource = source
+  },
+
+  /**
+   * The install handoff: the download page copied a `cinna://connect` link, and
+   * the first run of the freshly installed app picks it up from the clipboard.
+   *
+   * At most one read per process — the renderer asks once on first-run
+   * onboarding, and nothing else may turn this into a clipboard watcher. No
+   * read at all when an intent is already pending (a clicked link is newer and
+   * more deliberate than a copied one). The clipboard is the user's private
+   * data, so nothing that is not a candidate link is ever logged, and the
+   * clipboard is never written or cleared.
+   *
+   * The accepted intent is buffered **without a push**: the renderer drops an
+   * answer that arrives after the welcome step has painted (nothing may move
+   * under the user), and a push would land regardless. Returns only an intent
+   * this read delivered: one that was already pending reaches the renderer
+   * through `connect:get-pending`, and the renderer consumes a late answer, so
+   * returning a clicked link here would let that consume drop it.
+   */
+  checkClipboardOnce(): ConnectIntent | null {
+    if (clipboardChecked) return null
+    clipboardChecked = true
+    if (pending || !clipboardSource) return null
+
+    let raw: unknown
+    try {
+      raw = clipboardSource()
+    } catch (err) {
+      logger.warn('could not read the clipboard', {
+        // The class and message of the failure only; a failed read has no
+        // contents to leak, and this is the one place that could be tempted.
+        error: err instanceof Error ? `${err.name}: ${err.message}` : typeof err
+      })
+      return null
+    }
+    if (typeof raw !== 'string') return null
+
+    const text = raw.trim()
+    // Narrower than the scheme: `parseConnectUrl` logs the action of a
+    // `cinna://` URL it refuses, and for clipboard text that would be a piece
+    // of whatever the user copied.
+    if (!CLIPBOARD_LINK.test(text) || text.length > MAX_URL_LENGTH) {
+      logger.debug('the clipboard holds no connect link')
+      return null
+    }
+    return this.deliver(text, 'clipboard', { push: false })
   },
 
   /** Test seam: forget the buffer between cases. */
   reset(): void {
     pending = null
     getWindow = null
+    clipboardSource = null
+    clipboardChecked = false
   }
 }
 

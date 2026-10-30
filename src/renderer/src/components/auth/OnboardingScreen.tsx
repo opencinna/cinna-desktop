@@ -23,6 +23,7 @@ import {
 import { pickDefaultModelId } from '../../../../shared/modelDefaults'
 import type { ConnectIntent } from '../../../../shared/connectIntent'
 import { ConnectIntentPanel } from './ConnectIntentPanel'
+import { useConnectIntentStore } from '../../stores/connectIntent.store'
 
 interface OnboardingScreenProps {
   onComplete: () => void
@@ -103,6 +104,16 @@ const btnSecondaryClass =
 
 const btnPrimaryClass =
   'px-5 py-2 text-sm rounded-md bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50'
+
+/** Pasted text worth handing to main: anything on the `cinna://` scheme. */
+function isConnectLinkText(text: string): boolean {
+  return text.toLowerCase().startsWith('cinna://')
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+}
 
 export function OnboardingScreen({
   onComplete,
@@ -263,6 +274,59 @@ export function OnboardingScreen({
     setStep('cinna-server')
     setCinnaError('Authorization cancelled')
   }
+
+  // A `cinna://connect` link pasted into onboarding — the download page copied
+  // it, and on macOS the app never reads the clipboard by itself. It never
+  // enters a field: main parses it through the same funnel as a clicked link,
+  // and the confirm step takes over. Offered to the store as well as pushed, so
+  // the redirect does not depend on which of the two lands first. A refusal is
+  // shown on the Server URL step, the one place with room for it; the error is
+  // set once, from the answer, since clearing it first would drop the line for
+  // a frame and bring it back.
+  const deliverPastedLink = (text: string): void => {
+    window.api.connect.deliverPasted(text).then(
+      (found) => {
+        if (found) {
+          setCinnaError('')
+          useConnectIntentStore.getState().offer(found)
+        } else {
+          setCinnaError('That link has no server Cinna can use.')
+          setStep('cinna-server')
+        }
+      },
+      () => {
+        setCinnaError("Couldn't read that link. Try again.")
+        setStep('cinna-server')
+      }
+    )
+  }
+
+  const handleServerUrlPaste = (e: React.ClipboardEvent<HTMLInputElement>): void => {
+    const text = e.clipboardData.getData('text').trim()
+    if (!isConnectLinkText(text)) return
+    e.preventDefault()
+    deliverPastedLink(text)
+  }
+
+  // The Welcome card has no field, but the page's note says "paste it", and a
+  // person who just installed the app presses Cmd+V on the first screen they
+  // see. Listening on the document catches that; a real keystroke is a user
+  // paste, so macOS asks nothing. Only while Welcome shows, and never over an
+  // editable element, which handles its own paste.
+  const deliverPastedLinkRef = useRef(deliverPastedLink)
+  deliverPastedLinkRef.current = deliverPastedLink
+  useEffect(() => {
+    if (step !== 'welcome') return
+    const onPaste = (e: ClipboardEvent): void => {
+      if (isEditableTarget(e.target)) return
+      const text = e.clipboardData?.getData('text').trim() ?? ''
+      if (!isConnectLinkText(text)) return
+      e.preventDefault()
+      deliverPastedLinkRef.current(text)
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  }, [step])
 
   const handleRemoveHistoryEntry = (url: string): void => {
     const next = selfHostedHistory.filter((u) => u !== url)
@@ -582,6 +646,7 @@ export function OnboardingScreen({
               placeholder="https://your-server.com"
               value={cinnaServerUrl}
               onChange={(e) => setCinnaServerUrl(e.target.value)}
+              onPaste={handleServerUrlPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && cinnaServerUrl.trim() && !register.isPending) {
                   e.preventDefault()
@@ -634,14 +699,18 @@ export function OnboardingScreen({
             </div>
           )}
 
-          {cinnaError && <div className="text-xs text-[var(--color-danger)]">{cinnaError}</div>}
-
-          <div className="flex justify-end pt-1">
+          {/* The error shares the footer row with Connect rather than sitting
+              above it, so a failure — a refused paste fires with no submit —
+              never moves the button. */}
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div role="alert" className="min-w-0 text-xs text-[var(--color-danger)]">
+              {cinnaError}
+            </div>
             <button
               type="button"
               onClick={handleCinnaConnect}
               disabled={register.isPending || !cinnaServerUrl.trim()}
-              className={btnPrimaryClass}
+              className={`${btnPrimaryClass} shrink-0`}
             >
               Connect
             </button>

@@ -17,6 +17,12 @@ interface ConnectIntentStore {
   intent: ConnectIntent | null
   subscribed: boolean
   subscribe: () => Promise<void>
+  /**
+   * An intent the renderer fetched itself (the first-run clipboard check, a
+   * pasted link). Held only when nothing is: a pushed or pending link is the
+   * one already on its way to the screen.
+   */
+  offer: (intent: ConnectIntent) => void
   /** Confirmed, declined or switched to — tell main to drop the buffer too. */
   consume: () => void
 }
@@ -43,6 +49,10 @@ export const useConnectIntentStore = create<ConnectIntentStore>((set, get) => ({
         message: (err as Error).message
       })
     }
+  },
+
+  offer: (intent) => {
+    if (!get().intent) set({ intent })
   },
 
   consume: () => {

@@ -10,7 +10,7 @@ import { installRuntimeHost } from './host/runtimeHost'
 import { installEventPublisher } from './host/events'
 import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtimeHost'
 import { taskRuntimeService } from './services/taskRuntimeService'
-import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
+import { app, shell, BrowserWindow, Menu, dialog, powerMonitor, clipboard } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { appendFileSync, renameSync, statSync } from 'fs'
@@ -64,6 +64,28 @@ if (overrideUserData) {
   app.setPath('userData', overrideUserData)
   app.setPath('sessionData', join(overrideUserData, 'session-data'))
 }
+
+// The install handoff reads the clipboard once on first run, on Linux only.
+// macOS is left out because a program reading the pasteboard without a user
+// paste can raise "Allow Paste?". It is opt-in on macOS 15 and Apple means to
+// turn it on for everyone. The bare-Mac probe with the preview on showed an
+// `NSAlert` modal on main, and the app frozen behind it at first launch. A Mac
+// user pastes the link into Server URL instead, or clicks the page's Open
+// button. Under the E2E sandbox the developer's real pasteboard is never read
+// — a `cinna://` link they happened to copy would hijack whichever first-run
+// spec ran next — so the sandbox reads only the `CINNA_E2E_CLIPBOARD_TEXT`
+// seam, on every platform so the renderer path stays testable, and nothing at
+// all without it. The seam is ignored outside the sandbox.
+const e2eClipboardText = process.env['CINNA_E2E_CLIPBOARD_TEXT']
+connectIntentService.installClipboardSource(
+  overrideUserData
+    ? e2eClipboardText !== undefined
+      ? () => e2eClipboardText
+      : null
+    : process.platform === 'linux'
+      ? () => clipboard.readText()
+      : null
+)
 
 let mainWindow: BrowserWindow | null = null
 let startupComplete = false

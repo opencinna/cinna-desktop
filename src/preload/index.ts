@@ -1723,8 +1723,26 @@ const api = {
   connect: {
     /** The buffered intent, for a renderer that mounted after it arrived. */
     getPending: (): Promise<ConnectIntent | null> => ipcRenderer.invoke('connect:get-pending'),
-    /** Confirmed, declined, or switched to — either way, drop the buffer. */
-    consume: (): Promise<{ success: true }> => ipcRenderer.invoke('connect:consume'),
+    /**
+     * Confirmed, declined, or switched to — either way, drop the buffer. With
+     * `receivedAt`, main drops it only if it still holds that intent.
+     */
+    consume: (receivedAt?: number): Promise<{ success: true }> =>
+      ipcRenderer.invoke('connect:consume', receivedAt),
+    /**
+     * First-run only: a connect link the download page left on the clipboard,
+     * buffered without a push; null otherwise — including when an intent is
+     * already pending, which arrives through `getPending`/`onIntent` instead.
+     * Main reads the clipboard at most once per process.
+     */
+    checkClipboard: (): Promise<ConnectIntent | null> =>
+      ipcRenderer.invoke('connect:check-clipboard'),
+    /**
+     * A `cinna://` link pasted into the Server URL field, parsed in main. The
+     * accepted intent is also pushed, like a clicked link; null when refused.
+     */
+    deliverPasted: (text: string): Promise<ConnectIntent | null> =>
+      ipcRenderer.invoke('connect:deliver-pasted', text),
     /** Fires when a link arrives while the app is running. Returns an unsubscribe. */
     onIntent: (handler: (intent: ConnectIntent) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, intent: ConnectIntent): void => handler(intent)
