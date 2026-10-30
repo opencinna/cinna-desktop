@@ -84,7 +84,7 @@ beforeEach(() => {
   turnLock.releaseAll()
   workshop = mkdtempSync(join(tmpdir(), 'cinna-write-'))
   // Point the agents home at the temp workshop *before* anything calls
-  // `ensureHome`, which would otherwise resolve the real `~/Documents/CinnaAgents`
+  // `ensureHome`, which would otherwise resolve the real `~/CinnaAgents`
   // and create it. A test must never write outside its temp directory.
   appSettingsRepo.set('localAgentsHome', workshop)
   scaffoldService.installRootTemplates(workshop)

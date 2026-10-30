@@ -1,7 +1,7 @@
 import { dialog, type OpenDialogOptions } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
-import { localAgentService } from '../services/localAgents/localAgentService'
+import { localAgentService, type LocalAgentListResult } from '../services/localAgents/localAgentService'
 import { agentMcpService } from '../services/agentMcpService'
 import { runtimeService } from '../services/localAgents/runtimeService'
 import { providerService } from '../services/providerService'
@@ -21,7 +21,6 @@ import type {
   AgentCredentialBinding,
   AddAgentFolderResult,
   AgentRootDto,
-  AgentsHomeAccess,
   AgentsHomeState,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
@@ -93,7 +92,7 @@ async function withCodeAsync<T>(fn: () => Promise<T>): Promise<LocalAgentOutcome
 export function registerLocalAgentHandlers(): void {
   ipcHandle(
     'local-agent:list',
-    (): { roots: AgentRootDto[]; agents: LocalAgentDto[]; homeAccess: AgentsHomeAccess } => {
+    (): LocalAgentListResult => {
       userActivation.requireActivated()
       return localAgentService.list(getSettingsScopeUserId())
     }

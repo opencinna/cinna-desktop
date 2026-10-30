@@ -27,8 +27,10 @@ import type { Page } from '@playwright/test'
  *   engine's own records of sessions whose working folder was inside it: the
  *   `~/.claude/projects/<cwd>` folders, and the `~/.codex/sessions` rollouts
  *   (plus any new `~/.codex` file named after one of their thread ids, and the
- *   empty date folders they made). `~/Documents/CinnaAgents` (and its `Local/`,
- *   `Cloud/`) must have the same mtimes after as before, or the test fails.
+ *   empty date folders they made). The real agents homes — `~/CinnaAgents`, the
+ *   default, and `~/Documents/CinnaAgents`, the one older installs keep — and
+ *   their `Local/`, `Cloud/` must have the same mtimes after as before, or the
+ *   test fails.
  *
  * What is **not** restored: Claude's `~/.claude.json` bookkeeping for the temp
  * cwd, Codex's shared SQLite rows and caches (`models_cache.json` etc.).
@@ -48,7 +50,7 @@ export interface RealLogin {
 
 /** The real-login part of a sandbox: what to compare and clean after the test. */
 export interface RealLoginRun {
-  /** `~/Documents/CinnaAgents` before the launch. */
+  /** The real agents homes (`~/CinnaAgents`, `~/Documents/CinnaAgents`) before the launch. */
   before: Record<string, number | null>
   /** `~/.codex` files before the launch (Codex only). */
   codexBefore: Map<string, number>
@@ -99,7 +101,7 @@ export async function pinRealLoginProfile(page: Page, home: string, login: RealL
 
 /**
  * Delete the throwaway folder and the engine's records of sessions inside it;
- * answers what was removed and whether `~/Documents/CinnaAgents` is untouched.
+ * answers what was removed and whether the real agents homes are untouched.
  */
 export function endRealLogin(login: RealLogin, home: string, run: RealLoginRun): { removed: string[]; realAgentsHomeUnchanged: boolean } {
   const removed: string[] = []
@@ -148,11 +150,23 @@ function codexHome(): string {
   return process.env.CODEX_HOME ?? join(homedir(), '.codex')
 }
 
-/** Whether `~/Documents/CinnaAgents` exists, and the mtimes of it and its `Local/` and `Cloud/`. */
+/**
+ * Whether the real agents homes exist, and the mtimes of each and its `Local/`
+ * and `Cloud/`: `~/CinnaAgents` (the default) and `~/Documents/CinnaAgents`
+ * (the default before it moved, which older installs keep).
+ */
 function realAgentsHomeFingerprint(): Record<string, number | null> {
-  const base = join(homedir(), 'Documents', 'CinnaAgents')
   const mtime = (path: string): number | null => (existsSync(path) ? statSync(path).mtimeMs : null)
-  return { home: mtime(base), local: mtime(join(base, 'Local')), cloud: mtime(join(base, 'Cloud')) }
+  const out: Record<string, number | null> = {}
+  for (const [key, base] of [
+    ['home', join(homedir(), 'CinnaAgents')],
+    ['documents', join(homedir(), 'Documents', 'CinnaAgents')]
+  ] as const) {
+    out[key] = mtime(base)
+    out[`${key}Local`] = mtime(join(base, 'Local'))
+    out[`${key}Cloud`] = mtime(join(base, 'Cloud'))
+  }
+  return out
 }
 
 /** Every regular file under `dir` (symlinks not followed), with its mtime. */

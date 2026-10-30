@@ -44,11 +44,27 @@ interface AgentsHomeStore {
   reopen: (access: Unresolved) => void
   /** Put it away without answering. Every surface that raises it keeps a way back. */
   dismiss: () => void
+  /**
+   * The Agents tab's one creation of a missing, unguarded home, per window.
+   *
+   * A list read never creates the home, so the tab asks main to once it opens
+   * (`useCreateAgentsHomeOnOpen`). Held here rather than in a component, which
+   * `<StrictMode>`, a refetch or a tab switch would mount again. Keyed by the
+   * home path it ran for: `null` until the first request, `running` until the
+   * lists have come back with its answer, then `done` for the life of the
+   * window — a refused folder is the sidebar's "Pick another folder", not a
+   * request to repeat. A home moved to a different path is a different
+   * missing home, and is created once more.
+   */
+  autoCreate: { path: string; state: 'running' | 'done' } | null
+  setAutoCreate: (autoCreate: { path: string; state: 'running' | 'done' } | null) => void
 }
 
 export const useAgentsHomeStore = create<AgentsHomeStore>((set) => ({
   ask: null,
   dismissed: [],
+  autoCreate: null,
+  setAutoCreate: (autoCreate) => set({ autoCreate }),
 
   request: (access) =>
     set((s) => {

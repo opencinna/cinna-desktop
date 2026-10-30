@@ -38,6 +38,13 @@ interface NewLocalAgentModalProps {
   onRemoteAcp?: () => void
   onCustom?: () => void
   onCreateFolder?: () => boolean
+  /**
+   * The step the dialog opens at. `choose` from the sidebar's `+`; the empty
+   * agent pane opens `name` ("Create a local agent") or `advanced` ("Other
+   * types of agents") directly. Back from `advanced` still goes to `choose`,
+   * which is where the catalog is.
+   */
+  initialStep?: 'choose' | 'name' | 'advanced'
 }
 
 const INPUT =
@@ -125,7 +132,8 @@ export function NewLocalAgentModal({
   onCustom,
   onRemoteAcp,
   onA2A,
-  onCreateFolder
+  onCreateFolder,
+  initialStep = 'choose'
 }: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
@@ -139,7 +147,7 @@ export function NewLocalAgentModal({
   const pickFolder = usePickAgentFolder()
   const addFolder = useAddAgentFolder()
 
-  const [step, setStep] = useState<Step>({ kind: 'choose' })
+  const [step, setStep] = useState<Step>({ kind: initialStep })
   /** Root-relative paths ticked in the folder step. */
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   /** The name for a single adopted folder. Ignored when several are ticked. */

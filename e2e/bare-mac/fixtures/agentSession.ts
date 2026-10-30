@@ -2,10 +2,10 @@ import { expect, q, type BareVm } from './vm'
 
 /**
  * The steps every per-engine agent spec shares, as `first-agent-session` does
- * them for Claude: skip onboarding, point the agents home at ~/CinnaAgents
- * (the default under ~/Documents meets the Documents access prompt, which
- * nothing in the guest can click), make `engine` the Default runtime, run
+ * them for Claude: skip onboarding, make `engine` the Default runtime, run
  * `setup` inside the same window, then reload so the renderer reads it all.
+ * The agents home is the default, ~/CinnaAgents, which the Agents tab creates
+ * when it opens with no system prompt.
  */
 export async function arrangeAgentsHome(vm: BareVm, engine: string, setup?: () => Promise<void>): Promise<void> {
   const { page } = vm
@@ -13,10 +13,7 @@ export async function arrangeAgentsHome(vm: BareVm, engine: string, setup?: () =
   await page.getByRole('button', { name: 'Skip for now' }).click()
   await expect(page.getByRole('button', { name: 'Chats', exact: true })).toBeVisible()
   await page.evaluate(async (engine) => {
-    await window.api.settings.set('localAgentsHome', '/Users/admin/CinnaAgents')
     await window.api.settings.set('localAgentsDefaultEngine', engine)
-    // What the Agents tab's "Create folder" does, at the home set above.
-    await window.api.localAgents.homeGrant()
   }, engine)
   await setup?.()
   // Writes through window.api bypass the renderer's caches; reload, as a reopen would.

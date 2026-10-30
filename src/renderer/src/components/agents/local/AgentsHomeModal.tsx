@@ -41,8 +41,9 @@ const BODY_MIN_HEIGHT = 'min-h-[368px]'
  * "Where your agents will live" — the folder question, asked before macOS asks
  * its own.
  *
- * On a Mac the agents home is `~/Documents/CinnaAgents`, and creating it raises
- * the system's *"would like to access files in your Documents folder"* prompt.
+ * On a Mac an agents home inside `~/Documents` (where older installs keep it,
+ * or where the user pointed it) raises, when first created, the system's
+ * *"would like to access files in your Documents folder"* prompt.
  * That dialog explains nothing about agents, and until this existed it arrived
  * at whatever moment some screen happened to want the path — including in the
  * middle of signing in. This says what the folder is first, so the system

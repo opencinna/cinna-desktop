@@ -592,10 +592,12 @@ export interface LocalAgentDto {
 /**
  * Whether the agents home is usable, and if not, why not.
  *
- * Only ever anything but `ready` on macOS. Creating `~/Documents/CinnaAgents`
- * is a write into a TCC-protected folder, so the first one raises the system's
- * "would like to access files in your Documents folder" prompt — a dialog that
- * arrives with no context unless the app has said what it is about to do.
+ * Only ever anything but `ready` on macOS, and there only for a home inside a
+ * TCC-protected folder — one the user pointed at `~/Documents`, or the
+ * `~/Documents/CinnaAgents` default older installs keep. The first write there
+ * raises the system's "would like to access files in your Documents folder"
+ * prompt — a dialog that arrives with no context unless the app has said what
+ * it is about to do. The built-in default, `~/CinnaAgents`, is not guarded.
  *
  * * `ready` — the folder can be created (or already was). Nothing to ask.
  * * `needs_consent` — nothing has touched the folder yet and macOS is about to

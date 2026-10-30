@@ -4,8 +4,9 @@
  *
  * ## The problem
  *
- * The home is `~/Documents/CinnaAgents`, and `~/Documents` is one of the
- * folders macOS guards. The first write there raises *"Cinna Desktop would like
+ * The home can sit in `~/Documents` — where the default was before it moved
+ * to `~/CinnaAgents`, and where older installs keep it — and `~/Documents` is
+ * one of the folders macOS guards. The first write there raises *"Cinna Desktop would like
  * to access files in your Documents folder"* — a system dialog with no
  * explanation of what the folder is for, arriving at whatever moment some
  * unrelated screen happened to ask where the agents live. People decline

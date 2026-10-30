@@ -13,8 +13,9 @@ import { createTestDatabase, type TestDatabase } from '../../db/testSupport/node
  * The gate in front of the agents home.
  *
  * What is being protected is not a file, it is a *moment*: on macOS the first
- * write into `~/Documents/CinnaAgents` raises the system's Documents-folder
- * prompt, and the app has to have explained the folder before that happens.
+ * write into a guarded home — `~/Documents/CinnaAgents`, the default older
+ * installs keep (the built-in one is `~/CinnaAgents` now) — raises the
+ * system's Documents-folder prompt, and the app has to have explained the folder before that happens.
  * So the assertions are mostly about what does **not** happen — `ensureHome`
  * creating nothing while the question is outstanding — and about the cases
  * where asking would be wrong: a folder that is not guarded, and an install
@@ -25,8 +26,21 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const holder = vi.hoisted(() => ({
   current: null as TestDatabase | null,
   /** Stands in for `$HOME`, so a "Documents" folder here is a real tmpdir. */
-  home: ''
+  home: '',
+  /** Make `assertUsableRoot` refuse everything, as a redirected `~/Documents` would. */
+  refuseRoots: false
 }))
+
+vi.mock('./pathRules', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pathRules')>()
+  return {
+    ...actual,
+    assertUsableRoot: (path: unknown) => {
+      if (holder.refuseRoots) throw new Error('outside the permitted locations')
+      return actual.assertUsableRoot(path)
+    }
+  }
+})
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
@@ -84,6 +98,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  holder.refuseRoots = false
   homeAccessService.clearRefusal()
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
   holder.current?.close()
@@ -91,14 +106,27 @@ afterEach(() => {
   rmSync(holder.home, { recursive: true, force: true })
 })
 
-/** The default home, spelled the way `homePath` spells it. */
+/** The built-in default home, spelled the way `homePath` spells it. */
 function defaultHome(): string {
+  return join(holder.home, 'CinnaAgents')
+}
+
+/**
+ * The old default, inside `~/Documents`, which a migrated install keeps in
+ * `localAgentsHome`. The guarded home every gate test below is about.
+ */
+function guardedHome(): string {
   return join(holder.home, 'Documents', 'CinnaAgents')
+}
+
+/** Point the home at {@link guardedHome}, as the legacy-home migration does. */
+function pinGuardedHome(): void {
+  appSettingsRepo.set('localAgentsHome', guardedHome())
 }
 
 describe('which folders macOS guards', () => {
   it('guards the Documents folder and what is under it', () => {
-    expect(isGuardedLocation(defaultHome(), 'darwin')).toBe(true)
+    expect(isGuardedLocation(guardedHome(), 'darwin')).toBe(true)
     expect(isGuardedLocation(join(holder.home, 'Desktop', 'x'), 'darwin')).toBe(true)
     expect(isGuardedLocation(join(holder.home, 'Downloads', 'x'), 'darwin')).toBe(true)
   })
@@ -130,15 +158,75 @@ describe('which folders macOS guards', () => {
   it('guards nothing off macOS', () => {
     // A modal explaining a permission prompt that is never going to arrive is
     // worse than no modal.
-    expect(isGuardedLocation(defaultHome(), 'linux')).toBe(false)
-    expect(isGuardedLocation(defaultHome(), 'win32')).toBe(false)
+    expect(isGuardedLocation(guardedHome(), 'linux')).toBe(false)
+    expect(isGuardedLocation(guardedHome(), 'win32')).toBe(false)
+  })
+})
+
+describe('the built-in default', () => {
+  it('is ~/CinnaAgents, outside every guarded folder, so nothing is asked', () => {
+    const state = homeAccessService.state(USER)
+    expect(state.path).toBe(defaultHome())
+    expect(state.guarded).toBe(false)
+    expect(state.access).toBe('ready')
+  })
+})
+
+describe('the pinned legacy home', () => {
+  it('is used as it was while it was the default, without the root validation', () => {
+    // A `~/Documents` redirected outside the allowed bases fails
+    // `assertUsableRoot`; falling back to `~/CinnaAgents` would repoint the
+    // home root and empty the sidebar.
+    pinGuardedHome()
+    holder.refuseRoots = true
+    expect(homeAccessService.state(USER).path).toBe(guardedHome())
+    // Any other configured value is still validated.
+    appSettingsRepo.set('localAgentsHome', join(holder.home, 'Elsewhere'))
+    expect(homeAccessService.state(USER).path).toBe(defaultHome())
+  })
+})
+
+describe('a list read creates nothing', () => {
+  it('reports a missing, creatable home and leaves the disk alone', () => {
+    expect(agentsHomeService.refreshHome(USER)).toBe('ready')
+    expect(agentsHomeService.homeMissing(USER)).toBe(true)
+    expect(agentsHomeService.listRoots(USER)).toEqual([])
+    expect(agentsHomeService.listRootRows(USER)).toEqual([])
+    expect(existsSync(defaultHome())).toBe(false)
+  })
+
+  it('creates it when the Agents tab asks, and keeps it current on reads from then on', async () => {
+    expect((await agentsHomeService.prepare(USER)).access).toBe('ready')
+    expect(existsSync(join(defaultHome(), 'Local'))).toBe(true)
+    expect(agentsHomeService.homeMissing(USER)).toBe(false)
+    // An established home is still repaired by a read, as before: a deleted
+    // folder comes back.
+    rmSync(defaultHome(), { recursive: true, force: true })
+    expect(agentsHomeService.refreshHome(USER)).toBe('ready')
+    expect(existsSync(join(defaultHome(), 'Local'))).toBe(true)
+  })
+
+  it('survives two concurrent creations', async () => {
+    const [a, b] = await Promise.all([agentsHomeService.prepare(USER), agentsHomeService.prepare(USER)])
+    expect([a.access, b.access]).toEqual(['ready', 'ready'])
+    expect(agentRootRepo.list(USER).filter((row) => row.isDefault)).toHaveLength(1)
+  })
+
+  it('does not repoint a home that moved until it is asked to', () => {
+    agentRootRepo.create(USER, { path: join(holder.home, 'Old'), label: 'Agents', isDefault: true })
+    expect(agentsHomeService.homeMissing(USER)).toBe(true)
+    agentsHomeService.listRoots(USER)
+    expect(agentRootRepo.getDefault(USER)?.path).toBe(join(holder.home, 'Old'))
+    expect(existsSync(defaultHome())).toBe(false)
   })
 })
 
 describe('the question, before anything is written', () => {
+  beforeEach(pinGuardedHome)
+
   it('reports the folder and asks first', () => {
     const state = homeAccessService.state(USER)
-    expect(state.path).toBe(defaultHome())
+    expect(state.path).toBe(guardedHome())
     expect(state.guarded).toBe(true)
     expect(state.access).toBe('needs_consent')
   })
@@ -157,18 +245,20 @@ describe('the question, before anything is written', () => {
     } catch (err) {
       expect((err as InstanceType<typeof LocalAgentError>).code).toBe('home_consent_required')
     }
-    expect(existsSync(defaultHome())).toBe(false)
+    expect(existsSync(guardedHome())).toBe(false)
   })
 })
 
 describe('once the user has answered', () => {
+  beforeEach(pinGuardedHome)
+
   it('creates the folder and stops asking', async () => {
     const state = await agentsHomeService.prepare(USER)
     expect(state.access).toBe('ready')
-    expect(existsSync(join(defaultHome(), 'Local'))).toBe(true)
+    expect(existsSync(join(guardedHome(), 'Local'))).toBe(true)
     expect(homeAccessService.state(USER).access).toBe('ready')
     // And the ordinary path works from here on, with no gate in the way.
-    expect(agentsHomeService.ensureHome(USER).path).toBe(defaultHome())
+    expect(agentsHomeService.ensureHome(USER).path).toBe(guardedHome())
   })
 
   it('asks again when the home is pointed at a different guarded folder', async () => {
@@ -189,14 +279,20 @@ describe('once the user has answered', () => {
 })
 
 describe('an install that already has the folder', () => {
+  beforeEach(pinGuardedHome)
+
   it('is not asked about a folder it has been using', () => {
     // The update case: a build from before this gate existed created the home
     // and registered it, which on a guarded path is only possible with the
     // grant already given. Asking now would explain a folder full of the
     // user's own agents.
-    mkdirSync(defaultHome(), { recursive: true })
-    agentRootRepo.create(USER, { path: defaultHome(), label: 'Agents', isDefault: true })
+    mkdirSync(guardedHome(), { recursive: true })
+    agentRootRepo.create(USER, { path: guardedHome(), label: 'Agents', isDefault: true })
     expect(homeAccessService.state(USER).access).toBe('ready')
+    // A read keeps it current, through the home as before.
+    expect(agentsHomeService.homeMissing(USER)).toBe(false)
+    expect(agentsHomeService.refreshHome(USER)).toBe('ready')
+    expect(existsSync(join(guardedHome(), 'Local'))).toBe(true)
   })
 
   it('asks again when the row outlived the folder', () => {
@@ -204,27 +300,32 @@ describe('an install that already has the folder', () => {
     // with it, the folder and the grant do not. Trusting the row alone would
     // send `ensureHome` into a synchronous `mkdir` in `~/Documents` — the main
     // thread frozen behind a prompt nothing had explained.
-    agentRootRepo.create(USER, { path: defaultHome(), label: 'Agents', isDefault: true })
+    agentRootRepo.create(USER, { path: guardedHome(), label: 'Agents', isDefault: true })
     expect(homeAccessService.state(USER).access).toBe('needs_consent')
+    expect(agentsHomeService.refreshHome(USER)).toBe('needs_consent')
+    expect(existsSync(guardedHome())).toBe(false)
   })
 })
 
 describe('a refusal, for as long as the process lives', () => {
+  beforeEach(pinGuardedHome)
+
   it('is what every surface is told, until something succeeds', async () => {
     // Nothing about a refusal is written down — macOS remembers it, and a
     // stored "denied" would outlive the user fixing it in System Settings. So
     // main holds it in memory, and holds it in *one* place: a second answer in
     // the renderer is a second thing to keep in step.
-    homeAccessService.noteRefusal(defaultHome())
+    homeAccessService.noteRefusal(guardedHome())
     expect(homeAccessService.state(USER).access).toBe('denied')
     expect(agentsHomeService.tryEnsureHome(USER)).toBe('denied')
+    expect(agentsHomeService.refreshHome(USER)).toBe('denied')
     // And it does not survive the folder actually being made.
     await agentsHomeService.prepare(USER)
     expect(homeAccessService.state(USER).access).toBe('ready')
   })
 
   it('is forgotten when the home moves somewhere else', () => {
-    homeAccessService.noteRefusal(defaultHome())
+    homeAccessService.noteRefusal(guardedHome())
     appSettingsRepo.set('localAgentsHome', join(holder.home, 'CinnaAgents'))
     // The refusal was about a folder, not about the app. Another folder is a
     // question nobody has answered yet.
@@ -233,6 +334,8 @@ describe('a refusal, for as long as the process lives', () => {
 })
 
 describe('the roots the home is not', () => {
+  beforeEach(pinGuardedHome)
+
   it('keeps listing an adopted folder while the home question stands', () => {
     // The gate is on the home, not on the list. A user who dismissed the folder
     // question and then adopted their own workshop watched it register and
@@ -243,6 +346,6 @@ describe('the roots the home is not', () => {
 
     expect(homeAccessService.state(USER).access).toBe('needs_consent')
     expect(agentsHomeService.listRoots(USER).map((r) => r.path)).toEqual([workshop])
-    expect(existsSync(defaultHome())).toBe(false)
+    expect(existsSync(guardedHome())).toBe(false)
   })
 })

@@ -385,7 +385,7 @@ export const agents = sqliteTable('agents', {
 
 /**
  * Registered agents roots — the workshop folders the scanner walks. Exactly one
- * row per user carries `isDefault`: the agents home (`~/Documents/CinnaAgents`
+ * row per user carries `isDefault`: the agents home (`~/CinnaAgents`
  * unless the `localAgentsHome` app setting overrides it). Extra rows are folders
  * the user adopted, e.g. an existing kit workshop.
  *

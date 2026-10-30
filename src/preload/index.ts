@@ -1988,18 +1988,25 @@ const api = {
      * `homeAccess` rides along because the answer decides what the sidebar
      * shows: an empty list is either "no agents yet" or "the folder has not
      * been created", and those want different words and a different button.
+     * Never creates the home; `homeMissing` says it does not exist yet, which
+     * with `homeAccess: 'ready'` is the Agents tab's cue to call `homeGrant`.
      */
     list: (): Promise<{
       roots: AgentRootDto[]
       agents: LocalAgentDto[]
       homeAccess: AgentsHomeAccess
+      homeMissing: boolean
+      /** The configured home's path, which the tab's creation is keyed on. */
+      homePath: string
     }> => ipcRenderer.invoke('local-agent:list'),
     /** Where the agents home is and whether it can be used. Creates nothing. */
     homeState: (): Promise<AgentsHomeState> => ipcRenderer.invoke('local-agent:home-state'),
     /**
      * Create the agents home. On macOS this is where the system's
-     * Documents-folder prompt appears, so call it from a button, never from a
-     * mount effect — `denied` is the user having answered no.
+     * Documents-folder prompt appears for a guarded home, so call it from a
+     * button while `homeAccess` is `needs_consent`. The one mount-time caller
+     * is the Agents tab, and only while the home is missing and `ready` — no
+     * prompt can follow. `denied` is the system having said no.
      */
     homeGrant: (): Promise<AgentsHomeState> => ipcRenderer.invoke('local-agent:home-grant'),
     /** Pick a different home and create it there. Opens the OS folder picker. */

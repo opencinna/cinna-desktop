@@ -7,10 +7,9 @@ import { expect, q, test } from '../fixtures/vm'
  * into its own profile, checks the login, and says what to do — with no system
  * dialog anywhere on the way.
  *
- * The agents home is set to ~/CinnaAgents, as "choose a different location"
- * would. The default, ~/Documents/CinnaAgents, meets the macOS Documents
- * access prompt: expected, explained by the app first, and not something a
- * test can click from outside the guest.
+ * The agents home is the default, ~/CinnaAgents, which the Agents tab creates
+ * when it opens. It is outside every folder macOS guards, so creating it
+ * raises no Documents access prompt either.
  */
 test('first Claude agent message downloads Claude Code and asks for a login', async ({ vm }) => {
   const { page } = vm
@@ -18,13 +17,10 @@ test('first Claude agent message downloads Claude Code and asks for a login', as
   await page.getByRole('button', { name: 'Skip for now' }).click()
   await expect(page.getByRole('button', { name: 'Chats', exact: true })).toBeVisible()
   await page.evaluate(async () => {
-    await window.api.settings.set('localAgentsHome', '/Users/admin/CinnaAgents')
     await window.api.settings.set('localAgentsDefaultEngine', 'claude')
-    // What the Agents tab's "Create folder" does, at the home set above.
-    await window.api.localAgents.homeGrant()
   })
-  // The renderer read the Default runtime and the agents home at startup, and
-  // writes from here bypass its cache invalidation; reload, as a reopen would.
+  // The renderer read the Default runtime at startup, and writes from here
+  // bypass its cache invalidation; reload, as a reopen would.
   await page.reload()
   await expect(page.getByRole('button', { name: 'Chats', exact: true })).toBeVisible()
 

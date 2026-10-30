@@ -21,9 +21,9 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  * a temp `CINNA_USER_DATA` with `--use-mock-keychain` (the fixture's `launch`),
  * and an agents home in a fresh `~/.cinna-e2e-antigravity-*` set as
  * `localAgentsHome` and checked through `homeState` before `homeGrant`, so
- * nothing creates or grants `~/Documents/CinnaAgents`. Afterwards the agents
- * home and the temp root are removed and `~/Documents/CinnaAgents` must have
- * the same mtimes. The kit folder runs isolated, so the server's own home is
+ * nothing creates or grants the real agents home (`~/CinnaAgents`, or
+ * `~/Documents/CinnaAgents` on an older install). Afterwards the agents home
+ * and the temp root are removed and both real homes must have the same mtimes. The kit folder runs isolated, so the server's own home is
  * `<agent>/.cinna/antigravity` and goes with the folder; every file added or
  * changed under `~/.gemini` is listed in `evidence.json`, never deleted.
  *
@@ -76,11 +76,23 @@ function keychainHasToken(): boolean {
   return spawnSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity-acp'], { stdio: 'ignore' }).status === 0
 }
 
-/** Mtimes of `~/Documents/CinnaAgents` and its `Local/` and `Cloud/`: nothing here may touch them. */
+/**
+ * Mtimes of the real agents homes — `~/CinnaAgents` (the default) and
+ * `~/Documents/CinnaAgents` (where older installs keep it) — and their `Local/`
+ * and `Cloud/`: nothing here may touch them.
+ */
 function realProfileFingerprint(): Record<string, number | null> {
-  const base = join(homedir(), 'Documents', 'CinnaAgents')
   const mtime = (path: string): number | null => (existsSync(path) ? statSync(path).mtimeMs : null)
-  return { home: mtime(base), local: mtime(join(base, 'Local')), cloud: mtime(join(base, 'Cloud')) }
+  const out: Record<string, number | null> = {}
+  for (const [key, base] of [
+    ['home', join(homedir(), 'CinnaAgents')],
+    ['documents', join(homedir(), 'Documents', 'CinnaAgents')]
+  ] as const) {
+    out[key] = mtime(base)
+    out[`${key}Local`] = mtime(join(base, 'Local'))
+    out[`${key}Cloud`] = mtime(join(base, 'Cloud'))
+  }
+  return out
 }
 
 /** Every regular file under `dir` (symlinks not followed), with its mtime. Contents never read. */

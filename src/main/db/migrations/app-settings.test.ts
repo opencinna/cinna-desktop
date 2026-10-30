@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { adaptDatabase } from '../testSupport/nodeSqlite'
 import { runAllMigrations } from './index'
 import { AI_FUNCTIONS_BACKFILL_MARKER } from './app-settings'
@@ -93,5 +95,59 @@ describe('AI Functions credential backfill', () => {
     migrate(raw)
     expect(setting(raw, 'aiFunctionsCredentialId')).toBeUndefined()
     raw.close()
+  })
+})
+
+describe('agents home pin (default moved out of ~/Documents)', () => {
+  const legacy = join(homedir(), 'Documents', 'CinnaAgents')
+
+  function withDefaultRoot(path: string): DatabaseSync {
+    const raw = new DatabaseSync(':memory:')
+    migrate(raw)
+    raw
+      .prepare(`INSERT INTO agent_roots (id, user_id, path, label, is_default, created_at) VALUES ('r1', '__default__', ?, 'Agents', 1, 1)`)
+      .run(path)
+    return raw
+  }
+
+  it('pins the old default for an install whose home root is there', () => {
+    const raw = withDefaultRoot(legacy)
+    migrate(raw)
+    expect(setting(raw, 'localAgentsHome')).toBe(legacy)
+    raw.close()
+  })
+
+  it('pins over a stored empty value, which also meant "the default"', () => {
+    const raw = withDefaultRoot(legacy)
+    raw.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('localAgentsHome', '""', 1)`).run()
+    migrate(raw)
+    expect(setting(raw, 'localAgentsHome')).toBe(legacy)
+    raw.close()
+  })
+
+  it('leaves a fresh install on the new default', () => {
+    const raw = new DatabaseSync(':memory:')
+    migrate(raw)
+    expect(setting(raw, 'localAgentsHome')).toBeUndefined()
+    raw.close()
+  })
+
+  it('leaves a configured home, a non-default root and a home elsewhere alone', () => {
+    const configured = withDefaultRoot(legacy)
+    configured.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('localAgentsHome', ?, 1)`).run(JSON.stringify('/Volumes/x/Agents'))
+    migrate(configured)
+    expect(setting(configured, 'localAgentsHome')).toBe('/Volumes/x/Agents')
+    configured.close()
+
+    const adopted = withDefaultRoot(legacy)
+    adopted.prepare('UPDATE agent_roots SET is_default = 0').run()
+    migrate(adopted)
+    expect(setting(adopted, 'localAgentsHome')).toBeUndefined()
+    adopted.close()
+
+    const elsewhere = withDefaultRoot(join(homedir(), 'CinnaAgents'))
+    migrate(elsewhere)
+    expect(setting(elsewhere, 'localAgentsHome')).toBeUndefined()
+    elsewhere.close()
   })
 })

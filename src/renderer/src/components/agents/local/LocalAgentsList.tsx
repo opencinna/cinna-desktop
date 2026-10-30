@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
   useAgentsHomeQuestion,
+  useAgentsHomeSettling,
+  useCreateAgentsHomeOnOpen,
   useDeleteLocalAgent,
   useLocalAgents,
   useRenameKitAgent,
@@ -15,7 +17,7 @@ import { folderReadinessBlocksTurn, type LocalAgentDto } from '../../../../../sh
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 import { ManagedAgentModal } from '../ManagedAgentModal'
 import { CustomAgentModal } from '../CustomAgentModal'
-import { useAgents } from '../../../hooks/useAgents'
+import { useSidebarExternalAgents } from './useSidebarExternalAgents'
 import { A2AAgentForm } from '../../settings/A2AAgentForm'
 import { serverLabel } from '../../../utils/agentNavigation'
 import { AgentTypeIcon } from '../AgentTypeIcon'
@@ -199,7 +201,32 @@ export function LocalAgentsList(): React.JSX.Element {
   // The color the user chose for an agent tints its icon; None leaves it muted.
   const colorOf = useChosenAgentColor()
   const [addingA2A, setAddingA2A] = useState(false)
-  const [creating, setCreating] = useState(false)
+  // In the store: the empty agent pane opens the same dialog, at its own step.
+  const addAgentDialog = useUIStore((s) => s.addAgentDialog)
+  const setAddAgentDialog = useUIStore((s) => s.setAddAgentDialog)
+  // Opening this tab is what creates a missing, unguarded agents home; a list
+  // read never does. Once per window — see the hook.
+  useCreateAgentsHomeOnOpen()
+  // Until that has answered, the empty list could still turn into "Folder
+  // agents need a home"; say nothing rather than one thing and then the other.
+  const homeSettling = useAgentsHomeSettling()
+  /**
+   * The dialog's step outlives this list in the store, so leaving the Agents
+   * tab must close it — or it would open again, empty, on the next visit.
+   * Deferred, and only if still unmounted: `<StrictMode>` unmounts and remounts
+   * once on mount, and the empty pane may open the dialog in the same tick it
+   * switches the sidebar here.
+   */
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      setTimeout(() => {
+        if (!mounted.current) useUIStore.getState().setAddAgentDialog(null)
+      }, 0)
+    }
+  }, [])
   const [managed, setManaged] = useState<string | true | null>(null)
   const [custom, setCustom] = useState<string | true | null>(null)
   const profile = useAuthStore((state) => state.currentUser)
@@ -238,17 +265,12 @@ export function LocalAgentsList(): React.JSX.Element {
     setCatalogOpen(false)
     clearCatalogErrors()
   }
-  const { data: agentData } = useAgents()
   // Read here, though the rows no longer show it: the agent page decides
   // whether its sharing badge and Sharing tab exist from this list at first
   // paint, and the sidebar is what has it loaded before any page opens.
   useShareStatuses()
-  const allAgents = agentData?.filter((agent) => !agent.conductor && (agent.source !== 'remote' || agent.enabled !== false))
-  const remoteAgents = profile?.type === 'cinna_user' ? (allAgents ?? []).filter((agent) => agent.source === 'remote') : []
-  const a2aAgents = (allAgents ?? []).filter((agent) => agent.source === 'local' && agent.protocol === 'a2a')
-  const managedAgents = (allAgents ?? []).filter((agent) => agent.driver === 'managed')
+  const { remoteAgents, a2aAgents, managedAgents, commandAgents } = useSidebarExternalAgents()
   const [remoteAcp, setRemoteAcp] = useState(false)
-  const commandAgents = (allAgents ?? []).filter((agent) => agent.driver === 'acp' && agent.capabilities.cwd === false)
   const groups = useMemo(
     () => groupAgentsByRoot(data?.roots ?? [], data?.agents ?? []),
     [data]
@@ -336,18 +358,17 @@ export function LocalAgentsList(): React.JSX.Element {
           Agents
         </span>
         <button
-          onClick={() => setCreating(true)}
+          onClick={() => setAddAgentDialog('choose')}
           className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           // Not "New agent" any more: this opens a choice between scaffolding
           // one and pointing at a folder that already is one. It also has to
           // differ from the "New agent" card the dialog then shows, or the two
           // are one ambiguous name to a screen reader and to every test.
           //
-          // With no agents folder it raises the folder question instead. The
-          // dialog it would otherwise open offers to "create a folder in your
-          // agents folder" — the one that does not exist — so the click ends in
-          // a step that cannot finish, which is the same dead end the empty
-          // state below exists to prevent (ux_rules rule 9).
+          // It always opens the dialog. With no usable agents folder, the
+          // dialog's New agent choice raises the folder question instead
+          // (`onCreateFolder` below), since it could not finish; the other
+          // choices need no folder (ux_rules rule 9).
           title="Add an agent"
           aria-label="Add an agent"
         >
@@ -382,8 +403,8 @@ export function LocalAgentsList(): React.JSX.Element {
             </button>
           </div>
         ) : total === 0 && groups.length <= 1 ? (
-          (showSections || managedAgents.length + commandAgents.length + a2aAgents.length + remoteAgents.length === 0) && <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
-            {managedAgents.length + commandAgents.length + a2aAgents.length + remoteAgents.length ? 'No folder agents yet' : 'No agents yet — click + to add one'}
+          !homeSettling && (showSections || managedAgents.length + commandAgents.length + a2aAgents.length + remoteAgents.length === 0) && <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
+            {managedAgents.length + commandAgents.length + a2aAgents.length + remoteAgents.length ? 'No folder agents yet' : 'No agents yet'}
           </div>
         ) : (
           <div className={showSections ? 'px-1.5 py-1 space-y-2' : 'px-1.5'}>
@@ -424,8 +445,8 @@ export function LocalAgentsList(): React.JSX.Element {
           onCancel={() => setRowDialog(null)}
         />
       )}
-      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onCatalog={isCinna ? () => { setCreating(false); openCatalog() } : undefined} onA2A={() => { setCreating(false); setAddingA2A(true) }} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onRemoteAcp={() => { setCreating(false); setRemoteAcp(true) }} onCreateFolder={() => {
-        if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
+      {addAgentDialog !== null && <NewLocalAgentModal initialStep={addAgentDialog} onClose={() => setAddAgentDialog(null)} onCatalog={isCinna ? () => { setAddAgentDialog(null); openCatalog() } : undefined} onA2A={() => { setAddAgentDialog(null); setAddingA2A(true) }} onManaged={() => { setAddAgentDialog(null); setManaged(true) }} onCustom={() => { setAddAgentDialog(null); setCustom(true) }} onRemoteAcp={() => { setAddAgentDialog(null); setRemoteAcp(true) }} onCreateFolder={() => {
+        if (homeAccess && homeAccess !== 'ready') { setAddAgentDialog(null); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true
       }} />}
       {catalogOpen && isCinna && (

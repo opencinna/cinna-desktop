@@ -33,7 +33,7 @@ import { migrateLocalSchedules } from './local-schedules'
 import { migrateHandovers } from './handovers'
 import { migrateDelegations } from './delegations'
 import { migrateNotes } from './notes'
-import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
+import { migrateAppSettings, backfillAiFunctionsCredential, pinLegacyAgentsHome } from './app-settings'
 import { migrateInboxDismissals } from './inbox-dismissals'
 import { migrateRuntimeModelCatalogs } from './runtime-model-catalogs'
 import { migratePublishedArtifacts } from './published-artifacts'
@@ -157,4 +157,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // profile. Reads `chats.origin`, `chats.router`, `agents.driver_config` and
   // the legacy `user_id` columns, so it runs after all of them.
   shareLocalAgentChats(sqlite)
+  // The agents home default moved out of `~/Documents`; an install already
+  // using the old default keeps it. Reads `agent_roots`, writes `app_settings`,
+  // both created above; string comparison only, no filesystem access.
+  pinLegacyAgentsHome(sqlite)
 }

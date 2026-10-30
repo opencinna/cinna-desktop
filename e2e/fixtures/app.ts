@@ -1,4 +1,4 @@
-import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { test as base, _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test'
 import electronPath from 'electron'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -16,7 +16,7 @@ import { CLAUDE_API_AUTH, pinClaudeApiProfile, type ClaudeApiAuth } from './clau
  * The sandbox is a fresh `HOME`: the app derives its agents home from
  * `homedir()` and refuses agent roots outside it, and the seam in
  * `src/main/index.ts` puts `userData` under it too. Without both, a fresh
- * profile registers the developer's real `~/Documents/CinnaAgents` as its home
+ * profile registers the developer's real `~/CinnaAgents` as its home
  * and the test is running against their files — the spike that preceded this
  * suite did exactly that once.
  *
@@ -312,7 +312,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
         // Pass or fail: nothing of the run may stay under the real `HOME`.
         const { removed, realAgentsHomeUnchanged } = endRealLogin(realLogin, sandbox.home, realRun)
         testInfo.annotations.push({ type: 'real-login cleanup', description: removed.join('\n') })
-        if (!realAgentsHomeUnchanged) throw new Error('~/Documents/CinnaAgents changed during a real-login run')
+        if (!realAgentsHomeUnchanged) throw new Error('the real agents home (~/CinnaAgents or ~/Documents/CinnaAgents) changed during a real-login run')
       }
       // After the cleanup, so a failed check never leaves anything under the real `HOME`.
       if (liveEngineCheck && testInfo.status === 'passed') {
@@ -354,20 +354,20 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
 export { expect } from '@playwright/test'
 
 /**
- * Explicitly choose folder setup from the Agents tab, then create the fixture
- * home. Opening Agents alone no longer asks: external agents need no folder.
+ * Wait for the agents home the Agents tab creates when it opens. The default,
+ * `~/CinnaAgents` under the sandbox `$HOME`, is not a guarded folder, so the
+ * tab creates it with nothing to answer; a list read alone never does.
  * A no-op when this sandbox already has an adopted root or agents home.
  */
 export async function answerAgentsFolder(cinna: CinnaApp): Promise<void> {
   const roots = await cinna.page.evaluate(() => window.api.localAgents.rootsList())
   if (roots.length > 0) return
-  if (existsSync(join(cinna.sandbox.home, 'Documents', 'CinnaAgents'))) return
-  // All callers open Agents first. Auto-wait for its loaded empty-state action;
-  // no renderer store mutation or automatic filesystem consent is involved.
-  await cinna.page.getByRole('button', { name: 'Set one up', exact: true }).click()
-  const dialog = cinna.page.getByRole('dialog', { name: 'Where your agents will live' })
-  await dialog.getByRole('button', { name: 'Create folder' }).click()
-  await dialog.waitFor({ state: 'hidden' })
+  // All callers open Agents first, which is what asks main to create it.
+  await expect
+    .poll(async () => (await cinna.page.evaluate(() => window.api.localAgents.list())).homeMissing, {
+      message: 'the Agents tab creates the agents home'
+    })
+    .toBe(false)
 }
 
 /** A directory under the sandbox `$HOME`, where the app's path rules allow agent roots. */

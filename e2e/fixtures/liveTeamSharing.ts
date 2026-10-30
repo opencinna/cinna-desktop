@@ -249,7 +249,7 @@ export class PersonApp {
     // Same reason as `skipOnboarding`: never let the developer's real `claude`
     // become the Default runtime of a sandbox.
     await this.page.evaluate(() => window.api.settings.set('localAgentsDefaultEngine', 'opencode'))
-    // The agents home (`~/Documents/CinnaAgents` under the sandbox HOME):
+    // The agents home (`~/CinnaAgents` under the sandbox HOME):
     // Get lands in its `Local/`, and an added root is not a home.
     await this.page.evaluate(() => window.api.localAgents.homeGrant())
     const roots = await this.page.evaluate(() => window.api.localAgents.rootsList())

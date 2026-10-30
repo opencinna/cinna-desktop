@@ -14,7 +14,7 @@ test('launches into onboarding, then the main shell, inside the sandbox', async 
   // developer's real profile or agents folder is asserting against their data.
   const userData = await electronApp.evaluate(({ app }) => app.getPath('userData'))
   expect(userData).toBe(sandbox.userData)
-  // A fresh profile waits for the user's folder choice before creating a root.
+  // Nothing creates the agents home at launch; opening the Agents tab does.
   expect(await page.evaluate(() => window.api.localAgents.rootsList())).toEqual([])
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
   await answerAgentsFolder(cinna)

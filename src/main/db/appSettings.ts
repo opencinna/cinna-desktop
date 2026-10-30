@@ -26,7 +26,7 @@ export const DEFAULTS: AppSettingsSchema = {
   showAgentSidebarSections: true,
   showLocalDataInAllProfiles: true,
   prioritizeAccountDefaults: false,
-  // Empty = the built-in default (`~/Documents/CinnaAgents`). Kept as a string
+  // Empty = the built-in default (`~/CinnaAgents`). Kept as a string
   // rather than `string | null` so `appSettingsService`'s typeof check works.
   localAgentsHome: '',
   // Empty = resolve one (PATH first, then the pinned managed download).

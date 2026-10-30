@@ -100,7 +100,7 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     expect(agent!.description).toBe(NAME)
     expect(agent!.readiness).toBe('ok')
     // The form scaffolds into the default agents home, which on a fresh
-    // profile is `~/Documents/CinnaAgents` under the sandbox `$HOME`.
+    // profile is `~/CinnaAgents` under the sandbox `$HOME`.
     expect(agent!.path.startsWith(cinna.sandbox.home), `${agent!.path} is inside the sandbox`).toBe(true)
     folder = agent!.path
     expect(existsSync(folder)).toBe(true)
@@ -119,9 +119,8 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
 
     await expect(confirm).toBeHidden()
     await expect(page.getByRole('button', { name: NAME, exact: true })).toBeHidden()
-    await expect(
-      page.getByText('Select an agent from the sidebar, or add one with +.')
-    ).toBeVisible()
+    // The only agent is gone, so the empty pane offers the first one again.
+    await expect(page.getByRole('button', { name: 'Create a local agent' })).toBeVisible()
     await expect.poll(() => existsSync(folder), 'the folder is gone from disk').toBe(false)
   })
 })

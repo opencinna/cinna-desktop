@@ -5,8 +5,8 @@
  * `Cloud/`, the root markdown files, and `.cinna-kit/` — the kit copy that
  * lets a coding assistant working in the folder read the same rules the desktop
  * reads, along with the kit's guides and `tools/kit.py`. Exactly one root is
- * the *home*: `~/Documents/CinnaAgents` unless the
- * `localAgentsHome` app setting says otherwise. Any number of extra roots can be
+ * the *home*: `~/CinnaAgents` unless the `localAgentsHome` app setting says
+ * otherwise. Any number of extra roots can be
  * adopted, which is how an existing kit workshop joins the app unchanged.
  *
  * Everything here is idempotent and lazy. `ensureHome()` is safe to call on
@@ -578,15 +578,55 @@ export const agentsHomeService = {
     }
   },
 
-  /** Every registered root, home first, as the sidebar groups them. */
+  /**
+   * Whether the home has never been created at its configured path: no root is
+   * registered there. Pure database work — no filesystem call.
+   *
+   * True on a fresh install, and after the home setting moved somewhere new.
+   * With {@link refreshHome} answering `ready`, the Agents tab creates it
+   * through {@link prepare} when it opens; nothing else does on a read.
+   */
+  homeMissing(userId: string): boolean {
+    return agentRootRepo.getByPath(userId, configuredHomePath()) === undefined
+  },
+
+  /**
+   * The home's access, for a **read**: keep a home that already exists current,
+   * and never create one that does not.
+   *
+   * The list is read at launch by surfaces that have nothing to do with agents
+   * (the chat list, the composer, the catalog hooks), so a list read that
+   * created the home put a `~/CinnaAgents` folder on the disk of everyone who
+   * launched the app, whether or not they ever opened the Agents tab. So the
+   * first creation is a request of its own — the Agents tab's, through
+   * {@link prepare} — or the side effect of a write that needs the folder
+   * (`create`, a catalog install, local development), which call
+   * {@link ensureHome} themselves.
+   *
+   * A home already registered at its path goes through {@link tryEnsureHome}
+   * exactly as before: templates and `.cinna-kit/` kept in step, a deleted
+   * folder put back. An unregistered one is answered from
+   * `homeAccessService.state`, which on a fresh install reads nothing.
+   */
+  refreshHome(userId: string): AgentsHomeAccess {
+    const path = configuredHomePath()
+    if (homeAccessService.refused(path)) return 'denied'
+    if (this.homeMissing(userId)) return homeAccessService.state(userId).access
+    return this.tryEnsureHome(userId)
+  },
+
+  /**
+   * Every registered root, home first, as the sidebar groups them. Never
+   * creates the home — see {@link refreshHome}.
+   */
   listRoots(userId: string): AgentRootDto[] {
-    this.tryEnsureHome(userId)
+    this.refreshHome(userId)
     return this.rootDtos(userId)
   },
 
-  /** The raw rows, for the scanner and the watcher. */
+  /** The raw rows, for the scanner and the watcher. Never creates the home. */
   listRootRows(userId: string): AgentRootRow[] {
-    this.tryEnsureHome(userId)
+    this.refreshHome(userId)
     return agentRootRepo.list(userId)
   },
 
@@ -661,7 +701,7 @@ export const agentsHomeService = {
    * `fetch` and `merge --ff-only` in a working tree nobody named, and this
    * feature is precisely the reason a user might have put their agents home
    * under version control. Even the read path is not free: it can scaffold
-   * `~/Documents/CinnaAgents` on a machine where the user deliberately had
+   * the agents home on a machine where the user deliberately had
    * none, as a side effect of rendering a settings screen.
    *
    * @throws LocalAgentError `root_not_found`

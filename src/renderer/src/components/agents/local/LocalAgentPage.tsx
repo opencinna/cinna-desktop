@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquare, Settings } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
-  useAgentsHomeQuestion,
   useDraftLocalAgent,
   useLocalAgent,
   useLocalAgentGrants,
@@ -16,6 +15,7 @@ import { bareInstructionsFileList } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
 import { ChatWorkspace } from '../../layout/ChatWorkspace'
 import { RuntimePanel } from './RuntimePanel'
+import { AgentsEmptyPane } from './AgentsEmptyPane'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
 import { AgentTypeIcon } from '../AgentTypeIcon'
@@ -113,8 +113,6 @@ export function LocalAgentPage(): React.JSX.Element {
   )
   const mode = useUIStore((s) => s.agentPageMode)
   const setMode = useUIStore((s) => s.setAgentPageMode)
-  /** Whether there is an agents folder at all — see the placeholder below. */
-  const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
   const addons = useAddonsBadge(activeLocalAgentId, agent?.skills)
@@ -209,19 +207,9 @@ export function LocalAgentPage(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraftAgentId, activeLocalAgentId, setPendingDraftAgentId])
 
-  if (!activeLocalAgentId) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
-        {/* The `+` is the folder question while there is no agents folder, so
-            pointing at it as the way to add an agent would name a step that
-            cannot finish — the same claim the sidebar's empty state branches
-            for (ux_rules rule 9). */}
-        {homeAccess && homeAccess !== 'ready'
-          ? 'Your agents need a folder before you can add one.'
-          : 'Select an agent from the sidebar, or add one with +.'}
-      </div>
-    )
-  }
+  // No agent selected: the first-agent card, the pointer at the sidebar, or
+  // the folder message — see `AgentsEmptyPane`.
+  if (!activeLocalAgentId) return <AgentsEmptyPane />
 
   if (isLoading) {
     return (

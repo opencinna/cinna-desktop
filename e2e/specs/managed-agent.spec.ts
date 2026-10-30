@@ -50,7 +50,8 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   await form.getByRole('button', { name: 'Add agent', exact: true }).click()
   await expect(form).not.toBeVisible()
   await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toBeVisible()
-  expect(await cinna.page.evaluate(() => window.api.localAgents.rootsList())).toEqual([])
+  // Opening Agents creates the agents home; a managed agent adds no root of its own.
+  expect((await cinna.page.evaluate(() => window.api.localAgents.rootsList())).filter((root) => !root.isDefault)).toEqual([])
   const agents = await cinna.page.evaluate(() => window.api.agents.list())
   expect(agents).toEqual(expect.arrayContaining([expect.objectContaining({ name: MANAGED_NAME, driver: 'managed' })]))
 }

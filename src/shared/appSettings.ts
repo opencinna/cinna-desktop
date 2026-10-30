@@ -62,8 +62,9 @@ export interface AppSettingsSchema {
   prioritizeAccountDefaults: boolean
   /**
    * Absolute path of the agents home — the workshop folder local agents are
-   * scaffolded into. Empty means "the built-in default", `~/Documents/CinnaAgents`,
-   * which is what a fresh install uses; `agentsHomeService` resolves and
+   * scaffolded into. Empty means "the built-in default", `~/CinnaAgents`,
+   * which is what a fresh install uses (an install that used the older
+   * `~/Documents/CinnaAgents` default has it written here by a migration); `agentsHomeService` resolves and
    * validates the value on every read, so a path that is not a plausible agents
    * home falls back to the default rather than being written to.
    */

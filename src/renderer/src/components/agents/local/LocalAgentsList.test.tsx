@@ -25,6 +25,7 @@ const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setActiveLocalAgentId = vi.fn()
 const setSidebarTab = vi.fn()
+const dialogStore = vi.hoisted(() => ({ current: null as null | { setState: (s: { addAgentDialog: string | null }) => void } }))
 let externalAgents: Array<Record<string, unknown>> = []
 let showAgentSidebarSections = true
 vi.mock('../../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { showAgentSidebarSections } }) }))
@@ -41,8 +42,15 @@ vi.mock('../../../hooks/useAgents', () => ({
   useAgents: () => ({ data: externalAgents }),
   useApplyBundleUpdate: () => applyUpdate
 }))
-vi.mock('../../../stores/ui.store', () => {
+vi.mock('../../../stores/ui.store', async () => {
+  // The Add an agent dialog's open step is real store state: the `+` and the
+  // empty pane both write it, and the list renders the dialog from it.
+  const { create } = await import('zustand')
+  const dialog = create<{ addAgentDialog: string | null }>(() => ({ addAgentDialog: null }))
+  dialogStore.current = dialog
   const state = (): Record<string, unknown> => ({
+    addAgentDialog: dialog.getState().addAgentDialog,
+    setAddAgentDialog: (step: string | null) => dialog.setState({ addAgentDialog: step }),
     activeLocalAgentId,
     activeView: 'local-agent',
     setActiveLocalAgentId,
@@ -54,7 +62,10 @@ vi.mock('../../../stores/ui.store', () => {
   })
   // `getState` too: the catalog install lands through the store, not a hook.
   const useUIStore = Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) => selector(state()),
+    (selector: (s: Record<string, unknown>) => unknown) => {
+      dialog()
+      return selector(state())
+    },
     { getState: state }
   )
   return { useUIStore }
@@ -96,6 +107,8 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useAgentCredentialBindings: () => ({ data: [] }),
   useAgentsHomeQuestion: () => 'ready',
   useRaiseAgentsHomeQuestion: () => undefined,
+  useCreateAgentsHomeOnOpen: () => createHomeOnOpen(),
+  useAgentsHomeSettling: () => homeSettling,
   useDeleteLocalAgent: (options?: { onSuccess?: (result: { agentId: string; trashed: boolean }) => void }) => {
     deleteOptions.current = options
     return { mutate: vi.fn(), isPending: false }
@@ -104,6 +117,8 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useRenameLocalAgent: () => ({ mutate: vi.fn(), isPending: false }),
   useOpenAgentUploads: () => ({ mutateAsync: openUploads })
 }))
+const createHomeOnOpen = vi.fn()
+let homeSettling = false
 const deleteOptions: { current?: { onSuccess?: (result: { agentId: string; trashed: boolean }) => void } } = {}
 let activeLocalAgentId: string | null = null
 const openUploads = vi.fn(async () => undefined)
@@ -118,9 +133,9 @@ vi.mock('../../../hooks/useSharing', () => ({
   useGetFromLibrary: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useUpdateShared: () => ({ mutate: vi.fn(), isPending: false, variables: undefined })
 }))
-let newAgentProps: { onCatalog?: () => void } | null = null
+let newAgentProps: { onCatalog?: () => void; initialStep?: string; onClose?: () => void } | null = null
 vi.mock('./NewLocalAgentModal', () => ({
-  NewLocalAgentModal: (props: { onCatalog?: () => void }) => {
+  NewLocalAgentModal: (props: { onCatalog?: () => void; initialStep?: string }) => {
     newAgentProps = props
     return null
   }
@@ -155,6 +170,9 @@ function renderList(): ReturnType<typeof render> {
 }
 
 const CHAT = /start a new chat with alpha/i
+
+// The dialog's step lives in a store, which outlives a render: start closed.
+beforeEach(() => dialogStore.current?.setState({ addAgentDialog: null }))
 
 describe('LocalAgentsList — the row’s chat button', () => {
   beforeEach(() => {
@@ -543,5 +561,58 @@ describe('LocalAgentsList — the row’s right-click menu', () => {
     renderList()
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Alpha' }))
     expect(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.removeFromComputerMenu })).toBeTruthy()
+  })
+})
+
+describe('LocalAgentsList — Add an agent and the empty list', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    AGENTS = [AGENT]
+    externalAgents = []
+    newAgentProps = null
+    useAuthStore.setState({ currentUser: null })
+  })
+
+  it('creates a missing agents home when the tab opens', () => {
+    renderList()
+    expect(createHomeOnOpen).toHaveBeenCalled()
+  })
+
+  it('opens the dialog at its first step from the +, and at the step the store names', () => {
+    renderList()
+    expect(newAgentProps).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    expect(newAgentProps?.initialStep).toBe('choose')
+    act(() => newAgentProps!.onClose!())
+    act(() => dialogStore.current!.setState({ addAgentDialog: 'advanced' }))
+    expect(newAgentProps?.initialStep).toBe('advanced')
+  })
+
+  it('says only "No agents yet" when there is nothing at all', () => {
+    AGENTS = []
+    renderList()
+    expect(screen.getByText('No agents yet')).toBeTruthy()
+  })
+
+  it('says nothing about an empty list while the home is still being settled', () => {
+    AGENTS = []
+    homeSettling = true
+    try {
+      renderList()
+      expect(screen.queryByText('No agents yet')).toBeNull()
+    } finally {
+      homeSettling = false
+    }
+  })
+
+  it('closes the dialog when the list unmounts, so it does not re-open on the next visit', async () => {
+    const view = renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    expect(newAgentProps?.initialStep).toBe('choose')
+    view.unmount()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    newAgentProps = null
+    renderList()
+    expect(newAgentProps).toBeNull()
   })
 })

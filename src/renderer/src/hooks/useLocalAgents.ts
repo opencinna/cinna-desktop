@@ -116,6 +116,10 @@ export interface LocalAgentsSnapshot {
   roots: AgentRootDto[]
   agents: LocalAgentDto[]
   homeAccess: AgentsHomeAccess
+  /** The home does not exist yet. A list read never creates it; see {@link useCreateAgentsHomeOnOpen}. */
+  homeMissing: boolean
+  /** The configured home's path — what the tab's once-only creation is keyed on. */
+  homePath: string
 }
 
 /** Every root and every folder agent in them. Scans on each fetch. */
@@ -175,6 +179,74 @@ function actionableAccess(snapshot: LocalAgentsSnapshot): AgentsHomeAccess {
 export function useAgentsHomeQuestion(): AgentsHomeAccess | undefined {
   const { data } = useLocalAgents()
   return data && actionableAccess(data)
+}
+
+/**
+ * Create the agents home when the Agents tab opens, if it does not exist yet
+ * and nothing has to be asked first.
+ *
+ * A list read never creates the home: the list is read at launch by surfaces
+ * that have nothing to do with agents, and creating it there put a folder on
+ * the disk of everyone who launched the app. Opening the Agents tab is the
+ * user going looking for an agent, which is when the folder is worth having.
+ *
+ * Only while main answers `ready` — the default `~/CinnaAgents` on any
+ * platform, or a guarded home already explained — so no system prompt can
+ * follow. `needs_consent` stays a button the user presses (the explainer), and
+ * a refusal comes back as `denied`, which the sidebar reports with "Pick
+ * another folder" rather than a modal nobody asked for.
+ *
+ * Once per window and home path, latched in {@link useAgentsHomeStore} (see
+ * `autoCreate`) — a home moved somewhere new is created once more;
+ * main's `prepare` is safe against a concurrent call besides. The latch stays
+ * `running` until the lists have refetched, so a surface gated on it never
+ * shows the stale "missing" answer between the reply and the refetch.
+ */
+export function useCreateAgentsHomeOnOpen(): void {
+  const { data } = useLocalAgents()
+  const queryClient = useQueryClient()
+  const wanted = data !== undefined && data.homeMissing && data.homeAccess === 'ready'
+  useEffect(() => {
+    if (!wanted) return
+    const path = data.homePath
+    const store = useAgentsHomeStore.getState()
+    if (store.autoCreate?.path === path) return
+    store.setAutoCreate({ path, state: 'running' })
+    void (async () => {
+      try {
+        const state = await window.api.localAgents.homeGrant()
+        queryClient.setQueryData(AGENTS_HOME_KEY, state)
+      } catch {
+        // Nothing to say here: the home is still missing and still `ready`, so
+        // the next thing that needs it — New agent, a catalog install —
+        // creates it itself and reports its own failure where it was asked.
+      }
+      try {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY }),
+          queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
+        ])
+      } finally {
+        useAgentsHomeStore.getState().setAutoCreate({ path, state: 'done' })
+      }
+    })()
+    // `data` is read for its path only, which is in the key below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, data?.homePath, queryClient])
+}
+
+/**
+ * True while the Agents tab is still settling whether there is a home: the
+ * list has not landed, or the home is missing and its creation is on its way.
+ * A surface that branches on "is there anywhere to put an agent" renders
+ * nothing until this is false, so it never shows one answer and then another.
+ */
+export function useAgentsHomeSettling(): boolean {
+  const { data } = useLocalAgents()
+  const autoCreate = useAgentsHomeStore((s) => s.autoCreate)
+  if (!data) return true
+  const done = autoCreate?.path === data.homePath && autoCreate.state === 'done'
+  return data.homeMissing && data.homeAccess === 'ready' && !done
 }
 
 /** Cache key of the agents-home state — path, and whether it can be used. */

@@ -108,7 +108,8 @@ test('a command-line agent tests only initialization, then chats and answers one
   expect(await durableReplies(cinna)).toEqual(saved)
   expect(peer.received('session/prompt')).toHaveLength(1)
   expect(peer.answers()).toHaveLength(1)
-  expect(await cinna.page.evaluate(() => window.api.localAgents.rootsList())).toEqual([])
+  // Opening Agents creates the agents home; a command-line agent adds no root of its own.
+  expect((await cinna.page.evaluate(() => window.api.localAgents.rootsList())).filter((root) => !root.isDefault)).toEqual([])
   await expect(cinna.page.getByText(CUSTOM_STDERR, { exact: true })).toHaveCount(0)
   assertWire(peer)
 })

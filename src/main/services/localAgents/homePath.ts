@@ -3,8 +3,9 @@
  *
  * Split out of `agentsHomeService` because "which folder is the home?" and
  * "make the home exist" became two questions with different costs. Resolving
- * the path is pure string work; creating the folder is a write into
- * `~/Documents` that raises a macOS permission prompt. Every caller that only
+ * the path is pure string work; creating the folder can be a write into a
+ * macOS-guarded folder (a home the user pointed at `~/Documents`, or the
+ * pre-2026-10 default there) that raises a permission prompt. Every caller that only
  * wanted the path for a sentence — the onboarding copy, the local-dev consent
  * modal — used to go through `ensureHome` and create the folder to read its
  * name, which is how a Documents-access prompt came to appear on a sign-in
@@ -27,15 +28,25 @@ import { assertUsableRoot, isWithin } from './pathRules'
 
 const logger = createLogger('local-agents-home-path')
 
-/** Where a fresh install puts the agents home. */
-const DEFAULT_HOME_DIRS = ['Documents', 'CinnaAgents']
+/**
+ * Where a fresh install puts the agents home: `~/CinnaAgents`.
+ *
+ * Directly under the home directory rather than in `~/Documents`, which is
+ * where it used to be. `~/Documents` is guarded on macOS, so creating the
+ * default there raised the system's Documents prompt and needed the
+ * explainer in front of it; `~` is not guarded, so the default is created
+ * silently on every platform. Installs that already used the old default keep
+ * it: the `pinLegacyAgentsHome` migration writes it into `localAgentsHome`.
+ */
+const DEFAULT_HOME_DIRS = ['CinnaAgents']
 
 /**
  * The macOS locations behind a TCC "Files and Folders" prompt.
  *
- * `Documents` is the one that matters — it holds the default home — but the
- * home is a setting, and a user who points it at their Desktop deserves the
- * same explanation. `Mobile Documents` is iCloud Drive, which is where
+ * `Documents` is the one that matters — it held the default home until it moved
+ * to `~/CinnaAgents`, and older installs keep it there — but the home is a
+ * setting, and a user who points it at their Desktop deserves the same
+ * explanation. `Mobile Documents` is iCloud Drive, which is where
  * `~/Documents` actually lives on a Mac with Desktop & Documents syncing on.
  *
  * `/Volumes` is left out even though removable media has a TCC service of its
@@ -55,6 +66,14 @@ export function defaultHomePath(): string {
 }
 
 /**
+ * The default before it moved to `~/CinnaAgents`. The `pinLegacyAgentsHome`
+ * migration writes it into `localAgentsHome` for installs that were using it.
+ */
+export function legacyDefaultHomePath(): string {
+  return join(homedir(), 'Documents', 'CinnaAgents')
+}
+
+/**
  * The configured home, or the default. A configured path that no longer passes
  * the path rules is reported and ignored — the user keeps a working app rather
  * than an app that refuses to open its Agents tab.
@@ -62,6 +81,12 @@ export function defaultHomePath(): string {
 export function configuredHomePath(): string {
   const configured = appSettingsRepo.get('localAgentsHome')
   if (typeof configured !== 'string' || configured.trim() === '') return defaultHomePath()
+  // The old default, pinned by the migration, is trusted exactly as it was
+  // while it *was* the default: never validated. `assertUsableRoot` realpaths
+  // it, and a `~/Documents` redirected outside the allowed bases (a Linux
+  // `/data/Documents`, a Windows `D:\`) would then fail and fall back to
+  // `~/CinnaAgents` — repointing the home root and emptying the sidebar.
+  if (configured === legacyDefaultHomePath()) return configured
   try {
     return assertUsableRoot(configured)
   } catch {
@@ -93,8 +118,8 @@ export function isGuardedLocation(path: string, platform: string = process.platf
   const home = resolve(homedir())
   const target = resolve(path).toLowerCase()
   // `isWithin` is true for the guarded folder itself as well as for anything
-  // under it. The home can never *be* `~/Documents` — the default and
-  // `assertUsableRoot` both put it at least one level down — but a folder that
-  // is guarded is guarded either way.
+  // under it. The home can never *be* `~/Documents` — `assertUsableRoot` puts
+  // a configured one at least one level down — but a folder that is guarded is
+  // guarded either way.
   return MAC_GUARDED_DIRS.some((dirs) => isWithin(join(home, ...dirs).toLowerCase(), target))
 }

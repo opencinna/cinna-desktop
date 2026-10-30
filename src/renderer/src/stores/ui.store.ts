@@ -128,6 +128,9 @@ function applyTheme(theme: Theme): void {
   void window.api?.app?.setTheme(theme)?.catch(() => {})
 }
 
+/** Where the Add an agent dialog opens — see `NewLocalAgentModal`'s steps. */
+export type AddAgentDialogStep = 'choose' | 'name' | 'advanced'
+
 interface UIStore {
   activeView: ActiveView
   agentPageMode: 'chat' | 'settings'
@@ -188,6 +191,15 @@ interface UIStore {
    * can show its progress, rather than a modal firing it as it unmounts.
    */
   pendingDraftAgentId: string | null
+  /**
+   * The Add an agent dialog, open at this step, or `null` while it is closed.
+   * In the store rather than in the sidebar list that renders it, because two
+   * places open it: the sidebar's `+` (at `choose`) and the empty agent pane's
+   * "Create a local agent" card (`name`) and "Other types of agents" link
+   * (`advanced`). The list keeps rendering it, with the catalog, A2A, ACP and
+   * managed dialogs it hands off to.
+   */
+  addAgentDialog: AddAgentDialogStep | null
   /**
    * A folder agent whose Runs with Model select should take focus once its page
    * shows it — one-shot, from the composer's "no longer offered" row. Consumed
@@ -259,6 +271,7 @@ interface UIStore {
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
+  setAddAgentDialog: (step: AddAgentDialogStep | null) => void
   setPendingRuntimeModelFocusId: (id: string | null) => void
   addDraftingAgentId: (id: string) => void
   removeDraftingAgentId: (id: string) => void
@@ -306,6 +319,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
+  addAgentDialog: null,
   pendingRuntimeModelFocusId: null,
   draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
@@ -354,6 +368,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
+  setAddAgentDialog: (step) => set({ addAgentDialog: step }),
   setPendingRuntimeModelFocusId: (id) => set({ pendingRuntimeModelFocusId: id }),
   addDraftingAgentId: (id) =>
     set((state) =>

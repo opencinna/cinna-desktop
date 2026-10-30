@@ -131,7 +131,7 @@ beforeEach(() => {
   workshop = join(mkdtempSync(join(tmpdir(), 'cinna-write-')), 'workshop')
   mkdirSync(workshop)
   // Point the agents home at the temp workshop *before* anything calls
-  // `ensureHome`, which would otherwise resolve the real `~/Documents/CinnaAgents`
+  // `ensureHome`, which would otherwise resolve the real `~/CinnaAgents`
   // and create it. A test must never write outside its temp directory.
   appSettingsRepo.set('localAgentsHome', workshop)
   scaffoldService.installRootTemplates(workshop)
@@ -686,6 +686,29 @@ describe('create', () => {
     expect(agentRepo.getOwned(USER, created.id)?.description ?? null).toBeNull()
     const real = localAgentService.create(USER, { name: 'Real', description: 'Does things.' })
     expect(agentRepo.getOwned(USER, real.id)?.description).toBe('Does things.')
+  })
+})
+
+describe('a home that does not exist yet', () => {
+  it('is reported missing by the list, which creates nothing, and created by create', () => {
+    // The list is read at launch by surfaces unrelated to agents; creating the
+    // home there put a folder on every launcher's disk. Only the Agents tab
+    // (`prepare`) or a write that needs it creates it.
+    const next = join(dirname(workshop), 'moved-home')
+    appSettingsRepo.set('localAgentsHome', next)
+    const listed = localAgentService.list(USER)
+    expect(listed.homeMissing).toBe(true)
+    expect(listed.homeAccess).toBe('ready')
+    expect(existsSync(next)).toBe(false)
+    expect(localAgentService.listRoots(USER).find((root) => root.isDefault)?.path).toBe(workshop)
+
+    const created = localAgentService.create(USER, { name: 'Lands here' })
+    expect(dirname(dirname(created.path))).toBe(next)
+    expect(localAgentService.list(USER).homeMissing).toBe(false)
+  })
+
+  it('is not missing once registered', () => {
+    expect(localAgentService.list(USER).homeMissing).toBe(false)
   })
 })
 

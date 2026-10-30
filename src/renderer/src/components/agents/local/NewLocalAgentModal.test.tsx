@@ -656,3 +656,19 @@ describe('NewLocalAgentModal — right after Advanced options opens', () => {
     expect(onA2A).toHaveBeenCalledOnce()
   })
 })
+
+describe('NewLocalAgentModal — opened at a step', () => {
+  it('opens straight at the name step, focused, for the empty pane’s card', () => {
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), initialStep: 'name' }))
+    expect(screen.getByRole('dialog', { name: 'New agent' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByLabelText('Name'))
+  })
+
+  it('opens straight at the advanced step, and Back goes to the choice', () => {
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onA2A: vi.fn(), initialStep: 'advanced' }))
+    expect(screen.getByRole('dialog', { name: 'Advanced options' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^A2A agent/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+  })
+})

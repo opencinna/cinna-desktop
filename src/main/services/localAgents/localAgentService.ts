@@ -141,6 +141,18 @@ export interface LocalAgentListResult {
    * created yet.
    */
   homeAccess: AgentsHomeAccess
+  /**
+   * The home has not been created yet — no root is registered at its path. A
+   * list read never creates it (see `agentsHomeService.refreshHome`), so with
+   * `homeAccess: 'ready'` this is the renderer's cue to create it, which the
+   * Agents tab does once when it opens (`local-agent:home-grant`).
+   */
+  homeMissing: boolean
+  /**
+   * The configured home's path. What the Agents tab's once-per-window creation
+   * is keyed on: a home moved somewhere new is a different missing home.
+   */
+  homePath: string
 }
 
 /**
@@ -660,11 +672,14 @@ export const localAgentService = {
 
   /** Every root and every folder agent in them. */
   list(userId: string): LocalAgentListResult {
-    // One attempt at the home, whose answer is reported; the accessors below
-    // then read the roots as they stand. Going through `listRootRows` and
-    // `listRoots` would try to create the home two more times, and only the
-    // first attempt's answer would have reached the renderer.
-    const homeAccess = agentsHomeService.tryEnsureHome(userId)
+    // One look at the home, whose answer is reported; the accessors below then
+    // read the roots as they stand. Going through `listRootRows` and
+    // `listRoots` would look two more times, and only the first answer would
+    // have reached the renderer. A read never creates the home — see
+    // `agentsHomeService.refreshHome`.
+    const homeAccess = agentsHomeService.refreshHome(userId)
+    const homeMissing = agentsHomeService.homeMissing(userId)
+    const homePath = agentsHomeService.homePath()
     const roots = agentsHomeService.rootRows(userId)
     const agents: LocalAgentDto[] = []
     for (const root of roots) {
@@ -679,7 +694,9 @@ export const localAgentService = {
     return {
       roots: agentsHomeService.rootDtos(userId),
       agents: this.overlayEnabled(userId, agents),
-      homeAccess
+      homeAccess,
+      homeMissing,
+      homePath
     }
   },
 
@@ -1430,8 +1447,8 @@ export const localAgentService = {
 
   /**
    * Roots, for the settings screen. Missing the home while it is waiting on the
-   * user's answer, and complete in every other respect — see
-   * {@link agentsHomeService.tryEnsureHome}.
+   * user's answer or has not been created yet, and complete in every other
+   * respect — see {@link agentsHomeService.refreshHome}.
    */
   listRoots(userId: string): AgentRootDto[] {
     return agentsHomeService.listRoots(userId)

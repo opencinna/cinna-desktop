@@ -76,10 +76,10 @@ import { PersonApp, runCommand } from '../fixtures/liveTeamSharing'
  *     the login keychain; A stays fully sandboxed.
  *   - B's agents home is a fresh `~/.cinna-e2e-claude-*` folder, set as
  *     `localAgentsHome` and checked through `homeState` *before* `homeGrant`;
- *     on a fresh database the default `~/Documents/CinnaAgents` is a guarded
- *     path nobody acknowledged, so nothing creates it first. The mtimes of
- *     `~/Documents/CinnaAgents`, its `Local/` and `Cloud/` are compared before
- *     and after.
+ *     a list read never creates the home and B never opens the Agents tab
+ *     before that, so nothing creates the default `~/CinnaAgents` first. The
+ *     mtimes of `~/CinnaAgents` and `~/Documents/CinnaAgents`, their `Local/`
+ *     and `Cloud/` are compared before and after.
  *   - Afterwards the agents home, B's temp root, and the one
  *     `~/.claude/projects/<cwd>` folder the turn's temp cwd produced are
  *     deleted; nothing else under `~/.claude` (the CLI may still add its own
@@ -95,7 +95,7 @@ import { PersonApp, runCommand } from '../fixtures/liveTeamSharing'
  *   The shared real-HOME setup is `onRealHome` below, with the same safety
  *   measures as T2.3b (temp userData, `--use-mock-keychain`, a fresh
  *   `~/.cinna-e2e-codex-*` agents home set before `homeGrant` and removed
- *   afterwards, `~/Documents/CinnaAgents` mtimes compared). Codex-specific:
+ *   afterwards, the real agents homes' mtimes compared). Codex-specific:
  *   - The binary is the pinned `codex` the installed app downloaded
  *     (`…/cinna-desktop/runtimes/codex-<pin>/codex`), else the verified pin in
  *     the runtime cache `scripts/install-runtime.mjs` fills
@@ -748,7 +748,7 @@ interface RealHomeRun {
  * B on the developer's real `HOME` (see the file header), for one engine's real CLI: a throwaway
  * userData under the temp dir and a fresh `~/.cinna-e2e-<prefix>-*` agents home. Runs `body`, then —
  * pass or fail — closes B, runs the engine's own `cleanup`, removes the agents home and B's temp root,
- * and compares `~/Documents/CinnaAgents`. Answers the evidence, also written to `b-evidence.json`.
+ * and compares the real agents homes. Answers the evidence, also written to `b-evidence.json`.
  */
 async function onRealHome(
   fixture: CatalogFixture,
@@ -914,20 +914,29 @@ function codexRollouts(
 }
 
 /**
- * Whether `~/Documents/CinnaAgents` exists, and the mtimes of it and its `Local/` and `Cloud/`:
- * B's app must create nothing there and add or remove no agent folder.
+ * Whether the real agents homes exist — `~/CinnaAgents` and `~/Documents/CinnaAgents` — and the
+ * mtimes of each and its `Local/` and `Cloud/`: B's app must create nothing there and add or remove
+ * no agent folder.
  */
 function realProfileFingerprint(): Record<string, number | null> {
-  const base = join(homedir(), 'Documents', 'CinnaAgents')
   const mtime = (path: string): number | null => (existsSync(path) ? statSync(path).mtimeMs : null)
-  return { home: mtime(base), local: mtime(join(base, 'Local')), cloud: mtime(join(base, 'Cloud')) }
+  const out: Record<string, number | null> = {}
+  for (const [key, base] of [
+    ['home', join(homedir(), 'CinnaAgents')],
+    ['documents', join(homedir(), 'Documents', 'CinnaAgents')]
+  ] as const) {
+    out[key] = mtime(base)
+    out[`${key}Local`] = mtime(join(base, 'Local'))
+    out[`${key}Cloud`] = mtime(join(base, 'Cloud'))
+  }
+  return out
 }
 
 /**
  * Person B on the developer's real `HOME`, so the pinned CLI finds their login — but with a
  * throwaway userData and an agents home in a fresh `~/.cinna-e2e-<engine>-*` folder, set before
- * anything can create or grant the default `~/Documents/CinnaAgents`. On a fresh database that
- * default is a guarded path nobody acknowledged, so `ensureHome` refuses it until then.
+ * anything can create or grant the default `~/CinnaAgents`. A list read never creates the home;
+ * only the Agents tab, which B has not opened by then, or a write that needs it.
  */
 class RealHomePerson extends PersonApp {
   constructor(

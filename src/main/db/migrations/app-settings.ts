@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { hasColumn, hasTable } from './helpers'
 import { DEFAULT_USER_ID } from '../../../shared/userIds'
 
@@ -82,4 +84,53 @@ function providerOffersModel(
   } catch {
     return false
   }
+}
+
+/**
+ * Keep an existing install's agents home where it is.
+ *
+ * The built-in default moved from `~/Documents/CinnaAgents` to `~/CinnaAgents`
+ * (`services/localAgents/homePath.ts`): `~/Documents` is guarded on macOS, and
+ * creating the default there raised the system's Documents prompt. An empty
+ * `localAgentsHome` means "the default", so an install that has been using the
+ * old one would, after the move, have its home root repointed at a new empty
+ * folder by `ensureHome`'s "home moved" branch, and every agent would vanish
+ * from the sidebar.
+ *
+ * So when the setting is missing or empty **and** a default root is registered
+ * at exactly the old default path, that path is written into the setting. A
+ * fresh install has no such row and stays on the new default.
+ *
+ * Strings only: the old path is built with `join(homedir(), …)`, the same way
+ * the old default was, and compared with the stored row. Nothing is read or
+ * statted inside `~/Documents` — that is the read that raises the prompt.
+ * Idempotent with no marker: once the setting holds the path, the condition no
+ * longer matches. The written value is the same string the acknowledgement and
+ * the root row are keyed by, so a guarded home this install already uses
+ * reports `ready` exactly as before. `configuredHomePath` returns this exact
+ * value without `assertUsableRoot`, as it did while it was the default — so a
+ * `~/Documents` redirected outside the allowed bases keeps working.
+ */
+export function pinLegacyAgentsHome(sqlite: Database.Database, home: string = homedir()): void {
+  if (!hasTable(sqlite, 'app_settings') || !hasTable(sqlite, 'agent_roots')) return
+  const row = sqlite.prepare('SELECT value FROM app_settings WHERE key = ?').get('localAgentsHome') as
+    | { value: string }
+    | undefined
+  if (row) {
+    // Read as `appSettingsRepo.get` reads it: a corrupt or non-string value is
+    // the default there, so it counts as empty here.
+    let current: unknown = ''
+    try {
+      current = JSON.parse(row.value)
+    } catch {
+      /* corrupt: the default */
+    }
+    if (typeof current === 'string' && current.trim() !== '') return
+  }
+  const legacy = join(home, 'Documents', 'CinnaAgents')
+  const root = sqlite.prepare('SELECT 1 AS found FROM agent_roots WHERE is_default = 1 AND path = ? LIMIT 1').get(legacy)
+  if (!root) return
+  sqlite
+    .prepare('INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+    .run('localAgentsHome', JSON.stringify(legacy), Math.floor(Date.now() / 1000))
 }
