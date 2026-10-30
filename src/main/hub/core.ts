@@ -38,6 +38,20 @@ import { chatModeService } from '../services/chatModeService'
 import { shutdownOpencodeBootstraps } from '../agents/drivers/acp/acpLaunchers'
 import { installCloudUpdateFollow } from '../agents/cloudUpdateFollow'
 import { installAddonPolicyFollow } from '../services/addonDirectory/policyFollow'
+import { installScaffoldPrewarm } from '../services/localAgents/scaffoldService'
+import { prewarm, prewarmState, uvPrewarm } from '../services/localAgents/uvPrewarm'
+import { agentsHomeService } from '../services/localAgents/agentsHomeService'
+import { agentRepo } from '../db/agents'
+
+/**
+ * Whether this computer has local agents to pre-warm uv and Python for: an
+ * agents folder is registered and holds at least one folder agent. Read-only;
+ * creates nothing.
+ */
+function hasLocalAgents(userId: string): boolean {
+  if (agentsHomeService.rootPaths(userId).length === 0) return false
+  return agentRepo.listFolder(userId).length > 0
+}
 
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
   setLogValueRedactor(redactCredentialValues)
@@ -94,6 +108,19 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     marketplacePluginService.collectGarbage()
   })
   userActivation.onProfileReady(() => { pinnedSkillAutoFetch.retryAllMissing() })
+  // The managed uv and the template's Python, so a kit agent's first `uv run` does not wait on a
+  // download: when an agent is scaffolded, and once a profile with local agents is ready (off the
+  // boot path; skipped silently with no agents folder or no agents in it, and once Python is in).
+  installScaffoldPrewarm((agentDir) => { void prewarm(agentDir) })
+  userActivation.onProfileReady(() => {
+    setImmediate(() => {
+      try {
+        if (prewarmState().python !== 'ready' && hasLocalAgents(getSettingsScopeUserId())) void prewarm()
+      } catch (err) {
+        createLogger('uv-prewarm').warn('could not check for local agents to pre-warm', { error: err instanceof Error ? err.message : String(err) })
+      }
+    })
+  })
 }
 
 export { runExecutionService } from '../services/runExecutionService'
@@ -129,6 +156,8 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   // Cinna's OpenCode database is created by an engine outside the pool; it ends with the app too.
   const bootstraps = shutdownOpencodeBootstraps()
   toolInstallService.shutdown()
+  // A `uv python install` the pre-warm started dies with the app.
+  uvPrewarm.shutdown()
   watcherService.stopAll()
   await Promise.all([processes, userCommands, conductor, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
 }

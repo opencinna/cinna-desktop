@@ -39,6 +39,7 @@ import { createLogger } from '../logger/logger'
 import { which, whichPastStub } from './env'
 import { MAC_DEVELOPER_TOOL_STUBS, macDeveloperTools, type DeveloperToolsState } from './macDeveloperTools'
 import { managedGit, shellQuote, type ManagedGit } from './managedGit'
+import { withManagedUvFallback } from './managedUvPath'
 
 const logger = createLogger('developer-tool-shims')
 
@@ -208,7 +209,14 @@ const developerToolShims = createDeveloperToolShims({
  * git in front when there is no other. Apply it last, to the env that also
  * feeds the launch spec's key, so installing the tools — or the managed git
  * landing — replaces a running child on its next turn: both change `PATH`.
+ *
+ * The managed uv goes on after the shims' own edits (`managedUvPath.ts`): the
+ * shims prepend, so the uv directory stays last on `PATH`, behind the user's
+ * own uv, and whether a uv already resolves is judged on the `PATH` the child
+ * actually gets. Its directory is versioned (`uv-<pin>`), so a pin move
+ * changes it once; otherwise only the user installing a uv of their own
+ * changes the result (the `UV_PYTHON_PREFERENCE` it adds goes away).
  */
-export function withDeveloperToolShims<T extends Record<string, string | undefined>>(env: T): Promise<T> {
-  return developerToolShims.apply(env)
+export async function withDeveloperToolShims<T extends Record<string, string | undefined>>(env: T): Promise<T> {
+  return withManagedUvFallback(await developerToolShims.apply(env))
 }

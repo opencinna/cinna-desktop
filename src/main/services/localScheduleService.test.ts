@@ -26,6 +26,18 @@ vi.mock('./localAgents/commandService', () => ({
   commandService: { resolve: state.resolveCommand, runScheduled: state.runScheduled },
   resolveCommandRunner: (_cap: unknown, _wire: string, _user: string, _agent: string, run: unknown) => run
 }))
+// The pre-warm's real state, driven without a download or a uv: installing the
+// managed uv is the test's, and the run env's PATH holds no uv.
+const ensureUv = vi.hoisted(() => ({ current: async (): Promise<unknown> => ({}) }))
+vi.mock('../localdev/toolchain', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../localdev/toolchain')>()
+  return { ...actual, toolchain: { ...actual.toolchain, ensureUv: () => ensureUv.current() }, managedUvLayout: () => actual.managedUvLayoutAt('/nonexistent/cinna-test/localdev') }
+})
+vi.mock('../shell/env', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shell/env')>()),
+  getShellEnv: async () => ({ PATH: '/usr/bin:/bin' }),
+  shellEnvForChild: (env: NodeJS.ProcessEnv) => env
+}))
 const { localScheduleService } = await import('./localScheduleService')
 const { localScheduleRepo } = await import('../db/localSchedules')
 const { scriptRuntimeService } = await import('./scriptRuntimeService')
@@ -489,6 +501,44 @@ describe('scheduled shell commands', () => {
     expect(state.runScheduled).toHaveBeenCalledTimes(1)
     expect(driverRun).not.toHaveBeenCalled()
     expect(localScheduleRepo.get(USER, binding.id)?.nextDueAt).toBe(BASE + 120000)
+  })
+
+  describe('when uv could not start', () => {
+    // In order: the pre-warm's state is the process's, and only these tests set it.
+    const UNAVAILABLE = 'uv is not available, so this command could not start.'
+    async function failsWith(reason: string) {
+      definition.command = 'uv run scripts/check.py'
+      const outcome = commandOutcome({ stdout: '', stderr: 'sh: uv: command not found\n', exitCode: 127 })
+      state.runScheduled.mockResolvedValue(outcome)
+      const binding = enable()
+      check()
+      await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('failed'))
+      expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ resultKind: 'execution_error', reason, commandOutcome: outcome })
+      expect(driverRun).not.toHaveBeenCalled()
+      expect(taskRepo.list(USER)).toEqual([])
+    }
+
+    it('fails the occurrence saying Cinna is still installing its copy', async () => {
+      await failsWith(`${UNAVAILABLE} Cinna is still installing its copy; try again in a moment.`)
+    })
+
+    it('fails it naming the download failure', async () => {
+      const { ToolchainError } = await import('../errors')
+      const { prewarm } = await import('./localAgents/uvPrewarm')
+      await prewarm() // drains a retry an earlier failure started
+      ensureUv.current = async () => { throw new ToolchainError('download_failed', 'Could not download uv: timed out.') }
+      await prewarm()
+      await failsWith(`${UNAVAILABLE} Cinna could not download its copy of uv (Could not download uv: timed out.). Check the network connection and run it again.`)
+    })
+
+    it('fails it saying to install uv on an unsupported platform', async () => {
+      const { ToolchainError } = await import('../errors')
+      const { prewarm } = await import('./localAgents/uvPrewarm')
+      await prewarm() // drains a retry an earlier failure started
+      ensureUv.current = async () => { throw new ToolchainError('unsupported_platform', 'No build.') }
+      await prewarm()
+      await failsWith(`${UNAVAILABLE} Cinna has no uv build for this platform; install uv (https://docs.astral.sh/uv/) and run it again.`)
+    })
   })
 
   it('returns admission immediately, reserves active commands, and supports Stop with retained output', async () => {

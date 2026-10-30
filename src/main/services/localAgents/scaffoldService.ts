@@ -88,6 +88,18 @@ const SUBSTITUTED_FILES: ReadonlyMap<string, (value: string) => string> = new Ma
   ['pyproject.toml', tomlBasicString]
 ])
 
+/**
+ * Started, never awaited, once a new agent folder is in place: the uv and
+ * Python pre-warm (`uvPrewarm.ts`). Installed by the composition root
+ * (`hub/core.ts`), so a scaffold in a test downloads nothing.
+ */
+let scaffoldPrewarm: ((agentDir: string) => void) | null = null
+
+export function installScaffoldPrewarm(hook: ((agentDir: string) => void) | null): () => void {
+  scaffoldPrewarm = hook
+  return () => { if (scaffoldPrewarm === hook) scaffoldPrewarm = null }
+}
+
 export interface ScaffoldAgentInput {
   /** Absolute path of the workshop root. Already validated by the caller. */
   rootPath: string
@@ -309,6 +321,12 @@ export const scaffoldService = {
       contractSource: contract.source,
       durationMs: Date.now() - started
     })
+    // Fire and forget: the folder exists either way, and a scaffold never waits on a download.
+    try {
+      scaffoldPrewarm?.(agentDir)
+    } catch (err) {
+      logger.warn('could not start the uv pre-warm', { slug, error: String(err) })
+    }
     return { agentDir, manifest }
   },
 

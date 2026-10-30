@@ -8,6 +8,7 @@ import { stopSessionActivity } from '../sessionActivityStop'
 import { createUserCommandService, displayPath, fileRunCommand, relativeArgPath, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
 import { USER_COMMAND_NOT_EXECUTABLE_REASON, USER_COMMAND_NOT_RUNNABLE_REASON, USER_COMMAND_RUN_REASONS, type UserCommandOutputFrame } from '../../../shared/userCommands'
 import { OWN_COMMAND_REASONS, readableOwnScript } from '../localAgents/ownCommandPolicy'
+import { uvCouldNotStart, uvUnavailableMessage } from '../../shell/managedUvPath'
 
 // The real check, unless a test stands in for a file swapped after it.
 vi.mock('../localAgents/ownCommandPolicy', async (importOriginal) => {
@@ -53,7 +54,13 @@ interface World {
 
 const services: World['service'][] = []
 
-function world(options: { logCapBytes?: number; stopGraceMs?: number } = {}): World {
+function world(options: {
+  logCapBytes?: number; stopGraceMs?: number
+  /** The shell env's PATH; the test process's by default. */
+  path?: string
+  uvUnavailable?: (command: string, outcome: { exitCode: number | null; stderr: string }) => Promise<string | null>
+} = {}): World {
+  const { path, ...rest } = options
   userData = mkdtempSync(join(base, 'userData-'))
   const hub = createSessionActivityHub()
   const state: World['state'] = { workspace: { folder, scriptRoots: [] }, shell: '/bin/sh', trashed: false, onShellEnv: null, onUserData: null, gone: new Set() }
@@ -68,14 +75,14 @@ function world(options: { logCapBytes?: number; stopGraceMs?: number } = {}): Wo
     workspace: async () => state.workspace,
     shellEnv: async () => {
       state.onShellEnv?.()
-      return { PATH: process.env.PATH ?? '/usr/bin:/bin', SHELL: state.shell, HOME: base }
+      return { PATH: path ?? process.env.PATH ?? '/usr/bin:/bin', SHELL: state.shell, HOME: base }
     },
     userData: () => {
       state.onUserData?.()
       return userData
     },
     hub,
-    ...options
+    ...rest
   })
   services.push(service)
   return { hub, service, state }
@@ -219,6 +226,41 @@ describe('running a command', () => {
     if (!result.ok) throw new Error('did not start')
     await ended(w, 'chat-1', result.itemId)
     expect(item(w, result.itemId)).toMatchObject({ state: 'failed', detail: `Exit code 3 · ${displayPath(folder)}` })
+  })
+
+  describe('when uv could not start', () => {
+    const failure = { code: 'download_failed', message: 'HTTP 503' }
+    // The child's PATH decides a bare 127, as in production (`resolveOnEnvPath`).
+    const uvUnavailable = async (command: string, outcome: { exitCode: number | null; stderr: string }) =>
+      (await uvCouldNotStart(command, outcome, async () => false)) ? uvUnavailableMessage(failure) : null
+    const MESSAGE = uvUnavailableMessage(failure)
+
+    it('ends the window with the reason as its last line, and the row says it instead of the exit code', async () => {
+      const w = world({ path: '/usr/bin:/bin', uvUnavailable })
+      const result = await run(w, 'uv run scripts/report.py', true)
+      if (!result.ok) throw new Error('did not start')
+      const frames: UserCommandOutputFrame[] = []
+      w.service.watch('chat-1', result.itemId, (frame) => frames.push(frame))
+      await ended(w, 'chat-1', result.itemId)
+      const log = readFileSync(item(w, result.itemId)!.outputPath!, 'utf8')
+      expect(log.endsWith(`\r\n${MESSAGE}\r\n`)).toBe(true)
+      expect(log).toMatch(/uv: (command )?not found/)
+      expect(item(w, result.itemId)).toMatchObject({ state: 'failed', detail: MESSAGE })
+      expect(frames.at(-1)).toMatchObject({ type: 'end', end: { state: 'failed', exitCode: 127 } })
+    })
+
+    it('keeps the exit code for a failing command that is not uv, or a uv that ran', async () => {
+      const bin = mkdtempSync(join(base, 'own-bin-'))
+      writeFileSync(join(bin, 'uv'), '#!/bin/sh\nexit 3\n', { mode: 0o755 })
+      const w = world({ path: `${bin}:/usr/bin:/bin`, uvUnavailable })
+      for (const command of ['exit 127', 'uv run scripts/report.py']) {
+        const result = await run(w, command, true)
+        if (!result.ok) throw new Error('did not start')
+        await ended(w, 'chat-1', result.itemId)
+        expect(item(w, result.itemId)!.detail).toMatch(/^Exit code (127|3) · /)
+        expect(readFileSync(item(w, result.itemId)!.outputPath!, 'utf8')).not.toContain('uv is not available')
+      }
+    })
   })
 
   it('caps the log, says so, and lets the process run on', async () => {

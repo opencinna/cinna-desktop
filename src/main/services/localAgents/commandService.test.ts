@@ -38,10 +38,20 @@ vi.mock('../../logger/logger', () => ({
 }))
 // Real login-shell resolution is slow and machine-dependent; a command's
 // actual PATH behaviour is exercised through real `spawn` below regardless.
+// A test that needs a PATH with no uv (or a fake one) sets `shellEnv.current`.
+const shellEnv = vi.hoisted(() => ({ current: null as NodeJS.ProcessEnv | null }))
 vi.mock('../../shell/env', () => ({
-  getShellEnv: async () => process.env,
+  getShellEnv: async () => shellEnv.current ?? process.env,
   shellEnvForChild: (env: NodeJS.ProcessEnv) => env
 }))
+
+// The real toolchain module (the managed uv's layout under userData), except
+// that installing the managed uv is the test's: nothing is ever downloaded.
+const ensureUv = vi.hoisted(() => ({ current: async (): Promise<unknown> => { throw new Error('test bug: ensureUv not configured') } }))
+vi.mock('../../localdev/toolchain', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../localdev/toolchain')>()
+  return { ...actual, toolchain: { ...actual.toolchain, ensureUv: () => ensureUv.current() } }
+})
 
 const locateImpl = vi.hoisted(() => ({
   current: null as null | ((userId: string, agentId: string) => { root: { path: string }; agentDir: string })
@@ -108,6 +118,7 @@ beforeEach(() => {
   }
   spawnShouldThrow.current = false
   layoutShouldThrow.current = false
+  shellEnv.current = null
   turnLock.releaseAll()
 })
 
@@ -596,4 +607,83 @@ describe('scheduled command execution', () => {
     expect(outcome.stdout).toBe('***REDACTED***')
     expect(outcome.stdoutIsExactOk).toBe(true)
   } finally { clearCredentialRedaction() }
+})
+
+describe('the managed uv on a command\'s PATH', () => {
+  const managedDir = (): string => join(workshop, 'userData', 'localdev', 'uv-0.12.10')
+
+  it('appends the managed uv directory last on the spawned PATH', async () => {
+    writeCatalog('commands:\n  - name: path\n    description: x\n    command: printf "%s" "$PATH"\n')
+    const result = await commandService.run(USER, AGENT_ID, 'path')
+    expect(result.ok).toBe(true)
+    const entries = result.output.split(':')
+    expect(entries.at(-1)).toBe(managedDir())
+    expect(entries.filter((entry) => entry === managedDir())).toHaveLength(1)
+  })
+
+  it('runs the user\'s own uv when one is on PATH, and keeps the ordinary exit text when it fails', async () => {
+    const bin = join(workshop, 'own-bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'uv'), '#!/bin/sh\necho "own uv $*"\nexit 3\n', { mode: 0o755 })
+    shellEnv.current = { ...process.env, PATH: `${bin}:/usr/bin:/bin` }
+    writeCatalog('commands:\n  - name: which\n    description: x\n    command: command -v uv\n  - name: own\n    description: x\n    command: uv run scripts/x.py\n')
+    const which = await commandService.run(USER, AGENT_ID, 'which')
+    expect(which.output.trim()).toBe(join(bin, 'uv'))
+    const own = await commandService.run(USER, AGENT_ID, 'own')
+    expect(own.output).toContain('own uv run scripts/x.py')
+    expect(own.error).toBe('"uv run scripts/x.py" exited with code 3.')
+  })
+})
+
+describe('uv could not start', () => {
+  // In order: the pre-warm's state is the process's, and only these tests set it.
+  const NO_UV_PATH = '/usr/bin:/bin'
+  const UNAVAILABLE = 'uv is not available, so this command could not start.'
+
+  beforeEach(() => {
+    shellEnv.current = { ...process.env, PATH: NO_UV_PATH }
+    writeCatalog('commands:\n  - name: status\n    description: x\n    command: uv run scripts/status.py\n')
+  })
+
+  it('says Cinna is still installing its copy when the pre-warm recorded no failure', async () => {
+    const result = await commandService.run(USER, AGENT_ID, 'status')
+    expect(result.exitCode).toBe(127)
+    expect(result.error).toBe(`${UNAVAILABLE} Cinna is still installing its copy; try again in a moment.`)
+  })
+
+  it('names a download failure', async () => {
+    const { ToolchainError } = await import('../../errors')
+    const { prewarm } = await import('./uvPrewarm')
+    await prewarm() // drains the retry the previous failure started
+    ensureUv.current = async () => { throw new ToolchainError('download_failed', 'Could not download uv: HTTP 503.') }
+    await prewarm()
+    const result = await commandService.run(USER, AGENT_ID, 'status')
+    expect(result.error).toBe(`${UNAVAILABLE} Cinna could not download its copy of uv (Could not download uv: HTTP 503.). Check the network connection and run it again.`)
+  })
+
+  it('says to install uv on a platform Cinna has no build for', async () => {
+    const { ToolchainError } = await import('../../errors')
+    const { prewarm } = await import('./uvPrewarm')
+    await prewarm() // drains the retry the previous failure started
+    ensureUv.current = async () => { throw new ToolchainError('unsupported_platform', 'Cinna has no verified uv build for win32-x64.') }
+    await prewarm()
+    const result = await commandService.run(USER, AGENT_ID, 'status')
+    expect(result.error).toBe(`${UNAVAILABLE} Cinna has no uv build for this platform; install uv (https://docs.astral.sh/uv/) and run it again.`)
+  })
+
+  it('keeps the ordinary text for a 127 that a uv on PATH passed through from its own child', async () => {
+    const bin = join(workshop, 'own-bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'uv'), '#!/bin/sh\necho "jq: command not found" >&2\nexit 127\n', { mode: 0o755 })
+    shellEnv.current = { ...process.env, PATH: `${bin}:${NO_UV_PATH}` }
+    const result = await commandService.run(USER, AGENT_ID, 'status')
+    expect(result.exitCode).toBe(127)
+    expect(result.error).toBe('"uv run scripts/status.py" exited with code 127.')
+  })
+
+  it('leaves any other command\'s 127 as it was', async () => {
+    writeCatalog('commands:\n  - name: ghost\n    description: x\n    command: cinna-test-definitely-not-a-real-binary-xyz run\n')
+    const result = await commandService.run(USER, AGENT_ID, 'ghost')
+    expect(result.error).toBe('"cinna-test-definitely-not-a-real-binary-xyz run" exited with code 127.')
+  })
 })

@@ -119,6 +119,11 @@ export interface UserCommandDeps<A extends UserCommandAgent = UserCommandAgent> 
   workspace(agent: A): Promise<UserCommandWorkspace | 'missing' | null>
   /** The login shell's environment, narrowed for a child. */
   shellEnv(): Promise<Record<string, string>>
+  /**
+   * Why a failed run's `uv` could not start, or null for any other failure —
+   * written as the run's last line and its summary in place of the exit code.
+   */
+  uvUnavailable?: (command: string, outcome: { exitCode: number | null; stderr: string }) => Promise<string | null>
   userData(): string
   hub: UserCommandHub
   now?: () => number
@@ -152,7 +157,12 @@ interface Run {
   closed: Promise<void>
   /** The chat went away: nothing more is reported or kept. */
   removed: boolean
+  /** The last few KB of stderr, for telling "uv: command not found" from a script's own failure. */
+  stderrTail: string
 }
+
+/** How much of stderr's end a run keeps in memory. */
+const STDERR_TAIL_CHARS = 2000
 
 const refusal = (code: UserCommandRunFailure, extra: { reason?: string; folder?: string } = {}): UserCommandRunResult => ({
   ok: false, code, reason: extra.reason ?? USER_COMMAND_RUN_REASONS[code], ...(extra.folder ? { folder: extra.folder } : {})
@@ -371,7 +381,7 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     }
   }
 
-  const finish = (run: Run, outcome: { code: number | null; signal: NodeJS.Signals | null; error?: string }): void => {
+  const finish = (run: Run, outcome: { code: number | null; signal: NodeJS.Signals | null; error?: string }, uvUnavailable: string | null = null): void => {
     if (run.state !== 'running') return
     if (run.killTimer) { clearTimeout(run.killTimer); run.killTimer = null }
     // Stop requested before the close wins whatever the exit (a server exits 0
@@ -379,11 +389,15 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     // after the close is a no-op (`already_ended`).
     const state: UserCommandEnd['state'] = run.stopRequested ? 'stopped'
       : outcome.error === undefined && outcome.code === 0 ? 'completed' : 'failed'
+    // `uv` itself could not start: the window's last line and the row say why.
+    const uvReason = state === 'failed' ? uvUnavailable : null
+    if (uvReason) emit(run, `\r\n${uvReason}\r\n`)
     run.state = state
     run.endedAt = now()
     run.end = { state, exitCode: outcome.code, signal: outcome.signal }
     if (run.fd !== null) { try { closeSync(run.fd) } catch { /* closed */ } run.fd = null }
     const summary = state !== 'failed' ? undefined
+      : uvReason ? uvReason
       : outcome.error !== undefined ? outcome.error
         : outcome.signal ? `${outcome.signal} · ${run.displayFolder}`
           : `Exit code ${outcome.code ?? '?'} · ${run.displayFolder}`
@@ -614,12 +628,15 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
       id, chatId: input.chatId, agentId: agent.id, command, folder, displayFolder: shown, logPath,
       startedAt: now(), child, fd, bytes: 0, truncated: false, state: 'running', end: null, endedAt: null,
       stopRequested: false, killTimer: null, listeners: new Set(), decoders: [out, err],
-      closed: new Promise((resolve) => { closed = resolve }), removed: false
+      closed: new Promise((resolve) => { closed = resolve }), removed: false, stderrTail: ''
     }
     watchHub()
     runs.set(id, run)
     child.stdout?.on('data', (chunk: Buffer) => write(run, chunk, out))
-    child.stderr?.on('data', (chunk: Buffer) => write(run, chunk, err))
+    child.stderr?.on('data', (chunk: Buffer) => {
+      run.stderrTail = (run.stderrTail + chunk.toString('utf8')).slice(-STDERR_TAIL_CHARS)
+      write(run, chunk, err)
+    })
     child.on('error', (error) => {
       logger.warn('a user command failed after it started', { itemId: id, error: error.message })
       flush(run)
@@ -629,9 +646,15 @@ export function createUserCommandService<A extends UserCommandAgent = UserComman
     })
     child.once('close', (code, signal) => {
       flush(run)
-      finish(run, { code, signal })
-      dying.delete(run)
-      closed()
+      const done = (uvUnavailable: string | null): void => {
+        finish(run, { code, signal }, uvUnavailable)
+        dying.delete(run)
+        closed()
+      }
+      // A failed `uv …` is asked whether uv itself could not start (which may
+      // look at the child's PATH) before the run ends; anything else ends now.
+      if (!deps.uvUnavailable || run.stopRequested || signal || code === 0 || code === null) return done(null)
+      deps.uvUnavailable(run.command, { exitCode: code, stderr: run.stderrTail }).then(done, () => done(null))
     })
     // The command and the folder in the row; the log is its output.
     deps.hub.report(run.chatId, run.agentId, {

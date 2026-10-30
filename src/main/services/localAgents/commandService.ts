@@ -46,6 +46,8 @@ import { join } from 'node:path'
 import { getLayoutView } from '../../kit/contractStore'
 import { readCommandCatalog } from '../../kit/validator'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
+import { withManagedUvFallback } from '../../shell/managedUvPath'
+import { uvUnavailableReason } from './uvPrewarm'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
@@ -249,7 +251,8 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
   const body = async (): Promise<SpawnOutcome> => {
     // First statement under the lock: from here on the command may have had effects.
     onStart?.()
-    const env = shellEnvForChild(await getShellEnv())
+    // The managed uv last on PATH: `uv run` works before the user installs one.
+    const env = await withManagedUvFallback(shellEnvForChild(await getShellEnv()))
     const prepared = await prepareCredentials(agentId)
     const outcome = await execute(localCommand, agentDir, engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint }), signal, timeoutMs)
     const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
@@ -478,7 +481,8 @@ export const commandService = {
           exitCode: outcome.exitCode,
           aborted: false,
           busy: false,
-          error: `"${localCommand}" exited with code ${outcome.exitCode}.`
+          // uv itself could not start: say why, not "exited with code 127".
+          error: (await uvUnavailableReason(localCommand, outcome)) ?? `"${localCommand}" exited with code ${outcome.exitCode}.`
         }
       }
       return {

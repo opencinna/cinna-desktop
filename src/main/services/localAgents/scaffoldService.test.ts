@@ -33,7 +33,7 @@ vi.mock('../../logger/logger', () => ({
 }))
 
 const { clearContractCache } = await import('../../kit/contractStore')
-const { scaffoldService } = await import('./scaffoldService')
+const { scaffoldService, installScaffoldPrewarm } = await import('./scaffoldService')
 
 function walk(dir: string, out: string[] = []): string[] {
   const entries: Dirent[] = readdirSync(dir, { withFileTypes: true })
@@ -58,6 +58,32 @@ afterEach(() => {
 })
 
 describe('scaffoldAgent', () => {
+  it('starts the uv pre-warm for the new folder once it is in place, without waiting on it', () => {
+    const seen: Array<{ agentDir: string; existed: boolean; pythonVersion: boolean }> = []
+    const uninstall = installScaffoldPrewarm((agentDir) => {
+      seen.push({ agentDir, existed: existsSync(agentDir), pythonVersion: existsSync(join(agentDir, '.python-version')) })
+      // A pre-warm that never ends: the scaffold returns regardless.
+      void new Promise(() => {})
+    })
+    try {
+      const { agentDir } = scaffoldService.scaffoldAgent({ rootPath: workshop, slug: 'alpha', name: 'Alpha', description: 'Reads invoices.' })
+      expect(seen).toEqual([{ agentDir, existed: true, pythonVersion: true }])
+    } finally {
+      uninstall()
+    }
+  })
+
+  it('still creates the agent when the pre-warm hook throws, and runs none when none is installed', () => {
+    const uninstall = installScaffoldPrewarm(() => { throw new Error('boom') })
+    try {
+      const { agentDir } = scaffoldService.scaffoldAgent({ rootPath: workshop, slug: 'beta', name: 'Beta', description: 'Reads invoices.' })
+      expect(existsSync(agentDir)).toBe(true)
+    } finally {
+      uninstall()
+    }
+    expect(() => scaffoldService.scaffoldAgent({ rootPath: workshop, slug: 'gamma', name: 'Gamma', description: 'x' })).not.toThrow()
+  })
+
   it('leaves no {{TOKEN}} anywhere in the created tree', () => {
     const { agentDir } = scaffoldService.scaffoldAgent({
       rootPath: workshop,

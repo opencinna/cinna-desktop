@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { clearToolCache, getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
-import { toolchain } from '../../localdev/toolchain'
+import { managedUvLayout, toolchain } from '../../localdev/toolchain'
 import type { DetectedTool, LocalToolId, LocalToolKind } from '../../../shared/localTools'
 
 const logger = createLogger('local-tools')
@@ -75,7 +75,8 @@ const TOOL_SPECS: readonly ToolSpec[] = [
     bin: 'cinna',
     managed: () => join(toolchain.root(), 'bin', 'cinna')
   },
-  { id: 'uv', kind: 'runtime', label: 'uv', bin: 'uv' },
+  // The managed copy is what local-agent children fall back on (`managedUvPath.ts`).
+  { id: 'uv', kind: 'runtime', label: 'uv', bin: 'uv', managed: () => managedUvLayout().uvBin },
   { id: 'git', kind: 'runtime', label: 'Git', bin: 'git' },
   { id: 'python3', kind: 'runtime', label: 'Python 3', bin: 'python3' }
 ]

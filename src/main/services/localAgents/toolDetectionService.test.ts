@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { join } from 'node:path'
 
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} })
 }))
 
+// The managed uv's path; a test that wants it installed writes a file there.
+const managedUv = vi.hoisted(() => ({ path: '/nonexistent/cinna-toolchain/uv-0.12.10/uv' }))
 vi.mock('../../localdev/toolchain', () => ({
-  toolchain: { root: () => '/nonexistent/cinna-toolchain' }
+  toolchain: { root: () => '/nonexistent/cinna-toolchain' },
+  managedUvLayout: () => ({ uvBin: managedUv.path })
 }))
 
 /**
@@ -63,5 +67,26 @@ describe('detecting tools behind macOS developer-tool stubs', () => {
     const uv = tools.find((t) => t.id === 'uv')
     expect(uv).toMatchObject({ available: true, path: '/opt/homebrew/bin/uv', source: 'path', version: '0.4.20' })
     expect(execFile.mock.calls.map((call) => call[0])).toContain('/opt/homebrew/bin/uv')
+  })
+})
+
+describe('the managed uv', () => {
+  it('reports uv as managed when only the desktop\'s copy exists, and the user\'s own when both do', async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(join(tmpdir(), 'managed-uv-'))
+    const own = paths.uv
+    try {
+      managedUv.path = join(dir, 'uv')
+      writeFileSync(managedUv.path, '#!/bin/sh\n', { mode: 0o755 })
+      expect((await toolDetectionService.refresh()).find((t) => t.id === 'uv')).toMatchObject({ source: 'path', path: own })
+      delete paths.uv
+      expect((await toolDetectionService.refresh()).find((t) => t.id === 'uv')).toMatchObject({
+        available: true, source: 'managed', path: managedUv.path, version: '0.4.20'
+      })
+    } finally {
+      paths.uv = own
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

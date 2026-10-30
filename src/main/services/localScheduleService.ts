@@ -18,6 +18,7 @@ import { folderReadinessBlocksTurn, type LocalAgentDto } from '../../shared/loca
 import type { LocalAgentScheduleDefinition as LocalScheduleDefinition, LocalScheduleItem, LocalScheduleOccurrence, LocalScheduleReview } from '../../shared/localSchedules'
 import { interruptScheduledOrdinaryJob } from './jobExecution/scheduled'
 import { commandService } from './localAgents/commandService'
+import { uvUnavailableReason } from './localAgents/uvPrewarm'
 import { normalizeScheduleEditorMetadata } from '../../shared/scheduleTemplates'
 import { manifestPath, readWithStamp } from '../kit/manifestIo'
 import type { LocalScheduleSaveInput, LocalScheduleDeleteInput, LocalScheduleEditorSnapshot, LocalScheduleHistoryInput, LocalScheduleHistoryPage, LocalScheduleStopInput, ScheduleCommandOutcome } from '../../shared/localSchedules'
@@ -411,6 +412,14 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
     if (outcome.timedOut || outcome.spawnError) {
       localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'failed', resultKind: 'execution_error',
         reason: outcome.spawnError ?? (outcome.timedOut ? 'The command exceeded its five-minute limit.' : 'The command ended without an exit code.'), finishedAt: outcome.finishedAt })
+      return
+    }
+    // `uv` itself could not start: nothing ran for an agent to inspect, and the
+    // reason says what to do (wait for Cinna's copy, check the network, install uv).
+    const uvReason = outcome.exitCode !== 0 ? await uvUnavailableReason(binding.definition.resolvedCommand ?? '', outcome) : null
+    if (uvReason) {
+      localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'failed', resultKind: 'execution_error',
+        reason: uvReason, finishedAt: outcome.finishedAt })
       return
     }
     if (outcome.exitCode === 0 && !outcome.stdoutTruncated && (outcome.stdoutIsExactOk ?? outcome.stdout.trim() === 'OK')) {
