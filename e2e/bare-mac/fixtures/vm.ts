@@ -183,8 +183,14 @@ async function stopVm(name: string, run: ChildProcess, testInfo: TestInfo): Prom
   }
 }
 
-export const test = base.extend<{ vm: BareVm }>({
-  vm: async ({}, use, testInfo) => {
+export const test = base.extend<{ vm: BareVm; beforeLaunch: string | undefined }>({
+  /**
+   * A guest shell command run after the install and before the launch, for
+   * state the app must find at its first start — a pasteboard, a defaults key.
+   * Set with `test.use({ beforeLaunch: '…' })`.
+   */
+  beforeLaunch: [undefined, { option: true }],
+  vm: async ({ beforeLaunch }, use, testInfo) => {
     // A trailing slash is what tab completion leaves on a .app directory.
     const appArchive = process.env.CINNA_BARE_APP?.replace(/\/+$/, '')
     if (!appArchive || !existsSync(appArchive)) {
@@ -283,6 +289,11 @@ export const test = base.extend<{ vm: BareVm }>({
         appPath = (await sh(`ls -d /Applications/Cinna*.app`)).trim()
       }
 
+      if (beforeLaunch) {
+        currentStep = 'before launch'
+        await sh(beforeLaunch)
+      }
+
       currentStep = 'launch'
       launchedAt = Date.now()
       await sh(
@@ -371,7 +382,15 @@ async function collectArtifacts(
   windowLog: readonly string[]
 ): Promise<void> {
   const page = browser?.contexts().flatMap((c) => c.pages()).find((p) => p.url().endsWith('/index.html'))
-  if (page) await testInfo.attach('app.png', { body: await page.screenshot(), contentType: 'image/png' }).catch(() => undefined)
+  // Bounded: an app frozen behind a modal (a paste alert did this) never
+  // answers, and an unbounded screenshot would hang teardown past the test
+  // timeout and leak the VM.
+  if (page) {
+    await page
+      .screenshot({ timeout: 15_000 })
+      .then((body) => testInfo.attach('app.png', { body, contentType: 'image/png' }))
+      .catch(() => undefined)
+  }
   const appLog = await sh('cat /tmp/cinna.out /tmp/cinna.err 2>/dev/null || true').catch(() => '')
   await testInfo.attach('app.log', { body: appLog, contentType: 'text/plain' })
   const windows = await sh('osascript -l JavaScript /tmp/windows.js').catch(() => '')
