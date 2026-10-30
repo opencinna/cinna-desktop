@@ -28,7 +28,7 @@ Phase 7a of Local Agents. Phase 3 already listed the catalog on the agent page; 
 4. Sending the message runs it
 
 ### A command that fails
-1. The name isn't in the catalog, the folder is gone, the kit contract can't be read, the localised binary isn't on the machine's `PATH`, the script exits non-zero, or it runs past its own ceiling
+1. The name isn't in the catalog, the folder is gone, the kit contract can't be read, the localised binary isn't on the machine's `PATH`, the script exits non-zero, or it runs past its own ceiling. A command that starts with `uv` and fails because `uv` could not start reads *"uv is not available, so this command could not start."* plus what to do — Cinna could not download its copy (check the network), Cinna has no uv build for this platform (install uv), or Cinna is still installing it (try again in a moment) — not "exited with code 127". Exit 127 alone does not qualify: `uv run` passes its script's exit code through, so it counts only when the shell said uv was not found or no uv resolves on the command's `PATH`. The managed uv that makes this rare is described in [Developer Tools on a Bare Machine](../../development/shell_environment/developer_tools.md#the-managed-uv)
 2. Whatever output the process produced before failing is kept and shown
 3. The failure renders through the ordinary turn-error banner — expandable to the captured output — not a second error surface built for this case
 

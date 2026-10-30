@@ -19,7 +19,7 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 2. The engine child starts with `tool-shims/` first on its `PATH`, so its `git` at session start reaches the stand-in, not `/usr/bin/git`: no dialog
 3. Seeing no usable git, the app starts downloading the managed git in the background. Nothing waits for it; no UI reports it
 4. Once it lands, the next child starts with `git-shim/` ahead of `tool-shims/`, and a child already running reaches the managed git through the `git` stand-in, which looks for it on every call
-5. Tool detection (Settings → Default → Local Development → Developer Tools) lists `git`, `make` and `python3` as not installed rather than probing their versions, which would pop the dialog
+5. Tool detection (Settings → Default → Local Development → Developer Tools) lists `git` and `python3` as not installed rather than probing their versions, which would pop the dialog
 
 ### The user installs the Command Line Tools while the app runs
 1. The user runs `xcode-select --install`
@@ -46,6 +46,7 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 - **Only names whose lookup lands on a stub are shimmed**, and a shim left over for a tool the user has since installed through Homebrew is deleted on the next write, so it cannot shadow it
 - **The `git` stand-in's content never changes.** It runs the first real `git` further along the caller's `PATH` (skipping Cinna's own directories and `/usr/bin`), else the managed git's wrapper when it exists, else says git is not available and exits 127. So a long-lived child — an MCP server started before the managed git landed, whose `PATH` has `tool-shims/` but not `git-shim/` — still reaches whichever git exists now, and never the stub
 - **Never throws.** A shim directory that cannot be written costs the user the dialog, not the turn
+- **The managed uv is appended last, by the same entry point.** `withDeveloperToolShims` finishes by adding the directory of Cinna's own uv to the end of `PATH` (see [The managed uv](#the-managed-uv)). Because the shims prepend and the uv appends, the order is always shims, then the user's `PATH`, then the managed uv, and "does any uv resolve?" is judged on the `PATH` the child will actually get
 
 ### The managed git
 - **Any real git wins.** Command Line Tools, Xcode, Homebrew, a distro package: the managed git is used only when none is usable, and is left on disk, unused, once one appears
@@ -56,6 +57,16 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 - **A tree that verifies but will not run here is never downloaded again.** It would fail the same way on every start, so it leaves a marker, `<userData>/runtimes/.git-<version>-unsupported`; a new pin has a new marker name. A network or checksum failure leaves none
 - **Swept like an engine runtime.** It installs into the same `runtimes/` root, and a fresh install removes superseded `git-<version>` directories not used for a week; the wrapper re-stamps its tree as used at most hourly
 - **`CINNA_GIT_DOWNLOAD=off` turns the download off**, which the E2E fixture does on every launch
+
+### The managed uv
+- **Why.** A kit agent's commands are `uv run …`, and a fresh Mac has no uv. Cinna already downloads a pinned, checksummed uv for MCP servers and Local Development; the same copy is the last place a local-agent child looks. Without it, the first `/run:status` on a bare machine failed with "exited with code 127"
+- **Appended, never prepended.** A uv the user installed always wins; Homebrew or a distro package installed later takes over with no setting. The directory is added whether or not the download has landed, so a long-lived engine process finds uv the moment the install finishes
+- **Reaches every local-agent child:** the engine children and the other hosts of the shims (custom agents, stdio MCP servers), and also `/run:` commands, schedules and clickable chat scripts, which do not go through the shims and apply the same append themselves
+- **No `UV_*` directory variables.** uv uses its default cache and Python directories, the ones a later user-installed uv shares, so nothing is downloaded twice and the toolchain's own tools directory (the Cinna CLI) stays invisible to agent code
+- **One exception: `UV_PYTHON_PREFERENCE=only-managed`, only when no other uv resolves and the environment does not already set it.** On a Mac without the Command Line Tools, uv probing `/usr/bin/python3` pops the install dialog. A user with their own uv keeps their own preference
+- **Pre-warm.** When an agent is scaffolded, and once at profile-ready when this computer has a local agent, Cinna installs the managed uv and runs `uv python install` with the same environment a run gets, so the interpreter lands where runs look. Nothing waits for it and a scaffold never fails on it. One install at a time; a failure is remembered, never thrown, and a `uv …` command that cannot start starts another, so "run it again" is true. Child installs are killed when the app quits. `CINNA_UV_PREWARM=off` turns it off, which the E2E fixture does on every launch; the bare-Mac suite leaves it on
+- **When uv still cannot start,** a `/run:` command, a scheduled command and a Run Script window say so in one sentence instead of an exit code, chosen by what the pre-warm recorded: Cinna could not download its copy (with the reason, check the network), Cinna has no uv build for this platform (install uv), or Cinna is still installing it (try again in a moment). A scheduled run ends as an execution error, so no inspect task is opened for a failure no agent could fix. Exit 127 alone is not taken as proof, because `uv run` passes its script's exit code through: it counts only when the shell said `uv` was not found, or no uv resolves on the child's `PATH`. The same failure starts a new pre-warm, so "run it again" holds — unless one is installing, the platform has no uv build, or the last install failed under five minutes ago, so a once-a-minute schedule while offline does not download uv every minute. A quit during the uv download spawns no Python install afterwards. Engine bash tools are out of reach; the kit prose covers them
+- **Tool detection** reports uv with source `managed` when only Cinna's copy exists. The Developer Tools list no longer has a Make row: the kit no longer uses `make`
 
 ## Architecture Overview
 
@@ -71,6 +82,7 @@ Engine / custom agent / stdio MCP child env
        -> tools installed and git present -> env unchanged
        -> PATH = [git-shim/ if managed git needed and installed]
                  + [tool-shims/ if any name lands on a stub] + rest
+       -> withManagedUvFallback: + managed uv dir last (+ UV_PYTHON_PREFERENCE when no other uv)
 ```
 
 ## Integration Points
@@ -80,7 +92,8 @@ Engine / custom agent / stdio MCP child env
 - [The Local Engine](../../agents/local_agents/engine.md#binary-resolution-and-what-verified-means) — the shared managed install and sweep; engine launch keys
 - [Custom Agents](../../agents/custom_agents/custom_agents.md), [MCP Connections](../../mcp/connections/connections.md) — the other children that get the shims
 - [Open in Tools](../../agents/local_agents/open_in_tools.md) — tool detection reads a stub as not installed
-- [E2E](../e2e/e2e_llm.md) — `CINNA_GIT_DOWNLOAD=off`
+- [E2E](../e2e/e2e_llm.md) — `CINNA_GIT_DOWNLOAD=off`, `CINNA_UV_PREWARM=off`
+- [Local Agent Commands](../../agents/local_agents/commands.md) — the commands the managed uv exists for
 - [Bare-Mac Tests](../bare_mac/bare_mac.md) — [A fresh Mac, nothing installed](#a-fresh-mac-nothing-installed) on a real VM with no developer tools, failing on any system dialog: startup, the managed git download and tool detection (steps 3 and 5), and step 2 for Codex and OpenCode, whose children start a session in the agent folder. A Claude or Antigravity agent with no login spawns no child, so theirs is not reached
 
 Technical detail: [developer_tools_tech.md](developer_tools_tech.md).

@@ -120,7 +120,7 @@ Every install is built in a staging directory beside `.cinna-kit/`, gets the mar
 
 **In a tree it owns, the desktop keeps the kit's freshness stamp current, so no assistant runs `kit.py refresh` there.** The root `AGENTS.md` tells an assistant to run `kit.py refresh --check` when `.cinna-kit/.last_refresh_check` is missing or older than seven days — and a refresh in a desktop-owned tree would swap the app's kit behind its back. So the desktop writes that stamp, in `kit.py`'s own format, on every install and whenever it is older than a day. A failed write is swallowed; the worst case is that the rule fires. **A tree the desktop does not own never gets the stamp**: whether it refreshes is its owner's business, and a downloaded kit refreshing itself is exactly what "keeps working as before" means. A tree with a strictly newer contract is left without it too.
 
-What it deliberately does not do: the desktop never runs `kit.py`, never fetches a kit, and puts no managed `uv` or Python on anyone's PATH. `kit.py` still needs `uv` (or a `python3` of 3.10 or newer) on the machine; an assistant without one can read the guides but not run the tool.
+What it deliberately does not do: the desktop never runs `kit.py`, never fetches a kit, and puts nothing ahead of the user's own tools on anyone's PATH. It does append Cinna's managed `uv` to the end of the `PATH` of every local-agent child (so the user's own uv always wins) and pre-warms that uv and the template's Python, so a kit agent's `uv run` works on a machine with none ([Developer Tools on a Bare Machine](../../development/shell_environment/developer_tools.md#the-managed-uv)). `kit.py` still needs `uv` (or a `python3` of 3.10 or newer) on the machine; an assistant without one can read the guides but not run the tool.
 
 ### The legacy exemption, and the three places that must agree
 
@@ -202,8 +202,10 @@ So the three shapes that do this are detected, not guessed at:
 
 ### Validation severity
 
+Since contract 1.18.0 the kit has no Makefile: commands run through `layout.json`'s `local_command_runner`, so the validator neither reads nor reports a Makefile. An older agent's Makefile is ignored, and still left out of an export.
+
 - **error** — the folder is broken or would import wrong: a missing required field, a prompt file that is not there, an exposed secret, an unresolvable `/run:`, an unreadable command. The agent is not run — **except for skill findings** (below), which are errors that do not stop it
-- **warning** — it runs, but is stale or not cloud-ready: no example prompts, an uncatalogued script, a command with no Makefile target, an unrecognised credential `type` (the platform's list grows independently, so an unknown one is reported, never rejected), a legacy manifest, a `.env.<suffix>` no ignore rule covers
+- **warning** — it runs, but is stale or not cloud-ready: no example prompts, an uncatalogued script, an unrecognised credential `type` (the platform's list grows independently, so an unknown one is reported, never rejected), a legacy manifest, a `.env.<suffix>` no ignore rule covers
 - **info** — worth knowing: the folder predates the active contract, or still carries the deprecated `cloud` stamp
 
 The validator **never throws**. Its callers are a scanner and a page, and neither may crash on a file someone is mid-edit.

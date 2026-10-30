@@ -60,6 +60,7 @@ This is general infrastructure, not agent-specific. Installed-tool detection, th
 - On POSIX a candidate must be a regular file with the executable bit set; on Windows existence is the test, and each directory yields the bare name plus one candidate per `PATHEXT` extension (defaulting to `.COM;.EXE;.BAT;.CMD`) unless the name already carries one
 - Results are cached **including misses**, so a missing tool is not re-walked on every render
 - **`which()` answers what `PATH` holds, not whether it will run.** On a Mac without the Command Line Tools, `/usr/bin/git` is a stub that pops an install dialog; a caller about to execute a tool uses `usableTool()` instead, and engine, custom-agent and MCP children get stand-ins on their `PATH` — see [Developer Tools on a Bare Machine](developer_tools.md)
+- **Local-agent children get one addition to the narrowed `PATH`: Cinna's managed uv, appended last.** `/run:` commands, schedules, clickable chat scripts and the engine, custom-agent and MCP children end with its directory, so a uv the user installed always resolves first and none of the `UV_*` directory variables is set. The one extra variable, `UV_PYTHON_PREFERENCE=only-managed`, appears only when no other uv resolves — see [The managed uv](developer_tools.md#the-managed-uv)
 
 ### Child-Process Environment Rule
 

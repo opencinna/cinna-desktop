@@ -8,12 +8,16 @@ Implementation companion to [developer_tools.md](developer_tools.md). All three 
 - `src/main/shell/macDeveloperTools.ts` — the stub list, the tools-state probe, and `createUsableTool()`
 - `src/main/shell/developerToolShims.ts` — `tool-shims/` and the child-`PATH` plan; `withDeveloperToolShims(env)`
 - `src/main/shell/managedGit.ts` — the managed git's install, wrapper and fallback
+- `src/main/shell/managedUvPath.ts` — `withManagedUvFallback(env)` (managed uv directory last on `PATH`, `UV_PYTHON_PREFERENCE=only-managed` when no other uv resolves and the env sets none; idempotent, never throws, `Path` casing on win32), `resolveOnEnvPath`, `uvCouldNotStart` and `uvUnavailableMessage`. Core module with injectable deps; no import of `shell/env`
+- `src/main/services/localAgents/uvPrewarm.ts` — `prewarm(agentDir?)`, `prewarmState()` (`{uv, python, failure?}`, each step `unknown | installing | ready | failed`), `uvUnavailableReason(command, outcome)` (starts a new pre-warm on a match, outside `RETRY_BACKOFF_MS` after a failed install and never after `unsupported_platform`), `uvPrewarm.shutdown()`
 - `src/main/shell/env.ts` — `usableTool(bin)`, `whichPastStub(bin)`; `clearToolCache()` and `resetShellEnv()` also call `macDeveloperTools.clear()`
 - `src/main/managed/managedAsset.ts` — `sweepSuperseded()` and `markUsed()` moved here from `engine/binaryResolver.ts` (which re-exports `markUsed`) so the managed git can use them without importing the resolver; `installPinnedAsset` gained `publishDir`
 - `src/shared/runtimePins.ts` — `RUNTIME_PINS.git`
 
 ### Callers
 - `usableTool`: `services/localAgents/toolDetectionService.ts:detect()`, `services/localAgents/gitService.ts:resolveGit()`, `services/handoverGit.ts` (`resolveGit` dep; a null git returns the no-git answer without spawning)
+- `withManagedUvFallback`: `withDeveloperToolShims` (so every caller below), `services/localAgents/commandService.ts` (`/run:`, status refresh, schedules), `services/userCommands/index.ts` (clickable scripts). `toolDetectionService.ts` reports uv with `managed: managedUvLayout().uvBin`
+- `uvPrewarm`: `scaffoldService` through `installScaffoldPrewarm`, installed by `hub/core.ts` so a scaffold in a test downloads nothing; `hub/core.ts` once at `onProfileReady` (off the boot path, only when an agents folder is registered, a folder agent exists and Python is not already `ready`); `shutdownHubCore` calls `uvPrewarm.shutdown()`. `uvUnavailableReason`: `commandService`, `localScheduleService` (the occurrence ends `failed` / `execution_error` with the sentence, no inspect task), `userCommands`
 - `withDeveloperToolShims`: `agents/drivers/index.ts` (Claude and Codex launch env and login probes, OpenCode `childEnv`, and the development-agent `PATH` override), `services/customAgentService.ts` (custom ACP `childEnv`), `mcp/manager.ts` (stdio base env, before `mergeEnv` with `config.env`)
 - `agents/drivers/acp/acpLaunchers.ts` — OpenCode's spec key now digests `env.PATH`; Claude's and Codex's keys already covered their env
 
@@ -42,6 +46,7 @@ Implementation companion to [developer_tools.md](developer_tools.md). All three 
 
 ## Configuration
 
+- `CINNA_UV_PREWARM=off` — `prewarm()` does nothing. Set by `e2e/fixtures/app.ts` on every launch; `e2e/bare-mac` does not set it
 - `CINNA_GIT_DOWNLOAD=off` — `managedGit.ensureInstalled()` does nothing. Set by `e2e/fixtures/app.ts` on every launch, after a spec's own variables
 - On disk: `<userData>/tool-shims/<name>`, `<userData>/git-shim/git`, `<userData>/runtimes/git-<version>/{bin,libexec,share,etc}`, `<userData>/runtimes/.git-<version>-unsupported`
 - No setting, no IPC channel, no renderer surface
@@ -57,6 +62,7 @@ Implementation companion to [developer_tools.md](developer_tools.md). All three 
 - `macDeveloperTools.test.ts` — stub identification, the TTL, `unknown` versus absent, one probe per burst, `clear()`, and `createUsableTool`'s order (including no install when the state is unknown)
 - `developerToolShims.test.ts` — the `PATH` plan, idempotence, stale-shim removal, never throwing, and the `git` stand-in's delegation, run through `/bin/sh`
 - `managedGit.test.ts` — publish, checksum and version failures, the unsupported marker surviving a sweep, single-flight, `CINNA_GIT_DOWNLOAD=off`, the wrapper's environment and quoting
+- `managedUvPath.test.ts`, `uvPrewarm.test.ts` — append not prepend, idempotence, `UV_PYTHON_PREFERENCE` only without another uv, no `UV_*` directories, win32 `Path`; single-flight, failure stored not thrown, the run env and cwd/version, `CINNA_UV_PREWARM=off`, shutdown
 - `toolDetectionService.test.ts` — stubs read as not installed and are never run
 - `handoverGit.test.ts`, `acpLaunchers.test.ts`, `mcp/manager.peer.test.ts` — the no-git handover answer, OpenCode's key following `PATH`, and the MCP child's `PATH`
 - Every test runs on fakes — injected `xcode-select` answers, scripted `git` trees packed with `tar` — so none of them proves the real dialog stays shut or that the real dugite archive installs and runs
