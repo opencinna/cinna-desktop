@@ -44,7 +44,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 ### Browsing agents
 
-1. Click **Agents** in the sidebar tab strip. Switching to the tab clears the selection and shows its empty pane; it does not choose an arbitrary agent
+1. Click **Agents** in the sidebar tab strip. Switching to the tab clears the selection and shows its empty pane (see [The empty pane](#the-empty-pane)); it does not choose an arbitrary agent
 2. Groups appear in this order: default local folders (**Local**), enabled agents from the active Cinna server (its host name), other registered folder roots in registration order, **A2A agents**, **ACP agents**, **Managed**. Existing ordering within each group is retained
 3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions, credential sublines and a [shared agent](team_sharing.md)'s state are absent; runtime, readiness and sharing belong on the page
 4. **Settings → Features → Interface → Show sections in Agents sidebar** defaults on. Turning it off removes headings, section spacing and empty-group placeholders without changing row order or profile membership. With sections enabled, the default root is labelled **Local**; a lone present non-default root retains the existing rule that omits its heading. See [Features Settings](../../ui/settings/settings.md)
@@ -54,14 +54,26 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 ### Before there is anywhere to put a folder agent
 
-1. Opening Agents reports **Your agents need a folder** with **Set one up** or **Pick another folder** when needed; opening the tab alone does not raise the consent modal
+1. Opening Agents creates a missing, unguarded home (the default `~/CinnaAgents`) once, with nothing to click. When the home cannot be used the sidebar reports **Folder agents need a home** with **Set one up** or **Pick another folder** (after a refusal); opening the tab alone does not raise the consent modal. Only a home in a macOS-guarded folder ever needs **Set one up**
 2. **+** still opens **Add an agent**. Installing from the catalog, external connections and adopting an existing folder (under **Advanced options**) do not require the default agents home. Only choosing **New agent** asks to prepare the home when it is unavailable
 3. Any registered root makes the folder list usable; the unresolved default home remains manageable in application Settings
 4. See [The Agents Folder Question](home_access.md) for the consent and recovery flow
 
+### The empty pane
+
+With nothing selected, the Agents page shows `AgentsEmptyPane`:
+
+- **No agent of any kind** (no folder agent, and nothing in the sidebar's Cinna, A2A, command-line or managed groups): a **Create a local agent** card ("A folder of its own to chat with and shape as you go.") that opens Add an agent directly at its name step, and a quiet **Other types of agents** link that opens it at the advanced step. A first-time user goes from opening the tab to naming an agent without choosing between dialogs
+- **Any agent exists**: "Select an agent from the sidebar, or add one with +."
+- **No usable agents folder**: "Local agents need a folder before you can add one." and the **Other types of agents** link, which need no folder. The card is withheld because New agent could not finish there; the sidebar carries the button that resolves it (ux_rules rule 9)
+- **Still settling** (list not loaded, or a missing home on its way to being created): nothing is drawn, so the card never appears and then gives way to the folder message (rule 1)
+- **A list or agents query failed**: the select line; the sidebar says what went wrong
+
+The sidebar's empty text is just "No agents yet" (not "click + to add one", which pointed at a `+` the pane now does better); it is also withheld while the home is settling. Back from the advanced step still goes to the choice step, where the catalog is. Closing the dialog returns focus to the card or link that opened it.
+
 ### Creating an agent
 
-1. **+** — "Add an agent" — offers the two ways most people get an agent: **Install from catalog** (Cinna accounts only; see [Installing from the catalog](#installing-from-the-catalog)) and **New agent** (scaffold a folder — its sub-line reads "A folder of its own to chat with and shape as you go."), as two same-size tiles side by side; New agent takes the whole row when there is no catalog to offer. Below them an **Advanced options** link opens a second step, a two-column grid of tiles: **Add a folder** (adopt one that already is an agent — its sub-line reads "A project folder with agent instructions. Nothing in it changes."), **A2A agent**, **Remote ACP agent**, **Command-line agent** and **Managed (Claude)**. The advanced step has a Back arrow to the first. New agent and Add a folder stay on separate steps, not one form with an option, because they have nothing in common: one *writes* a new kit folder into the agents home, the other *reads* a folder the user already owns and changes nothing in it. An "or point at an existing folder" link under a name field would have made the second look like an option on the first
+1. **+** — "Add an agent" (or the empty pane's card and link, which open the same dialog at the name or advanced step) — offers the two ways most people get an agent: **Install from catalog** (Cinna accounts only; see [Installing from the catalog](#installing-from-the-catalog)) and **New agent** (scaffold a folder — its sub-line reads "A folder of its own to chat with and shape as you go."), as two same-size tiles side by side; New agent takes the whole row when there is no catalog to offer. Below them an **Advanced options** link opens a second step, a two-column grid of tiles: **Add a folder** (adopt one that already is an agent — its sub-line reads "A project folder with agent instructions. Nothing in it changes."), **A2A agent**, **Remote ACP agent**, **Command-line agent** and **Managed (Claude)**. The advanced step has a Back arrow to the first. New agent and Add a folder stay on separate steps, not one form with an option, because they have nothing in common: one *writes* a new kit folder into the agents home, the other *reads* a folder the user already owns and changes nothing in it. An "or point at an existing folder" link under a name field would have made the second look like an option on the first
 2. **New agent** is the form that already existed. It asks for one thing: a **name**. Enter creates
 3. The folder name (slug) is derived from the name and shown as a real path preview (`<root>/Local/<slug>`) under the field. It is a directory an assistant will `cd` into and a Cinna instance will import by, so it is shown before anything is written
 4. **More options** holds the choices almost nobody makes at creation time: a description (**optional** — "What should it do?"), the folder name (editable), and which agents folder to scaffold into (only when there is more than one root). The agent is about to be built — in chat on its page, or in the user's own assistant — and *that* is where its description usually gets written. Without one, the prompts start as templates to fill in

@@ -123,7 +123,7 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
 ## Services & Key Methods
 
 ### `src/main/services/localAgents/agentsHomeService.ts`
-- `ensureHome(userId)` — resolve → create → register → install templates and `.cinna-kit/`. Idempotent; on the path of `rescan`, `create` and `requireRoot`, and reached from `list` / `listRoots` through `tryEnsureHome`. **Throws `home_consent_required` when the home is in a macOS-guarded folder the user has not been told about** — the gate is here, at the one function every path to the home goes through, so a new caller that forgets the rule gets an error rather than an unexplained permission prompt. See [The Agents Folder Question](home_access.md)
+- `ensureHome(userId)` — resolve → create → register → install templates and `.cinna-kit/`. Idempotent; on the path of `rescan`, `create` and `requireRoot`, and reached from `list` / `listRoots` through `tryEnsureHome` only for a home that is already registered. **Throws `home_consent_required` when the home is in a macOS-guarded folder the user has not been told about** — the gate is here, at the one function every path to the home goes through, so a new caller that forgets the rule gets an error rather than an unexplained permission prompt. See [The Agents Folder Question](home_access.md)
 - `prepare(userId)` → `Promise<AgentsHomeState>` — the only way past that refusal: async `mkdir` (so the macOS prompt does not block the main thread), then `ensureHome`'s synchronous scaffolding
 - `tryEnsureHome(userId)` → `AgentsHomeAccess` — the attempt with its answer returned instead of thrown. **Gates the home, not the list**: what is missing while the question stands is one row
 - `homePath` — `configuredHomePath` from `homePath.ts`, for a caller that wants the path and will not create it
@@ -137,7 +137,8 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
   Both memos are keyed by the root path as passed and live for the process; `_resetKitSync()` clears them for tests. The marker's content is informational — only its existence is checked
 
   `touchRefreshCheck` (only ever called on a tree the desktop owns) writes `.cinna-kit/.last_refresh_check` (`REFRESH_CHECK_FILE`) in `kit.py`'s `time.strftime("%Y-%m-%dT%H:%M:%S%z")` format (`refreshCheckStamp()`: local time, offset without a colon), when forced or when the file is missing or older than `REFRESH_CHECK_MAX_AGE_MS` (24 h) — one `stat` on the current path. A write failure is logged at debug and swallowed. The stamp exists only to keep the root `AGENTS.md` freshness rule (seven days) from sending an assistant to `kit.py refresh`; see [The workshop copy](kit_contract.md#the-workshop-copy-installed-where-missing-kept-current-only-where-the-desktop-put-it)
-- `listRoots(userId)` / `listRootRows(userId)` — DTOs (home first) and raw rows, each preceded by one `tryEnsureHome`
+- `homeMissing(userId)` — no root registered at the configured home path; database only. `refreshHome(userId)` — the read-path look at the home: a registered home goes through `tryEnsureHome`, an unregistered one is answered from `homeAccessService.state` and **not created**
+- `listRoots(userId)` / `listRootRows(userId)` — DTOs (home first) and raw rows, each preceded by one `refreshHome` (never creates the home)
 - `rootDtos(userId)` / `rootRows(userId)` — the same two, **without** the attempt, for a caller that has already run `tryEnsureHome` and holds its answer. `localAgentService.list` does; re-running it per accessor meant two or three attempts of which only the first was reported
 - `rootPaths(userId)` — what the open-in guard is given. Deliberately does **not** call `ensureHome`: creating directories as a side effect of a launcher would be surprising, and a failure must mean "nothing is allowed"
 - `requireRoot(userId, rootId?)` — the named root, or the home
@@ -191,7 +192,7 @@ A readers-writer lock: per agent, a map of holders keyed by monotonic token, eac
 
 ### `src/main/services/localAgents/localAgentService.ts`
 - `configure(getUserId)` — registers the open-in roots provider and the watcher deps. Runs once, from the IPC registrar
-- `list(userId)` — one `tryEnsureHome`, whose answer becomes `homeAccess`, then a cached scan per root + `watchRoot`, then `overlayEnabled`. The roots come from `rootRows` / `rootDtos` rather than `listRootRows` / `listRoots` so the home is attempted once and that one answer is what the renderer sees
+- `list(userId)` — one `refreshHome`, whose answer becomes `homeAccess` (with `homeMissing` and `homePath` beside it), then a cached scan per root + `watchRoot`, then `overlayEnabled`. The roots come from `rootRows` / `rootDtos` rather than `listRootRows` / `listRoots` so the home is attempted once and that one answer is what the renderer sees
 - `overlayEnabled(userId, agents)` — folds the row's `enabled` back onto every scanned snapshot
 - `get(userId, agentId)` — always a fresh scan; the agent page is watched while editing
 - `locate(userId, agentId)` — id → `{root, agentDir}` **through the index row**, never from a renderer-supplied string
@@ -229,7 +230,7 @@ A readers-writer lock: per agent, a map of holders keyed by monotonic token, eac
 
 | Setting | Where | Notes |
 |---|---|---|
-| `localAgentsHome` | `src/shared/appSettings.ts`, default `''` in `src/main/db/appSettings.ts` | `''` means the built-in default `~/Documents/CinnaAgents`. Kept as a string, not `string \| null`, so the service's `typeof` check works |
+| `localAgentsHome` | `src/shared/appSettings.ts`, default `''` in `src/main/db/appSettings.ts` | `''` means the built-in default `~/CinnaAgents`. The `pinLegacyAgentsHome` migration (`src/main/db/migrations/app-settings.ts`, last step of `runAllMigrations`) writes `~/Documents/CinnaAgents` here when the setting is missing or empty and a default root is registered at exactly that path, so an existing install is not repointed at a new empty folder by `ensureHome`'s "home moved" branch. Strings only, no filesystem access (a stat in `~/Documents` is what raises the prompt); idempotent with no marker; a fresh install has no such row and stays on the new default. Kept as a string, not `string \| null`, so the service's `typeof` check works |
 | `localAgentsHomeAcknowledged` | same files, default `''` | JSON `{"<path>": true}` — the home paths the user has had explained before the app writes into a macOS-guarded folder. Documented with [The Agents Folder Question](home_access_tech.md#configuration) |
 
 Validation happens twice, on purpose:

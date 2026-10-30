@@ -285,7 +285,7 @@ Build-only runtime, credential and complexity keys are listed in [Build Sessions
 
 It exists because the E2E suite cannot serve this purpose: it proves the flow works and then tears the window down in seconds, while the part worth *looking* at — several minutes of per-component progress — only exists during a cold install. `make demo-clean` deletes the sandbox it prints for another cold run; keep it to land straight in `ready`.
 
-The sandbox is a fresh `HOME` and `userData`, so the agents home and the account workspace never touch `~/Documents`. Both hold state a rerun reuses: the toolchain and the consent answer in `userData/`, the workspace under `home/Documents/CinnaAgents/Cloud/`. `SANDBOX=<path>` on either target picks a different profile, so a cold and a warm one can sit side by side. `scripts/demo-localdev.sh` says why each environment variable is set.
+The sandbox is a fresh `HOME` and `userData`, so the agents home and the account workspace never touch the real home directory. Both hold state a rerun reuses: the toolchain and the consent answer in `userData/`, the workspace under `home/CinnaAgents/Cloud/`. `SANDBOX=<path>` on either target picks a different profile, so a cold and a warm one can sit side by side. `scripts/demo-localdev.sh` says why each environment variable is set.
 
 ## Security
 

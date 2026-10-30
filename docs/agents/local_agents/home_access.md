@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Ask the user about the [Agents Home](folder_index.md) before macOS does. Creating `~/Documents/CinnaAgents` is a write into a folder macOS guards, so the first one raises the system's *"Cinna Desktop would like to access files in your Documents folder"* dialog. That dialog says nothing about agents, and the app has no way to make it say anything — so the app says it first, from a button the user pressed, and keeps somewhere to go when the answer is no.
+Ask the user about the [Agents Home](folder_index.md) before macOS does. The built-in home, `~/CinnaAgents`, is not a folder macOS guards, so the Agents tab creates it when it opens and nothing is asked. A home inside a guarded folder is another matter: `~/Documents/CinnaAgents` (the old default, which an install already using it keeps) or anything the user points at `~/Documents`, `Desktop` or `Downloads`. The first write there raises the system's *"Cinna Desktop would like to access files in your Documents folder"* dialog. That dialog says nothing about agents, and the app has no way to make it say anything — so the app says it first, from a button the user pressed, and keeps somewhere to go when the answer is no.
 
 The failure this replaced: `ensureHome` was on every read path that wanted the home, including the one behind `useAgentsHomeHint` — a hook whose whole output is a sentence naming a folder. It was mounted by the `cinna://connect` confirm panel and by the local-development onboarding step, so **reading the folder's name created it**, and the Documents prompt arrived in the middle of signing in, before the app had used the word "agent". People decline dialogs they did not expect, and a decline left the app with nowhere to put an agent and no screen that admitted it.
 
@@ -16,8 +16,11 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 
 ## User Stories / Flows
 
-### First run on a Mac
-1. The user opens **Agents**, then chooses **+ → New agent** or the empty state's **Set one up**. Opening the tab alone does not ask for a folder; external connections do not need one
+### First run, default home
+The user opens **Agents**. The list reports the home as missing but `ready`, and the tab asks main to create it once (`local-agent:home-grant`); the lists refetch and the empty pane offers **Create a local agent**. No folder click, no modal, no system prompt, on any platform. A refusal (read-only home directory) comes back as `denied`: the sidebar says "Folder agents need a home" with **Pick another folder** and the pane says "Local agents need a folder before you can add one", neither raising a modal by itself.
+
+### First run with a guarded home on a Mac
+1. The home is guarded only if the user chose it, or an older install pinned the old default (which is already registered, so it reads as acknowledged). The user opens **Agents**; the tab does **not** create it, because `needs_consent` is not `ready`. They choose **+ → New agent** or the sidebar's **Set one up**
 2. With no roots and `needs_consent`, that folder action opens the modal: what an agent folder is, the exact path, and the sentence that makes the next dialog legible — *"macOS will now ask whether Cinna may use your Documents folder. That is this one."*
 3. **Create folder** makes the directory. The macOS prompt appears during that call and stays up until it is answered
 4. Allowed: the folder is acknowledged, the templates and `.cinna-kit/` copy go in, the root row is registered, and the lists refresh. The question does not come back
@@ -29,9 +32,9 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 3. **try again**, in the body copy, re-attempts the original folder — for the user who has just flipped the switch in System Settings → Privacy & Security → Files and Folders. A refusal is not remembered across launches either, so restarting the app has the same effect
 
 ### The rest of the app while the question stands
-1. The sidebar list says *"Your agents need a folder"* with **Set one up** (or **Pick another folder** after a refusal), not "No agents yet" — the two states want different words and a different button
+1. The sidebar list says *"Folder agents need a home"* with **Set one up** (or **Pick another folder** after a refusal), not "No agents yet" — the two states want different words and a different button
 2. The `+` opens Add an agent. Only **New agent** requests the unavailable home; **Install from catalog** and everything under **Advanced options** — **Add a folder**, A2A, ACP and managed connections — remain available without it
-3. The empty agent pane says the folder is missing rather than pointing at that `+`
+3. The empty agent pane says *"Local agents need a folder before you can add one"* rather than pointing at that `+`, and keeps its **Other types of agents** link, since those need no folder
 4. Settings → Agents shows the home's place in the **Agent Folders** list as a row naming the state and the path, carrying the button that resolves it
 5. **Not now** is always available, and every one of those surfaces is a way back in
 
@@ -65,7 +68,11 @@ An unanswered question removes **one row** from the roots list, never the list. 
 
 For the same reason the *modal* treats any registered root as an answer. A user who adopted their own workshop has a working app; the home is then a Settings matter, and raising a modal over someone whose agents are right there in the sidebar, about a folder they chose not to use, is the interruption this whole arrangement exists to remove. Settings reads the home's own state instead — reporting where the agents folder is *is* its job.
 
-### The question is raised by demand, never by launch
+### Reads create nothing; opening the Agents tab creates the unguarded home
+
+The list is read at launch by surfaces that have nothing to do with agents (the chat list, the composer, the catalog hooks). A list read that created the home put a `~/CinnaAgents` folder on the disk of everyone who launched the app, so `local-agent:list` calls `refreshHome`, which keeps an existing home current and never creates a missing one; it reports `homeMissing` and `homePath` instead. The first creation is a request of its own: opening the Agents tab (the sidebar list, or the empty pane when the page is open without it) calls `homeGrant` once per window and home path, but only while the list says `ready`. A guarded home that needs the explainer is never created this way, so no system prompt can follow a tab open. The latch is in `agentsHome.store`, not a component, because StrictMode, a refetch or a tab switch would mount a component again; it stays `running` until the lists have refetched, so nothing paints the stale "missing" answer in between. A refusal is the sidebar's **Pick another folder**, not a request to try again.
+
+### The modal is raised by demand, never by launch
 
 Main can answer "the folder does not exist yet" from the moment the app starts. A modal that acted on that would explain the agents folder to someone who is still signing in — the same out-of-nowhere interruption the macOS prompt was, only ours. The Agents sidebar's folder-setup button, its **New agent** choice and the application Settings row raise it explicitly. Connecting an external agent never requires folder consent.
 
@@ -110,9 +117,12 @@ empty state / New agent                  │
                                          │        └─ EPERM → denied (remembered in memory)
                                          └─ ensureHome()  templates, .cinna-kit/, root row
 
-local-agent:list ──► tryEnsureHome() ──► 'ready' | 'needs_consent' | 'denied'
-                            │                    (carried on the list as homeAccess)
-                            └─ ensureHome() refuses while the question stands
+local-agent:list ──► refreshHome() ──► 'ready' | 'needs_consent' | 'denied'
+                            │      (carried on the list as homeAccess, plus homeMissing / homePath)
+                            ├─ home registered: tryEnsureHome() keeps it current
+                            └─ home missing: creates nothing
+
+Agents tab opens, homeMissing && 'ready' ──► useCreateAgentsHomeOnOpen ──► local-agent:home-grant (once)
 ```
 
 ## Integration Points

@@ -6,8 +6,8 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 
 ## Core Concepts
 
-- **Sandbox** — A throwaway directory per test holding a fresh `HOME` and a `userData`. The app derives its agents home from `homedir()` and refuses agent roots outside it, so both must point into the sandbox or the test is running against the developer's real `~/Documents/CinnaAgents`
-- **The agents folder question** — Because `$HOME` is fresh, `$HOME/Documents/CinnaAgents` has never been created, so a spec that needs an agents home explicitly chooses **Set one up** then **Create folder** through `answerAgentsFolder(cinna)` after opening the Agents tab; opening the tab alone leaves external agents available without a home ([The Agents Folder Question](../../agents/local_agents/home_access.md)). It is a no-op where a spec adopted its own root or already made the home
+- **Sandbox** — A throwaway directory per test holding a fresh `HOME` and a `userData`. The app derives its agents home from `homedir()` and refuses agent roots outside it, so both must point into the sandbox or the test is running against the developer's real `~/CinnaAgents`
+- **The agents folder question** — Because `$HOME` is fresh, `$HOME/CinnaAgents` has never been created. Opening the Agents tab creates it (a list read does not), and a spec that needs it on disk waits for that through `answerAgentsFolder(cinna)`, which polls `list().homeMissing` until false; no folder dialog is involved ([The Agents Folder Question](../../agents/local_agents/home_access.md)). It is a no-op where a spec adopted its own root or already made the home
 - **`CINNA_USER_DATA`** — The profile seam: when set, `src/main/index.ts` calls `app.setPath('userData', …)` (and `sessionData`) before anything derives a path from it
 - **`CINNA_BACKGROUND_WINDOW`** — The only other thing the suite tells the app. Set to `1` by the fixture: the window is shown but never brought forward, so a run does not take the machine over. It also stops [desktop notifications](../../ui/desktop_notifications/desktop_notifications.md) from reaching the developer's notification centre — a never-focused window would otherwise notify on every turn a spec runs — and logs `desktop notification suppressed under the test harness` with what would have been shown, which a spec can assert on. Both are harness environment variables read once at startup, with no route into the app's own UI, and they are the app's only test-mode behaviour
 - **Main window vs. tray panel** — `firstWindow()` is the tray panel; the fixture selects the window whose URL ends in `index.html`
@@ -108,7 +108,7 @@ What they need, in order:
 
 ## Business Rules
 
-- Never launch the built app in a test without the sandbox. A fresh profile activates the default user and goes looking for the real agents home — on macOS that means the run asking the developer for access to their own `~/Documents`, and on any platform a test writing into `~/Documents/CinnaAgents`. Isolation is asserted in `smoke.spec.ts`, not assumed
+- Never launch the built app in a test without the sandbox. A fresh profile activates the default user and goes looking for the real agents home — and on any platform a test writing into `~/CinnaAgents`. Isolation is asserted in `smoke.spec.ts`, not assumed
 - The sandbox writes the test process's `PATH` into the sandbox's shell rc files, because the app probes the login shell for its environment (see [Shell Environment Resolution](../shell_environment/shell_environment.md)) and a bare home yields a `PATH` without `uv` or `opencode`
 - `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at the developer's real caches so `uv run` inside a test does not re-provision an interpreter per sandbox
 - The app is launched with the repo root as its argument, not the entry file: `app.getAppPath()` follows the argument and the kit contract resolves as `<appPath>/resources/cinna-agent-kit`
