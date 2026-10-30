@@ -216,7 +216,7 @@ function entry(workshopRoot?: string): ContractCacheEntry {
 /**
  * Read a file from the active contract.
  *
- * @param relPath contract-relative POSIX path, e.g. `templates/agent/Makefile`
+ * @param relPath contract-relative POSIX path, e.g. `templates/agent/pyproject.toml`
  * @throws KitError `invalid_path` for anything that escapes the tree,
  *   `contract_unreadable` when the file cannot be read.
  */

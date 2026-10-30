@@ -48,9 +48,9 @@ beforeEach(() => {
 })
 
 describe('detecting tools behind macOS developer-tool stubs', () => {
-  it('reports git, make and python3 as not available, with no version, and never runs them', async () => {
+  it('reports git and python3 as not available, with no version, and never runs them', async () => {
     const tools = await toolDetectionService.refresh()
-    for (const id of ['git', 'make', 'python3'] as const) {
+    for (const id of ['git', 'python3'] as const) {
       const tool = tools.find((t) => t.id === id)
       expect([id, tool?.available, tool?.path, tool?.version]).toEqual([id, false, null, null])
     }

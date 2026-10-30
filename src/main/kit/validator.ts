@@ -5,8 +5,9 @@ import { isCoordinatorHandover } from '../../shared/kit/handovers'
  * agent?
  *
  * The rules come from `schema/cinna-agent.schema.json` plus the file-level
- * checks the kit's guides describe (prompt files exist, commands have Makefile
- * targets, every script is catalogued, no secret is exposed). They are
+ * checks the kit's guides describe (prompt files exist, catalogued commands are
+ * readable and uniquely named, every script is catalogued, no secret is
+ * exposed). They are
  * hand-written rather than driven by a JSON-schema library: this app has no such
  * dependency and adding one to check eleven fields is not worth the weight.
  * When the schema changes, change the checks here in the same commit.
@@ -17,10 +18,9 @@ import { isCoordinatorHandover } from '../../shared/kit/handovers'
  *   field, a prompt file that is not there, an exposed secret, a `/run:` that
  *   resolves to nothing. The agent is not run.
  * * **warning** — it runs, but something is stale or not cloud-ready: no example
- *   prompts, a script missing from `scripts/README.md`, a command with no
- *   Makefile target, a credential `type` this build does not recognise (the
- *   platform's list grows independently, so an unknown one is reported, never
- *   rejected).
+ *   prompts, a script missing from `scripts/README.md`, a credential `type`
+ *   this build does not recognise (the platform's list grows independently, so
+ *   an unknown one is reported, never rejected).
  * * **info** — worth knowing: the folder predates the active contract, or still
  *   carries the deprecated `cloud` stamp.
  *
@@ -1347,23 +1347,6 @@ export function readCommandCatalog(agentDir: string, relPath = 'docs/CLI_COMMAND
   return { commands, unreadable }
 }
 
-/** Target names declared in a Makefile, `.PHONY` and pattern rules excluded. */
-export function readMakefileTargets(agentDir: string): Set<string> {
-  const targets = new Set<string>()
-  let text: string
-  try {
-    text = readFileSync(join(agentDir, 'Makefile'), 'utf8')
-  } catch {
-    return targets
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (line.startsWith('\t') || line.trim() === '' || line.trimStart().startsWith('#')) continue
-    const match = /^([A-Za-z0-9][A-Za-z0-9_.-]*)\s*:(?!=)/.exec(line)
-    if (match) targets.add(match[1])
-  }
-  return targets
-}
-
 /** Directories a validator never needs to walk into, whatever they contain. */
 const UNWALKED_DIRS = new Set(['app-data', 'node_modules', '__pycache__', 'venv', 'dist', 'build'])
 
@@ -1579,7 +1562,10 @@ function checkFiles(
     }
   }
 
-  // 2. Every catalogued command needs a Makefile target to run it locally.
+  // 2. Every catalogued command must be readable, named as a /run: name, and
+  //    unique. Since contract 1.18.0 there is no Makefile mirror: commands run
+  //    through layout.json `local_command_runner`, and a legacy Makefile is
+  //    neither read nor reported.
   const catalogPath = options.layout?.layout.agent.command_catalog ?? 'docs/CLI_COMMANDS.yaml'
   const { commands, unreadable } = readCommandCatalog(agentDir, catalogPath)
   for (const entry of unreadable) {
@@ -1595,7 +1581,6 @@ function checkFiles(
   }
   const names = new Set<string>()
   if (commands.length > 0) {
-    const targets = readMakefileTargets(agentDir)
     for (const command of commands) {
       if (!COMMAND_NAME_PATTERN.test(command.name)) {
         report.error(
@@ -1608,13 +1593,6 @@ function checkFiles(
         report.error('commands.duplicate', `Two commands are both named "${command.name}".`, catalogPath)
       }
       names.add(command.name)
-      if (!targets.has(command.name)) {
-        report.warn(
-          'commands.makefile_target_missing',
-          `Command "${command.name}" has no \`${command.name}:\` target in the Makefile, so it cannot be run locally by hand.`,
-          'Makefile'
-        )
-      }
     }
   }
 

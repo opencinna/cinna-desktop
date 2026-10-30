@@ -1,6 +1,6 @@
 {
-  "kit_version": "979f64ba3d9b86a7",
-  "contract_version": "1.17.0",
+  "kit_version": "8315b1b9c1ebf29a",
+  "contract_version": "1.18.0",
   "platform_url": "https://opencinna.io",
   "kit_base_url": "https://opencinna.io/api/agent-start",
   "start_url": "https://opencinna.io/agent-start",
@@ -31,7 +31,7 @@
     {
       "rung": "prompts",
       "doc": "guides/02-prompts-and-description.md",
-      "trigger": "always, before the agent is tested for the first time"
+      "trigger": "always, before the agent's first check"
     },
     {
       "rung": "scripts",

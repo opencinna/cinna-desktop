@@ -18,7 +18,6 @@ export const LOCAL_TOOL_IDS = [
   'antigravity-ide',
   'uv',
   'git',
-  'make',
   'python3',
   'cinna'
 ] as const
@@ -34,7 +33,7 @@ export function isLocalToolId(value: unknown): value is LocalToolId {
  * How a tool is offered:
  *  - `cli-assistant` — a coding assistant launched in a terminal at the folder
  *  - `editor` — opens the folder as a project
- *  - `runtime` — not launchable, but its presence gates features (uv, git, make)
+ *  - `runtime` — not launchable, but its presence gates features (uv, git)
  */
 export type LocalToolKind = 'cli-assistant' | 'editor' | 'runtime'
 

@@ -403,7 +403,7 @@ function desktopContextSection(agentDir: string, context: DesktopPromptContext):
     '',
     ...buildingModeSection(
       guide,
-      'whatever in this folder the change needs — `docs/`, `scripts/`, `knowledge/`, `config/`, `cinna-agent.json`, the `Makefile`, `pyproject.toml` — but never `app-data/desktop.json`, which belongs to Cinna Desktop',
+      'whatever in this folder the change needs — `docs/`, `scripts/`, `knowledge/`, `config/`, `cinna-agent.json`, `pyproject.toml` — but never `app-data/desktop.json`, which belongs to Cinna Desktop',
       undefined,
       kitDesktopNotesPath(agentDir)
     ),

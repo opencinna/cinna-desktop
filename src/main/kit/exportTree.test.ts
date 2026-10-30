@@ -51,6 +51,7 @@ beforeEach(() => {
   write('AGENTS.md', 'wrapper\n')
   write('CLAUDE.md', 'wrapper\n')
   write('README.md', 'wrapper\n')
+  // Left by a kit older than 1.18.0; the contract still excludes it.
   write('Makefile', 'status:\n')
   write('.gitignore', 'app-data/\n')
   write('.git/config', '[core]\n')

@@ -51,7 +51,7 @@ describe('the bundled contract', () => {
       'templates/root/AGENTS.md',
       'templates/root/gitignore',
       'templates/agent/cinna-agent.json',
-      'templates/agent/Makefile',
+      'templates/agent/pyproject.toml',
       'templates/agent/gitignore',
       'templates/agent/docs/WORKFLOW_PROMPT.md',
       'templates/agent/docs/CLI_COMMANDS.yaml',

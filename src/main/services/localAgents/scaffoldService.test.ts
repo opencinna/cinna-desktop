@@ -3,7 +3,7 @@ vi.mock('../../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, type Dirent } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -95,18 +95,15 @@ describe('scaffoldAgent', () => {
     expect(toml).toContain('description = "Says \\"hi\\" and C:\\\\path\\nsecond line"')
   })
 
-  it('keeps a multi-line name inside the Makefile comment', () => {
+  it('creates no Makefile (contract 1.18.0 ships none)', () => {
     const { agentDir } = scaffoldService.scaffoldAgent({
       rootPath: workshop,
       slug: 'alpha',
-      name: 'Alpha\nall:\n\trm -rf /',
+      name: 'Alpha',
       description: 'Reads invoices.'
     })
-    const makefile = readFileSync(join(agentDir, 'Makefile'), 'utf8')
-    const template = readFileSync(join(repoRoot, 'resources/cinna-agent-kit/templates/agent/Makefile'), 'utf8')
-    expect(makefile.split('\n')[0]).toBe('# Local convenience targets for Alpha all:  rm -rf /.')
-    // Nothing but the one token changed.
-    expect(makefile.split('\n').slice(1)).toEqual(template.split('\n').slice(1))
+    expect(existsSync(join(repoRoot, 'resources/cinna-agent-kit/templates/agent/Makefile'))).toBe(false)
+    expect(existsSync(join(agentDir, 'Makefile'))).toBe(false)
   })
 
   it('still copies scripts byte-for-byte', () => {

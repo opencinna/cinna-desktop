@@ -4,7 +4,9 @@ import {
   MAX_EXAMPLE_PROMPT_CHARS
 } from '../../shared/kit/manifest'
 import {
+  appendFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -420,13 +422,31 @@ describe('validateAgentFolder — file-level checks', () => {
     expectError(validateAgentFolder(agentDir, OPTIONS), 'commands.run_reference_unresolved')
   })
 
-  it('warns when a catalogued command has no Makefile target', () => {
-    writeFileSync(
+  it('a catalogued command with no Makefile produces no warning', () => {
+    // Contract 1.18.0 ships no Makefile; commands run through layout.json
+    // `local_command_runner`. A missing Makefile must not be reported.
+    expect(existsSync(join(agentDir, 'Makefile'))).toBe(false)
+    appendFileSync(
       join(agentDir, 'docs/CLI_COMMANDS.yaml'),
-      'commands:\n  - name: reconcile\n    description: Reconcile\n    command: python scripts/reconcile.py\n'
+      '  - name: reconcile\n    description: Reconcile\n    command: python scripts/reconcile.py\n'
     )
     const report = validateAgentFolder(agentDir, OPTIONS)
-    expect(codes(report.warnings)).toContain('commands.makefile_target_missing')
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings).filter((c) => c.startsWith('commands.'))).toEqual([])
+    expect(report.warnings.filter((w) => w.path === 'Makefile')).toEqual([])
+  })
+
+  it('ignores a legacy Makefile that lacks a catalogued command', () => {
+    // An agent from a kit older than 1.18.0 still has one; it is neither read
+    // nor reported, so it validates as before minus the old parity warning.
+    writeFileSync(join(agentDir, 'Makefile'), '.PHONY: other\nother:\n\techo other\n')
+    appendFileSync(
+      join(agentDir, 'docs/CLI_COMMANDS.yaml'),
+      '  - name: reconcile\n    description: Reconcile\n    command: python scripts/reconcile.py\n'
+    )
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings).filter((c) => c.startsWith('commands.'))).toEqual([])
   })
 
   it('warns about a script that is not in scripts/README.md', () => {

@@ -77,7 +77,6 @@ const TOOL_SPECS: readonly ToolSpec[] = [
   },
   { id: 'uv', kind: 'runtime', label: 'uv', bin: 'uv' },
   { id: 'git', kind: 'runtime', label: 'Git', bin: 'git' },
-  { id: 'make', kind: 'runtime', label: 'Make', bin: 'make' },
   { id: 'python3', kind: 'runtime', label: 'Python 3', bin: 'python3' }
 ]
 
