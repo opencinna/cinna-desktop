@@ -1,11 +1,12 @@
 # Onboarding — Technical Reference
 
-Implementation companion to [onboarding.md](onboarding.md). The onboarding logic itself is renderer-only — it adds no main-process IPC handlers. One step *reads* main-process state owned by other features: `cinna-confirm` reads the buffered deep link (see [connect_link_tech.md](connect_link_tech.md)), and its local-development checkbox reads and records the per-host consent answer (see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md)). There is no local-development step.
+Implementation companion to [onboarding.md](onboarding.md). The onboarding logic itself is renderer-only — it adds no main-process IPC handlers of its own. One step *reads* main-process state owned by other features, and the gate asks main for a clipboard link once on first run (see [connect_link_tech.md](connect_link_tech.md)): `cinna-confirm` reads the buffered deep link (see [connect_link_tech.md](connect_link_tech.md)), and its local-development checkbox reads and records the per-host consent answer (see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md)). There is no local-development step.
 
 ## File Locations
 
 ### Renderer — components
-- `src/renderer/src/App.tsx` — `OnboardingGate` wrapper, mounted inside `AuthGate` and outside `Shell`
+- `src/renderer/src/components/auth/OnboardingGate.tsx` (+ `.test.tsx`) — `OnboardingGate` wrapper, mounted by `App.tsx` inside `AuthGate` and outside `Shell`; exports `CLIPBOARD_WAIT_MS` (300)
+- `src/renderer/src/components/auth/OnboardingScreen.paste.test.tsx` — the Server URL and Welcome paste handlers
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — full-screen overlay with cinna-confirm / welcome / provider-type / provider-key / cinna-server / cinna-waiting steps
 - `src/renderer/src/components/auth/ConnectIntentPanel.tsx` — rendered by the `cinna-confirm` step (and by `ConnectIntentModal` past first run)
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Settings → Development → Testing toggle ("Enable onboarding on restart")
@@ -25,7 +26,7 @@ The onboarding feature does not add any main-process files. It depends on the ex
 - `src/main/ipc/provider.ipc.ts` — `provider:list`, `provider:test-key`, `provider:upsert`
 - `src/main/ipc/chat.ipc.ts` — `chatmode:upsert`
 - `src/main/ipc/auth.ipc.ts` — `auth:register`, `auth:login`, `auth:cinna-oauth-abort`
-- `src/main/ipc/connect.ipc.ts` — `connect:get-pending`, `connect:consume` (the deep-link feature's; see [connect_link_tech.md](connect_link_tech.md))
+- `src/main/ipc/connect.ipc.ts` — `connect:get-pending`, `connect:consume`, `connect:check-clipboard`, `connect:deliver-pasted` (the deep-link feature's; see [connect_link_tech.md](connect_link_tech.md))
 - `src/main/ipc/localdev.ipc.ts` — `localdev:get-consent`, `localdev:consent` (the local-development feature's; see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md))
 
 ## Database Schema
@@ -47,6 +48,8 @@ No schema changes. The feature only writes to existing tables via existing servi
 | `auth:cinna-oauth-abort` | Cancel button in the `cinna-waiting` step, and in `ConnectIntentPanel`'s waiting view |
 | `auth:login` | `cinna-confirm`'s **Switch to it**, when a profile for the link's origin already exists |
 | `connect:get-pending` / `connect:consume` / `connect:intent` | The buffered deep link that opens the screen on `cinna-confirm` |
+| `connect:check-clipboard` | The gate, once, on a genuine first run (not forced). Linux only in practice: main has no clipboard source elsewhere, so it answers null |
+| `connect:deliver-pasted` | The Server URL field's `onPaste`, and a paste anywhere on Welcome, for text starting `cinna://` |
 | `localdev:get-consent` / `localdev:consent` | The confirm step's **Enable local development** checkbox: seeded from a stored answer, recorded once the account exists (not awaited — a yes installs in the background) |
 | `local-agent:home-state` | The confirm step's (?) reads the Agents Home purely to name the folder in the local-development copy. **This channel creates nothing** and is the one local-agent channel with no activation gate, both for the same reason: it is called from a first-run screen, and it used to be `local-agent:roots-list`, which runs `ensureHome` — so naming the folder created it and raised the macOS Documents-folder prompt in the middle of signing in ([The Agents Folder Question](../../agents/local_agents/home_access.md)) |
 
@@ -66,7 +69,7 @@ The renderer-only feature delegates all server-side work through existing servic
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` ends on `onComplete()`: local development is not asked on this path at all
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `handleSaveAndFinish()` orchestrates the API-key save: blocking `upsertProvider`, then non-blocking `upsertChatMode`, then `onComplete()`
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` mirrors `RegisterForm.tsx:connectSelfHosted()`; on success it calls `prependSelfHostedHistory()` and persists via `writeSelfHostedHistory()`
-- `src/renderer/src/App.tsx` — `OnboardingGate` uses `useProviders()` + `useState` initializers seeded from `consumeForceOnboarding()` and `isOnboardingDismissed()`, plus `useConnectIntent()` for the `connectIntent` / `onConnectIntentDone` props. The first-run answer is latched in a `useRef<boolean | null>` **assigned during render**, not in an effect — an effect runs a frame late and that frame is a flash of the wrong screen — and the blank div is shown only while it is still `null`. `onComplete` sets a `finished` state (a state, not the ref: ending first run has to re-render) instead of writing back to `dismissed`/`forced`, so a `resetQueries()` on sign-in cannot unmount the screen mid-flow
+- `src/renderer/src/components/auth/OnboardingGate.tsx` — `OnboardingGate` uses `useProviders()` + `useState` initializers seeded from `consumeForceOnboarding()` and `isOnboardingDismissed()`, plus `useConnectIntent()` for the `connectIntent` / `onConnectIntentDone` props. The first-run answer is latched in a `useRef<boolean | null>` **assigned during render**, not in an effect — an effect runs a frame late and that frame is a flash of the wrong screen — and the blank div is shown only while it is still `null`. `onComplete` sets a `finished` state (a state, not the ref: ending first run has to re-render) instead of writing back to `dismissed`/`forced`, so a `resetQueries()` on sign-in cannot unmount the screen mid-flow. The clipboard check is an effect gated on `session.current === true && !forced`, guarded by its own ref so StrictMode's double run neither asks twice nor leaves the placeholder up for good; a 300 ms timer and the IPC answer race, and `clipboardSettled` lets the screen paint on whichever comes first
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `Step` union carries the matching invariant: **every terminal step must call `onComplete`**. It is the contract the session change created, and the one thing a future step-adder has to know — nothing above the screen will end first run for them
 - `src/renderer/src/App.tsx` — `<ConnectIntentModal />` and `<LocalDevConsentModal />` are mounted **inside** `OnboardingGate`, i.e. among the children it renders only once first run is over. During first run the link is confirmed by the screen's own step, and two surfaces confirming it at once would be two answers racing to be recorded; the consent modal is there because the sidebar button that alone opens it lives in the shell
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — the "Testing" section: one `SettingsToggleRow` (`id="dev-force-onboarding"`, a `role="switch"` the label names), with the description behind its (?) and a `title` saying whether onboarding will show on the next restart

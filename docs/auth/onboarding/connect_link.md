@@ -10,9 +10,10 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 |------|-----------|
 | **Connect intent** | The whole payload: `{ serverUrl, receivedAt }`. An origin and when it arrived. No token, no path, no query |
 | **The funnel** | `connectIntentService.deliver(rawUrl, source)` — the single place every delivery path lands in, so no caller can skip the validation, the buffer or the push |
-| **Source** | Which path delivered it: `open-url` (macOS), `second-instance` (a link click while the app runs), `argv` (a cold launch on Linux/Windows), `test-argv` (the E2E flag) |
+| **Source** | Which path delivered it: `open-url` (macOS), `second-instance` (a link click while the app runs), `argv` (a cold launch on Linux/Windows), `test-argv` (the E2E flag), `clipboard` (the first-run clipboard check, Linux only), `paste` (a link pasted into onboarding's Server URL field) |
 | **Confirm step** | `ConnectIntentPanel` — the one screen a link is allowed to reach, and **the feature's security boundary** |
 | **Buffer** | One pending intent held in main until someone asks for it. A second link replaces the first |
+| **Install handoff** | The download page copies the link to the clipboard; the freshly installed app picks it up on first run (Linux) or the user pastes it into Server URL (every platform). A way to *deliver* the link without a click, not a second confirmation path: both end on the same confirm step |
 
 ## User Stories / Flows
 
@@ -24,6 +25,22 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 5. **Connect** runs the ordinary self-hosted `auth:register` OAuth flow against that origin. The waiting state and its Cancel button are the same ones the typed-URL path uses
 6. On success the origin is written into the shared self-hosted history — the same history a typed URL populates, so the deep link and the paste fallback build one list rather than two — and the checkbox's answer is recorded for that host, ticked or not
 7. Onboarding finishes and the app opens. A ticked box installs [local development](../../agents/local_dev/local_dev.md) in the background, with progress on the sidebar's Local development icon and no modal; an unticked one is a remembered decline that icon can reverse
+
+### A brand-new install on Linux, launched from the icon
+An AppImage without AppImageLauncher cannot claim the scheme, so there the Open button does nothing and the user starts the app by hand. The download page has already copied the link, so:
+1. At first-run onboarding the renderer asks main once (`connect:check-clipboard`); main reads the clipboard, and if it holds a `cinna://connect` link, runs it through the funnel with source `clipboard` and **buffers it without a push**
+2. `OnboardingGate` keeps its blank placeholder for at most 300 ms while that answer is in flight, then opens the screen on `cinna-confirm` exactly as for a clicked link. The check is a local round trip of milliseconds; the cap only bounds a main process still busy with startup
+3. An answer later than the cap is **dropped**: the welcome card is already on screen and nothing may move under the user. The gate also tells main to forget that intent (`connect:consume` with its `receivedAt`), so a link nobody will show is not left waiting for the next mount
+4. Nothing on the clipboard, an unrelated clipboard, a failed read: welcome, as if the check had not existed
+
+### A brand-new install on macOS
+The app **never reads the clipboard on macOS**. With Apple's pasteboard privacy on (opt-in on macOS 15, meant to become the default), a program that reads the pasteboard without a user paste raises an **"Allow Paste?"** `NSAlert` modal, owned by the app. The bare-Mac probe on the Sequoia image (2026-10-30) showed the main thread parked inside `NSPasteboard stringForType:` behind that modal at first launch, frozen until someone answered. So a Mac user either clicks the page's Open button (the `open-url` path) or pastes the link, which is a user paste the privacy check allows.
+
+### A link pasted into Server URL, or on Welcome
+1. On the Cinna Server step, pasting text that starts with `cinna://` into **Server URL** does not put it in the field. The paste is cancelled and the text goes to main (`connect:deliver-pasted`), which parses it through the funnel with source `paste`
+2. The same paste on the **Welcome** card works too, with nothing to click first: the download page's note says *"Paste it into the Server URL field"*, and a person who has just installed the app presses Cmd+V on the first screen they see. Edit → Paste with no field focused fires at the page body, where Welcome listens; a paste into an editable element is left to that element. A real Cmd+V is a user paste, so macOS asks nothing
+3. An accepted link opens the confirm step like any other. A refused one shows **"That link has no server Cinna can use."** in the footer row of the Server URL step, left of **Connect** (a refusal on Welcome moves to that step to say so); the field is untouched
+4. This works on every platform and is the fallback that exists for the Mac and for a Linux user whose clipboard was overwritten before the first run
 
 ### A link while the app is already running
 1. The second launch is stopped by the single-instance lock; the primary instance receives the argv through `second-instance`
@@ -41,7 +58,7 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 2. `authService` calls `connectIntentService.flush()` in the `finally` of both `registerCinna` and `reauthCinna`, so the held link is released whichever way the flow settled
 
 ### A link the app refuses
-1. Nothing happens, visibly. A rejected deep link has no UI, because a link the app refuses should look to the user exactly like a link nobody sent
+1. Nothing happens, visibly. A rejected deep link has no UI, because a link the app refuses should look to the user exactly like a link nobody sent. **The one exception is a pasted link**: the user just acted, and a paste that silently did nothing would read as a broken field, so the Server URL step says the link has no usable server. A clipboard read is not an exception — nobody asked for it, so a refused or absent clipboard link stays invisible
 2. The reason is logged. An accepted one is logged at info with its host, because "why did nothing happen when I clicked the button" is a real support question and that line is the answer
 
 ### The scheme could not be registered
@@ -81,7 +98,19 @@ The URL is parsed as untrusted input and reduced to the one field the flow needs
 - **A second link replaces the first.** The user's most recent click is what they meant, and a queue of stale hosts is not something anyone wants to confirm one by one
 - `flush()` is idempotent and safe with no window
 - The buffer is dropped by `connect:consume`, which the renderer calls for **all three** outcomes — connected, switched, declined
+- `connect:consume` may name an intent by its `receivedAt`; main then drops it only if that is still the pending one. The gate uses it for a late clipboard answer, so discarding that answer cannot take a link clicked a moment later with it
 - A *new* intent arriving while the onboarding screen is open redirects it back to the confirm step. It is matched on `receivedAt`, so the intent the confirm step just consumed cannot bounce a user who declined straight back into it
+
+### The clipboard read is narrow on purpose
+
+The clipboard is the user's private data, and the feature reads it only to look for one kind of text.
+
+- **At most one read per process**, on first-run onboarding only: not past first run, not on forced onboarding (a test path on a configured install, where a stray link would only confuse whoever is testing), and not when an intent is already pending or in the store — a clicked link is newer and more deliberate than a copied one, and main does not read at all in that case. Nothing may turn it into a clipboard watcher
+- **Linux only.** macOS is excluded for the reason above; Windows is not read either
+- Only text starting `cinna://connect` (either spelling, case-insensitive, trimmed, at most 2048 characters) is parsed. Anything else is dropped **unlogged**: the parser logs the action of a `cinna://` URL it refuses, and for clipboard text that would be a piece of whatever the user copied. A failed read logs the error's class and message, nothing else
+- The clipboard is never written or cleared
+- Buffered without a push, and the call returns only an intent *this read* delivered. A clicked link already pending reaches the renderer through `connect:get-pending`; returning it here would let the gate's late-answer consume drop it
+- **Under the E2E sandbox (`CINNA_USER_DATA`) the real pasteboard is never read**: a `cinna://` link the developer happened to copy would hijack whichever first-run spec ran next. The sandbox reads only `CINNA_E2E_CLIPBOARD_TEXT`, on any platform so the renderer path stays testable, and reads nothing without it. The variable is ignored outside the sandbox
 
 ### Exactly one surface confirms
 
@@ -111,6 +140,9 @@ landing page  ──►  cinna://connect?server=https://cinna.acme.com
       ┌───────────────────┼────────────────────┬──────────────────┐
    open-url        second-instance          argv scan        --cinna-connect-intent=
    (macOS)         (running app)          (cold launch)          (E2E only)
+      │                   │                    │                  │
+      │   clipboard (Linux, first run, once, no push)    paste in Server URL
+      │      connect:check-clipboard                    connect:deliver-pasted
       └───────────────────┴────────────────────┴──────────────────┘
                           ▼
         connectIntentService.deliver()   parse → origin-only → buffer
@@ -137,7 +169,8 @@ landing page  ──►  cinna://connect?server=https://cinna.acme.com
 
 ## Integration Points
 
-- [Onboarding](onboarding.md) — `cinna-confirm` is a step of the onboarding screen, reached only by arriving
+- [Onboarding](onboarding.md) — `cinna-confirm` is a step of the onboarding screen, reached only by arriving; its Server URL field is where a link is pasted
+- [Bare-Mac Tests](../../development/bare_mac/bare_mac.md) — the `install-handoff` spec is where the macOS clipboard decision was probed and is kept honest
 - [Cinna Accounts](../cinna_accounts/cinna_accounts.md) — **Connect** runs the unchanged self-hosted OAuth flow; the intent carries no credential of any kind
 - [Cinna Re-authentication](../cinna_accounts/reauthentication.md) — shares `focusMainWindow()`, and releases a held intent in its own `finally`
 - [User Accounts](../user_accounts/user_accounts.md) — **Switch to it** is the ordinary `auth:login`, and a password-locked profile is deferred to the account menu
