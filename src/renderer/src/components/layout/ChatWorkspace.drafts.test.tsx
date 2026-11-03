@@ -23,7 +23,7 @@ vi.mock('../chat/MessageStream', () => ({ MessageStream: () => <p>Existing chat<
 vi.mock('../ui/HintBar', () => ({ HintBar: () => null }))
 vi.mock('../chat/DesktopAppsBanner', () => ({ DesktopAppsBanner: () => null }))
 vi.mock('../chat/ExamplePromptTags', () => ({ ExamplePromptTags: () => null }))
-vi.mock('../chat/ComposerReadiness', () => ({ RefusableExamplePrompts: ({ children }: { children: React.ReactNode }) => children, readinessRefusal: () => null }))
+vi.mock('../chat/ComposerReadiness', () => ({ RefusableExamplePrompts: ({ children }: { children: React.ReactNode }) => children, readinessRefusal: () => null, usePickedFolder: () => ({ folder: null, pending: false }) }))
 vi.mock('../chat/ChatInput', () => ({ ChatInput: (props: {
   chatModeMenu?: { activeId: string; onSelectMode: (mode: unknown) => void }
   pendingAgentIds?: string[]; pendingMcpIds?: string[]

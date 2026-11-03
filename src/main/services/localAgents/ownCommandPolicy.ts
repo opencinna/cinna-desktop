@@ -33,7 +33,7 @@ import {
   RG_OPTIONS,
   findShape,
   parseOptions,
-  scriptWord,
+  scriptWordIndex,
   searchShape,
   splitCommandLine
 } from '../../../shared/commandRun'
@@ -42,6 +42,15 @@ import {
 export interface OwnCommandPolicy {
   folder: string
   scriptRoots: readonly string[]
+  /**
+   * The workshop's managed kit copy (`<root>/.cinna-kit`, `workshopKitOf`),
+   * which a kit agent's `AGENTS.md` sends it to read while building. The
+   * read-only basics may read under it (never `grep`/`find`, whose trees are
+   * judged against the folder), and its `tools/kit.py validate` may run.
+   * Nothing else there runs unasked — `kit.py refresh` rewrites the kit the
+   * app owns.
+   */
+  workshopKit?: string
 }
 
 export interface EntryInfo {
@@ -143,10 +152,26 @@ function secretName(segment: string): boolean {
  * the isolated Antigravity home (`.cinna/`, whose `config/hooks.json` runs on
  * every tool call), workspace hooks (`.agents/`), any `.git/`, the grant
  * store (`app-data/desktop*`), `credentials/` and secret-looking files.
- * For a read, `credentials/README.md` is the one exception; for a write,
+ * For a read, `credentials/README.md` and the MCP tool schemas in the
+ * Antigravity home ({@link isMcpSchemaPath}) are the exceptions; for a write,
  * every hidden (dot-prefixed) path is protected too.
  */
 const INSTRUCTION_FILES = new Set(['agents.md', 'gemini.md', 'claude.md'])
+
+/**
+ * The one readable corner of the Antigravity home: the schemas the server
+ * writes for a session's MCP tools, `.cinna/antigravity/antigravity-acp/brain/
+ * <session>/mcp/<server>/<tool>.json`. A model lists or reads them to learn a
+ * Cinna tool's shape (a guided first build's `build_brief_propose`), and a
+ * permission ask there is the person's first sight of a new agent. Tool
+ * schemas, no secrets, nothing that runs; reads only, the rest of `.cinna/`
+ * stays protected.
+ */
+function isMcpSchemaPath(segments: string[]): boolean {
+  return segments.length >= 6 && segments[0] === '.cinna' && segments[1] === 'antigravity' &&
+    segments[2] === 'antigravity-acp' && segments[3] === 'brain' && segments[5] === 'mcp' &&
+    !segments.some((segment) => segment === '..' || segment === '.git' || secretName(segment))
+}
 
 function isProtected(segments: string[], mode: 'read' | 'write'): boolean {
   if (segments.length === 0) return false
@@ -156,6 +181,7 @@ function isProtected(segments: string[], mode: 'read' | 'write'): boolean {
   // Instruction files the engines read every session: an edit there outlives the turn.
   if (mode === 'write' && INSTRUCTION_FILES.has(segments[segments.length - 1])) return true
   const [first, second] = segments
+  if (mode === 'read' && isMcpSchemaPath(segments)) return false
   if (first === '.cinna' || first === '.agents') return true
   if (segments.includes('.git')) return true
   if (first === 'app-data' && second !== undefined && second.startsWith('desktop')) return true
@@ -197,11 +223,24 @@ export const OWN_COMMAND_REASONS = {
 } as const
 
 /** Why `word`, whose real path is `real`, is not readable (or writable) inside the folder, or null when it is. */
-function pathRefusal(folder: string, real: string | null, word: string, mode: 'read' | 'write'): string | null {
+function pathRefusal(folder: string, real: string | null, word: string, mode: 'read' | 'write', kit: string | null = null): string | null {
   if (real === null) return OWN_COMMAND_REASONS.outside(word)
   const segments = segmentsIn(folder, real)
-  if (segments === null) return OWN_COMMAND_REASONS.outside(word)
+  if (segments === null) return mode === 'read' && inKit(kit, real) ? null : OWN_COMMAND_REASONS.outside(word)
   return isProtected(segments, mode) ? OWN_COMMAND_REASONS.protected(word) : null
+}
+
+/** Whether `real` is the kit copy or under it, outside `.git` and secret-looking names. */
+function inKit(kit: string | null, real: string): boolean {
+  if (kit === null) return false
+  const segments = segmentsIn(kit, real)
+  return segments !== null && !segments.some((s) => s === '.git' || secretName(s))
+}
+
+/** The kit's real path, or null when the policy names none or it cannot be read. */
+function realKit(policy: OwnCommandPolicy, fs: OwnCommandFs): string | null {
+  if (typeof policy.workshopKit !== 'string' || !isAbsolute(policy.workshopKit)) return null
+  try { return fs.realpath(resolve(policy.workshopKit)) } catch { return null }
 }
 
 /* ----------------------------------------------------------------- commands */
@@ -247,8 +286,9 @@ export function ownCommandRefusal(
     if (words.length === 0) return OWN_COMMAND_REASONS.empty
     const [command] = words
     if (ENV_ASSIGNMENT.test(command)) return OWN_COMMAND_REASONS.env
-    if (READ_ONLY_COMMANDS.has(command)) return readOnlyRefusal(folder, realCwd, command, words.slice(1), fs)
-    return scriptRefusal(folder, realCwd, policy.scriptRoots, words, fs)
+    const kit = realKit(policy, fs)
+    if (READ_ONLY_COMMANDS.has(command)) return readOnlyRefusal(folder, realCwd, command, words.slice(1), fs, kit)
+    return scriptRefusal(folder, realCwd, policy.scriptRoots, words, fs, kit)
   } catch {
     return OWN_COMMAND_REASONS.unreadable
   }
@@ -256,11 +296,14 @@ export function ownCommandRefusal(
 
 /* ---------------------------------------------------------- the own script */
 
-function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string[], words: string[], fs: OwnCommandFs): string | null {
-  const word = scriptWord(words)
-  if (word === null) return OWN_COMMAND_REASONS.notOwn(words[0])
+function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string[], words: string[], fs: OwnCommandFs, kit: string | null = null): string | null {
+  const at = scriptWordIndex(words)
+  if (at === null) return OWN_COMMAND_REASONS.notOwn(words[0])
+  const word = words[at]
   const real = realPathOf(resolve(cwd, word), fs)
   if (real === null || !fs.stat(real)?.isFile()) return OWN_COMMAND_REASONS.scriptMissing(word)
+  // The kit's validator, the one kit command the kit tells a building agent to run; it only reads.
+  if (kit !== null && real === join(kit, 'tools', 'kit.py') && words[at + 1] === 'validate') return null
   const inFolder = segmentsIn(folder, real)
   if (inFolder !== null) return isProtected(inFolder, 'write') ? OWN_COMMAND_REASONS.protected(word) : null
   for (const root of scriptRoots) {
@@ -380,7 +423,7 @@ function firstRefusal(words: string[], check: (word: string) => string | null): 
   return null
 }
 
-function readOnlyRefusal(folder: string, cwd: string, command: string, args: string[], fs: OwnCommandFs): string | null {
+function readOnlyRefusal(folder: string, cwd: string, command: string, args: string[], fs: OwnCommandFs, kit: string | null = null): string | null {
   if (command === 'grep' || command === 'rg') return searchRefusal(folder, cwd, command, args, fs)
   if (command === 'find') return findRefusal(folder, cwd, args, fs)
   const options = PLAIN_OPTIONS[command]
@@ -388,7 +431,7 @@ function readOnlyRefusal(folder: string, cwd: string, command: string, args: str
   const parsed = parseOptions(options, args)
   if ('bad' in parsed) return OWN_COMMAND_REASONS.option(command, parsed.bad)
   if (NEEDS_PATH.has(command) && parsed.positionals.length === 0) return OWN_COMMAND_REASONS.needsPath(command)
-  return firstRefusal(parsed.positionals, (word) => pathRefusal(folder, realPathOf(resolve(cwd, word), fs), word, 'read'))
+  return firstRefusal(parsed.positionals, (word) => pathRefusal(folder, realPathOf(resolve(cwd, word), fs), word, 'read', kit))
 }
 
 /**

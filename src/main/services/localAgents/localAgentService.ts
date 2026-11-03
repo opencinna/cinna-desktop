@@ -2253,6 +2253,37 @@ export const localAgentService = {
     return this.overlayEnabled(userId, [this.scanFolder(root, agentDir)])[0]
   },
 
+  /**
+   * Guided first build done (Start building) or dismissed (Skip guidance): the
+   * agent stops reading as unbuilt, so no later chat with it is guided. Kit
+   * agents only; the marker lives under `userData`, never in the folder.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`
+   */
+  markGuidedBuildDone(userId: string, agentId: string): LocalAgentDto {
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (kindOf(root) !== 'kit') throw new LocalAgentError('invalid_input', 'Only a kit agent has a guided first build.')
+    desktopStateService.markGuidedBuildDone(agentDir)
+    // The marker is not in the folder, so the watcher never sees it.
+    scannerService.markRootDirty(root.id)
+    return this.overlayEnabled(userId, [this.scanFolder(root, agentDir)])[0]
+  },
+
+  /**
+   * A guided chat's guidance applies only while its agent is still unbuilt,
+   * read fresh from the folder now: after Start building or Skip guidance, or
+   * once the chat itself added scripts or credentials, it is false. Any failure
+   * (not a folder agent, folder gone) is false too — no guidance rather than a
+   * failed turn.
+   */
+  guidedBuildOpen(userId: string, agentId: string): boolean {
+    try {
+      return this.get(userId, agentId).unbuilt === true
+    } catch {
+      return false
+    }
+  },
+
   /** What git says about this folder's handovers directory — the `auto` gate's evidence. */
   async handoversCheck(userId: string, agentId: string): Promise<HandoverIgnoreCheck> {
     const { agentDir } = this.locate(userId, agentId)

@@ -36,6 +36,7 @@ import { ensureKitAgentSkillsPlugin, type KitAgentSkillsPlugin } from '../servic
 import { cachedPlugins, type CachedPlugin } from '../services/pluginSkills'
 import { readPluginCommand } from '../services/pluginTree'
 import { join } from 'node:path'
+import { workshopKitOf } from '../services/localAgents/workshopKit'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
 import { folderReadinessBlocksTurn } from '../../shared/localAgents'
 
@@ -282,10 +283,17 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
           ? (agent.runtime.permissions as Record<string, unknown>)
           : null,
       ...ownSkills(ownPlugin),
+      ...workshopKit(agent),
       ...kitAgentPluginCommands(agent)
     })
   }
   return out
+}
+
+/** The workshop kit for OpenCode's read allow ({@link workshopKitOf}). */
+function workshopKit(agent: { path: string }): Pick<EngineAgentInput, 'workshopKitPath'> {
+  const kit = workshopKitOf(agent.path)
+  return kit ? { workshopKitPath: kit } : {}
 }
 
 /**

@@ -34,7 +34,7 @@ vi.mock('../chat/MessageStream', () => ({ MessageStream: () => null }))
 vi.mock('../ui/HintBar', () => ({ HintBar: () => null }))
 vi.mock('../chat/DesktopAppsBanner', () => ({ DesktopAppsBanner: () => null }))
 vi.mock('../chat/ExamplePromptTags', () => ({ ExamplePromptTags: () => null }))
-vi.mock('../chat/ComposerReadiness', () => ({ RefusableExamplePrompts: ({ children }: { children: React.ReactNode }) => children, readinessRefusal: () => null }))
+vi.mock('../chat/ComposerReadiness', () => ({ RefusableExamplePrompts: ({ children }: { children: React.ReactNode }) => children, readinessRefusal: () => null, usePickedFolder: () => ({ folder: null, pending: false }) }))
 vi.mock('../chat/ChatInput', () => ({ ChatInput: (props: Record<string, unknown>) => {
   fixtures.props.current = props
   return null

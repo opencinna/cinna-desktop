@@ -37,7 +37,7 @@ import { SHELL_LEAD_IN } from '../../../services/pluginCommandExpansion'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
-import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
+import type { AcpLaunchContext, AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpHandlerScript, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
@@ -108,6 +108,8 @@ interface World {
   grants: LocalPermissionRequest[]
   /** Every event the turn posted. */
   events: RunEvent[]
+  /** Every context the launcher was asked to plan, in order. */
+  planned: AcpLaunchContext[]
   run(overrides?: {
     handbackEligible?: boolean
     signal?: AbortSignal
@@ -118,6 +120,7 @@ interface World {
     runScope?: RunInput['runScope']
     wireContent?: string
     turnContext?: string | null
+    guidedBuild?: boolean
   }): ReturnType<AgentDriver['run']>
   cleanup(): void
 }
@@ -130,6 +133,8 @@ interface WorldOptions {
   refusal?: string
   /** What the launcher asks the driver to set on the session. */
   setup?: AcpLaunchPlan['setup']
+  /** The setup from the planned context, as a real launcher reads it (wins over `setup`). */
+  setupFor?: (ctx: AcpLaunchContext) => AcpLaunchPlan['setup']
   /** A remembered session for `CHAT_ID`. */
   remembered?: string
   /** Deny every grant check, or answer one. */
@@ -168,13 +173,14 @@ function makeWorld(options: WorldOptions = {}): World {
   if (options.remembered) sessions.set(CHAT_ID, options.remembered)
   const grants: LocalPermissionRequest[] = []
   const events: RunEvent[] = []
+  const planned: AcpLaunchContext[] = []
 
   const launcher: AcpLauncher = {
     id: options.launcher ?? 'opencode',
     endsTurnsWithCostedUsage: options.costedEnd ?? options.launcher === 'claude',
     // As the real ones: only OpenCode sets the stall watch.
     ...((options.launcher ?? 'opencode') === 'opencode' ? { toolStallMs: ACP_TOOL_STALL_MS } : {}),
-    plan: async (): Promise<AcpPlanResult> =>
+    plan: async (ctx): Promise<AcpPlanResult> => (planned.push(ctx),
       options.refusal
         ? { error: options.refusal }
         : {
@@ -184,12 +190,12 @@ function makeWorld(options: WorldOptions = {}): World {
               clientCapabilities: { elicitation: { form: {} } }
             },
             session: { mcpServers: [] },
-            setup: options.setup ?? {},
+            setup: options.setupFor?.(ctx) ?? options.setup ?? {},
             ...(options.preamble ? { firstPromptPreamble: options.preamble } : {}),
             ...(options.sessionCwd ? { sessionCwd: options.sessionCwd } : {}),
             ...(options.autoApprove ? { autoApprove: options.autoApprove } : {}),
             ...(options.expectedAuth ? { expectedAuth: options.expectedAuth } : {})
-          },
+          }),
     ...options.launcherExtra,
     ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {}),
     ...(options.telemetryAuth ? { telemetryAuth: options.telemetryAuth } : {})
@@ -227,12 +233,14 @@ function makeWorld(options: WorldOptions = {}): World {
     sessions,
     grants,
     events,
+    planned,
     run: (overrides = {}) =>
       driver.run(USER_ID, ROW, {
         chatId: overrides.chatId ?? CHAT_ID,
         handbackEligible: overrides.handbackEligible,
         wireContent: overrides.wireContent ?? 'hello',
         ...(overrides.turnContext !== undefined ? { turnContext: overrides.turnContext } : {}),
+        ...(overrides.guidedBuild ? { guidedBuild: true } : {}),
         signal: overrides.signal ?? new AbortController().signal,
         onEvent: overrides.onEvent ?? ((event) => void events.push(event)),
         ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {}),
@@ -678,6 +686,27 @@ describe('a turn', () => {
       'session/set_config_option',
       'session/set_config_option',
       'session/prompt'
+    ])
+  })
+
+  it('plans a guided first build’s turn as guided, and every other turn without it, re-saying the setup on a loaded session', async () => {
+    // Codex asks in Plan mode for a guided build only, and `session/load`
+    // keeps the mode a session was left in: the turn after guidance ends must
+    // reach the launcher unguided and have its setup said on the loaded
+    // session. Mutation: drop `guidedBuild` from the plan context and the
+    // interview runs in Default mode, where its questions are unavailable.
+    const w = world({
+      launcher: 'codex',
+      script: SAYS_HELLO,
+      setupFor: (ctx) => ({ configOptions: [{ configId: 'collaboration_mode', value: ctx.guidedBuild ? 'plan' : 'default' }] })
+    })
+    await w.run({ guidedBuild: true })
+    await w.run()
+    expect(w.planned.map((ctx) => ctx.guidedBuild)).toEqual([true, undefined])
+    expect(w.fake.received('session/load')).toHaveLength(1)
+    expect(w.fake.received('session/set_config_option').map((entry) => entry.params)).toEqual([
+      expect.objectContaining({ configId: 'collaboration_mode', value: 'plan' }),
+      expect.objectContaining({ configId: 'collaboration_mode', value: 'default' })
     ])
   })
 
@@ -4893,6 +4922,35 @@ describe('an Antigravity session', () => {
     await running
     // The desktop's *Always allow* is a plain allow to the engine.
     expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } })
+  })
+})
+
+describe('Codex’s plan review in a guided first build', () => {
+  // codex-acp asks "Implement this plan?" when a Plan-mode turn ends with a
+  // plan; approving switches the session to Default and builds in the guided
+  // chat. Mutation: drop the guided check and the review parks for a click.
+  const REVIEW: FakeAcpScript = { prompt: { emit: [{ kind: 'permission',
+    options: [
+      { optionId: 'implement_plan', name: 'Yes, implement this plan', kind: 'allow_once' },
+      { optionId: 'revise_plan', name: 'No, stay in Plan mode', kind: 'reject_once' }
+    ],
+    toolCall: { toolCallId: 'plan-review', kind: 'switch_mode', status: 'pending', title: 'Implement this plan?' } }] } }
+
+  it('declines it unseen in a guided turn', async () => {
+    const w = world({ launcher: 'codex', script: REVIEW })
+    const result = await w.run({ guidedBuild: true })
+    expect(result.error).toBeUndefined()
+    expect(w.events.filter((event) => event.type === 'needs_input')).toEqual([])
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'revise_plan' } })
+  })
+
+  it('still asks outside a guided chat (a person’s own /plan)', async () => {
+    const w = world({ launcher: 'codex', script: REVIEW })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(asked.request).toMatchObject({ kind: 'permission' })
+    pendingRequests.resolve(asked.requestId, { kind: 'permission', reply: 'reject' })
+    await running
   })
 })
 

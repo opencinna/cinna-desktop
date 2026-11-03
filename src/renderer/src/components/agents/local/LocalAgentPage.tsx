@@ -38,7 +38,8 @@ import { useFinishSetup } from './FinishSetupDialog'
 import { useListedShareStatus } from '../../../hooks/useSharing'
 import { SHARE_UI_TEXT } from '../../../utils/shareText'
 
-export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
+export type { AgentPageTab } from '../../../stores/ui.store'
+import type { AgentPageTab } from '../../../stores/ui.store'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -126,7 +127,16 @@ export function LocalAgentPage(): React.JSX.Element {
   const stamp = useStampAgentIdentity()
   // Kept across agents on purpose: someone working through the addons of
   // three agents does not want to click "Addons" three times.
-  const [tab, setTab] = useState<AgentPageTab>('overview')
+  // A tab another surface asked for (`agentPageTabRequest`) wins at first
+  // paint, so the page never shows Overview for a frame before it.
+  const tabRequest = useUIStore((s) => s.agentPageTabRequest)
+  const setTabRequest = useUIStore((s) => s.setAgentPageTabRequest)
+  const [tab, setTab] = useState<AgentPageTab>(() => tabRequest ?? 'overview')
+  useEffect(() => {
+    if (!tabRequest) return
+    setTab(tabRequest)
+    setTabRequest(null)
+  }, [tabRequest, setTabRequest])
   // One slot for every header action's refusal (Open in, Rescan, Reveal,
   // Terminal, Stamp). Two menus each drawing their own absolutely-positioned
   // message produced two unreadable overlapping boxes; and an old message

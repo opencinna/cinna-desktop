@@ -1,10 +1,11 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { NO_CHAT_MODE, useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useAgents } from '../../hooks/useAgents'
 import { MessageStream } from '../chat/MessageStream'
 import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
-import { RefusableExamplePrompts, readinessRefusal } from '../chat/ComposerReadiness'
+import { RefusableExamplePrompts, readinessRefusal, usePickedFolder } from '../chat/ComposerReadiness'
+import { GUIDED_BUILD_LINE, GuidedBuildInvitation, guidedBuildHeading, guidedBuildPlaceholder } from '../chat/GuidedBuildInvitation'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { HintBar } from '../ui/HintBar'
 import { DesktopAppsBanner } from '../chat/DesktopAppsBanner'
@@ -222,6 +223,26 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // agent's failure comes back to it as a tool result.
   const exampleRefusal = newRouter !== 'coordinator' ? readinessRefusal(selectedAgent) : null
 
+  // Guided first build: one picked agent, a blank kit agent, a chat it answers
+  // directly, and the setting on. The invitation stands in for the example
+  // prompts — each is a task the agent cannot do yet, and a click sends it.
+  // The folder is looked up by id in the folder list, which the create
+  // mutation writes a new agent into before its page opens, so on the New
+  // agent path the answer is there at first paint. When it is not — the folder
+  // list or the settings still loading for an agent that may be blank — the
+  // slot is undetermined: neither prompts nor invitation, and a blank
+  // placeholder, so the screen never paints one state and then the other.
+  const guidedPickId = combinedAgentIds.length === 1 && newRouter === 'direct' ? combinedAgentIds[0] : null
+  const { folder: pickedFolder, pending: guidedCandidatePending } = usePickedFolder(
+    guidedPickId,
+    (agentList ?? []).some((a) => a.id === guidedPickId)
+  )
+  // Only ever true for a kit agent: a bare folder is never unbuilt. Pending,
+  // it may be one — or, while the folder list first loads, any agent at all.
+  const guidedCandidate = pickedFolder ? pickedFolder.unbuilt : guidedCandidatePending
+  const guidedInvite = guidedCandidate && pickedFolder !== null && appSettings?.guidedFirstBuild === true
+  const guidedUndetermined = guidedCandidate && (pickedFolder === null || appSettings === undefined)
+
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setModeSelection(mode ? { id: mode.id } : 'none')
     setSendError(null)
@@ -318,7 +339,9 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         mcpIds: effectiveMcpIds,
         onDemandMcpIds: pendingMcpIds,
         attachments,
-        noteIds
+        noteIds,
+        // A request: main stores it only if the agent still qualifies.
+        ...(guidedInvite ? { guidedBuild: true } : {})
       })
       if (!started) return false
       if (embedded) {
@@ -354,7 +377,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       pendingMcpIds,
       newChatDraftKey,
       modeSelection,
-      storedPendingAgentIds
+      storedPendingAgentIds,
+      guidedInvite
     ]
   )
 
@@ -452,21 +476,43 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         {/* Absolute at the top (like the HintBar at the bottom), so the offer
             appearing or going away never moves the composition. */}
         {!embedded && <DesktopAppsBanner />}
-        {!embedded && <div className="mb-8 text-center">
+        {/* One box whose text changes: the invitation's heading and line take
+            the generic heading's place, its 20 px line paid for by the margin
+            (mb-8 becomes mb-3), so picking a blank agent by "@" or Skip
+            guidance moves nothing. Undetermined, the heading line is blank. */}
+        {!embedded && <div className={`text-center ${guidedInvite ? 'mb-3' : 'mb-8'}`}>
           <CinnaLogoDraw className="mx-auto mb-3" />
-          <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
+          <h1 className="text-lg font-semibold text-[var(--color-text)]">
+            {guidedInvite && pickedFolder ? guidedBuildHeading(pickedFolder.name) : guidedUndetermined ? '\u00a0' : 'What can I help with?'}
+          </h1>
+          {guidedInvite && <p className="mt-1 text-xs leading-4 text-[var(--color-text-secondary)]">{GUIDED_BUILD_LINE}</p>}
         </div>}
-        <RefusableExamplePrompts refusal={exampleRefusal} hold={sendHold}>
-          <ExamplePromptTags
-            prompts={examplePrompts}
-            animationKey={selectedAgent?.id ?? 'none'}
-            // An example prompt sends past the composer, so its refusal is
-            // applied here, where it is clicked (the tags are also inert).
-            onSelect={(p) => {
-              if (!exampleRefusal && !sendHold) void handleNewChat(p.full)
-            }}
+        <ReservedPromptSlot reserveKey={combinedAgentIds.join(',')} inviting={guidedInvite && !!pickedFolder}>
+        {guidedInvite && pickedFolder ? (
+          <GuidedBuildInvitation
+            agentId={pickedFolder.id}
+            agentName={pickedFolder.name}
+            hold={sendHold}
+            onFill={(text) => chatInputRef.current?.fill(text)}
+            withHeading={embedded}
           />
-        </RefusableExamplePrompts>
+        ) : guidedUndetermined ? (
+          // The example-prompt row's footprint, empty.
+          <div data-testid="guided-build-undetermined" className="mb-3 min-h-10 w-full" />
+        ) : (
+          <RefusableExamplePrompts refusal={exampleRefusal} hold={sendHold}>
+            <ExamplePromptTags
+              prompts={examplePrompts}
+              animationKey={selectedAgent?.id ?? 'none'}
+              // An example prompt sends past the composer, so its refusal is
+              // applied here, where it is clicked (the tags are also inert).
+              onSelect={(p) => {
+                if (!exampleRefusal && !sendHold) void handleNewChat(p.full)
+              }}
+            />
+          </RefusableExamplePrompts>
+        )}
+        </ReservedPromptSlot>
         {sendErrorBanner}
         <ChatInput
           ref={chatInputRef}
@@ -474,6 +520,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           draftKey={newChatDraftKey}
           onNewChat={handleNewChat}
           sendHold={sendHold}
+          placeholder={guidedInvite && pickedFolder ? guidedBuildPlaceholder(pickedFolder.name) : guidedUndetermined ? '' : undefined}
           modeColor={modeColorPreset}
           selectedAgent={selectedAgent}
           pendingMcpIds={pendingMcpIds}
@@ -584,6 +631,44 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The new-chat screen's prompt slot: the guided-build invitation or the
+ * example prompts. Once the invitation has shown for these agents, the slot
+ * keeps its measured height for the rest of this screen's mount, so Skip
+ * guidance swapping in the (shorter) prompts never moves the composer in the
+ * centered column (rule 1). Other agents, or leaving the screen, drop it.
+ */
+function ReservedPromptSlot({ reserveKey, inviting, children }: {
+  reserveKey: string
+  inviting: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const [reserved, setReserved] = useState<{ key: string; height: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!inviting || !el) return
+    const measure = (): void => {
+      const height = el.getBoundingClientRect().height
+      if (height > 0) setReserved((current) => current?.key === reserveKey && current.height === height ? current : { key: reserveKey, height })
+    }
+    measure()
+    // The starters rewrap when the window narrows: the reservation follows.
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [inviting, reserveKey])
+
+  const minHeight = !inviting && reserved?.key === reserveKey ? reserved.height : undefined
+  return (
+    <div ref={ref} data-testid="new-chat-prompt-slot" className="flex w-full flex-col items-center justify-end" style={minHeight ? { minHeight } : undefined}>
+      {children}
     </div>
   )
 }

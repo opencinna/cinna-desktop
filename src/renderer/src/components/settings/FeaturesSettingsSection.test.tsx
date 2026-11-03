@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
 
@@ -49,7 +49,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(9)
+    expect(screen.getAllByRole('switch')).toHaveLength(10)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -74,6 +74,22 @@ describe('FeaturesSettingsSection', () => {
     expect(setSetting).not.toHaveBeenCalled()
     fireEvent.click(tasks)
     expect(useUIStore.getState().showTasksButton).toBe(true)
+  })
+
+  it('guides the first build of new agents unless it was turned off, and says the consequence behind its tip', () => {
+    render(<FeaturesSettingsSection />)
+    const guided = screen.getByRole('switch', { name: 'Guide the first build of new agents' })
+    // An AI function, right after Auto-generate chat titles (rule 12).
+    const section = screen.getByRole('heading', { name: 'AI Functions' }).closest('section')!
+    const switches = within(section).getAllByRole('switch')
+    const titles = within(section).getByRole('switch', { name: 'Auto-generate chat titles' })
+    expect(switches.indexOf(guided)).toBe(switches.indexOf(titles) + 1)
+    // Absent from the store means the default, which is on.
+    expect(guided.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(guided)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'guidedFirstBuild', value: false })
+    fireEvent.click(screen.getByRole('button', { name: 'About Guide the first build of new agents' }))
+    expect(screen.getByText(/Off: its first chat starts like any other/)).toBeTruthy()
   })
 
   it('keeps the title attribute on the switch and toggles the setting', () => {

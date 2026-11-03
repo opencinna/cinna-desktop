@@ -308,6 +308,24 @@ export function useComposerFolder(target: AgentData | null): LocalAgentDto | nul
 }
 
 /**
+ * The folder agent with this id, by id alone — a just-created agent is in the
+ * folder list (the create mutation writes it there) before the merged agent
+ * list has refetched. `pending` while the folder list cannot answer yet: not
+ * loaded, or refetching without the agent when the merged list (`listed`)
+ * does not know the id either — a folder made behind the mutation's back. An
+ * agent the merged list has and the folder list does not is no folder, so a
+ * refetch never makes it pending. A surface that would show one thing for a
+ * folder and another for no folder waits on `pending` rather than painting
+ * the second and then the first.
+ */
+export function usePickedFolder(agentId: string | null, listed: boolean): { folder: LocalAgentDto | null; pending: boolean } {
+  const { data, isError, isFetching } = useLocalAgents()
+  const folder = (agentId ? data?.agents.find((a) => a.id === agentId) : undefined) ?? null
+  const pending = agentId !== null && folder === null && (data === undefined ? !isError : isFetching && !listed)
+  return { folder, pending }
+}
+
+/**
  * What the folder's own check found, for a folder agent whose findings do not
  * stop it: the agent still takes the message, and the user still learns the
  * folder is not what its manifest promises. Skill findings are left to the
@@ -371,6 +389,16 @@ const AI_CREDENTIAL_TEXT: Record<Exclude<AiCredentialIssue, null>, string> = {
 /** The agent page in Settings mode, where Runs with — the runtime and its credential — is the first section. */
 export function openAgentRuntimeSettings(agentId: string): void {
   const ui = useUIStore.getState()
+  ui.setActiveLocalAgentId(agentId)
+  ui.setAgentPageMode('settings')
+  ui.setSidebarTab('agents')
+  ui.setActiveView('local-agent')
+}
+
+/** The agent page in Settings mode on its Credentials tab, where the agent's own access is added. */
+export function openAgentCredentials(agentId: string): void {
+  const ui = useUIStore.getState()
+  ui.setAgentPageTabRequest('credentials')
   ui.setActiveLocalAgentId(agentId)
   ui.setAgentPageMode('settings')
   ui.setSidebarTab('agents')

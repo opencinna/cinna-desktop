@@ -192,6 +192,13 @@ export const chats = sqliteTable('chats', {
    */
   origin: text('origin').$type<ChatOrigin>().notNull().default('user'),
   /**
+   * A blank kit agent's guided first build: its turns carry the guidance in
+   * the turn header and it is offered `build_brief_propose`. Validated and
+   * written once by main when the new chat is bound (`chatService.update`),
+   * never changed after.
+   */
+  guidedBuild: integer('guided_build', { mode: 'boolean' }).notNull().default(false),
+  /**
    * The chat's place in the sidebar's Pinned block, higher first; null when
    * not pinned. Pinning takes the highest rank + 1, and a drag inside Pinned
    * writes a rank between its new neighbours. Never bumps `updatedAt`.

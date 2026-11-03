@@ -20,8 +20,10 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 
 let pageMode: 'chat' | 'settings' = 'settings'
 let draftingAgentIds: string[] = []
+let tabRequest: string | null = null
+const setAgentPageTabRequest = vi.fn((tab: string | null) => { tabRequest = tab })
 const setAgentPageMode = vi.fn((mode: 'chat' | 'settings') => { pageMode = mode })
-beforeEach(() => { pageMode = 'settings'; draftingAgentIds = []; listedShare = null; vi.clearAllMocks() })
+beforeEach(() => { pageMode = 'settings'; draftingAgentIds = []; listedShare = null; tabRequest = null; vi.clearAllMocks() })
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setSidebarTab = vi.fn()
@@ -31,6 +33,8 @@ vi.mock('../../../stores/ui.store', () => ({
       activeLocalAgentId: 'folder:alpha',
       agentPageMode: pageMode,
       setAgentPageMode,
+      agentPageTabRequest: tabRequest,
+      setAgentPageTabRequest,
       setActiveLocalAgentId: vi.fn(),
       pendingDraftAgentId: null,
       setPendingDraftAgentId: vi.fn(),
@@ -140,6 +144,7 @@ vi.mock('./ReadOnlyCards', () => ({
   StatusCard: marker('status-card')
 }))
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
+vi.mock('./ServiceCredentialsTab', () => ({ ServiceCredentialsTab: marker('credentials-tab') }))
 vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
 const addonsBadge: { count: number; problems: number; skills?: number } = { count: 0, problems: 0 }
 vi.mock('./AgentAddonsTab', () => ({
@@ -196,6 +201,18 @@ describe('LocalAgentPage — chat and settings modes', () => {
     expect(setActiveView).not.toHaveBeenCalled()
     expect(setPendingAgentId).not.toHaveBeenCalled()
     expect(setSidebarTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalAgentPage — a tab asked for from elsewhere', () => {
+  it('opens on the requested tab at first paint, then lets go of the request', () => {
+    // The brief card's Add in Credentials. Mutation: ignore the request and
+    // the page stays on Overview.
+    tabRequest = 'credentials'
+    renderPage()
+    expect(screen.getByRole('tab', { name: /credentials/i }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('credentials-tab')).toBeTruthy()
+    expect(setAgentPageTabRequest).toHaveBeenCalledWith(null)
   })
 })
 

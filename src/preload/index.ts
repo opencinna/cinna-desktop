@@ -295,6 +295,8 @@ export interface ChatData {
   pinnedRank?: number | null
   /** A place the user dragged the chat to inside its Chats-list group; null when never dragged. */
   sortKey?: number | null
+  /** A blank kit agent's guided first build, fixed when main bound the chat. */
+  guidedBuild?: boolean
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -618,6 +620,8 @@ const api = {
         modeId?: string | null
         agentId?: string | null
         router?: ChatRouter
+        /** Ask for a guided first build; main stores it only when the bound agent qualifies. */
+        guidedBuild?: boolean
       }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     /** Rename without bumping `updatedAt`: the chat keeps its place in the list. */
@@ -2182,6 +2186,9 @@ const api = {
       approval: ClaudeApproval | null
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-antigravity-approval', { agentId, approval }),
+    /** Guided first build done (Start building) or dismissed (Skip guidance). */
+    markGuidedBuildDone: (agentId: string): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:mark-guided-build-done', { agentId }),
     setDelegationPermission: (
       agentId: string,
       field: 'delegations' | 'cloudDelegations',

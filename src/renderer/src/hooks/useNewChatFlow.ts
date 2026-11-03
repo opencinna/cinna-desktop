@@ -73,6 +73,12 @@ export interface NewChatOptions {
    * scope, then merged with `attachments` before the first send.
    */
   noteIds?: string[]
+  /**
+   * Ask main to make this chat a guided first build — the composer's send to
+   * one blank kit agent while its invitation shows. Main stores it only when
+   * that agent still qualifies; Start building's chat never asks.
+   */
+  guidedBuild?: boolean
 }
 
 export function resolveModel(
@@ -269,8 +275,10 @@ export function useNewChatFlow(): {
           modeId?: string
           agentId?: string
           router: ChatRouter
+          guidedBuild?: boolean
         } = { title, router }
         if (rootAgentId) updates.agentId = rootAgentId
+        if (opts.guidedBuild === true && rootAgentId) updates.guidedBuild = true
         // Only a chat its hidden runtime answers needs a mode or a model. A
         // `direct` chat with an agent, every `human` chat, and a coordinated
         // one with a conductor picked (`ChatWorkspace` passes one only when it

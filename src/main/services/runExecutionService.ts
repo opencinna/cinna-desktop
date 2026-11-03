@@ -22,6 +22,7 @@ import { buildCatchUpPacket, buildTurnHeader, joinTurnContext } from './threadCo
 import { driverFor } from '../agents/drivers'
 import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
 import { resolveCommandRunner } from './localAgents/commandService'
+import { localAgentService } from './localAgents/localAgentService'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import type { StreamPort } from './a2aStreamingService'
@@ -655,6 +656,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
   input.accepted()
 
   // `/run:<name>` is intercepted before the driver: see `bindTurn`.
+  const guidedBuild = guidedBuildOf({ driver, agent, agentOwnerId, profileUserId, chatId })
   const run = bindTurn({
     driver,
     agent,
@@ -662,7 +664,8 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     chatId,
     wireContent,
     packet,
-    turnHeader: turnHeaderFor({ driver, agent, profileUserId, chatId }),
+    turnHeader: turnHeaderFor({ driver, agent, agentOwnerId, profileUserId, chatId, guidedBuild: guidedBuild === 'closed' ? null : guidedBuild }),
+    guidedBuild: guidedBuild === null ? undefined : guidedBuild !== 'closed',
     fileIds,
     attachments,
     // The user row's id is the A2A `messageId`: the Cinna backend echoes
@@ -746,8 +749,12 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
 function turnHeaderFor(input: {
   driver: AgentDriver
   agent: AgentRow
+  /** The agent row's owner: whose folder index locates a folder agent. */
+  agentOwnerId: string
   profileUserId: string
   chatId: string
+  /** {@link guidedBuildOf}, read once for the turn. */
+  guidedBuild: { name: string; description: string | null } | null
 }): string | null {
   if (!input.driver.capabilities(input.agent).cwd) return null
   let task: { ref: string; title: string; reportRequired: boolean } | null = null
@@ -781,7 +788,41 @@ function turnHeaderFor(input: {
   } catch {
     /* no skill line rather than no header */
   }
-  return buildTurnHeader({ agentId: input.agent.id, chatId: input.chatId, task, depth, openDelegations, readyTasks, tasksSkill })
+  return buildTurnHeader({ agentId: input.agent.id, chatId: input.chatId, task, depth, openDelegations, readyTasks, tasksSkill, guidedBuild: input.guidedBuild })
+}
+
+/**
+ * Whether this turn is a guided first build's, or null. Read once per turn and
+ * handed to both the turn header (its guidance section) and the driver
+ * (`RunInput.guidedBuild`: Codex's Plan collaboration mode), so the two never
+ * disagree about one turn.
+ *
+ * A chat main marked guided, this turn is its root agent's, and that agent is
+ * still unbuilt right now (read fresh, so Start building, Skip guidance or a
+ * build the chat already did ends the guidance). Only an agent running in a
+ * folder on this machine can be unbuilt.
+ */
+function guidedBuildOf(input: {
+  driver: AgentDriver
+  agent: AgentRow
+  agentOwnerId: string
+  profileUserId: string
+  chatId: string
+}): { name: string; description: string | null } | 'closed' | null {
+  try {
+    if (!input.driver.capabilities(input.agent).cwd) return null
+    const chat = visibleChat(input.profileUserId, input.chatId)
+    if (chat?.guidedBuild && chat.agentId === input.agent.id) {
+      // A guided chat whose agent has since been built: `closed`, so the
+      // driver can take the session out of the guided setup it was left in.
+      return localAgentService.guidedBuildOpen(input.agentOwnerId, input.agent.id)
+        ? { name: input.agent.name, description: input.agent.description ?? null }
+        : 'closed'
+    }
+  } catch {
+    /* no guidance rather than no header */
+  }
+  return null
 }
 
 function bindTurn(input: {
@@ -802,6 +843,8 @@ function bindTurn(input: {
   registerSteer?: (steer: SteerFn | null) => void
   /** Wire-only turn context, in front of the catch-up packet (`RunInput.turnContext`). */
   turnHeader?: string | null
+  /** A guided first build's turn (`RunInput.guidedBuild`): true while guided, false once its chat's guidance has ended. */
+  guidedBuild?: boolean
   /** The chat's scope, for a follow-up turn the agent starts after this one. */
   runScope?: FollowUpScope
 }): TurnRun {
@@ -823,6 +866,7 @@ function bindTurn(input: {
         // alone, before this call.
         wireContent,
         turnContext: joinTurnContext(input.turnHeader ?? null, input.packet),
+        ...(input.guidedBuild !== undefined ? { guidedBuild: input.guidedBuild } : {}),
         fileIds: input.fileIds,
         attachments: input.attachments,
         ...(input.messageId ? { messageId: input.messageId } : {}),
@@ -896,6 +940,7 @@ async function resendAgentTurn(port: StreamPort, input: {
         })
       : null
     const driver = driverFor(agent)
+    const guidedBuild = guidedBuildOf({ driver, agent, agentOwnerId, profileUserId, chatId })
     run = bindTurn({
       driver,
       agent,
@@ -903,7 +948,8 @@ async function resendAgentTurn(port: StreamPort, input: {
       chatId,
       wireContent: row.content,
       packet,
-      turnHeader: turnHeaderFor({ driver, agent, profileUserId, chatId }),
+      turnHeader: turnHeaderFor({ driver, agent, agentOwnerId, profileUserId, chatId, guidedBuild: guidedBuild === 'closed' ? null : guidedBuild }),
+      guidedBuild: guidedBuild === null ? undefined : guidedBuild !== 'closed',
       fileIds: row.attachments?.map((attachment) => attachment.id),
       messageId: userMessageId,
       runScope: { profileUserId, settingsUserId }

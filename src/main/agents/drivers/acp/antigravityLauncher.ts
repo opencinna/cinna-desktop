@@ -298,7 +298,7 @@ export interface AntigravityLauncherDeps {
     /** `model` is the agent's own `runtime.model` (see `AcpSessionSetup.modelDeclared`). */
     modelDeclared?: boolean
     approval: ClaudeApproval
-    autoApprove?: { scriptRoots: string[] }
+    autoApprove?: { scriptRoots: string[]; workshopKit?: string }
   }
   /**
    * The isolated home for this session, when it is not the folder's own
@@ -421,7 +421,8 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           },
           // Read per ask by the driver's permission gate; under `yolo` nothing asks.
           ...(settings.approval === 'ask' && settings.autoApprove
-            ? { autoApprove: { folder: ctx.folder.path, scriptRoots: [...settings.autoApprove.scriptRoots] } }
+            ? { autoApprove: { folder: ctx.folder.path, scriptRoots: [...settings.autoApprove.scriptRoots],
+              ...(settings.autoApprove.workshopKit ? { workshopKit: settings.autoApprove.workshopKit } : {}) } }
             : {})
         }
       } catch {

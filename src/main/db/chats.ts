@@ -186,6 +186,8 @@ export const chatRepo = {
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
       origin: init?.origin ?? 'user',
+      // Never at insert: main decides it when the chat is bound (`chatService.update`).
+      guidedBuild: false,
       pinnedRank: null,
       sortKey: null,
       deletedAt: null,
@@ -244,6 +246,16 @@ export const chatRepo = {
     const result = getDb()
       .update(chats)
       .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /** Mark a chat as a guided first build. Written once, by `chatService.update`; leaves `updatedAt`. */
+  setGuidedBuild(userId: string, chatId: string): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ guidedBuild: true })
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0

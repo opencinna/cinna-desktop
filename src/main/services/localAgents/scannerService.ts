@@ -42,6 +42,7 @@ import {
 } from '../../kit/validator'
 import { KitError } from '../../errors'
 import { createLogger } from '../../logger/logger'
+import { isUnbuiltKitAgent } from './guidedBuild'
 import { checkContractCompatibility } from '../../../shared/kit/contractVersion'
 import {
   MANIFEST_FILE,
@@ -421,6 +422,8 @@ function unreadableAgent(
     skills: [],
     status: null,
     validation: { errors: [finding], warnings: [], infos: [] },
+    // Nothing could be read, so nothing says it is the scaffold.
+    unbuilt: false,
     desktop: desktopStateService.summarize(desktopStateService.read(agentDir, 'kit')),
     stamps: stampsFor(agentDir),
     scannedAt: Date.now()
@@ -544,6 +547,16 @@ function bareValidation(
     path: MANIFEST_FILE
   })
   return { errors, warnings, infos }
+}
+
+/** Entry names directly under `dir`; none when it is absent or unreadable. */
+function entryNames(dir: string): string[] {
+  try {
+    const entries: Dirent[] = readdirSync(dir, { withFileTypes: true })
+    return entries.map((entry) => entry.name)
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -674,6 +687,14 @@ export const scannerService = {
       ),
       status: readStatus(agentDir, layout.layout.agent.status_file),
       validation: toValidation(report),
+      unbuilt: isUnbuiltKitAgent({
+        scripts: entryNames(join(agentDir, 'scripts')),
+        skills: entryNames(join(agentDir, 'skills')),
+        credentials: manifest.credentials,
+        schedules: manifest.schedules,
+        shared: !!desktop.shared_remote,
+        guidedDone: desktopStateService.guidedBuildDone(agentDir)
+      }),
       desktop: desktopStateService.summarize(desktop),
       stamps: stampsFor(agentDir),
       scannedAt
@@ -757,6 +778,8 @@ export const scannerService = {
       // and the field's absence is what every surface reads as "no skills here".
       status: null,
       validation,
+      // Guided first build is a kit-agent feature: a bare folder is the user's own.
+      unbuilt: false,
       desktop: desktopStateService.summarize(desktop),
       // Keyed by the file the folder resolved to, which is the key the editor
       // looks its stamp up under. A folder with none has no stamp to save on.

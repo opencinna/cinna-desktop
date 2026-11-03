@@ -1,4 +1,5 @@
 import { runtimeHost } from '../../host/runtimeHost'
+import { workshopKitOf } from '../../services/localAgents/workshopKit'
 import { installRuntimeModelCatalogProbe, installRuntimeModelCatalogVariant, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
 import { chatConductorService, isChatConductor, conductorContext, conductorModelId, clearWorkspaceInstructionFiles } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
@@ -760,6 +761,12 @@ function ownCommandScriptRoots(agent: { path: string; kind: string; manifest?: u
   }
 }
 
+/** The workshop kit a folder agent reads while building (`OwnCommandPolicy.workshopKit`), when there is one. */
+function workshopKitFor(agent: { path: string }): { workshopKit?: string } {
+  const kit = workshopKitOf(agent.path)
+  return kit ? { workshopKit: kit } : {}
+}
+
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   codex: createCodexLauncher({
     // Through the service, like OpenCode's `binary` below: memoised per
@@ -866,7 +873,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         modelDeclared: resolved.modelSource === 'declared',
         approval,
         // Only here, the folder agent's branch: every branch above asks about everything.
-        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent) } } : {})
+        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent), ...workshopKitFor(agent) } } : {})
       }
     }
   }),

@@ -84,6 +84,8 @@ export function registerChatHandlers(): void {
         modeId?: string | null
         agentId?: string | null
         router?: ChatRouter
+        /** A request; `chatService.update` decides whether the chat is guided. */
+        guidedBuild?: boolean
       }
     ) => {
       userActivation.requireActivated()

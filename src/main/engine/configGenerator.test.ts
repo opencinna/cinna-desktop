@@ -819,6 +819,15 @@ describe('a kit agent’s own skills', () => {
     })
   })
 
+  it('allows reads of the workshop kit with no skills at all, and edits there still ask', () => {
+    const base = input()
+    base.agents[0] = { ...base.agents[0], workshopKitPath: '/home/CinnaAgents/.cinna-kit' }
+    const permission = agentOf(buildEngineConfig(base)).permission
+    expect(permission.external_directory).toEqual({ '*': 'ask', '/home/CinnaAgents/.cinna-kit/*': 'allow' })
+    expect((permission.edit as Record<string, string>)['*.cinna-kit/*']).toBe('ask')
+    expect((permission.write as Record<string, string>)['*.cinna-kit/*']).toBe('ask')
+  })
+
   it('lets a manifest’s own skill rule replace the entry, as every override does', () => {
     const base = input()
     base.agents[0] = { ...base.agents[0], skills: ['pdf-tools'], permissions: { skill: 'deny' } }

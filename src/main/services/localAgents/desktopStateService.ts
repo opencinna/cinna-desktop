@@ -477,6 +477,11 @@ function writeAtomically(path: string, contents: string): void {
   }
 }
 
+/** The guided-build marker of a folder, under `userData` whatever its kind. */
+function guidedBuildMarkerPath(agentDir: string): string {
+  return `${desktopStatePath(agentDir, 'bare')}.guided-build`
+}
+
 /** External command state is keyed by captured ownership/configuration, never by a fake folder. */
 export interface ExternalRuntimeStateKey { ownerId: string; agentId: string; binding: string }
 export function externalRuntimeStatePath(key: ExternalRuntimeStateKey): string {
@@ -573,6 +578,27 @@ export const desktopStateService = {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code !== 'ENOENT') logger.warn('could not remove desktop state', { path, code })
     }
+  },
+
+  /**
+   * Whether this agent's guided first build was finished (Start building) or
+   * dismissed (Skip guidance). Kept under `userData`, beside the delegation
+   * permissions, and never in the folder: it is this machine's answer about
+   * the person, not something the agent carries to anyone it is shared with.
+   * Keyed by the folder's real path, so a moved folder asks again.
+   */
+  guidedBuildDone(agentDir: string): boolean {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(guidedBuildMarkerPath(agentDir), 'utf8'))
+      return isRecord(raw) && raw.done === true
+    } catch {
+      return false
+    }
+  },
+
+  /** Record the guided build as done or dismissed. Idempotent. */
+  markGuidedBuildDone(agentDir: string): void {
+    writeAtomically(guidedBuildMarkerPath(agentDir), `${JSON.stringify({ done: true, at: Date.now() })}\n`)
   },
 
   /** What the renderer is allowed to know. The token is reported, never sent. */

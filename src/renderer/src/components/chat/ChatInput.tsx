@@ -118,6 +118,8 @@ interface ChatInputProps {
    * its own: the page above the composer already says why.
    */
   sendHold?: string | null
+  /** The empty composer's placeholder, when the screen above it has a better one than "Type a message...". */
+  placeholder?: string
   /**
    * New-chat MCP engagement buffer. When `chatId` is null, the on-demand MCP
    * popup picks add to / remove from this list (owned by MainArea) instead of
@@ -264,6 +266,12 @@ function findTriggerToken(
 export interface ChatInputHandle {
   focus: () => void
   clearInput: () => void
+  /**
+   * Replace the draft with `text` and focus it, selecting its first
+   * `⟨…⟩` placeholder so typing replaces it (the guided-build starters).
+   * Never sends.
+   */
+  fill: (text: string) => void
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
@@ -287,7 +295,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     tildeModePopup,
     onOpenChatFolder,
     onNewChatLike,
-    sendHold = null
+    sendHold = null,
+    placeholder
   },
   ref
 ) {
@@ -467,6 +476,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       setInput('')
       const el = textareaRef.current
       if (el) el.style.height = 'auto'
+    },
+    fill: (text: string) => {
+      setInput(text)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        el.style.height = 'auto'
+        el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+        const start = text.indexOf('⟨')
+        const end = start >= 0 ? text.indexOf('⟩', start) : -1
+        if (start >= 0 && end > start) el.setSelectionRange(start, end + 1)
+        else el.setSelectionRange(text.length, text.length)
+      })
     }
   }))
 
@@ -2066,11 +2089,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         <AmbientGrid inputRef={textareaRef} borderGlow={false} />
         <textarea
           ref={textareaRef}
+          // Found by surfaces outside the composer that hand focus back to it (a brief card's Keep talking).
+          data-chat-composer={chatId ?? 'new'}
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={held ? sendHold ?? undefined : chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : 'Type a message...'}
+          placeholder={held ? sendHold ?? undefined : chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : placeholder ?? 'Type a message...'}
           rows={1}
           role="combobox"
           aria-autocomplete="list"

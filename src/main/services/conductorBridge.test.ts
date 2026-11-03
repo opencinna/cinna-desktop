@@ -6,8 +6,9 @@ import type { AgentRow } from '../db/agents'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 
 const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[],
-  listings: 0, order: [] as string[], refreshed: [] as string[][] }))
-vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator' }) } }))
+  listings: 0, order: [] as string[], refreshed: [] as string[][], guided: false, unbuilt: true, guidedOwners: [] as string[] }))
+vi.mock('./localAgents/localAgentService', () => ({ localAgentService: { guidedBuildOpen: (owner: string) => { state.guidedOwners.push(owner); return state.unbuilt } } }))
+vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator', guidedBuild: state.guided }) } }))
 vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => ({ id: 'delegated-task' }) } }))
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => ({ targetAgentId: 'root' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
@@ -67,6 +68,43 @@ describe('runtime tool integration', () => {
       .toEqual(new Set(['cinna-handovers']))
     expect(plan.session.mcpServers).toEqual([expect.objectContaining({ name: 'cinna', type: 'http' })])
     lease?.close()
+  })
+
+  it('offers the build brief tool to a folder agent’s own session only in a guided chat', async () => {
+    const toolsIn = async (chatId: string): Promise<string[]> => {
+      const plan = { spec: { remote: false }, session: { mcpServers: [] } } as unknown as AcpLaunchPlan
+      const lease = await conductorBridge.prepare('settings', { id: 'root', source: 'folder', localPath: '/tmp/project', driver: 'acp' } as AgentRow,
+        { chatId, wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } }, plan, vi.fn(), () => true)
+      const tools = (await state.options!.getProviders()).flatMap((provider) => provider.getTools()).map((tool) => tool.name)
+      lease?.close()
+      return tools
+    }
+    try {
+      expect(await toolsIn('plain-folder')).not.toContain('build_brief_propose')
+      state.guided = true
+      expect(await toolsIn('guided-folder')).toContain('build_brief_propose')
+      expect(state.guidedOwners.at(-1)).toBe('settings')
+    } finally {
+      state.guided = false
+    }
+  })
+
+  it('stops offering the build brief tool once the guided chat’s agent is no longer unbuilt', async () => {
+    // Mutation: drop the fresh unbuilt read and a started or skipped build keeps the tool forever.
+    const plan = { spec: { remote: false }, session: { mcpServers: [] } } as unknown as AcpLaunchPlan
+    state.guided = true
+    state.unbuilt = false
+    try {
+      const lease = await conductorBridge.prepare('settings', { id: 'root', source: 'folder', localPath: '/tmp/project', driver: 'acp' } as AgentRow,
+        { chatId: 'guided-built', wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } }, plan, vi.fn(), () => true)
+      const tools = (await state.options!.getProviders()).flatMap((provider) => provider.getTools()).map((tool) => tool.name)
+      lease?.close()
+      expect(tools).not.toContain('build_brief_propose')
+      expect(tools).toContain('tasks_list')
+    } finally {
+      state.guided = false
+      state.unbuilt = true
+    }
   })
 
   it('pauses the conductor on the first classified specialist rate limit and keeps its diagnostic', async () => {

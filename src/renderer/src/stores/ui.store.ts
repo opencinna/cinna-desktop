@@ -128,12 +128,21 @@ function applyTheme(theme: Theme): void {
   void window.api?.app?.setTheme(theme)?.catch(() => {})
 }
 
+/** A local agent page's Settings tabs (`LocalAgentPage`). */
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
+
 /** Where the Add an agent dialog opens — see `NewLocalAgentModal`'s steps. */
 export type AddAgentDialogStep = 'choose' | 'name' | 'advanced'
 
 interface UIStore {
   activeView: ActiveView
   agentPageMode: 'chat' | 'settings'
+  /**
+   * A tab some other surface asked the agent page to open on (the brief
+   * card's Add in Credentials). One-shot: the page takes it on mount or when
+   * it changes, then clears it, and its own tab state goes on from there.
+   */
+  agentPageTabRequest: AgentPageTab | null
   settingsTab: SettingsMenu
   sidebarTab: SidebarTab
   activeJobId: string | null
@@ -252,6 +261,7 @@ interface UIStore {
    */
   chatGroupCollapsed: Record<string, boolean>
   setAgentPageMode: (mode: 'chat' | 'settings') => void
+  setAgentPageTabRequest: (tab: AgentPageTab | null) => void
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
   setSidebarTab: (tab: SidebarTab) => void
@@ -302,6 +312,7 @@ interface UIStore {
 export const useUIStore = create<UIStore>((set, get) => ({
   activeView: 'chat',
   agentPageMode: 'chat',
+  agentPageTabRequest: null,
   settingsTab: 'chats',
   sidebarTab: 'chats',
   activeJobId: null,
@@ -342,6 +353,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   chatShowActive: localStorage.getItem(CHAT_SHOW_ACTIVE_KEY) === '1',
   chatGroupCollapsed: readChatGroupCollapsed(),
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
+  setAgentPageTabRequest: (tab) => set({ agentPageTabRequest: tab }),
   setActiveView: (view) => set({ activeView: view }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),

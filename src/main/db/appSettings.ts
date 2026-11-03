@@ -23,6 +23,7 @@ export const DEFAULTS: AppSettingsSchema = {
   enableTrayIcon: true,
   desktopNotifications: true,
   showHints: true,
+  guidedFirstBuild: true,
   showAgentSidebarSections: true,
   showLocalDataInAllProfiles: true,
   prioritizeAccountDefaults: false,

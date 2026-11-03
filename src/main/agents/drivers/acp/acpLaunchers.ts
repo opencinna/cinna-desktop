@@ -125,6 +125,15 @@ export type AcpLaunchContext = {
    * background check never spawns an engine.
    */
   warmOnly?: boolean
+  /**
+   * A guided first build's turn (`RunInput.guidedBuild`), on a folder agent:
+   * true while guided, false once that chat's guidance has ended, absent otherwise.
+   * Session-level only: a launcher reads it into `setup`, never into the
+   * process `key`, because the pooled process is shared by the agent's chats.
+   * Codex asks in Plan collaboration mode for it, where `request_user_input`
+   * is usable.
+   */
+  guidedBuild?: boolean
 } & (
   | { folder: AcpAgentFolder; custom?: never }
   | { folder?: never; custom: CustomAgentConfig; accessToken?: string }

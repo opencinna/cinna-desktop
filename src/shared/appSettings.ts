@@ -42,6 +42,14 @@ export interface AppSettingsSchema {
    * Per-hint retirement counters live in localStorage, not here.
    */
   showHints: boolean
+  /**
+   * When true (the default), a new chat with a blank local kit agent
+   * (`LocalAgentDto.unbuilt`) starts guided: the agent interviews the person
+   * and proposes a build brief instead of attempting the task. Read by main
+   * when the chat is bound (`chatService.update`) and by the new-chat screen's
+   * invitation; a chat keeps the flag it was created with.
+   */
+  guidedFirstBuild: boolean
   /** Show source/root section labels in the Agents sidebar. */
   showAgentSidebarSections: boolean
   /**

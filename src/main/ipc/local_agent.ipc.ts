@@ -677,6 +677,15 @@ export function registerLocalAgentHandlers(): void {
     }
   )
 
+  /** Guided first build done or dismissed; the agent stops reading as unbuilt. */
+  ipcHandle(
+    'local-agent:mark-guided-build-done',
+    (_event, input: { agentId: string }): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      return withCode(() => localAgentService.markGuidedBuildDone(getSettingsScopeUserId(), input?.agentId ?? ''))
+    }
+  )
+
   ipcHandle(
     'local-agent:set-delegation-permission',
     (_event, input: { agentId: string; field: 'delegations' | 'cloudDelegations'; setting: HandoverSetting | null }): LocalAgentOutcome<LocalAgentDto> => {

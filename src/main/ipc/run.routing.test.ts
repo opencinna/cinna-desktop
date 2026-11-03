@@ -169,6 +169,12 @@ vi.mock('../services/localAgents/commandService', () => ({
   resolveCommandRunner: (..._args: unknown[]) => _args[4]
 }))
 
+// Whether a guided chat's agent is still unbuilt: read fresh by the turn header.
+const guidedBuildOpen = vi.fn((_owner: string, _agentId: string) => true)
+vi.mock('../services/localAgents/localAgentService', () => ({
+  localAgentService: { guidedBuildOpen: (owner: string, agentId: string) => guidedBuildOpen(owner, agentId) }
+}))
+
 const { registerRunHandlers } = await import('./run.ipc')
 const { runExecutionService } = await import('../services/runExecutionService')
 
@@ -214,12 +220,12 @@ async function wireContent(): Promise<string> {
 }
 
 /** Everything the driver was handed on the last turn that reached it. */
-async function driverInput(): Promise<{ wireContent: string; turnContext?: string | null; messageId?: string }> {
+async function driverInput(): Promise<{ wireContent: string; turnContext?: string | null; messageId?: string; guidedBuild?: boolean }> {
   const input = streamToAgent.mock.calls.at(-1)![0] as {
     run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
   }
   await input.run({ signal: new AbortController().signal, onEvent: vi.fn() })
-  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string; turnContext?: string | null; messageId?: string }])[2]
+  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string; turnContext?: string | null; messageId?: string; guidedBuild?: boolean }])[2]
 }
 
 /** A driver input as one string: its context, then the user's text. */
@@ -918,6 +924,51 @@ describe('the wire-only turn header', () => {
     // **Never stored.** The row is written from the user's text alone, before
     // the header is ever built.
     expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ userContent: 'hello' }))
+  })
+
+  it('carries the guided-build section in a guided chat, after the facts', async () => {
+    // Mutation: read the flag but skip the section, or bind it to another agent.
+    caps.cwd = true
+    chatTask.mockReturnValue(undefined)
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1', guidedBuild: true }
+    await send({ chatId: 'chat-1', content: 'check my Gmail' })
+    const input = await driverInput()
+    const wireContent = sent(input)
+    expect(wireContent.indexOf('Cinna task context (not part of the conversation):')).toBe(0)
+    expect(wireContent).toContain('\n\nGuided first build:\n- This agent has not been built yet')
+    expect(wireContent).toContain('`build_brief_propose`')
+    expect(wireContent.endsWith('check my Gmail')).toBe(true)
+    expect(guidedBuildOpen).toHaveBeenCalledWith('owner-1', 'a-1')
+    // The driver is told too (Codex asks in Plan mode), from the same one read.
+    // Mutation: drop `guidedBuild` from `bindTurn` and the interview's engine
+    // never learns the turn is guided.
+    expect(input.guidedBuild).toBe(true)
+    expect(guidedBuildOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the guided-build section once the agent is no longer unbuilt', async () => {
+    // Mutation: check only the chat's flag and a started, skipped or already
+    // built agent is told it has not been built yet, forever.
+    caps.cwd = true
+    chatTask.mockReturnValue(undefined)
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1', guidedBuild: true }
+    guidedBuildOpen.mockReturnValueOnce(false)
+    await send({ chatId: 'chat-1', content: 'check my Gmail' })
+    const input = await driverInput()
+    const wireContent = sent(input)
+    expect(wireContent).not.toContain('Guided first build:')
+    // The driver is told the guidance ended, so a built agent's chat goes back to Codex's Default mode.
+    expect(input.guidedBuild).toBe(false)
+    expect(wireContent.indexOf('Cinna task context (not part of the conversation):')).toBe(0)
+  })
+
+  it('leaves the section out of a chat that is not guided', async () => {
+    caps.cwd = true
+    chatTask.mockReturnValue(undefined)
+    await send({ chatId: 'chat-1', content: 'hello' })
+    const input = await driverInput()
+    expect(sent(input)).not.toContain('Guided first build:')
+    expect(input).not.toHaveProperty('guidedBuild')
   })
 
   it('requires a report only on a task someone waits on: dispatched, delegated, or a job run', async () => {

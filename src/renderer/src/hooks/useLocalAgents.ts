@@ -36,6 +36,8 @@ import {
   isStaleWriteError,
   unwrapLocalAgentOutcome
 } from '../../../shared/localAgents'
+// A cycle (useAppSettings imports this module's keys), safe: used only inside a callback.
+import { APP_SETTINGS_KEY } from './useAppSettings'
 import { useAgentsHomeStore } from '../stores/agentsHome.store'
 import {
   editFileText,
@@ -401,15 +403,55 @@ export function useLocalAgentWatch(): void {
   }, [queryClient])
 }
 
+/** An agent's folder below its root, as walk-order segments (`.` is the root itself). */
+function walkSegments(agent: LocalAgentDto): string[] {
+  const rel = agent.path.startsWith(agent.rootPath) ? agent.path.slice(agent.rootPath.length) : agent.path
+  return rel.split(/[\\/]+/).filter((part) => part !== '')
+}
+
+/** The scanner's walk order (`scannerService.compareWalkOrder`), segment by segment. */
+function compareWalkSegments(a: string[], b: string[]): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const order = a[i].localeCompare(b[i])
+    if (order !== 0) return order
+  }
+  return a.length - b.length
+}
+
+/**
+ * The list with a just-created agent in it, where the next scan will put it.
+ * Written before the refetch lands, so every surface that reads the list — the
+ * new-chat screen's guided-build invitation above all — has the agent at the
+ * page's first paint instead of a frame later.
+ */
+export function withCreatedAgent(list: LocalAgentsSnapshot, agent: LocalAgentDto): LocalAgentsSnapshot {
+  const rest = list.agents.filter((a) => a.id !== agent.id)
+  const key = walkSegments(agent)
+  const at = rest.findIndex((a) => a.rootId === agent.rootId && compareWalkSegments(walkSegments(a), key) > 0)
+  const lastOfRoot = rest.map((a) => a.rootId).lastIndexOf(agent.rootId)
+  const index = at >= 0 ? at : lastOfRoot >= 0 ? lastOfRoot + 1 : rest.length
+  return { ...list, agents: [...rest.slice(0, index), agent, ...rest.slice(index)] }
+}
+
 /** Scaffold a new agent folder. Resolves once the folder exists on disk. */
 export function useCreateLocalAgent() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (input: CreateLocalAgentInput) => window.api.localAgents.create(input),
-    onSuccess: (agent) => {
+    onSuccess: async (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
+      // Into the list too, before the caller navigates: the agent page's
+      // composer reads the list, and a refetch arrives only after first paint.
+      queryClient.setQueryData<LocalAgentsSnapshot>(LOCAL_AGENTS_KEY, (list) => (list ? withCreatedAgent(list, agent) : list))
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      // The composer's guided-build invitation also reads the settings, which
+      // no mounted surface may hold (an auth reset leaves an inactive query
+      // empty). Awaited here, so the caller's onSuccess lands on a page that
+      // can decide at first paint; a failure only leaves it undetermined.
+      await queryClient
+        .ensureQueryData({ queryKey: APP_SETTINGS_KEY, queryFn: () => window.api.settings.getAll() })
+        .catch(() => undefined)
     }
   })
 }
@@ -631,6 +673,22 @@ export function useHandoversCheck(agentId: string | null): UseQueryResult<Handov
     // Git does not change while the card is open, and the answer costs a
     // process. Re-read when the page is returned to, not on every focus.
     staleTime: 30_000
+  })
+}
+
+/**
+ * Mark an agent's guided first build done or dismissed. The list is
+ * invalidated so the invitation and the guided request follow at once.
+ */
+export function useMarkGuidedBuildDone() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string }>({
+    mutationFn: async ({ agentId }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.markGuidedBuildDone(agentId)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
   })
 }
 

@@ -993,6 +993,49 @@ describe('the launcher a folder row names', () => {
   })
 })
 
+describe('whether a kit agent is still unbuilt', () => {
+  it('is true for a fresh scaffold, whatever its prompts say', () => {
+    const dir = scaffold('alpha')
+    expect(scannerService.scanAgentFolder(dir, root).unbuilt).toBe(true)
+    // The workflow prompt does not count: an AI-drafted one is still unbuilt.
+    writeFileSync(join(dir, 'docs/WORKFLOW_PROMPT.md'), '# Alpha\n\nYou sort the inbox.\n')
+    mkdirSync(join(dir, 'scripts/__pycache__'), { recursive: true })
+    expect(scannerService.scanAgentFolder(dir, root).unbuilt).toBe(true)
+  })
+
+  it('is false once a script, a skill or a credential slot was added', () => {
+    const script = scaffold('with-script')
+    writeFileSync(join(script, 'scripts/fetch.py'), 'print(1)\n')
+    expect(scannerService.scanAgentFolder(script, root).unbuilt).toBe(false)
+    const skill = scaffold('with-skill')
+    mkdirSync(join(skill, 'skills/triage'), { recursive: true })
+    writeFileSync(join(skill, 'skills/triage/SKILL.md'), '---\nname: triage\ndescription: Sorts mail.\n---\nSort.\n')
+    expect(scannerService.scanAgentFolder(skill, root).unbuilt).toBe(false)
+    const slot = scaffold('with-slot')
+    const manifest = readManifest(manifestPath(slot))
+    manifest.credentials = [{ name: 'GMAIL_TOKEN', description: 'Gmail', required: true }] as never
+    writeManifest(manifestPath(slot), manifest)
+    expect(scannerService.scanAgentFolder(slot, root).unbuilt).toBe(false)
+  })
+
+  it('is false once its guided build was done, and the marker stays out of the folder', () => {
+    const dir = scaffold('alpha')
+    try {
+      desktopStateService.markGuidedBuildDone(dir)
+      expect(scannerService.scanAgentFolder(dir, root).unbuilt).toBe(false)
+      expect(existsSync(join(dir, 'app-data/desktop.json'))).toBe(false)
+    } finally {
+      rmSync(`${desktopStatePath(dir, 'bare')}.guided-build`, { force: true })
+    }
+  })
+
+  it('is false for a shared or catalog agent', () => {
+    const dir = scaffold('alpha')
+    desktopStateService.patch(dir, 'kit', { shared_remote: { kind: 'cinna', repo_id: 'r', clone_url: 'https://core.example/r.git' } })
+    expect(scannerService.scanAgentFolder(dir, root).unbuilt).toBe(false)
+  })
+})
+
 describe('external roots', () => {
   let external: string
   let externalRoot: Awaited<ReturnType<typeof agentRootRepo.create>>
@@ -1249,6 +1292,13 @@ describe('external roots', () => {
     expect(lost.truncated).toBe(true)
     expect(lost.agents.map((agent) => agent.path)).toEqual([a, c])
     expect(agentRepo.getOwned(USER, ids[1])).toBeUndefined()
+  })
+
+  it('never reads a bare folder as unbuilt, even one with nothing in it', () => {
+    // Guided first build is a kit-agent feature, and every surface reads
+    // `unbuilt` alone. Mutation: compute it for bare folders too.
+    const dir = bareAgent('empty-bare')
+    expect(scannerService.scanBareAgentFolder(dir, externalRoot, 'empty-bare').unbuilt).toBe(false)
   })
 
   it('reads a folder whose AGENT.md vanished as invalid, never as a throw', () => {

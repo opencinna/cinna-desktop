@@ -308,7 +308,13 @@ const IDENTITY_FILES: Record<string, string> = {
   // not kept for the one kind of agent whose identity is a single file.
   'AGENT.md': 'ask',
   'AGENTS.md': 'ask',
-  'CLAUDE.md': 'ask'
+  'CLAUDE.md': 'ask',
+  // The workshop kit beside the agents (`../../.cinna-kit/`) is readable
+  // without an ask (`workshopKitPath`), so its `external_directory` allow
+  // would otherwise let the file tools edit it too. It is a managed copy a
+  // refresh replaces whole: an edit there is a mistake, and one dialog says so.
+  // File tools only: a shell command aimed at it runs as any command does.
+  '*.cinna-kit/*': 'ask'
 }
 
 /**
@@ -477,6 +483,14 @@ export interface EngineAgentInput {
    * quoting the real cache path would otherwise stop the turn for a click.
    */
   skillReadPaths?: string[]
+  /**
+   * The workshop's kit copy (`<root>/.cinna-kit`), which the agent's own
+   * `AGENTS.md` and the guided build send it to read: allowed for reads
+   * outside the folder like {@link skillReadPaths}, so building an agent does
+   * not stop on a click per kit guide. File-tool edits there still ask
+   * (`IDENTITY_FILES`); the shell, allowed everywhere, is not stopped by it.
+   */
+  workshopKitPath?: string
   /**
    * Its pinned marketplace plugins' commands (`commands/*.md`), each a slash
    * command bound to this agent — the config-side counterpart of core's
@@ -835,7 +849,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     prompts.set(key, agent.prompt)
     const permission = agent.permissionMode === 'replace'
       ? { '*': 'deny', ...agent.permissions }
-      : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? [])]))
+      : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? []), ...(agent.workshopKitPath ? [agent.workshopKitPath] : [])]))
     policies.set(JSON.stringify(permission), permission)
     agents[key] = {
       description: agent.description || `The ${agent.slug} agent.`,

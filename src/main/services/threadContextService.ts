@@ -1,5 +1,6 @@
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import type { MessageRow } from '../db/messages'
+import { guidedBuildSection } from './localAgents/guidedBuild'
 
 /**
  * The catch-up packet: what an agent missed while somebody else was answering.
@@ -247,6 +248,12 @@ export function buildTurnHeader(input: {
   readyTasks?: number
   /** `cinna-tasks v1`, or null/absent when the skill is not available. */
   tasksSkill?: string | null
+  /**
+   * The chat is a blank kit agent's guided first build: the section from
+   * `guidedBuild.ts` follows the facts, on every turn of the chat. Here and
+   * not in the system prompt, which must stay chat-independent.
+   */
+  guidedBuild?: { name: string; description: string | null } | null
 }): string {
   const counts: string[] = []
   if (input.depth) counts.push(`chain depth: ${input.depth}`)
@@ -263,6 +270,7 @@ export function buildTurnHeader(input: {
       ? `- current task: \`${task.ref}\` ${JSON.stringify(task.title)} (report required: ${task.reportRequired ? 'yes' : 'no'})`
       : '- current task: none',
     ...(counts.length ? [`- ${counts.join(' · ')}`] : []),
-    ...(input.tasksSkill ? [`- tasks skill: ${input.tasksSkill}`] : [])
+    ...(input.tasksSkill ? [`- tasks skill: ${input.tasksSkill}`] : []),
+    ...(input.guidedBuild ? ['', guidedBuildSection(input.guidedBuild)] : [])
   ].join('\n')
 }

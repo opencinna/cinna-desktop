@@ -169,7 +169,7 @@ export function useUpdateChat() {
       updates
     }: {
       chatId: string
-      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; router?: ChatRouter }
+      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; router?: ChatRouter; guidedBuild?: boolean }
     }) => window.api.chat.update(chatId, updates),
     onSuccess: (_data, { chatId, updates }) => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })

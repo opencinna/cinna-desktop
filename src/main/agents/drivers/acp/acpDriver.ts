@@ -775,7 +775,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       // sentence naming the remedy instead of queueing behind a folder write to
       // be told.
       const plan = await beforeStart(input.signal, () => launcher
-        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) }))
+        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder, ...(input.guidedBuild !== undefined ? { guidedBuild: input.guidedBuild } : {}) } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) }))
         .catch((err: unknown) => {
           if (input.signal.aborted) return { error: 'The agent was stopped before its prompt started.' }
           logger.warn('a launcher failed to plan a turn', {
@@ -3190,6 +3190,11 @@ interface AskWorld {
   turn: AcpTurn
 }
 
+/** The adapter's Plan-mode review: `implement_plan` / `revise_plan` (codex-acp `PlanReviewReporter`). */
+export function isCodexPlanReview(launcherId: AcpLauncherId, params: Pick<RequestPermissionRequest, 'options'>): boolean {
+  return launcherId === 'codex' && params.options.some((option) => option.optionId === 'implement_plan')
+}
+
 /** Whether an ask is for a Cinna tool, in whichever spelling the engine uses. */
 export function isCinnaToolAsk(toolName: string | undefined, params: Pick<RequestPermissionRequest, 'toolCall'>, offers?: (name: string) => boolean): boolean {
   // The adapter's own name is authoritative; the title, which a model can
@@ -3255,6 +3260,15 @@ async function answerPermission(
   const chatOwned = typeof agent.driverConfig?.conductorChatId === 'string'
   const workspaceChat = chatOwned && agent.driverConfig?.conductorToolPolicy === 'workspace'
   if (chatOwned && !workspaceChat && !isCinnaToolAsk(toolName, params, ctx.offersCinnaTool)) return refused('not_allowed')
+  // Codex's Plan-mode review ("Implement this plan?") in a guided first build:
+  // approving it switches the session to Default and builds the agent in the
+  // guided chat, past the brief and Start building. The guided chat is in Plan
+  // mode only to ask, so the review is declined unseen; a person's own `/plan`
+  // outside a guided chat still gets the card.
+  if (input.guidedBuild === true && isCodexPlanReview(ctx.launcherId, params)) {
+    logger.info('a guided chat declined Codex’s plan review', { agentId: agent.id, chatId: input.chatId })
+    return selected('reject')
+  }
   // A question in a permission request's clothes (Antigravity's `ask_question`).
   const question = permissionAsQuestion(ctx.launcherId, params)
   if (question) return answerPermissionQuestion(deps, ctx, world, params, question)

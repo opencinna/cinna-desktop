@@ -49,6 +49,7 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
     commands: [],
     status: null,
     validation: { errors: [], warnings: [], infos: [] },
+    unbuilt: false,
     desktop: {
       localApiBaseUrl: null,
       hasAgentToken: false,

@@ -67,6 +67,15 @@ export interface RunInput {
    * assistant only (OpenCode). Absent, the context is already in `wireContent`.
    */
   contextBlock?: 'plain' | 'assistant'
+  /**
+   * This turn is a guided first build's: its chat is guided, the turn is the
+   * chat's root agent's, and that agent is still unbuilt right now
+   * (`runExecutionService.guidedBuildOf`, read fresh per turn). `false` in a
+   * chat that was guided and whose agent has since been built, so a session
+   * left in the guided setup is taken out of it. Absent on every other turn.
+   * The ACP driver hands it to its launcher's plan (`AcpLaunchContext.guidedBuild`).
+   */
+  guidedBuild?: boolean
   /** Cinna file ids to attach (A2A `metadata.cinna_file_ids`). */
   fileIds?: string[]
   /**

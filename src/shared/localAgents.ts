@@ -578,6 +578,14 @@ export interface LocalAgentDto {
   skills?: LocalAgentSkill[]
   status: LocalAgentStatusSummary | null
   validation: LocalAgentValidation
+  /**
+   * A kit agent that is still what the scaffold made — only the scaffold's
+   * scripts and skills, no credential slots, no schedules — and whose guided
+   * first build was neither done nor dismissed (`guidedBuild.isUnbuiltKitAgent`).
+   * Always false for a bare, shared or catalog agent. Its first chat may be a
+   * guided one.
+   */
+  unbuilt: boolean
   desktop: LocalAgentDesktopSummary
   /**
    * Stamps of the files the page can edit, keyed by agent-relative POSIX path.

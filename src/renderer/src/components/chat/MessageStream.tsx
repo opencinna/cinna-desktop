@@ -40,6 +40,8 @@ import { buildToolStepPreview, pairToolSteps, toolStepPreview } from '../../util
 import { NoticeBlock } from './NoticeBlock'
 import { SystemTurnBlock } from './SystemTurnBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
+import { BuildBriefCard } from './BuildBriefCard'
+import { BUILD_BRIEF_PROVIDER_NAME, BUILD_BRIEF_TOOL } from '../../../../shared/buildBrief'
 import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQuestion'
 import {
   isEngineRequestId,
@@ -867,6 +869,25 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     prevRef.current = { chatId, messageIds: messages.map((m) => m.id) }
   }, [chatId, messages])
 
+  // A guided build's brief card: only the latest brief, with nothing the user
+  // said after it, has controls. A live brief is the latest; a persisted one
+  // only while no live one follows it.
+  const activeBriefKey = useMemo((): string | null => {
+    const isBrief = (name?: string | null, provider?: string | null): boolean =>
+      name === BUILD_BRIEF_TOOL && provider === BUILD_BRIEF_PROVIDER_NAME
+    if (pendingUserMessage) return null
+    for (let i = streamingBlocks.length - 1; i >= 0; i--) {
+      const block = streamingBlocks[i]
+      if (block.type === 'tool_call' && isBrief(block.name, block.provider)) return block.status === 'error' ? null : `stream:${block.id}`
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message.role === 'user') return null
+      if (message.role === 'tool_call' && isBrief(message.toolName, message.toolProvider)) return message.toolError ? null : message.id
+    }
+    return null
+  }, [messages, streamingBlocks, pendingUserMessage])
+
   // One card per artifact: what the transcript already draws as a card.
   const shownArtifactIds = useMemo(() => {
     const ids = new Set<string>()
@@ -961,6 +982,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               continue
             }
             if (msg.role === 'tool_call') {
+              // A guided build's `build_brief_propose`: the brief card. A refused call keeps its plain row.
+              if (msg.toolName === BUILD_BRIEF_TOOL && msg.toolProvider === BUILD_BRIEF_PROVIDER_NAME && !msg.toolError) {
+                renderNodes.push({
+                  slot: 'plain',
+                  key: msg.id,
+                  node: (
+                    <>
+                      <BuildBriefCard chatId={chatId} agentId={rootAgentId} input={msg.toolInput as Record<string, unknown> | undefined}
+                        active={activeBriefKey === msg.id} />
+                      {footer}
+                    </>
+                  )
+                })
+                continue
+              }
               // An agent's `artifacts_publish`: the artifact's card, or what became of the request.
               if (msg.toolName === ARTIFACTS_PUBLISH_TOOL && msg.toolProvider === ARTIFACTS_PROVIDER_NAME) {
                 renderNodes.push({
@@ -1690,6 +1726,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     isStreaming={isStreaming && isLastBlock}
                   />
                 )
+              })
+              return
+            }
+            // A guided build's brief, live.
+            if (block.name === BUILD_BRIEF_TOOL && block.provider === BUILD_BRIEF_PROVIDER_NAME && block.status !== 'error') {
+              renderNodes.push({
+                slot: 'plain',
+                key: `stream-brief-${block.id}`,
+                node: <BuildBriefCard chatId={chatId} agentId={rootAgentId} input={block.input} active={activeBriefKey === `stream:${block.id}`} />
               })
               return
             }

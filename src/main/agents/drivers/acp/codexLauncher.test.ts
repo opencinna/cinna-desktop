@@ -42,6 +42,7 @@ describe('Codex ACP launcher', () => {
     expect(plan.spec.args).toEqual(['/app/codex-acp/dist/index.js'])
     expect(plan.spec.env).toMatchObject({ CODEX_PATH: '/usr/local/bin/codex', INITIAL_AGENT_MODE: 'workspace-write', ELECTRON_RUN_AS_NODE: '1' })
     expect(JSON.parse(plan.spec.env.CODEX_CONFIG)).toEqual({ developer_instructions: 'You are the folder agent.', model_reasoning_effort: 'medium' })
+    // No collaboration mode on an ordinary turn: a user's own `/plan` stays.
     expect(plan.setup).toEqual({ modeId: 'workspace-write' })
     expect(plan.init.clientCapabilities?.elicitation).toEqual({ form: {} })
   })
@@ -69,6 +70,32 @@ describe('Codex ACP launcher', () => {
     // The instructions travel in the environment, so the two kinds cannot
     // share a pooled process.
     expect(kit.spec.key).not.toBe(bare.spec.key)
+  })
+
+  it('asks in Plan collaboration mode for a guided first build, says Default once it ends, and nothing otherwise', async () => {
+    // Plan mode is where `request_user_input` is usable; Default answers it
+    // "unavailable in Default mode", so a guided interview could only ask in
+    // plain text. `session/load` keeps the mode a session was left in, so the
+    // guided chat's turns say Default once the agent is built. Every other
+    // turn says nothing, so a user's own `/plan` is not undone by the next
+    // message. Mutation: drop the guided branch and the interview cannot ask;
+    // drop the closed branch and a built agent's chat stays in Plan mode.
+    const launcher = createCodexLauncher(deps())
+    const guided = await launcher.plan({ ...kitContext, guidedBuild: true })
+    if (isRefusal(guided)) throw new Error(guided.error)
+    expect(guided.setup.configOptions).toEqual([{ configId: 'collaboration_mode', value: 'plan' }])
+    const closed = await launcher.plan({ ...kitContext, guidedBuild: false })
+    if (isRefusal(closed)) throw new Error(closed.error)
+    expect(closed.setup.configOptions).toEqual([{ configId: 'collaboration_mode', value: 'default' }])
+    const plain = await launcher.plan(kitContext)
+    if (isRefusal(plain)) throw new Error(plain.error)
+    expect(plain.setup.configOptions).toBeUndefined()
+    // The mode is the session's, not the process's: the agent's other chats
+    // share the pooled process, so guidance must neither replace it nor be
+    // carried into it.
+    expect(guided.spec.key).toBe(plain.spec.key)
+    expect(guided.spec.env).toEqual(plain.spec.env)
+    expect(guided.setup.modeId).toBe(plain.setup.modeId)
   })
 
   it('asks for background tasks only: native subagent sessions would hide the spawn call', async () => {

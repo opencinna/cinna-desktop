@@ -29,6 +29,9 @@ beforeAll(() => {
   file(join(folder, 'scripts', 'load_time_keys.py'))
   file(join(folder, 'credentials', 'x'))
   file(join(folder, 'notes', 'a.txt'))
+  file(join(folder, '.cinna', 'antigravity', 'antigravity-acp', 'brain', 'ses1', 'mcp', 'cinna', 'build_brief_propose.json'))
+  file(join(folder, '.cinna', 'antigravity', 'antigravity-acp', 'brain', 'ses1', 'task.md'))
+  file(join(folder, '.cinna', 'config', 'hooks.json'))
   file(join(pinned, 'scripts', 'run.py'))
   file(join(base, 'outside', 'evil.py'))
   symlinkSync(join(base, 'outside'), join(folder, 'linked'))
@@ -72,6 +75,55 @@ describe('ownCommandAllowed', () => {
     const denied: OwnCommandFs = { ...nodeOwnCommandFs, realpath: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) } }
     expect(allowed('ls', folder, denied)).toBe(false)
     expect(ownCommandAllowed({ folder: 'agent', scriptRoots: [] }, folder, 'ls')).toBe(false)
+  })
+})
+
+describe('the Antigravity home’s MCP tool schemas', () => {
+  // The agent lists them to learn a Cinna tool's shape; an ask there was a
+  // new user's first sight of a guided build. Mutation: drop the exception and
+  // the first two ask; widen it to `.cinna/` and the last two run unasked.
+  const MCP = '.cinna/antigravity/antigravity-acp/brain/ses1/mcp/cinna'
+  it('may be listed and read', () => {
+    expect(allowed(`ls -la ${MCP}/`)).toBe(true)
+    expect(allowed(`cat ${MCP}/build_brief_propose.json`)).toBe(true)
+  })
+  it('opens nothing else in the home, and no write', () => {
+    expect(allowed('cat .cinna/antigravity/antigravity-acp/brain/ses1/task.md')).toBe(false)
+    expect(allowed('cat .cinna/config/hooks.json')).toBe(false)
+    expect(allowed(`rm ${MCP}/build_brief_propose.json`)).toBe(false)
+  })
+})
+
+describe('the workshop kit', () => {
+  // A building agent reads the kit's guides (`../../.cinna-kit` from its
+  // folder) and runs its validator. Mutation: drop the kit from the policy and
+  // every line in the first test asks; widen it and the second test runs.
+  let root: string
+  let agent: string
+  let kitPolicy: OwnCommandPolicy
+  beforeAll(() => {
+    root = join(base, 'workshop')
+    agent = join(root, 'Local', 'news')
+    file(join(agent, 'scripts', 'run.py'))
+    file(join(root, '.cinna-kit', 'guides', '05-schedules.md'))
+    file(join(root, '.cinna-kit', 'tools', 'kit.py'))
+    file(join(root, '.cinna-kit', 'tools', 'other.py'))
+    kitPolicy = { folder: agent, scriptRoots: [], workshopKit: join(root, '.cinna-kit') }
+  })
+  const kitAllowed = (line: string): boolean => ownCommandAllowed(kitPolicy, agent, line)
+
+  it('reads its guides and runs its validator', () => {
+    expect(kitAllowed('cat ../../.cinna-kit/guides/05-schedules.md')).toBe(true)
+    expect(kitAllowed('ls -la ../../.cinna-kit/guides/')).toBe(true)
+    expect(kitAllowed('uv run ../../.cinna-kit/tools/kit.py validate .')).toBe(true)
+  })
+
+  it('runs nothing else there, and reads it only when the policy names it', () => {
+    expect(kitAllowed('uv run ../../.cinna-kit/tools/kit.py refresh')).toBe(false)
+    expect(kitAllowed('uv run ../../.cinna-kit/tools/other.py validate')).toBe(false)
+    expect(kitAllowed('rm ../../.cinna-kit/guides/05-schedules.md')).toBe(false)
+    expect(kitAllowed('grep -r schedules ../../.cinna-kit')).toBe(false)
+    expect(ownCommandAllowed({ folder: agent, scriptRoots: [] }, agent, 'cat ../../.cinna-kit/guides/05-schedules.md')).toBe(false)
   })
 })
 

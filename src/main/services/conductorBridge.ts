@@ -158,6 +158,15 @@ async function providers(entry: Entry): Promise<ToolProvider[]> {
     const artifacts = artifactToolProviderFor(entry.binding.artifacts)
     if (artifacts) result.push(artifacts)
   }
+  // A guided first build's brief: the folder agent's own session, in a chat main
+  // marked guided, while that agent is still unbuilt right now (read fresh).
+  if (entry.binding?.artifacts && chat.guidedBuild && chat.agentId === entry.agent.id) {
+    const { localAgentService } = await import('./localAgents/localAgentService')
+    if (localAgentService.guidedBuildOpen(entry.ownerId, entry.agent.id)) {
+      const { BuildBriefToolProvider } = await import('./localAgents/buildBriefToolProvider')
+      result.push(new BuildBriefToolProvider())
+    }
+  }
   result.push(...connectedMcp(new Set([...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId), ...addons])))
   const names = new Set(result.flatMap((provider) => provider.getTools().map((tool) => tool.name)))
   if (!controls && chat.router === 'coordinator') result.push(...buildAgentToolProviders(entry.chatId, entry.scope.settingsUserId,

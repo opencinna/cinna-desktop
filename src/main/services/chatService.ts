@@ -30,6 +30,9 @@ import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
 import { buildChatListSummaries } from './chatListSummary'
+import { appSettingsRepo } from '../db/appSettings'
+import { localAgentService } from './localAgents/localAgentService'
+import { decideGuidedChat } from './localAgents/guidedBuild'
 
 const logger = createLogger('chat')
 
@@ -145,6 +148,21 @@ function settleNewChatOwner(profileUserId: string, chat: ChatRow, next: Pick<Cha
   return { ...chat, userId: owner }
 }
 
+/**
+ * The bound agent as the guided-build decision needs it: a local folder agent
+ * read fresh from its folder, or null for any other agent (or one that no
+ * longer resolves).
+ */
+function guidedAgentFor(agentId: string | null): { unbuilt: boolean } | null {
+  if (!agentId) return null
+  try {
+    // Refuses any id that is not a folder agent's: that is none.
+    return { unbuilt: localAgentService.get(getSettingsScopeUserId(), agentId).unbuilt }
+  } catch {
+    return null
+  }
+}
+
 export const chatService = {
   list(userId: string): (ChatRow & { activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null })[] {
     const owners = listOwners(userId)
@@ -245,7 +263,16 @@ export const chatService = {
     logger.info('trash emptied', { removed })
   },
 
-  update(userId: string, chatId: string, updates: ChatMetaUpdate): void {
+  /**
+   * `guidedBuild` is a request, never a value: the row is marked guided only
+   * when {@link decideGuidedChat} agrees, once, while the chat is still empty
+   * and is being bound to its one agent. Decided here rather than at
+   * `chat:create`, because the new chat is bound only by this update.
+   */
+  update(userId: string, chatId: string, request: ChatMetaUpdate & { guidedBuild?: unknown }): void {
+    // Stripped whatever it holds: the column is main's to write.
+    const { guidedBuild: guidedRequested, ...metaUpdates } = request
+    let updates: ChatMetaUpdate = metaUpdates
     let chat = requireOwnedChat(userId, chatId)
     if (taskRunnersByChat.has(chatId) && Object.keys(updates).some((key) => key !== 'title')) {
       throw new ChatError('not_configured', 'Stop the autonomous task before changing its model or routing.')
@@ -280,6 +307,23 @@ export const chatService = {
     }
     const ok = chatRepo.updateMeta(owner, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
+    if (guidedRequested === true) {
+      const bound = { ...chat, ...updates }
+      const guided = decideGuidedChat({
+        requested: true,
+        settingOn: appSettingsRepo.get('guidedFirstBuild') === true,
+        alreadyGuided: chat.guidedBuild === true,
+        hasContent: chatRepo.hasContent(chatId),
+        router: routerOf(bound),
+        agentId: bound.agentId ?? null,
+        attachedAgents: chatOnDemandAgentRepo.listAgentIds(chatId).length,
+        agent: guidedAgentFor(bound.agentId ?? null)
+      })
+      if (guided) {
+        chatRepo.setGuidedBuild(owner, chatId)
+        logger.info('chat starts a guided first build', { chatId, agentId: bound.agentId })
+      }
+    }
     // Who answers here changed: the old sessions are no longer this chat's.
     if (updates.router !== undefined && updates.router !== routerOf(chat) && updates.agentId !== chat.agentId && !(updates.agentId === undefined && next.agentId === chat.agentId)) releaseChatSessions(chatId)
     else if (updates.agentId !== undefined && chat.agentId && updates.agentId !== chat.agentId) releaseChatSessions(chatId, chat.agentId)

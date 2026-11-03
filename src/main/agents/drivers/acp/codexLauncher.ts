@@ -182,8 +182,17 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
             clientInfo: { name: 'cinna-desktop', version: '1' } },
           session: { mcpServers: [] },
           sessionToolsFixed: true,
-          // Enforce on both new and loaded sessions, before any prompt.
-          setup: { modeId }
+          // Enforce on both new and loaded sessions, before any prompt. A
+          // guided first build asks in Plan collaboration mode, the one where
+          // `request_user_input` is usable (it is answered "unavailable in
+          // Default mode" otherwise, `codex.question.unavailable-in-default-mode`).
+          // `session/load` keeps the mode a session was left in
+          // (`codex.session.load`), so once that chat's agent is built its
+          // turns set Default again — every turn of that chat, so a `/plan`
+          // typed there later lasts one message. A chat that was never guided
+          // says nothing, and a user's own `/plan` lasts as Codex means it to. Never in the `key`:
+          // the pooled process is shared by the agent's chats.
+          setup: { modeId, ...(ctx.guidedBuild === undefined ? {} : { configOptions: [{ configId: 'collaboration_mode', value: ctx.guidedBuild ? 'plan' : 'default' }] }) }
         }
       } catch {
         // Errors from CLI/config readers can contain credentials or instructions.

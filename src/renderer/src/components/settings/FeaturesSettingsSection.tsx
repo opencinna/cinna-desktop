@@ -82,6 +82,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const showAgentSidebarSections = settings?.showAgentSidebarSections !== false
   const showLocalDataInAllProfiles = settings?.showLocalDataInAllProfiles !== false
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
+  const guidedFirstBuild = settings?.guidedFirstBuild !== false
 
   // Hint retirement counters live in localStorage (renderer-local UI state),
   // not in `app_settings` — so resetting them is a store call, not a mutation.
@@ -184,6 +185,18 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                 ? 'New chats will get a generated title from your first message'
                 : 'Chats will keep the default "New Chat" name'
             }
+          />
+          <SettingsToggleRow
+            id="feature-guided-first-build"
+            label="Guide the first build of new agents"
+            description="A blank local agent’s first chat asks a few questions about its job and suggests how to set it up, then starts building when you say so. Off: its first chat starts like any other, and it tries what you ask straight away."
+            checked={guidedFirstBuild}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'guidedFirstBuild', value: !guidedFirstBuild })
+            }}
+            title={guidedFirstBuild ? 'New agents start with a guided first build' : 'New agents start with an ordinary chat'}
           />
           <SettingsToggleRow
             id="feature-prioritize-account-defaults"

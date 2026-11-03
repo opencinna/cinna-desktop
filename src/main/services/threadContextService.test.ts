@@ -328,6 +328,22 @@ describe('buildTurnHeader', () => {
     ])
   })
 
+  it('appends the guided-build section after the facts, only for a guided chat', () => {
+    // Mutation: drop the section, or put it in the system prompt instead.
+    expect(buildTurnHeader(base)).not.toContain('Guided first build:')
+    const header = buildTurnHeader({ ...base, guidedBuild: { name: 'Mail helper', description: 'Sorts my inbox' } })
+    const lines = header.split('\n')
+    expect(lines.slice(0, 4)).toEqual([
+      'Cinna task context (not part of the conversation):',
+      '- here: Cinna Desktop, folder agent `folder:itan` · chat `chat-1`',
+      '- current task: none',
+      ''
+    ])
+    expect(lines[4]).toBe('Guided first build:')
+    expect(header).toContain('- At creation the person described it as: "Sorts my inbox"')
+    expect(lines.at(-1)).toContain('`build_brief_propose`')
+  })
+
   it('says `report required: no` for a task nobody waits on', () => {
     const header = buildTurnHeader({ ...base, task: { ref: 't', title: 'Tidy', reportRequired: false } })
     expect(header).toContain('- current task: `t` "Tidy" (report required: no)')
