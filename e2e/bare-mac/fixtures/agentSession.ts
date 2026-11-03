@@ -35,7 +35,8 @@ export async function createAgentAndSend(vm: BareVm, message: string): Promise<v
   await expect(form).toBeHidden()
 
   vm.step('send the first message')
-  const box = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+  // A fresh scaffold is unbuilt, so on a first install its composer is the guided-build one.
+  const box = page.getByRole('combobox', { name: 'Describe what Probe should do for you…', exact: true })
   await box.fill(message)
   await box.press('Enter')
 }

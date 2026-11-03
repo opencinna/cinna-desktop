@@ -16,16 +16,34 @@ export async function addAgentRoot(cinna: CinnaApp, name = 'agents-root'): Promi
   return added.root
 }
 
-/** Scaffold a folder agent into `root` from the bundled kit contract. */
+/**
+ * Scaffold a folder agent into `root` from the bundled kit contract.
+ *
+ * A fresh scaffold is `unbuilt`, and with `guidedFirstBuild` on (the default)
+ * its new-chat composer shows the guided-build invitation instead of the
+ * example prompts, under a different placeholder, and its first chat is
+ * guided (an extra turn-header section). Every spec that is not about that
+ * wants an ordinary agent, so this marks the guided build dismissed — the
+ * marker Skip guidance writes, under `userData` — unless `unbuilt: true`
+ * keeps the scaffold as a person would first see it
+ * (`guided-first-build.spec.ts`).
+ */
 export async function createFolderAgent(
   cinna: CinnaApp,
   root: AgentRootDto,
   name: string,
-  description = `${name}, scaffolded by the E2E suite.`
+  description = `${name}, scaffolded by the E2E suite.`,
+  options: { unbuilt?: boolean } = {}
 ): Promise<LocalAgentDto> {
   return cinna.page.evaluate(
-    (input) => window.api.localAgents.create(input),
-    { rootId: root.id, name, description }
+    async ({ input, unbuilt }) => {
+      const agent = await window.api.localAgents.create(input)
+      if (unbuilt) return agent
+      const done = await window.api.localAgents.markGuidedBuildDone(agent.id)
+      if (!done.ok) throw new Error(`could not dismiss the guided build: ${done.message}`)
+      return done.value
+    },
+    { input: { rootId: root.id, name, description }, unbuilt: options.unbuilt === true }
   )
 }
 

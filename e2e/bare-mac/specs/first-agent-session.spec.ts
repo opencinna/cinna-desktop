@@ -37,7 +37,8 @@ test('first Claude agent message downloads Claude Code and asks for a login', as
   vm.step('send the first message')
   // A new agent opens on its own page, composer already addressed to it.
   await expect(page.getByText(/^Claude( Code| Agent)?$/).first()).toBeVisible()
-  const box = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+  // A fresh scaffold is unbuilt, so on a first install its composer is the guided-build one.
+  const box = page.getByRole('combobox', { name: 'Describe what Probe should do for you…', exact: true })
   await box.fill('hi')
   await box.press('Enter')
 

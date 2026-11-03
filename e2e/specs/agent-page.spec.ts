@@ -58,7 +58,11 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     await expect(form).toBeHidden()
     await expect(page.getByRole('dialog', { name: 'Build it with' })).toHaveCount(0)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(NAME)
-    await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toBeVisible()
+    // A fresh scaffold is unbuilt, so its composer is the guided build's
+    // (`guided-first-build.spec.ts`) from the first paint, never "Type a
+    // message..." first: the create writes the agent into the folder list.
+    await expect(page.getByRole('combobox', { name: `Describe what ${NAME} should do for you…`, exact: true })).toBeVisible()
+    await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
   })
 
   let folder = ''
