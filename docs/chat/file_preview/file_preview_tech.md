@@ -327,7 +327,7 @@
 | `html-preview:open` | renderer → main | `HtmlPreviewOpenInput` | `{ success: true, token, url }` / `{ success: false, error, code? }`. Never asks for consent |
 | `html-preview:release` | renderer → main | `token: string` | `{ success: true }` |
 
-The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewServer.handle` through `session.protocol.handle`, and file bytes never cross to the renderer.
+The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewServer.handle` through `session.protocol.handle`, and file bytes never cross to the renderer. The scheme is shared: `handlePreviewRequest` (`host/desktop/htmlPreview.ts`) routes by host — `dash-<H>` to the dashboards' frame server, `art-…` to the artifact preview, anything else here. A dashboard tile's frame is **not** this preview's: it has its own sandbox (`DASHBOARD_FRAME_SANDBOX`, without `allow-top-navigation-by-user-activation`), a CSP scoped to its tile's path, and `previewFrameNavigation` keeps a subframe of a `dash-` document inside its own `<host>/<tile>/` prefix (it is checked before the rules below). See [Dashboards (tech)](../../ui/dashboards/dashboards_tech.md#the-frame-host).
 
 ## Services & Key Methods
 

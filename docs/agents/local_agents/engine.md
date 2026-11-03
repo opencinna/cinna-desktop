@@ -428,6 +428,7 @@ The folder already contains everything the agent needs to know; it is just sprea
 6. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none
 7. The desktop context block
 8. The **Cinna tasks** stub: the two rules every folder agent must not miss (report before ending a turn on an assigned task; never wait inside a turn), its own agent id, and one line saying how to open the `cinna-tasks` skill — by name on OpenCode and Claude, by its absolute `SKILL.md` path on Codex. The protocol itself lives in the skill, not here ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)). Bare prompts end with the same section
+9. For a kit agent, the **Cinna dashboards** section: open (or, on Codex and a native Antigravity folder, read by absolute path) the `cinna-dashboards` skill before building under `dashboards/`, check each component with the bundled `check_component.py` — by its absolute path in the app's bundle, since the workshop's `.cinna-kit/` may be a downloaded older copy — and the reference prefix this agent prints (`cinna://component/bundle:<bundle id>/` when the manifest or the shared-agent record has a bundle id, else `…/id:<manifest id>/`). No profile gate, unlike artifacts; left out when the manifest has neither id. See [Dashboards](../../ui/dashboards/dashboards.md)
 
 Four rules shape it:
 

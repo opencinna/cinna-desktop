@@ -98,7 +98,7 @@ All `ipcHandle`, all behind `userActivation.requireActivated()`, all returning d
 ## Configuration
 
 - No setting. Support and limits are the instance's. The dependency is the discovery document's `artifacts` (integer) and `instance_name`, and `GET /api/v1/artifacts/capabilities`.
-- Kit contract 1.12.0, and 1.13.0 for the `artifacts/` role (`protocols/artifacts.schema.json`, `skills/cinna-artifacts/`, `templates/artifact-sqlite-dashboard/`) — see [Kit Contract (tech)](../../agents/local_agents/kit_contract_tech.md).
+- Kit contract 1.12.0, and 1.13.0 for the `artifacts/` role (`protocols/artifacts.schema.json`, `skills/cinna-artifacts/`, `templates/artifact-sqlite-report/`, named `artifact-sqlite-dashboard/` before 1.19.0 — a live, refreshable view is a [dashboard component](../../ui/dashboards/dashboards.md), not an artifact) — see [Kit Contract (tech)](../../agents/local_agents/kit_contract_tech.md).
 
 ## Security
 

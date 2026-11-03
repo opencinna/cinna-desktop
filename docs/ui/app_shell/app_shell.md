@@ -12,7 +12,8 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and local-development status, update status and Interface controls on the right.
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
-- **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes and folder/external agent pages.
+- **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes, dashboards and folder/external agent pages.
+- **Dashboards tab** — The fifth sidebar tab (`Chats | Jobs | Notes | Agents | Dashboards`). Like Chats it comes back to the dashboard that was open, and the list opens the first one itself when none is: a dashboard is a screen to look at, not a folder to choose from. The main area shows the `dashboard` view. See [Dashboards](../dashboards/dashboards.md).
 - **Window State** — The main window's normal (un-maximized) size and position plus whether it was maximized, kept by the main process in a small file in the app's data folder and reapplied whenever the main window is created. Belongs to the machine, not to a profile.
 
 ## User Stories / Flows
@@ -135,10 +136,11 @@ App
     │     ├── New Chat button       → useStartNewChat()
     │     └── right-aligned group
     │           ├── Update-ready badge → only while the sidebar is hidden and an update is downloaded
-    │           └── JobOriginBanner    → "From job" pill
+    │           ├── JobOriginBanner    → "From job" pill
+    │           └── DashboardOriginPill → "From dashboard" pill (a chat a dashboard's panel started)
     └── flex row
         ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge band → peek)
-        │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content
+        │     ├── Settings menu OR Chats / Jobs / Notes / Agents / Dashboards tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)
         │           ├── Local-dev/update controls

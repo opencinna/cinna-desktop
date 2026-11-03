@@ -17,7 +17,7 @@
 - `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; `SidebarButton` (toggle, or dock in hover docking, with the right-click Sidebar docking menu) + Tasks + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
 - `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; in hover docking adds `is-floating` and portals the edge band (see [Sidebar docking](#sidebar-docking)); renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
-- `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch`, `useReadChatResult` and `useReadJobResult` once above the individual workspaces. Only activeView=chat supplies a visible chat ID, and only activeView=job-detail a visible job ID, for foreground result acknowledgement; [status details](../../chat/session_status/session_status_tech.md#renderer-components).
+- `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note, dashboard (`DashboardView`) and local/external agent pages; mounts `useLiveRunWatch`, `useReadChatResult` and `useReadJobResult` once above the individual workspaces. Only activeView=chat supplies a visible chat ID, and only activeView=job-detail a visible job ID, for foreground result acknowledgement; [status details](../../chat/session_status/session_status_tech.md#renderer-components).
 
 ### Renderer — Header and Footer Sub-components
 
@@ -59,8 +59,8 @@
 | `sidebarOpen` | Fixed docking's open state; hover docking neither reads nor writes it. Persisted as `cinna-sidebar-open`: read synchronously in the store initializer (only `0` collapses; missing or anything else is open) and written by `toggleSidebar` as `1`/`0`, and as `1` by `setSidebarDocking('fixed')`. Direct `setState` calls — tests only — do not write it |
 | `sidebarDocking` | `'fixed' \| 'hover'`, persisted as `cinna-sidebar-docking` (only `hover` means hover; anything else is fixed). `setSidebarDocking` writes the key and clears `sidebarPeek`; `'fixed'` also sets `sidebarOpen: true`, writing `cinna-sidebar-open` **before** the docking key so another window reacting to the docking event never reads the old closed state beside it. The `storage` listener (`syncAppearance`) applies a changed mode the same way, and a null key rereads it |
 | `sidebarPeek` | Hover docking only: floating on screen now. Not persisted; always starts `false`. Set by `useSidebarHoverDock` through `setSidebarPeek`, and by `revealSidebar` |
-| `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent or external-agent |
-| `sidebarTab` | Chats / Jobs / Notes / Agents, retained when opening a cross-tab view such as Inbox |
+| `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent, external-agent or dashboard |
+| `sidebarTab` | Chats / Jobs / Notes / Agents / Dashboards, retained when opening a cross-tab view such as Inbox |
 | `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
 | `agentPageMode` | `chat` or `settings`, initially `chat`; row selection sets chat mode explicitly |
 | `pendingAgentId` | One-shot new-chat preselection consumed only by the non-embedded workspace |
