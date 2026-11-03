@@ -245,6 +245,9 @@ describe('joinTurnContext', () => {
     expect(joinTurnContext('HEADER', null)).toBe('HEADER')
     expect(joinTurnContext(null, 'PACKET')).toBe('PACKET')
     expect(joinTurnContext(null, null)).toBeNull()
+    // The dashboard context sits beside the header, before the packet.
+    expect(joinTurnContext('HEADER', 'PACKET', 'DASHBOARD')).toBe('HEADER\n\nDASHBOARD\n\nPACKET')
+    expect(joinTurnContext(null, null, 'DASHBOARD')).toBe('DASHBOARD')
   })
 })
 

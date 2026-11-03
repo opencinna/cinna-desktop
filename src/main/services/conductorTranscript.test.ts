@@ -40,3 +40,21 @@ describe('fresh session transcript', () => {
     expect(await replayTranscript('chat', 'current', connection, 'profile', 'root', join(cwd, 'app-data', 'uploads'))).toContainEqual({ type: 'image', data: Buffer.from('image').toString('base64'), mimeType: 'image/png' })
   })
 })
+describe('a new session and the dashboard context (D3)', () => {
+  it('forgets what the old session was sent, and adds the turn’s section it left out after the transcript', async () => {
+    const { dashboardContextTracker } = await import('./dashboards/dashboardContext')
+    dashboardContextTracker.forTurn('dash-chat', 'SECTION').delivered()
+    // This turn's section was left out: the old session already had it.
+    expect(dashboardContextTracker.forTurn('dash-chat', 'SECTION').text).toBeNull()
+    fixtures.messages = [{ id: 'one', role: 'user', content: 'earlier' }, { id: 'current', role: 'user', content: 'now' }]
+    const blocks = await replayTranscript('dash-chat', 'current', connection, 'profile', 'root', null)
+    expect(blocks.at(-1)).toEqual({ type: 'text', text: 'SECTION' })
+    expect(blocks[0]).toEqual({ type: 'text', text: '<prior_chat_transcript>' })
+    // Mutation: drop the reset and a replacement session never sees the dashboard again until it changes.
+    expect(dashboardContextTracker.lastDeliveredHash('dash-chat')).toBeNull()
+    // A participant's new session is not the chat's: nothing is reset.
+    dashboardContextTracker.forTurn('dash-chat', 'SECTION').delivered()
+    await replayTranscript('dash-chat', 'current', connection, 'profile', 'participant', null)
+    expect(dashboardContextTracker.lastDeliveredHash('dash-chat')).not.toBeNull()
+  })
+})

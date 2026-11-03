@@ -304,6 +304,48 @@ describe('runQueueService.submit', () => {
     expect(start).toHaveBeenCalledWith(SCOPE, merged, { observe: expect.any(Function), sent: merged })
   })
 
+  it('drains the latest dashboard context with the messages, and never shows it in the queue', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const older = { dashboardId: 'd1', dashboard: 'Sales', focused: { tileId: 't1', component: 'deals', skill: null, title: 'Deals', params: {}, selection: [], dataAge: null, summary: 'old' }, alsoYours: [], otherTiles: [] }
+    const newer = { ...older, focused: { ...older.focused, summary: 'new' } }
+    await service.submit(SCOPE, payload('first', { dashboardContext: older }), options)
+    await service.submit(SCOPE, payload('second', { dashboardContext: newer }), options)
+    await service.submit(SCOPE, payload('third'), options)
+    expect(service.list(SCOPE, CHAT).items.every((item) => !('dashboardContext' in item))).toBe(true)
+    active.end('completed')
+    await flush()
+    expect(start).toHaveBeenCalledWith(SCOPE, expect.objectContaining({ content: 'first\n\nsecond\n\nthird', dashboardContext: newer }), expect.anything())
+  })
+
+  it('never steers a message carrying dashboard context into the running turn; the drain delivers it', async () => {
+    const service = createRunQueueService()
+    const active = running(async () => 'injected')
+    const context = { dashboardId: 'd1', dashboard: 'Sales', focused: { tileId: 't1', component: 'deals', skill: null, title: 'Deals', params: {}, selection: [], dataAge: null, summary: 's' }, alsoYours: [], otherTiles: [] }
+    expect(await service.submit(SCOPE, payload('why?', { dashboardContext: context }), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    expect(active.steer).not.toHaveBeenCalled()
+    // A re-offer mid-turn does not hand it over either.
+    active.offer()
+    await flush()
+    expect(active.steer).not.toHaveBeenCalled()
+    active.end('completed')
+    await flush()
+    expect(start).toHaveBeenCalledWith(SCOPE, expect.objectContaining({ content: 'why?', dashboardContext: context }), expect.anything())
+  })
+
+  it('a re-offer hands over plain messages only up to the first one with dashboard context', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const context = { dashboardId: 'd1', dashboard: 'Sales', focused: { tileId: 't1', component: 'deals', skill: null, title: 'Deals', params: {}, selection: [], dataAge: null, summary: 's' }, alsoYours: [], otherTiles: [] }
+    await service.submit(SCOPE, payload('plain'), options)
+    await service.submit(SCOPE, payload('with context', { dashboardContext: context }), options)
+    active.steer.mockImplementation(async () => 'injected')
+    active.offer()
+    await flush()
+    expect(active.steer.mock.calls.map((call) => call[0])).toEqual(['plain', 'plain'])
+    expect(service.list(SCOPE, CHAT).items.map((item) => item.content)).toEqual(['with context'])
+  })
+
   it('keeps the files of a drain whose start is refused, held', async () => {
     const service = createRunQueueService()
     const active = running()

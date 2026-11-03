@@ -16,6 +16,7 @@ import { TasksView } from '../tasks/TasksView'
 import { TaskView } from '../tasks/TaskView'
 import { ExternalAgentPage } from '../agents/ExternalAgentPage'
 import { LocalAgentPage } from '../agents/local/LocalAgentPage'
+import { DashboardView } from '../dashboards/DashboardView'
 
 export function MainArea(): React.JSX.Element {
   const activeView = useUIStore((s) => s.activeView)
@@ -37,6 +38,7 @@ export function MainArea(): React.JSX.Element {
     case 'external-agent': return <ExternalAgentPage />
     case 'local-development': return <LocalDevelopmentPage />
     case 'local-agent': return <LocalAgentPage />
+    case 'dashboard': return <DashboardView />
     default: return (
       <ChatTransition chatId={activeChatId} enabled={extraUIAnimation}>
         <ChatWorkspace />

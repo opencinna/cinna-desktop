@@ -17,6 +17,7 @@ import { useCatalogActions } from '../../hooks/useCatalogActions'
 import { useCatalogEntries } from '../../hooks/useCatalogEntries'
 import { useSettleGuard } from '../../hooks/useSettleGuard'
 import { useAuthStore } from '../../stores/auth.store'
+import { useUIStore } from '../../stores/ui.store'
 import { CATALOG_TEXT, type CatalogFilter } from '../../utils/catalogItems'
 import { CatalogItemDetailView } from '../agents/CatalogItemViews'
 import {
@@ -53,7 +54,14 @@ function CatalogSettingsList(): React.JSX.Element {
   const actions = useCatalogActions({ onLanded: () => undefined })
   const [filter, setFilter] = useState<CatalogFilter>('all')
   const [query, setQuery] = useState('')
-  const [selectedUuid, setSelectedUuid] = useState<string | null>(null)
+  // Another surface may have asked for one item (a component card's bundle): open on its detail.
+  const [selectedUuid, setSelectedUuid] = useState<string | null>(() => useUIStore.getState().catalogItemRequest)
+  const catalogItemRequest = useUIStore((s) => s.catalogItemRequest)
+  useEffect(() => {
+    if (catalogItemRequest === null) return
+    setSelectedUuid(catalogItemRequest)
+    useUIStore.getState().setCatalogItemRequest(null)
+  }, [catalogItemRequest])
   // The detail's actions open under the pointer that clicked the tile.
   const detailSettled = useSettleGuard(selectedUuid)
   const { shown, inFilter, selected } = useFilteredCatalog(views, filter, query, selectedUuid)

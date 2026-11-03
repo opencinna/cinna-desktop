@@ -183,12 +183,14 @@ export function isSlashCommand(userContent: string): boolean {
 }
 
 /**
- * A turn's wire-only context — the turn header, then the catch-up packet — as
- * one text, or null when there is neither. It travels beside the user's text
- * (`RunInput.turnContext`), never inside it, so each driver can place it.
+ * A turn's wire-only context — the turn header, the dashboard context section
+ * (`services/dashboards/dashboardContext.ts`, a dashboard panel's message
+ * only), then the catch-up packet — as one text, or null when there is none.
+ * It travels beside the user's text (`RunInput.turnContext`), never inside it,
+ * so each driver can place it.
  */
-export function joinTurnContext(header: string | null, packet: string | null): string | null {
-  return [header, packet].filter((part): part is string => !!part).join('\n\n') || null
+export function joinTurnContext(header: string | null, packet: string | null, dashboardContext: string | null = null): string | null {
+  return [header, dashboardContext, packet].filter((part): part is string => !!part).join('\n\n') || null
 }
 
 /**

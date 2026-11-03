@@ -1,5 +1,6 @@
 import { HTML_PREVIEW_SCHEME } from '../../services/htmlPreview/htmlPreviewServer'
 import { previewKindFor } from '../../../shared/filePreview'
+import { DASHBOARD_FRAME_HOST_PREFIX } from '../../../shared/htmlPreview'
 
 /**
  * The main-process rules that keep a previewed HTML page inside its frame.
@@ -100,6 +101,10 @@ export interface FrameNavigation {
 export function previewFrameNavigation(nav: FrameNavigation): FrameNavigationVerdict {
   if (nav.isMainFrame) return 'allow'
   const url = nav.url
+  // A dashboard tile stays inside its own path on the shared host: without
+  // this, a page could load another tile's (or another preview's) URL.
+  const tilePrefix = dashboardFramePrefix(nav.frameUrl)
+  if (tilePrefix !== null) return dashboardFramePrefix(url) === tilePrefix && pathUnder(url, tilePrefix) ? 'allow' : 'block'
   if (isPreviewUrl(url)) return 'allow'
   if (url === 'about:blank' || url === 'about:srcdoc') return 'allow'
   const isPreviewDocument = isPreviewUrl(nav.frameUrl)
@@ -109,6 +114,32 @@ export function previewFrameNavigation(nav: FrameNavigation): FrameNavigationVer
   const scheme = schemeOf(url)
   if (scheme === 'data:' || scheme === 'blob:') return 'allow'
   return 'block'
+}
+
+/**
+ * `cinna-preview://dash-<H>/<tile>/` for a URL inside a dashboard frame's
+ * path, else null. Parsed, so `..` and encodings are normalized first.
+ */
+export function dashboardFramePrefix(url: string | undefined): string | null {
+  if (!isPreviewUrl(url)) return null
+  let parsed: URL
+  try {
+    parsed = new URL(url as string)
+  } catch {
+    return null
+  }
+  if (!parsed.hostname.startsWith(DASHBOARD_FRAME_HOST_PREFIX)) return null
+  const tile = parsed.pathname.split('/')[1]
+  if (!tile) return null
+  return `${PREVIEW_PREFIX}//${parsed.hostname}/${tile}/`
+}
+
+function pathUnder(url: string, prefix: string): boolean {
+  try {
+    return new URL(url).href.startsWith(prefix)
+  } catch {
+    return false
+  }
 }
 
 export interface PermissionRequester {

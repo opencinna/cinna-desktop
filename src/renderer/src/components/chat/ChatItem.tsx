@@ -14,6 +14,7 @@ import { hasChatSummaryContent } from '../../utils/chatSummaryFormat'
 import { ChatRowMenu } from './ChatRowMenu'
 import { useChatsDrag } from './chatDragContext'
 import { unreadResultIndicator } from '../ui/runResultIndicators'
+import { DashboardOriginRowMark } from './DashboardOriginPill'
 
 /**
  * Closes whichever row's tooltip is open. One at a time: a closing delay on
@@ -34,6 +35,8 @@ interface ChatItemProps {
     activeRunId?: string | null
     lastRunResult?: ChatRunResult | null
     pinnedRank?: number | null
+    /** The dashboard whose panel started this chat: a "From dashboard" mark on the row. */
+    originDashboardId?: string | null
   }
   /** From `useChatSummaries`, not the polled list row. Not loaded yet: no tooltip. */
   summary?: ChatListSummary
@@ -316,6 +319,7 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
           {renameChat.isPending && renameChat.variables ? renameChat.variables.title.trim() : chat.title}
         </span>
       )}
+      {!renaming && <DashboardOriginRowMark dashboardId={chat.originDashboardId} />}
       <button
         onClick={(e) => {
           e.stopPropagation()

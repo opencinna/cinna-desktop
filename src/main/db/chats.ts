@@ -146,6 +146,21 @@ export const chatRepo = {
       .all()
   },
 
+  /**
+   * A dashboard panel's chat for one agent (Dashboards D3): the most recently
+   * active chat of `owners` opened from `dashboardId` and bound to `agentId`,
+   * not in the trash; undefined when there is none.
+   */
+  latestFromDashboard(owners: ChatOwners, dashboardId: string, agentId: string): ChatRow | undefined {
+    return getDb()
+      .select()
+      .from(chats)
+      .where(and(ownedBy(owners), isNull(chats.deletedAt), eq(chats.originDashboardId, dashboardId), eq(chats.agentId, agentId)))
+      .orderBy(desc(chats.updatedAt), desc(chats.createdAt))
+      .limit(1)
+      .get()
+  },
+
   listTrash(owners: ChatOwners): ChatRow[] {
     return getDb()
       .select()
@@ -171,13 +186,17 @@ export const chatRepo = {
        * production caller names it; omitted (tests, the hub spike) means `user`.
        */
       origin?: ChatOrigin
+      /** The dashboard whose chat panel opens it (Dashboards D3); fixed for the chat's life. */
+      originDashboardId?: string | null
+      /** A placeholder title (the title too, unless `title` is given) that auto titling may still replace. */
+      initialTitle?: string | null
     }
   ): ChatRow {
     const now = new Date()
     const chat = {
       id: nanoid(),
       userId,
-      title: init?.title ?? 'New Chat',
+      title: init?.title ?? init?.initialTitle ?? 'New Chat',
       modelId: init?.modelId ?? null,
       providerId: init?.providerId ?? null,
       modeId: init?.modeId ?? null,
@@ -188,6 +207,8 @@ export const chatRepo = {
       origin: init?.origin ?? 'user',
       // Never at insert: main decides it when the chat is bound (`chatService.update`).
       guidedBuild: false,
+      originDashboardId: init?.originDashboardId ?? null,
+      initialTitle: init?.initialTitle ?? null,
       pinnedRank: null,
       sortKey: null,
       deletedAt: null,

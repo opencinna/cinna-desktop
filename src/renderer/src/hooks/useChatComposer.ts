@@ -1,9 +1,10 @@
-import { useCallback } from 'react'
+import { useCallback, useContext } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStream } from './useChatStream'
 import { useChatStore } from '../stores/chat.store'
 import { routingOf, type RunTarget } from '../../../shared/chatRouting'
 import type { MessageAttachment } from '../../../shared/attachments'
+import { ComposerSendExtrasContext } from '../components/chat/composerSendContext'
 
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 type OnDemandAgents = Awaited<ReturnType<typeof window.api.chat.listOnDemandAgents>>
@@ -29,6 +30,8 @@ export function useChatComposer(chatId: string | null): {
   const queryClient = useQueryClient()
   const { startRun } = useChatStream()
   const addressedAgentByChat = useChatStore((s) => s.addressedAgentByChat)
+  // The dashboard panel's context, when this composer is the panel's (README D7).
+  const extras = useContext(ComposerSendExtrasContext)
 
   const submit = useCallback(
     async (input: string, attachments?: MessageAttachment[]): Promise<boolean> => {
@@ -37,13 +40,15 @@ export function useChatComposer(chatId: string | null): {
       const chat = queryClient.getQueryData<CachedChat>(['chat', chatId])
       if (!chat) return false
 
+      const dashboardContext = extras?.dashboardContext() ?? null
       startRun(chatId, trimmed, {
         attachments,
-        target: answererFor(queryClient, chat, chatId, addressedAgentByChat[chatId])
+        target: answererFor(queryClient, chat, chatId, addressedAgentByChat[chatId]),
+        ...(dashboardContext ? { dashboardContext } : {})
       })
       return true
     },
-    [chatId, queryClient, startRun, addressedAgentByChat]
+    [chatId, queryClient, startRun, addressedAgentByChat, extras]
   )
 
   return { submit }

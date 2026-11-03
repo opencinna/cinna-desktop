@@ -6,6 +6,7 @@ import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
+import { DashboardOriginPill } from '../chat/DashboardOriginPill'
 import { InboxButton } from '../inbox/InboxButton'
 import { TasksButton } from '../tasks/TasksButton'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
@@ -146,6 +147,7 @@ export function TopBar(): React.JSX.Element {
       <div className="ml-auto flex items-center gap-1 min-w-0">
         {!sidebarVisible && <UpdateStatusButton readyOnly className={TOPBAR_BTN} />}
         <JobOriginBanner />
+        <DashboardOriginPill />
       </div>
     </div>
   )

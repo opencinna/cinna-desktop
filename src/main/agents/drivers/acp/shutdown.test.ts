@@ -61,6 +61,17 @@ describe('the ACP process pool at quit', () => {
     expect(call).toBeLessThan(shutdown.indexOf('await'))
   })
 
+  it('also kills dashboard endpoints, which run in process groups of their own, and waits for them', () => {
+    // Mutation: drop the call and an endpoint or a tile's refresh command
+    // running at quit outlives the app.
+    const call = shutdown.indexOf('dashboardRefreshService.cancelAll()')
+    expect(call, 'dashboardRefreshService.cancelAll() inside shared shutdown').toBeGreaterThan(0)
+    expect(call).toBeLessThan(shutdown.indexOf('await'))
+    const assigned = /const (\w+) = dashboardRefreshService\.cancelAll\(\)/.exec(shutdown)?.[1]
+    expect(assigned, 'its promise kept for the final wait').toBeTruthy()
+    expect(shutdown.slice(shutdown.indexOf('await Promise.all(['))).toMatch(new RegExp(`\\b${assigned}\\b`))
+  })
+
   it('is killed only after the turns it runs have saved what they streamed', () => {
     // A direct chat writes its rows when the turn returns, and a turn whose
     // process is killed never does. The flush has to be in the same handler

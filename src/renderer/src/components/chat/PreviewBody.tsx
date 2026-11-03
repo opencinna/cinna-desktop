@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import { useMemo, useState, type RefObject } from 'react'
-import Markdown from 'react-markdown'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ParsedXml } from '../../utils/xmlDocument'
@@ -75,7 +75,16 @@ export function PreviewBody({
  * headings. Over {@link MAX_HIGHLIGHT_CHARS} the body is shown as written:
  * rendering a multi-MB document hung the window.
  */
-export function MarkdownPreview({ card, body }: { card: React.JSX.Element | null; body: string }): React.JSX.Element {
+export function MarkdownPreview({
+  card,
+  body,
+  components = previewMarkdownComponents
+}: {
+  card: React.JSX.Element | null
+  body: string
+  /** Overrides for the preview's markdown components (a dashboard tile demotes headings). */
+  components?: Components
+}): React.JSX.Element {
   if (body.length > MAX_HIGHLIGHT_CHARS) {
     return (
       <>
@@ -97,7 +106,7 @@ export function MarkdownPreview({ card, body }: { card: React.JSX.Element | null
         <Markdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}
-          components={previewMarkdownComponents}
+          components={components}
         >
           {body}
         </Markdown>
@@ -299,10 +308,13 @@ function compareCells(a: string, b: string): number {
 
 export function CsvPreview({
   text,
-  filtersEnabled
+  filtersEnabled,
+  rowSelection
 }: {
   text: string
   filtersEnabled: boolean
+  /** Rows the user can pick (a dashboard tile); see {@link DataTable}. */
+  rowSelection?: DataTableRowSelection
 }): React.JSX.Element {
   const { rows, clipped } = useMemo(() => {
     const delimiter = text.includes('\t') && !text.includes(',') ? '\t' : ','
@@ -323,8 +335,18 @@ export function CsvPreview({
       body={body}
       filtersEnabled={filtersEnabled}
       notes={clipped ? [`Showing first ${MAX_PREVIEW_ROWS} rows.`] : []}
+      rowSelection={rowSelection}
     />
   )
+}
+
+/**
+ * Rows the user picks by clicking (a dashboard tile, README D3): a click picks
+ * one, ⌘/Ctrl-click adds or removes. By the row's index in `body`.
+ */
+export interface DataTableRowSelection {
+  isSelected: (rowIndex: number) => boolean
+  onRowClick: (rowIndex: number, additive: boolean) => void
 }
 
 /**
@@ -332,16 +354,18 @@ export function CsvPreview({
  * sort on each header while `filtersEnabled`. Shared by CSV and the JSON
  * Lines table; `notes` are shown under it.
  */
-function DataTable({
+export function DataTable({
   header,
   body,
   filtersEnabled,
-  notes
+  notes,
+  rowSelection
 }: {
   header: string[]
   body: string[][]
   filtersEnabled: boolean
   notes: string[]
+  rowSelection?: DataTableRowSelection
 }): React.JSX.Element {
   // Column index → substring filter; null sort means original order.
   const [filters, setFilters] = useState<Record<number, string>>({})
@@ -447,7 +471,12 @@ function DataTable({
         </thead>
         <tbody>
           {processed.map(({ row, originalIndex }) => (
-            <tr key={originalIndex}>
+            <tr
+              key={originalIndex}
+              aria-selected={rowSelection ? rowSelection.isSelected(originalIndex) : undefined}
+              onClick={rowSelection ? (event) => rowSelection.onRowClick(originalIndex, event.metaKey || event.ctrlKey) : undefined}
+              className={rowSelection ? `cursor-pointer ${rowSelection.isSelected(originalIndex) ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-bg-hover)]'}` : undefined}
+            >
               {row.map((cell, c) => (
                 <td
                   key={c}

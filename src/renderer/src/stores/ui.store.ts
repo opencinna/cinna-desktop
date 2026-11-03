@@ -26,7 +26,9 @@ export type ActiveView =
   | 'local-agent'
   | 'local-development'
   | 'external-agent'
-export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
+  /** One dashboard's grid of tiles (the Dashboards tab). */
+  | 'dashboard'
+export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents' | 'dashboards'
 /**
  * How the sidebar sits beside the chat. `fixed` docks it in the layout and the
  * TopBar button opens and closes it; `hover` hides it and floats it over the
@@ -129,7 +131,7 @@ function applyTheme(theme: Theme): void {
 }
 
 /** A local agent page's Settings tabs (`LocalAgentPage`). */
-export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'dashboards' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
 
 /** Where the Add an agent dialog opens — see `NewLocalAgentModal`'s steps. */
 export type AddAgentDialogStep = 'choose' | 'name' | 'advanced'
@@ -143,6 +145,12 @@ interface UIStore {
    * it changes, then clears it, and its own tab state goes on from there.
    */
   agentPageTabRequest: AgentPageTab | null
+  /**
+   * A catalog item (uuid) some other surface asked Settings → Catalog to open
+   * on (a component card's bundle that is not installed). One-shot, like
+   * `agentPageTabRequest`.
+   */
+  catalogItemRequest: string | null
   settingsTab: SettingsMenu
   sidebarTab: SidebarTab
   activeJobId: string | null
@@ -193,6 +201,18 @@ interface UIStore {
   activeExternalAgentId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
+  /** The dashboard on screen (when activeView === 'dashboard'). Profile-scoped, so not persisted. */
+  activeDashboardId: string | null
+  /** The dashboard's chat panel is open (README D12). This window's session only. */
+  dashboardPanelOpen: boolean
+  /** The chat panel's width, px. This window's session only. */
+  dashboardPanelWidth: number
+  /**
+   * The Chats view's own selection while the dashboard chat panel shows its
+   * chat in the chat store: the Chats tab opens it instead of the panel's
+   * chat. Null while no panel holds the store's selection.
+   */
+  dashboardChatsStash: { chatId: string | null } | null
   /**
    * A folder agent that was just scaffolded and still wants its one-shot AI
    * draft. One-shot intent, handed from the new-agent form to the agent page
@@ -262,6 +282,7 @@ interface UIStore {
   chatGroupCollapsed: Record<string, boolean>
   setAgentPageMode: (mode: 'chat' | 'settings') => void
   setAgentPageTabRequest: (tab: AgentPageTab | null) => void
+  setCatalogItemRequest: (uuid: string | null) => void
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
   setSidebarTab: (tab: SidebarTab) => void
@@ -280,6 +301,10 @@ interface UIStore {
   setRevealInboxGateId: (id: string | null) => void
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
+  setActiveDashboardId: (id: string | null) => void
+  setDashboardPanelOpen: (open: boolean) => void
+  setDashboardPanelWidth: (width: number) => void
+  setDashboardChatsStash: (stash: { chatId: string | null } | null) => void
   setPendingDraftAgentId: (id: string | null) => void
   setAddAgentDialog: (step: AddAgentDialogStep | null) => void
   setPendingRuntimeModelFocusId: (id: string | null) => void
@@ -313,6 +338,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeView: 'chat',
   agentPageMode: 'chat',
   agentPageTabRequest: null,
+  catalogItemRequest: null,
   settingsTab: 'chats',
   sidebarTab: 'chats',
   activeJobId: null,
@@ -329,6 +355,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
   revealInboxGateId: null,
   activeExternalAgentId: null,
   activeLocalAgentId: null,
+  activeDashboardId: null,
+  dashboardPanelOpen: false,
+  dashboardPanelWidth: 400,
+  dashboardChatsStash: null,
   pendingDraftAgentId: null,
   addAgentDialog: null,
   pendingRuntimeModelFocusId: null,
@@ -354,6 +384,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   chatGroupCollapsed: readChatGroupCollapsed(),
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
   setAgentPageTabRequest: (tab) => set({ agentPageTabRequest: tab }),
+  setCatalogItemRequest: (uuid) => set({ catalogItemRequest: uuid }),
   setActiveView: (view) => set({ activeView: view }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
@@ -379,6 +410,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setRevealInboxGateId: (id) => set({ revealInboxGateId: id }),
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
+  setActiveDashboardId: (id) => set({ activeDashboardId: id }),
+  setDashboardPanelOpen: (open) => set({ dashboardPanelOpen: open }),
+  setDashboardPanelWidth: (width) => set({ dashboardPanelWidth: width }),
+  setDashboardChatsStash: (dashboardChatsStash) => set({ dashboardChatsStash }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
   setAddAgentDialog: (step) => set({ addAgentDialog: step }),
   setPendingRuntimeModelFocusId: (id) => set({ pendingRuntimeModelFocusId: id }),

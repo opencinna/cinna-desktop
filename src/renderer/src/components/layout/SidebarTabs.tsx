@@ -1,4 +1,4 @@
-import { MessageSquare, ClipboardList, NotebookPen, Bot } from 'lucide-react'
+import { MessageSquare, ClipboardList, NotebookPen, Bot, LayoutDashboard } from 'lucide-react'
 import { useUIStore, type ActiveView, type SidebarTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
@@ -27,14 +27,16 @@ const VIEW_FOR_TAB: Record<SidebarTab, ActiveView> = {
   chats: 'chat',
   jobs: 'job-detail',
   notes: 'note-detail',
-  agents: 'local-agent'
+  agents: 'local-agent',
+  dashboards: 'dashboard'
 }
 
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
   { id: 'jobs', label: 'Jobs', Icon: ClipboardList },
   { id: 'notes', label: 'Notes', Icon: NotebookPen },
-  { id: 'agents', label: 'Agents', Icon: Bot }
+  { id: 'agents', label: 'Agents', Icon: Bot },
+  { id: 'dashboards', label: 'Dashboards', Icon: LayoutDashboard }
 ]
 
 /**
@@ -88,7 +90,10 @@ export function SidebarTabs(): React.JSX.Element {
     setActiveCinnaRunId(null)
     setActiveTaskId(null)
     if (target === 'chats') {
-      const lastChatId = useChatStore.getState().activeChatId
+      // The dashboard chat panel holds the store's selection while it is
+      // open; the Chats view's own chat is the one it put aside.
+      const stash = useUIStore.getState().dashboardChatsStash
+      const lastChatId = stash ? stash.chatId : useChatStore.getState().activeChatId
       const chat = chats?.find((c) => c.id === lastChatId) ?? chats?.[0]
       setActiveView('chat')
       setActiveChatId(chat?.id ?? null)
@@ -98,6 +103,11 @@ export function SidebarTabs(): React.JSX.Element {
     } else if (target === 'notes') {
       setActiveNoteId(null)
       setActiveView('note-detail')
+    } else if (target === 'dashboards') {
+      // Like Chats, the tab comes back to the dashboard that was open; the
+      // list opens the first one itself when there is none (or it is gone):
+      // a dashboard is a screen to look at, not a folder to choose from.
+      setActiveView('dashboard')
     } else {
       // Agents: like Jobs, land on the empty page rather than auto-selecting.
       // The first agent is ambiguous when the list is grouped by root, and

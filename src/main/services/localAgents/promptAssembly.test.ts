@@ -943,3 +943,51 @@ describe('the agent’s own skills', () => {
     expect('ownSkills' in resolveDesktopPromptContext()).toBe(false)
   })
 })
+
+describe('the cinna-dashboards section of a kit agent', () => {
+  const ID = '2f6c0000-0000-4000-8000-000000000001'
+  const DASHBOARDS: DesktopPromptContext = {
+    ...CONTEXT,
+    dashboardsSkill: { kind: 'skill' },
+    dashboardsCheckScript: '/app/kit/skills/cinna-dashboards/scripts/check_component.py'
+  }
+
+  it('names the check script and the id form when the agent has no bundle id', () => {
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    const prompt = assembleAgentPrompt(dir, manifest({ id: ID }), DASHBOARDS)
+    expect(prompt).toContain('## Cinna dashboards')
+    expect(prompt).toContain('Open the `cinna-dashboards` skill')
+    expect(prompt).toContain('`uv run python /app/kit/skills/cinna-dashboards/scripts/check_component.py dashboards/<name>`')
+    expect(prompt).toContain(`\`cinna://component/id:${ID}/\``)
+    expect(prompt).not.toContain('bundle:')
+  })
+
+  it('prints the bundle form from desktop.json, and the manifest’s bundle id wins over it', () => {
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    write('app-data/desktop.json', JSON.stringify({ sessions: {}, shared_remote: { kind: 'cinna', repo_id: 'r1', clone_url: 'https://core.example/git/r1.git', bundle_id: 'io.example.cinna.ab12cd34' } }))
+    const shared = assembleAgentPrompt(dir, manifest({ id: ID }), DASHBOARDS)
+    expect(shared).toContain('`cinna://component/bundle:io.example.cinna.ab12cd34/`')
+    expect(shared).not.toContain(`id:${ID}`)
+    const exported = assembleAgentPrompt(dir, manifest({ id: ID, bundle: { bundle_id: 'io.cloud.cinna.ffff0000' } }), DASHBOARDS)
+    expect(exported).toContain('`cinna://component/bundle:io.cloud.cinna.ffff0000/`')
+    expect(exported).not.toContain('ab12cd34')
+  })
+
+  it('points Codex at SKILL.md, quotes a path with a space, and says nothing without the skill or an id', () => {
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    const pointer = assembleAgentPrompt(dir, manifest({ id: ID }), {
+      ...CONTEXT,
+      dashboardsSkill: { kind: 'pointer', path: '/Applications/Cinna Desktop.app/kit/skills/cinna-dashboards/SKILL.md' },
+      dashboardsCheckScript: '/Applications/Cinna Desktop.app/kit/skills/cinna-dashboards/scripts/check_component.py'
+    })
+    expect(pointer).toContain('Read `/Applications/Cinna Desktop.app/kit/skills/cinna-dashboards/SKILL.md` before you build')
+    expect(pointer).toContain('`uv run python "/Applications/Cinna Desktop.app/kit/skills/cinna-dashboards/scripts/check_component.py" dashboards/<name>`')
+    expect(assembleAgentPrompt(dir, manifest({ id: ID }), CONTEXT)).not.toContain('Cinna dashboards')
+    expect(assembleAgentPrompt(dir, manifest(), DASHBOARDS)).not.toContain('Cinna dashboards')
+  })
+
+  it('never reaches a bare folder’s prompt', () => {
+    write('AGENTS.md', '# Mine\n\ndo things')
+    expect(assembleBareAgentPrompt(dir, 'Mine', DASHBOARDS)).not.toContain('Cinna dashboards')
+  })
+})

@@ -145,13 +145,37 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
+/**
+ * What a caller other than `/run:` adds to {@link execute}: a dashboard
+ * endpoint gets its params on stdin and keeps its stdout and stderr apart,
+ * under caps of its own.
+ */
+export interface ExecuteOptions {
+  /**
+   * Written to the child's stdin, which is then closed at once. Without it
+   * stdin is ignored, as for every `/run:` command. A script that never reads
+   * stdin closes the pipe under the write: that EPIPE is swallowed by an
+   * `'error'` listener attached before the write (without one it would be an
+   * unhandled `'error'` event in main), and the run goes on.
+   */
+  stdin?: string
+  /** Per-call cap on stdout, in bytes; `stdoutTruncated` says it was crossed. Default {@link MAX_OUTPUT_BYTES}. */
+  maxStdoutBytes?: number
+  /**
+   * Keep only the last this-many bytes of stderr (a rolling tail) instead of
+   * the first {@link MAX_OUTPUT_BYTES}: a failing script's reason is at its end.
+   */
+  stderrTailBytes?: number
+}
+
 /** Run `localCommand` under a shell, cwd'd to `agentDir`, and collect its output. */
 function execute(
   localCommand: string,
   agentDir: string,
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
-  timeoutMs: number = COMMAND_TIMEOUT_MS
+  timeoutMs: number = COMMAND_TIMEOUT_MS,
+  options: ExecuteOptions = {}
 ): Promise<SpawnOutcome> {
   const startedAt = Date.now()
   const empty = (): SpawnOutcome => ({ output: '', stdout: '', stderr: '', exitCode: null,
@@ -174,7 +198,7 @@ function execute(
         cwd: agentDir,
         env,
         shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         // New process group on POSIX so `killTree` can reach every process
         // the shell forks, not only the shell itself. Meaningless (and
         // harmless) on Windows, where `killTree` takes the `taskkill /T` path
@@ -204,9 +228,27 @@ function execute(
     const ceiling = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
     ceiling.unref?.()
 
+    const caps: Record<keyof typeof collected, number> = {
+      output: MAX_OUTPUT_BYTES,
+      stdout: options.maxStdoutBytes ?? MAX_OUTPUT_BYTES,
+      stderr: MAX_OUTPUT_BYTES
+    }
     const append = (key: keyof typeof collected, chunk: Buffer): void => {
       const target = collected[key]
-      const remaining = MAX_OUTPUT_BYTES - target.bytes
+      if (key === 'stderr' && options.stderrTailBytes !== undefined) {
+        // A rolling tail: the newest bytes win, the oldest are dropped.
+        target.chunks.push(chunk)
+        target.bytes += chunk.length
+        if (target.bytes > options.stderrTailBytes) {
+          const all = Buffer.concat(target.chunks)
+          const kept = all.subarray(all.length - options.stderrTailBytes)
+          target.chunks = [kept]
+          target.bytes = kept.length
+          target.truncated = true
+        }
+        return
+      }
+      const remaining = caps[key] - target.bytes
       if (chunk.length > remaining) target.truncated = true
       if (remaining <= 0) return
       const kept = chunk.subarray(0, remaining)
@@ -237,24 +279,62 @@ function execute(
 
     child.once('error', (err) => finish({ spawnError: err.message, exitCode: null }))
     child.once('close', (code) => finish({ exitCode: code }))
+    if (options.stdin !== undefined && child.stdin) {
+      // Before the write: a script that ignores stdin raises EPIPE here.
+      child.stdin.on('error', () => {})
+      child.stdin.end(options.stdin)
+    }
   })
+}
+
+/**
+ * The environment a command for `agentId` runs in: the login shell's, the
+ * managed uv last on `PATH`, and the agent's credential env (its credentials
+ * file and, for a kit agent, the skill runtime). What `/run:` gets, and what
+ * a dashboard endpoint gets.
+ */
+export async function agentCommandEnv(agentId: string): Promise<NodeJS.ProcessEnv> {
+  const env = await withManagedUvFallback(shellEnvForChild(await getShellEnv()))
+  const prepared = await prepareCredentials(agentId)
+  return engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint })
+}
+
+/** {@link execute} for another runner in core (dashboard endpoints); outcomes are unredacted. */
+export function executeLocalCommand(
+  localCommand: string,
+  agentDir: string,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  options: ExecuteOptions
+): Promise<ScheduleCommandOutcome> {
+  return execute(localCommand, agentDir, env, signal, timeoutMs, options)
+}
+
+/**
+ * How a command waits for its agent's turn lock when an exclusive folder write
+ * is in the way: refuse (`busy`), queue until `signal` aborts, or — a
+ * dashboard's `refresh.command` — yield, refusing also while an exclusive
+ * write is only queued ({@link turnLock.tryAcquireSharedYielding}).
+ */
+export interface YieldingAdmission {
+  yieldingOwner: string
 }
 
 /**
  * Shared environment/lock lifetime; resolves only after the command lock is released.
  * Shared with turns and other commands; interactive callers are refused at once
- * while an exclusive folder write holds the agent (`busy`), and a scheduled run
- * passes `queueSignal` and waits it out instead, until aborted.
+ * while an exclusive folder write holds the agent (`busy`), a scheduled run
+ * passes `queueSignal` and waits it out instead, until aborted, and a yielding
+ * caller is refused while one is held or queued.
  */
 async function executeForAgent(agentId: string, agentDir: string, localCommand: string, signal?: AbortSignal,
-  timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal, onStart?: () => void): Promise<SpawnOutcome> {
-  const body = async (): Promise<SpawnOutcome> => {
+  timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal | YieldingAdmission, onStart?: () => void): Promise<SpawnOutcome> {
+  const body = async (runSignal = signal): Promise<SpawnOutcome> => {
     // First statement under the lock: from here on the command may have had effects.
     onStart?.()
     // The managed uv last on PATH: `uv run` works before the user installs one.
-    const env = await withManagedUvFallback(shellEnvForChild(await getShellEnv()))
-    const prepared = await prepareCredentials(agentId)
-    const outcome = await execute(localCommand, agentDir, engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint }), signal, timeoutMs)
+    const outcome = await execute(localCommand, agentDir, await agentCommandEnv(agentId), runSignal, timeoutMs)
     const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
     outcome.stdoutIsExactOk = !outcome.stdoutTruncated && outcome.stdout.trim() === 'OK'
     outcome.output = redactCredentialText(outcome.output)
@@ -262,6 +342,25 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     outcome.stderr = redactCredentialText(outcome.stderr)
     if (outcome.spawnError) outcome.spawnError = redactCredentialText(outcome.spawnError)
     return outcome
+  }
+  if (queueSignal && 'yieldingOwner' in queueSignal) {
+    // Preemptible: an exclusive folder write (an editor save) stops this run
+    // and takes the agent; the run comes back aborted, as a cancel does.
+    const preempt = new AbortController()
+    const forward = (): void => preempt.abort()
+    if (signal?.aborted) preempt.abort()
+    signal?.addEventListener('abort', forward, { once: true })
+    const handle = turnLock.tryAcquireSharedYielding(agentId, queueSignal.yieldingOwner, () => preempt.abort())
+    if (!handle) {
+      signal?.removeEventListener('abort', forward)
+      throw new LocalAgentError('turn_in_progress', 'This agent is busy right now. Try again when the current run finishes.')
+    }
+    try {
+      return await body(preempt.signal)
+    } finally {
+      signal?.removeEventListener('abort', forward)
+      handle.release()
+    }
   }
   return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body) : turnLock.withSharedLock(agentId, 'command', body, signal)
 }
@@ -371,8 +470,13 @@ export const commandService = {
     name: string,
     signal?: AbortSignal,
     timeoutMs: number = COMMAND_TIMEOUT_MS,
-    /** Wait for a busy agent instead of refusing — a scheduled turn's `/run:`. */
-    queueWhenBusy = false
+    /**
+     * Wait for a busy agent instead of refusing — a scheduled turn's `/run:`;
+     * or yield to an exclusive write held or queued — a dashboard's
+     * `refresh.command`, which then comes back `busy`, and comes back
+     * `aborted` when an exclusive write preempts it mid-run.
+     */
+    queueWhenBusy: boolean | YieldingAdmission = false
   ): Promise<CommandRunOutcome> {
     let located: ReturnType<typeof localAgentService.locate>
     try {
@@ -430,7 +534,7 @@ export const commandService = {
 
     try {
       const outcome = await executeForAgent(agentId, agentDir, localCommand, signal, timeoutMs,
-        queueWhenBusy ? signal ?? new AbortController().signal : undefined)
+        typeof queueWhenBusy === 'object' ? queueWhenBusy : queueWhenBusy ? signal ?? new AbortController().signal : undefined)
 
       if (outcome.spawnError) {
         return {

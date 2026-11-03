@@ -185,6 +185,17 @@ describe('AddonPicker', () => {
     expect(search).not.toHaveBeenCalled()
   })
 
+  it('says how many dashboard components a skill ships, and nothing for one without any', async () => {
+    answer = { ...answer, entries: [{ ...PDF, dashboardComponents: 2 }, { ...RELEASE, dashboardComponents: 1 }, BIG] }
+    mount()
+    await waitFor(() => expect(tiles()).toHaveLength(3))
+    expect((await open('PDF')).querySelector('[data-addon-dashboard-components]')?.textContent).toBe('Includes 2 dashboard components')
+    fireEvent.click(within(detail()).getByRole('button', { name: /Back/ }))
+    expect((await open('release-notes')).querySelector('[data-addon-dashboard-components]')?.textContent).toBe('Includes 1 dashboard component')
+    fireEvent.click(within(detail()).getByRole('button', { name: /Back/ }))
+    expect((await open('huge-skill')).querySelector('[data-addon-dashboard-components]')).toBeNull()
+  })
+
   it('opens an entry’s detail over the list; Back keeps the search, the filters and the scroll', async () => {
     mount()
     await waitFor(() => expect(tiles()).toHaveLength(6))

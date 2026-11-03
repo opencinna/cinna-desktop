@@ -35,13 +35,35 @@ import { useComposerDraftStore } from '../../stores/composerDraft.store'
 /** Why the new-chat composer holds sends while a picked agent is being drafted. */
 const DRAFTING_SEND_HOLD = "Drafting this agent's prompts — send when it finishes."
 
-export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string; embedded?: boolean }): React.JSX.Element {
+export function ChatWorkspace({
+  agentId,
+  embedded = false,
+  chatId: hostedChatId,
+  composerTop,
+  onNewChatLike
+}: {
+  agentId?: string
+  embedded?: boolean
+  /**
+   * Show this chat instead of the chat store's selection: the dashboard's chat
+   * panel (README D12). The host keeps the store's `activeChatId` on it while
+   * shown, since the live run watch and the streamed projection follow that;
+   * the one-shot "land on the new-chat screen" requests are left to the main
+   * view.
+   */
+  chatId?: string
+  /** Above the composer, inside its bottom-anchored wrapper (the panel's starters and context chip). */
+  composerTop?: React.ReactNode
+  /** Replaces the prompt-cache notice's New chat (the panel starts its own). */
+  onNewChatLike?: () => void
+}): React.JSX.Element {
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const pendingModeId = useUIStore((s) => s.pendingModeId)
   const setPendingModeId = useUIStore((s) => s.setPendingModeId)
   const storedChatId = useChatStore((s) => s.activeChatId)
-  const activeChatId = embedded ? null : storedChatId
+  const hosted = hostedChatId !== undefined
+  const activeChatId = hosted ? hostedChatId : embedded ? null : storedChatId
   const newChatDraftKey = useComposerDraftKey(null, embedded ? agentId : undefined)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const sendError = useChatStore((s) => s.sendError)
@@ -265,7 +287,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // Pending-agent selection from AgentStatusOverlay: land on new-chat screen,
   // preselect the agent, and focus the input. One-shot; cleared after handling.
   useEffect(() => {
-    if (embedded || !pendingAgentId || !agentList) return
+    if (embedded || hosted || !pendingAgentId || !agentList) return
     const agent = agentList.find((a) => a.id === pendingAgentId)
     if (!agent) {
       setPendingAgentId(null)
@@ -277,7 +299,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     setPendingAgentId(null)
     // Focus after the new-chat screen mounts the input.
     requestAnimationFrame(() => chatInputRef.current?.focus())
-  }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds, setRoutingPick])
+  }, [embedded, hosted, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds, setRoutingPick])
 
   // The same, for a chat mode (a Chats-list mode group's start button): the
   // new-chat screen in that mode, with no agents. `NO_CHAT_MODE` is a plain
@@ -285,7 +307,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // pick still pending wins and this request is dropped: yielding alone would
   // run it one render later and clear the agents the pick just set.
   useEffect(() => {
-    if (embedded || pendingModeId === null) return
+    if (embedded || hosted || pendingModeId === null) return
     if (pendingAgentId) {
       setPendingModeId(null)
       return
@@ -303,18 +325,18 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     setModeSelection(pendingModeId === NO_CHAT_MODE ? 'none' : { id: pendingModeId })
     setPendingModeId(null)
     requestAnimationFrame(() => chatInputRef.current?.focus())
-  }, [embedded, pendingModeId, pendingAgentId, chatModes, setActiveChatId, setPendingModeId, setPendingAgentIds, setModeSelection, setRoutingPick])
+  }, [embedded, hosted, pendingModeId, pendingAgentId, chatModes, setActiveChatId, setPendingModeId, setPendingAgentIds, setModeSelection, setRoutingPick])
 
   // When the agent-status overlay closes and we're on the chat view (new-chat
   // form or active chat), return focus to the chat input so the user can keep
   // typing without another click.
   const prevStatusOpen = useRef(agentStatusOpen)
   useEffect(() => {
-    if (prevStatusOpen.current && !agentStatusOpen && activeView === 'chat') {
+    if (prevStatusOpen.current && !agentStatusOpen && activeView === 'chat' && !hosted) {
       requestAnimationFrame(() => chatInputRef.current?.focus())
     }
     prevStatusOpen.current = agentStatusOpen
-  }, [agentStatusOpen, activeView])
+  }, [agentStatusOpen, activeView, hosted])
 
   const handleNewChat = useCallback(
     async (
@@ -588,11 +610,12 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           }}
         />
         <div className="relative pointer-events-auto">
+          {composerTop}
           {sendErrorBanner}
           <ChatInput
             ref={chatInputRef}
             chatId={activeChatId}
-            onNewChatLike={handleNewChatLike}
+            onNewChatLike={onNewChatLike ?? handleNewChatLike}
             modeColor={activeChatModeColor}
             // A runtime mode's chat: the runtime chip carries the mode's glyph, not the generic bot.
             conductorIcon={activeChatMode?.builtinEngine ? <ChatModeGlyph mode={activeChatMode} dot={10} /> : undefined}

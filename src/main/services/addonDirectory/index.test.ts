@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -44,7 +44,28 @@ vi.mock('../../db/mcpProviders', () => ({ mcpProviderRepo: repo }))
 vi.mock('../../mcp/manager', () => ({ mcpManager: { getConnection: () => undefined, needsUser: () => false } }))
 vi.mock('../../auth/scope', () => ({ getProfileScopeUserId: () => 'profile' }))
 
-const { addonDirectory } = await import('./index')
+/** The skill caches: `ready` at a folder for the refs a test puts here, `missing` otherwise. */
+const skillCaches = vi.hoisted(() => ({ ready: new Map<string, string>(), asked: [] as unknown[] }))
+vi.mock('../catalogSkillCache', () => ({
+  catalogSkillCache: {
+    resolve: (ref: { packageUuid: string; revisionNumber: number; archiveSha256: string }) => {
+      skillCaches.asked.push(ref)
+      const dir = skillCaches.ready.get(`${ref.packageUuid}/${ref.revisionNumber}/${ref.archiveSha256}`)
+      return dir ? { state: 'ready', dir } : { state: 'missing' }
+    }
+  }
+}))
+vi.mock('../marketplaceSkillCache', () => ({
+  marketplaceSkillCache: {
+    resolve: (ref: { entryUuid: string; archiveSha256: string }) => {
+      skillCaches.asked.push(ref)
+      const dir = skillCaches.ready.get(`${ref.entryUuid}/${ref.archiveSha256}`)
+      return dir ? { state: 'ready', dir } : { state: 'missing' }
+    }
+  }
+}))
+
+const { addonDirectory, skillDashboardComponents } = await import('./index')
 
 const USER = '__default__'
 const AGENT = 'folder:a'
@@ -222,3 +243,34 @@ describe('addonDirectory (wired) — core’s MCP directory and the manifest', (
   })
 })
 
+
+describe('skillDashboardComponents', () => {
+  const SHA = 'a'.repeat(64)
+  const skillEntry = (source: string, id: string, over: Record<string, unknown> = {}) => ({
+    ref: { source, id }, kind: 'skill' as const, name: 'sales', title: 'Sales', summary: '', description: '', category: null, tags: [],
+    iconUrl: null, publisher: null, origin: { label: 'x', kind: 'catalog' as const, repositoryUrl: null, homepage: null }, version: null,
+    digest: `sha256:${SHA}`, requires: { credentials: [] }, runsCode: null, status: 'ready' as const, unsupportedReason: null, install: null, ...over
+  })
+
+  it('counts the components of the copy cached on this computer, catalog by its revision, marketplace by its digest', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'cinna-skill-copy-'))
+    try {
+      for (const name of ['deals', 'revenue']) {
+        mkdirSync(join(folder, 'dashboards', name), { recursive: true })
+        writeFileSync(join(folder, 'dashboards', name, 'component.json'), '{}')
+      }
+      skillCaches.ready.set(`pkg-1/3/${SHA}`, folder)
+      skillCaches.ready.set(`entry-1/${SHA}`, folder)
+      const catalog = skillEntry('core-catalog', 'pkg-1', { install: { archivePath: '/api/v1/skills/packages/pkg-1/revisions/3/download' } })
+      expect(skillDashboardComponents(catalog)).toBe(2)
+      expect(skillDashboardComponents(skillEntry('core-marketplace', 'entry-1'))).toBe(2)
+      // Not downloaded here, no revision to look up, or no digest: nothing to count.
+      expect(skillDashboardComponents(skillEntry('core-marketplace', 'entry-2'))).toBe(0)
+      expect(skillDashboardComponents(skillEntry('core-catalog', 'pkg-1'))).toBe(0)
+      expect(skillDashboardComponents(skillEntry('core-marketplace', 'entry-1', { digest: null }))).toBe(0)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+      skillCaches.ready.clear()
+    }
+  })
+})

@@ -127,6 +127,10 @@ const artifactsSkill = vi.hoisted(() => ({ available: false }))
 vi.mock('../services/artifacts/artifactsSkill', () => ({
   artifactsSkillInfo: () => ({ available: artifactsSkill.available, dir: '/kit/skills/cinna-artifacts', skillFile: '/kit/skills/cinna-artifacts/SKILL.md' })
 }))
+const dashboardsSkill = vi.hoisted(() => ({ available: false }))
+vi.mock('../services/dashboards/dashboardsSkill', () => ({
+  dashboardsSkillInfo: () => ({ available: dashboardsSkill.available, dir: '/kit/skills/cinna-dashboards', skillFile: '/kit/skills/cinna-dashboards/SKILL.md', checkScript: '/kit/skills/cinna-dashboards/scripts/check_component.py' })
+}))
 const linksFolder = vi.hoisted(() => ({
   fails: false,
   skills: {} as Record<string, string[]>,
@@ -543,8 +547,12 @@ describe('collectEngineConfigInput', () => {
     // cinna-artifacts only while the profile's instance keeps artifacts — never the whole bundle folder.
     artifactsSkill.available = true
     expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills/cinna-tasks', '/kit/skills/cinna-artifacts'])
+    // cinna-dashboards whenever the bundle has it: a desktop feature, no profile gate.
+    dashboardsSkill.available = true
+    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills/cinna-tasks', '/kit/skills/cinna-artifacts', '/kit/skills/cinna-dashboards'])
     tasksSkill.available = false
     artifactsSkill.available = false
+    dashboardsSkill.available = false
     expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual([])
   })
 })

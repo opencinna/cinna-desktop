@@ -31,3 +31,18 @@ export type FilesOpenInBrowserResult = { success: true } | { success: false; err
  * app or keep storage.
  */
 export const HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-modals allow-top-navigation-by-user-activation'
+
+/**
+ * A dashboard tile's frame: {@link HTML_PREVIEW_SANDBOX} without
+ * `allow-top-navigation-by-user-activation`, so a component's page cannot send
+ * the window anywhere, not even inside a click. Leaving a tile always takes a
+ * visible confirm the host draws.
+ */
+export const DASHBOARD_FRAME_SANDBOX = 'allow-scripts allow-forms allow-modals'
+
+/**
+ * A dashboard frame's host on the `cinna-preview:` scheme:
+ * `cinna-preview://dash-<H>/<tile>/<file>`. The HTML preview's tokens are bare
+ * hex and artifact previews' start with `art-`.
+ */
+export const DASHBOARD_FRAME_HOST_PREFIX = 'dash-'

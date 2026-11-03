@@ -798,6 +798,12 @@ export interface ClaudeLauncherDeps {
    */
   artifactsSkillPlugin?(): string | null
   /**
+   * The desktop-owned plugin carrying `cinna-dashboards`
+   * (`dashboardsSkill.ensureDashboardsSkillPlugin`), or null when this session
+   * is not a kit agent's or the build has no skill. Read per session.
+   */
+  dashboardsSkillPlugin?(userId: string, agentId: string): string | null
+  /**
    * The local plugin carrying a **kit** agent's own skills
    * (`agentSkillsPlugin.ensureAgentSkillsPlugin`), or null when this session
    * is not a kit agent's or the agent has no deliverable skill. Asked on the
@@ -941,9 +947,10 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // local plugins load together, proven on 2.1.276 / adapter 0.76.0).
       const agentSkillsPath = native ? null : safely(() => deps.agentSkillsPlugin?.(ctx.userId, ctx.agentId) ?? null, null)
       const artifactsPluginPath = safely(() => deps.artifactsSkillPlugin?.() ?? null, null)
+      const dashboardsPluginPath = safely(() => deps.dashboardsSkillPlugin?.(ctx.userId, ctx.agentId) ?? null, null)
       // The agent's pinned plugins, each its own wrapper, after its skills plugin.
       const addonPluginPaths = native ? [] : safely(() => deps.agentAddonPlugins?.(ctx.userId, ctx.agentId) ?? [], [] as string[])
-      const pluginPaths = [pluginPath, artifactsPluginPath, agentSkillsPath, ...addonPluginPaths].filter((path): path is string => !!path)
+      const pluginPaths = [pluginPath, artifactsPluginPath, dashboardsPluginPath, agentSkillsPath, ...addonPluginPaths].filter((path): path is string => !!path)
       const plugins = pluginPaths.length > 0
         ? { plugins: pluginPaths.map((path) => ({ type: 'local' as const, path })) }
         : {}

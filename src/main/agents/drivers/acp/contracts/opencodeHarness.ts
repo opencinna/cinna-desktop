@@ -65,6 +65,7 @@ export const PERSONAL_MARKERS = {
 /** The bundled-skill stand-ins under `kit/skills/`: their markers reaching the model are the positive control. */
 export const KIT_SKILL_MARKER = 'CONTRACT_KIT_SKILL_9b4'
 export const KIT_ARTIFACTS_SKILL_MARKER = 'CONTRACT_KIT_ARTIFACTS_SKILL_9b5'
+export const KIT_DASHBOARDS_SKILL_MARKER = 'CONTRACT_KIT_DASHBOARDS_SKILL_9b6'
 
 export interface OpencodeScratch {
   root: string
@@ -77,7 +78,7 @@ export interface OpencodeScratch {
   kitSkills: string
   /**
    * What the app passes as `skillPaths`: each platform skill by its own
-   * folder (`cinna-tasks`, `cinna-artifacts`), never the `skills/` root —
+   * folder (`cinna-tasks`, `cinna-artifacts`, `cinna-dashboards`), never the `skills/` root —
    * `engineConfigSource.collectSkillPaths`.
    */
   kitSkillDirs: string[]
@@ -96,10 +97,11 @@ export function makeOpencodeScratch(prefix: string, input: { trapPort: number })
   const cwd = join(root, 'folder')
   const configRoot = join(root, 'acp')
   const kitSkills = join(root, 'kit', 'skills')
-  const kitSkillDirs = [join(kitSkills, 'cinna-tasks'), join(kitSkills, 'cinna-artifacts')]
+  const kitSkillDirs = [join(kitSkills, 'cinna-tasks'), join(kitSkills, 'cinna-artifacts'), join(kitSkills, 'cinna-dashboards')]
   for (const directory of [home, cwd, configRoot, ...kitSkillDirs, join(root, 'tmp')]) mkdirSync(directory, { recursive: true })
   writeFileSync(join(kitSkills, 'cinna-tasks', 'SKILL.md'), `---\nname: cinna-tasks\ndescription: ${KIT_SKILL_MARKER} platform tasks\n---\nbody\n`)
   writeFileSync(join(kitSkills, 'cinna-artifacts', 'SKILL.md'), `---\nname: cinna-artifacts\ndescription: ${KIT_ARTIFACTS_SKILL_MARKER} platform artifacts\n---\nbody\n`)
+  writeFileSync(join(kitSkills, 'cinna-dashboards', 'SKILL.md'), `---\nname: cinna-dashboards\ndescription: ${KIT_DASHBOARDS_SKILL_MARKER} platform dashboards\n---\nbody\n`)
   const skill = (dir: string, name: string, marker: string): void => {
     mkdirSync(join(home, dir, name), { recursive: true })
     writeFileSync(join(home, dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${marker} personal skill\n---\nbody\n`)

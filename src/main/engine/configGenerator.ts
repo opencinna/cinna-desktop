@@ -428,9 +428,10 @@ export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
   // The skill tool asks `skill` with the skill's name as its pattern; under
   // `'*': 'ask'` every opening of the platform's own `cinna-tasks` skill would
   // stop the turn for a click. `cinna-artifacts` likewise; it is only in
-  // `skills.paths` while the profile's instance keeps artifacts. Any other
-  // skill still asks.
-  skill: { '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow' }
+  // `skills.paths` while the profile's instance keeps artifacts.
+  // `cinna-dashboards` too, whenever the bundle has it. Any other skill still
+  // asks.
+  skill: { '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', 'cinna-dashboards': 'allow' }
 }
 
 /** One AI credential, ready to become a provider entry. */

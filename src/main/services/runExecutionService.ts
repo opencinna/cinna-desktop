@@ -21,7 +21,8 @@ import { a2aStreamingService } from './a2aStreamingService'
 import { buildCatchUpPacket, buildTurnHeader, joinTurnContext } from './threadContextService'
 import { driverFor } from '../agents/drivers'
 import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
-import { resolveCommandRunner } from './localAgents/commandService'
+import { commandService, resolveCommandRunner } from './localAgents/commandService'
+import { dashboardContextSection, dashboardContextTracker, sanitizeDashboardContext, type DashboardContextTurn } from './dashboards/dashboardContext'
 import { localAgentService } from './localAgents/localAgentService'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
@@ -248,7 +249,7 @@ export const runExecutionService = {
       if (closed) return
       if (!terminalPosted) post(terminalEventOf(outcome))
       closed = true
-      if (activeChats.get(chatId) === handle) { activeChats.delete(chatId); runClosed(chatId) }
+      if (activeChats.get(chatId) === handle) { activeChats.delete(chatId); runClosed(chatId, agentId) }
       let inputRequestIds: string[] = []
       try {
         inputRequestIds = taskInputRequestRepo.listOpenForRun(chatId, runId)
@@ -420,7 +421,7 @@ export const runExecutionService = {
         steerFn = null
         steerableListeners.clear()
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
-        if (activeChats.get(payload.chatId) === handle) { activeChats.delete(payload.chatId); runClosed(payload.chatId) }
+        if (activeChats.get(payload.chatId) === handle) { activeChats.delete(payload.chatId); runClosed(payload.chatId, context?.agentId ?? null) }
         try { for (const safe of subscriberRedactor.finish()) options.port?.postMessage(safe); options.port?.close() } catch { /* subscriber already disconnected */ }
         const { inputRequestIds, inputRequestReadError } = remainingRunRequests(payload.chatId, handle.id)
         const result = outcome!
@@ -553,6 +554,7 @@ async function resolveAndRun(
     agentId: target.agentId,
     userContent,
     attachments,
+    dashboardContext: payload.dashboardContext,
     // Coordinators retain their ACP session while specialists own the chat.
     // On return, their cursor must catch up with those specialists' messages.
     catchUp: routing.router !== 'direct' || (!!lifecycle.agentId && chat.agentId !== lifecycle.agentId)
@@ -597,6 +599,8 @@ interface AgentTurnInput {
   agentId: string
   userContent: string
   attachments: RunSendPayload['attachments']
+  /** `RunSendPayload.dashboardContext`, unchecked: {@link dashboardContextFor} decides. */
+  dashboardContext?: unknown
   catchUp: boolean
 }
 
@@ -657,6 +661,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
 
   // `/run:<name>` is intercepted before the driver: see `bindTurn`.
   const guidedBuild = guidedBuildOf({ driver, agent, agentOwnerId, profileUserId, chatId })
+  const dashboardTurn = input.nested ? null : dashboardContextFor({ driver, agent, profileUserId, chatId, wireContent, raw: input.dashboardContext })
   const run = bindTurn({
     driver,
     agent,
@@ -666,6 +671,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     packet,
     turnHeader: turnHeaderFor({ driver, agent, agentOwnerId, profileUserId, chatId, guidedBuild: guidedBuild === 'closed' ? null : guidedBuild }),
     guidedBuild: guidedBuild === null ? undefined : guidedBuild !== 'closed',
+    dashboardContext: dashboardTurn?.text ?? null,
     fileIds,
     attachments,
     // The user row's id is the A2A `messageId`: the Cinna backend echoes
@@ -687,7 +693,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       run,
       chatId,
       agentId,
-      port,
+      port: dashboardTurn ? deliveryTap(port, dashboardTurn) : port,
       onFinished: input.finish,
       ...(input.runnerOwned ? {} : {
         // **Null for anything the desktop authored.** The marker's id is what
@@ -707,6 +713,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       // Only a turn that finished moves the cursor. A failed or stopped one
       // leaves the gap for the retry to carry.
       onCompleted: () => {
+        dashboardTurn?.delivered()
         const last = messageRepo.lastId(chatId)
         if (last) chatAgentCursorRepo.advance(chatId, agentId, last)
         if (!isDesktopAuthored(input.inputOrigin)) messageRoutingService.retryTitleAfterTurn(profileUserId, chatId, engineTitles)
@@ -792,6 +799,60 @@ function turnHeaderFor(input: {
 }
 
 /**
+ * This turn's dashboard context section (README D7), or null: the panel's
+ * `dashboardContext`, accepted only for a chat opened from that very dashboard
+ * (`chats.origin_dashboard_id`), only for an agent that gets the turn header
+ * (one running in a folder here), and never for a `/run:` command, which no
+ * engine reads. Anything else is dropped silently. The section is left out
+ * when the engine session already has it ({@link dashboardContextTracker}).
+ */
+function dashboardContextFor(input: {
+  driver: AgentDriver
+  agent: AgentRow
+  profileUserId: string
+  chatId: string
+  wireContent: string
+  raw: unknown
+}): DashboardContextTurn | null {
+  if (input.raw === undefined || input.raw === null) return null
+  try {
+    const capabilities = input.driver.capabilities(input.agent)
+    if (!capabilities.cwd) return null
+    if (capabilities.commands === 'catalog' && commandService.matchRunCommand(input.wireContent)) return null
+    const context = sanitizeDashboardContext(input.raw)
+    const origin = visibleChat(input.profileUserId, input.chatId)?.originDashboardId ?? null
+    if (!context || !origin || origin !== context.dashboardId) {
+      logger.debug('a dashboard context was dropped', { chatId: input.chatId, valid: !!context, fromThisDashboard: !!context && !!origin && origin === context.dashboardId })
+      return null
+    }
+    return dashboardContextTracker.forTurn(input.chatId, dashboardContextSection(context))
+  } catch (error) {
+    // Context, never a precondition: the turn runs without it.
+    logger.warn('the dashboard context could not be built', { chatId: input.chatId, error: error instanceof Error ? error.message : String(error) })
+    return null
+  }
+}
+
+/**
+ * The port, telling the dashboard context the turn was delivered at the
+ * engine's first answer — a word, a tool call, an ask: the engine has the
+ * prompt in its session by then, even if the turn later fails or is stopped.
+ */
+function deliveryTap(port: StreamPort, turn: DashboardContextTurn): StreamPort {
+  let delivered = false
+  return {
+    postMessage(event) {
+      if (!delivered && (event.type === 'delta' || event.type === 'tool_use' || event.type === 'needs_input' || event.type === 'child')) {
+        delivered = true
+        turn.delivered()
+      }
+      port.postMessage(event)
+    },
+    close() { port.close() }
+  }
+}
+
+/**
  * Whether this turn is a guided first build's, or null. Read once per turn and
  * handed to both the turn header (its guidance section) and the driver
  * (`RunInput.guidedBuild`: Codex's Plan collaboration mode), so the two never
@@ -845,6 +906,8 @@ function bindTurn(input: {
   turnHeader?: string | null
   /** A guided first build's turn (`RunInput.guidedBuild`): true while guided, false once its chat's guidance has ended. */
   guidedBuild?: boolean
+  /** The dashboard context section, beside the header (`RunInput.turnContext`); wire-only. */
+  dashboardContext?: string | null
   /** The chat's scope, for a follow-up turn the agent starts after this one. */
   runScope?: FollowUpScope
 }): TurnRun {
@@ -865,7 +928,7 @@ function bindTurn(input: {
         // wire-only by construction: the row was persisted from `wireContent`
         // alone, before this call.
         wireContent,
-        turnContext: joinTurnContext(input.turnHeader ?? null, input.packet),
+        turnContext: joinTurnContext(input.turnHeader ?? null, input.packet, input.dashboardContext ?? null),
         ...(input.guidedBuild !== undefined ? { guidedBuild: input.guidedBuild } : {}),
         fileIds: input.fileIds,
         attachments: input.attachments,

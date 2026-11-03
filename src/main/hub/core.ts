@@ -12,7 +12,7 @@ import { stopAccountConfigPeriodicSync } from '../services/account-config-sync'
 import { initDatabase } from '../db/client'
 import { getCurrentUserId, initSession } from '../auth/session'
 import { userActivation } from '../auth/activation'
-import { getSettingsScopeUserId } from '../auth/scope'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
@@ -32,6 +32,8 @@ import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
 import { artifactService } from '../services/artifacts/artifactService'
+import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
+import { onRunClosed } from '../services/runExecutionState'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
 import { chatModeService } from '../services/chatModeService'
@@ -77,6 +79,12 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // Whether this profile's instance keeps artifacts, read now rather than when
   // a window first asks: an agent's session offers `artifacts_publish` from it.
   userActivation.onProfileReady(() => { void artifactService.support() })
+  // Leaving a profile stops its dashboards' runs and forgets which tiles were on screen.
+  userActivation.onProfileClosing(() => { void dashboardRefreshService.cancelAll() })
+  // A turn of an agent ended: its on-screen tiles that ask for it re-run (README D3).
+  onRunClosed((_chatId, agentId) => {
+    if (agentId && userActivation.isActivated()) dashboardRefreshService.afterTurn(getProfileScopeUserId(), agentId)
+  })
   remoteTurnRecoveryService.onRetryDue((userId) => {
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })
@@ -149,6 +157,8 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   // Commands the user ran from messages: every group is signalled now, killed after a grace.
   const userCommands = userCommandService.shutdown()
   const conductor = conductorBridge.shutdown()
+  // Dashboard endpoints and refresh commands run in their own process groups: killed now.
+  const dashboards = dashboardRefreshService.cancelAll()
   // The credential token endpoint's loopback listener ends with the app, its bearers with it.
   const credentialTokens = serviceCredentialService.closeTokenServer()
   // A login waiting on a browser sign-in holds a loopback port; it ends with the app.
@@ -159,5 +169,5 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   // A `uv python install` the pre-warm started dies with the app.
   uvPrewarm.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, userCommands, conductor, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
+  await Promise.all([processes, userCommands, conductor, dashboards, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
 }

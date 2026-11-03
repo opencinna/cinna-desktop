@@ -11,6 +11,9 @@ import {
 import { runtimeHost } from '../runtimeHost'
 import { createArtifactPreviewServer } from '../../services/htmlPreview/artifactPreviewServer'
 import { artifactService } from '../../services/artifacts/artifactService'
+import { createDashboardFrameServer } from '../../services/htmlPreview/dashboardFrameServer'
+import { dashboardService } from '../../services/dashboards/dashboardService'
+import { getLayoutView } from '../../kit/contractStore'
 import { agentFileService, openInBrowser } from './agentFiles'
 import {
   createExternalOpenGate,
@@ -61,7 +64,36 @@ export const artifactPreviewServer = createArtifactPreviewServer({
   fetch: (url, init) => runtimeHost.http.fetch(url, init)
 })
 
-/** Which of the scheme's two servers a request is for, by its host. */
+/**
+ * Dashboard frames on the same scheme (`cinna-preview://dash-<H>/<tile>/…`):
+ * one host per profile, one path per mounted frame, the component's folder
+ * found again on every request.
+ */
+export const dashboardFrameServer = createDashboardFrameServer({
+  currentUserId: getProfileScopeUserId,
+  resolve: (target) => {
+    const found = dashboardService.resolveComponent(target.agentId, target.component, target.skill)
+    if (!found?.scanned.spec) return null
+    const layout = (() => {
+      try {
+        return getLayoutView(found.agent.rootPath)
+      } catch {
+        return null
+      }
+    })()
+    return {
+      agentDir: found.agent.path,
+      componentDir: found.scanned.dir,
+      // A skill's component may sit in a cache outside the agent: judged by its agent-relative path.
+      agentRelDir: found.scanned.shownDir,
+      entry: found.scanned.spec.entry,
+      // An unreadable contract serves no file a secret rule could have named.
+      isSecret: (rel) => (layout ? layout.isSecretFile(rel) : true)
+    }
+  }
+})
+
+/** Which of the scheme's three servers a request is for, by its host. */
 function handlePreviewRequest(request: Request): Promise<Response> {
   let host = ''
   try {
@@ -69,6 +101,7 @@ function handlePreviewRequest(request: Request): Promise<Response> {
   } catch {
     // Unparseable: the HTML preview's handler answers it with a 404.
   }
+  if (dashboardFrameServer.owns(host)) return dashboardFrameServer.handle(request)
   return artifactPreviewServer.owns(host) ? artifactPreviewServer.handle(request) : htmlPreviewServer.handle(request)
 }
 

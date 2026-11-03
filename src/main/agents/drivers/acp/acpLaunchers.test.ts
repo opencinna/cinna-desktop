@@ -176,7 +176,7 @@ describe('the OpenCode launcher', () => {
     const config = JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8'))
     expect(config.skills).toEqual({ paths: ['/app/kit/skills', '/tmp/agents/pineapple/skills'] })
     const entry = Object.values(config.agent)[0] as { permission: Record<string, unknown> }
-    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', 'pdf-tools': 'allow' })
+    expect(entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', 'cinna-dashboards': 'allow', 'pdf-tools': 'allow' })
 
     // The same set again: the warm process is kept. One more skill: replaced.
     expect(plan(await launcher(withSkills(['pdf-tools'])).plan(CTX)).spec.key).toBe(p.spec.key)
@@ -698,6 +698,33 @@ describe('the Claude launcher', () => {
     }
     const closed = { ...both, artifactsSkillPlugin: () => null }
     expect(claudeOptions(plan(await createClaudeLauncher(closed).plan(CTX))).plugins).toEqual([{ type: 'local', path: '/data/cinna-plugins/cinna-tasks' }])
+  })
+
+  it('loads the cinna-dashboards plugin after cinna-artifacts for the session the dep answers for', async () => {
+    // Mutation: drop the dep from the plugin list and a kit agent never gets the skill.
+    const asked: [string, string][] = []
+    const all = {
+      ...deps,
+      tasksSkillPlugin: () => '/data/cinna-plugins/cinna-tasks',
+      artifactsSkillPlugin: () => '/data/cinna-plugins/cinna-artifacts',
+      dashboardsSkillPlugin: (userId: string, agentId: string) => {
+        asked.push([userId, agentId])
+        return '/data/cinna-plugins/cinna-dashboards'
+      }
+    }
+    expect(claudeOptions(plan(await createClaudeLauncher(all).plan(CTX))).plugins).toEqual([
+      { type: 'local', path: '/data/cinna-plugins/cinna-tasks' },
+      { type: 'local', path: '/data/cinna-plugins/cinna-artifacts' },
+      { type: 'local', path: '/data/cinna-plugins/cinna-dashboards' }
+    ])
+    expect(asked).toEqual([[CTX.userId, CTX.agentId]])
+    const notKit = { ...all, dashboardsSkillPlugin: () => null }
+    expect(claudeOptions(plan(await createClaudeLauncher(notKit).plan(CTX))).plugins).toEqual([
+      { type: 'local', path: '/data/cinna-plugins/cinna-tasks' },
+      { type: 'local', path: '/data/cinna-plugins/cinna-artifacts' }
+    ])
+    const broken = { ...all, dashboardsSkillPlugin: () => { throw new Error('disk full') } }
+    expect(claudeOptions(plan(await createClaudeLauncher(broken).plan(CTX))).plugins).toHaveLength(2)
   })
 
   it('loads a kit agent’s own skills plugin beside cinna-tasks, on the isolated branch only', async () => {

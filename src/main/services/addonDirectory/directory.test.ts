@@ -157,6 +157,25 @@ describe('addonDirectory.list', () => {
     expect(result.entries.map((e) => e.provider)).toEqual(['cinna-core', 'cinna-core', LOCAL_SOURCE, 'mcp-registries'])
   })
 
+  it('says how many dashboard components a skill ships, only for skills and only when there are some', async () => {
+    const directory = build([
+      provider('cinna-core', [CATALOG_SOURCE, MARKETPLACE_SOURCE], {
+        entries: [entry(catalogRef('c1'), { name: 'sales' }), entry(marketRef('m1'), { name: 'pdf' }), mcpEntry(registryRef('granola'))]
+      })
+    ])
+    const counted: string[] = []
+    deps.skillDashboardComponents = vi.fn((e) => {
+      counted.push(e.ref.id)
+      if (e.ref.id === 'm1') throw new Error('unreadable')
+      return e.ref.id === 'c1' ? 2 : 5
+    })
+    const result = ok(await directory.list(USER, AGENT))
+    expect(result.entries.map((e) => e.dashboardComponents)).toEqual([2, undefined, undefined])
+    expect(result.entries[1]).not.toHaveProperty('dashboardComponents')
+    // Never asked for a connector.
+    expect(counted).toEqual(['c1', 'm1'])
+  })
+
   it('passes refresh to the providers only when asked', async () => {
     const core = provider('cinna-core', [CATALOG_SOURCE], { entries: [] })
     const directory = build([core])

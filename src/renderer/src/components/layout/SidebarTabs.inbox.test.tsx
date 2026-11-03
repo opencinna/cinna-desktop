@@ -97,3 +97,14 @@ describe('SidebarTabs returning to Chats from another tab', () => {
     expect(useChatStore.getState().activeChatId).toBe('first-chat')
   })
 })
+
+describe('SidebarTabs and the Dashboards tab', () => {
+  it('comes back to the dashboard that was open, as Chats comes back to its chat', () => {
+    // Mutation: clear `activeDashboardId` on the tab change and this fails.
+    useUIStore.setState({ activeView: 'chat', sidebarTab: 'chats', activeDashboardId: 'd2' } as never)
+    render(createElement(SidebarTabs))
+    screen.getByRole('button', { name: 'Dashboards' }).click()
+    expect(useUIStore.getState()).toMatchObject({ activeView: 'dashboard', sidebarTab: 'dashboards', activeDashboardId: 'd2' })
+  })
+})
+

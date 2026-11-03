@@ -26,6 +26,7 @@ import { useStartup } from './hooks/useAuth'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
+import { useDashboardsWatch } from './hooks/useDashboards'
 import { useSharingWatch } from './hooks/useSharing'
 import { useCatalogItemsWatch } from './hooks/useCatalog'
 import { useSkillCredentialsWatch } from './hooks/useServiceCredentials'
@@ -125,6 +126,8 @@ function Shell(): React.JSX.Element {
   // once, means an assistant's change to a folder refreshes the Agents tab and
   // the open agent page wherever the user happens to be.
   useLocalAgentWatch()
+  // Tile data that main recomputed, and components that changed with their agent's folder.
+  useDashboardsWatch()
   // A shared agent's state and the Team library move on main's schedule (a
   // teammate shares, a fetch lands); one subscription refreshes every surface.
   useSharingWatch()

@@ -14,6 +14,7 @@ import type { MessageAttachment } from '../../../shared/attachments'
 // on both sides.
 import type { RunEvent } from '../../../shared/runEvents'
 import type { RunTarget } from '../../../shared/chatRouting'
+import type { DashboardContext } from '../../../shared/dashboards'
 
 export interface StartRunOptions {
   attachments?: MessageAttachment[]
@@ -23,6 +24,8 @@ export interface StartRunOptions {
    * The live watcher uses main's resolved agentId for status/readiness updates.
    */
   target?: RunTarget
+  /** From the dashboard panel's composer only (README D7); wire-only, main caps and never persists it. */
+  dashboardContext?: DashboardContext | null
 }
 
 /** Apply the shared event vocabulary to the selected chat's projection. */
@@ -152,7 +155,8 @@ export function useChatStream(): {
       if (pending) state.setPendingUserMessage(pending)
     }
     void window.api.run.start({ chatId, content, attachments: opts?.attachments,
-      addressedAgentId: opts?.target?.kind === 'agent' ? opts.target.agentId : null
+      addressedAgentId: opts?.target?.kind === 'agent' ? opts.target.agentId : null,
+      ...(opts?.dashboardContext ? { dashboardContext: opts.dashboardContext } : {})
     }).then((result) => {
       const current = useChatStore.getState()
       if (result.kind === 'started') {

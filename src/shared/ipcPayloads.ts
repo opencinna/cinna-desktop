@@ -7,6 +7,7 @@
  */
 
 import type { MessageAttachment } from './attachments'
+import type { DashboardContext } from './dashboards'
 
 /**
  * One user message for run:start or the generic run:send port interface.
@@ -30,6 +31,12 @@ export interface RunSendPayload {
    * an agent the chat is not carrying. Absent means "whoever answered last".
    */
   addressedAgentId?: string | null
+  /**
+   * What the user sees on the dashboard, from the dashboard panel's composer
+   * only (README D7). Wire-only: main validates and caps it, adds the
+   * `<dashboard_context>` section when it changed, and never persists it.
+   */
+  dashboardContext?: DashboardContext | null
 }
 
 /**

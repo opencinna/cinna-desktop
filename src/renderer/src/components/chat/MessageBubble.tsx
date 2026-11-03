@@ -1,16 +1,13 @@
 import { memo, useContext, useMemo, useState } from 'react'
 import { Info, Bot, ArrowRight, X, ClipboardList, ChevronDown } from 'lucide-react'
 import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
-import { CommandMessageContext, CommandScopeContext, FileRefContext, MessageIdContext, chatMarkdownComponents, type CommandMessage } from './fileRefs'
+import { CommandMessageContext, CommandScopeContext, FileRefContext, MessageIdContext, type CommandMessage } from './fileRefs'
+import { chatMessageComponents, chatRemarkPlugins, chatUrlTransform } from './chatMarkdown'
+import { ComponentRefScopeContext } from '../dashboards/ComponentCard'
 import { repairNestedFences } from '../../utils/nestedFences'
 import { useFrontmatter } from '../ui/FrontmatterTable'
-
-const REMARK_PLUGINS = [remarkGfm]
-const USER_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
 
 /**
  * Memoized markdown renderer. Two reasons it's split out:
@@ -25,15 +22,21 @@ const USER_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
  * `breaks` turns a single newline into a line break. Only a user's message
  * gets it: they typed Shift+Enter for a new line and expect one, while a
  * model writes Markdown and relies on a lone newline being a soft wrap.
+ *
+ * Plugins, components and `urlTransform` are the chat's one shared
+ * configuration (`chatMarkdown`), component references included.
  */
 const MarkdownContent = memo(function MarkdownContent({
   content,
   highlight,
-  breaks = false
+  breaks = false,
+  streaming = false
 }: {
   content: string
   highlight: boolean
   breaks?: boolean
+  /** The reply is still arriving: its last line may still grow, so it is no card yet. */
+  streaming?: boolean
 }): React.JSX.Element {
   // A reply that quotes a file whole, or a pasted spec, opens with its
   // frontmatter; shown as a card rather than a rule over one bold heading.
@@ -42,9 +45,10 @@ const MarkdownContent = memo(function MarkdownContent({
     <>
       {card}
       <Markdown
-        remarkPlugins={breaks ? USER_REMARK_PLUGINS : REMARK_PLUGINS}
+        remarkPlugins={chatRemarkPlugins({ breaks, streaming })}
         rehypePlugins={highlight ? [rehypeHighlight] : []}
-        components={chatMarkdownComponents}
+        components={chatMessageComponents}
+        urlTransform={chatUrlTransform}
       >
         {body}
       </Markdown>
@@ -242,6 +246,13 @@ export function MessageBubble({
         : repairNestedFences(stripCinnaAttachTags(content, { streaming: isStreaming }), { streaming: isStreaming }),
     [content, isUser, isStreaming]
   )
+  // A component reference resolves for the agent whose message it is: it wins a clash.
+  const inheritedComponentScope = useContext(ComponentRefScopeContext)
+  const messageAgentId = (isUser ? addressedAgentId : agentId) ?? null
+  const componentScope = useMemo(
+    () => (messageAgentId && messageAgentId !== inheritedComponentScope.agentId ? { ...inheritedComponentScope, agentId: messageAgentId } : inheritedComponentScope),
+    [inheritedComponentScope, messageAgentId]
+  )
   const downloadErrorForThisBubble =
     isUser && downloadError && attachments?.some((a) => a.id === errorFileId)
       ? downloadError
@@ -257,7 +268,9 @@ export function MessageBubble({
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <FileRefContext.Provider value={fileRefs}>
-              <UserMessageContent content={content} markdown={markdown} animate={animate} />
+              <ComponentRefScopeContext.Provider value={componentScope}>
+                <UserMessageContent content={content} markdown={markdown} animate={animate} />
+              </ComponentRefScopeContext.Provider>
             </FileRefContext.Provider>
             {addressedAgentName && (
               <div className="mt-0.5 flex justify-end">
@@ -323,7 +336,9 @@ export function MessageBubble({
             mid-stream so no fragment flashes before the turn finalizes. */}
         <FileRefContext.Provider value={fileRefs}>
           <CommandMessageContext.Provider value={commandMessage}>
-            <MarkdownContent content={markdown} highlight={!isStreaming} />
+            <ComponentRefScopeContext.Provider value={componentScope}>
+              <MarkdownContent content={markdown} highlight={!isStreaming} streaming={!!isStreaming} />
+            </ComponentRefScopeContext.Provider>
           </CommandMessageContext.Provider>
         </FileRefContext.Provider>
         {isStreaming && (

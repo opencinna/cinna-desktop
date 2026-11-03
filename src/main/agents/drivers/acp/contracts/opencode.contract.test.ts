@@ -21,7 +21,7 @@ import { OPENCODE_CONTRACT } from './opencode.contract'
 import { lineDiff, sorted } from './snapshotTools'
 import { startEgressTrap, type EgressTrap } from './claudeHarness'
 import {
-  KIT_ARTIFACTS_SKILL_MARKER, KIT_SKILL_MARKER, PERSONAL_MARKERS, descendantsOf, findContractOpencode, isAlive, makeOpencodeScratch, reap, spawnAcp, startFakeOpenAi,
+  KIT_ARTIFACTS_SKILL_MARKER, KIT_DASHBOARDS_SKILL_MARKER, KIT_SKILL_MARKER, PERSONAL_MARKERS, descendantsOf, findContractOpencode, isAlive, makeOpencodeScratch, reap, spawnAcp, startFakeOpenAi,
   type AcpConnection, type AcpMessage, type FakeOpenAi, type OpenAiReply, type OpenAiTurn, type OpencodeScratch
 } from './opencodeHarness'
 
@@ -920,8 +920,8 @@ function snapshot(): Json {
     model: {
       offeredTools: [...(first?.tools ?? [])].sort(),
       systemPromptArrives: first?.systemText.includes(SYSTEM_MARKER) ?? false,
-      // Both per-skill folders from `skills.paths` (cinna-tasks, cinna-artifacts).
-      kitSkill: (first?.mentions(KIT_SKILL_MARKER) && first?.mentions(KIT_ARTIFACTS_SKILL_MARKER)) ?? false,
+      // Every per-skill folder from `skills.paths` (cinna-tasks, cinna-artifacts, cinna-dashboards).
+      kitSkill: (first?.mentions(KIT_SKILL_MARKER) && first?.mentions(KIT_ARTIFACTS_SKILL_MARKER) && first?.mentions(KIT_DASHBOARDS_SKILL_MARKER)) ?? false,
       personal: Object.fromEntries(Object.entries(PERSONAL_MARKERS).map(([name, marker]) => [name, first?.mentions(marker) ?? false])),
       personalWithoutPluginEntry: Object.fromEntries(Object.entries(PERSONAL_MARKERS).map(([name, marker]) => [name, seen.control.turns[0]?.mentions(marker) ?? false]))
     },
@@ -1027,6 +1027,7 @@ describe.skipIf(!binaryRef)('OpenCode interface contract', () => {
     // Each skill is passed by its own folder (`skills.paths`), its SKILL.md at that folder's root.
     expect(first!.mentions(KIT_SKILL_MARKER), 'cinna-tasks from its skills.paths folder was not listed').toBe(true)
     expect(first!.mentions(KIT_ARTIFACTS_SKILL_MARKER), 'cinna-artifacts from its skills.paths folder was not listed').toBe(true)
+    expect(first!.mentions(KIT_DASHBOARDS_SKILL_MARKER), 'cinna-dashboards from its skills.paths folder was not listed').toBe(true)
     const leaked = Object.entries(PERSONAL_MARKERS).filter(([, marker]) => first!.mentions(marker)).map(([name]) => name).sort()
     expect(leaked).toEqual([])
     // The control: without the plugin entry the same HOME's skills do reach

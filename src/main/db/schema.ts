@@ -199,6 +199,19 @@ export const chats = sqliteTable('chats', {
    */
   guidedBuild: integer('guided_build', { mode: 'boolean' }).notNull().default(false),
   /**
+   * The dashboard whose chat panel opened this chat (Dashboards D3), or null.
+   * Written once at creation by `dashboards:panel-chat`; nulled when the
+   * dashboard is deleted. The run service accepts a `dashboardContext` only
+   * for a chat whose origin is that dashboard.
+   */
+  originDashboardId: text('origin_dashboard_id'),
+  /**
+   * A placeholder title main gave the chat at creation (a dashboard panel's
+   * "<dashboard> · <agent>"), or null. While `title` still equals it, auto
+   * titling treats the title as untouched, as it does `'New Chat'`.
+   */
+  initialTitle: text('initial_title'),
+  /**
    * The chat's place in the sidebar's Pinned block, higher first; null when
    * not pinned. Pinning takes the highest rank + 1, and a drag inside Pinned
    * writes a rank between its new neighbours. Never bumps `updatedAt`.
@@ -1418,3 +1431,46 @@ export const chatArtifactCards = sqliteTable('chat_artifact_cards', {
   artifactId: text('artifact_id').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
 })
+
+/** A per-profile dashboard. See `migrations/dashboards.ts`. */
+export const dashboards = sqliteTable('dashboards', {
+  id: text('id').primaryKey(),
+  profileUserId: text('profile_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
+})
+
+/** A component placed on a dashboard; references the agent by manifest id. */
+export const dashboardTiles = sqliteTable('dashboard_tiles', {
+  id: text('id').primaryKey(),
+  dashboardId: text('dashboard_id').notNull().references(() => dashboards.id, { onDelete: 'cascade' }),
+  agentManifestId: text('agent_manifest_id').notNull(),
+  component: text('component').notNull(),
+  /** The skill that ships the component, or null for the agent's own (D2). */
+  skill: text('skill'),
+  title: text('title'),
+  size: text('size').notNull(),
+  position: integer('position').notNull().default(0),
+  paramsJson: text('params_json').notNull().default('{}'),
+  refreshOverrideJson: text('refresh_override_json'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
+})
+
+/** A tile's last good result per params hash, with the last error beside it. */
+export const dashboardTileResults = sqliteTable(
+  'dashboard_tile_results',
+  {
+    tileId: text('tile_id').notNull().references(() => dashboardTiles.id, { onDelete: 'cascade' }),
+    paramsHash: text('params_hash').notNull(),
+    resultJson: text('result_json'),
+    fetchedAt: integer('fetched_at'),
+    error: text('error'),
+    durationMs: integer('duration_ms'),
+    tooLarge: integer('too_large', { mode: 'boolean' }).notNull().default(false),
+    updatedAt: integer('updated_at').notNull()
+  },
+  (table) => [primaryKey({ columns: [table.tileId, table.paramsHash] })]
+)

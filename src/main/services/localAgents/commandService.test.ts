@@ -404,6 +404,19 @@ describe('the turn lock', () => {
     const handle = turnLock.acquire(AGENT_ID, 'editor')
     handle.release()
   })
+
+  it('a dashboard refresh command is preempted by an editor write: the write proceeds and the run comes back aborted', async () => {
+    writeCatalog('commands:\n  - name: slow\n    description: x\n    command: sleep 5\n')
+    const started = Date.now()
+    const pending = commandService.run(USER, AGENT_ID, 'slow', undefined, undefined, { yieldingOwner: 'dashboard' })
+    expect(turnLock.isLocked(AGENT_ID)).toBe(true)
+    const editor = turnLock.acquire(AGENT_ID, 'editor')
+    const result = await pending
+    expect(result).toMatchObject({ ok: false, aborted: true, busy: false })
+    expect(Date.now() - started).toBeLessThan(3000)
+    expect(turnLock.isExclusivelyLocked(AGENT_ID)).toBe(true)
+    editor.release()
+  })
 })
 
 describe('runForTurn', () => {

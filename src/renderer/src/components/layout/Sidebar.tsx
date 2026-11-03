@@ -23,6 +23,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
 import { JobsList } from '../jobs/JobsList'
 import { NotesList } from '../notes/NotesList'
+import { DashboardsList } from '../dashboards/DashboardsList'
 import { LocalAgentsList } from '../agents/local/LocalAgentsList'
 import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
@@ -180,6 +181,8 @@ export function Sidebar(): React.JSX.Element {
                 <JobsList />
               ) : sidebarTab === 'notes' ? (
                 <NotesList />
+              ) : sidebarTab === 'dashboards' ? (
+                <DashboardsList />
               ) : (
                 <LocalAgentsList />
               )}

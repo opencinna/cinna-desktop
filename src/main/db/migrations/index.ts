@@ -39,6 +39,7 @@ import { migrateInboxDismissals } from './inbox-dismissals'
 import { migrateRuntimeModelCatalogs } from './runtime-model-catalogs'
 import { migratePublishedArtifacts } from './published-artifacts'
 import { migrateArtifactSupport } from './artifact-support'
+import { migrateDashboards } from './dashboards'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
 import { shareLocalAgentChats } from './share-local-agent-chats'
@@ -128,6 +129,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migratePublishedArtifacts(sqlite)
   // The last supported artifacts answer per profile+server; FK → users; creation only.
   migrateArtifactSupport(sqlite)
+  // Dashboards, their tiles and the tiles' last results; FK → users; creation only.
+  migrateDashboards(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).
   runSyncMigrations(sqlite)
   // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).

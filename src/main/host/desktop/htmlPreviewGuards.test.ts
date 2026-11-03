@@ -178,3 +178,43 @@ describe('createExternalOpenGate', () => {
     expect(gate.mayOpen()).toBe(false)
   })
 })
+
+describe('previewFrameNavigation: a dashboard tile stays under its own path', () => {
+  const H = 'dash-00112233445566778899aabbccddeeff'
+  const TILE = `cinna-preview://${H}/tile0001/index.html`
+
+  it('lets a tile frame load and reload its first page, and move within its own path', () => {
+    expect(previewFrameNavigation(nav({ url: TILE, frameUrl: '' }))).toBe('allow')
+    expect(previewFrameNavigation(nav({ url: TILE, frameUrl: 'about:blank' }))).toBe('allow')
+    expect(previewFrameNavigation(nav({ url: TILE, frameUrl: TILE }))).toBe('allow')
+    expect(previewFrameNavigation(nav({ url: `cinna-preview://${H}/tile0001/sub/other.html#x`, frameUrl: TILE }))).toBe('allow')
+  })
+
+  it('blocks another tile on the same host, another dash host, another preview and a climb out of its path', () => {
+    for (const url of [
+      `cinna-preview://${H}/tile0002/index.html`,
+      `cinna-preview://dash-ffff/tile0001/index.html`,
+      'cinna-preview://0123abcd/report.html',
+      'cinna-preview://art-abc/index.html',
+      `cinna-preview://${H}/tile0001/../tile0002/index.html`,
+      `cinna-preview://${H}/tile0001%2F..%2Ftile0002/index.html`,
+      'about:blank',
+      'https://example.com/',
+      'data:text/html,hi'
+    ]) {
+      expect(previewFrameNavigation(nav({ url, frameUrl: TILE })), url).toBe('block')
+    }
+  })
+
+  it('leaves the HTML preview’s own rules alone', () => {
+    expect(previewFrameNavigation(nav({ url: `cinna-preview://${H}/tile0002/index.html`, frameUrl: PREVIEW }))).toBe('allow')
+  })
+
+  it('takes the HTML preview sandbox minus top navigation for dashboard frames', async () => {
+    const { DASHBOARD_FRAME_SANDBOX, HTML_PREVIEW_SANDBOX } = await import('../../../shared/htmlPreview')
+    expect(DASHBOARD_FRAME_SANDBOX.split(' ').sort()).toEqual(
+      HTML_PREVIEW_SANDBOX.split(' ').filter((token) => token !== 'allow-top-navigation-by-user-activation').sort()
+    )
+    expect(DASHBOARD_FRAME_SANDBOX).not.toMatch(/allow-same-origin|allow-popups|allow-top-navigation/)
+  })
+})

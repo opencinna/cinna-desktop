@@ -1,6 +1,6 @@
 {
-  "kit_version": "8315b1b9c1ebf29a",
-  "contract_version": "1.18.0",
+  "kit_version": "16ae73845b95eac9",
+  "contract_version": "1.19.1",
   "platform_url": "https://opencinna.io",
   "kit_base_url": "https://opencinna.io/api/agent-start",
   "start_url": "https://opencinna.io/agent-start",
@@ -18,11 +18,14 @@
   "marketplace_schema": "schema/cinna-marketplace.schema.json",
   "protocols": {
     "tasks": "protocols/tasks.schema.json",
-    "artifacts": "protocols/artifacts.schema.json"
+    "artifacts": "protocols/artifacts.schema.json",
+    "dashboards": "protocols/dashboards.schema.json",
+    "dashboards_bridge": "protocols/dashboards-bridge.js"
   },
   "platform_skills": {
     "cinna-tasks": "skills/cinna-tasks",
-    "cinna-artifacts": "skills/cinna-artifacts"
+    "cinna-artifacts": "skills/cinna-artifacts",
+    "cinna-dashboards": "skills/cinna-dashboards"
   },
   "agent_template": "templates/agent",
   "root_template": "templates/root",
@@ -72,6 +75,11 @@
       "rung": "multi_agent",
       "doc": "guides/09-multi-agent.md",
       "trigger": "a second agent appears, or one agent should delegate to another"
+    },
+    {
+      "rung": "dashboards",
+      "doc": "guides/14-dashboards.md",
+      "trigger": "the owner wants to see, track or keep an eye on something over time in Cinna Desktop"
     },
     {
       "rung": "go_cloud",

@@ -259,6 +259,26 @@ import {
   type ArtifactVisibility,
   type PublishArtifactInput
 } from '../shared/artifacts'
+import {
+  DASHBOARDS_TILE_CHANGED_CHANNEL,
+  type AddTileInput,
+  type ComponentInfo,
+  type ComponentPlacement,
+  type DashboardDto,
+  type DashboardFrameOutcome,
+  type DashboardFrameTarget,
+  type DashboardRefreshReason,
+  type DashboardsOutcome,
+  type DashboardsTileChangedPayload,
+  type TileDto,
+  type TileResultDto,
+  type ResolveReferenceInput,
+  type PanelChatInput,
+  type PanelChatOutcome,
+  type ResolveReferenceOutcome,
+  type TileView,
+  type UpdateTileInput
+} from '../shared/dashboards'
 import type {
   ImprovementContext,
   ImprovementOutcome,
@@ -285,6 +305,8 @@ export interface ChatData {
   router: ChatRouter
   /** The job run that spawned this chat, if any (drives the chat-page job-origin banner). */
   originatingJobRunId: string | null
+  /** The dashboard whose panel started this chat (the "From dashboard" pill); null otherwise. */
+  originDashboardId?: string | null
   /**
    * Kept out of the Chats list — a job spawns its chats this way until one is
    * moved into it. On the wire since the column existed (the row is spread);
@@ -2376,6 +2398,58 @@ const api = {
       const listener = (_event: IpcRendererEvent, payload: ArtifactsSupportChangedPayload): void => handler(payload)
       ipcRenderer.on(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(ARTIFACTS_SUPPORT_CHANGED_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * Dashboards: the active profile's grids of tiles, each showing a component
+   * an agent built in its folder. The renderer names dashboards, tiles,
+   * agents and components, never paths; every answer, refusals included, is
+   * data. See `src/shared/dashboards.ts`.
+   */
+  dashboards: {
+    list: (): Promise<DashboardDto[]> => ipcRenderer.invoke('dashboards:list'),
+    create: (name: string): Promise<DashboardsOutcome<{ dashboard: DashboardDto }>> => ipcRenderer.invoke('dashboards:create', name),
+    rename: (dashboardId: string, name: string): Promise<DashboardsOutcome<{ dashboard: DashboardDto }>> =>
+      ipcRenderer.invoke('dashboards:rename', { dashboardId, name }),
+    delete: (dashboardId: string): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:delete', dashboardId),
+    reorder: (orderedIds: string[]): Promise<DashboardsOutcome<{ dashboards: DashboardDto[] }>> => ipcRenderer.invoke('dashboards:reorder', orderedIds),
+    /** A dashboard's tiles, each with whether its component can be drawn. */
+    tiles: (dashboardId: string): Promise<DashboardsOutcome<{ dashboard: DashboardDto; tiles: TileView[] }>> =>
+      ipcRenderer.invoke('dashboards:tiles', dashboardId),
+    addTile: (input: AddTileInput): Promise<DashboardsOutcome<{ tile: TileDto; dashboard: DashboardDto }>> => ipcRenderer.invoke('dashboards:add-tile', input),
+    updateTile: (input: UpdateTileInput): Promise<DashboardsOutcome<{ tile: TileDto }>> => ipcRenderer.invoke('dashboards:update-tile', input),
+    moveTile: (tileId: string, toIndex: number): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:move-tile', { tileId, toIndex }),
+    removeTile: (tileId: string): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:remove-tile', tileId),
+    /** One agent's components (or every kit agent's), valid or not. Reading runs nothing. */
+    components: (agentId?: string): Promise<ComponentInfo[]> => ipcRenderer.invoke('dashboards:components', agentId),
+    /** Where an agent's components sit on this profile's dashboards. */
+    placements: (agentId: string): Promise<ComponentPlacement[]> => ipcRenderer.invoke('dashboards:placements', agentId),
+    /** A tile's cached data and state; runs nothing. */
+    tileResult: (tileId: string): Promise<DashboardsOutcome<{ result: TileResultDto }>> => ipcRenderer.invoke('dashboards:tile-result', tileId),
+    /** Recompute a tile if it is stale (`visible`) or always (`manual`); answers at once. */
+    ensureFresh: (tileId: string, reason: DashboardRefreshReason): Promise<DashboardsOutcome<{ result: TileResultDto }>> =>
+      ipcRenderer.invoke('dashboards:ensure-fresh', { tileId, reason }),
+    /** Run a component once for a preview; never cached. */
+    preview: (agentId: string, component: string, skill: string | null = null): Promise<DashboardsOutcome<{ result: TileResultDto }>> =>
+      ipcRenderer.invoke('dashboards:preview', { agentId, component, skill }),
+    /** The panel's chat for (dashboard, agent): the latest one, or a new one with `fresh`. */
+    panelChat: (input: PanelChatInput): Promise<PanelChatOutcome> => ipcRenderer.invoke('dashboards:panel-chat', input),
+    /** A component reference from a message, resolved against this machine's agents; reading runs nothing. */
+    resolveReference: (input: ResolveReferenceInput): Promise<ResolveReferenceOutcome> =>
+      ipcRenderer.invoke('dashboards:resolve-reference', input),
+    /** These tiles are on screen; renewed every 20 s. */
+    lease: (tileIds: string[]): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:lease', tileIds),
+    /** None (or none of these) is on screen any more: hidden, blurred or closed. */
+    dropLease: (tileIds?: string[]): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:drop-lease', tileIds),
+    /** A frame URL for an html component; release the token on unmount. */
+    openFrame: (target: DashboardFrameTarget): Promise<DashboardFrameOutcome> => ipcRenderer.invoke('dashboards:open-frame', target),
+    releaseFrame: (token: string): Promise<boolean> => ipcRenderer.invoke('dashboards:release-frame', token),
+    /** A tile's data or refresh state changed in main. */
+    onTileChanged: (handler: (payload: DashboardsTileChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: DashboardsTileChangedPayload): void => handler(payload)
+      ipcRenderer.on(DASHBOARDS_TILE_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(DASHBOARDS_TILE_CHANGED_CHANNEL, listener)
     }
   },
 

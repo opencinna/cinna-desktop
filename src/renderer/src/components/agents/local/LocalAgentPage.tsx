@@ -30,6 +30,7 @@ import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
 import { AgentAddonsTab, useAddonsBadge } from './AgentAddonsTab'
 import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
+import { AgentDashboardsTab } from '../../dashboards/AgentDashboardsTab'
 import { AgentShareBadge } from './sharing/AgentShareBadge'
 import { SharingTab } from './sharing/SharingTab'
 import { useShareActions } from './sharing/useShareActions'
@@ -53,6 +54,9 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   // The agent's task queue: how its Ready tasks start (Manual / One at a
   // time) and Run next. Every folder agent has one, bare or kit.
   { id: 'tasks', label: 'Tasks' },
+  // The components this agent built in `dashboards/`, and where each is placed.
+  // Kit agents only: a bare folder has no `dashboards/` convention.
+  { id: 'dashboards', label: 'Dashboards' },
   // Permissions is a tab and not a card on Overview: in the common case it is a
   // fixed paragraph identical for every folder agent plus "nothing remembered
   // yet" — knowledge, not a control (rule 2) — and the count badge is what
@@ -286,7 +290,7 @@ export function LocalAgentPage(): React.JSX.Element {
   // profile it runs under, Folder the findings that explain what it is.
   const tabs = TABS.filter(
     (entry) =>
-      !(agent.kind === 'bare' && ['commands', 'schedules'].includes(entry.id)) &&
+      !(agent.kind === 'bare' && ['commands', 'schedules', 'dashboards'].includes(entry.id)) &&
       (entry.id !== 'sharing' || listedShare != null)
   )
   // The selected tab persists across agents, so someone on Commands who clicks
@@ -527,6 +531,7 @@ export function LocalAgentPage(): React.JSX.Element {
           {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
           {activeTab === 'tasks' && <AgentTasksTab key={agent.id} agent={agent} />}
+          {activeTab === 'dashboards' && <AgentDashboardsTab key={agent.id} agent={agent} />}
           {activeTab === 'addons' && <AgentAddonsTab key={agent.id} agent={agent} onFinishSetup={finishSetup.open} />}
           {activeTab === 'overview' &&
             /* Three of the kit cards name a file only a kit folder has:

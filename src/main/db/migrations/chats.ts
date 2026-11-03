@@ -67,6 +67,20 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN sort_key REAL`)
   }
 
+  // A dashboard panel's chat (Dashboards D3): the dashboard it was opened
+  // from, so the panel resumes the latest one per (dashboard, agent) and the
+  // Chats row shows "From dashboard". Nullable; deleting the dashboard nulls
+  // it (`dashboardRepo.delete`), and the chat survives.
+  if (!hasColumn(sqlite, 'chats', 'origin_dashboard_id')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN origin_dashboard_id TEXT`)
+  }
+
+  // A placeholder title given at creation (a dashboard panel's chat), which
+  // auto titling may still replace while the title equals it. Nullable.
+  if (!hasColumn(sqlite, 'chats', 'initial_title')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN initial_title TEXT`)
+  }
+
   // Multi-agent switchboard removed: agents-as-tools orchestration is now the
   // only multi-counterparty engine, so the per-chat active-agent target, the
   // Smart Rewrite toggle, and the catch-up cursor table are all obsolete.

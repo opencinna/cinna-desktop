@@ -23,7 +23,12 @@ import { defaultEngineService } from '../localAgents/defaultEngineService'
 import { effectiveEngine } from '../../../shared/engine'
 import { addonPolicies } from './policy'
 import { mcpService } from '../mcpService'
-import { createAddonDirectory, LOCAL_SOURCE, type AgentFacts, type McpSetup } from './directory'
+import { CATALOG_SOURCE, createAddonDirectory, LOCAL_SOURCE, MARKETPLACE_SOURCE, type AgentFacts, type McpSetup } from './directory'
+import { catalogSkillCache } from '../catalogSkillCache'
+import { marketplaceSkillCache } from '../marketplaceSkillCache'
+import { skillDashboardComponentCount } from '../dashboards/dashboardsSkill'
+import type { CatalogSkillCacheState } from '../../kit/skills'
+import type { DirectoryEntry } from '../../../shared/addons/directory'
 import { createCinnaCoreProvider } from './cinnaCore'
 import { createThisComputerProvider } from './thisComputer'
 import { createMcpRegistriesProvider } from './mcpRegistries'
@@ -74,6 +79,29 @@ function uvBins(): UvBins | null {
   } catch {
     return null
   }
+}
+
+/** A catalog entry's revision, from its download path (`…/revisions/<n>/download`); null when it names none. */
+const CATALOG_REVISION_RE = /\/revisions\/(\d+)\/download$/
+
+/**
+ * How many dashboard components a skill entry ships, counted in the copy
+ * cached on this computer (any agent's pin of the same digest). A skill never
+ * downloaded here has no folder to count, so the picker says nothing.
+ */
+export function skillDashboardComponents(entry: DirectoryEntry): number {
+  const sha = entry.digest?.startsWith('sha256:') ? entry.digest.slice('sha256:'.length) : null
+  if (!sha) return 0
+  let state: CatalogSkillCacheState = { state: 'missing' }
+  if (entry.ref.source === MARKETPLACE_SOURCE) {
+    state = marketplaceSkillCache.resolve({ entryUuid: entry.ref.id, name: entry.name, archiveSha256: sha })
+  } else if (entry.ref.source === CATALOG_SOURCE) {
+    const path = entry.install && 'archivePath' in entry.install ? entry.install.archivePath : ''
+    const revision = CATALOG_REVISION_RE.exec(path)?.[1]
+    if (!revision) return 0
+    state = catalogSkillCache.resolve({ packageUuid: entry.ref.id, revisionNumber: Number(revision), name: entry.name, archiveSha256: sha })
+  }
+  return state.state === 'ready' ? skillDashboardComponentCount(state.dir) : 0
 }
 
 /** A refusal `refusalOf` reads as data: the code and the sentence. */
@@ -170,6 +198,7 @@ export const addonDirectory = createAddonDirectory({
   },
   deleteMcp: async (userId, id) => {
     await mcpService.delete(userId, id)
-  }
+  },
+  skillDashboardComponents
 })
 

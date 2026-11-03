@@ -921,6 +921,12 @@
   [data-theme="light"] .file-preview-markdown tbody tr:nth-child(odd) td {
     background: color-mix(in srgb, var(--color-bg-secondary), black 2.5%);
   }
+  /* A selected row (a dashboard table tile) wins over the stripe on every
+     row; `:nth-child(n)` lifts it above the light-theme stripe rule. */
+  .file-preview-table tbody tr[aria-selected="true"]:nth-child(n) td,
+  .file-preview-markdown tbody tr[aria-selected="true"]:nth-child(n) td {
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg));
+  }
   .markdown-body th {
     background: var(--color-bg-secondary);
     font-weight: 600;

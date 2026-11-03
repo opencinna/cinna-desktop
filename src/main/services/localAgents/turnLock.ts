@@ -17,6 +17,8 @@
  * every shared acquisition is refused while an exclusive one is held — except
  * that {@link TurnLock.withSharedLock} waits a few seconds out a `credentials`
  * write, which is short and may be a background auto-attach the user never saw.
+ * A dashboard run's hold is *preemptible* (`onPreempt`): an exclusive
+ * acquisition stops such runs and takes their place instead of refusing.
  *
  * **Reader preference.** A queued exclusive waiter is admitted only when no
  * holder at all remains; a steady stream of overlapping turns can therefore
@@ -46,6 +48,12 @@ interface HeldLock {
   owner: string
   acquiredAt: number
   mode: LockMode
+  /**
+   * Set by a yielding shared hold (a dashboard run): an exclusive acquisition
+   * that finds only such holders calls this and takes their place instead of
+   * refusing. The holder must stop its run; its later release is a no-op.
+   */
+  onPreempt?: () => void
 }
 
 export interface TurnLockHandle {
@@ -57,7 +65,19 @@ export interface TurnLockHandle {
 const held = new Map<string, Map<number, HeldLock>>()
 /** Called when an agent's last holder leaves: `whenFree` callbacks and queued acquisitions. */
 const releaseWaiters = new Map<string, Array<() => void>>()
+/**
+ * Per agent, how many queued exclusive acquisitions ({@link TurnLock.withQueuedLock})
+ * are waiting. A yielding shared hold ({@link TurnLock.tryAcquireSharedYielding})
+ * stands back while any is, so a stream of dashboard runs cannot keep one out.
+ */
+const queuedExclusive = new Map<string, number>()
 let nextToken = 1
+
+function countQueuedExclusive(agentId: string, delta: 1 | -1): void {
+  const next = (queuedExclusive.get(agentId) ?? 0) + delta
+  if (next > 0) queuedExclusive.set(agentId, next)
+  else queuedExclusive.delete(agentId)
+}
 
 function fireWaiters(agentId: string): void {
   const waiters = releaseWaiters.get(agentId)
@@ -78,14 +98,40 @@ function exclusiveHolder(agentId: string): HeldLock | undefined {
   return undefined
 }
 
-/** Whether a `mode` acquisition must wait (or be refused) right now, and whom it would wait for. */
+/**
+ * Whether a `mode` acquisition must wait (or be refused) right now, and whom it
+ * would wait for. Preemptible holders never block an exclusive acquisition:
+ * {@link preemptAll} evicts them when it takes the lock.
+ */
 function blocker(agentId: string, mode: LockMode): HeldLock | undefined {
   if (mode === 'shared') return exclusiveHolder(agentId)
-  const holders = held.get(agentId)
-  return holders ? holders.values().next().value : undefined
+  for (const lock of held.get(agentId)?.values() ?? []) if (!lock.onPreempt) return lock
+  return undefined
 }
 
-function take(agentId: string, owner: string, mode: LockMode): TurnLockHandle {
+/**
+ * Evict every preemptible holder of `agentId` and tell each to stop. Called
+ * only once nothing else holds it. Synchronous on purpose: the exclusive
+ * callers (`acquire`) are synchronous, and a preempted run is a re-runnable
+ * read whose result is discarded, so its process being killed a moment after
+ * the write starts cannot leave the folder half-written by the desktop.
+ */
+function preemptAll(agentId: string): void {
+  const holders = held.get(agentId)
+  if (!holders) return
+  const evicted = [...holders.values()]
+  held.delete(agentId)
+  for (const lock of evicted) {
+    logger.debug('turn lock preempted', { agentId, owner: lock.owner, heldMs: Date.now() - lock.acquiredAt })
+    try {
+      lock.onPreempt?.()
+    } catch (err) {
+      logger.error('a preempted holder failed to stop', { agentId, error: err })
+    }
+  }
+}
+
+function take(agentId: string, owner: string, mode: LockMode, onPreempt?: () => void): TurnLockHandle {
   const existing = blocker(agentId, mode)
   if (existing) {
     throw new LocalAgentError(
@@ -94,9 +140,10 @@ function take(agentId: string, owner: string, mode: LockMode): TurnLockHandle {
       `held by ${existing.owner} for ${Date.now() - existing.acquiredAt}ms`
     )
   }
+  if (mode === 'exclusive') preemptAll(agentId)
   const token = nextToken++
   const holders = held.get(agentId) ?? new Map<number, HeldLock>()
-  holders.set(token, { owner, acquiredAt: Date.now(), mode })
+  holders.set(token, { owner, acquiredAt: Date.now(), mode, ...(onPreempt ? { onPreempt } : {}) })
   held.set(agentId, holders)
   logger.debug('turn lock acquired', { agentId, owner, mode })
 
@@ -120,7 +167,9 @@ function take(agentId: string, owner: string, mode: LockMode): TurnLockHandle {
 
 async function withQueued<T>(agentId: string, owner: string, mode: LockMode, signal: AbortSignal, fn: () => Promise<T> | T): Promise<T> {
   const handle = await new Promise<TurnLockHandle>((resolve, reject) => {
+    let counted = false
     const remove = (): void => {
+      if (counted) { counted = false; countQueuedExclusive(agentId, -1) }
       signal.removeEventListener('abort', abort)
       const waiters = releaseWaiters.get(agentId)?.filter((waiter) => waiter !== acquire)
       if (waiters?.length) releaseWaiters.set(agentId, waiters)
@@ -130,6 +179,7 @@ async function withQueued<T>(agentId: string, owner: string, mode: LockMode, sig
     const acquire = (): void => {
       if (signal.aborted) { abort(); return }
       if (blocker(agentId, mode)) {
+        if (mode === 'exclusive' && !counted) { counted = true; countQueuedExclusive(agentId, 1) }
         const waiters = releaseWaiters.get(agentId) ?? []
         waiters.push(acquire)
         releaseWaiters.set(agentId, waiters)
@@ -239,6 +289,24 @@ export const turnLock = {
     return take(agentId, owner, 'shared')
   },
 
+  /**
+   * A shared hold that yields: taken at once, or refused (`null`, never a
+   * throw) while an exclusive holder exists **or an exclusive acquisition is
+   * queued** for this agent. A dashboard run takes this (owner `'dashboard'`):
+   * refused, the tile keeps its data and skips the tick. Reader preference
+   * would otherwise let a steady stream of tile refreshes keep an editor save
+   * or a credential write out for as long as a dashboard is open. Turns and
+   * `/run:` keep {@link withSharedLock}.
+   *
+   * `onPreempt` makes the hold preemptible: an exclusive acquisition that
+   * finds only preemptible holders evicts them (calling each `onPreempt`, which
+   * must abort the run) and proceeds instead of refusing.
+   */
+  tryAcquireSharedYielding(agentId: string, owner: string, onPreempt?: () => void): TurnLockHandle | null {
+    if (exclusiveHolder(agentId) || (queuedExclusive.get(agentId) ?? 0) > 0) return null
+    return take(agentId, owner, 'shared', onPreempt)
+  },
+
   /** Run `fn` under the exclusive lock, releasing it however `fn` ends. */
   async withLock<T>(agentId: string, owner: string, fn: () => Promise<T> | T): Promise<T> {
     return withHeld(take(agentId, owner, 'exclusive'), fn)
@@ -307,5 +375,6 @@ export const turnLock = {
     held.clear()
     for (const agentId of ids) fireWaiters(agentId)
     releaseWaiters.clear()
+    queuedExclusive.clear()
   }
 }

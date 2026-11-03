@@ -284,4 +284,89 @@ describe('turnLock', () => {
       expect(turnLock.isLocked('a')).toBe(false)
     })
   })
+
+  describe('yielding shared holds (dashboards)', () => {
+    it('takes a shared hold beside turns and commands, and releases it', () => {
+      const turn = turnLock.acquireShared('a', 'turn')
+      const dash = turnLock.tryAcquireSharedYielding('a', 'dashboard')
+      expect(dash).not.toBeNull()
+      expect(() => turnLock.acquire('a', 'editor')).toThrow(/busy/i)
+      dash!.release()
+      turn.release()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('refuses without throwing while an exclusive hold is held', () => {
+      const editor = turnLock.acquire('a', 'editor')
+      expect(turnLock.tryAcquireSharedYielding('a', 'dashboard')).toBeNull()
+      // Other agents are not affected.
+      expect(turnLock.tryAcquireSharedYielding('b', 'dashboard')).not.toBeNull()
+      editor.release()
+      expect(turnLock.tryAcquireSharedYielding('a', 'dashboard')).not.toBeNull()
+    })
+
+    it('stands back while an exclusive acquisition is queued, though a plain shared hold would still enter', async () => {
+      const turn = turnLock.acquireShared('a', 'turn')
+      const controller = new AbortController()
+      const entered = vi.fn()
+      const queued = turnLock.withQueuedLock('a', 'credentials', controller.signal, entered)
+      expect(turnLock.tryAcquireSharedYielding('a', 'dashboard')).toBeNull()
+      // Reader preference, unchanged for turns: a turn still joins.
+      const other = turnLock.acquireShared('a', 'turn')
+      other.release()
+      turn.release()
+      await queued
+      expect(entered).toHaveBeenCalledOnce()
+      expect(turnLock.tryAcquireSharedYielding('a', 'dashboard')).not.toBeNull()
+    })
+
+    it('stops standing back once a queued exclusive acquisition is cancelled', async () => {
+      const turn = turnLock.acquireShared('a', 'turn')
+      const controller = new AbortController()
+      const queued = turnLock.withQueuedLock('a', 'editor', controller.signal, () => {})
+      expect(turnLock.tryAcquireSharedYielding('a', 'dashboard')).toBeNull()
+      controller.abort()
+      await expect(queued).rejects.toThrow('stopped')
+      const dash = turnLock.tryAcquireSharedYielding('a', 'dashboard')
+      expect(dash).not.toBeNull()
+      dash!.release()
+      turn.release()
+    })
+
+    it('an exclusive acquisition preempts dashboard holds instead of refusing', () => {
+      const stopA = vi.fn()
+      const stopB = vi.fn()
+      const first = turnLock.tryAcquireSharedYielding('a', 'dashboard', stopA)!
+      const second = turnLock.tryAcquireSharedYielding('a', 'dashboard', stopB)!
+      const editor = turnLock.acquire('a', 'editor')
+      expect(stopA).toHaveBeenCalledOnce()
+      expect(stopB).toHaveBeenCalledOnce()
+      expect(turnLock.isExclusivelyLocked('a')).toBe(true)
+      // The preempted runs' late releases do not free the editor's hold.
+      first.release()
+      second.release()
+      expect(turnLock.isExclusivelyLocked('a')).toBe(true)
+      editor.release()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('a queued exclusive acquisition preempts dashboard holds too', async () => {
+      const stop = vi.fn()
+      turnLock.tryAcquireSharedYielding('a', 'dashboard', stop)
+      const entered = vi.fn()
+      await turnLock.withQueuedLock('a', 'credentials', new AbortController().signal, entered)
+      expect(stop).toHaveBeenCalledOnce()
+      expect(entered).toHaveBeenCalledOnce()
+    })
+
+    it('a real turn beside a dashboard hold still refuses the exclusive acquisition and preempts nothing', () => {
+      const stop = vi.fn()
+      const dash = turnLock.tryAcquireSharedYielding('a', 'dashboard', stop)!
+      const turn = turnLock.acquireShared('a', 'turn')
+      expect(() => turnLock.acquire('a', 'editor')).toThrow(/busy/i)
+      expect(stop).not.toHaveBeenCalled()
+      turn.release()
+      dash.release()
+    })
+  })
 })

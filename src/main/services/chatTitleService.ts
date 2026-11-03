@@ -20,12 +20,16 @@ const DEFAULT_CHAT_TITLE = 'New Chat'
  * The renderer's new-chat flow stamps the chat title with a truncated copy
  * of the first user message (see {@link deriveTitleFromMessage}). That's a
  * fallback title, not a user edit — for the "is this chat still using an
- * auto-generated title?" decision we treat both the initial `'New Chat'`
- * and the renderer's truncation as untouched, anything else as a real edit.
+ * auto-generated title?" decision we treat the initial `'New Chat'`, a
+ * placeholder main gave the chat at creation (`initialTitle`, a dashboard
+ * panel's "<dashboard> · <agent>") and the renderer's truncation as
+ * untouched, anything else as a real edit.
  */
-function isUntouchedAutoTitle(currentTitle: string, firstUserText: string): boolean {
+function isUntouchedAutoTitle(chat: { title: string; initialTitle?: string | null }, firstUserText: string): boolean {
+  const currentTitle = chat.title
   return (
     currentTitle === DEFAULT_CHAT_TITLE ||
+    (!!chat.initialTitle && currentTitle === chat.initialTitle) ||
     currentTitle === deriveTitleFromMessage(firstUserText)
   )
 }
@@ -118,7 +122,7 @@ export const chatTitleService = {
       // chat, or a specialist, answers top-level too, but speaks for itself.
       if (routingOf(chat).rootAgentId !== input.agentId) return false
       const firstUserText = messageRepo.firstByRole(chatId, 'user')?.content.trim() ?? ''
-      if (!isUntouchedAutoTitle(chat.title, firstUserText)) return false
+      if (!isUntouchedAutoTitle(chat, firstUserText)) return false
       const title = sanitizeTitle(input.title)
       if (!title || title === chat.title) return false
       chatRepo.updateMeta(ownerOfVisible(userId, chat), chatId, { title })
@@ -188,7 +192,7 @@ export const chatTitleService = {
     // truncation of the first message are treated as "still auto-set" and
     // safe to replace — anything else means the user (or another feature)
     // intentionally renamed the chat.
-    if (!isUntouchedAutoTitle(chat.title, firstUserText)) {
+    if (!isUntouchedAutoTitle(chat, firstUserText)) {
       throw new ChatTitleError(
         'chat_renamed_initial',
         'Chat already has a custom title'
@@ -235,7 +239,7 @@ export const chatTitleService = {
     if (!fresh) {
       throw new ChatTitleError('chat_not_found', 'Chat deleted during generation')
     }
-    if (!isUntouchedAutoTitle(fresh.title, firstUserText)) {
+    if (!isUntouchedAutoTitle(fresh, firstUserText)) {
       throw new ChatTitleError(
         'chat_renamed_mid_flight',
         'Chat was renamed while title was being generated'

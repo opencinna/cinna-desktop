@@ -31,6 +31,7 @@ import {
 import { createLogger } from '../logger/logger'
 import { tasksSkillInfo } from '../services/tasksSkillService'
 import { artifactsSkillInfo } from '../services/artifacts/artifactsSkill'
+import { dashboardsSkillInfo } from '../services/dashboards/dashboardsSkill'
 import { SKILLS_DIR } from '../kit/skills'
 import { ensureKitAgentSkillsPlugin, type KitAgentSkillsPlugin } from '../services/agentSkillsPlugin'
 import { cachedPlugins, type CachedPlugin } from '../services/pluginSkills'
@@ -395,9 +396,12 @@ export async function collectEngineConfigInput(
 /**
  * The platform skills OpenCode loads, each by its own folder: `cinna-tasks`
  * when the bundle has it, and `cinna-artifacts` only while the active
- * profile's instance keeps artifacts (`artifactsSkill`). Not the bundle's
- * `skills/` root, which would hand every agent `cinna-artifacts` whether or
- * not it is offered the tool. OpenCode scans each path for
+ * profile's instance keeps artifacts (`artifactsSkill`), and
+ * `cinna-dashboards` whenever the bundle has it (a desktop feature, no
+ * profile gate; the config is one for every agent, so a bare folder's agent
+ * sees it listed too, though only a kit agent's prompt names it). Not the
+ * bundle's `skills/` root, which would hand every agent `cinna-artifacts`
+ * whether or not it is offered the tool. OpenCode scans each path for
  * `{*.md,**\/SKILL.md}` and names a root `SKILL.md` after its folder.
  */
 function collectSkillPaths(): string[] {
@@ -413,6 +417,12 @@ function collectSkillPaths(): string[] {
     if (artifacts.available) paths.push(artifacts.dir)
   } catch {
     /* no artifacts skill */
+  }
+  try {
+    const dashboards = dashboardsSkillInfo()
+    if (dashboards.available) paths.push(dashboards.dir)
+  } catch {
+    /* no dashboards skill */
   }
   return paths
 }

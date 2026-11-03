@@ -63,6 +63,7 @@ import {
 } from '../../services/localAgents/promptAssembly'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { withDeveloperToolShims } from '../../shell/developerToolShims'
+import { withCinnaNode } from '../../shell/cinnaNode'
 import { buildClaudeEnv, type ClaudeApiKeyEnv } from './acp/claudeEnv'
 import { claudeAuthService } from '../../services/localAgents/claudeAuthService'
 import { appSettingsService } from '../../services/appSettingsService'
@@ -113,6 +114,7 @@ import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import { ensureTasksSkillPlugin, tasksSkillInfo, TASKS_SKILL_NAME } from '../../services/tasksSkillService'
 import { ARTIFACTS_SKILL_NAME, artifactsSkillInfo, ensureArtifactsSkillPlugin } from '../../services/artifacts/artifactsSkill'
+import { DASHBOARDS_SKILL_NAME, dashboardsSkillInfo, ensureDashboardsSkillPlugin } from '../../services/dashboards/dashboardsSkill'
 import { agentSkillsPluginName, ensureKitAgentSkillsPlugin, kitAgentPinnedSkillFolders } from '../../services/agentSkillsPlugin'
 import { ensureAgentPluginWrappers } from '../../services/agentPluginWrappers'
 import { cachedPlugins } from '../../services/pluginSkills'
@@ -362,6 +364,7 @@ function folderSystemPrompt(
     // folder keeps the path, since nothing is written to the user's home.
     if (engine === 'antigravity' && mode === 'isolated' && context.tasksSkill?.kind === 'pointer') context.tasksSkill = { kind: 'skill' }
     if (engine === 'antigravity' && mode === 'isolated' && context.artifactsSkill?.kind === 'pointer') context.artifactsSkill = { kind: 'skill' }
+    if (engine === 'antigravity' && mode === 'isolated' && context.dashboardsSkill?.kind === 'pointer') context.dashboardsSkill = { kind: 'skill' }
     if (mode === 'native') {
       return assembleBareNativePrompt(agent.path, agent.name, context, engine)
     }
@@ -794,7 +797,8 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       return path
     },
     nodeRuntime: hostNodeRuntime,
-    env: async () => withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() })),
+    // Sessions only (not the probe or the login): `CINNA_NODE` for the dashboards check script.
+    env: async () => withCinnaNode(await withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() }))),
     systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
       const synthetic = syntheticRuntimeProfiles.get(agentId)
@@ -834,7 +838,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       antigravityAuthProbe.invalidate()
       void antigravityAuthProbe.refresh().catch(() => undefined)
     },
-    env: async () => withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() })),
+    env: async () => withCinnaNode(await withDeveloperToolShims(buildAntigravityEnv({ shellEnv: await getShellEnv() }))),
     systemPrompt: folderSystemPrompt('antigravity'),
     // A chat runtime or AI function shares a profile-owned home, never one
     // inside a chat folder: beside its process folder, or — for a `workspace`
@@ -853,6 +857,11 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     artifactsSkill: () => {
       const info = artifactsSkillInfo()
       return { name: ARTIFACTS_SKILL_NAME, dir: info.available ? info.dir : null }
+    },
+    // Kit agents only; any other isolated home has an earlier copy taken out.
+    dashboardsSkill: (userId, agentId) => {
+      const info = dashboardsSkillInfo()
+      return { name: DASHBOARDS_SKILL_NAME, dir: info.available && isKitFolderAgent(userId, agentId) ? info.dir : null }
     },
     settings: (userId, agentId) => {
       const synthetic = syntheticRuntimeProfiles.get(agentId)
@@ -917,7 +926,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       return input
     },
     configRoot: () => join(runtimeHost.getPath('userData'), 'acp'),
-    childEnv: async () => withDeveloperToolShims(shellEnvForChild(await getShellEnv()))
+    childEnv: async () => withCinnaNode(await withDeveloperToolShims(shellEnvForChild(await getShellEnv())))
   }),
   claude: createClaudeLauncher({
     // Through the service, exactly like Codex above.
@@ -938,13 +947,14 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status()),
     adapterEntry: claudeAdapterEntry,
     nodeRuntime: hostNodeRuntime,
-    claudeEnv: (apiKey) => claudeChildEnv(apiKey ?? null),
+    claudeEnv: async (apiKey) => withCinnaNode(await claudeChildEnv(apiKey ?? null)),
     // Subscription or the picked Anthropic credential; an API mode with none
     // refuses the turn (never the subscription instead).
     launchAuth: () => claudeAuthService.resolve(),
     systemPrompt: folderSystemPrompt('claude'),
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
     artifactsSkillPlugin: () => ensureArtifactsSkillPlugin(),
+    dashboardsSkillPlugin: (userId, agentId) => (isKitFolderAgent(userId, agentId) ? ensureDashboardsSkillPlugin() : null),
     agentSkillsPlugin: kitAgentSkillsPlugin,
     agentAddonPlugins: kitAgentAddonPlugins,
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
@@ -1038,6 +1048,23 @@ function kitAgentSkillsPlugin(userId: string, agentId: string): string | null {
   if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return null
   const { agentDir } = localAgentService.locate(userId, agentId)
   return ensureKitAgentSkillsPlugin({ id: agentId, path: agentDir })?.dir ?? null
+}
+
+/**
+ * Whether this session is a **kit** folder agent's own — the agents that get
+ * `cinna-dashboards`. Not a conductor, an AI function, a synthetic chat or a
+ * build session (each an isolated folder too), and not a bare folder, which
+ * has no `dashboards/`. False when the folder cannot be read.
+ */
+function isKitFolderAgent(userId: string, agentId: string): boolean {
+  try {
+    if (syntheticRuntimeProfiles.has(agentId) || aiFunctionProfiles.has(agentId)) return false
+    const row = agentRepo.getOwned(userId, agentId)
+    if (!row || isChatConductor(row) || isDevelopmentAgent(row)) return false
+    return localAgentService.get(userId, agentId).kind === 'kit'
+  } catch {
+    return false
+  }
 }
 
 /**

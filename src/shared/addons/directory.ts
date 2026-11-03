@@ -122,6 +122,12 @@ export interface DirectoryEntry {
   digest: string | null
   /** Plugins only (U1+). */
   components?: AddonComponents
+  /**
+   * Skills only: how many dashboard components the skill ships (its
+   * `dashboards/<name>/component.json` folders), counted in main from the copy
+   * cached on this computer. Absent when there are none or no copy is here.
+   */
+  dashboardComponents?: number
   requires: { credentials: Record<string, unknown>[] }
   /** Scripts, hooks or a stdio server; null when the source does not say. */
   runsCode: boolean | null

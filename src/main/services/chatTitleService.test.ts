@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
-  enabled: true, title: 'New Chat', count: 1,
+  enabled: true, title: 'New Chat', initialTitle: null as string | null, count: 1,
   resolve: vi.fn(), run: vi.fn(), update: vi.fn(), firstUser: 'My first message'
 }))
-vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ id: 'chat', title: state.title, router: 'coordinator', agentId: 'root' }), updateMeta: (...args: unknown[]) => state.update(...args) } }))
+vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ id: 'chat', title: state.title, initialTitle: state.initialTitle, router: 'coordinator', agentId: 'root' }), updateMeta: (...args: unknown[]) => state.update(...args) } }))
 vi.mock('../db/messages', () => ({ messageRepo: { countByRole: () => state.count, firstByRole: () => ({ content: state.firstUser }) } }))
 vi.mock('../db/appSettings', () => ({ appSettingsRepo: { get: () => state.enabled } }))
 vi.mock('../index', () => ({ getMainWindow: () => null }))
@@ -17,6 +17,7 @@ import { chatTitleService } from './chatTitleService'
 beforeEach(() => {
   state.enabled = true
   state.title = 'New Chat'
+  state.initialTitle = null
   state.count = 1
   state.firstUser = 'My first message'
   state.resolve.mockReset().mockReturnValue({ kind: 'runtime', userId: 'user' })
@@ -54,6 +55,27 @@ describe('automatic titles on AI Functions', () => {
   })
   it('ignores an agent that is not the chat’s root', () => {
     expect(chatTitleService.applyEngineTitle({ userId: 'user', chatId: 'chat', agentId: 'addressed', title: 'Codex title' })).toBe(false)
+    expect(state.update).not.toHaveBeenCalled()
+  })
+})
+
+describe('a dashboard panel chat’s placeholder title', () => {
+  it('is replaced while the chat still has it, with background titles on', async () => {
+    state.title = state.initialTitle = 'Sales overview · Sales Desk'
+    await chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })
+    expect(state.update).toHaveBeenCalledWith('user', 'chat', { title: 'A helpful title' })
+  })
+  it('stays with background titles off', async () => {
+    state.enabled = false
+    state.title = state.initialTitle = 'Sales overview · Sales Desk'
+    await expect(chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })).rejects.toMatchObject({ code: 'feature_disabled' })
+    expect(state.update).not.toHaveBeenCalled()
+  })
+  it('once the user renamed the chat, is no longer the title and nothing replaces it', async () => {
+    state.initialTitle = 'Sales overview · Sales Desk'
+    state.title = 'Q3 questions'
+    await expect(chatTitleService.autoGenerateForFirstMessage({ userId: 'user', chatId: 'chat' })).rejects.toMatchObject({ code: 'chat_renamed_initial' })
+    expect(chatTitleService.applyEngineTitle({ userId: 'user', chatId: 'chat', agentId: 'root', title: 'Codex title' })).toBe(false)
     expect(state.update).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,6 @@
 import { sessionActivityHub } from './sessionActivityHub'
 import { AGENT_PROCESS_KINDS } from '../../shared/sessionActivity'
+import { dashboardContextTracker } from './dashboards/dashboardContext'
 
 /**
  * Stop listening between turns to a chat's agent sessions (only the named
@@ -15,9 +16,14 @@ export function installChatSessionForgetter(forgetter: ChatSessionForgetter): ()
   return () => { forgetters.delete(forgetter) }
 }
 
-/** Every installed driver stops listening to the chat's sessions. */
+/**
+ * Every installed driver stops listening to the chat's sessions. The chat's
+ * dashboard context is forgotten with them: the next session it talks to has
+ * been sent none.
+ */
 export function forgetChatSessions(chatId: string, agentId?: string): void {
   for (const forget of [...forgetters]) forget(chatId, agentId)
+  dashboardContextTracker.forget(chatId)
 }
 
 /**

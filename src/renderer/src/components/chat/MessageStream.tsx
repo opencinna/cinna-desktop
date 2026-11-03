@@ -21,6 +21,7 @@ import { MessageBubble } from './MessageBubble'
 import { CommandScopeContext, FileRefContext, FileRefResolver, MessageIdContext, collectFileRefSources, type CommandScope, type FileRefScope } from './fileRefs'
 import { agentRunsCommands } from '../../utils/userCommands'
 import { ArtifactCard, ShownArtifactsContext } from '../artifacts/ArtifactCard'
+import { ComponentRefScopeContext } from '../dashboards/ComponentCard'
 import { ArtifactPublishToolBlock, parsePublishResult } from '../artifacts/ArtifactPublishTool'
 import { ArtifactCardsSource, useArtifactsSupport } from '../../hooks/useArtifacts'
 import { ARTIFACTS_PROVIDER_NAME, ARTIFACTS_PUBLISH_TOOL, type ArtifactCardDto } from '../../../../shared/artifacts'
@@ -687,6 +688,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     return map
   }, [agents])
   const rootAgentId = chatData?.agentId ?? null
+  // Component references in this transcript resolve for the chat's agent; Ask to fix fills this chat's composer.
+  const componentRefScope = useMemo(() => ({ chatId, agentId: rootAgentId }), [chatId, rootAgentId])
   // Inline file references in folder agents' bubbles, resolved per agent over
   // the persisted transcript. The resolver is a sibling of the transcript (see
   // `FileRefResolver`) and reports the scopes here.
@@ -907,6 +910,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
 
   return (
     <ShownArtifactsContext.Provider value={shownArtifactIds}>
+    <ComponentRefScopeContext.Provider value={componentRefScope}>
     {/* No wrapper element (the provider renders no DOM): the pills are
         absolutely positioned against MainArea's `relative` chat container (the
         same one the composer overlay anchors to), so they need no layout box of
@@ -1850,6 +1854,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
       {messageContextMenu.menu}
     </CommandScopeContext.Provider>
     </TranscriptExpansionContext.Provider>
+    </ComponentRefScopeContext.Provider>
     </ShownArtifactsContext.Provider>
   )
 }

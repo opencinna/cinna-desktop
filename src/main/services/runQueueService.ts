@@ -28,6 +28,8 @@ export type QueueListener = (chatId: string, view: RunQueueView) => void
 /** A queued message, with the agent resolved to answer it when it was queued (main-only). */
 interface QueuedEntry extends RunQueueItem {
   addressedAgentId: string | null
+  /** What the dashboard panel showed when it was queued; wire-only, never in the queue's view. */
+  dashboardContext?: RunSendPayload['dashboardContext']
 }
 
 interface ChatQueue {
@@ -107,6 +109,11 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
 
   /** A message with files waits for the turn to end: a steer carries text only. */
   const hasFiles = (item: RunQueueItem): boolean => !!item.attachments?.length
+  /**
+   * A message the drain must deliver: files, or a dashboard panel's context —
+   * a steer carries text only, and would drop either.
+   */
+  const waitsForDrain = (item: QueuedEntry): boolean => hasFiles(item) || !!item.dashboardContext
 
   const forget = (key: string, queue: ChatQueue): void => {
     if (!queue.items.length && !queue.flushing && queues.get(key) === queue) queues.delete(key)
@@ -133,10 +140,13 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     // Joined over the non-empty texts only, so a files-only message adds no
     // stray separator; its files ride along in order.
     const attachments: MessageAttachment[] = items.flatMap((item) => item.attachments ?? [])
+    // The latest dashboard context among them: what the user saw last.
+    const dashboardContext = [...items].reverse().find((item) => item.dashboardContext)?.dashboardContext
     const payload: RunSendPayload = {
       chatId: queue.chatId,
       content: items.map((item) => item.content).filter((content) => content.trim()).join('\n\n'),
       ...(attachments.length ? { attachments } : {}),
+      ...(dashboardContext ? { dashboardContext } : {}),
       addressedAgentId: address
     }
     // Announced **before** the start, whose user row reaches the renderer on
@@ -183,17 +193,22 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
    * for an ACP turn, when its last tool call has ended. The leading run of
    * messages for that turn's agent goes as one message, as a drain would send
    * it; messages for someone else wait for the turn to end. A steer carries
-   * text only, so the run stops before the first message with files, and one
-   * at the head is not handed over at all: it leaves when the turn ends.
+   * text only, so the run stops before the first message with files or a
+   * dashboard context, and one at the head is not handed over at all: it
+   * leaves when the turn ends.
    */
   const flush = (key: string): void => {
     const queue = queues.get(key)
     if (!queue || !queue.items.length || queue.held || queue.flushing) return
     const active = activeRunsByChat.get(queue.chatId)
     const address = active?.agentId
-    if (!active || !address || !active.steerable || queue.items[0].addressedAgentId !== address || hasFiles(queue.items[0])) return
+    if (!active || !address || !active.steerable || queue.items[0].addressedAgentId !== address) return
+    if (waitsForDrain(queue.items[0])) {
+      if (queue.items[0].dashboardContext) logger.debug('a queued message with dashboard context waits for the turn to end', { chatId: queue.chatId })
+      return
+    }
     let count = 1
-    while (count < queue.items.length && queue.items[count].addressedAgentId === address && !hasFiles(queue.items[count])) count++
+    while (count < queue.items.length && queue.items[count].addressedAgentId === address && !waitsForDrain(queue.items[count])) count++
     const items = queue.items.splice(0, count)
     queue.flushing = true
     // Announced **before** the steer, as a drain announces before its start:
@@ -301,8 +316,12 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       const target = runExecutionService.answererOf(chat, payload)
       const forRunningTurn = target.kind === 'agent' && !!active?.agentId && target.agentId === active.agentId
       const aheadOfIt = !!queues.get(key)?.items.length || !!queues.get(key)?.flushing
-      // A steer takes text only: a message with files is queued for the drain.
-      const steered = !!active && forRunningTurn && !aheadOfIt && !attachments
+      // A steer takes text only: a message with files or a dashboard panel's
+      // context is queued for the drain, which delivers them.
+      const steered = !!active && forRunningTurn && !aheadOfIt && !attachments && !payload.dashboardContext
+      if (active && forRunningTurn && !aheadOfIt && !attachments && payload.dashboardContext) {
+        logger.debug('a message with dashboard context is queued for the drain instead of steered', { chatId })
+      }
       if (active && steered) {
         let delivered: Awaited<ReturnType<RunHandle['steer']>> = 'unavailable'
         try { delivered = await active.steer(payload.content) } catch (error) {
@@ -323,6 +342,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
         content: payload.content,
         createdAt: Date.now(),
         ...(attachments ? { attachments } : {}),
+        ...(payload.dashboardContext ? { dashboardContext: payload.dashboardContext } : {}),
         // Who answers is settled now, not at the drain: an unaddressed message
         // follows the last addressed one, and by the time it drains that can be
         // a message queued after it.

@@ -34,6 +34,7 @@ import { registerAgentFileHandlers } from './agent_files.ipc'
 import { registerArtifactHandlers } from './artifacts.ipc'
 import { registerImprovementRequestHandlers } from './improvementRequests.ipc'
 import { registerHtmlPreviewHandlers } from './html_preview.ipc'
+import { registerDashboardHandlers } from './dashboards.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
 import { registerPathMentionHandlers } from './path_mention.ipc'
@@ -99,6 +100,7 @@ export function registerAllIpcHandlers(): void {
   // Improvement Request: send a cloud bundle agent's conversation to its publisher.
   registerImprovementRequestHandlers()
   registerHtmlPreviewHandlers()
+  registerDashboardHandlers()
   registerEngineHandlers()
   registerConnectHandlers()
   // "Mention in Cinna": Finder paths waiting for the composer, and the Quick Action.

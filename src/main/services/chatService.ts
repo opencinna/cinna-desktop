@@ -205,10 +205,24 @@ export const chatService = {
     }
   },
 
-  create(userId: string): ChatRow {
-    const chat = chatRepo.create(userId, { origin: 'user' })
-    logger.info('chat created', { chatId: chat.id })
+  /**
+   * A new, unbound chat. `originDashboardId` and the placeholder
+   * `initialTitle` are set only by main's `dashboards:panel-chat`
+   * (Dashboards D3), never from `chat:create`.
+   */
+  create(userId: string, init?: { originDashboardId?: string | null; initialTitle?: string | null }): ChatRow {
+    const chat = chatRepo.create(userId, {
+      origin: 'user',
+      ...(init?.originDashboardId ? { originDashboardId: init.originDashboardId } : {}),
+      ...(init?.initialTitle ? { initialTitle: init.initialTitle } : {})
+    })
+    logger.info('chat created', { chatId: chat.id, ...(chat.originDashboardId ? { originDashboardId: chat.originDashboardId } : {}) })
     return chat
+  },
+
+  /** The latest chat this profile sees that was opened from the dashboard's panel for the agent (Dashboards D3). */
+  latestFromDashboard(userId: string, dashboardId: string, agentId: string): ChatRow | null {
+    return chatRepo.latestFromDashboard(listOwners(userId), dashboardId, agentId) ?? null
   },
 
   delete(userId: string, chatId: string): void {

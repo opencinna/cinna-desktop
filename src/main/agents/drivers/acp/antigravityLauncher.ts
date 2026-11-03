@@ -319,6 +319,12 @@ export interface AntigravityLauncherDeps {
    * removes an earlier copy, null leaves the home alone.
    */
   artifactsSkill?(): { name: string; dir: string | null } | null
+  /**
+   * `cinna-dashboards` for this session's isolated home: `{ name, dir }`
+   * installs it (a kit agent's), `{ name, dir: null }` removes an earlier
+   * copy, null leaves the home alone. Per session: only kit agents get it.
+   */
+  dashboardsSkill?(userId: string, agentId: string): { name: string; dir: string | null } | null
   platform?: NodeJS.Platform
 }
 
@@ -391,6 +397,9 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           const artifacts = deps.artifactsSkill?.() ?? null
           if (artifacts?.dir) installAntigravitySkill(home, { name: artifacts.name, dir: artifacts.dir })
           else if (artifacts) removeAntigravitySkill(home, artifacts.name)
+          const dashboards = deps.dashboardsSkill?.(ctx.userId, ctx.agentId) ?? null
+          if (dashboards?.dir) installAntigravitySkill(home, { name: dashboards.name, dir: dashboards.dir })
+          else if (dashboards) removeAntigravitySkill(home, dashboards.name)
           env.GEMINI_HOME = home
         }
         phase = 'instructions'

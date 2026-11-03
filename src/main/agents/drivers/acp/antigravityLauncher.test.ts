@@ -348,6 +348,25 @@ describe('a chat runtime’s home and the cinna-tasks skill', () => {
     expect(existsSync(installed)).toBe(false)
   })
 
+  it('installs cinna-dashboards in the isolated home of the session the dep delivers it to, and takes it out otherwise', async () => {
+    const source = skillSource()
+    const folder = tempDir()
+    const installed = join(antigravitySkillsDir(antigravityIsolatedHome(folder)), 'cinna-dashboards')
+    const asked: [string, string][] = []
+    const on = await createAntigravityLauncher(deps({
+      dashboardsSkill: (userId: string, agentId: string) => {
+        asked.push([userId, agentId])
+        return { name: 'cinna-dashboards', dir: source }
+      }
+    })).plan(contexts(folder).isolated)
+    if (isRefusal(on)) throw new Error(on.error)
+    expect(existsSync(join(installed, 'SKILL.md'))).toBe(true)
+    expect(asked).toHaveLength(1)
+    const off = await createAntigravityLauncher(deps({ dashboardsSkill: () => ({ name: 'cinna-dashboards', dir: null }) })).plan(contexts(folder).isolated)
+    if (isRefusal(off)) throw new Error(off.error)
+    expect(existsSync(installed)).toBe(false)
+  })
+
   it('copies the skill again only when its source changed, dropping files the source no longer has', () => {
     const source = skillSource()
     const home = join(tempDir(), 'home')

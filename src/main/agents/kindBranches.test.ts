@@ -290,6 +290,12 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/agents/status/index.ts', category: 'source', count: 2, why: 'resolves ownership of optional folder or synced Cinna status data; source implementations own read/refresh behavior' },
   { file: 'src/renderer/src/components/chat/MessageStream.tsx', category: 'providerType', count: 1, why: 'presents agent subthreads from the persisted/wire tool representation' },
   {
+    file: 'src/main/services/dashboards/dashboardService.ts',
+    category: 'kind',
+    count: 2,
+    why: 'only a kit folder has the dashboards/ layout role; a bare folder has no components to list, and running one goes through the endpoint runner, not kind. The second branch lists bare folders only so a reference to one says not_kit_agent'
+  },
+  {
     file: 'src/main/services/localScheduleService.ts',
     category: 'kind',
     count: 1,

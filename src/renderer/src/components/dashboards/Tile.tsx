@@ -1,0 +1,314 @@
+import { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
+import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type ComponentPrompt, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
+import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
+import { ConfirmDialog } from './DashboardDialog'
+import { EditTileDialog } from './EditTileDialog'
+import { TileBody, TileSkeleton, ageLabel } from './TileBody'
+import { MissingCredentials, errorFindings, openAgentTab } from './componentParts'
+import type { ViewSelection } from './views/nativeViews'
+
+/** What a tile on a dashboard with the chat panel gets (README D3); a tile without it has no Ask. */
+export interface TileChat {
+  focused: boolean
+  /** The rows or items picked here (native views). */
+  selected: string[]
+  /** Click anywhere on the tile. */
+  onFocus: () => void
+  onPick: (key: string, additive: boolean) => void
+  onClearSelection: () => void
+  /** The page's `setContext` (html view). */
+  onContext: (context: { summary: string; selection: string[] }) => void
+  /** Ask: focus the tile and open the panel. */
+  onAsk: () => void
+  /** A suggested question: focus, open the panel and send it with the context. */
+  onPrompt: (prompt: ComponentPrompt) => void
+}
+
+/** How many suggested questions fit on the hover bar for a tile this wide; the rest are in ⋯. */
+export function promptsOnBar(cols: number): number {
+  return cols >= 8 ? 2 : cols >= 4 ? 1 : 0
+}
+
+const BAR_TEXT_BUTTON =
+  'shrink-0 max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent-hover)]'
+
+const MARK = 'pointer-events-auto rounded-full bg-[var(--color-bg)] p-0.5'
+
+/** The bar's strip, reserved at the top of every tile: the bar's height, and where the content starts. */
+const BAR_HEIGHT = 'h-7'
+const BAR_HEIGHT_TOP = 'top-7'
+
+/**
+ * One tile: a fixed-size box whose content never resizes it (ux rule 1). A
+ * strip at the top holds the title, and on hover the age, Refresh and ⋯;
+ * the content scrolls below it and never sits under it. Every
+ * state is drawn inside the tile: the skeleton on first load, a corner
+ * spinner while refreshing with data, a mark whose tooltip gives the reason
+ * when a refresh failed, the sentence when there is no data, and the sentence
+ * plus Remove when the component cannot be drawn at all.
+ */
+export function Tile({
+  view,
+  dashboardName,
+  span,
+  editMode,
+  dragging,
+  onHandlePointerDown,
+  onVisibilityChange,
+  chat
+}: {
+  view: TileView
+  dashboardName: string
+  span: { cols: number; rows: number }
+  editMode: boolean
+  dragging: boolean
+  onHandlePointerDown: (event: React.PointerEvent, tileId: string) => void
+  /** The tile came on screen or left it (scrolled); the view keeps the lease and first loads. */
+  onVisibilityChange: (tileId: string, visible: boolean) => void
+  /** Focus, selection, Ask and suggested questions (the chat panel, D3). */
+  chat?: TileChat
+}): React.JSX.Element {
+  const { tile, displayTitle, state, component } = view
+  // A credential the agent has not attached: nothing runs, the tile says which (README D16).
+  const needsCredentials = state === 'ok' && !!component && component.missingCredentials.length > 0
+  const ok = state === 'ok' && !!component?.view && !needsCredentials
+  const result = useTileResult(tile.id)
+  const removeTile = useRemoveTile()
+  const updateTile = useUpdateTile()
+  const [menu, setMenu] = useState<{ x: number; y: number; anchor: HTMLElement } | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Whether the tile is on screen (inside the scrolled grid): the view leases what is shown.
+  useEffect(() => {
+    if (!ok) return
+    const node = ref.current
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      onVisibilityChange(tile.id, true)
+      return () => onVisibilityChange(tile.id, false)
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry) onVisibilityChange(tile.id, entry.isIntersecting)
+    })
+    observer.observe(node)
+    return () => {
+      observer.disconnect()
+      onVisibilityChange(tile.id, false)
+    }
+  }, [ok, tile.id, onVisibilityChange])
+
+  const refresh = (): void => {
+    setRefreshError(null)
+    void window.api.dashboards
+      .ensureFresh(tile.id, 'manual')
+      .then((outcome) => { if (!outcome.ok) setRefreshError(outcome.message) })
+      .catch(() => setRefreshError('The tile could not be refreshed.'))
+  }
+
+  const openAgent = (): void => {
+    if (component) openAgentTab(component.agentId, 'dashboards')
+  }
+
+  const data = result.data ?? null
+  const hasData = !!data && data.data !== null
+  const agentName = component?.agentName ?? 'its agent'
+  const unavailable =
+    state === 'agent_missing'
+      ? 'The agent behind this tile is not on this computer.'
+      : state === 'component_missing'
+        ? `${tile.component} is no longer in ${agentName}’s folder.`
+        : state === 'invalid'
+          ? `${displayTitle} has problems to fix: ${(component && errorFindings(component)[0]?.message) ?? 'its component.json is not valid'}`
+          : null
+  const mark = refreshError ?? data?.error ?? null
+  // Asking needs the agent on this machine: the panel's chat is that agent's.
+  const canAsk = !!chat && !!component && state !== 'agent_missing'
+  const prompts = canAsk ? component!.prompts : []
+  const onBar = prompts.slice(0, promptsOnBar(span.cols))
+  const inMenu = prompts.slice(onBar.length)
+  const selection: ViewSelection | undefined = chat ? { selected: chat.selected, onPick: chat.onPick } : undefined
+
+  return (
+    <div
+      ref={ref}
+      role="group"
+      aria-label={displayTitle}
+      data-tile-id={tile.id}
+      data-focused={chat?.focused || undefined}
+      // Focusable by click, so Escape reaches it; the ring, not the outline, shows focus.
+      tabIndex={chat ? -1 : undefined}
+      onPointerDown={chat && !editMode ? () => { if (!chat.focused) chat.onFocus() } : undefined}
+      onKeyDown={chat ? (event) => {
+        if (event.key === 'Escape' && chat.selected.length > 0) {
+          event.stopPropagation()
+          chat.onClearSelection()
+        }
+      } : undefined}
+      style={{ gridColumn: `span ${span.cols}`, gridRow: `span ${span.rows}` }}
+      // The focus ring is a box-shadow: focusing a tile moves nothing (ux rule 1).
+      className={`group relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-[var(--color-bg)] outline-none ${
+        dragging ? 'border-[var(--color-accent)] opacity-60' : 'border-[var(--color-border)]'
+      } ${chat?.focused ? 'ring-2 ring-[var(--color-accent)]' : ''}`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        setMenu({ x: event.clientX, y: event.clientY, anchor: event.currentTarget })
+      }}
+    >
+      {/* Below the bar's strip: the content scrolls inside and never sits under the bar. */}
+      <div data-testid="tile-content" className={`absolute inset-x-0 bottom-0 ${BAR_HEIGHT_TOP} overflow-auto`}>
+        {unavailable ? (
+          <div className="flex h-full flex-col items-start justify-center gap-2 p-3">
+            <p className="text-[11px] text-[var(--color-text-secondary)]">{unavailable}</p>
+            <button type="button" onClick={() => setConfirmRemove(true)} className="rounded-md border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
+              Remove
+            </button>
+          </div>
+        ) : needsCredentials ? (
+          <div className="flex h-full flex-col items-start justify-center p-3">
+            <MissingCredentials component={component!} scale="chrome" />
+          </div>
+        ) : !ok || result.isPending ? (
+          <TileSkeleton />
+        ) : (
+          <TileBody
+            view={component!.view!}
+            result={data}
+            loading={result.isPending}
+            frameTarget={{ tileId: tile.id }}
+            meta={{ component: tile.component, title: displayTitle, params: resolveParamWords(tile.params, component!.params), size: tile.size }}
+            selection={selection}
+            onContext={chat?.onContext}
+          />
+        )}
+      </div>
+
+      {/* Corner marks: they sit over the content and never move it. */}
+      <div className="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1">
+        {hasData && data?.notice && <span className={MARK} title={data.notice} aria-label={data.notice}><Info size={12} className="text-[var(--color-warning)]" /></span>}
+        {hasData && data?.tooLarge && <span className={MARK} title="Too large to keep: shown until Cinna restarts." aria-label="Too large to keep"><Info size={12} className="text-[var(--color-text-muted)]" /></span>}
+        {mark && <span className={MARK} title={mark} aria-label={`Last refresh failed: ${mark}`}><AlertTriangle size={12} className="text-[var(--color-danger)]" /></span>}
+      </div>
+      {hasData && data?.refreshing && (
+        <Loader2 size={12} aria-label="Refreshing" className="pointer-events-none absolute right-2 top-2 animate-spin text-[var(--color-text-muted)] group-hover:opacity-0" />
+      )}
+
+      {/*
+        The bar's strip is reserved on every tile, so nothing moves on hover:
+        the title always shows there, the controls fade in on hover (and stay
+        in edit mode).
+      */}
+      <div
+        data-testid="tile-bar"
+        className={`absolute inset-x-0 top-0 flex ${BAR_HEIGHT} items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-2`}
+      >
+        {editMode && (
+          <button
+            type="button"
+            aria-label={`Move ${displayTitle}`}
+            title="Drag to move"
+            onPointerDown={(event) => onHandlePointerDown(event, tile.id)}
+            className="cursor-grab touch-none rounded p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] active:cursor-grabbing"
+          >
+            <GripVertical size={13} />
+          </button>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--color-text)]">{displayTitle}</span>
+        <div
+          className={`flex shrink-0 items-center gap-1 transition-opacity ${
+            editMode ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+          }`}
+        >
+        {ok && <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]">{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
+        {onBar.map((prompt, index) => (
+          <button key={index} type="button" title={prompt.prompt} onClick={() => chat!.onPrompt(prompt)} className={BAR_TEXT_BUTTON}>
+            {prompt.label}
+          </button>
+        ))}
+        {canAsk && (
+          <button type="button" onClick={chat!.onAsk} title={`Ask ${agentName} about this`} aria-label={`Ask about ${displayTitle}`} className={BAR_TEXT_BUTTON}>
+            Ask
+          </button>
+        )}
+        {ok && (
+          <button type="button" onClick={refresh} title="Refresh" aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
+            <RefreshCw size={12} className={data?.refreshing ? 'animate-spin' : undefined} />
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label={`Actions for ${displayTitle}`}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            setMenu({ x: rect.left, y: rect.bottom + 4, anchor: event.currentTarget })
+          }}
+          className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+        >
+          <MoreHorizontal size={13} />
+        </button>
+        </div>
+      </div>
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} anchor={menu.anchor} label={`Actions for ${displayTitle}`} error={updateTile.error?.message ?? null} onClose={() => setMenu(null)}>
+          <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Size</div>
+          {TILE_SIZES.map((size: TileSize) => (
+            <button
+              key={size}
+              type="button"
+              role="menuitemradio"
+              aria-checked={tile.size === size}
+              className={CONTEXT_MENU_ITEM}
+              onClick={() => updateTile.mutate({ tileId: tile.id, size }, { onSuccess: () => setMenu(null) })}
+            >
+              <span className="w-3">{tile.size === size ? '✓' : ''}</span>
+              {TILE_SIZE_LABELS[size]}
+            </button>
+          ))}
+          {inMenu.length > 0 && (
+            <>
+              <div className="my-1 border-t border-[var(--color-border)]" />
+              <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Ask</div>
+              {inMenu.map((prompt, index) => (
+                <button key={index} type="button" role="menuitem" title={prompt.prompt} className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); chat!.onPrompt(prompt) }}>
+                  {prompt.label}
+                </button>
+              ))}
+            </>
+          )}
+          <div className="my-1 border-t border-[var(--color-border)]" />
+          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setEditing(true) }}>
+            Edit tile…
+          </button>
+          {component && (
+            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); openAgent() }}>
+              Open agent
+            </button>
+          )}
+          <div className="my-1 border-t border-[var(--color-border)]" />
+          <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setMenu(null); setConfirmRemove(true) }}>
+            Remove…
+          </button>
+        </ContextMenu>
+      )}
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title={`Remove ${displayTitle}`}
+          body={`Remove ${displayTitle} from ${dashboardName}? The component stays in ${agentName}’s folder; you can add it again.`}
+          confirmLabel="Remove"
+          pendingLabel="Removing…"
+          pending={removeTile.isPending}
+          error={removeTile.error?.message ?? null}
+          onConfirm={() => removeTile.mutate(tile.id, { onSuccess: () => setConfirmRemove(false) })}
+          onClose={() => { if (!removeTile.isPending) { removeTile.reset(); setConfirmRemove(false) } }}
+        />
+      )}
+      {editing && <EditTileDialog view={view} onClose={() => setEditing(false)} />}
+    </div>
+  )
+}

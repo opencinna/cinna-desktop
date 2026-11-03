@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronLeft, ExternalLink, HelpCircle, Loader2, SquareTerminal } from 'lucide-react'
+import { Check, ChevronLeft, ExternalLink, HelpCircle, LayoutDashboard, Loader2, SquareTerminal } from 'lucide-react'
 import type { AddonNextStep, AgentDirectoryEntry } from '../../../../../shared/addons/directory'
 import { useConnectMcp, useMcpProviders, useUpsertMcpProvider } from '../../../hooks/useMcp'
 import { ADDONS_KEY, useAddonPluginStatus, useRecheckRuntimes } from '../../../hooks/useAddonDirectory'
@@ -29,6 +29,8 @@ export const PICKER_TEXT = {
   /** A plugin's connectors the add started, not up yet: an `npx -y` / `uvx` server downloads on its first start. */
   starting: 'Starting… the first start downloads the server',
   runsCode: 'Runs code on this computer',
+  /** A skill that ships dashboard components (`dashboards/<name>/component.json`), counted in main. */
+  dashboardComponents: (count: number) => `Includes ${count} dashboard component${count === 1 ? '' : 's'}`,
   needsKit: 'A cinna-agent.json: skills are pinned there, and this agent is a plain folder without one. Connectors work on it.',
   addTo: (agent: string) => `Add to ${agent}`,
   /** A plugin that runs code: the button itself carries the consent (no extra dialog). */
@@ -483,6 +485,13 @@ export function AddonPickerDetail({
         <p data-addon-runs-code className="mt-4 flex items-center gap-1.5 text-[13px] text-[var(--color-text)]">
           <SquareTerminal size={14} aria-hidden className="shrink-0 text-[var(--color-warning)]" />
           {PICKER_TEXT.runsCode}
+        </p>
+      )}
+
+      {entry.kind === 'skill' && (entry.dashboardComponents ?? 0) > 0 && (
+        <p data-addon-dashboard-components className="mt-4 flex items-center gap-1.5 text-[13px] text-[var(--color-text)]">
+          <LayoutDashboard size={14} aria-hidden className="shrink-0 text-[var(--color-text-muted)]" />
+          {PICKER_TEXT.dashboardComponents(entry.dashboardComponents ?? 0)}
         </p>
       )}
 

@@ -31,7 +31,8 @@ import {
   type AddonSearchResult,
   type AddonSourceStatus,
   type AgentAddonState,
-  type AgentDirectoryEntry
+  type AgentDirectoryEntry,
+  type DirectoryEntry
 } from '../../../shared/addons/directory'
 import type { LocalAgentSkill } from '../../../shared/localAgents'
 import type { McpServerAuth, McpServerRequirement } from '../../../shared/kit/manifest'
@@ -163,6 +164,12 @@ export interface AddonDirectoryDeps {
   createMcpFromDirectory(userId: string, entry: ProviderEntry): Promise<{ id: string; setup: McpSetup | null }>
   /** Delete a local provider this directory just created (its attach failed). */
   deleteMcp(userId: string, mcpProviderId: string): Promise<void>
+  /**
+   * How many dashboard components a skill entry ships, from its copy on this
+   * computer; 0 when none or no copy is here. Asked per skill entry per
+   * directory read. Never throws.
+   */
+  skillDashboardComponents?(entry: DirectoryEntry): number
 }
 
 const SEARCH_MEMORY_MAX = 500
@@ -419,6 +426,18 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
     return result
   }
 
+  /** A skill entry with the number of dashboard components it ships, when there are any. */
+  function withDashboardComponents(entry: AgentDirectoryEntry): AgentDirectoryEntry {
+    if (entry.kind !== 'skill' || !deps.skillDashboardComponents) return entry
+    let count = 0
+    try {
+      count = deps.skillDashboardComponents(entry)
+    } catch {
+      count = 0
+    }
+    return count > 0 ? { ...entry, dashboardComponents: count } : entry
+  }
+
   function pinned(outcome: PinOutcome): AddonActionResult {
     return outcome.ok ? { ok: true, next: null } : refused(outcome.code, outcome.message)
   }
@@ -434,7 +453,7 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
         const access = await skillAccessOf(userId, agentId, agent)
         const attached = new Set(deps.attachedMcp(userId, agentId))
         const checked = await withPluginBlocks(userId, entries)
-        return { ok: true, entries: checked.map((entry) => toAgentEntry(entry, agent, attached, access)), sources, policy }
+        return { ok: true, entries: checked.map((entry) => withDashboardComponents(toAgentEntry(entry, agent, attached, access))), sources, policy }
       } catch (err) {
         return refusalOf(err)
       }

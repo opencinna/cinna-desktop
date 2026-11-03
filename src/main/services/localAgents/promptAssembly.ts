@@ -39,6 +39,8 @@ import {
 import { resolveBareInstructionsFile } from './externalScan'
 import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillService'
 import { artifactsFolderRole, artifactsSkillDeliveryFor, cinnaArtifactsSection, type ArtifactsSkillDelivery } from '../artifacts/artifactsSkill'
+import { agentReferencePrefix, cinnaDashboardsSection, dashboardsSkillDeliveryFor, dashboardsSkillInfo, type DashboardsSkillDelivery } from '../dashboards/dashboardsSkill'
+import { desktopStateService } from './desktopStateService'
 import { deliverableSkills } from '../../kit/skills'
 import { deliveredSkillRows } from '../pluginSkills'
 
@@ -103,6 +105,14 @@ export interface DesktopPromptContext {
    * `app-data/`, which is never published. Only with `artifactsSkill`.
    */
   artifactsFolder?: string | null
+  /**
+   * How this engine's agent opens `cinna-dashboards`, or null/absent when this
+   * build has no skill. No profile gate: a desktop feature, for every kit
+   * agent. Only the kit assembler ({@link assembleAgentPrompt}) uses it.
+   */
+  dashboardsSkill?: DashboardsSkillDelivery | null
+  /** The bundled `check_component.py`, absolute. Only with `dashboardsSkill`. */
+  dashboardsCheckScript?: string | null
   /**
    * How this engine's agent reaches its **own** skills, when the producer
    * names the engine: `skill` where the engine loads them itself (Claude
@@ -497,8 +507,30 @@ export function assembleAgentPrompt(
 
   sections.push(desktopContextSection(agentDir, context))
   sections.push(...handoverSections(context))
+  sections.push(...dashboardsSections(agentDir, manifest, context))
 
   return `${sections.join('\n\n---\n\n')}\n`
+}
+
+/**
+ * The `cinna-dashboards` section of a kit agent, or nothing: the check script
+ * and the agent's own reference prefix (README §5.5, "The agent is told which
+ * form to print"). The bundle id is the manifest's `bundle.bundle_id`, else
+ * this machine's `app-data/desktop.json` `shared_remote.bundle_id`; with
+ * neither, the id form. A manifest with no id and no bundle id gets nothing:
+ * no reference it printed could resolve.
+ */
+function dashboardsSections(agentDir: string, manifest: CinnaAgentManifest, context: DesktopPromptContext): string[] {
+  if (!context.dashboardsSkill || !context.dashboardsCheckScript) return []
+  let sharedRemoteBundleId: string | null = null
+  try {
+    sharedRemoteBundleId = desktopStateService.read(agentDir, 'kit').shared_remote?.bundle_id ?? null
+  } catch {
+    /* no desktop state: the manifest alone decides */
+  }
+  const referencePrefix = agentReferencePrefix(manifest, sharedRemoteBundleId)
+  if (!referencePrefix) return []
+  return cinnaDashboardsSection({ delivery: context.dashboardsSkill, checkScript: context.dashboardsCheckScript, referencePrefix })
 }
 
 /**
@@ -822,6 +854,8 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
   }
   let tasksSkill: CinnaTasksSkillDelivery | null = null
   let artifactsSkill: ArtifactsSkillDelivery | null = null
+  let dashboardsSkill: DashboardsSkillDelivery | null = null
+  let dashboardsCheckScript: string | null = null
   try {
     if (engine) tasksSkill = tasksSkillDeliveryFor(engine)
   } catch {
@@ -832,11 +866,32 @@ export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopP
   } catch {
     /* no artifacts line rather than no prompt */
   }
+  try {
+    if (engine) {
+      const info = dashboardsSkillInfo()
+      dashboardsSkill = dashboardsSkillDeliveryFor(engine, info)
+      if (dashboardsSkill) dashboardsCheckScript = info.checkScript
+    }
+  } catch {
+    /* no dashboards section rather than no prompt */
+  }
   // Codex has no skill loader, and Antigravity's reads only its own skill
   // folders; Claude and OpenCode load the agent's skills natively.
   const ownSkills = engine === 'codex' || engine === 'antigravity' ? 'pointer' : 'skill'
   // Antigravity's instructions are its first prompt, screened by Google's filter.
   const credentials = engine === 'antigravity' ? 'pointer' : 'inline'
   const artifactsFolder = artifactsSkill ? artifactsFolderRole() : null
-  return { locale, timeZone, ...(engine ? { tasksSkill, ownSkills, credentials, ...(artifactsSkill ? { artifactsSkill, ...(artifactsFolder ? { artifactsFolder } : {}) } : {}) } : {}) }
+  return {
+    locale,
+    timeZone,
+    ...(engine
+      ? {
+          tasksSkill,
+          ownSkills,
+          credentials,
+          ...(artifactsSkill ? { artifactsSkill, ...(artifactsFolder ? { artifactsFolder } : {}) } : {}),
+          ...(dashboardsSkill && dashboardsCheckScript ? { dashboardsSkill, dashboardsCheckScript } : {})
+        }
+      : {})
+  }
 }
