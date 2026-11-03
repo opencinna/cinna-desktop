@@ -62,7 +62,7 @@ const openInBrowser = vi.fn()
 const reveal = vi.fn()
 const create = vi.fn()
 const agentsList = vi.fn()
-const DRAFT = composerDraftKey('alice', 'dashboard')
+const DRAFT = composerDraftKey('alice', 'new-chat')
 const originalClientRects = Range.prototype.getClientRects
 
 beforeEach(() => {

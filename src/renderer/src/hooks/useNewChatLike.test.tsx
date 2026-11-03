@@ -69,8 +69,8 @@ async function newChatLike(agentId?: string): Promise<void> {
   await act(async () => { await result.current() })
 }
 
-const dashboardKey = composerDraftKey(undefined, NEW_CHAT_DRAFT_SURFACE)
-const draft = (key = dashboardKey) => useComposerDraftStore.getState().drafts[key]
+const newChatKey = composerDraftKey(undefined, NEW_CHAT_DRAFT_SURFACE)
+const draft = (key = newChatKey) => useComposerDraftStore.getState().drafts[key]
 
 beforeEach(() => {
   sends.mockClear()
@@ -161,7 +161,7 @@ describe('New chat like this one', () => {
   })
 
   it('keeps what the new-chat draft already holds besides its routing', async () => {
-    useComposerDraftStore.getState().update(dashboardKey, () => ({
+    useComposerDraftStore.getState().update(newChatKey, () => ({
       text: 'half a thought',
       notes: [{ id: 'n1', title: 'Note' }],
       pathRefs: [{ path: '/tmp/a.txt', kind: 'file' } as never],

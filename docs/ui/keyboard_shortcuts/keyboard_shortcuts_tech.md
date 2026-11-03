@@ -93,7 +93,7 @@ The Interface tab's other pair, `agent:list-colors` / `agent:set-color`, follows
 2. `handleKeyDown` enters the `e.key === 'Escape' && onDoubleEscape` branch, calls `preventDefault`, reads `Date.now()`.
 3. First press: `now - lastEscapeAt.current` is larger than `DOUBLE_ESC_WINDOW_MS`, so `lastEscapeAt.current = now`.
 4. User presses `Esc` again within 400 ms: `now - lastEscapeAt.current <= DOUBLE_ESC_WINDOW_MS`, so `lastEscapeAt.current = 0` and `onDoubleEscape()` fires.
-5. `ChatWorkspace`'s callback runs `setPendingAgentIds([])`, clearing the pending agent chips on the dashboard or embedded agent composer.
+5. `ChatWorkspace`'s callback runs `setPendingAgentIds([])`, clearing the pending agent chips on the new-chat or embedded agent composer.
 
 ### Double-ESC → stop a running turn
 

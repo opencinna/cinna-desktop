@@ -17,7 +17,7 @@ const { useUIStore } = await import('../stores/ui.store')
 const { useToastStore } = await import('../stores/toast.store')
 const { composerDraftKey, useComposerDraftStore } = await import('../stores/composerDraft.store')
 
-const DRAFT = composerDraftKey('alice', 'dashboard')
+const DRAFT = composerDraftKey('alice', 'new-chat')
 const report: ComposerPathRef = { path: '/Users/me/docs/report.md', displayPath: '~/docs/report.md', kind: 'file' }
 const site: ComposerPathRef = { path: '/Users/me/website', displayPath: '~/website', kind: 'dir' }
 

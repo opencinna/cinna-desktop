@@ -130,7 +130,7 @@ describe('pasting into the composer', () => {
 })
 
 describe('a long text paste becomes a chip', () => {
-  const NEW_DRAFT = composerDraftKey(undefined, 'dashboard')
+  const NEW_DRAFT = composerDraftKey(undefined, 'new-chat')
   const lines = (n: number, first = 'Dear Anna,'): string => [first, ...Array.from({ length: n - 1 }, (_, i) => `line ${i + 2}`)].join('\n')
   const EMAIL = lines(20)
   const box = (): HTMLTextAreaElement => screen.getByRole('combobox') as HTMLTextAreaElement

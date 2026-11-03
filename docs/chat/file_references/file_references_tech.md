@@ -335,7 +335,7 @@ None.
 
 ### `src/renderer/src/utils/startAgentChat.ts`
 - `startAgentChat(agentId | null, { draft?, pathRefs? })`: with a draft or chips, updates the composer draft keyed by `composerDraftKey(profile, NEW_CHAT_DRAFT_SURFACE)` — the draft alone, or the existing text with trailing newlines trimmed, a newline, then the draft; `pathRefs` merged by path after the existing chips (`mergePathRefs`) — before setting `activeJobId` null, `pendingAgentId` (with a null agent, the active chat is cleared instead), `activeView: 'chat'` and `sidebarTab: 'chats'`. Writing first means the text is there when `ChatWorkspace` mounts.
-- `NEW_CHAT_DRAFT_SURFACE` (`composerDraft.store.ts`) is `'dashboard'`, the surface `useComposerDraftKey` uses with no chat and no agent page; naming it keeps the two in step.
+- `NEW_CHAT_DRAFT_SURFACE` (`composerDraft.store.ts`) is `'new-chat'`, the surface `useComposerDraftKey` uses with no chat and no agent page; naming it keeps the two in step.
 
 ### `src/renderer/src/assets/main.css`
 - `.markdown-body code.file-ref`:

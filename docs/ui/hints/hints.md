@@ -57,7 +57,7 @@ The shortcuts (`@`, `#`, `/`, `?`, `~`, double-ESC, the `?`-then-Enter note expa
 - **No layout shift.** The bar has a fixed height and is positioned outside the centered composition, so a hint appearing, changing, or being absent never moves the composer. The layout reserves a matching strip — gated on the same setting the bar reads — so a tall composer on a short window can't grow underneath it.
 - **Not a live region.** Deliberately announced-on-demand rather than `aria-live` — a polite live region firing every few seconds is hostile to screen-reader users.
 - **The `×` is session-scoped only.** A permanent kill hidden behind a hover-only affordance is a trap; the durable switch lives in Settings.
-- **Events fire from every chat.** The composer emits hint events in active chats too, even though the bar only renders on the new-chat screen — the gestures are identical, so using `~` inside a live chat correctly retires the `~` tip shown on the dashboard.
+- **Events fire from every chat.** The composer emits hint events in active chats too, even though the bar only renders on the new-chat screen — the gestures are identical, so using `~` inside a live chat correctly retires the `~` tip shown on the new-chat screen.
 - **Setting defaults to on, but renders off until loaded.** The bar waits for the real setting value rather than assuming the default, so a user who turned hints off never sees a flash while the settings query resolves.
 - **The catalog is documentation.** A keybinding change must update the hint that teaches it — a stale hint is worse than no hint. See [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md).
 

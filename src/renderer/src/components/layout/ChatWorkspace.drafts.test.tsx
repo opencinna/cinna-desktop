@@ -49,7 +49,7 @@ beforeEach(() => {
 })
 const selections = () => JSON.parse(screen.getByTestId('selections').textContent!)
 
-it('keeps dashboard choices when visiting a chat and keeps each agent start page independent', () => {
+it('keeps new-chat choices when visiting a chat and keeps each agent start page independent', () => {
   const first = render(<ChatWorkspace />)
   fireEvent.click(screen.getByText('Choose mode'))
   fireEvent.click(screen.getByText('Toggle agent'))

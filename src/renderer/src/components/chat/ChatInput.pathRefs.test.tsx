@@ -30,7 +30,7 @@ const { ChatInput } = await import('./ChatInput')
 const { useChatStore } = await import('../../stores/chat.store')
 const { useComposerDraftStore, composerDraftKey } = await import('../../stores/composerDraft.store')
 
-const NEW_DRAFT = composerDraftKey(undefined, 'dashboard')
+const NEW_DRAFT = composerDraftKey(undefined, 'new-chat')
 const CHAT_DRAFT = composerDraftKey(undefined, 'chat:chat-1')
 const FOLDER: ComposerPathRef = { path: '/Users/me/Projects/site', displayPath: '~/Projects/site', kind: 'dir' }
 const FILE: ComposerPathRef = { path: '/Users/me/notes/plan.md', displayPath: '~/notes/plan.md', kind: 'file' }

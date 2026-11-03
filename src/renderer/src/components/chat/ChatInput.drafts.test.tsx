@@ -21,13 +21,13 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 it('restores text, notes and files across entry pages and actual component unmounts', () => {
-  const dashboard = composerDraftKey(undefined, 'dashboard')
-  useComposerDraftStore.getState().update(dashboard, () => ({
+  const newChat = composerDraftKey(undefined, 'new-chat')
+  useComposerDraftStore.getState().update(newChat, () => ({
     notes: [{ id: 'n1', title: 'My plan' }],
     files: { attachments: [{ id: '/tmp/brief.pdf', filename: 'brief.pdf', source: 'pending', size: 42, mimeType: 'application/pdf' }], uploading: false, error: null, token: null }
   }))
   const first = render(<ChatInput chatId={null} />, { wrapper })
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Dashboard\nmessage' } })
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'New chat\nmessage' } })
   first.unmount()
   const second = render(<ChatInput chatId={null} draftKey="agent-1" />, { wrapper })
   expect(screen.getByRole('combobox')).toHaveProperty('value', '')
@@ -36,9 +36,9 @@ it('restores text, notes and files across entry pages and actual component unmou
   expect(screen.getByRole('combobox')).toHaveProperty('value', '')
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Existing chat message' } })
   second.rerender(<ChatInput chatId={null} />)
-  expect(screen.getByRole('combobox')).toHaveProperty('value', 'Dashboard\nmessage')
-  expect(screen.getByRole('combobox')).toHaveProperty('selectionStart', 'Dashboard\nmessage'.length)
-  expect(screen.getByRole('combobox')).toHaveProperty('selectionEnd', 'Dashboard\nmessage'.length)
+  expect(screen.getByRole('combobox')).toHaveProperty('value', 'New chat\nmessage')
+  expect(screen.getByRole('combobox')).toHaveProperty('selectionStart', 'New chat\nmessage'.length)
+  expect(screen.getByRole('combobox')).toHaveProperty('selectionEnd', 'New chat\nmessage'.length)
   expect(screen.getByText('My plan')).toBeTruthy()
   expect(screen.getByText('brief.pdf')).toBeTruthy()
   second.rerender(<ChatInput chatId={null} draftKey="agent-1" />)

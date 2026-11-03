@@ -11,7 +11,7 @@ No new backend module. Save to Notes reuses `src/main/ipc/note.ipc.ts`, `src/mai
 - `src/renderer/src/components/chat/MessageContextMenu.tsx` — payload capture, portal, focus, pointer/keyboard navigation and action lifetime. Its file-reference items (`messageMenuItems`, `referenceChip`) are described in [File References tech](../file_references/file_references_tech.md#srcrenderersrccomponentschatmessagecontextmenutsx-reference-half).
 - `src/renderer/src/hooks/useNotes.ts` — `useSaveMessageNote` title derivation, existing create IPC and profile-guarded query invalidation.
 - `src/renderer/src/components/chat/ChatInput.tsx` — restored textarea, draft content, preparation lock and conditional send cleanup.
-- `src/renderer/src/components/layout/ChatWorkspace.tsx` — dashboard/agent entry identity, stored mode and capability intent, explicit new-chat outcome.
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — new-chat/agent entry identity, stored mode and capability intent, explicit new-chat outcome.
 - `src/renderer/src/hooks/useComposerDraft.ts`, `src/renderer/src/stores/composerDraft.store.ts` — field subscriptions and profile/surface buffers.
 - `src/renderer/src/hooks/useChatAttachments.ts`, `src/renderer/src/hooks/useChatNotes.ts` — draft-owned files and note references.
 - `src/renderer/src/hooks/useChatComposer.ts`, `src/renderer/src/hooks/useNewChatFlow.ts` — boolean dispatch outcomes; missing chat data or preparation failure must not consume content.
@@ -64,7 +64,7 @@ No draft table or migration. `composerDraft.store` and the build draft map live 
 
 ### Draft ownership
 
-- `composerDraftKey` serializes a tuple of profile ID (or null) and `dashboard`, `agent:<id>` or `chat:<id>`. `useComposerDraftKey` derives it from the active profile and entry identity; the `dashboard` surface is exported as `NEW_CHAT_DRAFT_SURFACE`, which `startAgentChat` writes a seeded draft into. Agent-page drafts do not reuse the dashboard's null-chat buffer.
+- `composerDraftKey` serializes a tuple of profile ID (or null) and `new-chat`, `agent:<id>` or `chat:<id>`. `useComposerDraftKey` derives it from the active profile and entry identity; the `new-chat` surface is exported as `NEW_CHAT_DRAFT_SURFACE`, which `startAgentChat` writes a seeded draft into. Agent-page drafts do not reuse the new-chat screen's null-chat buffer.
 - `useComposerDraftStore.update` merges a field patch and skips unchanged identities. `useComposerDraftField` subscribes to one field and binds its setter to the originating key, so typing does not rerender the workspace and an awaited operation cannot write into a newly visible composer.
 - Each draft contains text, note ID/title references, `pathRefs` (file and folder chips, unique by path, sent as `Referenced file|folder:` lines and never read; see [Path Mentions](../path_mentions/path_mentions.md)), `pastes` (long-paste chips, sent as `<pasted_text>` blocks before the typed text; see [Pasted Text](../pasted_text/pasted_text.md)), files with upload/error/token state, new-chat `modeSelection`, ordered `pendingAgentIds` and `pendingMcpIds`, plus `sending`. Mode intent is `auto`, `none` or a live mode ID. Null agent intent uses the entry page's seed; an empty list preserves explicit removal.
 - `beginSend(key)` synchronously acquires the draft's preparation lock; `endSend(key)` releases it in `finally`. A component-local ref used to reset on remount, allowing a return to the entry page to dispatch the same preparation twice. The lock belongs to the draft, not all composers.

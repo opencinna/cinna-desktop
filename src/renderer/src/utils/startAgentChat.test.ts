@@ -6,7 +6,7 @@ import { useUIStore } from '../stores/ui.store'
 import { composerDraftKey, useComposerDraftStore } from '../stores/composerDraft.store'
 import type { ComposerPathRef } from '../../../shared/pathMentions'
 
-const DRAFT = composerDraftKey('alice', 'dashboard')
+const DRAFT = composerDraftKey('alice', 'new-chat')
 const a: ComposerPathRef = { path: '/w/a', displayPath: '~/a', kind: 'dir' }
 const b: ComposerPathRef = { path: '/w/b.md', displayPath: '~/b.md', kind: 'file' }
 

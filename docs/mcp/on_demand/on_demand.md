@@ -23,7 +23,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 3. User selects the entry. The `@gith` token disappears and a "GitHub" chip (connector/`Plug` icon, fixed accent color) appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
 4. User types their first message and presses Enter.
 5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add`, then starts the run as usual. The chat's runtime is offered the MCP's tools on this very first turn.
-6. A confirmed first-send dispatch consumes the submitted buffer only if its selection is unchanged. Navigating away before sending keeps the dashboard or agent-page draft; preparation failure retains it for retry. New picks made during preparation remain in that source draft.
+6. A confirmed first-send dispatch consumes the submitted buffer only if its selection is unchanged. Navigating away before sending keeps the new-chat or agent-page draft; preparation failure retains it for retry. New picks made during preparation remain in that source draft.
 
 ### Engaging an MCP mid-chat
 
@@ -59,7 +59,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 - Local ACP sessions receive attached connectors through the Cinna MCP bridge. Remote agents retain their own tool sets. Synthetic No tools modes expose no connectors.
 - The on-demand set is persisted per chat (`chat_on_demand_mcps`) and survives reload, app restart, and chat reopen. It is intentionally *not* per-message.
-- New-chat screen picks live in a renderer-session draft, isolated by profile and dashboard/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so tools are available before the first prompt.
+- New-chat screen picks live in a renderer-session draft, isolated by profile and new-chat/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so tools are available before the first prompt.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
 - The retained pendingAnnounce field is compatibility state. Runtime tool discovery uses the injected MCP endpoint and list-change notifications, not a one-shot system-note prefix.
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.

@@ -47,7 +47,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 ### Starting a New Chat
 
 1. User clicks the **+** icon in the top bar (visible in any state, any view).
-2. Active chat is cleared and the dashboard composer is shown with its saved session draft and the caret at the end. New Chat is navigation; it does not discard unsent work. Agent start screens keep separate drafts. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft).
+2. Active chat is cleared and the new-chat composer is shown with its saved session draft and the caret at the end. New Chat is navigation; it does not discard unsent work. Agent start screens keep separate drafts. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft).
 
 ### Opening Settings
 
@@ -76,7 +76,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 
 1. User selects an agent in the Agents sidebar. Its page opens a new-chat composer with that agent selected; no empty chat is created.
 2. The neutral bordered **Settings** action switches the page body to configuration. The accent **Start chat** action returns to the same composer with its draft intact. Folder agents show a compact runtime summary while chatting and full runtime controls in Settings; non-folder agents expose Overview and Connection tabs in Settings.
-3. Sending uses the shared chat flow and opens the resulting conversation under Chats. The row's hover Start chat shortcut opens the dashboard composer directly and does not also select the row's page.
+3. Sending uses the shared chat flow and opens the resulting conversation under Chats. The row's hover Start chat shortcut opens the new-chat composer directly and does not also select the row's page.
 
 ### Opening Inbox
 

@@ -45,7 +45,7 @@
 | Chat agent selector | `src/renderer/src/components/chat/ComposerPlusMenu.tsx` (the `[+]` menu) → `src/renderer/src/components/agents/AgentPickerModal.tsx` (the picker); the standalone `AgentSelector` dropdown was folded into these — see [Composer Menu](../../chat/composer_menu/composer_menu.md) |
 | @-mention popup | `src/renderer/src/components/chat/AgentMentionPopup.tsx` |
 | Chat input (mention detection) | `src/renderer/src/components/chat/ChatInput.tsx` — `findMentionToken()`, `@`-mention state, `forwardRef` with `ChatInputHandle` |
-| Chat integration | `src/renderer/src/components/layout/ChatWorkspace.tsx` — shared dashboard/agent composer and new-chat creation; `src/renderer/src/components/layout/MainArea.tsx` routes views |
+| Chat integration | `src/renderer/src/components/layout/ChatWorkspace.tsx` — shared new-chat/agent composer and new-chat creation; `src/renderer/src/components/layout/MainArea.tsx` routes views |
 | Sidebar menu | `src/renderer/src/components/layout/Sidebar.tsx` — `'agents'` menu item |
 | Settings routing | `src/renderer/src/components/settings/SettingsPage.tsx` — `AgentsSettingsSection` |
 | UI store | `src/renderer/src/stores/ui.store.ts` — external-agent selection, chat/settings page mode, and settings routing |

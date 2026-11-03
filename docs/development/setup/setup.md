@@ -86,7 +86,7 @@ TopBar (permanent drag strip): traffic lights → sidebar toggle → Agent Statu
 
 Sidebar: Chats / Jobs / Notes / Agents tabs, selected list, and profile, local-development/update status and interface controls in the footer. The sidebar can collapse while global top-bar actions remain available.
 
-MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. ChatWorkspace supplies the dashboard/active-chat composer and embedded agent landing composer; agent pages switch between chat and Settings without replacing the mounted draft.
+MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. ChatWorkspace supplies the new-chat/active-chat composer and embedded agent landing composer; agent pages switch between chat and Settings without replacing the mounted draft.
 
 ## Theming
 

@@ -169,7 +169,7 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Drafts across navigation
 
-- Pending files belong to a profile and composer (dashboard, individual agent start screen or existing chat). Navigation restores that draft; an in-flight picker or upload finishes into its originating draft even after unmount.
+- Pending files belong to a profile and composer (new-chat screen, individual agent start screen or existing chat). Navigation restores that draft; an in-flight picker or upload finishes into its originating draft even after unmount.
 - Pending path references and upload status are renderer-session state, not saved draft files; renderer refresh/restart discards that buffer. Dispatched attachments retain their normal storage lifecycle.
 - Explicitly clearing a draft invalidates pending upload results and drops paths queued behind a running upload. Destination changes or loading never silently delete queued files; incompatible files block sending with an explanation.
 

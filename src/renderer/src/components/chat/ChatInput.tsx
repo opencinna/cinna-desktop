@@ -343,7 +343,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Hint bar telemetry. Every call is "the user just did X" — the store decides
   // whether that retires a hint, fires a contextual one, or neither. Emitting
   // from active chats too is intentional: the gestures are the same, so using
-  // one in a live chat still retires the tip shown on the dashboard.
+  // one in a live chat still retires the tip shown on the new-chat screen.
   const observeHint = useHintsStore((s) => s.observe)
   const setHintsBusy = useHintsStore((s) => s.setBusy)
   // Used only to gate the new-chat attach button: showing `[+]` for a
