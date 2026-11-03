@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "title": "Open tasks",
+  "description": "Open tasks ranked by priority, from a Python endpoint.",
+  "view": "list",
+  "source": { "endpoint": "tasks" },
+  "endpoints": {
+    "tasks": { "script": "api/tasks.py", "description": "Open tasks. Params: limit.", "timeout_s": 60 }
+  },
+  "params": { "limit": { "type": "number", "label": "How many", "default": 5 } },
+  "refresh": { "max_age": "15m" },
+  "size": "m",
+  "prompts": [{ "label": "What first?", "prompt": "Which of these tasks should I do first, and why?" }]
+}

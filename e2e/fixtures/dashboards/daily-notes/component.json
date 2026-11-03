@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "title": "Daily notes",
+  "description": "The agent's running notes, read from app-data/notes.md.",
+  "view": "markdown",
+  "source": { "file": "app-data/notes.md" },
+  "refresh": { "max_age": "15m" },
+  "size": "m",
+  "context": "Free-form notes the agent keeps for its owner."
+}

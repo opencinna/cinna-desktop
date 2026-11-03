@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "title": "Weekly signups",
+  "description": "Signups per day this week, drawn by the component's own page.",
+  "view": "html",
+  "entry": "index.html",
+  "source": { "endpoint": "series" },
+  "endpoints": {
+    "series": { "script": "api/series.mjs", "description": "Signups per day. No params." }
+  },
+  "refresh": { "max_age": "1h" },
+  "size": "l"
+}
