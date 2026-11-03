@@ -31,6 +31,10 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 
 Claude, Codex and OpenCode folder agents reuse the question modal through ACP form elicitation, while the turn is parked. Their answer goes through the shared request/Inbox reply path, not a new user turn; the next-message rules below describe the remote transcript-tool variant. Codex's `_meta.codex.isOtherAnswer` companion field is folded into the existing Other choice, and selected/custom text returns under the original question ID. OpenCode's `q<n>_custom` companion is handled the same way: a typed answer replaces the chosen option for a single choice and is appended for a multiple one. Live reply requests expire on run teardown or restart. See [The Agent Turn](../../agents/local_agents/agent_turn.md) and [Codex](../../agents/local_agents/codex_engine.md).
 
+### The guided first build asks through the same tool
+
+- A guided first build's interview asks its questions with the agent's own question tool, so they render and are answered as any local question. Its closing `build_brief_propose` call is not a question: it has its own card and never parks the turn. See [Guided First Build](../../agents/local_agents/guided_build.md).
+
 ### A local question's answer is shown once
 
 - A settled local question carries its outcome inside the block — the runner's `Answered: …` line — so the block itself says what the user chose, live and after a reload.

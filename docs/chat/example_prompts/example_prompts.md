@@ -41,6 +41,7 @@ Surfaces an agent's suggested starter prompts in two places — as a clickable t
 - The `#` trigger is gated by having a prompt-source agent with at least one example prompt — it's inert otherwise
 - The `@` and `#` triggers share one popup-state slot in `ChatInput` — only one popup is open at a time; switching trigger characters replaces the popup's contents
 - Selecting an example prompt in an active chat only inserts text into the textarea — it does not auto-send; the user must confirm with the send button or Enter
+- While one blank (unbuilt) kit agent is picked and [Guided First Build](../../agents/local_agents/guided_build.md) is on, the tags are replaced by its invitation: each is a task the agent is not set up for yet, and a click sends. They return after **Skip guidance**, or once the agent is built. The slot keeps its height across that swap so the composer does not move
 - Clicking a tag on the new-chat screen does auto-send — tags are a shortcut, not a drafting aid
 
 ## Architecture Overview
@@ -77,4 +78,5 @@ Renderer:
 - [Remote Agents](../../agents/remote_agents/remote_agents.md) — one source of `example_prompts`; the backend sync stores them under `remoteMetadata`
 - [Folder Agents as Counterparties](../../agents/local_agents/counterparty.md) — the other source: a folder agent's manifest, synthesized into the same column at scan time. That doc also owns the caveat that the column's *name* is accurate for only half its rows
 - [Agents](../../agents/agents/agents.md) — The `#` picker works in any chat bound to an agent that has prompts, including sessions that were themselves started via a tag click
+- [Guided First Build](../../agents/local_agents/guided_build.md) — replaces the tag cloud for a blank kit agent
 - [Messaging](../messaging/messaging.md) — A tag click drives the standard new-chat flow; a `#` pick becomes ordinary message text that travels the same streaming pipeline
