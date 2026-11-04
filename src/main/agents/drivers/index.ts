@@ -764,6 +764,12 @@ function ownCommandScriptRoots(agent: { path: string; kind: string; manifest?: u
   }
 }
 
+/** The bundled component checker a kit agent runs (`OwnCommandPolicy.dashboardsCheckScript`), when this build has it. */
+function dashboardsCheckFor(userId: string, agentId: string): { dashboardsCheckScript?: string } {
+  const info = dashboardsSkillInfo()
+  return info.available && isKitFolderAgent(userId, agentId) ? { dashboardsCheckScript: info.checkScript } : {}
+}
+
 /** The workshop kit a folder agent reads while building (`OwnCommandPolicy.workshopKit`), when there is one. */
 function workshopKitFor(agent: { path: string }): { workshopKit?: string } {
   const kit = workshopKitOf(agent.path)
@@ -882,7 +888,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         modelDeclared: resolved.modelSource === 'declared',
         approval,
         // Only here, the folder agent's branch: every branch above asks about everything.
-        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent), ...workshopKitFor(agent) } } : {})
+        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent), ...workshopKitFor(agent), ...dashboardsCheckFor(userId, agentId) } } : {})
       }
     }
   }),

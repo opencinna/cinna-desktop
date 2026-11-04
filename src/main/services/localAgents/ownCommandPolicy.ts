@@ -51,6 +51,13 @@ export interface OwnCommandPolicy {
    * app owns.
    */
   workshopKit?: string
+  /**
+   * The desktop's bundled `cinna-dashboards` `scripts/check_component.py`
+   * (absolute), which the prompt tells a kit agent to run on a component
+   * before offering it. It reads the component and, with `--run`, runs the
+   * component's own endpoints, which are the agent's own scripts anyway.
+   */
+  dashboardsCheckScript?: string
 }
 
 export interface EntryInfo {
@@ -237,6 +244,12 @@ function inKit(kit: string | null, real: string): boolean {
   return segments !== null && !segments.some((s) => s === '.git' || secretName(s))
 }
 
+/** The bundled component checker's real path, or null when the policy names none or it cannot be read. */
+function realCheckScript(policy: OwnCommandPolicy, fs: OwnCommandFs): string | null {
+  if (typeof policy.dashboardsCheckScript !== 'string' || !isAbsolute(policy.dashboardsCheckScript)) return null
+  try { return fs.realpath(resolve(policy.dashboardsCheckScript)) } catch { return null }
+}
+
 /** The kit's real path, or null when the policy names none or it cannot be read. */
 function realKit(policy: OwnCommandPolicy, fs: OwnCommandFs): string | null {
   if (typeof policy.workshopKit !== 'string' || !isAbsolute(policy.workshopKit)) return null
@@ -288,7 +301,7 @@ export function ownCommandRefusal(
     if (ENV_ASSIGNMENT.test(command)) return OWN_COMMAND_REASONS.env
     const kit = realKit(policy, fs)
     if (READ_ONLY_COMMANDS.has(command)) return readOnlyRefusal(folder, realCwd, command, words.slice(1), fs, kit)
-    return scriptRefusal(folder, realCwd, policy.scriptRoots, words, fs, kit)
+    return scriptRefusal(folder, realCwd, policy.scriptRoots, words, fs, kit, realCheckScript(policy, fs))
   } catch {
     return OWN_COMMAND_REASONS.unreadable
   }
@@ -296,7 +309,7 @@ export function ownCommandRefusal(
 
 /* ---------------------------------------------------------- the own script */
 
-function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string[], words: string[], fs: OwnCommandFs, kit: string | null = null): string | null {
+function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string[], words: string[], fs: OwnCommandFs, kit: string | null = null, checkScript: string | null = null): string | null {
   const at = scriptWordIndex(words)
   if (at === null) return OWN_COMMAND_REASONS.notOwn(words[0])
   const word = words[at]
@@ -304,6 +317,8 @@ function scriptRefusal(folder: string, cwd: string, scriptRoots: readonly string
   if (real === null || !fs.stat(real)?.isFile()) return OWN_COMMAND_REASONS.scriptMissing(word)
   // The kit's validator, the one kit command the kit tells a building agent to run; it only reads.
   if (kit !== null && real === join(kit, 'tools', 'kit.py') && words[at + 1] === 'validate') return null
+  // The dashboards skill's component checker, which the prompt names by this path.
+  if (checkScript !== null && real === checkScript) return null
   const inFolder = segmentsIn(folder, real)
   if (inFolder !== null) return isProtected(inFolder, 'write') ? OWN_COMMAND_REASONS.protected(word) : null
   for (const root of scriptRoots) {

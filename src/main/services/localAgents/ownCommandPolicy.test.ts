@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { looksAutoRunnable } from '../../../shared/commandRun'
 import { COMMAND_CASES, COMMAND_CASE_FILES } from '../../../shared/commandRunCases'
 import { OWN_COMMAND_REASONS, nodeOwnCommandFs, ownCommandAllowed, ownCommandRefusal, type OwnCommandFs, type OwnCommandPolicy } from './ownCommandPolicy'
@@ -124,6 +124,32 @@ describe('the workshop kit', () => {
     expect(kitAllowed('rm ../../.cinna-kit/guides/05-schedules.md')).toBe(false)
     expect(kitAllowed('grep -r schedules ../../.cinna-kit')).toBe(false)
     expect(ownCommandAllowed({ folder: agent, scriptRoots: [] }, agent, 'cat ../../.cinna-kit/guides/05-schedules.md')).toBe(false)
+  })
+})
+
+describe('the dashboards component checker', () => {
+  // The prompt names the bundled check_component.py by its absolute path.
+  // Mutation: drop the check in scriptRefusal and the first test asks.
+  let agent: string
+  let checker: string
+  let checkPolicy: OwnCommandPolicy
+  beforeAll(() => {
+    agent = join(base, 'checker-agent')
+    checker = join(base, 'app-resources', 'cinna-agent-kit', 'skills', 'cinna-dashboards', 'scripts', 'check_component.py')
+    file(join(agent, 'dashboards', 'deals', 'component.json'))
+    file(checker)
+    file(join(base, 'app-resources', 'cinna-agent-kit', 'skills', 'cinna-dashboards', 'scripts', 'other.py'))
+    checkPolicy = { folder: agent, scriptRoots: [], dashboardsCheckScript: checker }
+  })
+
+  it('runs the bundled checker on a component, with or without --run', () => {
+    expect(ownCommandAllowed(checkPolicy, agent, `uv run python ${checker} dashboards/deals`)).toBe(true)
+    expect(ownCommandAllowed(checkPolicy, agent, `python3 ${checker} dashboards/deals --run`)).toBe(true)
+  })
+
+  it('runs nothing else beside it, and only when the policy names it', () => {
+    expect(ownCommandAllowed(checkPolicy, agent, `python3 ${join(dirname(checker), 'other.py')}`)).toBe(false)
+    expect(ownCommandAllowed({ folder: agent, scriptRoots: [] }, agent, `python3 ${checker} dashboards/deals`)).toBe(false)
   })
 })
 
