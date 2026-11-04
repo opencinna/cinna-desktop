@@ -6,9 +6,14 @@ import type { AgentRow } from '../db/agents'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 
 const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[],
-  listings: 0, order: [] as string[], refreshed: [] as string[][], guided: false, unbuilt: true, guidedOwners: [] as string[] }))
+  listings: 0, order: [] as string[], refreshed: [] as string[][], guided: false, unbuilt: true, guidedOwners: [] as string[],
+  origin: null as string | null, dashboardSessions: [] as unknown[] }))
 vi.mock('./localAgents/localAgentService', () => ({ localAgentService: { guidedBuildOpen: (owner: string) => { state.guidedOwners.push(owner); return state.unbuilt } } }))
-vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator', guidedBuild: state.guided }) } }))
+vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator', guidedBuild: state.guided, originDashboardId: state.origin }) } }))
+vi.mock('./dashboards/dashboardTileAgentTools', () => ({ dashboardTileToolProviderFor: (session: unknown) => {
+  state.dashboardSessions.push(session)
+  return { providerType: 'mcp', displayName: 'Cinna dashboards', getTools: () => [{ name: 'dashboards_tiles' }, { name: 'dashboards_update_tile' }] }
+} }))
 vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => ({ id: 'delegated-task' }) } }))
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => ({ targetAgentId: 'root' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
@@ -86,6 +91,31 @@ describe('runtime tool integration', () => {
       expect(state.guidedOwners.at(-1)).toBe('settings')
     } finally {
       state.guided = false
+    }
+  })
+
+  it('offers the dashboard tile tools only to a folder agent’s own session in a chat opened from a dashboard', async () => {
+    // Mutation: drop the origin check and every folder chat gets them; drop the binding check and a non-folder agent does.
+    const toolsIn = async (chatId: string, agent: Partial<AgentRow>): Promise<string[]> => {
+      const plan = { spec: { remote: false }, session: { mcpServers: [] } } as unknown as AcpLaunchPlan
+      const lease = await conductorBridge.prepare('settings', { id: 'root', driver: 'acp', ...agent } as AgentRow,
+        { chatId, wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } }, plan, vi.fn(), () => true)
+      const tools = (await state.options!.getProviders()).flatMap((provider) => provider.getTools()).map((tool) => tool.name)
+      lease?.close()
+      return tools
+    }
+    const folder = { source: 'folder', localPath: '/tmp/project' } as Partial<AgentRow>
+    try {
+      expect(await toolsIn('dash-plain', folder)).not.toContain('dashboards_tiles')
+      state.origin = 'dash-1'
+      expect(await toolsIn('dash-panel', folder)).toEqual(expect.arrayContaining(['dashboards_tiles', 'dashboards_update_tile']))
+      expect(state.dashboardSessions.at(-1)).toEqual({ profileUserId: 'user', chatId: 'dash-panel', agentId: 'root' })
+      // Another agent's chat: the bound agent is not this one.
+      expect(await toolsIn('dash-other', { ...folder, id: 'someone-else' })).not.toContain('dashboards_tiles')
+      // Not a folder agent: no own session binding.
+      expect(await toolsIn('dash-remote', {})).not.toContain('dashboards_tiles')
+    } finally {
+      state.origin = null
     }
   })
 

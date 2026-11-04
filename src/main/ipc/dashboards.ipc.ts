@@ -4,6 +4,7 @@ import { dashboardFrameServer } from '../host/desktop/htmlPreview'
 import { dashboardService } from '../services/dashboards/dashboardService'
 import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
 import { panelChatService } from '../services/dashboards/panelChat'
+import { tileHighlights } from '../services/dashboards/tileHighlights'
 import type {
   ComponentInfo,
   ComponentPlacement,
@@ -162,6 +163,39 @@ export function registerDashboardHandlers(): void {
       userId
     )
     return { ok: true, token, url }
+  })
+
+  /** The ids an agent highlighted on one of the active profile's tiles and still holds; [] when none or not its tile. */
+  ipcHandle('dashboards:highlight', (_event, tileId: unknown): string[] => {
+    userActivation.requireActivated()
+    if (!dashboardService.resolveTile(getProfileScopeUserId(), tileId)) return []
+    return tileHighlights.get(tileId as string)
+  })
+
+  /** The owner selected something on the tile: the agent's highlight is over. No push; the renderer already shows it. */
+  ipcHandle('dashboards:clear-highlight', (_event, tileId: unknown): boolean => {
+    userActivation.requireActivated()
+    if (!dashboardService.resolveTile(getProfileScopeUserId(), tileId)) return false
+    tileHighlights.clear(tileId as string)
+    return true
+  })
+
+  /**
+   * The tile's page sent `cinna/highlight-ready` (`ready` true), or a page that
+   * had loaded again (false): `dashboards_tiles` reports it can highlight only
+   * while the page now loaded listens.
+   */
+  ipcHandle('dashboards:highlight-ready', (_event, tileId: unknown, ready?: unknown): boolean => {
+    userActivation.requireActivated()
+    const resolved = dashboardService.resolveTile(getProfileScopeUserId(), tileId)
+    if (!resolved) return false
+    if (ready === false) {
+      tileHighlights.unmarkReady(resolved.tile.id)
+      return true
+    }
+    if (resolved.scanned?.spec?.view !== 'html') return false
+    tileHighlights.markReady(resolved.tile.id)
+    return true
   })
 
   ipcHandle('dashboards:release-frame', (_event, token: unknown): boolean => {

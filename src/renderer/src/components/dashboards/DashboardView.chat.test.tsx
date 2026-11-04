@@ -18,6 +18,7 @@ vi.mock('../layout/ChatWorkspace', async () => {
       return (
         <div data-testid="workspace" data-chat-id={chatId}>
           {composerTop}
+          <textarea aria-label="Message" />
           <button type="button" onClick={() => void submit('typed here')}>Send typed</button>
         </div>
       )
@@ -125,6 +126,10 @@ beforeEach(() => {
       lease: async () => ({ ok: true }),
       dropLease: async () => ({ ok: true }),
       onTileChanged: () => () => {},
+      highlight: async () => [],
+      onTileHighlight: () => () => {},
+      clearHighlight: async () => true,
+      highlightReady: async () => true,
       panelChat
     },
     chat: {
@@ -478,5 +483,48 @@ describe('the dashboard header', () => {
     await waitFor(() => expect(useComposerDraftStore.getState().drafts[key]?.text).toBe('Why did W3 drop?'))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(runStart).not.toHaveBeenCalled()
+  })
+
+  it('the composer gaining focus asks the focused page what is selected; an empty answer drops the quoted text from the chip and the send', async () => {
+    // Mutation: drop the panel's onFocus, or keep selectedText on an empty answer, and this fails.
+    const PAGE = tileView('t4', 'Weekly chart', info({ name: 'chart', view: 'html' }), 'm')
+    const api = window.api as unknown as { dashboards: Record<string, unknown> }
+    api.dashboards.tiles = async () => ({ ok: true, dashboard: { id: 'd1', name: 'Sales overview', sortOrder: 0, tileCount: 1, createdAt: 0, updatedAt: 0 }, tiles: [PAGE] })
+    api.dashboards.tileResult = async (tileId: string) => ({ ok: true, result: { tileId, data: null, fetchedAt: null, error: null, refreshing: false, stale: false, tooLarge: false, notice: null } })
+    api.dashboards.openFrame = async () => ({ ok: true, token: 'tok', url: 'cinna-preview://dash-h/t4/index.html' })
+    api.dashboards.releaseFrame = async () => {}
+    show()
+    const iframe = (await screen.findByTestId('dashboard-frame')) as HTMLIFrameElement
+    const win = iframe.contentWindow!
+    const posted: Array<Record<string, unknown>> = []
+    vi.spyOn(win, 'postMessage').mockImplementation(((message: unknown) => { posted.push(message as Record<string, unknown>) }) as never)
+    const send = (data: Record<string, unknown>) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'null', source: win })) })
+    send({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} })
+    const nonce = (posted[0].result as { _meta: { cinna: { nonce: string } } })._meta.cinna.nonce
+    send({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: { _meta: { cinna: { nonce } } } })
+    const collects = () => posted.filter((m) => m.method === 'cinna/collect-context')
+    const answer = (id: unknown, selectedText: string) =>
+      send({ jsonrpc: '2.0', id, result: { source: 'collected', summary: 'Chart', selection: [], visible: [], microdata: [], selected_text: selectedText, _meta: { cinna: { nonce } } } })
+
+    await askAbout('Weekly chart')
+    const aside = await panel()
+    const composer = await within(aside).findByRole('textbox', { name: 'Message' })
+    // Focus moves from the page to the composer: the page is asked, once.
+    const asked = collects().length
+    fireEvent.focus(composer)
+    expect(collects()).toHaveLength(asked + 1)
+    answer(collects().at(-1)!.id, 'W3 dropped 40%')
+    const chip = screen.getByTestId('dashboard-context-chip')
+    await waitFor(() => expect(chip.textContent).toContain('Weekly chart · quoted text'))
+    expect(chip.querySelector('[title]')!.getAttribute('title')).toContain('“W3 dropped 40%”')
+
+    // The owner deselected in the page, then came back to the composer.
+    fireEvent.focus(composer)
+    answer(collects().at(-1)!.id, '')
+    await waitFor(() => expect(chip.textContent).not.toContain('quoted text'))
+    expect(chip.querySelector('[title]')!.getAttribute('title')).toBe('Sent with your message: what this tile shows')
+    fireEvent.click(within(aside).getByRole('button', { name: 'Send typed' }))
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1))
+    expect(runStart.mock.calls[0][0].dashboardContext.focused).not.toHaveProperty('selectedText')
   })
 })

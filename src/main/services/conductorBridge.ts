@@ -158,6 +158,12 @@ async function providers(entry: Entry): Promise<ToolProvider[]> {
     const artifacts = artifactToolProviderFor(entry.binding.artifacts)
     if (artifacts) result.push(artifacts)
   }
+  // A chat opened from a dashboard: the folder agent's own session acts on its
+  // own tiles there. Each call reads the chat and the dashboard again.
+  if (entry.binding?.artifacts && chat.originDashboardId && chat.agentId === entry.agent.id) {
+    const { dashboardTileToolProviderFor } = await import('./dashboards/dashboardTileAgentTools')
+    result.push(dashboardTileToolProviderFor({ profileUserId: entry.scope.profileUserId, chatId: entry.chatId, agentId: entry.agent.id }))
+  }
   // A guided first build's brief: the folder agent's own session, in a chat main
   // marked guided, while that agent is still unbuilt right now (read fresh).
   if (entry.binding?.artifacts && chat.guidedBuild && chat.agentId === entry.agent.id) {

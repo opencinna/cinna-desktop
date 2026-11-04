@@ -55,6 +55,11 @@ export interface ToolExecutionResult {
   parts?: MessagePart[]
   /** True when the call failed — the orchestrator posts `tool_error`. */
   isError?: boolean
+  /**
+   * MCP `structuredContent`, sent beside `content` on Cinna's own MCP server
+   * (a protocol's error object, `{ error: { code, message } }`). Not persisted.
+   */
+  structuredContent?: Record<string, unknown>
 }
 
 export interface ToolProvider {

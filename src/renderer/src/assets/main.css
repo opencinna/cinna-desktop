@@ -66,6 +66,11 @@
     --color-danger: #ef4444;
     --color-success: #22c55e;
     --color-warning: #eab308;
+    /* What an agent highlighted on a dashboard tile (D5): a violet apart from
+       the accent of the owner's selection and from warning amber. The tint is
+       strong enough on dark to read without the bar at the row's start. */
+    --color-highlight: #a78bfa;
+    --color-highlight-tint: color-mix(in srgb, var(--color-highlight) 26%, var(--color-bg));
     /* The edge of a runnable command in a reply, apart from a file reference's neutral one. */
     --color-command-ref-edge: #3f6f52;
     /* Send while a turn runs: the message joins that turn or its queue. */
@@ -118,6 +123,8 @@
     --color-danger: #dc2626;
     --color-success: #16a34a;
     --color-warning: #ca8a04;
+    --color-highlight: #7c3aed;
+    --color-highlight-tint: color-mix(in srgb, var(--color-highlight) 12%, var(--color-bg));
     --color-command-ref-edge: #8cc09f;
     --color-send-queued: #2563eb;
     /* The light app icon's blue into teal. */
@@ -926,6 +933,19 @@
   .file-preview-table tbody tr[aria-selected="true"]:nth-child(n) td,
   .file-preview-markdown tbody tr[aria-selected="true"]:nth-child(n) td {
     background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg));
+  }
+  /* What an agent highlighted on a dashboard tile (D5): the highlight tint and
+     a bar at the row's start, never the accent of the owner's own selection,
+     which wins on a row that is both. Paint only: nothing moves. */
+  .file-preview-table tbody tr[data-highlighted="true"]:not([aria-selected="true"]):nth-child(n) td {
+    background: var(--color-highlight-tint);
+  }
+  .file-preview-table tbody tr[data-highlighted="true"]:not([aria-selected="true"]) td:first-child {
+    box-shadow: inset 3px 0 0 var(--color-highlight);
+  }
+  .dashboard-highlight {
+    background-color: var(--color-highlight-tint);
+    box-shadow: inset 3px 0 0 var(--color-highlight);
   }
   .markdown-body th {
     background: var(--color-bg-secondary);

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { MAX_ASK_TEXT, createBridgeSession, linkTarget, readModelContext } from './componentBridge'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MAX_ASK_TEXT, createBridgeSession, linkTarget, readCollectedContext, readModelContext } from './componentBridge'
 
 /** The host's checks on a dashboard frame's messages (spike §3's cases). */
 
@@ -384,5 +384,178 @@ describe('linkTarget', () => {
     expect(linkTarget('file:///etc/passwd')).toBeNull()
     expect(linkTarget('data:text/html,hi')).toBeNull()
     expect(linkTarget(42)).toBeNull()
+  })
+})
+
+describe('D5 on the host: highlight and collect-context', () => {
+  function d5(extra: Partial<Parameters<typeof createBridgeSession>[0]> = {}) {
+    const frame = { name: 'tile frame' }
+    const posted: Array<Record<string, unknown>> = []
+    let n = 0
+    const session = createBridgeSession({
+      frameWindow: () => frame,
+      post: (message) => posted.push(message as Record<string, unknown>),
+      hostContext: () => ({ theme: 'dark', styles: { variables: {} } }),
+      meta: () => ({ component: 'chart', title: 'Chart', params: {}, size: 'm' }),
+      onInitialized: () => {},
+      newNonce: () => `nonce-${++n}`,
+      ...extra
+    })
+    const from = (data: unknown) => session.receive({ source: frame, origin: 'null', data })
+    const init = (id = 1) => {
+      from({ jsonrpc: '2.0', id, method: 'ui/initialize', params: {} })
+      const nonce = `nonce-${n}`
+      from({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: { _meta: { cinna: { nonce } } } })
+      return nonce
+    }
+    const ready = (nonce: string) => from({ jsonrpc: '2.0', method: 'cinna/highlight-ready', params: { _meta: { cinna: { nonce } } } })
+    return { session, posted, from, init, ready }
+  }
+  afterEach(() => vi.useRealTimers())
+
+  it('hands cinna/highlight-ready to onHighlightReady once per document, and only after initialized', () => {
+    const onHighlightReady = vi.fn()
+    const { from, init, ready, session } = d5({ onHighlightReady })
+    from({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} })
+    expect(ready('nonce-1')).toBe('ignored')
+    from({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: { _meta: { cinna: { nonce: 'nonce-1' } } } })
+    expect(ready('nonce-other')).toBe('rejected')
+    expect(ready('nonce-1')).toBe('accepted')
+    expect(ready('nonce-1')).toBe('accepted')
+    expect(onHighlightReady).toHaveBeenCalledOnce()
+    expect(session.isHighlightReady()).toBe(true)
+    // A reloaded document starts over and says it again.
+    const second = init(2)
+    expect(session.isHighlightReady()).toBe(false)
+    ready(second)
+    expect(onHighlightReady).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a ready document replaced by a new load to onHighlightLost, and only then', () => {
+    const onHighlightLost = vi.fn()
+    const { init, ready } = d5({ onHighlightReady: () => {}, onHighlightLost })
+    init(1)
+    init(2)
+    expect(onHighlightLost).not.toHaveBeenCalled()
+    ready(`nonce-2`)
+    init(3)
+    expect(onHighlightLost).toHaveBeenCalledOnce()
+  })
+
+  it('a host with no highlight (a preview) ignores highlight-ready and sends none', () => {
+    const { init, ready, session, posted } = d5()
+    const nonce = init()
+    expect(ready(nonce)).toBe('ignored')
+    expect(session.sendHighlight(['a'])).toBe(false)
+    expect(posted.some((m) => m.method === 'cinna/highlight')).toBe(false)
+  })
+
+  it('sends cinna/highlight {ids} with the nonce only to a ready document', () => {
+    const { init, ready, session, posted } = d5({ onHighlightReady: () => {} })
+    const nonce = init()
+    expect(session.sendHighlight(['a'])).toBe(false)
+    ready(nonce)
+    expect(session.sendHighlight(['o-1', 'o-2'])).toBe(true)
+    expect(posted.at(-1)).toEqual({ jsonrpc: '2.0', method: 'cinna/highlight', params: { ids: ['o-1', 'o-2'], _meta: { cinna: { nonce } } } })
+    expect(session.sendHighlight([])).toBe(true)
+    expect(posted.at(-1)).toMatchObject({ method: 'cinna/highlight', params: { ids: [] } })
+  })
+
+  it('collect-context: a nonced request, resolved with the cleaned answer', async () => {
+    const { init, session, posted, from } = d5()
+    expect(await session.collectContext()).toBeNull()
+    const nonce = init()
+    const pending = session.collectContext()
+    const request = posted.at(-1)!
+    expect(request).toMatchObject({ jsonrpc: '2.0', method: 'cinna/collect-context', params: { _meta: { cinna: { nonce } } } })
+    // Another document's answer, or none of ours, settles nothing.
+    expect(from({ jsonrpc: '2.0', id: request.id, result: { source: 'collected', _meta: { cinna: { nonce: 'nonce-9' } } } })).toBe('rejected')
+    expect(from({ jsonrpc: '2.0', id: 'unknown', result: { _meta: { cinna: { nonce } } } })).toBe('ignored')
+    expect(from({
+      jsonrpc: '2.0', id: request.id,
+      result: { source: 'collected', summary: 'Pipeline', selection: ['o-1', 3], visible: [], microdata: [{ id: 'o-1', type: 'Order', properties: { status: 'open' } }, 'junk'], selected_text: 'Acme', _meta: { cinna: { nonce } } }
+    })).toBe('accepted')
+    expect(await pending).toEqual({
+      source: 'collected', summary: 'Pipeline', selection: ['o-1'], visible: [],
+      microdata: [{ id: 'o-1', type: 'Order', properties: { status: 'open' } }], selected_text: 'Acme'
+    })
+  })
+
+  it('collect-context: no answer within 500 ms, an error, or a re-initialise is nothing', async () => {
+    vi.useFakeTimers()
+    const { init, session, posted, from } = d5()
+    const nonce = init()
+    const silent = session.collectContext()
+    await vi.advanceTimersByTimeAsync(499)
+    let settled = false
+    void silent.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await silent).toBeNull()
+    const failed = session.collectContext()
+    from({ jsonrpc: '2.0', id: posted.at(-1)!.id, error: { code: -32601, message: 'no', data: { _meta: { cinna: { nonce } } } } })
+    expect(await failed).toBeNull()
+    const orphaned = session.collectContext()
+    init(2)
+    expect(await orphaned).toBeNull()
+  })
+
+  it('readCollectedContext caps what a page that is not the kit’s sends', () => {
+    expect(readCollectedContext('x')).toBeNull()
+    const big = readCollectedContext({ source: 'weird', selected_text: 'x'.repeat(5000), selection: Array.from({ length: 900 }, (_, i) => `i${i}`), microdata: Array.from({ length: 300 }, () => ({ properties: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`p${i}`, 'v'.repeat(500)])) })) })!
+    expect(big.source).toBe('collected')
+    expect(big.selected_text).toHaveLength(2000)
+    expect(big.selection).toHaveLength(500)
+    expect(big.microdata).toHaveLength(100)
+    expect(Object.keys(big.microdata[0].properties)).toHaveLength(20)
+    expect(big.microdata[0].properties.p0).toHaveLength(200)
+  })
+})
+
+describe('D5 against the kit’s bridge', () => {
+  async function kit(extra: Partial<Parameters<typeof createBridgeSession>[0]>) {
+    const { readFileSync } = await import('node:fs')
+    const { DASHBOARDS_BRIDGE_REPO_PATH } = await import('../../../../main/kit/dashboardsProtocol')
+    const script = readFileSync(DASHBOARDS_BRIDGE_REPO_PATH, 'utf8')
+    const listeners: Array<(event: { source: unknown; data: unknown }) => void> = []
+    const frame: Record<string, unknown> = {
+      parent: { postMessage: (data: unknown) => queueMicrotask(() => session.receive({ source: frame, origin: 'null', data: JSON.parse(JSON.stringify(data)) })) },
+      addEventListener: (_type: string, listener: (event: { source: unknown; data: unknown }) => void) => listeners.push(listener),
+      getSelection: () => ({ toString: () => '  Acme   renewal ', isCollapsed: true })
+    }
+    const session = createBridgeSession({
+      frameWindow: () => frame,
+      post: (message) => queueMicrotask(() => listeners.forEach((l) => l({ source: frame.parent, data: JSON.parse(JSON.stringify(message)) }))),
+      hostContext: () => ({ theme: 'light', styles: { variables: {} } }),
+      meta: () => ({ component: 'chart', title: 'Chart', params: {}, size: 'm' }),
+      onInitialized: () => {},
+      ...extra
+    })
+    const documentStub = { title: 'Pipeline', querySelectorAll: () => [], documentElement: { style: { setProperty: () => {}, colorScheme: '' }, setAttribute: () => {} } }
+    new Function('window', 'document', script)(frame, documentStub)
+    const cinna = frame.cinna as Record<string, (...args: unknown[]) => unknown> & { ready: Promise<unknown> }
+    await cinna.ready
+    return { cinna, session }
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('onHighlight sends highlight-ready, and the page’s listener gets the ids the host sends', async () => {
+    const onHighlightReady = vi.fn()
+    const { cinna, session } = await kit({ onHighlightReady })
+    const seen: unknown[] = []
+    cinna.onHighlight((ids: unknown) => seen.push(ids))
+    await flush()
+    expect(onHighlightReady).toHaveBeenCalledOnce()
+    expect(session.sendHighlight(['o-1'])).toBe(true)
+    await flush()
+    expect(seen).toEqual([['o-1']])
+  })
+
+  it('collect-context is answered by the bridge itself: collected, then set_context after setContext', async () => {
+    const { cinna, session } = await kit({ onContext: () => {} })
+    expect(await session.collectContext()).toEqual({ source: 'collected', summary: 'Pipeline', selection: [], visible: [], microdata: [], selected_text: 'Acme renewal' })
+    await cinna.setContext({ summary: 'Two deals stalled', selection: ['d-17'], visible: [] })
+    expect(await session.collectContext()).toMatchObject({ source: 'set_context', summary: 'Two deals stalled', selection: ['d-17'], selected_text: 'Acme renewal' })
   })
 })

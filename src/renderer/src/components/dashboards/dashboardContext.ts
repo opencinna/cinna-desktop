@@ -1,5 +1,6 @@
 import {
   DASHBOARD_CONTEXT_MAX_CHARS,
+  type CollectedPageContext,
   resolveParamWords,
   type DashboardContext,
   type DashboardViewKind,
@@ -14,10 +15,16 @@ import {
  * tested without a dashboard on screen.
  */
 
-/** What a web tile's page last told the host through `setContext`. */
+/**
+ * What a web tile's page last told the host: its `setContext`, or what the
+ * kit's bridge collected from its microdata (`cinna/collect-context`), plus
+ * the text the owner selected there. Page content: data, never instructions.
+ */
 export interface WebTileContext {
   summary: string
   selection: string[]
+  /** Text selected in the page, at most 2,000 chars; absent or '' when none. */
+  selectedText?: string
 }
 
 /** How many rows/items a summary lists before saying how many more there are. */
@@ -117,6 +124,55 @@ function summarizeMarkdown(data: unknown): string {
   return `${(cut > MARKDOWN_PART / 2 ? head.slice(0, cut) : head).trim()}\n…`
 }
 
+/** "https://schema.org/Order" → "Order": an item type, as a word. */
+function shortType(type: string): string {
+  const word = type.replace(/[/#]+$/, '').split(/[/#]/).pop() ?? ''
+  return oneLine(word || type)
+}
+
+/** One microdata item as a line: `Order o-17: status=stalled, owner=Ana`. */
+function microdataLine(item: CollectedPageContext['microdata'][number]): string {
+  const head = [item.type ? shortType(item.type) : '', item.id ? oneLine(item.id) : ''].filter(Boolean).join(' ')
+  const props = Object.entries(item.properties)
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([name, value]) => `${oneLine(name)}=${oneLine(value)}`)
+    .join(', ')
+  return head && props ? `${head}: ${props}` : head || props
+}
+
+/**
+ * A page that never called `setContext`, from what its bridge collected: the
+ * document's title, then one compact line per microdata item (the selected
+ * ones first), capped like every summary.
+ */
+export function summarizeCollected(collected: CollectedPageContext): string {
+  const items = collected.microdata.map((item) => ({ id: item.id, line: microdataLine(item) })).filter((item) => item.line !== '')
+  const chosen = new Set(collected.selection)
+  const selected = items.filter((item) => item.id !== undefined && chosen.has(item.id)).map((item) => item.line)
+  const title = oneLine(collected.summary)
+  return capSummary(lines(title || null, items.map((item) => item.line), selected, items.length).trim())
+}
+
+/**
+ * A `cinna/collect-context` answer as the tile's web context. `collected`:
+ * the summary from microdata and the ids the text selection touches.
+ * `set_context`: the page's own setContext values as the host last kept them
+ * (`previous`), else as the answer repeats them. Either way the selected text.
+ */
+export function webContextFromCollected(collected: CollectedPageContext, previous: WebTileContext | null): WebTileContext {
+  // Nothing selected now: the text an earlier answer quoted is gone from the chip and the next send.
+  const selectedText = collected.selected_text.trim()
+  const quoted = selectedText ? { selectedText } : {}
+  if (collected.source === 'set_context') {
+    return {
+      summary: previous?.summary ?? collected.summary,
+      selection: previous?.selection ?? collected.selection,
+      ...quoted
+    }
+  }
+  return { summary: summarizeCollected(collected), selection: collected.selection, ...quoted }
+}
+
 /**
  * What the focused tile shows, as short text: a table's or list's first rows
  * (selected ones first), the metrics, a markdown document's first part, or a
@@ -181,7 +237,8 @@ export function buildDashboardContext(input: {
       params: focused.component ? resolveParamWords(focused.tile.params, focused.component.params) : focused.tile.params,
       selection,
       dataAge: dataAgeText(input.result?.fetchedAt ?? null, input.now),
-      summary: summarizeTile(view, input.result?.data ?? null, selection, input.web)
+      summary: summarizeTile(view, input.result?.data ?? null, selection, input.web),
+      ...(view === 'html' && input.web?.selectedText ? { selectedText: input.web.selectedText } : {})
     },
     alsoYours: others.filter((t) => agentId !== null && t.component?.agentId === agentId).map((t) => t.displayTitle),
     otherTiles: others
@@ -203,13 +260,27 @@ function paramWords(params: Record<string, unknown>): string[] {
 
 /**
  * The chip's words in two parts: the title, which may be cut short, and what
- * follows it (" · Sep 2026 · 3 selected"), which changes as the user picks
+ * follows it (" · Sep 2026 · 3 selected · quoted text"), which changes as the user picks
  * rows and so is never cut.
  */
 export function contextChipParts(context: DashboardContext): { title: string; rest: string } {
   const parts = [...paramWords(context.focused.params)]
   if (context.focused.selection.length > 0) parts.push(`${context.focused.selection.length} selected`)
+  // What is sent: the owner's text selection in a page goes too.
+  if (context.focused.selectedText) parts.push('quoted text')
   return { title: context.focused.title, rest: parts.map((part) => ` · ${part}`).join('') }
+}
+
+/** How much of the quoted text the chip's tooltip shows. */
+export const CHIP_QUOTE_CHARS = 200
+
+/** The chip's tooltip: what goes with the message, and the quoted text itself, cut to about 200 characters. */
+export function contextChipTitle(context: DashboardContext): string {
+  const base = 'Sent with your message: what this tile shows'
+  const text = context.focused.selectedText?.replace(/\s+/g, ' ').trim()
+  if (!text) return base
+  const quote = text.length > CHIP_QUOTE_CHARS ? `${text.slice(0, CHIP_QUOTE_CHARS).trimEnd()}…` : text
+  return `${base}, and the text you selected:\n“${quote}”`
 }
 
 /** The chip's words: "Deals pipeline · Sep 2026 · 3 selected". */

@@ -1,7 +1,7 @@
 {
   "contract_version": "{{CONTRACT_VERSION}}",
   "id": "{{ID}}",
-  "kit_version": "16ae73845b95eac9",
+  "kit_version": "358f1d8edf2f682e",
   "created_at": "{{CREATED_AT}}",
   "name": "{{NAME}}",
   "slug": "{{SLUG}}",

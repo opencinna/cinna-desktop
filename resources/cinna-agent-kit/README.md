@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `16ae73845b95eac9` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
+Kit version `358f1d8edf2f682e` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
 
 ## Documents
 
@@ -37,6 +37,7 @@ Kit version `16ae73845b95eac9` · contract version in `CONTRACT_VERSION` · inst
 | `templates/artifact-sqlite-report/` | A minimal report site an agent copies, fills with its data and publishes as an artifact (a snapshot for people). |
 | `protocols/dashboards.schema.json` | You implement a host that shows dashboard components, or need the exact `component.json`, data shapes, endpoint convention, page bridge or reference grammar (`cinna_protocol: dashboards/1`). |
 | `protocols/dashboards-bridge.js` | You implement a host that shows web-view components: the reference `window.cinna` helper every host injects unchanged (since 1.19.1). Agents never copy it. |
+| `protocols/dashboards-tools.schema.json` | You implement a host's `dashboards_tiles` and `dashboards_update_tile` tools on the `cinna` server, through which an agent changes its own tiles' params and highlights from a dashboard chat (since 1.20.0). |
 | `skills/cinna-dashboards/` | The skill that teaches agents to build dashboard components, live views the owner keeps, and its `scripts/check_component.py`. Hosts deliver it beside `cinna-artifacts`. |
 | `templates/dashboard-list/`, `templates/dashboard-html/` | Starter components: a native `list` view, and a web view with a dependency-free SVG chart helper. Copy one to `dashboards/<name>/`. |
 | `layout.json` | You need the folder model as data: what each folder is for, what a kit refresh may replace, what never travels to the cloud, and which file Cinna Desktop owns. |

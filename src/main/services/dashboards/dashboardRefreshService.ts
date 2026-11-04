@@ -501,6 +501,18 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
     },
 
     /**
+     * Whole seconds until the tile's budget lets one more run through (at
+     * least 1): the `retry_after_s` of an agent's `rate_limited`.
+     */
+    retryAfterSeconds(tileId: string): number {
+      const at = now()
+      const recent = (callTimes.get(`tile:${tileId}`) ?? []).filter((t) => at - t < CALL_RATE_WINDOW_MS)
+      if (recent.length < DASHBOARD_CALLS_PER_MINUTE) return 1
+      const freeAt = recent[recent.length - DASHBOARD_CALLS_PER_MINUTE] + CALL_RATE_WINDOW_MS
+      return Math.max(1, Math.ceil((freeAt - at) / 1000))
+    },
+
+    /**
      * `tools/call` from a component's page (README §5.4): one of the
      * component's own endpoints, run once and never cached. The target is a
      * tile of this profile or a preview's component; every refusal and failure

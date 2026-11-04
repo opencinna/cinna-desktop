@@ -313,6 +313,29 @@ export interface DashboardsTileChangedPayload {
   tileId: string
 }
 
+/**
+ * Main pushes this when an agent's `dashboards_update_tile` set or cleared a
+ * tile's highlight (`ids: []` clears). The highlight lives in main, in memory,
+ * until the owner selects something on the tile or the app quits.
+ */
+export const DASHBOARDS_TILE_HIGHLIGHT_CHANNEL = 'dashboards:tile-highlight'
+export interface DashboardsTileHighlightPayload {
+  tileId: string
+  ids: string[]
+}
+
+/** The `cinna/collect-context` answer of core's bridge (contract 1.20.0). */
+export interface CollectedPageContext {
+  /** `set_context`: the page's last `setContext`; `collected`: read from its microdata and text selection. */
+  source: 'set_context' | 'collected'
+  summary: string
+  selection: string[]
+  visible: string[]
+  microdata: Array<{ id?: string; type?: string; properties: Record<string, unknown> }>
+  /** At most 2,000 characters. */
+  selected_text: string
+}
+
 /** The JSON-RPC protocol version the bridge answers `ui/initialize` with (MCP Apps). */
 export const DASHBOARD_BRIDGE_PROTOCOL = '2026-01-26'
 
@@ -435,6 +458,8 @@ export interface DashboardContext {
     dataAge: string | null
     /** The first rows / the metrics / the page's `setContext` summary; capped. */
     summary: string
+    /** Text the owner selected inside a web view (`cinna/collect-context`), at most 2,000 chars. */
+    selectedText?: string
   }
   /** Other tiles of the focused tile's agent on this dashboard, by title. */
   alsoYours: string[]

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
-import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
 import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
 import { ConfirmDialog } from './DashboardDialog'
@@ -10,6 +10,7 @@ import { TileBody, TileSkeleton, ageLabel } from './TileBody'
 import { COMPONENT_LINK, MissingCredentials, errorFindings, openAgentTab } from './componentParts'
 import { FILTER_ROW_TOP, TileFilters, hasFilterRow } from './TileFilters'
 import type { ViewSelection } from './views/nativeViews'
+import { drawnHighlights, revealFirstHighlight, revealHighlight, useTileHighlight } from './useTileHighlight'
 
 /** What a tile on a dashboard with the chat panel gets (README D3); a tile without it has no Ask. */
 export interface TileChat {
@@ -22,6 +23,10 @@ export interface TileChat {
   onClearSelection: () => void
   /** The page's `setContext` (html view). */
   onContext: (context: { summary: string; selection: string[] }) => void
+  /** The page's `cinna/collect-context` answer (html view, focused tile only). */
+  onCollected: (collected: CollectedPageContext) => void
+  /** Bumped when the panel's composer gains focus: the focused page is asked what it shows now. */
+  collectRequest?: number
   /** Ask: focus the tile and open the panel. */
   onAsk: () => void
   /** A suggested question: focus, open the panel and send it with the context. */
@@ -127,6 +132,11 @@ export function Tile({
     setStored(storedRef.current)
   }, [tileParamsKey])
   const ref = useRef<HTMLDivElement>(null)
+  // What an agent highlighted here (D5); the owner's own pick or Escape ends it.
+  const highlight = useTileHighlight(tile.id)
+  const highlightKey = highlight.ids.join('\u0000')
+  /** The page's last reported selection: only a change to a non-empty one is the owner's pick. */
+  const pageSelection = useRef('')
 
   // Whether the tile is on screen (inside the scrolled grid): the view leases what is shown.
   useEffect(() => {
@@ -146,6 +156,31 @@ export function Tile({
       onVisibilityChange(tile.id, false)
     }
   }, [ok, tile.id, onVisibilityChange])
+
+  // The first highlighted row in view, inside the tile only; once per highlight, as soon as it is drawn.
+  const revealed = useRef<string | null>(null)
+  /** Which drawn highlighted row the bar's "N highlighted" showed last; a new highlight starts at the first. */
+  const stepped = useRef(0)
+  /** How many highlighted rows the tile draws (native views); the page of a web tile draws its own. */
+  const [drawnCount, setDrawnCount] = useState(0)
+  useEffect(() => {
+    const count = ref.current ? drawnHighlights(ref.current).length : 0
+    if (count !== drawnCount) setDrawnCount(count)
+    if (highlightKey === '') {
+      revealed.current = null
+      return
+    }
+    if (revealed.current === highlightKey || !ref.current) return
+    if (revealFirstHighlight(ref.current)) {
+      revealed.current = highlightKey
+      stepped.current = 0
+    }
+  })
+  const showNextHighlight = (): void => {
+    if (!ref.current) return
+    stepped.current += 1
+    revealHighlight(ref.current, stepped.current)
+  }
 
   const refresh = (): void => {
     setRefreshError(null)
@@ -221,7 +256,16 @@ export function Tile({
   const prompts = canAsk ? component!.prompts : []
   const onBar = prompts.slice(0, promptsOnBar(span.cols))
   const inMenu = prompts.slice(onBar.length)
-  const selection: ViewSelection | undefined = chat ? { selected: chat.selected, onPick: chat.onPick } : undefined
+  const selection: ViewSelection | undefined = chat
+    ? { selected: chat.selected, onPick: (key, additive) => { highlight.clear(); chat.onPick(key, additive) } }
+    : undefined
+  // A page's setContext: a new non-empty selection is the owner's pick there, which ends the agent's highlight.
+  const onPageContext = (context: { summary: string; selection: string[] }): void => {
+    const key = context.selection.join('\u0000')
+    if (context.selection.length > 0 && key !== pageSelection.current) highlight.clear()
+    pageSelection.current = key
+    chat?.onContext(context)
+  }
   const filters = ok && hasFilterRow(component!.view, component!.params)
   // The schedule that writes what the source reads (D4); one that will not run here is said, never silent.
   const schedule = ok ? (view.schedule ?? null) : null
@@ -251,8 +295,15 @@ export function Tile({
       frameTarget={{ tileId: tile.id }}
       meta={{ component: tile.component, title: displayTitle, params: resolveParamWords(tile.params, component!.params), size: tile.size }}
       selection={selection}
-      onContext={chat?.onContext}
+      onContext={onPageContext}
       actions={{ onParams: setParams, onAsk: canAsk ? (text) => { chat!.onFill(text); return true } : undefined }}
+      highlight={{
+        ids: highlight.ids,
+        label: `Highlighted by ${agentName}`,
+        onReady: () => void window.api.dashboards.highlightReady(tile.id).catch(() => {}),
+        onLost: () => void window.api.dashboards.highlightReady(tile.id, false).catch(() => {})
+      }}
+      collect={chat ? { enabled: chat.focused, onCollected: chat.onCollected, request: chat.collectRequest } : undefined}
     />
   )
 
@@ -266,11 +317,11 @@ export function Tile({
       // Focusable by click, so Escape reaches it; the ring, not the outline, shows focus.
       tabIndex={chat ? -1 : undefined}
       onPointerDown={chat && !editMode ? () => { if (!chat.focused) chat.onFocus() } : undefined}
-      onKeyDown={chat ? (event) => {
-        if (event.key === 'Escape' && chat.selected.length > 0) {
-          event.stopPropagation()
-          chat.onClearSelection()
-        }
+      onKeyDown={chat || highlight.ids.length > 0 ? (event) => {
+        if (event.key !== 'Escape' || ((chat?.selected.length ?? 0) === 0 && highlight.ids.length === 0)) return
+        event.stopPropagation()
+        if (chat && chat.selected.length > 0) chat.onClearSelection()
+        highlight.clear()
       } : undefined}
       style={{ gridColumn: `span ${span.cols}`, gridRow: `span ${span.rows}` }}
       // The focus ring is a box-shadow: focusing a tile moves nothing (ux rule 1).
@@ -357,6 +408,18 @@ export function Tile({
           </button>
         )}
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--color-text)]">{displayTitle}</span>
+        {/* Always shown while rows are highlighted, so one below the fold is not missed; in the bar's own strip, so nothing moves. */}
+        {drawnCount > 0 && (
+          <button
+            type="button"
+            data-testid="tile-highlight-count"
+            onClick={showNextHighlight}
+            title={`Highlighted by ${agentName}: show the next one`}
+            className={BAR_TEXT_BUTTON}
+          >
+            {drawnCount} highlighted
+          </button>
+        )}
         <div
           className={`flex shrink-0 items-center gap-1 transition-opacity ${
             editMode ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'

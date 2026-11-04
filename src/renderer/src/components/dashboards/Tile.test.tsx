@@ -42,6 +42,10 @@ beforeEach(() => {
     dashboards: {
       tileResult: async () => ({ ok: true, result }),
       onTileChanged: () => () => {},
+      highlight: async () => [],
+      onTileHighlight: () => () => {},
+      clearHighlight: async () => true,
+      highlightReady: async () => true,
       ensureFresh: async () => ({ ok: true })
     }
   } as never

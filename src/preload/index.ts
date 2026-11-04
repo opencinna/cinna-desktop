@@ -261,6 +261,7 @@ import {
 } from '../shared/artifacts'
 import {
   DASHBOARDS_TILE_CHANGED_CHANNEL,
+  DASHBOARDS_TILE_HIGHLIGHT_CHANNEL,
   type AddTileInput,
   type ComponentInfo,
   type ComponentPlacement,
@@ -270,6 +271,7 @@ import {
   type DashboardRefreshReason,
   type DashboardsOutcome,
   type DashboardsTileChangedPayload,
+  type DashboardsTileHighlightPayload,
   type TileDto,
   type TileResultDto,
   type ResolveReferenceInput,
@@ -2452,6 +2454,18 @@ const api = {
     /** A frame URL for an html component; release the token on unmount. */
     openFrame: (target: DashboardFrameTarget): Promise<DashboardFrameOutcome> => ipcRenderer.invoke('dashboards:open-frame', target),
     releaseFrame: (token: string): Promise<boolean> => ipcRenderer.invoke('dashboards:release-frame', token),
+    /** The ids an agent highlighted on this tile that it still holds; [] when none. */
+    highlight: (tileId: string): Promise<string[]> => ipcRenderer.invoke('dashboards:highlight', tileId),
+    /** The owner selected something on the tile: the agent's highlight is over. */
+    clearHighlight: (tileId: string): Promise<boolean> => ipcRenderer.invoke('dashboards:clear-highlight', tileId),
+    /** The tile's page sent `cinna/highlight-ready` (true), or loaded again and has not yet (false). */
+    highlightReady: (tileId: string, ready = true): Promise<boolean> => ipcRenderer.invoke('dashboards:highlight-ready', tileId, ready),
+    /** An agent set or cleared a tile's highlight (`ids: []`). */
+    onTileHighlight: (handler: (payload: DashboardsTileHighlightPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: DashboardsTileHighlightPayload): void => handler(payload)
+      ipcRenderer.on(DASHBOARDS_TILE_HIGHLIGHT_CHANNEL, listener)
+      return () => ipcRenderer.off(DASHBOARDS_TILE_HIGHLIGHT_CHANNEL, listener)
+    },
     /** A tile's data or refresh state changed in main. */
     onTileChanged: (handler: (payload: DashboardsTileChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: DashboardsTileChangedPayload): void => handler(payload)

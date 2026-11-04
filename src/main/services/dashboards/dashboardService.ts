@@ -344,6 +344,11 @@ export function createDashboardService(deps: DashboardServiceDeps = { agents: de
       return { ok: true, dashboard: toDashboardDto(row), tiles: dashboardRepo.tiles(userId, dashboardId).map((tile) => resolveRow(userId, tile).view) }
     },
 
+    /** A dashboard's tiles, in its order, each with what it shows; [] when the dashboard is not this profile's. */
+    resolvedTiles(userId: string, dashboardId: string): ResolvedTile[] {
+      return dashboardRepo.tiles(userId, dashboardId).map((row) => resolveRow(userId, row))
+    },
+
     /** One tile and what it shows, or null when the tile is not this profile's. */
     resolveTile(userId: string, tileId: unknown): ResolvedTile | null {
       if (typeof tileId !== 'string') return null

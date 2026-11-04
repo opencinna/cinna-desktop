@@ -119,7 +119,30 @@ export function formatCell(value: unknown, type: unknown): string {
   }
 }
 
-export function TableView({ data, selection }: { data: unknown; selection?: ViewSelection }): React.JSX.Element {
+/**
+ * Rows or items an agent highlighted on the tile (D5), by the same keys as
+ * the owner's selection; drawn apart from it (main.css: the highlight tint and
+ * a bar at the start), marked `data-highlighted` for the tile to scroll to,
+ * and saying who highlighted it (`highlightLabel`, its title and description).
+ */
+function highlightFor(highlighted: string[] | undefined, keyAt: (index: number) => string): ((index: number) => boolean) | undefined {
+  if (!highlighted || highlighted.length === 0) return undefined
+  const marked = new Set(highlighted)
+  return (index) => marked.has(keyAt(index))
+}
+
+export function TableView({
+  data,
+  selection,
+  highlighted,
+  highlightLabel
+}: {
+  data: unknown
+  selection?: ViewSelection
+  highlighted?: string[]
+  /** "Highlighted by Sales Agent": what a highlighted row says it is. */
+  highlightLabel?: string
+}): React.JSX.Element {
   const table = useMemo(() => {
     if (!isRecord(data) || !Array.isArray(data.columns) || !Array.isArray(data.rows)) return null
     const columns = data.columns.filter(isRecord).filter((c) => typeof c.key === 'string')
@@ -131,7 +154,7 @@ export function TableView({ data, selection }: { data: unknown; selection?: View
   if (isRecord(data) && typeof data.csv === 'string') {
     return (
       <div className="px-2 py-2">
-        <CsvPreview text={data.csv} filtersEnabled={false} rowSelection={rowSelectionFor(selection, String)} />
+        <CsvPreview text={data.csv} filtersEnabled={false} rowSelection={rowSelectionFor(selection, String)} rowHighlight={highlightFor(highlighted, String)} rowHighlightLabel={highlightLabel} />
       </div>
     )
   }
@@ -144,6 +167,8 @@ export function TableView({ data, selection }: { data: unknown; selection?: View
         filtersEnabled={false}
         notes={[]}
         rowSelection={rowSelectionFor(selection, (index) => table.keys[index] ?? String(index))}
+        rowHighlight={highlightFor(highlighted, (index) => table.keys[index] ?? String(index))}
+        rowHighlightLabel={highlightLabel}
       />
     </div>
   )
@@ -155,10 +180,22 @@ const PRIORITY_COLOR: Record<string, string> = {
   low: 'bg-[var(--color-text-muted)]'
 }
 
-export function ListView({ data, selection }: { data: unknown; selection?: ViewSelection }): React.JSX.Element {
+export function ListView({
+  data,
+  selection,
+  highlighted,
+  highlightLabel
+}: {
+  data: unknown
+  selection?: ViewSelection
+  highlighted?: string[]
+  /** "Highlighted by Sales Agent": what a highlighted item says it is. */
+  highlightLabel?: string
+}): React.JSX.Element {
   if (!isRecord(data) || !Array.isArray(data.items)) return <ShapeMismatch view="list" />
   const items = data.items.filter(isRecord)
   const chosen = new Set(selection?.selected ?? [])
+  const marked = new Set(highlighted ?? [])
   if (items.length === 0) return <p className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">Nothing here right now.</p>
   return (
     <ul className="divide-y divide-[var(--color-border)]">
@@ -168,12 +205,17 @@ export function ListView({ data, selection }: { data: unknown; selection?: ViewS
         const title = text(item.title)
         const key = selectionKeyOf(item, index)
         const picked = chosen.has(key)
+        // The owner's selection wins over the agent's highlight on the same item.
+        const lit = !picked && marked.has(key)
         return (
           <li
             key={text(item.id) || index}
             aria-selected={selection ? picked : undefined}
+            data-highlighted={lit || undefined}
+            title={lit ? highlightLabel : undefined}
+            aria-description={lit ? highlightLabel : undefined}
             onClick={selection ? (event) => selection.onPick(key, event.metaKey || event.ctrlKey) : undefined}
-            className={`flex items-start gap-2 px-3 py-1.5 ${selection ? `cursor-pointer ${picked ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-bg-hover)]'}` : ''}`}
+            className={`flex items-start gap-2 px-3 py-1.5 ${lit ? 'dashboard-highlight' : ''} ${selection ? `cursor-pointer ${picked ? 'bg-[var(--color-accent)]/10' : lit ? '' : 'hover:bg-[var(--color-bg-hover)]'}` : ''}`}
           >
             {priority && <span aria-label={`${text(item.priority)} priority`} className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${priority}`} />}
             <div className="min-w-0 flex-1">

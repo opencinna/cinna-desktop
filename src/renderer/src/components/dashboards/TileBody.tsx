@@ -1,6 +1,6 @@
 import type { DashboardFrameTarget, DashboardViewKind, TileResultDto, TileSize } from '../../../../shared/dashboards'
 import { ListView, MarkdownView, MetricsView, TableView, type ViewSelection } from './views/nativeViews'
-import { WebView, type BridgeActions } from './views/WebView'
+import { WebView, type BridgeActions, type FrameCollect, type FrameHighlight } from './views/WebView'
 
 /** "just now", "4 min ago", "3 h ago", "2 d ago". */
 export function ageLabel(fetchedAt: number | null, now = Date.now()): string {
@@ -37,7 +37,9 @@ export function TileBody({
   loading,
   selection,
   onContext,
-  actions
+  actions,
+  highlight,
+  collect
 }: {
   view: DashboardViewKind
   result: TileResultDto | null
@@ -50,6 +52,10 @@ export function TileBody({
   onContext?: (context: { summary: string; selection: string[] }) => void
   /** The page's setParams and ask (html view, D4). */
   actions?: BridgeActions
+  /** What an agent highlighted on the tile (D5): drawn by table and list views and a page that draws it; markdown and metrics ignore it. */
+  highlight?: FrameHighlight
+  /** The page's collect-context while the tile is focused (html view, D5). */
+  collect?: FrameCollect
 }): React.JSX.Element {
   const hasData = !!result && result.data !== null
   if (view === 'html') {
@@ -62,6 +68,8 @@ export function TileBody({
           title={meta.title}
           onContext={onContext}
           actions={actions}
+          highlight={highlight}
+          collect={collect}
           data={hasData ? { value: result!.data, fetchedAt: result!.fetchedAt, stale: result!.stale } : null}
         />
         {!hasData && result?.error && !loading && (
@@ -81,9 +89,9 @@ export function TileBody({
     case 'markdown':
       return <MarkdownView data={data} />
     case 'table':
-      return <TableView data={data} selection={selection} />
+      return <TableView data={data} selection={selection} highlighted={highlight?.ids} highlightLabel={highlight?.label} />
     case 'list':
-      return <ListView data={data} selection={selection} />
+      return <ListView data={data} selection={selection} highlighted={highlight?.ids} highlightLabel={highlight?.label} />
     case 'metrics':
       return <MetricsView data={data} />
   }

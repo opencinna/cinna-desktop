@@ -9,7 +9,7 @@ import { ConfirmDialog } from './DashboardDialog'
 import { RenameDashboardDialog } from './DashboardsList'
 import { Tile, type TileChat } from './Tile'
 import { DashboardChatPanel, type ContextChip, type PendingPrompt } from './DashboardChatPanel'
-import { buildDashboardContext, coalescePerKey, contextIdentity, type WebTileContext } from './dashboardContext'
+import { buildDashboardContext, coalescePerKey, contextIdentity, webContextFromCollected, type WebTileContext } from './dashboardContext'
 
 /** Grid row height, px. */
 const ROW_HEIGHT = 110
@@ -158,6 +158,18 @@ function useTileDrag(tiles: TileView[], onDrop: (tileId: string, toIndex: number
  * panel on the same chat, as it was left, instead of an open panel asking for
  * a click.
  */
+/** The tiles' web contexts with one replaced; the same object when nothing changed, so nothing re-renders. */
+function withWebContext(all: Record<string, WebTileContext>, tileId: string, web: WebTileContext): Record<string, WebTileContext> {
+  const prev = all[tileId]
+  if (
+    prev &&
+    prev.summary === web.summary &&
+    prev.selection.join('\u0000') === web.selection.join('\u0000') &&
+    (prev.selectedText ?? '') === (web.selectedText ?? '')
+  ) return all
+  return { ...all, [tileId]: web }
+}
+
 const panelFocusByDashboard = new Map<string, { focusedTileId: string | null; panelAgentId: string | null }>()
 
 function useDashboardChat(dashboardId: string | null, dashboardName: string, tiles: TileView[]) {
@@ -175,6 +187,8 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
   const [removed, setRemoved] = useState<string | null>(null)
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null)
   const promptSeq = useRef(0)
+  /** Bumped when the panel's composer gains focus: the focused tile's page is asked for its context. */
+  const [collectRequest, setCollectRequest] = useState(0)
   const setPanelOpen = useUIStore((s) => s.setDashboardPanelOpen)
 
   let effective = focusState
@@ -201,11 +215,8 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
   const contextQueue = useRef<ReturnType<typeof coalescePerKey<WebTileContext>> | null>(null)
   if (!contextQueue.current) {
     contextQueue.current = coalescePerKey<WebTileContext>((tileId, web) =>
-      setWebContexts((all) => {
-        const prev = all[tileId]
-        if (prev && prev.summary === web.summary && prev.selection.join('\u0000') === web.selection.join('\u0000')) return all
-        return { ...all, [tileId]: web }
-      })
+      // A setContext says nothing about the text selection: the last collected one stays.
+      setWebContexts((all) => withWebContext(all, tileId, { ...web, selectedText: web.selectedText ?? all[tileId]?.selectedText }))
     )
   }
   useEffect(() => {
@@ -282,6 +293,10 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
       }),
     onClearSelection: () => setSelections((all) => ({ ...all, [view.tile.id]: [] })),
     onContext: (web) => contextQueue.current?.push(view.tile.id, web),
+    onCollected: (collected) =>
+      setWebContexts((all) => withWebContext(all, view.tile.id, webContextFromCollected(collected, all[view.tile.id] ?? null))),
+    // The focused tile's only: the others' pages are not asked, and do not re-render for it.
+    collectRequest: view.tile.id === focusedTileId ? collectRequest : 0,
     onAsk: () => ask(view),
     onPrompt: (prompt) => sendPrompt(view, prompt),
     onFill: (text) => fillComposer(view, text)
@@ -301,7 +316,8 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
     starters,
     onStarter: (prompt: ComponentPrompt) => { if (focused) sendPrompt(focused, prompt) },
     pendingPrompt,
-    onPromptSent: (seq: number) => setPendingPrompt((p) => (p && p.seq === seq ? null : p))
+    onPromptSent: (seq: number) => setPendingPrompt((p) => (p && p.seq === seq ? null : p)),
+    onComposerFocus: () => setCollectRequest((n) => n + 1)
   }
 }
 
@@ -511,6 +527,7 @@ export function DashboardView(): React.JSX.Element {
         pendingPrompt={chat.pendingPrompt}
         onPromptSent={chat.onPromptSent}
         onClose={() => setPanelOpen(false)}
+        onComposerFocus={chat.onComposerFocus}
         rowWidth={rowWidth}
       />
     )}

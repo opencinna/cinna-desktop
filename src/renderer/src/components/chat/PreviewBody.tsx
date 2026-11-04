@@ -309,12 +309,17 @@ function compareCells(a: string, b: string): number {
 export function CsvPreview({
   text,
   filtersEnabled,
-  rowSelection
+  rowSelection,
+  rowHighlight,
+  rowHighlightLabel
 }: {
   text: string
   filtersEnabled: boolean
   /** Rows the user can pick (a dashboard tile); see {@link DataTable}. */
   rowSelection?: DataTableRowSelection
+  /** Rows an agent highlighted (a dashboard tile); see {@link DataTable}. */
+  rowHighlight?: (rowIndex: number) => boolean
+  rowHighlightLabel?: string
 }): React.JSX.Element {
   const { rows, clipped } = useMemo(() => {
     const delimiter = text.includes('\t') && !text.includes(',') ? '\t' : ','
@@ -336,6 +341,8 @@ export function CsvPreview({
       filtersEnabled={filtersEnabled}
       notes={clipped ? [`Showing first ${MAX_PREVIEW_ROWS} rows.`] : []}
       rowSelection={rowSelection}
+      rowHighlight={rowHighlight}
+      rowHighlightLabel={rowHighlightLabel}
     />
   )
 }
@@ -359,13 +366,19 @@ export function DataTable({
   body,
   filtersEnabled,
   notes,
-  rowSelection
+  rowSelection,
+  rowHighlight,
+  rowHighlightLabel
 }: {
   header: string[]
   body: string[][]
   filtersEnabled: boolean
   notes: string[]
   rowSelection?: DataTableRowSelection
+  /** Rows an agent highlighted (a dashboard tile, D5), by index in `body`: marked `data-highlighted`, drawn by main.css. */
+  rowHighlight?: (rowIndex: number) => boolean
+  /** What a highlighted row says it is ("Highlighted by Sales Agent"): its title and aria-description, unless the row is selected. */
+  rowHighlightLabel?: string
 }): React.JSX.Element {
   // Column index → substring filter; null sort means original order.
   const [filters, setFilters] = useState<Record<number, string>>({})
@@ -470,10 +483,16 @@ export function DataTable({
           )}
         </thead>
         <tbody>
-          {processed.map(({ row, originalIndex }) => (
+          {processed.map(({ row, originalIndex }) => {
+            // A selected row shows the selection, not the highlight (main.css), so it does not say it either.
+            const lit = !!rowHighlight?.(originalIndex) && !rowSelection?.isSelected(originalIndex)
+            return (
             <tr
               key={originalIndex}
               aria-selected={rowSelection ? rowSelection.isSelected(originalIndex) : undefined}
+              data-highlighted={rowHighlight?.(originalIndex) || undefined}
+              title={lit ? rowHighlightLabel : undefined}
+              aria-description={lit ? rowHighlightLabel : undefined}
               onClick={rowSelection ? (event) => rowSelection.onRowClick(originalIndex, event.metaKey || event.ctrlKey) : undefined}
               className={rowSelection ? `cursor-pointer ${rowSelection.isSelected(originalIndex) ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-bg-hover)]'}` : undefined}
             >
@@ -487,7 +506,8 @@ export function DataTable({
                 </td>
               ))}
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
       {filtersEnabled && processed.length === 0 && body.length > 0 && (

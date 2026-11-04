@@ -93,12 +93,14 @@ function reply(response: ServerResponse, status: number, message: string): void 
 function toolResult(result: ToolExecutionResult): CallToolResult {
   // Preserve real MCP content blocks, including images/resources. Agent results
   // remain compact text; parts and trusted runner controls stay in main.
-  const parsed = CallToolResultSchema.safeParse({ content: result.content, isError: result.isError })
+  const structured = result.structuredContent ? { structuredContent: result.structuredContent } : {}
+  const parsed = CallToolResultSchema.safeParse({ content: result.content, isError: result.isError, ...structured })
   if (parsed.success) return parsed.data
   return {
     content: [{ type: 'text', text: typeof result.content === 'string'
       ? result.content : JSON.stringify(result.content) ?? '' }],
-    isError: result.isError
+    isError: result.isError,
+    ...structured
   }
 }
 

@@ -118,6 +118,19 @@ describe('conductor MCP loopback server', () => {
     expect(await client.callTool({ name: 'self' })).toMatchObject({ isError: true })
   })
 
+  it('sends a protocol error’s structuredContent beside its text', async () => {
+    const refusing = provider('refusing')
+    vi.mocked(refusing.callTool).mockResolvedValue({ content: 'No such tile.', isError: true, structuredContent: { error: { code: 'not_found', message: 'No such tile.' } } })
+    const { session } = await subject({ getProviders: () => [refusing] })
+    const { client } = await connect(session)
+    await client.listTools()
+    expect(await client.callTool({ name: 'refusing', arguments: {} })).toEqual({
+      content: [{ type: 'text', text: 'No such tile.' }],
+      isError: true,
+      structuredContent: { error: { code: 'not_found', message: 'No such tile.' } }
+    })
+  })
+
   it('offers exactly the names the last tools/list served, and nothing once disposed', async () => {
     let providers = [provider('self', 'root'), provider('probe')]
     const { session } = await subject({ conductorAgentId: 'root', getProviders: () => providers })

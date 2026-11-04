@@ -103,6 +103,8 @@ export function useDashboardsWatch(): void {
   useEffect(() => {
     const offTile = window.api.dashboards.onTileChanged(({ tileId }) => {
       void queryClient.invalidateQueries({ queryKey: tileResultKey(tileId) })
+      // Params set from main (an agent's dashboards_update_tile) reach the tile's filters and page.
+      void queryClient.invalidateQueries({ queryKey: ['dashboards', 'tiles'] })
     })
     const offFolder = window.api.localAgents.onChanged(() => {
       void queryClient.invalidateQueries({ queryKey: ['dashboards', 'components'] })

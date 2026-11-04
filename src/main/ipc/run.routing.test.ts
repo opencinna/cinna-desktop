@@ -950,6 +950,9 @@ describe('the dashboard context (D3)', () => {
     // The engine's first word: delivered. Mutation: advance when built and the retry above loses it.
     portGivenToTheStream().postMessage({ type: 'delta', kind: 'text', text: 'Sure' } as RunEvent)
     ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+    // What `dashboards_tiles` reads: the context behind the delivered section.
+    const { dashboardContextTracker } = await import('../services/dashboards/dashboardContext')
+    expect(dashboardContextTracker.lastContext('chat-1')).toMatchObject({ dashboardId: 'dash-1', focused: { tileId: 't-1', summary: '3 open deals', selection: ['d-17'] } })
 
     await send({ chatId: 'chat-1', content: 'three', dashboardContext: context })
     expect(sent(await driverInput())).not.toContain(OPEN)

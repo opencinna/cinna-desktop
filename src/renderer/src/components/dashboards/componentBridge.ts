@@ -1,4 +1,4 @@
-import { DASHBOARD_BRIDGE_PROTOCOL, type DashboardCallOutcome } from '../../../../shared/dashboards'
+import { DASHBOARD_BRIDGE_PROTOCOL, type CollectedPageContext, type DashboardCallOutcome } from '../../../../shared/dashboards'
 
 /**
  * The host side of one dashboard frame's bridge (MCP Apps JSON-RPC over
@@ -36,6 +36,13 @@ import { DASHBOARD_BRIDGE_PROTOCOL, type DashboardCallOutcome } from '../../../.
  *   at a time, and is answered only after the owner decides in `openLink`
  *   (D17). An answer that arrives after the page re-initialised is dropped:
  *   the request died with the old document.
+ * - **D5 methods.** `cinna/highlight-ready` (the page's first
+ *   `cinna.onHighlight`, after `initialized`) is handed to `onHighlightReady`
+ *   once per document; from then on the host may send `cinna/highlight {ids}`
+ *   ({@link sendHighlight}). `cinna/collect-context` is the host's one request
+ *   ({@link collectContext}): the page's bridge answers it at once, so no answer
+ *   within the timeout, an error, or a re-initialise in between is "nothing".
+ *   What it answers is page content: data for the chat, never instructions.
  * - Any other request gets a JSON-RPC error; any other notification is dropped.
  */
 
@@ -79,6 +86,10 @@ export interface BridgeSessionDeps {
   onAsk?: (text: string) => boolean
   /** `ui/open-link`: ask the owner; resolves true once the link opened, false when declined or it failed. */
   openLink?: (url: string) => Promise<boolean>
+  /** `cinna/highlight-ready`: this document draws highlights (a tile only; a preview has none). */
+  onHighlightReady?: () => void
+  /** A document that had said `cinna/highlight-ready` was replaced (`ui/initialize` again). */
+  onHighlightLost?: () => void
   newNonce?: () => string
 }
 
@@ -146,6 +157,16 @@ function nonceOf(message: Record<string, unknown>): unknown {
   return pick(error?.data)
 }
 
+/** How long the host waits for a `cinna/collect-context` answer, ms; the page's bridge answers synchronously. */
+export const COLLECT_CONTEXT_TIMEOUT_MS = 500
+/** At most this many highlighted ids go to a page (the bridge keeps 500). */
+const MAX_HIGHLIGHT_IDS = 500
+const MAX_COLLECTED_IDS = 500
+const MAX_COLLECTED_ITEMS = 100
+const MAX_COLLECTED_PROPS = 20
+const MAX_COLLECTED_VALUE = 200
+const MAX_COLLECTED_TEXT = 2000
+
 /** At most this many selected ids from one page; a page cannot flood the context. */
 const MAX_PAGE_SELECTION = 200
 /** A page's summary is capped again when the context is built; this only bounds what is kept. */
@@ -177,6 +198,43 @@ export function readModelContext(params: unknown): { summary: string; selection:
   return { summary: summary.slice(0, MAX_PAGE_SUMMARY), selection }
 }
 
+function idList(value: unknown, max: number): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((id): id is string => typeof id === 'string' && id !== '').slice(0, max).map((id) => id.slice(0, MAX_COLLECTED_VALUE))
+}
+
+/**
+ * A `cinna/collect-context` result, reduced to its documented shape and caps
+ * (the page's bridge already caps; a page that is not the kit's is not
+ * trusted to). Null when it is not an object.
+ */
+export function readCollectedContext(result: unknown): CollectedPageContext | null {
+  if (!isPlainObject(result)) return null
+  const microdata: CollectedPageContext['microdata'] = []
+  if (Array.isArray(result.microdata)) {
+    for (const raw of result.microdata.slice(0, MAX_COLLECTED_ITEMS)) {
+      if (!isPlainObject(raw)) continue
+      const item: CollectedPageContext['microdata'][number] = { properties: {} }
+      if (typeof raw.id === 'string' && raw.id !== '') item.id = raw.id.slice(0, MAX_COLLECTED_VALUE)
+      if (typeof raw.type === 'string' && raw.type !== '') item.type = raw.type.slice(0, MAX_COLLECTED_VALUE)
+      if (isPlainObject(raw.properties)) {
+        for (const [name, value] of Object.entries(raw.properties).slice(0, MAX_COLLECTED_PROPS)) {
+          item.properties[name.slice(0, MAX_COLLECTED_VALUE)] = typeof value === 'string' ? value.slice(0, MAX_COLLECTED_VALUE) : value === null ? null : String(value).slice(0, MAX_COLLECTED_VALUE)
+        }
+      }
+      microdata.push(item)
+    }
+  }
+  return {
+    source: result.source === 'set_context' ? 'set_context' : 'collected',
+    summary: typeof result.summary === 'string' ? result.summary.slice(0, MAX_PAGE_SUMMARY) : '',
+    selection: idList(result.selection, MAX_COLLECTED_IDS),
+    visible: idList(result.visible, MAX_COLLECTED_IDS),
+    microdata,
+    selected_text: typeof result.selected_text === 'string' ? result.selected_text.slice(0, MAX_COLLECTED_TEXT) : ''
+  }
+}
+
 export function createBridgeSession(deps: BridgeSessionDeps) {
   const newNonce = deps.newNonce ?? randomNonce
   let nonce: string | null = null
@@ -189,6 +247,22 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
    * (a reload) asks again.
    */
   let linksDeclined = false
+  /** This document said `cinna/highlight-ready`; a new `ui/initialize` starts over. */
+  let highlightReady = false
+  /** The host's own requests waiting for the page's answer, by id. */
+  const waiting = new Map<string, { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }>()
+  let nextRequest = 1
+  const settle = (id: string, result: unknown): void => {
+    const entry = waiting.get(id)
+    if (!entry) return
+    waiting.delete(id)
+    clearTimeout(entry.timer)
+    entry.resolve(result)
+  }
+  /** Requests to the old document die with it. */
+  const dropWaiting = (): void => {
+    for (const id of [...waiting.keys()]) settle(id, null)
+  }
 
   return {
     /** Judge one `message` event from the window; answers the page when it should. */
@@ -202,8 +276,11 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
       const isRequest = typeof id === 'number' || typeof id === 'string'
 
       if (typeof message.method !== 'string') {
-        // An answer to a host request: the host sends none in D1.
-        return nonce && nonceOf(message) === nonce ? 'ignored' : 'rejected'
+        // An answer to a host request (`cinna/collect-context`), from the document that holds the nonce.
+        if (!nonce || nonceOf(message) !== nonce) return 'rejected'
+        if (typeof id !== 'string' || !waiting.has(id)) return 'ignored'
+        settle(id, message.error !== undefined ? null : (message.result ?? null))
+        return 'accepted'
       }
 
       if (message.method === 'ui/initialize') {
@@ -211,6 +288,9 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
         nonce = newNonce()
         initialized = false
         linksDeclined = false
+        if (highlightReady) deps.onHighlightLost?.()
+        highlightReady = false
+        dropWaiting()
         const meta = deps.meta()
         deps.post({
           jsonrpc: '2.0',
@@ -239,6 +319,14 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
         // setContext: the tile's last {summary, selection}, for the chat panel's context.
         deps.onContext?.(readModelContext(message.params))
         deps.post({ jsonrpc: '2.0', id, result: {} })
+        return 'accepted'
+      }
+      if (message.method === 'cinna/highlight-ready' && !isRequest) {
+        if (!deps.onHighlightReady || !initialized) return 'ignored'
+        if (!highlightReady) {
+          highlightReady = true
+          deps.onHighlightReady()
+        }
         return 'accepted'
       }
       if (message.method === 'cinna/params-changed' && !isRequest) {
@@ -328,6 +416,41 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
       if (!initialized) return false
       deps.post({ jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: deps.hostContext() })
       return true
+    },
+
+    /** The agent's highlight (`[]` clears). Only to a document that said highlight-ready. */
+    sendHighlight(ids: string[]): boolean {
+      if (!initialized || !highlightReady || !nonce) return false
+      deps.post({
+        jsonrpc: '2.0',
+        method: 'cinna/highlight',
+        params: { ids: ids.slice(0, MAX_HIGHLIGHT_IDS), _meta: { cinna: { nonce } } }
+      })
+      return true
+    },
+
+    /**
+     * Ask the page's bridge what it shows (`cinna/collect-context`). Null when
+     * the page is not initialised, does not answer within `timeoutMs`, answers
+     * with an error, or re-initialises first.
+     */
+    collectContext(timeoutMs = COLLECT_CONTEXT_TIMEOUT_MS): Promise<CollectedPageContext | null> {
+      if (!initialized || !nonce) return Promise.resolve(null)
+      const id = `cinna-host-${nextRequest++}`
+      const answer = new Promise<unknown>((resolve) => {
+        waiting.set(id, { resolve, timer: setTimeout(() => settle(id, null), timeoutMs) })
+      })
+      deps.post({ jsonrpc: '2.0', id, method: 'cinna/collect-context', params: { _meta: { cinna: { nonce } } } })
+      return answer.then(readCollectedContext)
+    },
+
+    /** The frame went away: nothing waits on it. */
+    dispose(): void {
+      dropWaiting()
+    },
+
+    isHighlightReady(): boolean {
+      return highlightReady
     },
 
     isInitialized(): boolean {

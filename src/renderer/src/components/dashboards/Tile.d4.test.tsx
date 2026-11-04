@@ -57,6 +57,10 @@ beforeEach(() => {
     dashboards: {
       tileResult: async () => ({ ok: true, result }),
       onTileChanged: () => () => {},
+      highlight: async () => [],
+      onTileHighlight: () => () => {},
+      clearHighlight: async () => true,
+      highlightReady: async () => true,
       ensureFresh: async () => ({ ok: true }),
       setParams,
       call,
@@ -317,7 +321,7 @@ async function framePage() {
 
 function chatStub(): TileChat {
   return {
-    focused: false, selected: [], onFocus: vi.fn(), onPick: vi.fn(), onClearSelection: vi.fn(), onContext: vi.fn(),
+    focused: false, selected: [], onFocus: vi.fn(), onPick: vi.fn(), onClearSelection: vi.fn(), onContext: vi.fn(), onCollected: vi.fn(),
     onAsk: vi.fn(), onPrompt: vi.fn(), onFill: vi.fn()
   }
 }

@@ -10,7 +10,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { ComposerSendExtrasContext, type ComposerSendExtras } from '../chat/composerSendContext'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
 import { fillChatComposer } from './ComponentCard'
-import { contextChipParts } from './dashboardContext'
+import { contextChipParts, contextChipTitle } from './dashboardContext'
 
 /** The panel's narrowest and default widths, px; it never takes more than 60% of the window. */
 export const PANEL_MIN_WIDTH = 300
@@ -82,6 +82,7 @@ export function DashboardChatPanel({
   pendingPrompt,
   onPromptSent,
   onClose,
+  onComposerFocus,
   rowWidth
 }: {
   dashboardId: string
@@ -99,6 +100,8 @@ export function DashboardChatPanel({
   pendingPrompt: PendingPrompt | null
   onPromptSent: (seq: number) => void
   onClose: () => void
+  /** The composer gained focus: the focused tile's page is asked what is selected there now (D5). */
+  onComposerFocus?: () => void
 }): React.JSX.Element {
   const storedWidth = useUIStore((s) => s.dashboardPanelWidth)
   const setWidth = useUIStore((s) => s.setDashboardPanelWidth)
@@ -226,6 +229,8 @@ export function DashboardChatPanel({
         overlay ? 'absolute inset-y-0 right-0 z-30 shadow-xl' : 'relative'
       }`}
       style={{ width }}
+      // The composer gaining focus, from a tile's page (where the owner selected text) or anywhere else.
+      onFocus={(event) => { if (event.target instanceof HTMLTextAreaElement) onComposerFocus?.() }}
     >
       <ResizeHandle width={width} maxWidth={maxWidth} onResize={setWidth} />
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-3">
@@ -338,7 +343,7 @@ export function ContextChipRow({ chip }: { chip: ContextChip }): React.JSX.Eleme
         <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-0.5 pl-2 pr-0.5 text-[var(--color-text)]">
           <LayoutDashboard size={11} className="shrink-0 text-[var(--color-accent)]" />
           {/* Only the title is cut short: "· 3 selected" changes as rows are picked, so it always shows. */}
-          <span className="flex min-w-0 items-center whitespace-pre" title="Sent with your message: what this tile shows">
+          <span className="flex min-w-0 items-center whitespace-pre" title={contextChipTitle(chip.context)}>
             <span className="truncate" data-testid="dashboard-context-chip-title">{contextChipParts(chip.context).title}</span>
             <span className="shrink-0">{contextChipParts(chip.context).rest}</span>
           </span>

@@ -825,7 +825,7 @@ function dashboardContextFor(input: {
       logger.debug('a dashboard context was dropped', { chatId: input.chatId, valid: !!context, fromThisDashboard: !!context && !!origin && origin === context.dashboardId })
       return null
     }
-    return dashboardContextTracker.forTurn(input.chatId, dashboardContextSection(context))
+    return dashboardContextTracker.forTurn(input.chatId, dashboardContextSection(context), context)
   } catch (error) {
     // Context, never a precondition: the turn runs without it.
     logger.warn('the dashboard context could not be built', { chatId: input.chatId, error: error instanceof Error ? error.message : String(error) })
