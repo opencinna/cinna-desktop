@@ -19,6 +19,7 @@ import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useToastStore } from '../../stores/toast.store'
 import { useUIStore } from '../../stores/ui.store'
+import { useCapabilities } from '../../hooks/useCapabilities'
 import { authorizeAgentFile, readAgentFileText } from '../../utils/agentFileAccess'
 import { startableAgent } from '../../utils/appShortcuts'
 import { fileNoteFromContents } from '../../utils/fileNote'
@@ -94,7 +95,14 @@ export type MessageMenuItem =
  * agent's message) adds a last group: Run, Run in background and Edit and
  * Run… for one that looks safe, Edit and Run… alone for any other.
  */
-export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false, command?: { auto: boolean }): MessageMenuItem[][] {
+export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false, command?: { auto: boolean }, saveToNotes = true): MessageMenuItem[][] {
+  // Notes off (Settings → Features → Capabilities): no Save to Notes, and a
+  // group it leaves empty goes with it.
+  if (!saveToNotes) {
+    return messageMenuItems(file, canPublish, command)
+      .map((group) => group.filter((item) => item !== 'save-text' && item !== 'save-contents'))
+      .filter((group) => group.length > 0)
+  }
   if (!file) {
     if (!command) return [['copy-text', 'save-text']]
     return [['copy-text', 'save-text'], command.auto ? ['run', 'run-background', 'edit-run'] : ['edit-run']]
@@ -512,7 +520,8 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
     'edit-run': ['Edit and Run…', SquarePen]
   }
   // Decided once, at open: nothing appears or disappears while the menu is open.
-  const [groups] = useState(() => messageMenuItems(file, canPublish, command))
+  const notesEnabled = useCapabilities().notesEnabled
+  const [groups] = useState(() => messageMenuItems(file, canPublish, command, notesEnabled))
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (['Escape', 'Tab', 'PageUp', 'PageDown'].includes(event.key)) {

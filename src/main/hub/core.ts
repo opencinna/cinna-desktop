@@ -33,6 +33,7 @@ import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
 import { artifactService } from '../services/artifacts/artifactService'
 import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
+import { capabilityService } from '../services/capabilityService'
 import { onRunClosed } from '../services/runExecutionState'
 import { onScheduleRunCompleted } from '../services/localScheduleEvents'
 import { mcpManager } from '../mcp/manager'
@@ -60,6 +61,11 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   setLogValueRedactor(redactCredentialValues)
   initDatabase(openDatabase)
   initSession()
+  // Notes and Dashboards nobody has turned on or off yet: decided once, from
+  // whether any profile holds a note or a dashboard, before the first window
+  // reads its settings and before the dashboard warm-up asks. A failure stays
+  // undecided (off) and the next read retries.
+  capabilityService.resolveUnset()
   // Every runtime is a chat mode (Claude Code, Codex, Antigravity, OpenCode).
   // Chat modes live in the Default scope; `chatmode:list` makes them too.
   try {

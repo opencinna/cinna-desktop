@@ -7,6 +7,7 @@ import { useAddTile, useComponentReference } from '../../hooks/useDashboards'
 import { useAuthStore } from '../../stores/auth.store'
 import { composerDraftKey, useComposerDraftStore } from '../../stores/composerDraft.store'
 import { useUIStore } from '../../stores/ui.store'
+import { useCapabilities } from '../../hooks/useCapabilities'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AddToDashboardDialog } from './AddToDashboardDialog'
 import { ComponentPreviewDialog } from './ComponentPreview'
@@ -139,6 +140,8 @@ function FoundCard({
   const blocked = component.missingCredentials.length > 0
   const runnable = component.valid && !blocked
   const needsId = component.manifestId === ''
+  // Off, the card still previews; putting it on a dashboard waits until on (ux rule 15).
+  const dashboardsOn = useCapabilities().dashboardsEnabled
   return (
     <div className={SHELL} data-component-card={reference} aria-label={`Component ${component.title}`} role="group">
       <div className={TITLE_ROW}>
@@ -153,16 +156,18 @@ function FoundCard({
             <button type="button" className={BUTTON} onClick={() => setPreviewing(true)} aria-label={`Preview ${component.title}`}>
               Preview
             </button>
-            <button
-              type="button"
-              className={BUTTON}
-              onClick={() => setAdding(true)}
-              disabled={needsId}
-              title={needsId ? 'This agent needs an id first' : undefined}
-              aria-label={`Add ${component.title} to a dashboard`}
-            >
-              Add to dashboard…
-            </button>
+            {dashboardsOn && (
+              <button
+                type="button"
+                className={BUTTON}
+                onClick={() => setAdding(true)}
+                disabled={needsId}
+                title={needsId ? 'This agent needs an id first' : undefined}
+                aria-label={`Add ${component.title} to a dashboard`}
+              >
+                Add to dashboard…
+              </button>
+            )}
           </>
         )}
         <CopyReferenceButton text={canonicalReference} />

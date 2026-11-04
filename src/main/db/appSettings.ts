@@ -54,7 +54,10 @@ export const DEFAULTS: AppSettingsSchema = {
   // JSON `{ "<path>": true }`. Empty = the agents home has never been explained.
   localAgentsHomeAcknowledged: '',
   // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
-  localDevConsent: ''
+  localDevConsent: '',
+  // Undecided until `capabilityService` decides it once; read as off until then.
+  notesCapability: 'unset',
+  dashboardsCapability: 'unset'
 }
 
 export const appSettingsRepo = {

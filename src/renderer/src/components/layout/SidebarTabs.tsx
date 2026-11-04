@@ -1,7 +1,16 @@
 import { MessageSquare, ClipboardList, NotebookPen, Bot, LayoutDashboard } from 'lucide-react'
-import { useUIStore, type ActiveView, type SidebarTab } from '../../stores/ui.store'
+import { useEffect } from 'react'
+import {
+  useUIStore,
+  CAPABILITY_VIEWS,
+  disabledCapabilityOnScreen,
+  isSidebarTabEnabled,
+  type ActiveView,
+  type SidebarTab
+} from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
+import { useCapabilities } from '../../hooks/useCapabilities'
 
 /**
  * The centers that belong to **no** tab, and are therefore the ones the
@@ -16,6 +25,13 @@ import { useChatList } from '../../hooks/useChat'
  * nobody wrote down.
  */
 const TABLESS_VIEWS: readonly ActiveView[] = ['inbox', 'tasks', 'task', 'cinna-task-run']
+
+/**
+ * Settings leaves the same way: its section menu replaces the list, so no tab
+ * is selected while it is open, and pressing the tab that was selected before
+ * has to leave it rather than decide nothing changed.
+ */
+const LEAVABLE_VIEWS: readonly ActiveView[] = [...TABLESS_VIEWS, 'settings']
 
 /**
  * The center each tab owns, for the one case that only realigns it: returning
@@ -34,8 +50,10 @@ const VIEW_FOR_TAB: Record<SidebarTab, ActiveView> = {
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
   { id: 'jobs', label: 'Jobs', Icon: ClipboardList },
-  { id: 'notes', label: 'Notes', Icon: NotebookPen },
   { id: 'agents', label: 'Agents', Icon: Bot },
+  // Optional capabilities (Settings → Features → Capabilities), shown only
+  // once on. Last on the rail, so turning one on appends a tab and moves none.
+  { id: 'notes', label: 'Notes', Icon: NotebookPen },
   { id: 'dashboards', label: 'Dashboards', Icon: LayoutDashboard }
 ]
 
@@ -43,7 +61,8 @@ const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[]
  * Diary-book tabs that stick out on the LEFT of the sidebar card. The
  * sidebar reads as a "page"; the active tab visually merges with the page
  * (same surface, no seam on the right), while inactive tabs sit as smaller
- * recessed blocks. Renders nothing in the settings view (Sidebar gates it).
+ * recessed blocks. In Settings the rail stays, dimmed and with no tab
+ * selected — the section menu is the page then — and a tab leaves Settings.
  */
 export function SidebarTabs(): React.JSX.Element {
   const sidebarTab = useUIStore((s) => s.sidebarTab)
@@ -57,6 +76,8 @@ export function SidebarTabs(): React.JSX.Element {
   const activeExternalAgentId = useUIStore((s) => s.activeExternalAgentId)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
+  const { notesEnabled, dashboardsEnabled, loaded: capabilitiesLoaded } = useCapabilities()
+  const inSettings = activeView === 'settings'
 
   const { data: chats } = useChatList()
 
@@ -73,8 +94,18 @@ export function SidebarTabs(): React.JSX.Element {
   // already-selected tab has to be able to leave: pressing Chats while the
   // inbox or a task fills the center must realign the center, not decide
   // nothing changed.
+  const openChats = (): void => {
+    // The dashboard chat panel holds the store's selection while it is
+    // open; the Chats view's own chat is the one it put aside.
+    const stash = useUIStore.getState().dashboardChatsStash
+    const lastChatId = stash ? stash.chatId : useChatStore.getState().activeChatId
+    const chat = chats?.find((c) => c.id === lastChatId) ?? chats?.[0]
+    setActiveView('chat')
+    setActiveChatId(chat?.id ?? null)
+  }
+
   const handleSwitchTab = (target: SidebarTab): void => {
-    const leavingTabless = TABLESS_VIEWS.includes(activeView)
+    const leavingTabless = LEAVABLE_VIEWS.includes(activeView)
     if (target === sidebarTab && !leavingTabless) return
     setSidebarTab(target)
     // **Coming back to the tab you were already on keeps your place.** The
@@ -90,13 +121,7 @@ export function SidebarTabs(): React.JSX.Element {
     setActiveCinnaRunId(null)
     setActiveTaskId(null)
     if (target === 'chats') {
-      // The dashboard chat panel holds the store's selection while it is
-      // open; the Chats view's own chat is the one it put aside.
-      const stash = useUIStore.getState().dashboardChatsStash
-      const lastChatId = stash ? stash.chatId : useChatStore.getState().activeChatId
-      const chat = chats?.find((c) => c.id === lastChatId) ?? chats?.[0]
-      setActiveView('chat')
-      setActiveChatId(chat?.id ?? null)
+      openChats()
     } else if (target === 'jobs') {
       setActiveJobId(null)
       setActiveView('job-detail')
@@ -117,17 +142,41 @@ export function SidebarTabs(): React.JSX.Element {
     }
   }
 
+  // A capability turned off — here, in Settings or in another window — takes
+  // its tab with it, and the sidebar falls back to Chats. Its center goes too
+  // when it is on screen; a center that belongs to no tab (Settings, the
+  // Inbox) stays, and only the tab under it moves to Chats.
+  // Not before the settings answer: unloaded reads as off, and is not a choice.
+  const offOnScreen = capabilitiesLoaded
+    ? disabledCapabilityOnScreen({ notesEnabled, dashboardsEnabled, sidebarTab, activeView })
+    : null
+  useEffect(() => {
+    if (!offOnScreen) return
+    if (sidebarTab !== 'chats') setSidebarTab('chats')
+    if (activeView === CAPABILITY_VIEWS[offOnScreen]) {
+      setActiveCinnaRunId(null)
+      setActiveTaskId(null)
+      openChats()
+    }
+  }, [offOnScreen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tabs = TAB_ITEMS.filter(({ id }) => isSidebarTabEnabled({ notesEnabled, dashboardsEnabled }, id))
+
   return (
-    <div className="app-sidebar-tabs">
-      {TAB_ITEMS.map(({ id, label, Icon }) => {
-        const isActive = sidebarTab === id
+    <div className={`app-sidebar-tabs ${inSettings ? 'is-dimmed' : ''}`}>
+      {tabs.map(({ id, label, Icon }) => {
+        const isActive = !inSettings && sidebarTab === id
+        // In Settings the menu beside the rail has its own Chats and Agents
+        // items; a tab there says it leaves Settings, so the two never share
+        // a name (ux rule 10).
+        const name = inSettings ? `Open ${label}` : label
         return (
           <button
             key={id}
             type="button"
             onClick={() => handleSwitchTab(id)}
-            title={label}
-            aria-label={label}
+            title={name}
+            aria-label={name}
             aria-pressed={isActive}
             className="sidebar-tab"
           >

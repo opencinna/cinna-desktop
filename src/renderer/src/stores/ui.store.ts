@@ -89,6 +89,23 @@ const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
 const TASKS_BUTTON_KEY = 'cinna-show-tasks-button'
 const TASKS_VIEW_MODE_KEY = 'cinna-tasks-view-mode'
 
+/** The sidebar tabs a user can turn off, each with the one center it owns. */
+export type CapabilityTab = Extract<SidebarTab, 'notes' | 'dashboards'>
+export const CAPABILITY_VIEWS: Record<CapabilityTab, ActiveView> = {
+  notes: 'note-detail',
+  dashboards: 'dashboard'
+}
+
+/**
+ * Whether the optional capabilities are on — main's app settings
+ * (`notesCapability` / `dashboardsCapability`), read through `useCapabilities`.
+ * Undecided or not loaded yet reads as off.
+ */
+export interface CapabilityFlags {
+  notesEnabled: boolean
+  dashboardsEnabled: boolean
+}
+
 /** A card per agent (the default), the list by last change (Recent), the board, or the list grouped by category. */
 export type TasksViewMode = 'agents' | 'recent' | 'board' | 'list'
 
@@ -523,6 +540,24 @@ export const useUIStore = create<UIStore>((set, get) => ({
       return { chatGroupCollapsed: next }
     })
 }))
+
+/** Whether a sidebar tab is shown: the optional ones only once turned on. */
+export const isSidebarTabEnabled = (flags: CapabilityFlags, tab: SidebarTab): boolean =>
+  tab === 'notes' ? flags.notesEnabled : tab === 'dashboards' ? flags.dashboardsEnabled : true
+
+/**
+ * The capability a sidebar tab or center belongs to when that capability is
+ * not on — the screen the sidebar has to leave for Chats — or null.
+ */
+export function disabledCapabilityOnScreen(
+  state: CapabilityFlags & Pick<UIStore, 'sidebarTab' | 'activeView'>
+): CapabilityTab | null {
+  for (const tab of Object.keys(CAPABILITY_VIEWS) as CapabilityTab[]) {
+    if (isSidebarTabEnabled(state, tab)) continue
+    if (state.sidebarTab === tab || state.activeView === CAPABILITY_VIEWS[tab]) return tab
+  }
+  return null
+}
 
 /** Whether the sidebar is on screen, in either docking mode. */
 export const selectSidebarVisible = (state: Pick<UIStore, 'sidebarDocking' | 'sidebarOpen' | 'sidebarPeek'>): boolean =>

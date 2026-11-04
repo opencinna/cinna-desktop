@@ -15,6 +15,10 @@ import { useUIStore } from '../../stores/ui.store'
 import { useToastStore } from '../../stores/toast.store'
 import { composerDraftKey, useComposerDraftStore } from '../../stores/composerDraft.store'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 /**
  * The transcript's right-click menu over an inline code span that names a
  * file or folder: which actions it offers for each, and what they do.
@@ -66,6 +70,8 @@ const DRAFT = composerDraftKey('alice', 'new-chat')
 const originalClientRects = Range.prototype.getClientRects
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   clipboardText.mockReset().mockResolvedValue(undefined)
   bridge.mockReset().mockResolvedValue({ success: true })
   authorize.mockReset().mockResolvedValue({ success: true, approved: true })

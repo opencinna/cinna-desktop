@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { useNoteList } from './useNotes'
+import { useCapabilities } from './useCapabilities'
 import { useAgents } from './useAgents'
 import { useMcpProviders } from './useMcp'
 import { useChatModes } from './useChatModes'
@@ -29,6 +30,8 @@ export function useHintContext(
   pendingAgentCount: number
 ): HintContext {
   const { data: notes } = useNoteList()
+  // The `?` picker only opens with Notes on, so the hint teaching it waits for that too.
+  const notesEnabled = useCapabilities().notesEnabled
   const { data: agents } = useAgents()
   const { data: mcps } = useMcpProviders()
   const { data: chatModes } = useChatModes()
@@ -56,7 +59,7 @@ export function useHintContext(
 
   return useMemo<HintContext>(
     () => ({
-      hasNotes: (notes ?? []).length > 0,
+      hasNotes: notesEnabled && (notes ?? []).length > 0,
       hasExamplePrompts: promptCount > 0,
       hasCliCommands: commandCount > 0,
       hasChatModes: (chatModes ?? []).some((m) => m.enabled !== false),
@@ -65,6 +68,6 @@ export function useHintContext(
       hasPendingAgents: pendingAgentCount > 0,
       canAttachFiles
     }),
-    [notes, promptCount, commandCount, chatModes, agents, mcps, pendingAgentCount, canAttachFiles]
+    [notes, notesEnabled, promptCount, commandCount, chatModes, agents, mcps, pendingAgentCount, canAttachFiles]
   )
 }

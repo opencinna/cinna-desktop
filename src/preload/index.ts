@@ -207,7 +207,9 @@ import {
   type UpdaterState
 } from '../shared/updaterState'
 import {
+  APP_SETTINGS_CHANGED_CHANNEL,
   CHAT_TITLE_UPDATED_CHANNEL,
+  type AppSettingsChangedPayload,
   type AppSettingsSchema,
   type ChatTitleUpdatedPayload
 } from '../shared/appSettings'
@@ -1862,7 +1864,13 @@ const api = {
     ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value),
     /** Where AI Functions will run right now, and why it falls back when it does. */
     aiFunctionsBackend: (): Promise<AiFunctionsBackendStatus> =>
-      ipcRenderer.invoke('settings:ai-functions-backend')
+      ipcRenderer.invoke('settings:ai-functions-backend'),
+    /** Main saved a setting with a new value, whoever wrote it. */
+    onChanged: (handler: (payload: AppSettingsChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: AppSettingsChangedPayload): void => handler(payload)
+      ipcRenderer.on(APP_SETTINGS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(APP_SETTINGS_CHANGED_CHANNEL, listener)
+    }
   },
 
   /**

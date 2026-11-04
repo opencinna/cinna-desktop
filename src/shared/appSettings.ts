@@ -6,6 +6,7 @@
  */
 import type { AiSpendingLevel } from './aiSpendingLevel'
 import type { ClaudeAuthMode } from './claudeAuthMode'
+import type { CapabilityState } from './capabilities'
 
 export interface AppSettingsSchema {
   /** Concurrent autonomous tasks and agent calls on this device. */
@@ -235,11 +236,36 @@ export interface AppSettingsSchema {
    * Absent host = never asked.
    */
   localDevConsent: string
+  /**
+   * Whether Notes (the sidebar tab, the composer's `?` picker, Save to note)
+   * is on. `'unset'` until decided: main decides it once from whether any
+   * profile has a note, and every reader treats `'unset'` as off. See
+   * `shared/capabilities.ts`.
+   */
+  notesCapability: CapabilityState
+  /**
+   * Whether Dashboards is on — the sidebar tab, Add to dashboard, and in main
+   * the launch warm-up, interval timers and schedule-fed refreshes. Same
+   * tri-state as {@link notesCapability}.
+   */
+  dashboardsCapability: CapabilityState
 }
 
 export type AppSettingKey = keyof AppSettingsSchema
 
 export const CHAT_TITLE_UPDATED_CHANNEL = 'chats:title-updated'
+
+/**
+ * Main saved an app setting with a different value — through `settings:set`
+ * or by main itself. Sent to the main window, which re-reads the whole store, so
+ * a write it did not make itself (an E2E fixture, a capability main decided)
+ * reaches its cache.
+ */
+export const APP_SETTINGS_CHANGED_CHANNEL = 'settings:changed'
+
+export interface AppSettingsChangedPayload {
+  key: AppSettingKey
+}
 
 export interface ChatTitleUpdatedPayload {
   chatId: string

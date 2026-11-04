@@ -1,9 +1,11 @@
 import { isAbsolute } from 'node:path'
 import { appSettingsRepo, DEFAULTS } from '../db/appSettings'
-import type {
-  AppSettingKey,
-  AppSettingsSchema
+import {
+  APP_SETTINGS_CHANGED_CHANNEL,
+  type AppSettingKey,
+  type AppSettingsSchema
 } from '../../shared/appSettings'
+import { publishEvent } from '../host/events'
 import { AppSettingsError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { assertUsableRoot } from './localAgents/pathRules'
@@ -12,6 +14,7 @@ import { isAgentEngine } from '../../shared/engine'
 import { isWorkComplexity } from '../../shared/modelFamilies'
 import { isAiSpendingLevel } from '../../shared/aiSpendingLevel'
 import { isClaudeAuthMode } from '../../shared/claudeAuthMode'
+import { isCapabilityState } from '../../shared/capabilities'
 
 const logger = createLogger('app-settings')
 
@@ -255,6 +258,19 @@ const VALUE_CHECKS: {
     if (!isWorkComplexity(value)) {
       throw new AppSettingsError('invalid_value', 'Choose Simple, Medium, or Complex work complexity.')
     }
+  },
+  /**
+   * On or off — a decision. `'unset'` is the state before anyone decided, which
+   * only the default and `capabilityService`'s first check stand for; a write
+   * of it would ask that check to overrule the user again.
+   */
+  notesCapability: (value) => assertCapabilityDecision(value),
+  dashboardsCapability: (value) => assertCapabilityDecision(value)
+}
+
+function assertCapabilityDecision(value: string): void {
+  if (!isCapabilityState(value) || value === 'unset') {
+    throw new AppSettingsError('invalid_value', 'Turn the capability on or off.')
   }
 }
 
@@ -287,6 +303,7 @@ export const appSettingsService = {
     // Only a real change: re-saving the same Codex path must not restart a
     // download that is already running for it.
     if (previous === value) return
+    publishEvent(APP_SETTINGS_CHANGED_CHANNEL, { key })
     for (const listener of savedListeners.get(key) ?? []) {
       try {
         listener()

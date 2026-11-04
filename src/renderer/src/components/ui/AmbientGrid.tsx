@@ -1,9 +1,14 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { useUIStore } from '../../stores/ui.store'
+import { HEAVY_AMBIENT_IDLE_MS, subscribeUserIdle } from '../../hooks/useUserIdle'
 
 const CELL = 24
 const OFFSET = 12
 const FADE_MS = 350
+/** Once the user has gone idle (HEAVY_AMBIENT_IDLE_MS), the first burst follows soon. */
+const BURST_FIRST_DELAY_MS = [2000, 6000] as const
+/** Between bursts while the user stays idle. */
+const BURST_INTERVAL_MS = [40000, 90000] as const
 const random = (min: number, max: number): number => min + Math.random() * (max - min)
 
 type Point = { x: number; y: number }
@@ -79,7 +84,11 @@ function makeTrails(origin: Point, columns: number, rows: number): Trail[] {
   return trails
 }
 
-/** Decorative, intermittent motion. The host needs the ambient-grid-surface class. */
+/**
+ * Decorative, intermittent motion. The host needs the ambient-grid-surface class.
+ * The grid burst is heavy ambient motion (see useUserIdle): it plays only while
+ * the user is idle app-wide. The border glow is subtle and keeps its cadence.
+ */
 export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow = !!inputRef }: {
   active?: boolean
   inputRef?: RefObject<HTMLTextAreaElement | null>
@@ -94,6 +103,8 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
   const [burst, setBurst] = useState<Burst | null>(null)
   const [borderBurst, setBorderBurst] = useState<BorderBurst | null>(null)
   const [fading, setFading] = useState(false)
+  // A burst alone fades when the user becomes active, so a border glow beside it stays.
+  const [burstFading, setBurstFading] = useState(false)
 
   useEffect(() => {
     if (!enabled || !window.matchMedia) return
@@ -101,15 +112,23 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
     const input = inputRef?.current
     let timer: ReturnType<typeof setTimeout>
     let fadeTimer: ReturnType<typeof setTimeout>
+    let burstFadeTimer: ReturnType<typeof setTimeout>
     let borderTimer: ReturnType<typeof setTimeout>
     let disposed = false
     let interacting = false
+    // The burst is heavy motion: it plays only while the user is idle app-wide.
+    let idle = false
+    let bursting = false
 
+    const scheduleBurst = (delay: number): void => {
+      clearTimeout(timer)
+      if (idle && !interacting && !document.hidden && !motion.matches) timer = setTimeout(play, delay)
+    }
     const play = (): void => {
-      if (disposed || interacting || document.hidden || motion.matches) return
+      if (disposed || !idle || interacting || document.hidden || motion.matches) return
       const bounds = ref.current?.getBoundingClientRect()
       if (!bounds || bounds.width < CELL || bounds.height < CELL) {
-        timer = setTimeout(play, random(12000, 24000))
+        scheduleBurst(random(...BURST_INTERVAL_MS))
         return
       }
       const columns = Math.floor((bounds.width - OFFSET * 2) / CELL)
@@ -119,16 +138,35 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
         y: Math.floor(random(0, rows + 1))
       }
       const duration = random(6500, 8500)
+      clearTimeout(burstFadeTimer)
       setFading(false)
+      setBurstFading(false)
+      bursting = true
       setBurst({
         origin: { x: OFFSET + origin.x * CELL, y: OFFSET + origin.y * CELL },
         trails: makeTrails(origin, columns, rows),
         duration
       })
       timer = setTimeout(() => {
+        bursting = false
         setBurst(null)
-        timer = setTimeout(play, random(12000, 24000))
+        scheduleBurst(random(...BURST_INTERVAL_MS))
       }, duration)
+    }
+    const fadeBurst = (): void => {
+      clearTimeout(timer)
+      if (!bursting) return
+      bursting = false
+      setBurstFading(true)
+      burstFadeTimer = setTimeout(() => {
+        setBurst(null)
+        setBurstFading(false)
+      }, FADE_MS)
+    }
+    const onIdle = (next: boolean): void => {
+      idle = next
+      if (next) scheduleBurst(random(...BURST_FIRST_DELAY_MS))
+      else fadeBurst()
     }
 
     const playBorder = (): void => {
@@ -150,18 +188,22 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
     const restart = (): void => {
       clearTimeout(timer)
       clearTimeout(fadeTimer)
+      clearTimeout(burstFadeTimer)
       clearTimeout(borderTimer)
+      bursting = false
       setBurst(null)
       setBorderBurst(null)
       setFading(false)
+      setBurstFading(false)
       if (!interacting && !document.hidden && !motion.matches) {
-        timer = setTimeout(play, random(1500, 4500))
+        scheduleBurst(random(...BURST_FIRST_DELAY_MS))
         if (borderGlow) borderTimer = setTimeout(playBorder, random(18000, 35000))
       }
     }
     const quiet = (): void => {
       if (interacting) return
       interacting = true
+      bursting = false
       clearTimeout(timer)
       clearTimeout(fadeTimer)
       clearTimeout(borderTimer)
@@ -175,9 +217,8 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
     const resume = (): void => {
       if (!interacting) return
       interacting = false
-      clearTimeout(timer)
       if (!document.hidden && !motion.matches) {
-        timer = setTimeout(play, random(12000, 24000))
+        scheduleBurst(random(...BURST_INTERVAL_MS))
         if (borderGlow) borderTimer = setTimeout(playBorder, random(35000, 70000))
       }
     }
@@ -187,13 +228,16 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
     interactionEvents.forEach((event) => input?.addEventListener(event, quiet))
     input?.addEventListener('blur', resume)
     restart()
+    const unsubscribeIdle = subscribeUserIdle(HEAVY_AMBIENT_IDLE_MS, onIdle)
     document.addEventListener('visibilitychange', restart)
     motion.addEventListener('change', restart)
     return () => {
       disposed = true
       clearTimeout(timer)
       clearTimeout(fadeTimer)
+      clearTimeout(burstFadeTimer)
       clearTimeout(borderTimer)
+      unsubscribeIdle()
       interactionEvents.forEach((event) => input?.removeEventListener(event, quiet))
       input?.removeEventListener('blur', resume)
       document.removeEventListener('visibilitychange', restart)
@@ -204,39 +248,41 @@ export function AmbientGrid({ active = true, inputRef, borderColor, borderGlow =
   return (
     <div ref={ref} className="ambient-grid" data-fading={fading || undefined} aria-hidden="true"
       style={{ '--ambient-input-tint': borderColor } as CSSProperties}>
+      {enabled && burst && (
+        <div className="ambient-grid-burst-layer" data-fading={burstFading || undefined}>
+          <svg
+            className="ambient-grid-burst"
+            width="100%"
+            height="100%"
+            focusable="false"
+            style={{
+              '--grid-duration': `${burst.duration}ms`,
+              '--grid-origin-x': `${burst.origin.x}px`,
+              '--grid-origin-y': `${burst.origin.y}px`
+            } as CSSProperties}
+          >
+            <defs>
+              <pattern id={patternId} x={OFFSET} y={OFFSET} width={CELL} height={CELL} patternUnits="userSpaceOnUse">
+                <path d={`M${CELL} 0H0V${CELL}`} fill="none" stroke="currentColor" strokeWidth="0.6" />
+              </pattern>
+            </defs>
+            <rect className="ambient-grid-lines" width="100%" height="100%" fill={`url(#${patternId})`} />
+            {burst.trails.flatMap((trail, trailIndex) => trail.edges.map((edge, edgeIndex) => (
+              <g key={`${trailIndex}-${edgeIndex}`} style={{
+                '--edge-delay': `${700 + trail.delay + edgeIndex * 220}ms`
+              } as CSSProperties}>
+                <path className="ambient-grid-edge ambient-grid-edge-halo" d={edge} />
+                <path className="ambient-grid-edge" d={edge} />
+              </g>
+            )))}
+          </svg>
+        </div>
+      )}
       {enabled && borderGlow && borderBurst && (
         <span className="ambient-surface-border" style={{
           '--button-glow-duration': `${borderBurst.duration}ms`,
           '--button-start-angle': `${borderBurst.angle}deg`
         } as CSSProperties} />
-      )}
-      {enabled && burst && (
-        <svg
-          className="ambient-grid-burst"
-          width="100%"
-          height="100%"
-          focusable="false"
-          style={{
-            '--grid-duration': `${burst.duration}ms`,
-            '--grid-origin-x': `${burst.origin.x}px`,
-            '--grid-origin-y': `${burst.origin.y}px`
-          } as CSSProperties}
-        >
-          <defs>
-            <pattern id={patternId} x={OFFSET} y={OFFSET} width={CELL} height={CELL} patternUnits="userSpaceOnUse">
-              <path d={`M${CELL} 0H0V${CELL}`} fill="none" stroke="currentColor" strokeWidth="0.6" />
-            </pattern>
-          </defs>
-          <rect className="ambient-grid-lines" width="100%" height="100%" fill={`url(#${patternId})`} />
-          {burst.trails.flatMap((trail, trailIndex) => trail.edges.map((edge, edgeIndex) => (
-            <g key={`${trailIndex}-${edgeIndex}`} style={{
-              '--edge-delay': `${700 + trail.delay + edgeIndex * 220}ms`
-            } as CSSProperties}>
-              <path className="ambient-grid-edge ambient-grid-edge-halo" d={edge} />
-              <path className="ambient-grid-edge" d={edge} />
-            </g>
-          )))}
-        </svg>
       )}
     </div>
   )

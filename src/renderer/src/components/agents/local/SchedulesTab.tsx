@@ -9,6 +9,7 @@ import { useOpenTask } from '../../../hooks/useTasks'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
 import { usePopover } from '../../ui/usePopover'
+import { switchThumbClass, switchTrackClass } from '../../ui/SwitchTrack'
 import { MENU_ITEM, MENU_SURFACE } from './OpenInMenu'
 import { ScheduleEditor, catchUpExplanation, scheduleButtonClass as buttonClass, scheduleDialogClass, scheduleTimingLabel } from './ScheduleEditor'
 import { ScheduleHistory, scheduleStatusLabels, scheduleTime } from './ScheduleHistory'
@@ -23,8 +24,8 @@ export function ScheduleSwitch({ item, checked, disabled, onToggle }: { item: Lo
   return <button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={onToggle}
     aria-label={`Run “${item.name}” on this device`}
     title={checked ? `“${item.name}” runs on this device` : `“${item.name}” does not run on this device`}
-    className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
-    <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'left-[18px]' : 'left-0.5'}`} />
+    className={`${switchTrackClass(checked)} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
+    <div className={switchThumbClass(checked)} />
   </button>
 }
 

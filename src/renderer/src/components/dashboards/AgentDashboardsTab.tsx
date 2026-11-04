@@ -5,6 +5,7 @@ import type { LocalAgentDto } from '../../../../shared/localAgents'
 import { useAddTile, useComponents, usePlacements } from '../../hooks/useDashboards'
 import { useOpenAgentPath } from '../../hooks/useLocalAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { useCapabilities } from '../../hooks/useCapabilities'
 import { SettingsBadge, SettingsButton, SettingsInfoTip, SettingsSection } from '../settings/SettingsLayout'
 import { AddToDashboardDialog } from './AddToDashboardDialog'
 import { ComponentPreviewDialog } from './ComponentPreview'
@@ -45,6 +46,9 @@ function ComponentRow({
 }): React.JSX.Element {
   const blocked = component.missingCredentials.length > 0
   const runnable = component.valid && !blocked
+  // Off, Dashboards keeps the agent's components listed but offers no way to
+  // put one on a dashboard (ux rule 15).
+  const dashboardsOn = useCapabilities().dashboardsEnabled
   return (
     <div data-component={component.name} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -61,14 +65,16 @@ function ComponentRow({
             <SettingsButton onClick={onPreview} aria-label={`Preview ${component.title}`}>
               Preview
             </SettingsButton>
-            <SettingsButton
-              onClick={onAdd}
-              disabled={needsId}
-              aria-label={`Add ${component.title} to a dashboard`}
-              title={needsId ? 'This agent needs an id first' : undefined}
-            >
-              Add to dashboard…
-            </SettingsButton>
+            {dashboardsOn && (
+              <SettingsButton
+                onClick={onAdd}
+                disabled={needsId}
+                aria-label={`Add ${component.title} to a dashboard`}
+                title={needsId ? 'This agent needs an id first' : undefined}
+              >
+                Add to dashboard…
+              </SettingsButton>
+            )}
           </div>
         )}
       </div>

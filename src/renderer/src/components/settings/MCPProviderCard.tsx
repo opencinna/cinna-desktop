@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Trash2, ChevronDown, Wrench, Shield, Unlink } from 'lucide-react'
 import { useUpsertMcpProvider, useDeleteMcpProvider, useConnectMcp, useDisconnectMcp } from '../../hooks/useMcp'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 import { mcpHealth } from './mcpPresentation'
 import { DeleteMcpProviderDialog } from './DeleteMcpProviderDialog'
 import { formatEnvVars, parseEnvVars } from '../../utils/envVars'
@@ -191,16 +192,12 @@ export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): Rea
       onClick={(e) => { e.stopPropagation(); if (!isDirty) handleToggle() }}
       disabled={isDirty}
       title={toggleTitle}
+      role="switch"
+      aria-checked={provider.enabled}
       aria-label={provider.enabled ? `Turn off ${provider.name}` : `Turn on ${provider.name}`}
-      className={`relative w-9 h-5 shrink-0 rounded-full transition-colors ${
-        provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-      } ${isDirty ? 'opacity-50 cursor-not-allowed' : ''}`}
+      className={`${switchTrackClass(provider.enabled)} ${isDirty ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
-      <div
-        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-          provider.enabled ? 'left-[18px]' : 'left-0.5'
-        }`}
-      />
+      <div className={switchThumbClass(provider.enabled)} />
     </button>
   )
 

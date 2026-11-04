@@ -10,6 +10,10 @@ import { DashboardOriginPill, DashboardOriginRowMark } from './DashboardOriginPi
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 let dashboards: Array<{ id: string; name: string }> = []
 const list = vi.fn(async () => dashboards)
 
@@ -19,6 +23,8 @@ function show(node: React.ReactNode) {
 }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   dashboards = [{ id: 'd1', name: 'Sales overview' }]
   list.mockClear()
   window.api = {
@@ -54,6 +60,22 @@ describe('"From dashboard" in the chat header', () => {
     await waitFor(() => expect(list).toHaveBeenCalled())
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByRole('button')).toBeNull()
+  })
+})
+
+describe('"From dashboard" with Dashboards turned off', () => {
+  it('is hidden in the header and on the row: there is no view to open', async () => {
+    capabilities.dashboardsEnabled = false
+    useChatStore.getState().setActiveChatId('from-dash')
+    const { unmount } = show(<DashboardOriginPill />)
+    // Long enough for the chat and the dashboard list to answer, were they asked.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(screen.queryByRole('button')).toBeNull()
+    unmount()
+    show(<DashboardOriginRowMark dashboardId="d1" />)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(list).not.toHaveBeenCalled()
   })
 })
 

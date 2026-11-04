@@ -13,6 +13,10 @@ import { composerDraftKey, useComposerDraftStore } from '../../stores/composerDr
 import { useUIStore } from '../../stores/ui.store'
 import type { ComponentInfo, ComponentReferenceResolution } from '../../../../shared/dashboards'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 const ID = '2f6c3a1e-9b7d-4c2a-8e1f-0a1b2c3d4e5f'
 const REF = `cinna://component/id:${ID}/deals-pipeline`
 const CANONICAL = 'cinna://component/bundle:io.example.cinna.ab12cd34/deals-pipeline'
@@ -67,6 +71,8 @@ function show(text: string, scope = { chatId: 'chat-1', agentId: 'agent-root' })
 }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   resolveReference.mockReset()
   writeText.mockReset().mockResolvedValue({ success: true })
   items.mockReset().mockResolvedValue({ success: true, value: { host: 'http://core.test', items: [], fetchedAt: '', available: true } })
@@ -95,6 +101,17 @@ describe('ComponentCard', () => {
     expect(within(card).getByRole('button', { name: 'Preview Deals pipeline' })).toBeTruthy()
     expect(within(card).getByRole('button', { name: 'Add Deals pipeline to a dashboard' })).toBeTruthy()
     expect(container.querySelector('[data-component-card-skeleton]')).toBeNull()
+  })
+
+  it('with Dashboards off, still previews but offers no Add, and names its dashboards as text, not links', async () => {
+    capabilities.dashboardsEnabled = false
+    resolveReference.mockResolvedValue({ ok: true, resolution: found({}, [{ dashboardName: 'Sales overview' }]) })
+    show(`Here:\n\n${REF}`)
+    const card = await screen.findByRole('group', { name: 'Component Deals pipeline' })
+    expect(within(card).getByRole('button', { name: 'Preview Deals pipeline' })).toBeTruthy()
+    expect(within(card).queryByRole('button', { name: 'Add Deals pipeline to a dashboard' })).toBeNull()
+    expect(within(card).queryByRole('button', { name: 'Sales overview' })).toBeNull()
+    expect(card.textContent).toContain('Sales overview')
   })
 
   it('resolves for the agent whose message it is in a chat of several', async () => {

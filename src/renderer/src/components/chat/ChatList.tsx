@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, ListFilter, Plus, Zap } from 'lucide-react'
+import { ListFilter, Plus, Zap } from 'lucide-react'
 import { useChatList, useChatSummaries, useMoveChat } from '../../hooks/useChat'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
@@ -10,7 +10,7 @@ import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { usePopover } from '../ui/usePopover'
-import { MENU_ITEM } from '../agents/local/OpenInMenu'
+import { MenuSwitchItem } from '../ui/MenuSwitchItem'
 import { ChatItem } from './ChatItem'
 import { ChatGroupHeader } from './ChatGroupHeader'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -381,7 +381,7 @@ function usePointerOnList(): { inside: boolean; onMouseMove: (event: React.Mouse
 }
 
 /**
- * The header's grouping menu: independent switches, each checked while on —
+ * The header's grouping menu: independent switches, each on its own row —
  * the two groupings, then the Active block.
  * A pick keeps the menu open, so both can be set in one visit.
  */
@@ -424,10 +424,7 @@ function GroupChatsMenu(): React.JSX.Element {
   }, [open, setOpen, popoverRef, triggerRef])
 
   const item = (label: string, checked: boolean, toggle: () => void): React.JSX.Element => (
-    <button type="button" role="menuitemcheckbox" aria-checked={checked} className={MENU_ITEM} onClick={toggle}>
-      <span className="inline-flex w-3 shrink-0">{checked && <Check size={12} aria-hidden="true" />}</span>
-      {label}
-    </button>
+    <MenuSwitchItem label={label} checked={checked} onToggle={toggle} />
   )
 
   return (

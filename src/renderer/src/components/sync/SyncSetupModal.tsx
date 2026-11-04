@@ -24,6 +24,7 @@ import { ShieldCheck, KeyRound, Smartphone, Check, Copy, RefreshCw, X } from 'lu
 import { useAuthStore } from '../../stores/auth.store'
 import { SYNC_KEY, useSyncInit, useSyncUnlock } from '../../hooks/useSync'
 import { PairJoinPane } from './PairJoinPane'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 import type { SyncInitResult, UnlockMethod } from '../../../../shared/sync'
 
 type Mode = 'enable' | 'restore'
@@ -180,15 +181,9 @@ function EnablePane({
           role="switch"
           aria-checked={enabled}
           onClick={() => setEnabled((v) => !v)}
-          className={`shrink-0 relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-bg-tertiary)]'
-          }`}
+          className={switchTrackClass(enabled, 'sm')}
         >
-          <span
-            className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
+          <span className={switchThumbClass(enabled, 'sm')} />
         </button>
         <span className="text-[13px] text-[var(--color-text)]">Enable data sync between devices</span>
       </label>

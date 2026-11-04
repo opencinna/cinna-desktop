@@ -2,6 +2,10 @@ import { render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 /**
  * Leaving a tabless view by the tab that is already selected.
  *
@@ -31,6 +35,8 @@ const { useUIStore } = await import('../../stores/ui.store')
 const { useChatStore } = await import('../../stores/chat.store')
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   useUIStore.setState({ activeView: 'inbox', sidebarTab: 'chats', activeJobId: 'j1' } as never)
   useChatStore.setState({ activeChatId: 'other-chat' } as never)
 })

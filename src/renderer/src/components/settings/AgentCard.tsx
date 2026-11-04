@@ -27,6 +27,7 @@ import {
 } from '../chat/ComposerReadiness'
 import { deriveBundleUpdate } from '../../utils/bundleVersion'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 import {
   SettingsBadge,
   SettingsButton,
@@ -71,6 +72,9 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
   const deleteAgent = useDeleteAgent()
   const testAgent = useTestAgent()
   const setEnabled = useSetAgentEnabled()
+  const toggleError = setEnabled.error
+    ? setEnabled.error instanceof Error ? setEnabled.error.message : String(setEnabled.error)
+    : null
   const applyUpdate = useApplyBundleUpdate()
   const [updateError, setUpdateError] = useState<string | null>(null)
 
@@ -391,21 +395,19 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
 
         <button
           type="button"
+          role="switch"
+          aria-checked={agent.enabled}
+          aria-label={agent.enabled ? `Turn off ${agent.name}` : `Turn on ${agent.name}`}
           onClick={(e) => { e.stopPropagation(); handleToggle() }}
-          title={setEnabled.error ? String(setEnabled.error) : undefined}
-          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
-            setEnabled.error
-              ? 'bg-[var(--color-danger)]/40 ring-1 ring-[var(--color-danger)]'
-              : agent.enabled
-                ? 'bg-[var(--color-accent)]'
-                : 'bg-[var(--color-border)]'
+          title={toggleError ?? undefined}
+          // A failed toggle rings the shared switch in danger; the track keeps
+          // its on/off colour, so the switch still reads as the setting it is.
+          // The reason is the status line last in the card.
+          className={`${switchTrackClass(agent.enabled)} ${
+            setEnabled.error ? 'ring-1 ring-[var(--color-danger)]' : ''
           }`}
         >
-          <div
-            className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              agent.enabled ? 'left-[18px]' : 'left-0.5'
-            }`}
-          />
+          <div className={switchThumbClass(agent.enabled)} />
         </button>
 
         {!isRemote && (
@@ -532,6 +534,18 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
           </section>
         </div>
       </AnimatedCollapse>
+
+      {/* Why the switch did not move: one line, last in the card, only while
+          there is an error (ux_rules rules 1 and 6). */}
+      {toggleError && (
+        <div
+          role="status"
+          className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-4 py-2 text-[12px] text-[var(--color-danger)]"
+        >
+          <XCircle size={10} className="shrink-0" />
+          <span className="min-w-0 truncate" title={toggleError}>{toggleError}</span>
+        </div>
+      )}
     </div>
   )
 }

@@ -33,6 +33,10 @@ import { useChatStore } from '../../stores/chat.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { composerDraftKey, useComposerDraftStore } from '../../stores/composerDraft.store'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 function info(over: Partial<ComponentInfo>): ComponentInfo {
   return {
     agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
@@ -107,6 +111,8 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   // Main resumes the latest chat for (dashboard, agent); `fresh` starts a new one.
   const latest = new Map<string, string>()
   panelChat.mockReset().mockImplementation(async ({ agentId, fresh }: { agentId: string; fresh?: boolean }) => {

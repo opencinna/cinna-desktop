@@ -18,6 +18,7 @@ import {
 import { useAgentCredentialBindings } from '../../hooks/useLocalAgents'
 import { useChatModes } from '../../hooks/useChatModes'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 import { describeDependents, DisableCredentialDialog } from './DisableCredentialDialog'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
@@ -342,15 +343,9 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
           aria-label={`${provider.enabled ? 'Switch off' : 'Switch on'} ${provider.name}`}
           onClick={(e) => { e.stopPropagation(); handleToggle() }}
           disabled={provider.enabled && dependentsUnknown}
-          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50 ${
-            provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
+          className={`${switchTrackClass(provider.enabled)} disabled:opacity-50`}
         >
-          <div
-            className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              provider.enabled ? 'left-[18px]' : 'left-0.5'
-            }`}
-          />
+          <div className={switchThumbClass(provider.enabled)} />
         </button>
 
         <button

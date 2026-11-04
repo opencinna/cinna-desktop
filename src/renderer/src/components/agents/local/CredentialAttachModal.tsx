@@ -9,6 +9,7 @@ import { credentialTypeIcon, credentialTypeName, credentialTypeTitle } from '../
 import { cloudErrors } from '../../settings/ServiceCredentialsSection'
 import { CredentialOwnershipGlyph, CredentialStatusGlyph } from '../../settings/CredentialRow'
 import { credentialHealth, credentialOwnership, oauthFlowErrorText } from '../../settings/credentialPresentation'
+import { switchThumbClass, switchTrackClass } from '../../ui/SwitchTrack'
 
 type Item = ServiceCredentialAttachGroup['items'][number]
 
@@ -251,8 +252,8 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
       </div>
       <div className="mt-3 flex items-center gap-2">
         <button type="button" role="switch" aria-checked={choosing.readOnly} aria-label="Read-only" disabled={busy} onClick={() => setChoosing({ ...choosing, readOnly: !choosing.readOnly })}
-          className={`relative h-4 w-7 shrink-0 rounded-full transition-colors disabled:opacity-50 ${choosing.readOnly ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'}`}>
-          <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${choosing.readOnly ? 'left-[14px]' : 'left-0.5'}`} />
+          className={`${switchTrackClass(choosing.readOnly, 'sm')} disabled:opacity-50`}>
+          <span className={switchThumbClass(choosing.readOnly, 'sm')} />
         </button>
         <span aria-hidden className="text-xs text-[var(--color-text)]">Read-only</span>
         <span className="text-[11px] text-[var(--color-text-muted)]">The agent can read but not change anything</span>

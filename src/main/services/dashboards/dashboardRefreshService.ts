@@ -68,6 +68,7 @@ import { dashboardRepo } from '../../db/dashboards'
 import { publishEvent } from '../../host/events'
 import { getSettingsScopeUserId } from '../../auth/scope'
 import { createLogger } from '../../logger/logger'
+import { capabilityService } from '../capabilityService'
 import { isCredentialFilePath } from '../../../shared/agentFiles'
 import { redactCredentialValues } from '../../security/serviceCredentialRedaction'
 import { commandService } from '../localAgents/commandService'
@@ -132,6 +133,14 @@ export interface RefreshServiceDeps {
   timers?: RefreshTimers
   /** Whether the launch warm-up is off (`CINNA_DASHBOARD_WARMUP=off`). */
   warmupDisabled?: () => boolean
+  /**
+   * Whether Dashboards is on (Settings → Features → Capabilities). Off, nothing
+   * runs in the background: no warm-up, no interval timer, no schedule-fed run.
+   * Asked at each of those moments, so turning it on takes effect at the next
+   * one (a lease renewal arms timers within 20 s; warm-up waits for the next
+   * profile start). What the user or an agent asks for directly still runs.
+   */
+  enabled?: () => boolean
 }
 
 /** A sentence for an endpoint call that gave no value, as a page reads it. */
@@ -221,6 +230,7 @@ function parse(json: string | null): unknown {
 
 export function createDashboardRefreshService(deps: RefreshServiceDeps) {
   const now = deps.now ?? Date.now
+  const enabled = deps.enabled ?? (() => true)
   /** Runs in flight, per `${tileId}|${paramsHash}`. */
   const inFlight = new Map<string, Promise<void>>()
   /** Every run's controller, so a profile close can stop them all. */
@@ -264,12 +274,13 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
   function syncTimer(userId: string, tile: TileDto, scanned: ScannedComponent | null): void {
     const periodMs = scanned?.spec ? rule(tile, scanned).whileOpenEveryMs : null
     const existing = timers.get(tile.id)
-    if (existing && existing.periodMs === periodMs && existing.userId === userId) return
+    if (existing && existing.periodMs === periodMs && existing.userId === userId && enabled()) return
     stopTimer(tile.id)
-    if (periodMs === null) return
+    if (periodMs === null || !enabled()) return
     const handle = clock.setInterval(() => {
-      // No lease, no timer: a lapsed or dropped lease stops it at its next tick.
-      if (!service.isLeased(tile.id, userId)) {
+      // No lease, no timer: a lapsed or dropped lease stops it at its next tick,
+      // and so does Dashboards being turned off.
+      if (!service.isLeased(tile.id, userId) || !enabled()) {
         stopTimer(tile.id)
         return
       }
@@ -576,6 +587,7 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
      */
     async warmUp(userId: string): Promise<string[]> {
       if (deps.warmupDisabled ? deps.warmupDisabled() : process.env.CINNA_DASHBOARD_WARMUP === 'off') return []
+      if (!enabled()) return []
       if (warmup) warmup.cancelled = true
       const token = { cancelled: false }
       warmup = token
@@ -593,7 +605,7 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
           tileIds = []
         }
         for (const tileId of tileIds) {
-          if (token.cancelled || startedEpoch !== epoch) break
+          if (token.cancelled || startedEpoch !== epoch || !enabled()) break
           const resolved = deps.dashboards.resolveTile(userId, tileId)
           const { agent, scanned, tile } = resolved ?? {}
           if (!resolved || resolved.view.state !== 'ok' || !agent || !scanned?.spec || !tile) continue
@@ -614,6 +626,7 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
      * source once, with reason `schedule`, lease or not. Answers the tile ids asked.
      */
     scheduleRan(userId: string, agentId: string, scheduleName: string): string[] {
+      if (!enabled()) return []
       let tileIds: string[] = []
       try {
         tileIds = deps.dashboards.placements(userId, agentId).map((placement) => placement.tileId)
@@ -779,5 +792,6 @@ export const dashboardRefreshService = createDashboardRefreshService({
   runner: endpointRunner,
   runCommand: (agentId, name, signal) =>
     commandService.run(getSettingsScopeUserId(), agentId, name, signal, undefined, { yieldingOwner: DASHBOARD_LOCK_OWNER }),
-  publish: (tileId) => publishEvent(DASHBOARDS_TILE_CHANGED_CHANNEL, { tileId })
+  publish: (tileId) => publishEvent(DASHBOARDS_TILE_CHANGED_CHANNEL, { tileId }),
+  enabled: () => capabilityService.isOn('dashboards')
 })

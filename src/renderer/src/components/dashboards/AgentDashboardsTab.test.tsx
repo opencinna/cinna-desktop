@@ -10,6 +10,10 @@ vi.mock('../../stores/logger.store', () => ({
 
 import { AgentDashboardsTab } from './AgentDashboardsTab'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 const BASE: ComponentInfo = {
   agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
   description: '', view: 'list', size: 'wide', source: { endpoint: 'e' }, maxAge: '15m', refreshCommand: null,
@@ -33,6 +37,8 @@ function show() {
 }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   addTile.mockReset().mockResolvedValue({ ok: true, tile: {} })
   window.api = {
     dashboards: {
@@ -56,6 +62,13 @@ describe('AgentDashboardsTab', () => {
     // No chat to fill on the agent's Settings tab: no Ask to fix.
     expect(within(broken).queryByRole('button', { name: 'Ask to fix' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Preview Deals' })).toBeTruthy()
+  })
+
+  it('with Dashboards off, still lists and previews components but offers no Add to dashboard', async () => {
+    capabilities.dashboardsEnabled = false
+    show()
+    expect(await screen.findByRole('button', { name: 'Preview Deals' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add Deals to a dashboard' })).toBeNull()
   })
 
   it('Add to dashboard opens with focus on the title, so Enter adds rather than cancels', async () => {

@@ -2,6 +2,7 @@ import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { isCredentialActive } from '../../../../shared/credentials'
 import { useAiFunctionsBackend, useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
+import { useCapabilities } from '../../hooks/useCapabilities'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
 import { AI_SPENDING_LEVELS, AI_SPENDING_LEVEL_LABEL } from '../../../../shared/aiSpendingLevel'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
@@ -38,6 +39,10 @@ function describeRunsOn(status: AiFunctionsBackendStatus | undefined, models: re
 
 /**
  * Features tab — opt-in toggles grouped by domain:
+ *   • Capabilities — optional sections of the app (Notes, Dashboards), off
+ *     until turned on; each adds a sidebar tab and the actions that create
+ *     content there (ux rule 15). First, because it decides what the rest of
+ *     the app shows, and is two short rows above the long AI Functions list.
  *   • AI Functions — features that consume LLM tokens alongside the normal
  *     chat flow (chat-title autogen, future chat-summary, etc.)
  *   • Interface — chrome toggles (tray icon, future window/menu prefs)
@@ -62,6 +67,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setShowTasksButton = useUIStore((s) => s.setShowTasksButton)
   const showVoiceInput = useUIStore((s) => s.showVoiceInput)
   const setShowVoiceInput = useUIStore((s) => s.setShowVoiceInput)
+  const { notesEnabled, dashboardsEnabled } = useCapabilities()
   const speech = useSpeechStatus()
   const { data: settings, isLoading, isError } = useAppSettings()
   const setSetting = useSetAppSetting()
@@ -90,6 +96,13 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const resetHints = useHintsStore((s) => s.reset)
   const canResetHints = hasHintProgress(hintProgress)
 
+  // Main's installation-global decision; turning one off leaves its tab
+  // through the sidebar (`SidebarTabs`), which knows which chat to land on.
+  const toggleCapability = (key: 'notesCapability' | 'dashboardsCapability', on: boolean): void => {
+    if (!settings || disabled) return
+    setSetting.mutate({ key, value: on ? 'off' : 'on' })
+  }
+
   const toggleAutoChatTitles = (): void => {
     if (!settings || disabled) return
     setSetting.mutate({ key: 'autoChatTitles', value: !settings.autoChatTitles })
@@ -115,6 +128,29 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   return (
     <div className="space-y-6">
+      <SettingsSection title="Capabilities">
+        <SettingsRows insetDividers>
+          <SettingsToggleRow
+            id="feature-notes"
+            label="Notes"
+            description="Adds a Notes tab to the sidebar, and Save to Notes to a message’s right-click menu. Turning it off hides them; your notes are kept."
+            checked={notesEnabled}
+            disabled={disabled}
+            onToggle={() => toggleCapability('notesCapability', notesEnabled)}
+            title={notesEnabled ? 'The Notes tab is in the sidebar' : 'The Notes tab is hidden'}
+          />
+          <SettingsToggleRow
+            id="feature-dashboards"
+            label="Dashboards"
+            description="Adds a Dashboards tab to the sidebar, where components your agents build stay live as tiles, and Add to dashboard… on components in chats and on an agent’s page. Turning it off hides them; your dashboards are kept."
+            checked={dashboardsEnabled}
+            disabled={disabled}
+            onToggle={() => toggleCapability('dashboardsCapability', dashboardsEnabled)}
+            title={dashboardsEnabled ? 'The Dashboards tab is in the sidebar' : 'The Dashboards tab is hidden'}
+          />
+        </SettingsRows>
+      </SettingsSection>
+
       <SettingsSection title="AI Functions">
         <SettingsRows insetDividers>
           <SettingsRow className="flex items-center justify-between gap-3">

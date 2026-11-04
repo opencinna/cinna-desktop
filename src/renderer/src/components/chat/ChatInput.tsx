@@ -27,6 +27,7 @@ import { useCatalogPicker } from '../../hooks/useCatalogPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
 import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
+import { useCapabilities } from '../../hooks/useCapabilities'
 import { useChatNotes } from '../../hooks/useChatNotes'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
@@ -1326,6 +1327,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // filter by title only — the user explicitly asked to search titles, and
   // matching body text would make typing a common word balloon the list.
   const { data: notes } = useNoteList()
+  // With Notes off (Settings → Features → Capabilities) `?` is ordinary text.
+  const notesEnabled = useCapabilities().notesEnabled
+  const hasPickableNotes = notesEnabled && (notes ?? []).length > 0
   const filteredNotes = useMemo(() => {
     const all = notes ?? []
     const q = triggerFilter.toLowerCase()
@@ -1346,7 +1350,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     triggerChar === '@' && (newChatHasContent || activeChatHasContent)
   const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
   const commandPopupOpen = triggerChar === '/' && commands.length > 0
-  const notePopupOpen = triggerChar === '?' && (notes ?? []).length > 0
+  const notePopupOpen = triggerChar === '?' && hasPickableNotes
 
   const closeTrigger = useCallback(() => {
     setTriggerChar(null)
@@ -1956,7 +1960,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const agentGate = token.char === '@' && (newChatHasContent || activeChatHasContent)
     const promptGate = token.char === '#' && examplePrompts.length > 0
     const commandGate = token.char === '/' && commands.length > 0
-    const noteGate = token.char === '?' && (notes ?? []).length > 0
+    const noteGate = token.char === '?' && hasPickableNotes
     if (!agentGate && !promptGate && !commandGate && !noteGate) {
       if (triggerChar) closeTrigger()
       return

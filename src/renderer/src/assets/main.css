@@ -95,6 +95,17 @@
     --color-overlay-backdrop: rgba(0, 0, 0, 0.4);
     --color-overlay-panel: rgba(0, 0, 0, 0.2);
 
+    /* The sidebar card while it holds the Settings menu rather than a list:
+       a translucent lift with a touch of the accent, layered over the card's
+       dark glass (see .app-sidebar.is-menu) so it reads lifted, not warmer. */
+    --color-sidebar-menu-bg: color-mix(in srgb, var(--color-accent) 4%, rgba(255, 255, 255, 0.06));
+    /* The shade an inactive sidebar tab takes on hover, as if tucked under
+       the card to its right. */
+    --color-sidebar-tab-shadow: rgba(0, 0, 0, 0.9);
+    /* Dark only: a hovered inactive tab lightens a little, so the shade has
+       something to darken. */
+    --color-sidebar-tab-hover-bg: rgba(255, 255, 255, 0.07);
+
     /* Behind a previewed HTML page: a browser's default canvas, in both
        themes, so a page that sets no background reads as it would there. */
     --color-html-page: #ffffff;
@@ -146,6 +157,9 @@
     /* White-based tints for light theme — brighten/desaturate the backdrop. */
     --color-overlay-backdrop: rgba(255, 255, 255, 0.55);
     --color-overlay-panel: rgba(255, 255, 255, 0.35);
+
+    --color-sidebar-menu-bg: color-mix(in srgb, var(--color-accent) 5%, var(--color-bg-secondary));
+    --color-sidebar-tab-shadow: rgba(15, 23, 42, 0.26);
   }
 
   /* Layout tokens — theme-agnostic. TopBar is absolutely positioned over the
@@ -205,6 +219,7 @@
     border: 1px solid var(--color-border);
     border-radius: 14px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    transition: background-color 160ms ease;
   }
   /* Sidebar list scrollers fade into the header above and the footer below,
      like the transcript under the top bar, instead of a hard cut. The padding
@@ -220,6 +235,16 @@
     backdrop-filter: blur(10px);
     border-color: rgba(255, 255, 255, 0.06);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+  /* In Settings the card holds the section menu, not a list: a tinted
+     surface, colour only, so nothing moves between the two (ux rule 17). */
+  .app-sidebar.is-menu {
+    background-color: var(--color-sidebar-menu-bg);
+  }
+  /* Dark: the tint is translucent and painted over the card's own glass. */
+  [data-theme="dark"] .app-sidebar.is-menu {
+    background-color: rgba(0, 0, 0, 0.82);
+    background-image: linear-gradient(var(--color-sidebar-menu-bg), var(--color-sidebar-menu-bg));
   }
 
   /* Local, quiet bursts of grid motion, painted below content and controls.
@@ -240,7 +265,15 @@
     opacity: 0.8;
     transition: opacity 350ms ease-out;
   }
-  .ambient-grid[data-fading] {
+  /* A burst fades on its own when the user becomes active (useUserIdle), so a
+     border glow running beside it is left alone. */
+  .ambient-grid-burst-layer {
+    position: absolute;
+    inset: 0;
+    transition: opacity 350ms ease-out;
+  }
+  .ambient-grid[data-fading],
+  .ambient-grid-burst-layer[data-fading] {
     opacity: 0;
   }
   .ambient-grid-burst {
@@ -639,11 +672,37 @@
     /* Inactive — recessed, distinct from the sidebar page. */
     background-color: var(--color-bg-tertiary);
     color: var(--color-text-muted);
-    transition: color 120ms ease, background-color 120ms ease;
+    /* The hover shade's resting state: the same inset shadow at zero, so the
+       two interpolate and the shade slides in from the card's edge. */
+    box-shadow: inset 0 0 0 0 transparent;
+    transition: color 120ms ease, background-color 120ms ease, opacity 120ms ease, box-shadow 180ms ease-out;
     cursor: pointer;
   }
   .sidebar-tab:hover {
     color: var(--color-text-secondary);
+  }
+  /* An inactive tab sinks a little under the card on hover: a shade grows
+     from its right edge. The active tab is part of the page and never sinks. */
+  .sidebar-tab:not([aria-pressed='true']):hover {
+    box-shadow: inset -5px 0 5px -3px var(--color-sidebar-tab-shadow);
+  }
+  /* In Settings no tab is selected — the menu is the page — and the rail
+     recedes; a hovered or focused tab comes back to full strength. */
+  .app-sidebar-tabs.is-dimmed .sidebar-tab {
+    opacity: 0.45;
+  }
+  /* The dark rail is already faint; .45 lost the icons there. */
+  [data-theme="dark"] .app-sidebar-tabs.is-dimmed .sidebar-tab {
+    opacity: 0.6;
+  }
+  .app-sidebar-tabs.is-dimmed .sidebar-tab:hover,
+  .app-sidebar-tabs.is-dimmed .sidebar-tab:focus-visible {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar-tab {
+      transition: color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+    }
   }
   [data-theme="dark"] .sidebar-tab {
     background-color: rgba(0, 0, 0, 0.18);
@@ -672,6 +731,9 @@
     left: 100%;
     width: 7px;
     background-color: var(--color-bg-secondary);
+  }
+  [data-theme="dark"] .sidebar-tab:not([aria-pressed='true']):hover {
+    background-color: var(--color-sidebar-tab-hover-bg);
   }
   [data-theme="dark"] .sidebar-tab[aria-pressed='true'] {
     background-color: rgba(0, 0, 0, 0.45);

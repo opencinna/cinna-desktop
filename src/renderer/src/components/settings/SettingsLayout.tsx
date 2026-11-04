@@ -2,6 +2,7 @@ import { useEffect, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, Circle, HelpCircle } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 
 /**
  * The shell a Settings tab is built from.
@@ -223,15 +224,9 @@ export function SettingsSwitch({
       disabled={disabled}
       onClick={onToggle}
       title={title}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-        checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-      } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+      className={`${switchTrackClass(checked)} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
     >
-      <div
-        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-          checked ? 'left-[18px]' : 'left-0.5'
-        }`}
-      />
+      <div className={switchThumbClass(checked)} />
     </button>
   )
 }

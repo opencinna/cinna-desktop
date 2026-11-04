@@ -39,17 +39,16 @@ const { FeaturesSettingsSection } = await import('./FeaturesSettingsSection')
 const { useUIStore } = await import('../../stores/ui.store')
 
 /**
- * Two titled sections, each one `SettingsRows` list of one-line toggles. The
+ * Three titled sections, each one `SettingsRows` list of one-line toggles. The
  * description of each toggle is behind its `(?)`, not a paragraph under the
  * label (ux_rules rule 12).
  */
 describe('FeaturesSettingsSection', () => {
-  it('is two titled sections of one-line rows, with the descriptions behind the tips', () => {
+  it('is three titled sections of one-line rows, with the descriptions behind the tips', () => {
     render(<FeaturesSettingsSection />)
 
-    expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(10)
+    expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface'])
+    expect(screen.getAllByRole('switch')).toHaveLength(12)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -61,6 +60,29 @@ describe('FeaturesSettingsSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'About Auto-generate chat titles' }))
     expect(screen.getByText(/Generates a short title from your first message/)).toBeTruthy()
+  })
+
+  it('turns the Notes and Dashboards capabilities on and off through main’s app settings', () => {
+    // `'unset'` is main's not-decided-yet, and reads as off: no tab until it is on.
+    settings = { ...HEALTHY, notesCapability: 'off', dashboardsCapability: 'unset' }
+    const { rerender } = render(<FeaturesSettingsSection />)
+    const notes = screen.getByRole('switch', { name: 'Notes' })
+    const dashboards = screen.getByRole('switch', { name: 'Dashboards' })
+    expect(notes.getAttribute('aria-checked')).toBe('false')
+    expect(dashboards.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(notes)
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'notesCapability', value: 'on' })
+    fireEvent.click(dashboards)
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'dashboardsCapability', value: 'on' })
+
+    settings = { ...HEALTHY, notesCapability: 'on', dashboardsCapability: 'on' }
+    rerender(<FeaturesSettingsSection />)
+    expect(screen.getByRole('switch', { name: 'Notes' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(screen.getByRole('switch', { name: 'Dashboards' }))
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'dashboardsCapability', value: 'off' })
+    // Nothing of it is kept in the renderer.
+    expect(localStorage.getItem('cinna-notes-enabled')).toBeNull()
   })
 
   it('has a Tasks button switch, on by default, kept in the UI store like the other appearance rows', () => {

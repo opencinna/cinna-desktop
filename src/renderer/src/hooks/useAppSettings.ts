@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppSettingsSchema } from '../../../shared/appSettings'
 import { createLogger } from '../stores/logger.store'
@@ -36,6 +37,20 @@ export function useAppSettings() {
     queryKey: APP_SETTINGS_KEY,
     queryFn: () => window.api.settings.getAll()
   })
+}
+
+/**
+ * Re-reads the app settings when main says one was saved with a new value —
+ * whoever saved it. The window's own writes already refresh through
+ * `useSetAppSetting`; this is for the rest (an E2E fixture turning a
+ * capability on, a capability main decided after the first read), so a surface gated on a setting follows without a
+ * reload. Mounted once, in the signed-in shell.
+ */
+export function useAppSettingsWatch(): void {
+  const queryClient = useQueryClient()
+  useEffect(() => window.api.settings.onChanged(() => {
+    void queryClient.invalidateQueries({ queryKey: APP_SETTINGS_KEY })
+  }), [queryClient])
 }
 
 /**

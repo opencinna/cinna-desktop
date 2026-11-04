@@ -33,7 +33,8 @@ const spies = vi.hoisted(() => ({
   engineLoginCancel: vi.fn(async (_engine: string) => true),
   engineLoginRunning: vi.fn(async (): Promise<Record<'claude' | 'codex', 'preparing' | 'waiting' | null>> => ({ claude: null, codex: null })),
   clipboardWrite: vi.fn(async (_text: string) => ({ success: true })),
-  notesGet: vi.fn(async () => null as unknown)
+  notesGet: vi.fn(async () => null as unknown),
+  settingsGetAll: vi.fn(async () => ({ notesCapability: 'on', dashboardsCapability: 'on' }))
 }))
 
 /** Every `useFinishSetup` the composer made, with its options. */
@@ -98,6 +99,8 @@ const api: Record<string, unknown> = new Proxy(
       if (ns === 'llm') return namespace({ sendMessage: spies.llmSend })
       if (ns === 'auth') return namespace({ cinnaReauth: spies.cinnaReauth })
       if (ns === 'notes') return namespace({ list: spies.notesList, get: spies.notesGet })
+      // Notes is an optional capability; the `?` picker needs it on.
+      if (ns === 'settings') return namespace({ getAll: spies.settingsGetAll })
       if (ns === 'clipboard') return namespace({ writeText: spies.clipboardWrite })
       if (ns === 'localAgents') return namespace({ list: async () => ({ agents: localAgentList.current, errors: [] }), openPath })
       if (ns === 'engine') return namespace({ defaultRuntime: async () => ({ engine: 'opencode' }) })
@@ -403,6 +406,7 @@ describe('composer readiness refusal', () => {
     mountActive(agent(DOWN))
     // `?` opens the picker only once there are notes to pick from.
     await waitFor(() => expect(spies.notesList).toHaveBeenCalled())
+    await waitFor(() => expect(spies.settingsGetAll).toHaveBeenCalled())
     await tick()
     const box = screen.getByRole('combobox')
     fireEvent.change(box, { target: { value: '?' } })

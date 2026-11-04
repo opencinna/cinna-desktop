@@ -824,3 +824,48 @@ describe('preview params (D4)', () => {
     expect(runner.calls).toHaveLength(1)
   })
 })
+
+describe('Dashboards turned off (Settings → Features → Capabilities)', () => {
+  let on = false
+  let timers: ReturnType<typeof manualTimers>
+  beforeEach(() => {
+    on = false
+    timers = manualTimers()
+    refresh = createDashboardRefreshService({ dashboards, runner: runner.runner, runCommand, publish: () => {}, now: () => clock, warmupDisabled: () => false, timers: timers.timers, enabled: () => on })
+  })
+
+  it('warms nothing up at launch', async () => {
+    addComponentTile('warm', { view: 'list', source: { endpoint: 'data' }, endpoints: { data: { script: 'api/data.py' } }, refresh: { on_app_start: true } })
+    expect(await refresh.warmUp('p1')).toEqual([])
+    await drain()
+    expect(runner.calls).toHaveLength(0)
+  })
+
+  it('arms no interval timer, stops a running one at its next tick, and arms again at the renewal after it is turned on', async () => {
+    dashboards.updateTile('p1', { tileId, refreshOverride: { whileOpenEvery: '2m' } })
+    refresh.renewLease('p1', [tileId])
+    await settleNext(ok({ items: [] }))
+    expect(timers.live.size).toBe(0)
+    // Turned on: the next renewal (the renderer's 20 s) arms it.
+    on = true
+    refresh.renewLease('p1', [tileId])
+    await drain()
+    expect(timers.live.size).toBe(1)
+    // Turned off while it runs: the next tick — the lease still live — stops it and runs nothing.
+    on = false
+    const before = runner.calls.length
+    expect(refresh.isLeased(tileId, 'p1')).toBe(true)
+    timers.fireAll()
+    await drain()
+    expect(timers.live.size).toBe(0)
+    expect(runner.calls).toHaveLength(before)
+  })
+
+  it('runs no schedule-fed tile', async () => {
+    writeAgentFile('cinna-agent.json', JSON.stringify({ id: 'm1', schedules: [{ name: 'nightly' }] }))
+    addComponentTile('ranked', { view: 'list', source: { endpoint: 'data' }, endpoints: { data: { script: 'api/data.py' } }, refresh: { schedule: 'nightly' } })
+    expect(refresh.scheduleRan('p1', 'folder:m1', 'nightly')).toEqual([])
+    await drain()
+    expect(runner.calls).toHaveLength(0)
+  })
+})

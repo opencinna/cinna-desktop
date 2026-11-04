@@ -6,6 +6,10 @@ import { MessageBubble } from './MessageBubble'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 vi.hoisted(() => { window.api = { app: { setTheme: async () => {} } } as never })
 const copy = vi.fn()
 const create = vi.fn()
@@ -17,6 +21,8 @@ function selectionRects(rects = [{ left: 0, top: 0, right: 20000, bottom: 20000 
 }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   selectionRects()
   copy.mockReset().mockResolvedValue(undefined)
   create.mockReset().mockResolvedValue({ id: 'note-1' })
@@ -88,6 +94,14 @@ it('captures the selected excerpt before menu focus or streaming changes it', as
   rerender(<Harness content={markdown + '\n\nMore streaming text'} />)
   fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
   await waitFor(() => expect(copy).toHaveBeenCalledWith('format'))
+})
+
+it('offers no Save to Notes while Notes is off', () => {
+  capabilities.notesEnabled = false
+  mount()
+  open()
+  expect(screen.getByRole('menuitem', { name: 'Copy text' })).toBeTruthy()
+  expect(screen.queryByRole('menuitem', { name: 'Save to Notes' })).toBeNull()
 })
 
 it('saves selected text as a new note and opens it selected in the Notes sidebar', async () => {

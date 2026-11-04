@@ -11,6 +11,7 @@ import { isChatCapableModelId } from '../../../../shared/modelDefaults'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 
 interface ManagedChatModeCardProps {
   mode: ChatModeData
@@ -97,21 +98,18 @@ export function ManagedChatModeCard({ mode }: ManagedChatModeCardProps): React.J
 
         <button
           type="button"
+          role="switch"
+          aria-checked={mode.enabled}
+          aria-label={mode.name}
           disabled={setEnabled.isPending}
           onClick={(e) => {
             e.stopPropagation()
             setEnabled.mutate({ id: mode.id, enabled: !mode.enabled })
           }}
-          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50 ${
-            mode.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
+          className={`${switchTrackClass(mode.enabled)} disabled:opacity-50`}
           title={mode.enabled ? 'Disable for this profile' : 'Enable'}
         >
-          <div
-            className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              mode.enabled ? 'left-[18px]' : 'left-0.5'
-            }`}
-          />
+          <div className={switchThumbClass(mode.enabled)} />
         </button>
 
         <div

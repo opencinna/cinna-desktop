@@ -1,5 +1,6 @@
 import type { ComponentFinding, ComponentInfo, ComponentPlacement } from '../../../../shared/dashboards'
 import { useUIStore, type AgentPageTab } from '../../stores/ui.store'
+import { useCapabilities } from '../../hooks/useCapabilities'
 
 /**
  * The pieces a component is drawn with wherever it is listed — the agent's
@@ -33,6 +34,8 @@ export function openAgentTab(agentId: string, tab: AgentPageTab): void {
 
 /** "On Sales overview, Ops" with each dashboard a link, or "Not on a dashboard yet." */
 export function PlacementsLine({ placements, scale }: { placements: ComponentPlacement[]; scale: ComponentScale }): React.JSX.Element {
+  // With Dashboards off there is no dashboard view to open: the names stay, as text.
+  const dashboardsOn = useCapabilities().dashboardsEnabled
   return (
     <p className={`m-0 min-w-0 ${LINE[scale]} truncate text-[var(--color-text-secondary)]`}>
       {placements.length === 0 ? (
@@ -43,9 +46,13 @@ export function PlacementsLine({ placements, scale }: { placements: ComponentPla
           {placements.map((p, index) => (
             <span key={p.tileId}>
               {index > 0 && ', '}
-              <button type="button" className={COMPONENT_LINK} onClick={() => openDashboard(p.dashboardId)} title={`Open ${p.dashboardName}`}>
-                {p.dashboardName}
-              </button>
+              {dashboardsOn ? (
+                <button type="button" className={COMPONENT_LINK} onClick={() => openDashboard(p.dashboardId)} title={`Open ${p.dashboardName}`}>
+                  {p.dashboardName}
+                </button>
+              ) : (
+                p.dashboardName
+              )}
             </span>
           ))}
         </>

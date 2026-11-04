@@ -8,6 +8,10 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useRunScriptStore } from '../../stores/runScript.store'
 import { COMMAND_REVIEW_REASONS } from '../../../../shared/userCommands'
 
+// Main's app settings, as `useCapabilities` reads them (`'on'` only).
+const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
+vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
+
 /**
  * The message menu's last group: Run, Run in background and Edit and Run…
  * for a command in a local agent's reply, decided once at open.
@@ -20,6 +24,8 @@ const folderAgent = { id: 'folder:a', name: 'A', source: 'folder', driver: 'acp'
 const remoteAgent = { id: 'remote:r', name: 'R', source: 'remote', driver: 'a2a', localPath: null, capabilities: {} }
 
 beforeEach(() => {
+  // Notes and Dashboards are optional capabilities, off until turned on.
+  Object.assign(capabilities, { notesEnabled: true, dashboardsEnabled: true })
   run.mockReset().mockResolvedValue({ ok: true, itemId: 'cmd-1', folder: '~/agents/a' })
   window.api = { app: { setTheme: async () => {} }, userCommands: { run } } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
@@ -51,6 +57,8 @@ describe('messageMenuItems with a command', () => {
     expect(messageMenuItems(undefined, false, { auto: true })).toEqual([['copy-text', 'save-text'], ['run', 'run-background', 'edit-run']])
     expect(messageMenuItems(undefined, false, { auto: false })).toEqual([['copy-text', 'save-text'], ['edit-run']])
     expect(messageMenuItems(undefined, true)).toEqual([['copy-text', 'save-text']])
+    // Notes off: no Save to Notes anywhere, and no group left empty by it.
+    expect(messageMenuItems(undefined, false, { auto: false }, false)).toEqual([['copy-text'], ['edit-run']])
   })
 })
 

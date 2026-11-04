@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -45,36 +45,51 @@ describe('TopBar — sidebar docking', () => {
     expect(screen.getByTitle('Collapse sidebar')).toBeTruthy()
   })
 
-  it('picks the docking mode from a right-click menu that marks the current one', () => {
+  it('flips the docking mode with one Show sidebar on hover switch in a right-click menu that stays open', () => {
     render(createElement(TopBar), { wrapper })
     const button = screen.getByTitle('Collapse sidebar')
     act(() => {
       fireEvent.contextMenu(button)
     })
     const menu = screen.getByRole('menu', { name: 'Sidebar docking' })
-    expect(menu).toBeTruthy()
-    const fixed = screen.getByRole('menuitemradio', { name: 'Fixed' })
-    const hover = screen.getByRole('menuitemradio', { name: 'On Hover' })
-    expect(fixed.getAttribute('aria-checked')).toBe('true')
-    expect(fixed.querySelector('svg')).toBeTruthy()
-    expect(hover.getAttribute('aria-checked')).toBe('false')
-    expect(hover.querySelector('svg')).toBeNull()
+    // One switch row, not a Fixed / On Hover radio pair.
+    expect(within(menu).queryAllByRole('menuitemradio')).toHaveLength(0)
+    expect(within(menu).queryByText('Fixed')).toBeNull()
+    const onHover = within(menu).getByRole('menuitemcheckbox', { name: 'Show sidebar on hover' })
+    expect(onHover.getAttribute('aria-checked')).toBe('false')
+    // The switch row takes focus on opening, as the chat-list menu's first item does.
+    expect(document.activeElement).toBe(onHover)
+    expect(onHover.querySelector('[data-switch-track]')?.getAttribute('data-switch-track')).toBe('off')
     // The right-click did not also toggle the sidebar.
     expect(useUIStore.getState().sidebarOpen).toBe(true)
 
-    fireEvent.click(hover)
+    fireEvent.click(onHover)
     expect(useUIStore.getState().sidebarDocking).toBe('hover')
     expect(localStorage.getItem('cinna-sidebar-docking')).toBe('hover')
-    expect(screen.queryByRole('menu', { name: 'Sidebar docking' })).toBeNull()
     expect(screen.getByTitle('Dock sidebar')).toBeTruthy()
+    // Still open, so the switch is seen to move.
+    const switched = within(screen.getByRole('menu', { name: 'Sidebar docking' })).getByRole('menuitemcheckbox', { name: 'Show sidebar on hover' })
+    expect(switched.getAttribute('aria-checked')).toBe('true')
+    expect(switched.querySelector('[data-switch-track]')?.getAttribute('data-switch-track')).toBe('on')
 
-    act(() => {
-      fireEvent.contextMenu(screen.getByTitle('Dock sidebar'))
-    })
-    expect(screen.getByRole('menuitemradio', { name: 'On Hover' }).getAttribute('aria-checked')).toBe('true')
+    // Toggling back returns to fixed docking.
+    fireEvent.click(switched)
+    expect(useUIStore.getState().sidebarDocking).toBe('fixed')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Show sidebar on hover' }).getAttribute('aria-checked')).toBe('false')
+
     act(() => {
       fireEvent.keyDown(document, { key: 'Escape' })
     })
     expect(screen.queryByRole('menu', { name: 'Sidebar docking' })).toBeNull()
+    // Escape gives focus back to the sidebar button.
+    expect(document.activeElement).toBe(button)
+
+    act(() => {
+      useUIStore.setState({ sidebarDocking: 'hover', sidebarOpen: false })
+    })
+    act(() => {
+      fireEvent.contextMenu(screen.getByTitle('Dock sidebar'))
+    })
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Show sidebar on hover' }).getAttribute('aria-checked')).toBe('true')
   })
 })

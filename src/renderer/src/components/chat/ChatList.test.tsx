@@ -167,13 +167,17 @@ describe('grouping', () => {
     return screen.getByRole('menu', { name: 'Chats list options' })
   }
 
-  it('groups by agent from the menu, checked while on, and falls back for a row with no summary', async () => {
+  it('groups by agent from the menu, its switch on while on, and falls back for a row with no summary', async () => {
     const menu = await openMenu()
     const byAgent = within(menu).getByRole('menuitemcheckbox', { name: 'Group by Agent' })
     expect(byAgent.getAttribute('aria-checked')).toBe('false')
+    // A switch, not a check mark.
+    expect(byAgent.querySelector('[data-switch-track]')?.getAttribute('data-switch-track')).toBe('off')
     fireEvent.click(byAgent)
     // Stays open, and says it is on.
-    expect(within(screen.getByRole('menu', { name: 'Chats list options' })).getByRole('menuitemcheckbox', { name: 'Group by Agent' }).getAttribute('aria-checked')).toBe('true')
+    const onAgain = within(screen.getByRole('menu', { name: 'Chats list options' })).getByRole('menuitemcheckbox', { name: 'Group by Agent' })
+    expect(onAgain.getAttribute('aria-checked')).toBe('true')
+    expect(onAgain.querySelector('[data-switch-track]')?.getAttribute('data-switch-track')).toBe('on')
     expect(localStorage.getItem('cinna-chat-group-by-agent')).toBe('1')
 
     // The count is in the name, not beside it.

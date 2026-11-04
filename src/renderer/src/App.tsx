@@ -27,6 +27,7 @@ import { useTrayIcon } from './hooks/useTrayIcon'
 import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useDashboardsWatch } from './hooks/useDashboards'
+import { useAppSettingsWatch } from './hooks/useAppSettings'
 import { useSharingWatch } from './hooks/useSharing'
 import { useCatalogItemsWatch } from './hooks/useCatalog'
 import { useSkillCredentialsWatch } from './hooks/useServiceCredentials'
@@ -128,6 +129,9 @@ function Shell(): React.JSX.Element {
   useLocalAgentWatch()
   // Tile data that main recomputed, and components that changed with their agent's folder.
   useDashboardsWatch()
+  // App settings saved by someone other than this window (Notes and Dashboards
+  // gate whole surfaces on two of them).
+  useAppSettingsWatch()
   // A shared agent's state and the Team library move on main's schedule (a
   // teammate shares, a fetch lands); one subscription refreshes every surface.
   useSharingWatch()

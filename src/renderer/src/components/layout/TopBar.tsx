@@ -1,9 +1,10 @@
-import { Check, Plus, PanelLeft, PanelLeftClose } from 'lucide-react'
+import { Plus, PanelLeft, PanelLeftClose } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useUIStore, selectSidebarVisible, type SidebarDocking } from '../../stores/ui.store'
+import { useUIStore, selectSidebarVisible } from '../../stores/ui.store'
 import { usePopover } from '../ui/usePopover'
-import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
+import { MENU_SURFACE } from '../agents/local/OpenInMenu'
+import { MenuSwitchItem } from '../ui/MenuSwitchItem'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
 import { DashboardOriginPill } from '../chat/DashboardOriginPill'
@@ -22,14 +23,10 @@ const TOPBAR_BTN =
   'bg-[var(--color-bg-secondary)]/60 text-[var(--color-text-muted)] ' +
   'hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
 
-const DOCKING_OPTIONS: { value: SidebarDocking; label: string }[] = [
-  { value: 'fixed', label: 'Fixed' },
-  { value: 'hover', label: 'On Hover' }
-]
-
 /**
  * The sidebar button. Fixed docking: opens and closes the sidebar. Hover
- * docking: docks it (back to fixed, open). Right-click picks the docking mode.
+ * docking: docks it (back to fixed, open). Right-click opens a menu whose
+ * "Show sidebar on hover" switch flips the docking mode.
  */
 function SidebarButton(): React.JSX.Element {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
@@ -37,17 +34,26 @@ function SidebarButton(): React.JSX.Element {
   const docking = useUIStore((s) => s.sidebarDocking)
   const setSidebarDocking = useUIStore((s) => s.setSidebarDocking)
   const menu = usePopover<HTMLButtonElement>('below-left')
-  const { open, setOpen } = menu
+  const { open, setOpen, popoverRef, triggerRef } = menu
   const hover = docking === 'hover'
 
+  // Keyboard, as a menu: the switch row takes focus once the menu is placed
+  // (as GroupChatsMenu does), and Escape closes it and gives focus back.
+  const positioned = menu.style !== null
+  useEffect(() => {
+    if (!open || !positioned) return
+    popoverRef.current?.querySelector<HTMLElement>('[role="menuitemcheckbox"]')?.focus()
+  }, [open, positioned, popoverRef])
   useEffect(() => {
     if (!open) return
     const escape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
     }
     document.addEventListener('keydown', escape)
     return () => document.removeEventListener('keydown', escape)
-  }, [open, setOpen])
+  }, [open, setOpen, triggerRef])
 
   return (
     <>
@@ -69,24 +75,15 @@ function SidebarButton(): React.JSX.Element {
           role="menu"
           aria-label="Sidebar docking"
           style={menu.style}
-          className={MENU_SURFACE.replace('w-56', 'w-36')}
+          className={MENU_SURFACE.replace('w-56', 'w-52')}
         >
-          {DOCKING_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={docking === option.value}
-              className={MENU_ITEM}
-              onClick={() => {
-                setSidebarDocking(option.value)
-                setOpen(false)
-              }}
-            >
-              <span className="flex-1">{option.label}</span>
-              {docking === option.value && <Check size={12} className="text-[var(--color-accent)]" aria-hidden="true" />}
-            </button>
-          ))}
+          {/* One switch, not a Fixed / On Hover radio pair. The menu stays
+              open so the switch is seen to move; Escape or a click outside closes it. */}
+          <MenuSwitchItem
+            label="Show sidebar on hover"
+            checked={hover}
+            onToggle={() => setSidebarDocking(hover ? 'fixed' : 'hover')}
+          />
         </div>,
         document.body
       )}

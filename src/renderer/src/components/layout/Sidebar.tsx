@@ -117,8 +117,10 @@ export function Sidebar(): React.JSX.Element {
         <div className="app-sidebar-hot-zone" aria-hidden="true" data-testid="sidebar-hot-zone" {...hoverDock.hotZone} />,
         document.body
       )}
-      {!isSettings && <SidebarTabs />}
-      <div className="app-sidebar ambient-grid-surface overflow-hidden flex flex-col">
+      {/* In Settings too, dimmed: the tabs are the way out besides Back, and the
+          tinted card says the body is a menu now, not a list (ux rule 17). */}
+      <SidebarTabs />
+      <div className={`app-sidebar ambient-grid-surface overflow-hidden flex flex-col ${isSettings ? 'is-menu' : ''}`}>
         <AmbientGrid active={visible} borderGlow />
         {isSettings ? (
           <>

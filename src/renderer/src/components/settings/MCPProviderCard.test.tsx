@@ -61,7 +61,8 @@ it('marks a plugin’s connector in Settings with where it is from, offers no De
     authType: 'oauth', status: 'disconnected', tools: [], managedBy: 'plugin:e@s', managedByTitle: 'Ledger Tools' }} />)
   expect(screen.getByText('From Ledger Tools')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Delete MCP ledger' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Turn off ledger' }).getAttribute('title')).toBe('Turn off ledger on this computer')
+  expect(screen.getByRole('switch', { name: 'Turn off ledger' }).getAttribute('title')).toBe('Turn off ledger on this computer')
+  expect(screen.getByRole('switch', { name: 'Turn off ledger' }).getAttribute('aria-checked')).toBe('true')
 })
 
 it('says From a plugin when main does not name the plugin, and keeps Delete on the user’s own connector', () => {
@@ -89,7 +90,7 @@ it('asks one password field per stored setting, never showing a value, and sends
   expect(region.placeholder).toBe('Value')
   // Typing makes the form dirty: the switch waits for Save.
   fireEvent.change(region, { target: { value: 'eu' } })
-  expect((screen.getByRole('button', { name: 'Turn off ledger' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('switch', { name: 'Turn off ledger' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.click(screen.getByText('Save'))
   expect(upsertMutate.mock.calls[0][0]).toMatchObject({ id: 'p2', command: 'node', args: ['s.mjs'], env: { LEDGER_TOKEN: '', LEDGER_REGION: 'eu' } })
 })

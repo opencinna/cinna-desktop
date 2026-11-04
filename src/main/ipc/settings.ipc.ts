@@ -1,5 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { appSettingsService } from '../services/appSettingsService'
+import { capabilityService } from '../services/capabilityService'
 import { syncTrayFromSettings } from '../host/desktop/traySync'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
@@ -41,6 +42,9 @@ export function registerSettingsHandlers(): void {
      * setting exists, so every launch after the first pays nothing.
      */
     await defaultEngineService.lockIfUnset()
+    // A capability the startup check could not decide is tried again here, so
+    // the renderer never caches an `'unset'` that a retry could have answered.
+    capabilityService.resolveUnset()
     return appSettingsService.getAll()
   })
 

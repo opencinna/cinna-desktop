@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { Check, Loader2, Mic } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, CONTEXT_MENU_SURFACE, ContextMenu } from '../../ui/ContextMenu'
+import { MenuSwitchItem } from '../../ui/MenuSwitchItem'
 import { useUIStore } from '../../../stores/ui.store'
 import { useToastStore } from '../../../stores/toast.store'
 import { registerMediaToggle } from './mediaKeys'
@@ -236,22 +237,11 @@ function VoiceInputControl({
             <MicrophoneItem key={mic.deviceId} label={mic.label} checked={selected === mic.deviceId} onPick={() => pick(mic.deviceId)} />
           ))}
           <div className="my-1 border-t border-[var(--color-border)]" />
-          <button type="button" role="menuitemcheckbox" aria-checked={true} className={CONTEXT_MENU_ITEM} onClick={hide}>
-            <span className="min-w-0 flex-1 truncate">Show audio input</span>
-            <MenuSwitch checked />
-          </button>
+          {/* Always on here: turning it off hides the button this menu belongs to. */}
+          <MenuSwitchItem label="Show audio input" checked onToggle={hide} />
         </ContextMenu>
       )}
     </>
-  )
-}
-
-/** The settings switch, menu-sized; the row around it is the control. */
-function MenuSwitch({ checked }: { checked: boolean }): React.JSX.Element {
-  return (
-    <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'}`}>
-      <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${checked ? 'left-[14px]' : 'left-0.5'}`} />
-    </span>
   )
 }
 
