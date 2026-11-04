@@ -1,13 +1,19 @@
 import { test, expect, answerAgentsFolder } from '../fixtures/app'
 
+// A fresh user: Notes and Dashboards are optional capabilities, off until turned on.
+test.use({ capabilities: [] })
+
 test('launches into onboarding, then the main shell, inside the sandbox', async ({ cinna }) => {
   const { page, electronApp, sandbox } = cinna
   await expect(page).toHaveTitle('Cinna')
   await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
 
   await cinna.skipOnboarding()
-  for (const name of ['Chats', 'Jobs', 'Notes', 'Agents', 'New chat']) {
+  for (const name of ['Chats', 'Jobs', 'Agents', 'New chat']) {
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
+  }
+  for (const name of ['Notes', 'Dashboards']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }
 
   // Isolation is a correctness property of the suite: a test that reaches the

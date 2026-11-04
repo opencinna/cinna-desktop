@@ -220,6 +220,13 @@ export interface CinnaOptions {
    * `liveEngineOptions()`; null (the default) checks nothing.
    */
   liveEngineCheck: LiveEngineCheck | null
+  /**
+   * The optional capabilities (Settings → Features → Capabilities) that
+   * `skipOnboarding()` turns on. Both by default, so a spec that drives Notes
+   * or Dashboards finds their tabs as before they became optional; a spec of
+   * the fresh-user default sets `test.use({ capabilities: [] })`.
+   */
+  capabilities: readonly ('notes' | 'dashboards')[]
 }
 
 export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
@@ -228,7 +235,8 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   env: [{}, { option: true }],
   realLogin: [null, { option: true }],
   liveEngineCheck: [null, { option: true }],
-  cinna: async ({ engine, launchArgs, env, realLogin: requestedLogin, liveEngineCheck }, use, testInfo) => {
+  capabilities: [['notes', 'dashboards'], { option: true }],
+  cinna: async ({ engine, launchArgs, env, realLogin: requestedLogin, liveEngineCheck, capabilities }, use, testInfo) => {
     // `CINNA_E2E_CLAUDE_AUTH=api_key` (`claudeApiAuth.ts`): a Claude real-login
     // run becomes an ordinary sandbox in API Token mode on the `.env` key.
     const claudeApi: ClaudeApiAuth | null = CLAUDE_API_AUTH && requestedLogin?.engine === 'claude'
@@ -275,6 +283,18 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
         await skip.or(shell).first().waitFor()
         if (await skip.isVisible()) await skip.click()
         await shell.waitFor()
+        // Main's installation-global app settings, written as the user's choice
+        // (`settings:set` needs the activated profile the shell now has). Main
+        // announces the change, so the open window re-reads it without a reload;
+        // the spec waits for the tabs so nothing races the re-read.
+        if (capabilities.length > 0) {
+          await page.evaluate(async (on) => {
+            for (const name of on) await window.api.settings.set(name === 'notes' ? 'notesCapability' : 'dashboardsCapability', 'on')
+          }, [...capabilities])
+          for (const name of capabilities) {
+            await page.getByRole('button', { name: name === 'notes' ? 'Notes' : 'Dashboards', exact: true }).waitFor()
+          }
+        }
         /**
          * **Pin the Default runtime to the OpenCode runner for every spec.**
          *

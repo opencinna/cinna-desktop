@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 
 /**
- * Sidebar docking: right-click the TopBar sidebar button for Fixed / On Hover.
+ * Sidebar docking: right-click the TopBar sidebar button for its "Show sidebar on hover" switch.
  *
  * In On Hover the wrap is `.is-floating` (width 0, so the chat never reflows)
  * and `.is-collapsed` (opacity 0) until the pointer stays in the invisible
@@ -66,15 +66,20 @@ test('sidebar docking On Hover peeks from the left edge without reflowing the ch
   let dockedWidth = 0
   let floatingWidth = 0
 
-  await test.step('right-click the sidebar button, pick On Hover: the sidebar hides and the chat widens', async () => {
+  await test.step('right-click the sidebar button, switch "Show sidebar on hover" on: the sidebar hides and the chat widens', async () => {
     const page = cinna.page
     await expect(wrap(page)).toHaveCSS('opacity', '1')
     dockedWidth = await mainWidth(page)
 
     await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click({ button: 'right' })
     const menu = page.getByRole('menu', { name: 'Sidebar docking', exact: true })
-    await expect(menu.getByRole('menuitemradio', { name: 'Fixed', exact: true })).toHaveAttribute('aria-checked', 'true')
-    await menu.getByRole('menuitemradio', { name: 'On Hover', exact: true }).click()
+    const onHover = menu.getByRole('menuitemcheckbox', { name: 'Show sidebar on hover', exact: true })
+    await expect(onHover).toHaveAttribute('aria-checked', 'false')
+    await expect(onHover).toBeFocused()
+    await onHover.click()
+    // The menu stays open so the switch is seen to move; Escape closes it.
+    await expect(onHover).toHaveAttribute('aria-checked', 'true')
+    await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
 
     await expectHidden(page)
@@ -177,7 +182,7 @@ test('sidebar docking On Hover peeks from the left edge without reflowing the ch
     await peekFromEdge(page)
     await page.getByRole('button', { name: 'Dock sidebar', exact: true }).click({ button: 'right' })
     const menu = page.getByRole('menu', { name: 'Sidebar docking', exact: true })
-    await expect(menu.getByRole('menuitemradio', { name: 'On Hover', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await expect(menu.getByRole('menuitemcheckbox', { name: 'Show sidebar on hover', exact: true })).toHaveAttribute('aria-checked', 'true')
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
   })
