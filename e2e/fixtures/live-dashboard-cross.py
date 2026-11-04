@@ -15,7 +15,7 @@ can ever match the other's data:
     rm /tmp/dashcross.json
 
 Run the docker commands from cinna-core's checkout ($CINNA_CORE_PATH), at
-``c32f211b`` or later (the CLI's ``dashboards/capabilities`` route) with
+``7de29ca7`` or later (the CLI's ``dashboards/capabilities`` route, and fresh component reads) with
 migration ``7c1d4e8a2b90`` applied.
 
 ``create <engine>…`` (``opencode`` and/or ``claude-haiku``) signs up one person,

@@ -15,7 +15,7 @@ import { coreCall, makeTeamTest, type PersonApp, type TeamFixtureBase } from '..
  * (see its docstring): one `agent-developer` person and per engine a cloud
  * agent `Dash cross e2e <engine> <tag>` with **no** components.
  * `CINNA_DASHBOARD_CROSS_LIVE_FIXTURE` points at the JSON it printed; without
- * it every test skips. Core must be at `c32f211b`+ (the CLI's capabilities
+ * it every test skips. Core must be at `7de29ca7`+ (fresh component reads for X4; the CLI's capabilities
  * route) with migration `7c1d4e8a2b90`. The CLI comes from `CINNA_CLI_PATH`
  * (default `../cinna-cli`), run with `uv`; it signs in through a real account
  * setup token and syncs the agent with Mutagen, all in a sandboxed `HOME`.
@@ -406,17 +406,10 @@ for (const engine of ENGINES) {
         })
         await test.step('a component.json naming a missing script: check exits 1, the desktop tile has problems to fix', async () => {
           writeComponent(workspace, stampV2, { ...COMPONENT_JSON, endpoints: { rows: { script: 'api/missing.py', description: 'Gone.' } } })
-          // The CLI's promise: a check right after a push sees the push (it flushes and asks `?fresh=true`).
-          // KNOWN FAILING (2026-11-04, core c32f211b): core's GET agents/{id}/dashboards/ and /{name} take
-          // no `fresh` query parameter (backend/app/api/routes/agent_dashboards.py), so it is ignored and
-          // core's 10 s per-worker list cache answers the component as it was: "deals: ok", exit 0, while the
-          // environment's file already names api/missing.py. Soft, so the desktop half below still runs.
-          const immediate = cli!.run(['dashboards', 'check', agent.name, COMPONENT])
-          expect.soft(immediate.code, `check right after the push (core's list cache):\n${immediate.stdout}${immediate.stderr}`).toBe(1)
-          let check = immediate
-          await expect
-            .poll(() => (check = cli!.run(['dashboards', 'check', agent.name, COMPONENT])).code, { timeout: 60_000, intervals: [5_000] })
-            .toBe(1)
+          // The CLI's promise: a check right after a push sees the push (it flushes and asks `?fresh=true`,
+          // which core honours since 7de29ca7; before it, core's 10 s per-worker list cache said "deals: ok").
+          const check = cli!.run(['dashboards', 'check', agent.name, COMPONENT])
+          expect(check.code, `check right after the push:\n${check.stdout}${check.stderr}`).toBe(1)
           expect(check.stdout).toContain('[script_missing]')
           test.info().annotations.push({ type: 'X4 CLI check (broken)', description: check.stdout.slice(0, 400) })
           // Desktop re-reads a cloud agent's component list only when the dashboard's tiles are listed again
@@ -436,11 +429,9 @@ for (const engine of ENGINES) {
         })
       } finally {
         writeComponent(workspace, stampV1)
-        // Polled: core's list cache answers the broken component for up to 10 s after the push (see above).
-        let restored = cli!.run(['dashboards', 'check', agent.name, COMPONENT, '--run'])
-        await expect
-          .poll(() => (restored = cli!.run(['dashboards', 'check', agent.name, COMPONENT, '--run'])).code, { timeout: 60_000, intervals: [5_000], message: `restoring v1: ${restored.stdout}${restored.stderr}` })
-          .toBe(0)
+        // Straight after the push, as above: a fresh read sees the fixed component.
+        const restored = cli!.run(['dashboards', 'check', agent.name, COMPONENT, '--run'])
+        expect(restored.code, `restoring v1: ${restored.stdout}${restored.stderr}`).toBe(0)
       }
     })
 
