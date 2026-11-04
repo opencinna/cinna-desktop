@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { DASHBOARD_FRAME_SANDBOX } from '../../../../../shared/htmlPreview'
-import type { CollectedPageContext, DashboardFrameTarget } from '../../../../../shared/dashboards'
+import type { CollectedPageContext, DashboardFrameTarget, DashboardsErrorCode } from '../../../../../shared/dashboards'
 import { useUIStore } from '../../../stores/ui.store'
 import { createBridgeSession, readHostContext, type BridgeSession, type BridgeTileMeta } from '../componentBridge'
 import { coalescePerKey } from '../dashboardContext'
 import { OpenLinkDialog } from '../OpenLinkDialog'
+import { CloudRefusal, RetryLink } from '../componentParts'
+
+/** The least time between two automatic reopens of a failed cloud frame (each mint wakes the environment). */
+export const CLOUD_FRAME_REOPEN_GAP_MS = 10_000
 
 /** What the page may ask of its host beyond data and context (D4); each absent one is refused. */
 export interface BridgeActions {
@@ -199,7 +203,10 @@ export function useComponentBridge(
   }, [collectRequest])
 }
 
-type FrameState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'failed'; error: string }
+/** A cloud page that did not open: the server did not answer, or its environment is still starting (core's mint wakes it). */
+const CLOUD_FRAME_RETRY_ON: readonly DashboardsErrorCode[] = ['unreachable', 'env_unavailable']
+
+type FrameState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'failed'; error: string; code: string | null }
 
 /**
  * An html component's page in its sandboxed frame. The URL is minted for this
@@ -213,7 +220,9 @@ export function WebView({
   onContext,
   actions,
   highlight,
-  collect
+  collect,
+  cloudNames,
+  reopenKey
 }: {
   target: DashboardFrameTarget
   meta: BridgeTileMeta
@@ -227,8 +236,21 @@ export function WebView({
   highlight?: FrameHighlight
   /** collect-context while the tile is focused (D5). */
   collect?: FrameCollect
+  /**
+   * A cloud component's page (D6): its refusals read as the cloud sentences,
+   * with Retry where trying again can mend them and Open settings for a sign-in.
+   */
+  cloudNames?: { agent: string; server: string }
+  /**
+   * Changes whenever the tile's result does (a push or a refetch). A cloud page
+   * that could not open because the server did not answer or the environment
+   * was still starting is opened again once per change (D6.10), never in a loop.
+   */
+  reopenKey?: unknown
 }): React.JSX.Element {
   const [state, setState] = useState<FrameState>({ status: 'loading' })
+  /** Bumped by Retry: a cloud page whose files the server did not serve is asked for again (D6.10). */
+  const [attempt, setAttempt] = useState(0)
   const [link, setLink] = useState<LinkAsk | null>(null)
   const linkRef = useRef<LinkAsk | null>(null)
   linkRef.current = link
@@ -251,15 +273,35 @@ export function WebView({
     setLink(null)
   }
 
+  // The result version a failure happened at: only a later one opens the page again.
+  const reopenKeyRef = useRef<unknown>(reopenKey)
+  reopenKeyRef.current = reopenKey
+  const failedAt = useRef<unknown>(undefined)
+  const failed = state.status === 'failed' && (state.code === 'unreachable' || state.code === 'env_unavailable')
+  // When the last open started: automatic reopens keep CLOUD_FRAME_REOPEN_GAP_MS from it, because a
+  // cloud frame's mint wakes the agent's environment and a tile's result can change several times a second.
+  const openedAt = useRef(0)
+  useEffect(() => {
+    if (!failed || reopenKey === undefined || reopenKey === failedAt.current) return
+    failedAt.current = reopenKey
+    const wait = Math.max(0, openedAt.current + CLOUD_FRAME_REOPEN_GAP_MS - Date.now())
+    const timer = setTimeout(() => setAttempt((n) => n + 1), wait)
+    return () => clearTimeout(timer)
+  }, [failed, reopenKey])
+
   useEffect(() => {
     let cancelled = false
     let token: string | null = null
+    openedAt.current = Date.now()
     setState({ status: 'loading' })
     window.api.dashboards
       .openFrame(targetRef.current)
       .then((result) => {
         if (!result.ok) {
-          if (!cancelled) setState({ status: 'failed', error: result.message })
+          if (!cancelled) {
+            failedAt.current = reopenKeyRef.current
+            setState({ status: 'failed', error: result.message, code: result.code })
+          }
           return
         }
         if (cancelled) {
@@ -270,16 +312,40 @@ export function WebView({
         setState({ status: 'ready', url: result.url })
       })
       .catch(() => {
-        if (!cancelled) setState({ status: 'failed', error: 'The page could not be opened.' })
+        if (!cancelled) setState({ status: 'failed', error: 'The page could not be opened.', code: null })
       })
     return () => {
       cancelled = true
       if (token) void window.api.dashboards.releaseFrame(token).catch(() => {})
     }
-  }, [key])
+  }, [key, attempt])
 
   const linkDialog = link && <OpenLinkDialog url={link.url} onDone={closeLink} />
-  if (state.status === 'failed') return <p className="px-3 py-2 text-[11px] text-[var(--color-danger)]">{state.error}</p>
+  if (state.status === 'failed' && cloudNames) {
+    return (
+      <CloudRefusal
+        code={state.code as DashboardsErrorCode | null}
+        message={state.error}
+        names={cloudNames}
+        onRetry={() => setAttempt((n) => n + 1)}
+        retryOn={CLOUD_FRAME_RETRY_ON}
+        className="px-3 py-2 text-[11px]"
+      />
+    )
+  }
+  if (state.status === 'failed') {
+    return (
+      <p className="px-3 py-2 text-[11px] text-[var(--color-danger)]">
+        {state.error}
+        {state.code === 'unreachable' && (
+          <>
+            {' '}
+            <RetryLink onRetry={() => setAttempt((n) => n + 1)} />
+          </>
+        )}
+      </p>
+    )
+  }
   if (state.status === 'loading') return <div className="h-full w-full" />
   return (
     <>

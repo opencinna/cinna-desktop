@@ -327,6 +327,32 @@ describe('the dashboard chat panel', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Sales Agent is not on this computer.')
   })
 
+  it('a cloud chat the server did not answer says so with Retry, which asks again and opens it (D6.10)', async () => {
+    // Mutation: drop `attempt` from the resolving effect's deps and Retry never asks again.
+    panelChat.mockResolvedValueOnce({ ok: false, code: 'unreachable', message: 'fetch failed' })
+    show()
+    await screen.findByText('Acme')
+    await askAbout('Deals pipeline')
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Can’t reach the Cinna server.')
+    expect(alert.textContent).not.toContain('fetch failed')
+    await act(async () => fireEvent.click(within(alert).getByRole('button', { name: 'Retry' })))
+    expect(panelChat).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(screen.getByTestId('workspace').dataset.chatId).toBe('chat-folder:sales'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a cloud chat that needs a new sign-in offers Open settings', async () => {
+    panelChat.mockResolvedValueOnce({ ok: false, code: 'reauth_required', message: 'Cinna 401' })
+    show()
+    await screen.findByText('Acme')
+    await askAbout('Deals pipeline')
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Sign in to the Cinna server again.')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Open settings' }))
+    expect(useUIStore.getState()).toMatchObject({ activeView: 'settings', settingsTab: 'profile-agents' })
+  })
+
   it('the Chats tab opens the Chats view’s own chat, not the panel’s', async () => {
     // Mutation: read `activeChatId` instead of the stash in SidebarTabs and
     // this lands on the panel's chat.

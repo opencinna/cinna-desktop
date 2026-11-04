@@ -11,7 +11,7 @@ import { useCapabilities } from '../../hooks/useCapabilities'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AddToDashboardDialog } from './AddToDashboardDialog'
 import { ComponentPreviewDialog } from './ComponentPreview'
-import { COMPONENT_LINK, ComponentFindings, MissingCredentials, PlacementsLine, VIEW_LABELS, errorFindings, fixRequest, openAgentTab } from './componentParts'
+import { COMPONENT_LINK, ComponentFindings, RetryLink, MissingCredentials, PlacementsLine, VIEW_LABELS, agentPlace, errorFindings, fixRequest, openAgentTab, useCinnaServerName } from './componentParts'
 import type { ComponentRefItem } from './componentReferences'
 
 /**
@@ -85,7 +85,9 @@ export function ComponentCard({ reference, label }: { reference: string; label: 
     )
   }
   const resolution = query.data
-  if (!resolution.found) return <MissedReference reference={reference} label={label} resolution={resolution} />
+  if (!resolution.found) {
+    return <MissedReference reference={reference} label={label} resolution={resolution} onRetry={() => void query.refetch()} retrying={query.isFetching} />
+  }
   return <FoundCard reference={reference} label={label} resolution={resolution} chatId={scope.chatId} />
 }
 
@@ -142,7 +144,8 @@ function FoundCard({
   const [previewing, setPreviewing] = useState(false)
   const blocked = component.missingCredentials.length > 0
   const runnable = component.valid && !blocked
-  const needsId = component.manifestId === ''
+  // A cloud component has no manifest id here, and needs none: core knows its agent (D6).
+  const needsId = !component.cloud && component.manifestId === ''
   // Off, the card still previews; putting it on a dashboard waits until on (ux rule 15).
   const dashboardsOn = useCapabilities().dashboardsEnabled
   return (
@@ -175,7 +178,7 @@ function FoundCard({
         )}
         <CopyReferenceButton text={canonicalReference} />
       </div>
-      <WhoLine label={label} agentName={component.agentName} skill={component.skill} />
+      <WhoLine label={label} agentName={agentPlace(component)} skill={component.skill} />
       {/* An invalid component's errors follow below; only without any does the line say so. */}
       {(component.valid || errorFindings(component).length === 0) && (
         <div className={LINE_ROW}>
@@ -234,30 +237,42 @@ function MissCard({ reference, label, agentName, children }: { reference: string
   )
 }
 
-const MISS_SENTENCE: Record<Exclude<ComponentReferenceMiss, 'bundle_not_installed'>, (agent: string) => string> = {
+const MISS_SENTENCE: Record<Exclude<ComponentReferenceMiss, 'bundle_not_installed'>, (agent: string, server: string) => string> = {
   agent_not_here: () => 'Its agent is not on this machine.',
   ambiguous: () => 'Two agents match this reference.',
   // Said of a reference, not a history: the component may never have existed.
   gone: (agent) => `Not in ${agent}.`,
   not_in_this_copy: (agent) => `Not in your copy of ${agent}.`,
-  not_kit_agent: (agent) => `Components need a kit agent, and ${agent} is a plain folder.`
+  not_kit_agent: (agent) => `Components need a kit agent, and ${agent} is a plain folder.`,
+  // D6.9: a cloud agent the profile does not own (shared, identity, app route); no Add.
+  not_owner: (agent) => `Only ${agent}’s owner can add its components to a dashboard.`,
+  unreachable: (_agent, server) => `Can’t reach ${server}.`
 }
 
 function MissedReference({
   reference,
   label,
-  resolution
+  resolution,
+  onRetry,
+  retrying
 }: {
   reference: string
   label: string | null
   resolution: Extract<ComponentReferenceResolution, { found: false }>
+  /** Resolve again: offered where the Cinna server did not answer. */
+  onRetry: () => void
+  retrying: boolean
 }): React.JSX.Element {
   const { reason, agentName, agentId, bundleId } = resolution
+  const server = useCinnaServerName()
   if (reason === 'bundle_not_installed') return <BundleMiss reference={reference} label={label} bundleId={bundleId} />
   const agent = agentName ?? 'its agent'
   return (
     <MissCard reference={reference} label={label} agentName={agentName}>
-      <span className="truncate text-[var(--color-text-secondary)]" data-miss-reason={reason}>{MISS_SENTENCE[reason](agent)}</span>
+      <span className="truncate text-[var(--color-text-secondary)]" data-miss-reason={reason}>{MISS_SENTENCE[reason](agent, server)}</span>
+      {reason === 'unreachable' && (
+        <RetryLink onRetry={onRetry} retrying={retrying} className={`shrink-0 ${COMPONENT_LINK}`} />
+      )}
       {reason === 'not_in_this_copy' && agentId && (
         <button type="button" className={`shrink-0 ${COMPONENT_LINK}`} onClick={() => openAgentTab(agentId, 'sharing')}>
           Open Sharing

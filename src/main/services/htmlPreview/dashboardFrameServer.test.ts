@@ -182,3 +182,72 @@ describe('dashboardFrameServer', () => {
     expect(html).toContain(`<head><script>${script}</script><title>`)
   })
 })
+
+describe('dashboardFrameServer: a cloud frame (D6.3)', () => {
+  function remote(answer?: (segments: string[], method: string) => Awaited<ReturnType<import('./dashboardFrameServer').RemoteFrameSource['file']>>) {
+    const calls: Array<{ segments: string[]; method: string }> = []
+    return {
+      calls,
+      source: {
+        entry: 'app/index.html',
+        file: async (segments: string[], method: 'GET' | 'HEAD') => {
+          calls.push({ segments, method })
+          return answer?.(segments, method) ?? { ok: true as const, contentType: 'text/html; charset=utf-8', body: new TextEncoder().encode('<html><head></head><body>core</body></html>') }
+        }
+      }
+    }
+  }
+
+  it('serves core’s bytes and Content-Type under the dash host with the desktop’s own CSP and headers, without a second bridge', async () => {
+    const s = server()
+    const { source, calls } = remote()
+    const { url, token } = s.registerRemote(source)
+    expect(url).toMatch(/^cinna-preview:\/\/dash-t\d+\/t\d+\/app\/index\.html$/)
+    const res = await get(s, url)
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('<html><head></head><body>core</body></html>')
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('content-security-policy')).toBe(dashboardFrameCsp(new URL(url).hostname, token))
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect([...res.headers.keys()].sort()).toEqual(['access-control-allow-origin', 'cache-control', 'content-security-policy', 'content-type', 'referrer-policy', 'x-content-type-options'])
+    expect(calls).toEqual([{ segments: ['app', 'index.html'], method: 'GET' }])
+  })
+
+  it('answers GET and HEAD only, HEAD with no body', async () => {
+    const s = server()
+    const { source, calls } = remote()
+    const { url } = s.registerRemote(source)
+    for (const method of ['POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']) expect((await get(s, url, method)).status).toBe(405)
+    const head = await get(s, url, 'HEAD')
+    expect(head.status).toBe(200)
+    expect(await head.text()).toBe('')
+    expect(calls.map((c) => c.method)).toEqual(['HEAD'])
+  })
+
+  it('never asks core for api/, dot segments or another tile’s path', async () => {
+    const s = server()
+    const { source, calls } = remote()
+    const { url } = s.registerRemote(source)
+    const prefix = url.replace('app/index.html', '')
+    for (const path of ['api/data.py', 'API/x', '.env', '%2e%2e/x', 'x/%2e%2e/%2e%2e/y', 'a%2Fb', '']) expect((await get(s, prefix + path)).status, path).toBe(404)
+    expect((await get(s, url.replace(/\/t\d+\//, '/t9999/'))).status).toBe(404)
+    expect(calls).toEqual([])
+  })
+
+  it('passes the relay’s refusal as a status page under the same CSP, and stops serving on release or another profile', async () => {
+    const s = server()
+    const { source } = remote(() => ({ ok: false, status: 503, message: 'The agent’s environment isn’t running.' }))
+    const { url, token } = s.registerRemote(source)
+    const res = await get(s, url)
+    expect(res.status).toBe(503)
+    expect(await res.text()).toBe('The agent’s environment isn’t running.')
+    expect(res.headers.get('content-security-policy')).toBe(dashboardFrameCsp(new URL(url).hostname, token))
+    s.release(token)
+    expect((await get(s, url)).status).toBe(404)
+    const again = s.registerRemote(remote().source)
+    user = 'p2'
+    expect((await get(s, again.url)).status).toBe(404)
+  })
+})

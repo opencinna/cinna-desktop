@@ -261,6 +261,8 @@ export interface RunAgentTurnInput {
   accessToken?: string
   wireContent: string
   fileIds?: string[]
+  /** `RunInput.dashboardContext`: sent as `message.metadata.cinna_dashboard_context`, beside any `cinna_file_ids`. */
+  dashboardContext?: Record<string, unknown>
   /**
    * The A2A `messageId` to send: the user row's id in a direct chat, so the
    * Cinna backend can deduplicate a resend and a stream that ends without a
@@ -511,6 +513,18 @@ export type A2ARunAgentTurnInput = RunAgentTurnInput & {
  * **Unchanged by the Phase 6 runner seam.** Its body is exactly what it was;
  * only its input type re-narrows the widened shared one.
  */
+/**
+ * The A2A `message.metadata` of a turn: Cinna file ids, and a dashboard
+ * panel's context for a cloud agent (core's A2A handler reads both keys), or
+ * undefined when there is neither.
+ */
+export function a2aMessageMetadata(fileIds: string[] | undefined, dashboardContext: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = {}
+  if (fileIds && fileIds.length > 0) metadata.cinna_file_ids = fileIds
+  if (dashboardContext) metadata.cinna_dashboard_context = dashboardContext
+  return Object.keys(metadata).length > 0 ? metadata : undefined
+}
+
 export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgentTurnResult> {
   const {
     chatId,
@@ -521,6 +535,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
     accessToken,
     wireContent,
     fileIds,
+    dashboardContext,
     messageId,
     isCinnaTokenAuth = false,
     signal,
@@ -530,8 +545,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
     registerSnapshot,
     renewAccessToken
   } = input
-  const metadata =
-    fileIds && fileIds.length > 0 ? { cinna_file_ids: fileIds } : undefined
+  const metadata = a2aMessageMetadata(fileIds, dashboardContext)
   const onEvent = (event: RunEvent): void => {
     signal.throwIfAborted()
     sink?.(event)

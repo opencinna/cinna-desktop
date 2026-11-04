@@ -111,6 +111,25 @@ export interface ComponentPrompt {
   prompt: string
 }
 
+/**
+ * Where a cloud component or tile lives (D6): one of the profile's own agents
+ * on its Cinna server. Present only for cloud ones; absent means a folder
+ * agent on this computer. The renderer never sees core's dashboard or block
+ * ids, a frame cap or a URL on the server.
+ */
+export interface CloudOrigin {
+  /** The core agent's id (the remote agent row's `remoteTargetId`). */
+  remoteAgentId: string
+  /** The server's host as the user knows it (`cinna.example.com`), for "Can't reach <server>.". */
+  server: string
+}
+
+/** A cloud tile is on a dashboard backed by one core dashboard; core caps its blocks at this. */
+export const MAX_CLOUD_TILES_PER_DASHBOARD = 20
+
+/** Without core's events (offline, no socket), an on-screen cloud tile re-reads its data this often. */
+export const CLOUD_TILE_POLL_MS = 30_000
+
 /** What a scanned component is, valid or not. */
 export interface ComponentInfo {
   /** `folder:<manifest id>` — the agent's row id. */
@@ -151,6 +170,13 @@ export interface ComponentInfo {
    * the agent's Credentials tab.
    */
   missingCredentials: string[]
+  /**
+   * Set for a component of a cloud agent (D6). Then `agentId` is the remote
+   * agent's row id, `manifestId` is `''`, and `findings`, `params`, `refresh`
+   * and `prompts` come from core's component list (its `component_json`).
+   * `missingCredentials` is what core's last tile data said, else `[]`.
+   */
+  cloud?: CloudOrigin
 }
 
 /** The user's per-tile change to the component's refresh rule (Edit tile). Absent fields keep the component's. */
@@ -179,7 +205,16 @@ export interface DashboardDto {
 export interface TileDto {
   id: string
   dashboardId: string
+  /** The folder agent's manifest id; `''` for a cloud tile. */
   agentManifestId: string
+  /**
+   * Set for a cloud tile (D6). Its `params` mirror core's stored set (core
+   * owns them); its `refreshOverride` is sent to core's block config, where
+   * `manual` and `onAppStart` mean nothing (core has no launch warm-up, and
+   * Manual is kept on this side only: main never asks core to recompute it on
+   * its own).
+   */
+  cloud?: CloudOrigin
   component: string
   /** The skill that ships the component, or null for the agent's own. */
   skill: string | null
@@ -196,16 +231,28 @@ export interface TileDto {
  * - `ok`;
  * - `agent_missing` — no agent with that manifest id on this machine;
  * - `component_missing` — the agent has no such folder under `dashboards/`;
- * - `invalid` — the folder is there but its `component.json` has problems.
+ * - `invalid` — the folder is there but its `component.json` has problems;
+ * - `wrong_server` — a cloud tile made while the profile was signed in to
+ *   another server: "Not on this server." with Remove; nothing runs.
+ *
+ * For a cloud tile, `agent_missing` means the remote agent is no longer in the
+ * synced list or core answered `not_found` for it: "<agent> is no longer
+ * available." with Remove (D6.10).
  */
-export type TileComponentState = 'ok' | 'agent_missing' | 'component_missing' | 'invalid'
+export type TileComponentState = 'ok' | 'agent_missing' | 'component_missing' | 'invalid' | 'wrong_server'
 
 export interface TileView {
   tile: TileDto
   /** The title the tile shows: the user's, the component's, or its name. */
   displayTitle: string
   state: TileComponentState
+  /**
+   * For a cloud tile, the component as core last described it (cached in
+   * main, so a tile draws offline), or null before main has ever read it.
+   */
   component: ComponentInfo | null
+  /** The agent's display name even when `component` is null (a gone agent, a cloud tile not read yet); null when unknown. */
+  agentName?: string | null
   /** The schedule that feeds the tile (`refresh.schedule`), as it stands on this device; null when none. */
   schedule: TileScheduleState | null
 }
@@ -247,6 +294,45 @@ export interface TileResultDto {
   tooLarge: boolean
   /** The result's own one-line `notice`, which becomes the tile's mark. */
   notice: string | null
+  /**
+   * A cloud tile's state beyond the data (D6). `data`, `fetchedAt` and
+   * `stale` are core's (mirrored in main's cache, so they survive offline);
+   * `error` is core's `mark`, or main's own failure sentence.
+   */
+  cloud?: CloudTileStatus
+}
+
+/**
+ * Why a cloud tile cannot be brought up to date just now (D6.10). The cached
+ * data always stays on the tile; the mark says why, in `message`, which main
+ * writes with the agent and server names filled in. The renderer adds the
+ * action by code:
+ * - `unreachable` — "Can't reach <server>."; an html tile shows it with Retry
+ *   in place of the frame;
+ * - `reauth_required` — "Sign in to <server> again." → the Cinna settings;
+ * - `agent_gone` — "<agent> is no longer available." → Remove;
+ * - `waking` — "Waking <agent>…": a refresh that wakes the environment is in flight;
+ * - `env_unavailable` — "<agent>'s environment isn't running.";
+ * - `adapter_unsupported` — core's sentence (rebuild the environment);
+ * - `needs_credentials` — "Needs the <name> credential" → the agent's page;
+ * - `rate_limited` — the D4 sentence.
+ */
+export type CloudTileMarkCode =
+  | 'unreachable'
+  | 'reauth_required'
+  | 'agent_gone'
+  | 'waking'
+  | 'env_unavailable'
+  | 'adapter_unsupported'
+  | 'needs_credentials'
+  | 'rate_limited'
+
+export interface CloudTileStatus {
+  mark: { code: CloudTileMarkCode; message: string } | null
+  /** The params core computed with (`params_resolved`), shown on the tile instead of resolving words here. */
+  paramsResolved: Record<string, unknown>
+  /** Core's credential names when it answered `needs_credentials` or listed `missing_credentials`. */
+  missingCredentials: string[]
 }
 
 /**
@@ -279,6 +365,18 @@ export type DashboardsErrorCode =
   | 'needs_credentials'
   /** The endpoint ran (or was stopped) and gave no value: timeout, non-zero exit, not JSON, too large, busy, replaced. */
   | 'call_failed'
+  /**
+   * Cloud (D6) only, never passed on to a page (a page sees `call_failed`,
+   * addendum §3): the server did not answer; the session needs a new sign-in;
+   * the agent's environment is not running or cannot run components; the
+   * agent is not the profile's own (D6.9); the dashboard was made on another server.
+   */
+  | 'unreachable'
+  | 'reauth_required'
+  | 'env_unavailable'
+  | 'adapter_unsupported'
+  | 'not_owner'
+  | 'wrong_server'
 
 export type DashboardsOutcome<T> = ({ ok: true } & T) | { ok: false; code: DashboardsErrorCode; message: string }
 
@@ -392,7 +490,16 @@ export interface ComponentReference {
  * - `ambiguous` — two agents match and the chat's own is neither;
  * - `gone` — the agent is here but has no such component (or skill);
  * - `not_in_this_copy` — a bundle install that lacks it (an older copy);
- * - `not_kit_agent` — the agent is a legacy one with no `dashboards/`.
+ * - `not_kit_agent` — the agent is a legacy one with no `dashboards/`;
+ * - `not_owner` (D6.9) — a cloud agent the profile does not own (shared,
+ *   identity, app route): "Only <agent>'s owner can add its components to a
+ *   dashboard.", no Add;
+ * - `unreachable` (D6) — the reference names a cloud agent and the server
+ *   did not answer; the card says so and can be tried again.
+ *
+ * Resolution order for `bundle:` (D6.8): the chat's own agent, then a local
+ * agent, then the profile's own cloud agent with that bundle id. `id:` and
+ * slug forms reach a cloud agent only when it is the chat's own agent.
  */
 export type ComponentReferenceMiss =
   | 'agent_not_here'
@@ -401,6 +508,8 @@ export type ComponentReferenceMiss =
   | 'gone'
   | 'not_in_this_copy'
   | 'not_kit_agent'
+  | 'not_owner'
+  | 'unreachable'
 
 export interface ResolveReferenceInput {
   /** The reference as written. Main parses it again; the renderer's parse is for rendering only. */
@@ -430,6 +539,14 @@ export type ComponentReferenceResolution =
 
 /** A malformed reference never reaches main as a card; this is main's answer if one does. */
 export type ResolveReferenceOutcome = DashboardsOutcome<{ resolution: ComponentReferenceResolution }>
+
+/**
+ * A cloud agent's components (D6.8, its Dashboards tab and the Add dialog),
+ * from core's `GET /agents/{id}/dashboards/`, which never wakes anything.
+ * `placements` are this profile's desktop tiles showing them. Refusals:
+ * `not_owner`, `unreachable`, `reauth_required`, `not_found`.
+ */
+export type CloudComponentsOutcome = DashboardsOutcome<{ components: ComponentInfo[]; placements: ComponentPlacement[] }>
 
 /**
  * The dashboard context (README D7, §5.6): what the user sees, assembled by the
@@ -478,10 +595,15 @@ export const DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS = 8_000
  * per dashboard. The latest such chat is resumed; `fresh` starts a new one
  * ("New chat"). The chat is an ordinary chat bound to the agent, with
  * `originDashboardId` set, listed in Chats with a "From dashboard" pill.
+ *
+ * For a cloud agent (D6.6) the chat is a remote-agent chat continuing the
+ * core session `POST /dashboards/{backing}/chat` gave (`fresh` → `new: true`);
+ * its `dashboardContext` travels as A2A `message.metadata.cinna_dashboard_context`,
+ * never in the message text. Refusals add `unreachable` and `reauth_required`.
  */
 export interface PanelChatInput {
   dashboardId: string
-  /** The focused tile's agent (row id, `folder:<manifest id>`). */
+  /** The focused tile's agent (row id: `folder:<manifest id>`, or the remote agent's row id for a cloud tile). */
   agentId: string
   fresh?: boolean
 }

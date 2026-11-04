@@ -50,8 +50,23 @@ export interface DashboardFrameServerDeps {
   maxBytes?: number
 }
 
+/**
+ * A cloud tile's or cloud preview's frame (D6.3): its files come from core's
+ * `/d/v/` through main (`services/dashboards/remote/remoteFrames.ts`), which
+ * holds the cap. Only the status, `Content-Type` and bytes come back here.
+ */
+export interface RemoteFrameSource {
+  /** The entry page, component-relative. */
+  readonly entry: string
+  file(segments: string[], method: 'GET' | 'HEAD'): Promise<
+    { ok: true; contentType: string; body: Uint8Array<ArrayBuffer> | null } | { ok: false; status: number; message: string }
+  >
+}
+
 interface Frame {
-  target: DashboardFrameTargetRef
+  /** A local component, found again on every request; absent for a cloud frame. */
+  target: DashboardFrameTargetRef | null
+  remote: RemoteFrameSource | null
   userId: string
 }
 
@@ -129,6 +144,19 @@ export function createDashboardFrameServer(deps: DashboardFrameServerDeps) {
     return `${DASHBOARD_FRAME_HOST_PREFIX}${host.token}`
   }
 
+  function add(frame: Frame, entry: string): { token: string; url: string } {
+    const h = hostFor(frame.userId)
+    const token = newToken(16)
+    frames.set(token, frame)
+    while (frames.size > maxFrames) {
+      const oldest = frames.keys().next().value
+      if (oldest === undefined) break
+      frames.delete(oldest)
+    }
+    const path = entry.split('/').map(encodeURIComponent).join('/')
+    return { token, url: `${HTML_PREVIEW_SCHEME}://${h}/${token}/${path}` }
+  }
+
   return {
     owns(hostname: string): boolean {
       return hostname.startsWith(DASHBOARD_FRAME_HOST_PREFIX)
@@ -140,16 +168,16 @@ export function createDashboardFrameServer(deps: DashboardFrameServerDeps) {
      * already validated.
      */
     register(target: DashboardFrameTargetRef, entry: string, userId: string = deps.currentUserId()): { token: string; url: string } {
-      const h = hostFor(userId)
-      const token = newToken(16)
-      frames.set(token, { target, userId })
-      while (frames.size > maxFrames) {
-        const oldest = frames.keys().next().value
-        if (oldest === undefined) break
-        frames.delete(oldest)
-      }
-      const path = entry.split('/').map(encodeURIComponent).join('/')
-      return { token, url: `${HTML_PREVIEW_SCHEME}://${h}/${token}/${path}` }
+      return add({ target, remote: null, userId }, entry)
+    },
+
+    /**
+     * A cloud frame under the active profile (D6.3): the same host, path
+     * token, CSP, headers and navigation rule as a local one; its files are
+     * fetched through `source`, whose cap never leaves main.
+     */
+    registerRemote(source: RemoteFrameSource, userId: string = deps.currentUserId()): { token: string; url: string } {
+      return add({ target: null, remote: source, userId }, source.entry)
     },
 
     release(token: unknown): boolean {
@@ -198,6 +226,15 @@ export function createDashboardFrameServer(deps: DashboardFrameServerDeps) {
         logger.info('refused a dashboard frame request', { status: 404 })
         return status(404, 'Not found', csp)
       }
+      if (frame.remote) {
+        // Core already put the kit bridge into the entry page, byte for byte
+        // the file `injectDashboardHelper` would add: no second copy. Of
+        // core's headers only its `Content-Type` is kept.
+        const answer = await frame.remote.file(file, request.method)
+        if (!answer.ok) return status(answer.status, answer.message, csp)
+        return new Response(request.method === 'HEAD' ? null : answer.body, { status: 200, headers: headers(answer.contentType, csp) })
+      }
+      if (!frame.target) return status(404, 'Not found', csp)
       const resolved = await deps.resolve(frame.target)
       if (!resolved) return status(404, 'Not found', csp)
       let real: string

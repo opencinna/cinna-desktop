@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
-import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { TILE_SIZES, TILE_SIZE_LABELS, type CloudTileStatus, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { tileParamsShown } from './dashboardContext'
 import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
 import { ConfirmDialog } from './DashboardDialog'
 import { EditTileDialog } from './EditTileDialog'
 import { TileBody, TileSkeleton, ageLabel } from './TileBody'
-import { COMPONENT_LINK, MissingCredentials, errorFindings, openAgentTab } from './componentParts'
+import { COMPONENT_LINK, MissingCredentials, errorFindings, openAgentTab, openCinnaSignIn } from './componentParts'
 import { FILTER_ROW_TOP, TileFilters, hasFilterRow } from './TileFilters'
 import type { ViewSelection } from './views/nativeViews'
 import { drawnHighlights, revealFirstHighlight, revealHighlight, useTileHighlight } from './useTileHighlight'
@@ -60,6 +61,75 @@ const BAR_TEXT_BUTTON =
 
 const MARK = 'pointer-events-auto rounded-full bg-[var(--color-bg)] p-0.5'
 
+type CloudMarkValue = NonNullable<CloudTileStatus['mark']>
+
+/**
+ * Why a cloud tile cannot be brought up to date (D6.10): main's sentence and
+ * the action its code has. As a `pill` it sits over the cached data at the
+ * tile's foot and moves nothing; as a `block` it fills a tile that has no
+ * data to keep (and an html tile whose files the server did not serve).
+ */
+/** A mark's action: the accent link every Retry on a dashboard uses (ux rule 13). */
+const MARK_ACTION = `${COMPONENT_LINK} disabled:cursor-default disabled:opacity-50`
+
+function CloudMark({
+  mark,
+  layout,
+  agentId,
+  onRetry,
+  retrying = false,
+  onRemove
+}: {
+  mark: CloudMarkValue
+  layout: 'pill' | 'block'
+  /** The cloud agent's row id, for Open agent; null when the tile has never read its component. */
+  agentId: string | null
+  onRetry: () => void
+  /** A Retry is in flight: the button is disabled, its label unchanged (no width change, ux rule 1). */
+  retrying?: boolean
+  onRemove: () => void
+}): React.JSX.Element {
+  const action =
+    mark.code === 'unreachable' ? { label: 'Retry', run: onRetry }
+      : mark.code === 'reauth_required' ? { label: 'Open settings', run: openCinnaSignIn }
+        : mark.code === 'agent_gone' ? { label: 'Remove', run: onRemove }
+          : mark.code === 'needs_credentials' && agentId ? { label: 'Open agent', run: () => openAgentTab(agentId, 'overview') }
+            : null
+  const busy = !!action && action.run === onRetry && retrying
+  const icon =
+    mark.code === 'waking'
+      ? <Loader2 size={11} aria-hidden="true" className="shrink-0 animate-spin text-[var(--color-text-muted)] motion-reduce:animate-none" />
+      : <AlertTriangle size={11} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
+  if (layout === 'block') {
+    return (
+      <div data-cloud-mark={mark.code} className="flex h-full flex-col items-start justify-center gap-2 p-3">
+        <p className="m-0 flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">{icon}{mark.message}</p>
+        {action && (
+          <button type="button" onClick={action.run} disabled={busy} aria-busy={busy || undefined} className={`text-[11px] ${MARK_ACTION}`}>
+            {action.label}
+          </button>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div
+      data-cloud-mark={mark.code}
+      role="status"
+      className="pointer-events-auto inline-flex min-h-5 max-w-full items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-[10px] leading-[13px] text-[var(--color-text-secondary)]"
+    >
+      {icon}
+      {/* Two lines at most: on a Small tile the reason is read, not hovered for (ux rule 7). */}
+      <span data-cloud-mark-text className="min-w-0 break-words line-clamp-2" title={mark.message}>{mark.message}</span>
+      {action && (
+        <button type="button" onClick={action.run} disabled={busy} aria-busy={busy || undefined} className={`shrink-0 ${MARK_ACTION}`}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** The bar's strip, reserved at the top of every tile: the bar's height, and where the content starts. */
 const BAR_HEIGHT = 'h-7'
 const BAR_HEIGHT_TOP = 'top-7'
@@ -95,8 +165,10 @@ export function Tile({
   chat?: TileChat
 }): React.JSX.Element {
   const { tile, displayTitle, state, component } = view
+  const cloud = !!tile.cloud
   // A credential the agent has not attached: nothing runs, the tile says which (README D16).
-  const needsCredentials = state === 'ok' && !!component && component.missingCredentials.length > 0
+  // A cloud tile keeps its cached data and says so in its mark instead (D6.10).
+  const needsCredentials = !cloud && state === 'ok' && !!component && component.missingCredentials.length > 0
   const ok = state === 'ok' && !!component?.view && !needsCredentials
   const result = useTileResult(tile.id)
   const removeTile = useRemoveTile()
@@ -182,9 +254,9 @@ export function Tile({
     revealHighlight(ref.current, stepped.current)
   }
 
-  const refresh = (): void => {
+  const refresh = (): Promise<void> => {
     setRefreshError(null)
-    void window.api.dashboards
+    return window.api.dashboards
       .ensureFresh(tile.id, 'manual')
       .then((outcome) => { if (!outcome.ok) setRefreshError(outcome.message) })
       .catch(() => setRefreshError('The tile could not be refreshed.'))
@@ -241,18 +313,46 @@ export function Tile({
 
   const data = result.data ?? null
   const hasData = !!data && data.data !== null
-  const agentName = component?.agentName ?? 'its agent'
+  const agentName = view.agentName ?? component?.agentName ?? 'its agent'
   const unavailable =
-    state === 'agent_missing'
-      ? 'The agent behind this tile is not on this computer.'
+    state === 'wrong_server'
+      ? 'Not on this server.'
+      : state === 'agent_missing'
+        ? cloud ? `${agentName} is no longer available.` : 'The agent behind this tile is not on this computer.'
       : state === 'component_missing'
-        ? `${tile.component} is no longer in ${agentName}’s folder.`
+        ? cloud ? `${tile.component} is no longer in ${agentName}.` : `${tile.component} is no longer in ${agentName}’s folder.`
         : state === 'invalid'
           ? `${displayTitle} has problems to fix: ${(component && errorFindings(component)[0]?.message) ?? 'its component.json is not valid'}`
           : null
-  const mark = refreshError ?? data?.error ?? null
-  // Asking needs the agent on this machine: the panel's chat is that agent's.
-  const canAsk = !!chat && !!component && state !== 'agent_missing'
+  // A cloud tile's mark says why with its action; its `error` is the same sentence, so it is not drawn twice.
+  const cloudMark = ok ? (data?.cloud?.mark ?? null) : null
+  const mark = refreshError ?? (cloudMark ? null : (data?.error ?? null))
+  const bodyData = cloudMark && data ? { ...data, error: null } : data
+  // An html tile whose files the server did not serve shows the sentence and Retry in place of
+  // the frame; Retry re-opens the frame until the next answer says otherwise.
+  const [frameRetryAt, setFrameRetryAt] = useState<number | null>(null)
+  const frameBlocked = cloudMark?.code === 'unreachable' && component?.view === 'html' && frameRetryAt !== result.dataUpdatedAt
+  // No data to keep under the mark (and not waking, where the skeleton waits): the mark fills the tile.
+  const markFills = !!cloudMark && (frameBlocked || (!hasData && component?.view !== 'html' && cloudMark.code !== 'waking'))
+  // One Retry at a time: a manual refresh can wake the agent's environment, so a second click waits for the first.
+  const [retrying, setRetrying] = useState(false)
+  const retryingRef = useRef(false)
+  const retryCloud = (): void => {
+    if (retryingRef.current || data?.refreshing) return
+    retryingRef.current = true
+    setRetrying(true)
+    if (component?.view === 'html') setFrameRetryAt(result.dataUpdatedAt)
+    void refresh().finally(() => {
+      retryingRef.current = false
+      setRetrying(false)
+    })
+  }
+  const retryBusy = retrying || !!data?.refreshing
+  // Asking needs the agent: the panel's chat is that agent's.
+  // A cloud tile whose agent core no longer has (or made on another server): nothing runs, so
+  // its filters, Ask and Refresh stay where they are, disabled (ux rule 1).
+  const gone = state === 'agent_missing' || state === 'wrong_server' || cloudMark?.code === 'agent_gone'
+  const canAsk = !!chat && !!component && !gone
   const prompts = canAsk ? component!.prompts : []
   const onBar = prompts.slice(0, promptsOnBar(span.cols))
   const inMenu = prompts.slice(onBar.length)
@@ -290,10 +390,11 @@ export function Tile({
   const body = ok && (
     <TileBody
       view={component!.view!}
-      result={data}
+      result={bodyData}
       loading={result.isPending}
       frameTarget={{ tileId: tile.id }}
-      meta={{ component: tile.component, title: displayTitle, params: resolveParamWords(tile.params, component!.params), size: tile.size }}
+      // A cloud tile shows the params core computed with (`current`, `today` in the owner's server time zone).
+      meta={{ component: tile.component, title: displayTitle, params: tileParamsShown(tile, component, data), size: tile.size }}
       selection={selection}
       onContext={onPageContext}
       actions={{ onParams: setParams, onAsk: canAsk ? (text) => { chat!.onFill(text); return true } : undefined }}
@@ -304,6 +405,8 @@ export function Tile({
         onLost: () => void window.api.dashboards.highlightReady(tile.id, false).catch(() => {})
       }}
       collect={chat ? { enabled: chat.focused, onCollected: chat.onCollected, request: chat.collectRequest } : undefined}
+      cloudNames={tile.cloud ? { agent: agentName, server: tile.cloud.server } : undefined}
+      reopenKey={tile.cloud ? result.dataUpdatedAt : undefined}
     />
   )
 
@@ -348,6 +451,8 @@ export function Tile({
           </div>
         ) : !ok || result.isPending ? (
           <TileSkeleton />
+        ) : markFills ? (
+          <CloudMark mark={cloudMark!} layout="block" agentId={component?.agentId ?? null} onRetry={retryCloud} retrying={retryBusy} onRemove={() => setConfirmRemove(true)} />
         ) : scheduleNotice && !hasData ? (
           // Instead of the empty state: nothing will fill this tile here until the schedule runs.
           <div className="flex h-full flex-col items-start justify-center p-3">{scheduleNotice}</div>
@@ -373,7 +478,16 @@ export function Tile({
             notice={filterNotice}
             onDismissNotice={() => setFilterNotice(null)}
             onChange={setParams}
+            resolved={cloud ? (data?.cloud?.paramsResolved ?? null) : null}
+            disabled={gone}
           />
+        </div>
+      )}
+
+      {/* A cloud tile's mark, over the cached data at the tile's foot: it never moves the content. */}
+      {cloudMark && !markFills && (
+        <div className="pointer-events-none absolute bottom-1.5 left-1.5 right-10 flex">
+          <CloudMark mark={cloudMark} layout="pill" agentId={component?.agentId ?? null} onRetry={retryCloud} retrying={retryBusy} onRemove={() => setConfirmRemove(true)} />
         </div>
       )}
 
@@ -437,13 +551,13 @@ export function Tile({
             {prompt.label}
           </button>
         ))}
-        {canAsk && (
-          <button type="button" onClick={chat!.onAsk} title={`Ask ${agentName} about this`} aria-label={`Ask about ${displayTitle}`} className={BAR_TEXT_BUTTON}>
+        {(canAsk || (gone && !!chat && !!component)) && (
+          <button type="button" onClick={canAsk ? chat!.onAsk : undefined} disabled={!canAsk} title={canAsk ? `Ask ${agentName} about this` : undefined} aria-label={`Ask about ${displayTitle}`} className={`${BAR_TEXT_BUTTON} disabled:cursor-default disabled:opacity-50`}>
             Ask
           </button>
         )}
         {ok && (
-          <button type="button" onClick={refresh} title={refreshTitle} aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
+          <button type="button" onClick={refresh} disabled={gone} title={gone ? undefined : refreshTitle} aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent">
             <RefreshCw size={12} className={data?.refreshing ? 'animate-spin' : undefined} />
           </button>
         )}
@@ -507,7 +621,15 @@ export function Tile({
       {confirmRemove && (
         <ConfirmDialog
           title={`Remove ${displayTitle}`}
-          body={`Remove ${displayTitle} from ${dashboardName}? The component stays in ${agentName}’s folder; you can add it again.`}
+          body={
+            cloud && (view.state === 'agent_missing' || cloudMark?.code === 'agent_gone')
+              ? `Remove ${displayTitle} from ${dashboardName}? ${agentName} is no longer available, so its data goes with the tile.`
+              : cloud && view.state === 'wrong_server'
+                ? `Remove ${displayTitle} from ${dashboardName}? It was made on another Cinna server, so its data goes with the tile.`
+                : cloud
+                  ? `Remove ${displayTitle} from ${dashboardName}? The component stays with ${agentName}; you can add it again.`
+              : `Remove ${displayTitle} from ${dashboardName}? The component stays in ${agentName}’s folder; you can add it again.`
+          }
           confirmLabel="Remove"
           pendingLabel="Removing…"
           pending={removeTile.isPending}

@@ -79,6 +79,13 @@ export interface RunInput {
   /** Cinna file ids to attach (A2A `metadata.cinna_file_ids`). */
   fileIds?: string[]
   /**
+   * A cloud agent's dashboard panel turn (D6.6): the dashboard context as a
+   * JSON object, which the A2A driver sends as
+   * `message.metadata.cinna_dashboard_context` (never in the text). Absent
+   * when there is none or the agent already has this one.
+   */
+  dashboardContext?: Record<string, unknown>
+  /**
    * The id of the user row this turn answers, for a driver whose protocol
    * carries one (A2A sends it as the message's `messageId`). Absent for a
    * turn with no user row of its own, such as an orchestrated call.

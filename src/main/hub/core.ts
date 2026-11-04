@@ -33,6 +33,8 @@ import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
 import { artifactService } from '../services/artifacts/artifactService'
 import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
+import { coreEvents } from '../services/dashboards/remote/coreEvents'
+import { cloudFrames } from '../services/dashboards/remote/cloudFrames'
 import { capabilityService } from '../services/capabilityService'
 import { onRunClosed } from '../services/runExecutionState'
 import { onScheduleRunCompleted } from '../services/localScheduleEvents'
@@ -88,6 +90,23 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   userActivation.onProfileReady(() => { void artifactService.support() })
   // Leaving a profile stops its dashboards' runs and forgets which tiles were on screen.
   userActivation.onProfileClosing(() => { void dashboardRefreshService.cancelAll() })
+  // Core's events for cloud tiles (D6.7): matched to the active profile's tiles by block id; the socket closes with the profile.
+  coreEvents.setHandlers({
+    tileUpdated: (userId, blockId) => {
+      if (userActivation.isActivated() && getProfileScopeUserId() === userId) void dashboardRefreshService.cloudTileUpdated(userId, blockId).catch(() => {})
+    },
+    tileHighlight: (userId, blockId, ids) => {
+      if (userActivation.isActivated() && getProfileScopeUserId() === userId) dashboardRefreshService.cloudTileHighlight(userId, blockId, ids)
+    },
+    connected: (userId) => {
+      if (userActivation.isActivated() && getProfileScopeUserId() === userId) dashboardRefreshService.cloudConnected(userId)
+    }
+  })
+  userActivation.onProfileClosing(() => {
+    coreEvents.closeAll()
+    // Frame caps minted for the profile's cloud tiles (D6.3) are forgotten with it.
+    cloudFrames.reset()
+  })
   // A turn of an agent ended: its on-screen tiles that ask for it re-run (README D3).
   onRunClosed((_chatId, agentId) => {
     if (agentId && userActivation.isActivated()) dashboardRefreshService.afterTurn(getProfileScopeUserId(), agentId)
@@ -173,6 +192,8 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   const conductor = conductorBridge.shutdown()
   // Dashboard endpoints and refresh commands run in their own process groups: killed now.
   const dashboards = dashboardRefreshService.cancelAll()
+  // Core's socket for cloud tiles (D6.7) closes with the app.
+  coreEvents.closeAll()
   // The credential token endpoint's loopback listener ends with the app, its bearers with it.
   const credentialTokens = serviceCredentialService.closeTokenServer()
   // A login waiting on a browser sign-in holds a loopback port; it ends with the app.

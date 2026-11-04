@@ -8,7 +8,9 @@ vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { AgentDashboardsTab } from './AgentDashboardsTab'
+import { AgentDashboardsTab, CloudAgentDashboardsTab } from './AgentDashboardsTab'
+import { useAuthStore } from '../../stores/auth.store'
+import { useUIStore } from '../../stores/ui.store'
 
 // Main's app settings, as `useCapabilities` reads them (`'on'` only).
 const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
@@ -81,3 +83,108 @@ describe('AgentDashboardsTab', () => {
     await waitFor(() => expect(addTile).toHaveBeenCalled())
   })
 })
+
+describe('CloudAgentDashboardsTab (D6.8)', () => {
+  const CLOUD: ComponentInfo = { ...BASE, agentId: 'remote-row-1', manifestId: '', agentName: 'Cloud Sales', cloud: { remoteAgentId: 'core-1', server: 'cinna.example.com' } }
+  const cloudComponents = vi.fn()
+
+  function showCloud() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={client}>
+        <CloudAgentDashboardsTab agent={{ id: 'remote-row-1', name: 'Cloud Sales' }} />
+      </QueryClientProvider>
+    )
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({ currentUser: { id: 'alice', type: 'cinna_user', cinnaServerUrl: 'https://cinna.example.com' } as never })
+    cloudComponents.mockReset().mockResolvedValue({ ok: true, components: [CLOUD], placements: [] })
+    Object.assign(window.api.dashboards, { cloudComponents })
+  })
+
+  it('a refused cloud Add gives the cloud sentence with no Retry beside it: Add is the retry', async () => {
+    addTile.mockResolvedValueOnce({ ok: false, code: 'unreachable', message: 'fetch failed' })
+    showCloud()
+    const row = (await screen.findByRole('heading', { name: 'Deals' })).closest('[data-component]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Add Deals to a dashboard' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Deals to a dashboard' })
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Add' })))
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.textContent).toContain('Can’t reach cinna.example.com.')
+    expect(within(alert).queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: 'Add' })).toBeTruthy()
+  })
+
+  it('lists the cloud agent’s components with Preview and Add; Add sends the remote agent’s row id', async () => {
+    showCloud()
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    const row = (await screen.findByRole('heading', { name: 'Deals' })).closest('[data-component]') as HTMLElement
+    expect(cloudComponents).toHaveBeenCalledWith('remote-row-1')
+    // No local folder path for a component on the server, and no "needs an id".
+    expect(row.textContent).not.toContain('dashboards/deals/')
+    expect(row.textContent).not.toContain('needs an id')
+    expect(within(row).getByRole('button', { name: 'Preview Deals' })).toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: 'Add Deals to a dashboard' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Deals to a dashboard' })
+    expect(dialog.textContent).toContain('from Cloud Sales in the cloud')
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Add' })))
+    await waitFor(() => expect(addTile).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'remote-row-1', component: 'deals', dashboardId: 'd1' })))
+  })
+
+  it('unreachable: names the server, and Retry reads again', async () => {
+    cloudComponents.mockResolvedValueOnce({ ok: false, code: 'unreachable', message: 'network down' })
+    showCloud()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Can’t reach cinna.example.com.')
+    await act(async () => fireEvent.click(within(alert).getByRole('button', { name: 'Retry' })))
+    expect(await screen.findByRole('heading', { name: 'Deals' })).toBeTruthy()
+    expect(cloudComponents).toHaveBeenCalledTimes(2)
+  })
+
+  it('a session that needs a new sign-in links to the Cinna settings', async () => {
+    cloudComponents.mockResolvedValue({ ok: false, code: 'reauth_required', message: '401' })
+    showCloud()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Sign in to cinna.example.com again.')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Open settings' }))
+    expect(useUIStore.getState()).toMatchObject({ activeView: 'settings', settingsTab: 'profile-agents' })
+  })
+
+  it('a refused Add says why with the cloud sentence and stays open', async () => {
+    addTile.mockResolvedValue({ ok: false, code: 'env_unavailable', message: 'env stopped' })
+    showCloud()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Deals to a dashboard' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Deals to a dashboard' })
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Add' })))
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('Cloud Sales’s environment isn’t running.')
+    expect(screen.getByRole('dialog', { name: 'Add Deals to a dashboard' })).toBeTruthy()
+  })
+
+  it('the 20-cloud-tiles limit shows main’s sentence', async () => {
+    addTile.mockResolvedValue({ ok: false, code: 'limit_reached', message: 'Sales overview already has 20 cloud tiles.' })
+    showCloud()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Deals to a dashboard' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Deals to a dashboard' })
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Add' })))
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('Sales overview already has 20 cloud tiles.')
+  })
+
+  it('a refused Preview gives the cloud sentence, and Retry where the server did not answer', async () => {
+    const preview = vi.fn().mockResolvedValueOnce({ ok: false, code: 'unreachable', message: 'x' }).mockReturnValue(new Promise(() => {}))
+    Object.assign(window.api.dashboards, { preview })
+    showCloud()
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Deals' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Preview of Deals' })
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.textContent).toContain('Can’t reach cinna.example.com.')
+    expect(preview).toHaveBeenCalledWith('remote-row-1', 'deals', null, {})
+    await act(async () => fireEvent.click(within(alert).getByRole('button', { name: 'Retry' })))
+    expect(preview).toHaveBeenCalledTimes(2)
+  })
+})
+

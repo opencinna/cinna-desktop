@@ -308,8 +308,8 @@ describe('agentBundleId', () => {
 describe('resolveReference', () => {
   const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
   const OTHER = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
-  const resolve = (reference: string, chatAgentId?: string) => {
-    const out = service.resolveReference('p1', { reference, chatAgentId })
+  const resolve = async (reference: string, chatAgentId?: string) => {
+    const out = await service.resolveReference('p1', { reference, chatAgentId })
     if (!out.ok) throw new Error(out.message)
     return out.resolution
   }
@@ -319,46 +319,46 @@ describe('resolveReference', () => {
     agents[0].slug = 'sales'
   })
 
-  it('finds a component by id, slug or bundle, with its placements and a canonical reference; reading runs nothing', () => {
+  it('finds a component by id, slug or bundle, with its placements and a canonical reference; reading runs nothing', async () => {
     const d = service.create('p1', 'Sales')
     if (!d.ok) throw new Error()
     service.addTile('p1', { dashboardId: d.dashboard.id, agentId: `folder:${ID}`, component: 'deals' })
-    const byId = resolve(`cinna://component/id:${ID.toUpperCase()}/deals`)
+    const byId = await resolve(`cinna://component/id:${ID.toUpperCase()}/deals`)
     expect(byId).toMatchObject({ found: true, component: { name: 'deals', agentId: `folder:${ID}`, valid: true }, canonicalReference: `cinna://component/id:${ID}/deals` })
     expect(byId.found && byId.placements.map((p) => p.dashboardName)).toEqual(['Sales'])
-    expect(resolve('cinna://component/sales/deals')).toMatchObject({ found: true, canonicalReference: `cinna://component/id:${ID}/deals` })
+    expect(await resolve('cinna://component/sales/deals')).toMatchObject({ found: true, canonicalReference: `cinna://component/id:${ID}/deals` })
     agents[0].bundleId = () => 'io.example.sales'
-    expect(resolve('cinna://component/bundle:io.example.sales/deals')).toMatchObject({ found: true, canonicalReference: 'cinna://component/bundle:io.example.sales/deals' })
-    expect(resolve('cinna://component/sales/deals')).toMatchObject({ canonicalReference: 'cinna://component/bundle:io.example.sales/deals' })
+    expect(await resolve('cinna://component/bundle:io.example.sales/deals')).toMatchObject({ found: true, canonicalReference: 'cinna://component/bundle:io.example.sales/deals' })
+    expect(await resolve('cinna://component/sales/deals')).toMatchObject({ canonicalReference: 'cinna://component/bundle:io.example.sales/deals' })
   })
 
-  it('resolves a skill’s component and says gone when the skill or component is not there', () => {
+  it('resolves a skill’s component and says gone when the skill or component is not there', async () => {
     agents[0].skills = () => [{ name: 'crm', dir: cachedSkill('crm', { pipeline: list }) }]
-    expect(resolve(`cinna://component/id:${ID}/crm/pipeline`)).toMatchObject({ found: true, component: { skill: 'crm', name: 'pipeline' }, canonicalReference: `cinna://component/id:${ID}/crm/pipeline` })
-    expect(resolve(`cinna://component/id:${ID}/other/pipeline`)).toEqual({ found: false, reason: 'gone', agentName: agents[0].name, agentId: `folder:${ID}`, bundleId: null })
-    expect(resolve(`cinna://component/id:${ID}/missing`)).toMatchObject({ found: false, reason: 'gone' })
+    expect(await resolve(`cinna://component/id:${ID}/crm/pipeline`)).toMatchObject({ found: true, component: { skill: 'crm', name: 'pipeline' }, canonicalReference: `cinna://component/id:${ID}/crm/pipeline` })
+    expect(await resolve(`cinna://component/id:${ID}/other/pipeline`)).toEqual({ found: false, reason: 'gone', agentName: agents[0].name, agentId: `folder:${ID}`, bundleId: null })
+    expect(await resolve(`cinna://component/id:${ID}/missing`)).toMatchObject({ found: false, reason: 'gone' })
   })
 
-  it('maps every miss to its reason', () => {
+  it('maps every miss to its reason', async () => {
     agents[0].bundleId = () => 'io.example.sales'
-    expect(resolve(`cinna://component/id:${OTHER}/deals`)).toEqual({ found: false, reason: 'agent_not_here', agentName: null, agentId: null, bundleId: null })
-    expect(resolve('cinna://component/nobody/deals')).toMatchObject({ found: false, reason: 'agent_not_here' })
-    expect(resolve('cinna://component/bundle:io.example.other/deals')).toEqual({ found: false, reason: 'bundle_not_installed', agentName: null, agentId: null, bundleId: 'io.example.other' })
-    expect(resolve('cinna://component/bundle:io.example.sales/missing')).toMatchObject({ found: false, reason: 'not_in_this_copy', agentId: `folder:${ID}` })
+    expect(await resolve(`cinna://component/id:${OTHER}/deals`)).toEqual({ found: false, reason: 'agent_not_here', agentName: null, agentId: null, bundleId: null })
+    expect(await resolve('cinna://component/nobody/deals')).toMatchObject({ found: false, reason: 'agent_not_here' })
+    expect(await resolve('cinna://component/bundle:io.example.other/deals')).toEqual({ found: false, reason: 'bundle_not_installed', agentName: null, agentId: null, bundleId: 'io.example.other' })
+    expect(await resolve('cinna://component/bundle:io.example.sales/missing')).toMatchObject({ found: false, reason: 'not_in_this_copy', agentId: `folder:${ID}` })
     others.push({ id: 'bare:x', manifestId: '', name: 'Notes folder', slug: 'notes' })
-    expect(resolve('cinna://component/notes/deals')).toMatchObject({ found: false, reason: 'not_kit_agent', agentName: 'Notes folder', agentId: 'bare:x' })
-    expect(service.resolveReference('p1', { reference: 'cinna://component/id:nope/deals' })).toMatchObject({ ok: false, code: 'invalid_input' })
-    expect(service.resolveReference('p1', { reference: 42 })).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(await resolve('cinna://component/notes/deals')).toMatchObject({ found: false, reason: 'not_kit_agent', agentName: 'Notes folder', agentId: 'bare:x' })
+    expect(await service.resolveReference('p1', { reference: 'cinna://component/id:nope/deals' })).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(await service.resolveReference('p1', { reference: 42 })).toMatchObject({ ok: false, code: 'invalid_input' })
   })
 
-  it('lets the chat’s own agent win a clash; two installs of one bundle are ambiguous elsewhere', () => {
+  it('lets the chat’s own agent win a clash; two installs of one bundle are ambiguous elsewhere', async () => {
     kitAgent(OTHER, { deals: list })
     agents[1].slug = 'sales'
     for (const agent of agents) agent.bundleId = () => 'io.example.sales'
     for (const ref of ['cinna://component/sales/deals', 'cinna://component/bundle:io.example.sales/deals']) {
-      expect(resolve(ref)).toMatchObject({ found: false, reason: 'ambiguous' })
-      expect(resolve(ref, `folder:${OTHER}`)).toMatchObject({ found: true, component: { agentId: `folder:${OTHER}` } })
-      expect(resolve(ref, 'folder:unrelated')).toMatchObject({ found: false, reason: 'ambiguous' })
+      expect(await resolve(ref)).toMatchObject({ found: false, reason: 'ambiguous' })
+      expect(await resolve(ref, `folder:${OTHER}`)).toMatchObject({ found: true, component: { agentId: `folder:${OTHER}` } })
+      expect(await resolve(ref, 'folder:unrelated')).toMatchObject({ found: false, reason: 'ambiguous' })
     }
   })
 })

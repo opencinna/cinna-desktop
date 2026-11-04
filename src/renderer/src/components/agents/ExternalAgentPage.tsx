@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Code2, MessageSquare, Settings } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAgents } from '../../hooks/useAgents'
@@ -10,12 +10,15 @@ import { ExternalAgentActionsMenu } from './ExternalAgentActionsMenu'
 import { AgentCard } from '../settings/AgentCard'
 import { CustomAgentModal } from './CustomAgentModal'
 import { AgentInterfaceTab } from './AgentInterfaceTab'
+import { CloudAgentDashboardsTab } from '../dashboards/AgentDashboardsTab'
 import { SettingsButton, SettingsCard, SettingsRow, SettingsRows, SettingsSection } from '../settings/SettingsLayout'
 import { ManagedAgentModal } from './ManagedAgentModal'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
 import { canDevelopAgent, serverLabel } from '../../utils/agentNavigation'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { describeOpenExternalFailure } from '../../hooks/useSystem'
+
+const TAB_LABELS: Record<string, string> = { overview: 'Overview', connection: 'Connection', interface: 'Interface', dashboards: 'Dashboards' }
 
 /** All non-folder agents share a chat landing page and a separate settings mode. */
 export function ExternalAgentPage(): React.JSX.Element {
@@ -31,7 +34,19 @@ export function ExternalAgentPage(): React.JSX.Element {
   const [editing, setEditing] = useState<string | null>(null)
   const [developing, setDeveloping] = useState<string | null>(null)
   const [developmentError, setDevelopmentError] = useState<{ id: string; message: string } | null>(null)
-  const [tab, setTab] = useState('overview')
+  // A tab another surface asked for (a tile's Open agent: Dashboards) wins at first paint, as on the folder page.
+  const tabRequest = useUIStore((s) => s.agentPageTabRequest)
+  const setTabRequest = useUIStore((s) => s.setAgentPageTabRequest)
+  const [tab, setTab] = useState<string>(() => tabRequest ?? 'overview')
+  useEffect(() => {
+    if (!tabRequest) return
+    setTab(tabRequest)
+    setTabRequest(null)
+  }, [tabRequest, setTabRequest])
+  // Dashboards only for the profile's own cloud agents: core's component routes are owner-only (D6.9).
+  const tabs = agent && canDevelopAgent(agent) ? ['overview', 'connection', 'interface', 'dashboards'] : ['overview', 'connection', 'interface']
+  // A tab this agent does not have (another agent's, or a folder agent's Credentials) shows Overview.
+  const shownTab = tabs.includes(tab) ? tab : 'overview'
 
   const develop = async (): Promise<void> => {
     if (!agent || developing) return
@@ -87,10 +102,10 @@ export function ExternalAgentPage(): React.JSX.Element {
           <div hidden={settingsMode} className={settingsMode ? undefined : 'flex flex-1 flex-col'}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
           {settingsMode && <>
             <nav role="tablist" aria-label="Agent settings" className="flex gap-1 border-b border-[var(--color-border)]">
-              {['overview', 'connection', 'interface'].map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${tab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{id === 'overview' ? 'Overview' : id === 'connection' ? 'Connection' : 'Interface'}</button>)}
+              {tabs.map((id) => <button key={id} type="button" role="tab" aria-selected={shownTab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${shownTab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{TAB_LABELS[id]}</button>)}
             </nav>
             <div role="tabpanel" className="space-y-6">
-              {tab === 'interface' ? <AgentInterfaceTab key={agent.id} agent={agent} /> : tab === 'overview' ? <>
+              {shownTab === 'interface' ? <AgentInterfaceTab key={agent.id} agent={agent} /> : shownTab === 'dashboards' ? <CloudAgentDashboardsTab key={agent.id} agent={agent} /> : shownTab === 'overview' ? <>
                 <SettingsSection title="About this agent">
                   <SettingsCard>
                     <p className="text-[13px] text-[var(--color-text-secondary)]">{agent.description || 'No description provided.'}</p>

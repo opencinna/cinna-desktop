@@ -121,4 +121,18 @@ describe('Edit tile', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('while_open_every must be at least 1m.')
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('a cloud tile has no When Cinna starts; Manual, max age, while open and after a turn stay', async () => {
+    // Mutation: drop the `cloud` gate in RefreshOverrideFields and the first assertion fails.
+    const cloudView = view()
+    cloudView.tile = { ...cloudView.tile, agentManifestId: '', cloud: { remoteAgentId: 'core-1', server: 'cinna.example.com' } }
+    show(cloudView)
+    expect(screen.queryByLabelText('When Cinna starts')).toBeNull()
+    for (const label of ['Recompute when older than', 'While on screen, every', 'After a chat turn of its agent', 'Only when I press Refresh']) {
+      expect(screen.getByLabelText(label)).toBeTruthy()
+    }
+    fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { manual: true } }))
+  })
 })

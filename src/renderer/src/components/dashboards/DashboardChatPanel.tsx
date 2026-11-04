@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LayoutDashboard, MessageSquare, SquarePen, X } from 'lucide-react'
-import type { ComponentPrompt, DashboardContext } from '../../../../shared/dashboards'
+import type { ComponentPrompt, DashboardContext, DashboardsErrorCode } from '../../../../shared/dashboards'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { useReadChatResult } from '../../hooks/useReadChatResult'
@@ -10,6 +10,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { ComposerSendExtrasContext, type ComposerSendExtras } from '../chat/composerSendContext'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
 import { fillChatComposer } from './ComponentCard'
+import { CloudRefusal, useCinnaServerName } from './componentParts'
 import { contextChipParts, contextChipTitle } from './dashboardContext'
 
 /** The panel's narrowest and default widths, px; it never takes more than 60% of the window. */
@@ -107,7 +108,10 @@ export function DashboardChatPanel({
   const setWidth = useUIStore((s) => s.setDashboardPanelWidth)
   const { width, maxWidth, overlay } = panelLayout(rowWidth, storedWidth, window.innerWidth)
   const key = agentId ? `${dashboardId}\u0000${agentId}` : null
-  const [resolved, setResolved] = useState<{ key: string; chatId: string } | { key: string; error: string } | null>(null)
+  const [resolved, setResolved] = useState<{ key: string; chatId: string } | { key: string; error: string; code: DashboardsErrorCode | null } | null>(null)
+  // Bumped by Retry on a refusal: the chat for the same (dashboard, agent) is asked for again.
+  const [attempt, setAttempt] = useState(0)
+  const server = useCinnaServerName()
   const [starting, setStarting] = useState(false)
   // Chats this panel resolved, per (dashboard, agent): switching back is instant.
   const chatsByKey = useRef(new Map<string, string>())
@@ -125,18 +129,22 @@ export function DashboardChatPanel({
       .panelChat({ dashboardId, agentId })
       .then((outcome) => {
         if (cancelled) return
-        if (!outcome.ok) return setResolved({ key, error: outcome.message })
+        if (!outcome.ok) return setResolved({ key, error: outcome.message, code: outcome.code })
         chatsByKey.current.set(key, outcome.chatId)
         ownChats.current.add(outcome.chatId)
         setResolved({ key, chatId: outcome.chatId })
       })
       .catch((error: unknown) => {
-        if (!cancelled) setResolved({ key, error: unwrapIpcError(error, 'The chat could not be opened.') })
+        if (!cancelled) setResolved({ key, error: unwrapIpcError(error, 'The chat could not be opened.'), code: null })
       })
     return () => {
       cancelled = true
     }
-  }, [key, dashboardId, agentId])
+  }, [key, dashboardId, agentId, attempt])
+  const retryChat = (): void => {
+    setResolved(null)
+    setAttempt((n) => n + 1)
+  }
 
   const current = resolved && resolved.key === key ? resolved : null
   const chatId = current && 'chatId' in current ? current.chatId : null
@@ -191,7 +199,7 @@ export function DashboardChatPanel({
       .panelChat({ dashboardId, agentId, fresh: true })
       .then((outcome) => {
         if (!outcome.ok) {
-          if (keyRef.current === key) setResolved({ key, error: outcome.message })
+          if (keyRef.current === key) setResolved({ key, error: outcome.message, code: outcome.code })
           return
         }
         // Remembered for its own key either way: coming back finds the new chat.
@@ -200,7 +208,7 @@ export function DashboardChatPanel({
         if (keyRef.current === key) setResolved({ key, chatId: outcome.chatId })
       })
       .catch((error: unknown) => {
-        if (keyRef.current === key) setResolved({ key, error: unwrapIpcError(error, 'A new chat could not be started.') })
+        if (keyRef.current === key) setResolved({ key, error: unwrapIpcError(error, 'A new chat could not be started.'), code: null })
       })
       .finally(() => setStarting(false))
   }, [key, dashboardId, agentId])
@@ -250,7 +258,14 @@ export function DashboardChatPanel({
         {!agentId ? (
           <p className="m-auto max-w-[16rem] px-4 text-center text-xs text-[var(--color-text-secondary)]">Click a tile to ask its agent about it.</p>
         ) : current && 'error' in current ? (
-          <p role="alert" className="m-auto max-w-[18rem] px-4 text-center text-xs text-[var(--color-danger)]">{current.error}</p>
+          // A cloud agent's chat can be refused (D6): our sentence, Retry where the server did not answer, Open settings for a sign-in.
+          <CloudRefusal
+            code={current.code}
+            message={current.error}
+            names={{ agent: agentName, server }}
+            onRetry={retryChat}
+            className="m-auto max-w-[18rem] px-4 text-center text-xs"
+          />
         ) : !onScreen ? (
           <div className="flex-1" />
         ) : (

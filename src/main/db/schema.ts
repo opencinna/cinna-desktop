@@ -1438,6 +1438,10 @@ export const dashboards = sqliteTable('dashboards', {
   profileUserId: text('profile_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   sortOrder: integer('sort_order').notNull().default(0),
+  /** The core dashboard backing its cloud tiles (D6), or null before the first one. */
+  coreDashboardId: text('core_dashboard_id'),
+  /** The profile's server URL when `coreDashboardId` was made. */
+  coreServer: text('core_server'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })
@@ -1455,6 +1459,14 @@ export const dashboardTiles = sqliteTable('dashboard_tiles', {
   position: integer('position').notNull().default(0),
   paramsJson: text('params_json').notNull().default('{}'),
   refreshOverrideJson: text('refresh_override_json'),
+  /** `local` (a folder agent; `agentManifestId`) or `remote` (a cloud agent, D6; `agentManifestId` is `''`). */
+  source: text('source').notNull().default('local'),
+  /** A cloud tile's core agent id. */
+  remoteAgentId: text('remote_agent_id'),
+  /** A cloud tile's block on the backing core dashboard. */
+  coreBlockId: text('core_block_id'),
+  /** A cloud tile's component as core last described it (`CoreComponent` JSON), for drawing offline. */
+  cloudComponentJson: text('cloud_component_json'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })

@@ -483,6 +483,12 @@ export interface ValidationContext {
   manifest: Record<string, unknown> | null
   /** `docs/CLI_COMMANDS.yaml` names, or null when unreadable (no `refresh_command_unknown`). */
   commandNames: Set<string> | null
+  /**
+   * False for a component whose folder is not on this machine (a cloud
+   * agent's, D6): no file is looked at — no script, entry or page check.
+   * Its findings are the server's; only the normalized spec is used.
+   */
+  files?: boolean
 }
 
 /**
@@ -559,11 +565,13 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
           continue
         }
         const target = join(ctx.componentDir, ...parts)
-        if (!inside(target, ctx.componentDir)) {
+        if (ctx.files === false) {
+          // Not on this machine: the server checked the file.
+        } else if (!inside(target, ctx.componentDir)) {
           out.error(at, 'symlink_escape', `\`${field}.script\` ${script} leads outside the component folder through a symlink.`, `${field}.script`)
           continue
         }
-        if (!isFile(target)) {
+        if (ctx.files !== false && !isFile(target)) {
           out.error(at, 'script_missing', `\`${field}.script\` names ${script}, which does not exist.`, `${field}.script`)
           continue
         }
@@ -637,7 +645,9 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
     } else {
       entry = entryParts.join('/')
       const path = join(ctx.componentDir, ...entryParts)
-      if (!inside(path, ctx.componentDir)) out.error(at, 'symlink_escape', `\`entry\` ${entry} leads outside the component folder through a symlink.`, 'entry')
+      if (ctx.files === false) {
+        // Not on this machine: the server checked the page.
+      } else if (!inside(path, ctx.componentDir)) out.error(at, 'symlink_escape', `\`entry\` ${entry} leads outside the component folder through a symlink.`, 'entry')
       else if (!isFile(path)) out.error(at, 'entry_missing', `\`entry\` ${entry} does not exist.`, 'entry')
     }
   }
@@ -757,7 +767,7 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
   }
 
   // A web view's page files: what its sandbox blocks.
-  if (rawView === 'html') {
+  if (rawView === 'html' && ctx.files !== false) {
     for (const rel of pageFiles(ctx.componentDir, entryParts)) scanPage(ctx.componentDir, rel, `${ctx.shownDir}/${rel}`, out)
   }
 

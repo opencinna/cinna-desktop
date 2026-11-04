@@ -230,12 +230,22 @@ export function TileFilters({
   revision,
   notice,
   onDismissNotice,
-  onChange
+  onChange,
+  resolved,
+  disabled = false
 }: {
   tileId: string
   specs: Record<string, ComponentParamSpec>
   /** The tile's stored params (without defaults). */
   params: Record<string, unknown>
+  /**
+   * A cloud tile's `params_resolved` (D6): where a value is the word
+   * `current` or `today`, the control shows what core resolved it to, so the
+   * row never disagrees with the data core computed (core's timezone, not ours).
+   */
+  resolved?: Record<string, unknown> | null
+  /** Nothing can run for this tile (its cloud agent is gone, or another server): the controls stay in place, disabled. */
+  disabled?: boolean
   /** Bumped when a change was refused: the controls go back to the stored values. */
   revision: number
   /** Why the last change was not applied, or null. */
@@ -244,6 +254,12 @@ export function TileFilters({
   onChange: (changed: Record<string, unknown>) => void
 }): React.JSX.Element {
   const shown = resolveParamWords(params, specs)
+  if (resolved) {
+    for (const [name, spec] of Object.entries(specs)) {
+      const raw = name in params ? params[name] : spec.default
+      if ((raw === 'current' || raw === 'today') && resolved[name] !== undefined) shown[name] = resolved[name]
+    }
+  }
   const entries = Object.entries(specs)
   const rowRef = useRef<HTMLDivElement>(null)
   const sizesRef = useRef<HTMLDivElement>(null)
@@ -287,7 +303,8 @@ export function TileFilters({
   }, [behind.length, moreOpen, setMoreOpen])
 
   return (
-    <div className="relative">
+    // A disabled fieldset disables every control in the row, and "Filters ⋯" with them.
+    <fieldset disabled={disabled} aria-disabled={disabled || undefined} className={`relative m-0 min-w-0 border-0 p-0 ${disabled ? 'opacity-50' : ''}`}>
       <div
         ref={rowRef}
         data-testid="tile-filters"
@@ -349,6 +366,6 @@ export function TileFilters({
         </div>,
         document.body
       )}
-    </div>
+    </fieldset>
   )
 }

@@ -1,5 +1,7 @@
-import type { ComponentFinding, ComponentInfo, ComponentPlacement } from '../../../../shared/dashboards'
+import type { ComponentFinding, ComponentInfo, ComponentPlacement, DashboardsErrorCode } from '../../../../shared/dashboards'
+import { isFolderAgentId } from '../../../../shared/localAgents'
 import { useUIStore, type AgentPageTab } from '../../stores/ui.store'
+import { useAuthStore } from '../../stores/auth.store'
 import { useCapabilities } from '../../hooks/useCapabilities'
 
 /**
@@ -22,14 +24,129 @@ export function openDashboard(dashboardId: string): void {
   ui.setActiveView('dashboard')
 }
 
-/** The agent's page, on one of its Settings tabs. */
+/**
+ * The agent's page, on one of its Settings tabs. A cloud agent (D6) opens its
+ * external page, which takes the tabs it has (Dashboards) and shows Overview
+ * for the rest.
+ */
 export function openAgentTab(agentId: string, tab: AgentPageTab): void {
   const ui = useUIStore.getState()
-  ui.setActiveLocalAgentId(agentId)
+  const folder = isFolderAgentId(agentId)
+  if (folder) ui.setActiveLocalAgentId(agentId)
+  else ui.setActiveExternalAgentId(agentId)
   ui.setAgentPageMode('settings')
   ui.setAgentPageTabRequest(tab)
   ui.setSidebarTab('agents')
-  ui.setActiveView('local-agent')
+  ui.setActiveView(folder ? 'local-agent' : 'external-agent')
+}
+
+/** Settings → the profile's Agents, where a Cinna session that needs a new sign-in is renewed. */
+export function openCinnaSignIn(): void {
+  const ui = useUIStore.getState()
+  ui.setSettingsMenu('profile-agents')
+  ui.setActiveView('settings')
+}
+
+/** The profile's Cinna server as the user knows it (its host), for "Can't reach <server>.". */
+export function useCinnaServerName(): string {
+  const url = useAuthStore((s) => s.currentUser?.cinnaServerUrl)
+  try {
+    return new URL(url ?? '').host || 'the Cinna server'
+  } catch {
+    return 'the Cinna server'
+  }
+}
+
+/** "Sales Agent in the cloud": how a cloud component names its agent on a card or in a dialog (D6.8). */
+export function agentPlace(component: Pick<ComponentInfo, 'agentName' | 'cloud'>): string {
+  return component.cloud ? `${component.agentName} in the cloud` : component.agentName
+}
+
+/**
+ * The sentence for a refusal about a cloud agent (D6.10), with its names
+ * filled in; null where main's own message is the one to show (core's
+ * sentence for `adapter_unsupported`, and every local refusal).
+ */
+export function cloudRefusalSentence(code: DashboardsErrorCode | null, names: { agent: string; server: string }): string | null {
+  switch (code) {
+    case 'unreachable':
+      return `Can’t reach ${names.server}.`
+    case 'reauth_required':
+      return `Sign in to ${names.server} again.`
+    case 'env_unavailable':
+      return `${names.agent}’s environment isn’t running.`
+    case 'not_owner':
+      return `Only ${names.agent}’s owner can add its components to a dashboard.`
+    case 'wrong_server':
+      return 'That dashboard was made on another Cinna server.'
+    case 'not_found':
+      return `${names.agent} is no longer available.`
+    default:
+      return null
+  }
+}
+
+/** The refusals Retry can mend by default: the server did not answer. */
+const RETRY_ON_DEFAULT: readonly DashboardsErrorCode[] = ['unreachable']
+
+/**
+ * A Retry link whose label never changes, so the row it sits in never
+ * changes width while it runs (ux rule 1): in flight it is disabled and dimmed.
+ */
+export function RetryLink({ onRetry, retrying = false, className = COMPONENT_LINK }: { onRetry: () => void; retrying?: boolean; className?: string }): React.JSX.Element {
+  return (
+    <button type="button" className={`${className} disabled:cursor-default disabled:opacity-50`} onClick={onRetry} disabled={retrying} aria-busy={retrying || undefined}>
+      Retry
+    </button>
+  )
+}
+
+/**
+ * A cloud refusal's sentence and the way out it has: Retry where trying again
+ * can mend it (`retryOn`; by default only where the server did not answer),
+ * Open settings where the session needs a new sign-in. The sentence is main's
+ * when there is no sentence of our own.
+ */
+export function CloudRefusal({
+  code,
+  message,
+  names,
+  onRetry,
+  retrying = false,
+  retryOn = RETRY_ON_DEFAULT,
+  className = 'text-[11px]',
+  tone = 'danger'
+}: {
+  code: DashboardsErrorCode | null
+  message: string
+  names: { agent: string; server: string }
+  onRetry?: () => void
+  retrying?: boolean
+  /** The codes that offer Retry (with `onRetry`). */
+  retryOn?: readonly DashboardsErrorCode[]
+  className?: string
+  tone?: 'danger' | 'quiet'
+}): React.JSX.Element {
+  const sentence = cloudRefusalSentence(code, names) ?? message
+  return (
+    <p role="alert" data-refusal={code ?? undefined} className={`m-0 ${className} ${tone === 'danger' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'}`}>
+      {sentence}
+      {code !== null && retryOn.includes(code) && onRetry && (
+        <>
+          {' '}
+          <RetryLink onRetry={onRetry} retrying={retrying} />
+        </>
+      )}
+      {code === 'reauth_required' && (
+        <>
+          {' '}
+          <button type="button" className={COMPONENT_LINK} onClick={openCinnaSignIn}>
+            Open settings
+          </button>
+        </>
+      )}
+    </p>
+  )
 }
 
 /** "On Sales overview, Ops" with each dashboard a link, or "Not on a dashboard yet." */
@@ -66,8 +183,12 @@ export function placementsOf(component: ComponentInfo, placements: ComponentPlac
   return placements.filter((p) => p.component === component.name && (p.skill ?? null) === (component.skill ?? null))
 }
 
-/** "Needs the gmail credential. Attach it" — nothing runs until it is attached. */
-export function MissingCredentials({ component, scale }: { component: ComponentInfo; scale: ComponentScale }): React.JSX.Element {
+/**
+ * "Needs the gmail credential. Open Credentials" — nothing runs until it is
+ * attached. A cloud agent's credentials are attached on its server, so its
+ * line links to the agent's page instead (none on that page itself).
+ */
+export function MissingCredentials({ component, scale, link = true }: { component: ComponentInfo; scale: ComponentScale; link?: boolean }): React.JSX.Element {
   const names = component.missingCredentials
   return (
     <p className={`m-0 ${LINE[scale]} text-[var(--color-text-secondary)]`} data-missing-credentials>
@@ -78,10 +199,24 @@ export function MissingCredentials({ component, scale }: { component: ComponentI
           <code className="font-mono">{name}</code>
         </span>
       ))}{' '}
-      credential{names.length === 1 ? '' : 's'}.{' '}
-      <button type="button" className={COMPONENT_LINK} onClick={() => openAgentTab(component.agentId, 'credentials')}>
-        Open Credentials
-      </button>
+      credential{names.length === 1 ? '' : 's'}.
+      {component.cloud ? (
+        link && (
+          <>
+            {' '}
+            <button type="button" className={COMPONENT_LINK} onClick={() => openAgentTab(component.agentId, 'overview')}>
+              Open agent
+            </button>
+          </>
+        )
+      ) : (
+        <>
+          {' '}
+          <button type="button" className={COMPONENT_LINK} onClick={() => openAgentTab(component.agentId, 'credentials')}>
+            Open Credentials
+          </button>
+        </>
+      )}
     </p>
   )
 }

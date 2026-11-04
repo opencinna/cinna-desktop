@@ -56,6 +56,10 @@
  *   preview target in any sliding minute; credentials and the endpoint's
  *   timeout as for refreshes.
  * - **Profile close** cancels every run, timer and warm-up and drops every lease.
+ * - **Cloud tiles (D6)** take the same calls and reasons, answered by core
+ *   through {@link createRemoteTileSource}: main reads and mirrors core's
+ *   data, and asks core to recompute by core's wake rules. Interval timers
+ *   are main's as for local tiles; launch and schedule run nothing.
  *
  * Core module: no Electron. Pushes `dashboards:tile-changed {tileId}` through
  * `host/events`.
@@ -77,8 +81,14 @@ import { dashboardsFolderRole, type ComponentAgent, type ScannedComponent } from
 import { dashboardService, type DashboardService } from './dashboardService'
 import { checkCallParams, effectiveRefresh, normalizeTileParams, type EffectiveRefresh } from './tileParams'
 import { DASHBOARD_LOCK_OWNER, MAX_ENDPOINT_STDOUT_BYTES, endpointRunner, type EndpointOutcome, type EndpointRunner } from './endpointRunner'
+import { createRemoteTileSource, type RemoteTileSourceDeps } from './remote/remoteTileSource'
+import { coreEvents } from './remote/coreEvents'
+import { tileHighlights } from './tileHighlights'
+import type { ComponentSpec } from './componentScanner'
 import {
   DASHBOARDS_TILE_CHANGED_CHANNEL,
+  DASHBOARDS_TILE_HIGHLIGHT_CHANNEL,
+  type DashboardsTileHighlightPayload,
   DASHBOARD_CALLS_PER_MINUTE,
   DASHBOARD_LEASE_TTL_MS,
   resolveParamWords,
@@ -124,7 +134,11 @@ const nodeTimers: RefreshTimers = {
 }
 
 export interface RefreshServiceDeps {
-  dashboards: Pick<DashboardService, 'resolveTile' | 'resolveComponent' | 'placements' | 'setParams' | 'list' | 'tiles'>
+  dashboards: Pick<
+    DashboardService,
+    'resolveTile' | 'resolveComponent' | 'placements' | 'setParams' | 'list' | 'tiles' | 'resolveCloudBlock' | 'mirrorCloudParams' | 'cloudAgent' | 'serverUrl'
+  > &
+    Partial<Pick<DashboardService, 'cloudRefreshed'>>
   runner: Pick<EndpointRunner, 'run'>
   /** A file source's `refresh.command`, through `/run:` with the yielding lock. */
   runCommand: (agentId: string, name: string, signal: AbortSignal) => Promise<{ ok: boolean; busy: boolean; aborted: boolean; error?: string }>
@@ -141,6 +155,8 @@ export interface RefreshServiceDeps {
    * profile start). What the user or an agent asks for directly still runs.
    */
   enabled?: () => boolean
+  /** Cloud tiles (D6): core's client and events, and the highlight push; the real ones when absent. */
+  cloud?: Partial<Pick<RemoteTileSourceDeps, 'client' | 'events' | 'highlight'>>
 }
 
 /** A sentence for an endpoint call that gave no value, as a page reads it. */
@@ -259,6 +275,27 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
     return effectiveRefresh(scanned?.spec, tile.refreshOverride)
   }
 
+  const remote = createRemoteTileSource({
+    client: deps.cloud?.client,
+    events: deps.cloud?.events ?? coreEvents,
+    resolve: (userId, tileId) => deps.dashboards.resolveTile(userId, tileId)?.cloud ?? null,
+    byBlock: (userId, coreBlockId) => deps.dashboards.resolveCloudBlock(userId, coreBlockId),
+    mirrorParams: (userId, tileId, params) => {
+      deps.dashboards.mirrorCloudParams(userId, tileId, params)
+    },
+    isLeased: (tileId, userId) => service.isLeased(tileId, userId),
+    publish: (tileId) => deps.publish(tileId),
+    refreshed: (userId, tileId) => deps.dashboards.cloudRefreshed?.(userId, tileId),
+    highlight:
+      deps.cloud?.highlight ??
+      ((tileId, ids) => {
+        tileHighlights.set(tileId, ids)
+        publishEvent(DASHBOARDS_TILE_HIGHLIGHT_CHANNEL, { tileId, ids } satisfies DashboardsTileHighlightPayload)
+      }),
+    now,
+    timers: deps.timers
+  })
+
   function maxAgeMs(tile: TileDto, scanned: ScannedComponent | null): number {
     return rule(tile, scanned).maxAgeMs
   }
@@ -271,8 +308,9 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
   }
 
   /** A leased tile's interval: started, restarted at a new period, or stopped when it has none. */
-  function syncTimer(userId: string, tile: TileDto, scanned: ScannedComponent | null): void {
-    const periodMs = scanned?.spec ? rule(tile, scanned).whileOpenEveryMs : null
+  function syncTimer(userId: string, tile: TileDto, scanned: ScannedComponent | null, cloudSpec?: ComponentSpec | null): void {
+    const spec = cloudSpec !== undefined ? cloudSpec : scanned?.spec
+    const periodMs = spec ? effectiveRefresh(spec, tile.refreshOverride).whileOpenEveryMs : null
     const existing = timers.get(tile.id)
     if (existing && existing.periodMs === periodMs && existing.userId === userId && enabled()) return
     stopTimer(tile.id)
@@ -455,11 +493,37 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
     return true
   }
 
+  /** A cloud tile that cannot run now, enough to read its mirror. */
+  function cloudStub(tile: TileDto) {
+    return { tile, coreDashboardId: '', coreBlockId: '', remoteAgentId: tile.cloud?.remoteAgentId ?? '', agentName: 'the agent', serverUrl: null, spec: null }
+  }
+
+  /** A cloud tile's params: the whole set to core (checked here first when the component parses), mirrored on success. */
+  async function setCloudParams(userId: string, resolved: NonNullable<ReturnType<typeof deps.dashboards.resolveTile>>, input: unknown): Promise<DashboardsOutcome<{ tile: TileDto }>> {
+    const ref = resolved.cloud
+    if (!ref) return { ok: false, code: 'not_found', message: 'This tile cannot reach its agent now.' }
+    const raw = (input as Record<string, unknown>).params
+    let params: Record<string, unknown>
+    if (ref.spec) {
+      const checked = normalizeTileParams(raw, ref.spec.params)
+      if (!checked.ok) return { ok: false, code: 'invalid_input', message: checked.message }
+      params = checked.params
+    } else {
+      if (raw !== undefined && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) return { ok: false, code: 'invalid_input', message: 'Params are an object of name → value.' }
+      params = (raw as Record<string, unknown> | null | undefined) ?? {}
+    }
+    const sent = await remote.setParams(userId, ref, params)
+    if (!sent.ok) return sent
+    const tile = deps.dashboards.resolveTile(userId, resolved.tile.id)?.tile
+    return tile ? { ok: true, tile } : { ok: false, code: 'not_found', message: 'That tile is gone.' }
+  }
+
   const service = {
     /** A tile's cached data and state; runs nothing. */
     tileResult(userId: string, tileId: unknown): DashboardsOutcome<{ result: TileResultDto }> {
       const resolved = deps.dashboards.resolveTile(userId, tileId)
       if (!resolved) return { ok: false, code: 'not_found', message: 'That tile is gone.' }
+      if (resolved.tile.cloud) return { ok: true, result: resolved.cloud ? remote.result(resolved.cloud) : remote.result(cloudStub(resolved.tile)) }
       return { ok: true, result: resultFor(resolved.tile, resolved.scanned) }
     },
 
@@ -474,6 +538,15 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
       const resolved = deps.dashboards.resolveTile(userId, tileId)
       if (!resolved) return { ok: false, code: 'not_found', message: 'That tile is gone.' }
       const { agent, scanned, tile } = resolved
+      if (tile.cloud) {
+        // A cloud tile: core answers (D6.4). One that cannot run now shows its mirror.
+        if (options.syncTimer) syncTimer(userId, tile, null, resolved.cloud?.spec ?? null)
+        if (!resolved.cloud) {
+          if (options.syncTimer) remote.unlease([tile.id])
+          return { ok: true, result: remote.result(cloudStub(tile)) }
+        }
+        return { ok: true, result: await remote.ensureFresh(userId, resolved.cloud, why, { wait: options.wait, renewal: options.syncTimer }) }
+      }
       // A renewal starts, re-times or stops the tile's interval.
       if (options.syncTimer) syncTimer(userId, tile, resolved.view.state === 'ok' ? scanned : null)
       if (resolved.view.state !== 'ok' || !agent || !scanned?.spec) return { ok: true, result: resultFor(tile, scanned) }
@@ -501,6 +574,7 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
       const tileId = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).tileId : undefined
       const resolved = deps.dashboards.resolveTile(userId, tileId)
       if (!resolved) return { ok: false, code: 'not_found', message: 'That tile is gone.' }
+      if (resolved.tile.cloud) return setCloudParams(userId, resolved, input)
       const targetKey = `tile:${resolved.tile.id}`
       if (!underCallLimit(targetKey)) return { ok: false, code: 'rate_limited', message: rateLimitedMessage('tile') }
       const saved = deps.dashboards.setParams(userId, input)
@@ -540,6 +614,13 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
       if (typeof target.tileId === 'string') {
         const resolved = deps.dashboards.resolveTile(userId, target.tileId)
         if (!resolved) return { ok: false, code: 'not_found', message: 'That tile is gone.' }
+        if (resolved.tile.cloud) {
+          // A cloud tile's page: core runs the endpoint (budget, credentials, params are core's).
+          if (!resolved.cloud) return { ok: false, code: 'call_failed', message: 'This tile cannot reach its agent now.' }
+          if (typeof value.endpoint !== 'string' || !value.endpoint) return { ok: false, code: 'invalid_input', message: 'No endpoint named.' }
+          const args = value.params && typeof value.params === 'object' && !Array.isArray(value.params) ? (value.params as Record<string, unknown>) : {}
+          return remote.call(userId, resolved.cloud, value.endpoint.slice(0, 128), args)
+        }
         if (!resolved.agent || !resolved.scanned) return { ok: false, code: 'not_found', message: 'That component is no longer in the agent’s folder.' }
         agent = resolved.agent
         scanned = resolved.scanned
@@ -608,7 +689,8 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
           if (token.cancelled || startedEpoch !== epoch || !enabled()) break
           const resolved = deps.dashboards.resolveTile(userId, tileId)
           const { agent, scanned, tile } = resolved ?? {}
-          if (!resolved || resolved.view.state !== 'ok' || !agent || !scanned?.spec || !tile) continue
+          // No launch warm-up for a cloud tile (D6.4): `agent`/`scanned` are null for one.
+          if (!resolved || resolved.tile.cloud || resolved.view.state !== 'ok' || !agent || !scanned?.spec || !tile) continue
           // Missing credentials: nothing to spawn; the tile says so when it is shown.
           if (scanned.info.missingCredentials.length > 0 || !wantsRun('launch', tile, scanned)) continue
           ran.push(tileId)
@@ -654,6 +736,18 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
      * user's own click and is not counted.
      */
     async preview(userId: string, agentId: unknown, component: unknown, skill?: unknown, params?: unknown): Promise<DashboardsOutcome<{ result: TileResultDto }>> {
+      const cloudAgent = deps.dashboards.cloudAgent(userId, agentId)
+      if (cloudAgent) {
+        if (!cloudAgent.owned) return { ok: false, code: 'not_owner', message: `Only ${cloudAgent.name}’s owner can add its components to a dashboard.` }
+        if (typeof component !== 'string' || !component) return { ok: false, code: 'not_found', message: `That component is no longer in ${cloudAgent.name}.` }
+        const skillName = typeof skill === 'string' && skill ? skill : null
+        const args = params && typeof params === 'object' && !Array.isArray(params) ? (params as Record<string, unknown>) : {}
+        return remote.preview(
+          userId,
+          { remoteAgentId: cloudAgent.remoteTargetId, agentName: cloudAgent.name, serverUrl: deps.dashboards.serverUrl(userId), component, skill: skillName },
+          args
+        )
+      }
       const found = deps.dashboards.resolveComponent(agentId, component, skill)
       if (!found) return { ok: false, code: 'not_found', message: 'That component is no longer in the agent’s folder.' }
       if (!found.scanned.spec) return { ok: false, code: 'component_invalid', message: 'This component has problems to fix before it can run.' }
@@ -714,12 +808,15 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
     /** The window was hidden or lost focus, or the dashboard closed: no tile of it is on screen. */
     dropLease(userId: string, tileIds?: unknown): DashboardsOutcome<object> {
       const ids = Array.isArray(tileIds) ? tileIds.filter((id): id is string => typeof id === 'string') : null
+      const dropped: string[] = []
       for (const [tileId, lease] of leases) {
         if (lease.userId === userId && (!ids || ids.includes(tileId))) {
           leases.delete(tileId)
           stopTimer(tileId)
+          dropped.push(tileId)
         }
       }
+      remote.unlease(dropped)
       return { ok: true }
     },
 
@@ -766,11 +863,30 @@ export function createDashboardRefreshService(deps: RefreshServiceDeps) {
       for (const controller of controllers) controller.abort()
       controllers.clear()
       for (const tileId of [...timers.keys()]) stopTimer(tileId)
+      remote.cancelAll()
       leases.clear()
       uncached.clear()
       callTimes.clear()
       return Promise.allSettled([...pending]).then(() => undefined)
     },
+
+    /** Core said a cloud tile's block changed (D6.7): re-read its data and params. */
+    cloudTileUpdated(userId: string, coreBlockId: string): Promise<void> {
+      return remote.tileUpdated(userId, coreBlockId)
+    },
+
+    /** Core's socket (re)connected (D6.7): on-screen cloud tiles re-read, so outage marks clear. */
+    cloudConnected(userId: string): void {
+      remote.reconnected(userId)
+    },
+
+    /** Core's agent highlighted on a cloud tile (D6.7). */
+    cloudTileHighlight(userId: string, coreBlockId: string, ids: string[]): void {
+      remote.tileHighlight(userId, coreBlockId, ids)
+    },
+
+    /** For tests: the cloud tile source. */
+    remote,
 
     /** For tests: runs in flight now. */
     inFlightCount(): number {

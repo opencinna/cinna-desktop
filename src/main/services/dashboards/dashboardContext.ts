@@ -159,8 +159,24 @@ function block(json: string): string {
  * then the owner's selected text, then the other tiles, the agent's other tiles, the selection and the params.
  */
 export function dashboardContextSection(ctx: DashboardContext): string {
+  return fit(ctx, (current) => block(wire(current)))
+}
+
+/**
+ * The context as a JSON object for a cloud agent's A2A message
+ * (`message.metadata.cinna_dashboard_context`, D6.6): the same snake_case
+ * keys as the section's JSON line, which is core's `MessageCreate.dashboard_context`
+ * shape, cut by the same rule to {@link DASHBOARD_CONTEXT_MAX_CHARS} of JSON
+ * (core refuses a longer one).
+ */
+export function dashboardContextPayload(ctx: DashboardContext): Record<string, unknown> {
+  return JSON.parse(fit(ctx, wire)) as Record<string, unknown>
+}
+
+/** `render(ctx)` cut to at most {@link DASHBOARD_CONTEXT_MAX_CHARS}: the summary gives way first, then the rest in order. */
+function fit(ctx: DashboardContext, render: (ctx: DashboardContext) => string): string {
   let current: DashboardContext = { ...ctx, focused: { ...ctx.focused }, alsoYours: [...ctx.alsoYours], otherTiles: [...ctx.otherTiles] }
-  let out = block(wire(current))
+  let out = render(current)
   while (out.length > DASHBOARD_CONTEXT_MAX_CHARS) {
     const over = out.length - DASHBOARD_CONTEXT_MAX_CHARS
     const summary = current.focused.summary
@@ -182,7 +198,7 @@ export function dashboardContextSection(ctx: DashboardContext): string {
     else if (current.focused.selection.length) current = { ...current, focused: { ...current.focused, selection: current.focused.selection.slice(0, -1) } }
     else if (Object.keys(current.focused.params).length) current = { ...current, focused: { ...current.focused, params: {} } }
     else break
-    out = block(wire(current))
+    out = render(current)
   }
   return out
 }

@@ -3,6 +3,7 @@ import {
   DASHBOARD_CONTEXT_CLOSE,
   DASHBOARD_CONTEXT_OPEN,
   createDashboardContextTracker,
+  dashboardContextPayload,
   dashboardContextSection,
   sanitizeDashboardContext
 } from './dashboardContext'
@@ -208,5 +209,25 @@ describe('the owner’s selected text (D5)', () => {
     expect(tracker.lastContext('c1')).toEqual(sample)
     tracker.forget('c1')
     expect(tracker.lastContext('c1')).toBeNull()
+  })
+})
+
+describe('dashboardContextPayload (D6.6, A2A metadata)', () => {
+  it('is the section’s JSON line as an object, core’s dashboard_context shape', () => {
+    expect(dashboardContextPayload(sample)).toEqual(JSON.parse(dashboardContextSection(sample).split('\n')[1]))
+  })
+
+  it('is built in one key order every time, since core dedupes by the sha256 of its compact form', () => {
+    const payload = dashboardContextPayload({ ...sample, focused: { ...sample.focused, skill: 'crm', selectedText: 'x' } }) as { focused: Record<string, unknown> }
+    expect(Object.keys(payload)).toEqual(['dashboard', 'focused', 'also_yours', 'other_tiles'])
+    expect(Object.keys(payload.focused)).toEqual(['component', 'skill', 'title', 'params', 'selection', 'data_age', 'summary', 'selected_text'])
+    expect(JSON.stringify(dashboardContextPayload(sample))).toBe(JSON.stringify(dashboardContextPayload(structuredClone(sample))))
+  })
+
+  it('fits 12,000 characters of JSON, the summary giving way first', () => {
+    const big = { ...sample, focused: { ...sample.focused, summary: 'x'.repeat(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS) }, otherTiles: Array.from({ length: 20 }, (_, i) => `${'t'.repeat(400)} ${i}`) }
+    const payload = dashboardContextPayload(big) as { focused: { summary: string } }
+    expect(JSON.stringify(payload).length).toBeLessThanOrEqual(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(payload.focused.summary.length).toBeLessThan(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)
   })
 })

@@ -39,7 +39,9 @@ export function TileBody({
   onContext,
   actions,
   highlight,
-  collect
+  collect,
+  cloudNames,
+  reopenKey
 }: {
   view: DashboardViewKind
   result: TileResultDto | null
@@ -56,6 +58,10 @@ export function TileBody({
   highlight?: FrameHighlight
   /** The page's collect-context while the tile is focused (html view, D5). */
   collect?: FrameCollect
+  /** A cloud component (D6): its page's refusals read as the cloud sentences (html view). */
+  cloudNames?: { agent: string; server: string }
+  /** Changes with every result: a cloud page that could not open is opened again once (html view). */
+  reopenKey?: unknown
 }): React.JSX.Element {
   const hasData = !!result && result.data !== null
   if (view === 'html') {
@@ -70,6 +76,8 @@ export function TileBody({
           actions={actions}
           highlight={highlight}
           collect={collect}
+          cloudNames={cloudNames}
+          reopenKey={reopenKey}
           data={hasData ? { value: result!.data, fetchedAt: result!.fetchedAt, stale: result!.stale } : null}
         />
         {!hasData && result?.error && !loading && (

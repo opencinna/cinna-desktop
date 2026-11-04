@@ -23,7 +23,26 @@ const resolveTile = vi.hoisted(() => vi.fn((userId: string, tileId: unknown) => 
 vi.mock('../services/dashboards/dashboardService', () => ({ dashboardService: { resolveTile } }))
 vi.mock('../services/dashboards/dashboardRefreshService', () => ({ dashboardRefreshService: {} }))
 vi.mock('../services/dashboards/panelChat', () => ({ panelChatService: {} }))
-vi.mock('../host/desktop/htmlPreview', () => ({ dashboardFrameServer: {} }))
+const dashboardFrameServer = vi.hoisted(() => ({
+  registerRemote: vi.fn(() => ({ token: 'tok-cloud', url: 'cinna-preview://dash-h/tok-cloud/index.html' })),
+  release: vi.fn(() => true)
+}))
+vi.mock('../host/desktop/htmlPreview', () => ({ dashboardFrameServer }))
+const frameOwners = vi.hoisted(() => ({ own: vi.fn(), forget: vi.fn() }))
+vi.mock('../host/desktop/dashboardFrameOwners', () => ({
+  dashboardFrameOwners: { forget: frameOwners.forget },
+  ownDashboardFrame: (sender: { id: number }, token: string) => frameOwners.own(sender.id, token)
+}))
+const cloudFrames = vi.hoisted(() => ({
+  isCloudTile: vi.fn((_userId: string, tileId: string) => tileId === 'tile-cloud'),
+  highlightReady: vi.fn(async () => true),
+  openTile: vi.fn(async (_userId: string, tileId: string) =>
+    tileId === 'tile-cloud' ? { ok: true as const, frame: {}, tileId } : tileId === 'tile-down' ? { ok: false as const, code: 'unreachable', message: 'down' } : null),
+  openPreview: vi.fn(async () => null),
+  registered: vi.fn(),
+  released: vi.fn()
+}))
+vi.mock('../services/dashboards/remote/cloudFrames', () => ({ cloudFrames }))
 
 const { tileHighlights } = await import('../services/dashboards/tileHighlights')
 const { registerDashboardHandlers } = await import('./dashboards.ipc')
@@ -75,11 +94,35 @@ describe('dashboards highlight IPC', () => {
     expect(await call('dashboards:highlight-ready', 'tile-other', false)).toBe(false)
   })
 
+  it('sends a cloud tile’s readiness to core’s page state, not the local store (D6.5)', async () => {
+    expect(await call('dashboards:highlight-ready', 'tile-cloud')).toBe(true)
+    expect(await call('dashboards:highlight-ready', 'tile-cloud', false)).toBe(true)
+    expect(cloudFrames.highlightReady.mock.calls).toEqual([['profile-1', 'tile-cloud', true], ['profile-1', 'tile-cloud', false]])
+    expect(tileHighlights.isReady('tile-cloud')).toBe(false)
+    expect(resolveTile).not.toHaveBeenCalled()
+  })
+
   it('refuses every channel before activation', async () => {
     requireActivated.mockImplementation(() => { throw new Error('not activated') })
     for (const channel of ['dashboards:highlight', 'dashboards:clear-highlight', 'dashboards:highlight-ready']) {
       expect(() => call(channel, 'tile-page')).toThrow('not activated')
     }
     expect(tileHighlights.isReady('tile-page')).toBe(false)
+  })
+})
+
+describe('dashboards frame ownership IPC', () => {
+  it('tracks the renderer that opened a frame, so its reload or crash releases it, and forgets a frame it released itself', async () => {
+    const sender = { id: 7 }
+    const opened = (await handlers.get('dashboards:open-frame')!({ sender }, { tileId: 'tile-cloud' })) as { ok: boolean; token: string }
+    expect(opened).toMatchObject({ ok: true, token: 'tok-cloud' })
+    expect(frameOwners.own).toHaveBeenCalledWith(7, 'tok-cloud')
+    // A refused open owns nothing.
+    frameOwners.own.mockClear()
+    expect(await handlers.get('dashboards:open-frame')!({ sender }, { tileId: 'tile-down' })).toMatchObject({ ok: false, code: 'unreachable' })
+    expect(frameOwners.own).not.toHaveBeenCalled()
+    expect(await call('dashboards:release-frame', 'tok-cloud')).toBe(true)
+    expect(frameOwners.forget).toHaveBeenCalledWith('tok-cloud')
+    expect(cloudFrames.released).toHaveBeenCalledWith('tok-cloud')
   })
 })

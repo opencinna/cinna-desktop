@@ -9,6 +9,23 @@ import {
 } from '../../../../shared/dashboards'
 
 /**
+ * The params a tile shows and names in its context. A cloud tile's are the
+ * ones core computed with (`params_resolved`, D6.5: `current`/`today` in the
+ * owner's server time zone); before core has computed any (`{}`) the tile's
+ * own are used, resolved here as a local tile's are, so a tile with filters
+ * never reads as having none. A local tile resolves its words here.
+ */
+export function tileParamsShown(
+  tile: TileView['tile'],
+  component: TileView['component'],
+  result: Pick<TileResultDto, 'cloud'> | null | undefined
+): Record<string, unknown> {
+  const resolved = result?.cloud?.paramsResolved
+  if (resolved && Object.keys(resolved).length > 0) return resolved
+  return component ? resolveParamWords(tile.params, component.params) : tile.params
+}
+
+/**
  * The dashboard context (README D7, §5.6) as the renderer assembles it: what
  * the user sees on the focused tile, summarised as short text, plus the other
  * tiles by title. Pure, so each view's summary and the chip's words can be
@@ -234,7 +251,7 @@ export function buildDashboardContext(input: {
       component: focused.tile.component,
       skill: focused.tile.skill,
       title: focused.displayTitle,
-      params: focused.component ? resolveParamWords(focused.tile.params, focused.component.params) : focused.tile.params,
+      params: tileParamsShown(focused.tile, focused.component, input.result),
       selection,
       dataAge: dataAgeText(input.result?.fetchedAt ?? null, input.now),
       summary: summarizeTile(view, input.result?.data ?? null, selection, input.web),
@@ -243,7 +260,7 @@ export function buildDashboardContext(input: {
     alsoYours: others.filter((t) => agentId !== null && t.component?.agentId === agentId).map((t) => t.displayTitle),
     otherTiles: others
       .filter((t) => agentId === null || t.component?.agentId !== agentId)
-      .map((t) => `${t.displayTitle} (${t.component?.agentName ?? 'unknown agent'})`)
+      .map((t) => `${t.displayTitle} (${t.component?.agentName ?? t.agentName ?? 'unknown agent'})`)
   }
 }
 

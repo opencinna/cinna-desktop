@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import { TILE_SIZES, TILE_SIZE_LABELS, type ComponentInfo, type TileRefreshOverride, type TileSize } from '../../../../shared/dashboards'
-import { readLastDashboardId, useDashboardList, type useAddTile } from '../../hooks/useDashboards'
+import { readLastDashboardId, refusalCode, useDashboardList, type useAddTile } from '../../hooks/useDashboards'
 import { ComponentPreview } from './ComponentPreview'
 import { DashboardDialog, DIALOG_INPUT, DIALOG_LABEL, DIALOG_PRIMARY } from './DashboardDialog'
 import { RefreshFields, refreshSummary } from './EditTileDialog'
+import { CloudRefusal, agentPlace, useCinnaServerName } from './componentParts'
 
 const NEW = '__new__'
 const PREVIEW_BOX = { width: 560, height: 260 }
@@ -43,6 +44,7 @@ export function AddToDashboardDialog({
   const [override, setOverride] = useState<TileRefreshOverride | null>(null)
   const [changingRefresh, setChangingRefresh] = useState(false)
 
+  const server = useCinnaServerName()
   const isNew = dashboardId === NEW
   const canAdd = !addTile.isPending && !dashboards.isPending && (!isNew || newName.trim() !== '')
 
@@ -65,7 +67,7 @@ export function AddToDashboardDialog({
   return (
     <DashboardDialog label={`Add ${component.title} to a dashboard`} pending={addTile.isPending} onClose={() => { addTile.reset(); onClose() }} initialFocusRef={firstRef} width="max-w-[38rem]">
       <h2 className="text-sm font-semibold text-[var(--color-text)]">Add to dashboard</h2>
-      <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{component.title} · from {component.agentName}{component.skill ? ` · from skill ${component.skill}` : ''}</p>
+      <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{component.title} · from {agentPlace(component)}{component.skill ? ` · from skill ${component.skill}` : ''}</p>
 
       <div className="mt-3 flex items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] p-2" style={{ height: PREVIEW_BOX.height + 16 }}>
         <ComponentPreview component={component} size={size} box={PREVIEW_BOX} />
@@ -129,7 +131,20 @@ export function AddToDashboardDialog({
           </button>
           <button type="submit" className={DIALOG_PRIMARY} disabled={!canAdd}>{addTile.isPending ? 'Adding…' : 'Add'}</button>
         </div>
-        {addTile.error && <p role="alert" className="text-xs text-[var(--color-danger)]">{addTile.error.message}</p>}
+        {addTile.error && (
+          // A cloud refusal gets our sentence and its way out (D6.10); `not_found` may be the dashboard, so main's sentence stays.
+          component.cloud && refusalCode(addTile.error) !== 'not_found' ? (
+            <CloudRefusal
+              code={refusalCode(addTile.error)}
+              message={addTile.error.message}
+              names={{ agent: component.agentName, server: component.cloud.server || server }}
+              // No Retry: Add, just above, is the retry (ux rule 6).
+              className="text-xs"
+            />
+          ) : (
+            <p role="alert" className="text-xs text-[var(--color-danger)]">{addTile.error.message}</p>
+          )
+        )}
       </form>
     </DashboardDialog>
   )

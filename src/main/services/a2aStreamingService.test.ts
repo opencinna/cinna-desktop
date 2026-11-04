@@ -67,6 +67,7 @@ vi.mock('./jobService', () => ({
 import {
   A2A_AUTH_REQUIRED_FALLBACK,
   a2aInputRequestOf,
+  a2aMessageMetadata,
   a2aStreamingService,
   toRunState
 } from './a2aStreamingService'
@@ -819,5 +820,15 @@ describe('typed agent turn outcomes', () => {
       expect(p.posted.some((event) => event.type === 'error')).toBe(true)
       expect(p.posted.some((event) => event.type === 'done')).toBe(false)
     }
+  })
+})
+
+describe('a2aMessageMetadata (D6.6)', () => {
+  it('carries a cloud panel’s dashboard context beside any Cinna file ids, and nothing when there is neither', () => {
+    const ctx = { dashboard: 'Sales', focused: { component: 'deals' } }
+    expect(a2aMessageMetadata(['f1'], ctx)).toEqual({ cinna_file_ids: ['f1'], cinna_dashboard_context: ctx })
+    expect(a2aMessageMetadata(undefined, ctx)).toEqual({ cinna_dashboard_context: ctx })
+    expect(a2aMessageMetadata(['f1'], undefined)).toEqual({ cinna_file_ids: ['f1'] })
+    expect(a2aMessageMetadata([], undefined)).toBeUndefined()
   })
 })

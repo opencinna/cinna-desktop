@@ -76,6 +76,16 @@ describe('a2a driver — run', () => {
     })
   })
 
+  it('hands a dashboard panel’s context to runAgentTurn for the message metadata, and none when there is none (D6.6)', async () => {
+    const d = deps()
+    const ctx = { dashboard: 'Sales', focused: { component: 'deals' } }
+    await createA2aDriver(d).run('owner-1', REMOTE, { ...input(), dashboardContext: ctx })
+    expect(d.runTurn.mock.calls[0][0].dashboardContext).toBe(ctx)
+    expect(d.runTurn.mock.calls[0][0].wireContent).toBe('hello')
+    await createA2aDriver(d).run('owner-1', REMOTE, input())
+    expect(d.runTurn.mock.calls[1][0]).not.toHaveProperty('dashboardContext')
+  })
+
   it('sends the turn context in front of the text, a slash command’s too', async () => {
     // A remote agent's parser reads one string; its commands are not split out
     // (that is an ACP engine's prompt). Mutation: pass `wireContent` alone and

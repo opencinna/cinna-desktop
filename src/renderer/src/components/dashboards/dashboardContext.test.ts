@@ -135,6 +135,21 @@ describe('buildDashboardContext', () => {
     const context = buildDashboardContext({ dashboardId: 'd1', dashboardName: 'S', focused: web, tiles: [web], result: result({ a: 1 }), selection: [], web: null, now })
     expect(context.focused).toMatchObject({ summary: '', selection: [] })
   })
+
+  it('a cloud tile’s params are core’s resolved ones, never resolved here (D6.5)', () => {
+    const cloudTile = tile('t1', 'Deals', {}, { month: 'current' })
+    const cloudResult: TileResultDto = { ...result({ a: 1 }), cloud: { mark: null, paramsResolved: { month: '2026-10' }, missingCredentials: [] } }
+    const context = buildDashboardContext({ dashboardId: 'd1', dashboardName: 'S', focused: cloudTile, tiles: [cloudTile], result: cloudResult, selection: [], web: null })
+    expect(context.focused.params).toEqual({ month: '2026-10' })
+  })
+
+  it('a cloud tile core has not computed yet ({}) names the tile’s own params (defaults resolved here), not none', () => {
+    const cloudTile = tile('t1', 'Deals', {}, { owner: 'ann' })
+    const cloudResult: TileResultDto = { ...result({ a: 1 }), cloud: { mark: null, paramsResolved: {}, missingCredentials: [] } }
+    const context = buildDashboardContext({ dashboardId: 'd1', dashboardName: 'S', focused: cloudTile, tiles: [cloudTile], result: cloudResult, selection: [], web: null })
+    expect(context.focused.params).toMatchObject({ owner: 'ann' })
+    expect(Object.keys(context.focused.params).length).toBeGreaterThan(0)
+  })
 })
 
 describe('the chip', () => {

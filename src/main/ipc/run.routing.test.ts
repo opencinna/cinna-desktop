@@ -147,11 +147,11 @@ vi.mock('../services/a2aStreamingService', () => ({
 
 const driverRun = vi.fn(async () => ({ text: '', parts: [], notices: [] }))
 /** Whether this turn's agent runs in a folder on this machine (`capabilities.cwd`). */
-const caps = vi.hoisted(() => ({ cwd: false }))
+const caps = vi.hoisted(() => ({ cwd: false, auth: 'token' }))
 vi.mock('../agents/drivers', () => ({
   driverFor: () => ({
     id: 'a2a',
-    capabilities: () => ({ commands: 'card', cwd: caps.cwd }),
+    capabilities: () => ({ commands: 'card', cwd: caps.cwd, auth: caps.auth }),
     run: driverRun,
     readiness: vi.fn(),
     respond: vi.fn()
@@ -220,7 +220,7 @@ async function wireContent(): Promise<string> {
 }
 
 /** Everything the driver was handed on the last turn that reached it. */
-async function driverInput(): Promise<{ wireContent: string; turnContext?: string | null; messageId?: string; guidedBuild?: boolean }> {
+async function driverInput(): Promise<{ wireContent: string; turnContext?: string | null; messageId?: string; guidedBuild?: boolean; dashboardContext?: Record<string, unknown> }> {
   const input = streamToAgent.mock.calls.at(-1)![0] as {
     run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
   }
@@ -908,6 +908,7 @@ describe('the dashboard context (D3)', () => {
     const { dashboardContextTracker } = await import('../services/dashboards/dashboardContext')
     dashboardContextTracker.forget('chat-1')
     caps.cwd = true
+    caps.auth = 'token'
     chatTask.mockReturnValue(undefined)
     chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1', originDashboardId: 'dash-1' }
   })
@@ -960,6 +961,41 @@ describe('the dashboard context (D3)', () => {
 
     await send({ chatId: 'chat-1', content: 'four', dashboardContext: { ...context, focused: { ...context.focused, selection: ['d-21'] } } })
     expect(sent(await driverInput())).toContain('"selection":["d-21"]')
+  })
+
+  it('goes to a Cinna-synced A2A agent as a JSON object for its message metadata, never in the text, deduped (D6.6)', async () => {
+    // Mutation: route the cloud agent through the text path and its turn carries the block twice at core.
+    caps.cwd = false
+    caps.auth = 'cinna'
+    await send({ chatId: 'chat-1', content: 'which is biggest?', dashboardContext: context })
+    let input = await driverInput()
+    expect(sent(input)).not.toContain('<dashboard_context>')
+    expect(input.dashboardContext).toEqual({
+      dashboard: 'Sales overview',
+      focused: { component: 'deals', title: 'Deals', params: { month: '2026-09' }, selection: ['d-17'], data_age: '12 min', summary: '3 open deals' },
+      also_yours: ['Upcoming meetings'],
+      other_tiles: []
+    })
+    portGivenToTheStream().postMessage({ type: 'delta', kind: 'text', text: 'Sure' } as RunEvent)
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+
+    await send({ chatId: 'chat-1', content: 'again', dashboardContext: context })
+    input = await driverInput()
+    expect(input).not.toHaveProperty('dashboardContext')
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+
+    await send({ chatId: 'chat-1', content: 'changed', dashboardContext: { ...context, focused: { ...context.focused, selection: ['d-21'] } } })
+    input = await driverInput()
+    expect(input.dashboardContext).toMatchObject({ focused: { selection: ['d-21'] } })
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+
+    // A hand-added A2A agent (its own token, no Cinna behind it) gets none.
+    caps.auth = 'token'
+    ;(await import('../services/dashboards/dashboardContext')).dashboardContextTracker.forget('chat-1')
+    await send({ chatId: 'chat-1', content: 'hand-added', dashboardContext: context })
+    input = await driverInput()
+    expect(input).not.toHaveProperty('dashboardContext')
+    expect(sent(input)).not.toContain('<dashboard_context>')
   })
 })
 

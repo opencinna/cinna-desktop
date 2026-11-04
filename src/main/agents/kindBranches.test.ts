@@ -287,6 +287,10 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/renderer/src/components/agents/local/ReadOnlyCards.tsx', category: 'kind', count: 1, why: 'presents the actual desktop state storage' },
   { file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx', category: 'kind', count: 1, why: 'writes manifest versus desktop-owned runtime configuration' },
   { file: 'src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx', category: 'kind', count: 3, why: 'owns registered root layout and adoption controls' },
+  { file: 'src/main/db/dashboards.ts', category: 'source', count: 1,
+    why: 'Dashboards D6: a tile row\'s own `source` says whether core holds it (a block on the backing dashboard) or this device does; `isCloudTileRow` is the one reader, and no agent behaviour is dispatched on it' },
+  { file: 'src/renderer/src/components/dashboards/componentParts.tsx', category: 'source', count: 1,
+    why: 'Dashboards D6: a component card\'s agent link opens the page that owns the agent row (folder page or synced agent page); navigation, not behaviour' },
   { file: 'src/main/agents/status/index.ts', category: 'source', count: 2, why: 'resolves ownership of optional folder or synced Cinna status data; source implementations own read/refresh behavior' },
   { file: 'src/renderer/src/components/chat/MessageStream.tsx', category: 'providerType', count: 1, why: 'presents agent subthreads from the persisted/wire tool representation' },
   {

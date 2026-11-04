@@ -230,7 +230,7 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
 
   const focus = useCallback((view: TileView) => {
     setFocusedTileId(view.tile.id)
-    if (view.component && view.state !== 'agent_missing') setPanelAgentId(view.component.agentId)
+    if (view.component && view.state !== 'agent_missing' && view.state !== 'wrong_server') setPanelAgentId(view.component.agentId)
   }, [setFocusedTileId, setPanelAgentId])
 
   const focused = tiles.find((view) => view.tile.id === focusedTileId) ?? null
@@ -302,7 +302,8 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
     onFill: (text) => fillComposer(view, text)
   })
 
-  const panelAgentName = tiles.find((view) => view.component?.agentId === panelAgentId)?.component?.agentName ?? ''
+  const panelAgentView = tiles.find((view) => view.component?.agentId === panelAgentId)
+  const panelAgentName = panelAgentView?.component?.agentName ?? panelAgentView?.agentName ?? ''
   const starters = focused && focusedAgentId === panelAgentId ? (focused.component?.prompts ?? []) : []
 
   return {

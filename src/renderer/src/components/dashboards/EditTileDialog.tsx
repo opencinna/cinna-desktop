@@ -77,15 +77,18 @@ function onOff(value: boolean | undefined): string {
  * component's own value ("Component: every 15 minutes"), which is no
  * override; anything else is stored on the tile and wins. Manual turns the
  * rest off (they stay as set, greyed), so the dialog's height never changes.
+ * A cloud tile (D6) has no "When Cinna starts": core has no launch warm-up.
  */
 export function RefreshOverrideFields({
   rule,
   value,
-  onChange
+  onChange,
+  cloud = false
 }: {
   rule: ComponentRefreshRule
   value: TileRefreshOverride | null
   onChange: (next: TileRefreshOverride | null) => void
+  cloud?: boolean
 }): React.JSX.Element {
   const current = value ?? {}
   const manual = current.manual === true
@@ -131,14 +134,14 @@ export function RefreshOverrideFields({
             <option value="off">Off</option>
           </select>
         </div>
-        <div>
+        {!cloud && <div>
           <label htmlFor="edit-tile-app-start" className={DIALOG_LABEL}>When Cinna starts</label>
           <select id="edit-tile-app-start" className={select} disabled={manual} value={onOff(current.onAppStart)} onChange={(e) => set({ onAppStart: e.target.value === INHERIT ? undefined : e.target.value === 'on' })}>
             <option value={INHERIT}>Component: {rule.onAppStart ? 'warm up' : 'off'}</option>
             <option value="on">Warm up</option>
             <option value="off">Off</option>
           </select>
-        </div>
+        </div>}
       </div>
       <label className="flex items-center gap-2 text-xs text-[var(--color-text)]">
         <input type="checkbox" checked={manual} onChange={(e) => set({ manual: e.target.checked })} />
@@ -183,7 +186,7 @@ export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () 
           <label htmlFor="edit-tile-title" className={DIALOG_LABEL}>Title</label>
           <input id="edit-tile-title" ref={inputRef} className={`${DIALOG_INPUT} mt-1`} value={title} placeholder={componentTitle} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
         </div>
-        <RefreshOverrideFields rule={ruleOf(view)} value={override} onChange={setOverride} />
+        <RefreshOverrideFields rule={ruleOf(view)} value={override} onChange={setOverride} cloud={!!view.tile.cloud} />
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]" disabled={update.isPending} onClick={onClose}>Cancel</button>
           <button type="submit" className={DIALOG_PRIMARY} disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save'}</button>

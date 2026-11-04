@@ -232,6 +232,7 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           // too: a remote agent's own parser reads one string.
           wireContent: withCatchUp(input.turnContext ?? null, wireContent),
           fileIds,
+          ...(input.dashboardContext ? { dashboardContext: input.dashboardContext } : {}),
           ...(input.messageId ? { messageId: input.messageId } : {}),
           // Synced agents authenticate with a Cinna-issued JWT — a stream-level
           // 401/403 means the server revoked the session and the user needs to

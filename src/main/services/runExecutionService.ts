@@ -22,7 +22,7 @@ import { buildCatchUpPacket, buildTurnHeader, joinTurnContext } from './threadCo
 import { driverFor } from '../agents/drivers'
 import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
 import { commandService, resolveCommandRunner } from './localAgents/commandService'
-import { dashboardContextSection, dashboardContextTracker, sanitizeDashboardContext, type DashboardContextTurn } from './dashboards/dashboardContext'
+import { dashboardContextPayload, dashboardContextSection, dashboardContextTracker, sanitizeDashboardContext, type DashboardContextTurn } from './dashboards/dashboardContext'
 import { localAgentService } from './localAgents/localAgentService'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
@@ -672,6 +672,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     turnHeader: turnHeaderFor({ driver, agent, agentOwnerId, profileUserId, chatId, guidedBuild: guidedBuild === 'closed' ? null : guidedBuild }),
     guidedBuild: guidedBuild === null ? undefined : guidedBuild !== 'closed',
     dashboardContext: dashboardTurn?.text ?? null,
+    ...(dashboardTurn?.payload ? { dashboardContextPayload: dashboardTurn.payload } : {}),
     fileIds,
     attachments,
     // The user row's id is the A2A `messageId`: the Cinna backend echoes
@@ -805,6 +806,12 @@ function turnHeaderFor(input: {
  * (one running in a folder here), and never for a `/run:` command, which no
  * engine reads. Anything else is dropped silently. The section is left out
  * when the engine session already has it ({@link dashboardContextTracker}).
+ *
+ * A Cinna-synced agent reached over A2A (a cloud tile's agent, D6.6) gets the
+ * context as a JSON object instead (`payload`, sent as
+ * `message.metadata.cinna_dashboard_context`) and never in the text (`text`
+ * stays null), deduped by the same tracker: on the chat's first message, then
+ * only when it changed.
  */
 function dashboardContextFor(input: {
   driver: AgentDriver
@@ -813,17 +820,23 @@ function dashboardContextFor(input: {
   chatId: string
   wireContent: string
   raw: unknown
-}): DashboardContextTurn | null {
+}): (DashboardContextTurn & { payload?: Record<string, unknown> | null }) | null {
   if (input.raw === undefined || input.raw === null) return null
   try {
     const capabilities = input.driver.capabilities(input.agent)
-    if (!capabilities.cwd) return null
+    const overA2a = input.driver.id === 'a2a' && capabilities.auth === 'cinna'
+    if (!capabilities.cwd && !overA2a) return null
     if (capabilities.commands === 'catalog' && commandService.matchRunCommand(input.wireContent)) return null
     const context = sanitizeDashboardContext(input.raw)
     const origin = visibleChat(input.profileUserId, input.chatId)?.originDashboardId ?? null
     if (!context || !origin || origin !== context.dashboardId) {
       logger.debug('a dashboard context was dropped', { chatId: input.chatId, valid: !!context, fromThisDashboard: !!context && !!origin && origin === context.dashboardId })
       return null
+    }
+    if (overA2a) {
+      const payload = dashboardContextPayload(context)
+      const turn = dashboardContextTracker.forTurn(input.chatId, JSON.stringify(payload), context)
+      return { text: null, delivered: turn.delivered, payload: turn.text === null ? null : payload }
     }
     return dashboardContextTracker.forTurn(input.chatId, dashboardContextSection(context), context)
   } catch (error) {
@@ -908,6 +921,8 @@ function bindTurn(input: {
   guidedBuild?: boolean
   /** The dashboard context section, beside the header (`RunInput.turnContext`); wire-only. */
   dashboardContext?: string | null
+  /** A cloud agent's dashboard context as A2A metadata (`RunInput.dashboardContext`), never in the text. */
+  dashboardContextPayload?: Record<string, unknown>
   /** The chat's scope, for a follow-up turn the agent starts after this one. */
   runScope?: FollowUpScope
 }): TurnRun {
@@ -931,6 +946,7 @@ function bindTurn(input: {
         turnContext: joinTurnContext(input.turnHeader ?? null, input.packet, input.dashboardContext ?? null),
         ...(input.guidedBuild !== undefined ? { guidedBuild: input.guidedBuild } : {}),
         fileIds: input.fileIds,
+        ...(input.dashboardContextPayload ? { dashboardContext: input.dashboardContextPayload } : {}),
         attachments: input.attachments,
         ...(input.messageId ? { messageId: input.messageId } : {}),
         signal: io.signal,

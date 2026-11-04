@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import { getDb } from './client'
-import { chats, dashboardTileResults, dashboardTiles, dashboards } from './schema'
+import { a2aSessions, chats, dashboardTileResults, dashboardTiles, dashboards } from './schema'
 
 export type DashboardRow = typeof dashboards.$inferSelect
 export type DashboardTileRow = typeof dashboardTiles.$inferSelect
@@ -19,6 +19,11 @@ export interface NewTile {
   size: string
   paramsJson: string
   refreshOverrideJson: string | null
+  /** A cloud tile (D6): `remote`, with its core agent, block and component as core described it. */
+  source?: 'local' | 'remote'
+  remoteAgentId?: string | null
+  coreBlockId?: string | null
+  cloudComponentJson?: string | null
 }
 
 export interface TileResultWrite {
@@ -36,6 +41,11 @@ export interface TileResultWrite {
  * tile id from another profile reads as absent. Limits and validation are
  * `dashboardService`'s; this file only stores.
  */
+/** A cloud tile (D6): backed by a core block, its agent a cloud agent. The one place that reads a tile row's `source`. */
+export function isCloudTileRow(row: Pick<DashboardTileRow, 'source'>): boolean {
+  return row.source === 'remote'
+}
+
 export const dashboardRepo = {
   list(profileUserId: string): Array<DashboardRow & { tileCount: number }> {
     const rows = getDb()
@@ -85,11 +95,23 @@ export const dashboardRepo = {
       profileUserId,
       name,
       sortOrder: (last?.sortOrder ?? -1) + 1,
+      coreDashboardId: null,
+      coreServer: null,
       createdAt: now,
       updatedAt: now
     }
     getDb().insert(dashboards).values(row).run()
     return row
+  },
+
+  /** Record (or clear) the core dashboard backing a dashboard's cloud tiles (D6.1), and the server it is on. */
+  setCoreDashboard(profileUserId: string, dashboardId: string, coreDashboardId: string | null, coreServer: string | null): boolean {
+    const result = getDb()
+      .update(dashboards)
+      .set({ coreDashboardId, coreServer })
+      .where(and(eq(dashboards.profileUserId, profileUserId), eq(dashboards.id, dashboardId)))
+      .run()
+    return result.changes > 0
   },
 
   rename(profileUserId: string, dashboardId: string, name: string): boolean {
@@ -141,6 +163,40 @@ export const dashboardRepo = {
     return Number(row?.n ?? 0)
   },
 
+  /** A dashboard's cloud tiles (`source = 'remote'`), the ones its backing core dashboard holds as blocks. */
+  cloudTileCount(dashboardId: string): number {
+    const row = getDb()
+      .select({ n: sql<number>`count(*)` })
+      .from(dashboardTiles)
+      .where(and(eq(dashboardTiles.dashboardId, dashboardId), eq(dashboardTiles.source, 'remote')))
+      .get()
+    return Number(row?.n ?? 0)
+  },
+
+  /** This profile's cloud tile backed by core block `coreBlockId`, with its dashboard, or null. */
+  tileByCoreBlock(profileUserId: string, coreBlockId: string): { tile: DashboardTileRow; dashboard: DashboardRow } | null {
+    // The tile alone, then its dashboard: no two selected columns may share a name.
+    const tile = getDb()
+      .select({ tile: dashboardTiles })
+      .from(dashboardTiles)
+      .innerJoin(dashboards, eq(dashboards.id, dashboardTiles.dashboardId))
+      .where(and(eq(dashboardTiles.coreBlockId, coreBlockId), eq(dashboardTiles.source, 'remote'), eq(dashboards.profileUserId, profileUserId)))
+      .get()?.tile
+    const dashboard = tile ? this.get(profileUserId, tile.dashboardId) : null
+    return tile && dashboard ? { tile, dashboard } : null
+  },
+
+  /** Every cloud tile of this profile showing a component of core agent `remoteAgentId`, with its dashboard's name. */
+  tilesForRemoteAgent(profileUserId: string, remoteAgentId: string): Array<{ tile: DashboardTileRow; dashboardName: string }> {
+    return getDb()
+      .select({ tile: dashboardTiles, dashboardName: dashboards.name })
+      .from(dashboardTiles)
+      .innerJoin(dashboards, eq(dashboards.id, dashboardTiles.dashboardId))
+      .where(and(eq(dashboards.profileUserId, profileUserId), eq(dashboardTiles.source, 'remote'), eq(dashboardTiles.remoteAgentId, remoteAgentId)))
+      .orderBy(asc(dashboards.sortOrder), asc(dashboardTiles.position))
+      .all()
+  },
+
   /** A tile of one of this profile's dashboards, or null. */
   tile(profileUserId: string, tileId: string): DashboardTileRow | null {
     const row = getDb()
@@ -165,6 +221,10 @@ export const dashboardRepo = {
       id: randomUUID(),
       dashboardId,
       ...tile,
+      source: tile.source ?? 'local',
+      remoteAgentId: tile.remoteAgentId ?? null,
+      coreBlockId: tile.coreBlockId ?? null,
+      cloudComponentJson: tile.cloudComponentJson ?? null,
       position: (last?.position ?? -1) + 1,
       createdAt: now,
       updatedAt: now
@@ -177,7 +237,7 @@ export const dashboardRepo = {
   updateTile(
     profileUserId: string,
     tileId: string,
-    patch: Partial<Pick<DashboardTileRow, 'title' | 'size' | 'paramsJson' | 'refreshOverrideJson'>>
+    patch: Partial<Pick<DashboardTileRow, 'title' | 'size' | 'paramsJson' | 'refreshOverrideJson' | 'cloudComponentJson'>>
   ): DashboardTileRow | null {
     const existing = this.tile(profileUserId, tileId)
     if (!existing) return null
@@ -215,9 +275,25 @@ export const dashboardRepo = {
       .select({ tile: dashboardTiles, dashboardName: dashboards.name })
       .from(dashboardTiles)
       .innerJoin(dashboards, eq(dashboards.id, dashboardTiles.dashboardId))
-      .where(and(eq(dashboards.profileUserId, profileUserId), eq(dashboardTiles.agentManifestId, agentManifestId)))
+      .where(and(eq(dashboards.profileUserId, profileUserId), eq(dashboardTiles.source, 'local'), eq(dashboardTiles.agentManifestId, agentManifestId)))
       .orderBy(asc(dashboards.sortOrder), asc(dashboardTiles.position))
       .all()
+  },
+
+  /**
+   * The newest core session (A2A task id) of one of the profile's chats with
+   * this remote agent row, or null. Dashboards D6.8: core resolves an `id:` or
+   * slug reference against the chat agent named by one of its sessions.
+   */
+  latestCoreSessionForAgent(profileUserId: string, agentRowId: string): string | null {
+    const row = getDb()
+      .select({ taskId: a2aSessions.taskId })
+      .from(a2aSessions)
+      .innerJoin(chats, eq(chats.id, a2aSessions.chatId))
+      .where(and(eq(a2aSessions.agentId, agentRowId), eq(chats.userId, profileUserId), sql`${a2aSessions.taskId} IS NOT NULL`))
+      .orderBy(desc(a2aSessions.updatedAt))
+      .get()
+    return row?.taskId ?? null
   },
 
   result(tileId: string, paramsHash: string): DashboardTileResultRow | null {

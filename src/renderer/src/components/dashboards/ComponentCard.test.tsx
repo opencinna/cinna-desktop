@@ -256,3 +256,43 @@ describe('ComponentCard', () => {
     await waitFor(() => expect(card.textContent).toContain('That is not a component reference.'))
   })
 })
+
+describe('ComponentCard for a cloud agent (D6.8, D6.9)', () => {
+  const CLOUD_REF = 'cinna://component/bundle:io.example.cinna.ab12cd34/deals-pipeline'
+  const cloud = { agentId: 'remote-row-1', manifestId: '', cloud: { remoteAgentId: 'core-1', server: 'cinna.example.com' } }
+
+  beforeEach(() => {
+    useAuthStore.setState({ currentUser: { id: 'alice', type: 'cinna_user', cinnaServerUrl: 'https://cinna.example.com' } as never })
+  })
+
+  it('an owned cloud component names its agent in the cloud and offers Add without asking for an id', async () => {
+    // Mutation: put `needsId = component.manifestId === ''` back and Add is disabled with "needs an id first".
+    resolveReference.mockResolvedValue({ ok: true, resolution: found(cloud) })
+    show(`Here:\n\n${CLOUD_REF}`)
+    const card = await screen.findByRole('group', { name: 'Component Deals pipeline' })
+    expect(card.textContent).toContain('Sales Agent in the cloud')
+    const add = within(card).getByRole('button', { name: 'Add Deals pipeline to a dashboard' }) as HTMLButtonElement
+    expect(add.disabled).toBe(false)
+    expect(card.textContent).not.toContain('needs an id first')
+  })
+
+  it('a cloud agent the profile does not own: the owner sentence, and no Add', async () => {
+    resolveReference.mockResolvedValue({ ok: true, resolution: miss('not_owner', { agentName: 'Team Bot', agentId: 'remote-row-2' }) })
+    show(`Here:\n\n${CLOUD_REF}`)
+    const card = await screen.findByRole('group', { name: 'Component deals-pipeline' })
+    expect(card.textContent).toContain('Only Team Bot’s owner can add its components to a dashboard.')
+    expect(within(card).queryByRole('button', { name: /Add/ })).toBeNull()
+    expect(within(card).queryByRole('button', { name: /Preview/ })).toBeNull()
+  })
+
+  it('an unreachable server names the host and Retry resolves again', async () => {
+    resolveReference.mockResolvedValueOnce({ ok: true, resolution: miss('unreachable', { agentName: 'Sales Agent' }) })
+    resolveReference.mockResolvedValueOnce({ ok: true, resolution: found(cloud) })
+    show(`Here:\n\n${CLOUD_REF}`)
+    const card = await screen.findByRole('group', { name: 'Component deals-pipeline' })
+    expect(card.textContent).toContain('Can’t reach cinna.example.com.')
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Retry' })))
+    expect(await screen.findByRole('group', { name: 'Component Deals pipeline' })).toBeTruthy()
+    expect(resolveReference).toHaveBeenCalledTimes(2)
+  })
+})

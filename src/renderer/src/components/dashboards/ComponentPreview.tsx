@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { TILE_SIZE_SPANS, resolveParamWords, type ComponentInfo, type TileSize } from '../../../../shared/dashboards'
+import { DashboardsRefusal, refusalCode } from '../../hooks/useDashboards'
 import { DashboardDialog } from './DashboardDialog'
+import { CloudRefusal, useCinnaServerName } from './componentParts'
 import { TileBody } from './TileBody'
 
 const GAP = 6
@@ -31,13 +33,14 @@ export function ComponentPreview({
     placeholderData: (previous) => previous,
     queryFn: async () => {
       const outcome = await window.api.dashboards.preview(component.agentId, component.name, component.skill, pageParams)
-      if (!outcome.ok) throw new Error(outcome.message)
+      if (!outcome.ok) throw new DashboardsRefusal(outcome.code, outcome.message)
       return outcome.result
     },
     retry: false,
     staleTime: Infinity,
     gcTime: 0
   })
+  const server = useCinnaServerName()
   const span = TILE_SIZE_SPANS[size]
   // One scale for every size: the widest preset fills the width, the tallest the height.
   const col = Math.min((box.width - 11 * GAP) / 12, (box.height - 3 * GAP) / (4 * ROW_TO_COL))
@@ -51,7 +54,20 @@ export function ComponentPreview({
       style={{ width, height }}
     >
       {preview.isError ? (
-        <p className="px-3 py-2 text-[11px] text-[var(--color-danger)]">{preview.error.message}</p>
+        component.cloud ? (
+          // A cloud agent's refusal (D6.10): our sentence, and Retry where the server did not answer.
+          <div className="px-3 py-2">
+            <CloudRefusal
+              code={refusalCode(preview.error)}
+              message={preview.error.message}
+              names={{ agent: component.agentName, server: component.cloud.server || server }}
+              onRetry={() => void preview.refetch()}
+              retrying={preview.isFetching}
+            />
+          </div>
+        ) : (
+          <p className="px-3 py-2 text-[11px] text-[var(--color-danger)]">{preview.error.message}</p>
+        )
       ) : component.view ? (
         <div className="absolute inset-0 overflow-auto">
           <TileBody
@@ -61,6 +77,8 @@ export function ComponentPreview({
             frameTarget={{ agentId: component.agentId, component: component.name, skill: component.skill }}
             meta={{ component: component.name, title: component.title, params: resolveParamWords(pageParams, component.params), size }}
             actions={{ onParams: (changed) => setPageParams((current) => ({ ...current, ...changed })) }}
+            cloudNames={component.cloud ? { agent: component.agentName, server: component.cloud.server || server } : undefined}
+            reopenKey={component.cloud ? preview.dataUpdatedAt : undefined}
           />
         </div>
       ) : null}

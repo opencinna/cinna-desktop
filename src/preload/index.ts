@@ -283,6 +283,7 @@ import {
   type SetTileParamsInput,
   type PanelChatOutcome,
   type ResolveReferenceOutcome,
+  type CloudComponentsOutcome,
   type TileView,
   type UpdateTileInput
 } from '../shared/dashboards'
@@ -2436,6 +2437,8 @@ const api = {
     removeTile: (tileId: string): Promise<DashboardsOutcome<object>> => ipcRenderer.invoke('dashboards:remove-tile', tileId),
     /** One agent's components (or every kit agent's), valid or not. Reading runs nothing. */
     components: (agentId?: string): Promise<ComponentInfo[]> => ipcRenderer.invoke('dashboards:components', agentId),
+    /** A cloud agent's components from its Cinna server (D6), with this profile's tiles of them; refusals are data. */
+    cloudComponents: (agentId: string): Promise<CloudComponentsOutcome> => ipcRenderer.invoke('dashboards:cloud-components', agentId),
     /** Where an agent's components sit on this profile's dashboards. */
     placements: (agentId: string): Promise<ComponentPlacement[]> => ipcRenderer.invoke('dashboards:placements', agentId),
     /** A tile's cached data and state; runs nothing. */

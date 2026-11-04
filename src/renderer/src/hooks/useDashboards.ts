@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AddTileInput, DashboardsOutcome, UpdateTileInput } from '../../../shared/dashboards'
+import type { AddTileInput, DashboardsErrorCode, DashboardsOutcome, UpdateTileInput } from '../../../shared/dashboards'
 
 /**
  * Dashboards in the renderer: queries over `window.api.dashboards`, and the
@@ -15,6 +15,8 @@ export const dashboardTilesKey = (dashboardId: string | null) => ['dashboards', 
 export const tileResultKey = (tileId: string) => ['dashboards', 'result', tileId] as const
 export const componentsKey = (agentId: string | null) => ['dashboards', 'components', agentId] as const
 export const placementsKey = (agentId: string) => ['dashboards', 'placements', agentId] as const
+/** A cloud agent's components and their placements (D6): under placements, so adding or removing a tile re-reads it. */
+export const cloudComponentsKey = (agentId: string | null) => ['dashboards', 'placements', 'cloud', agentId] as const
 /** Every resolved component reference: placements and components change under them. */
 export const REFERENCES_KEY = ['dashboards', 'reference'] as const
 export const referenceKey = (reference: string, chatAgentId: string | null) => ['dashboards', 'reference', reference, chatAgentId] as const
@@ -36,8 +38,21 @@ export function rememberLastDashboardId(id: string): void {
   }
 }
 
-function unwrap<T>(outcome: DashboardsOutcome<T>): { ok: true } & T {
-  if (!outcome.ok) throw new Error(outcome.message)
+/** A refusal from main, thrown with its code so a surface can add the action that fits it (D6.10). */
+export class DashboardsRefusal extends Error {
+  constructor(readonly code: DashboardsErrorCode, message: string) {
+    super(message)
+    this.name = 'DashboardsRefusal'
+  }
+}
+
+/** The refusal's code, when the error is one; null for an IPC failure or anything else. */
+export function refusalCode(error: unknown): DashboardsErrorCode | null {
+  return error instanceof DashboardsRefusal ? error.code : null
+}
+
+export function unwrap<T>(outcome: DashboardsOutcome<T>): { ok: true } & T {
+  if (!outcome.ok) throw new DashboardsRefusal(outcome.code, outcome.message)
   return outcome
 }
 
@@ -86,6 +101,21 @@ export function useComponentReference(reference: string, chatAgentId: string | n
   return useQuery({
     queryKey: referenceKey(reference, chatAgentId),
     queryFn: async () => unwrap(await window.api.dashboards.resolveReference({ reference, chatAgentId })).resolution,
+    retry: false
+  })
+}
+
+/**
+ * A cloud agent's components from its Cinna server (D6.8), with this
+ * profile's tiles of them. A refusal (`unreachable`, `reauth_required`,
+ * `not_owner`, `not_found`) is data, so the tab can say which and offer the
+ * way out; only an IPC failure is thrown.
+ */
+export function useCloudComponents(agentId: string | null) {
+  return useQuery({
+    queryKey: cloudComponentsKey(agentId),
+    queryFn: () => window.api.dashboards.cloudComponents(agentId!),
+    enabled: !!agentId,
     retry: false
   })
 }

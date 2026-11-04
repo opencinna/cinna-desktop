@@ -1,11 +1,14 @@
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { dashboardFrameServer } from '../host/desktop/htmlPreview'
+import { dashboardFrameOwners, ownDashboardFrame } from '../host/desktop/dashboardFrameOwners'
 import { dashboardService } from '../services/dashboards/dashboardService'
 import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
 import { panelChatService } from '../services/dashboards/panelChat'
 import { tileHighlights } from '../services/dashboards/tileHighlights'
+import { cloudFrames } from '../services/dashboards/remote/cloudFrames'
 import type {
+  CloudComponentsOutcome,
   ComponentInfo,
   ComponentPlacement,
   DashboardCallOutcome,
@@ -57,9 +60,12 @@ export function registerDashboardHandlers(): void {
     return dashboardService.tiles(getProfileScopeUserId(), dashboardId)
   })
 
-  ipcHandle('dashboards:add-tile', (_event, input: unknown): DashboardsOutcome<{ tile: TileDto; dashboard: DashboardDto }> => {
+  /** A folder agent's component, or a cloud agent's (D6: async, a block on the backing core dashboard). */
+  ipcHandle('dashboards:add-tile', (_event, input: unknown): DashboardsOutcome<{ tile: TileDto; dashboard: DashboardDto }> | Promise<DashboardsOutcome<{ tile: TileDto; dashboard: DashboardDto }>> => {
     userActivation.requireActivated()
-    return dashboardService.addTile(getProfileScopeUserId(), input)
+    const userId = getProfileScopeUserId()
+    const agentId = input && typeof input === 'object' ? (input as Record<string, unknown>).agentId : undefined
+    return dashboardService.cloudAgent(userId, agentId) ? dashboardService.addCloudTile(userId, input) : dashboardService.addTile(userId, input)
   })
 
   ipcHandle('dashboards:update-tile', (_event, input: unknown): DashboardsOutcome<{ tile: TileDto }> => {
@@ -80,6 +86,12 @@ export function registerDashboardHandlers(): void {
   ipcHandle('dashboards:components', (_event, agentId?: unknown): ComponentInfo[] => {
     userActivation.requireActivated()
     return dashboardService.components(agentId)
+  })
+
+  /** A cloud agent's components from its Cinna server (never wakes anything), with this profile's tiles of them; refusals are data. */
+  ipcHandle('dashboards:cloud-components', (_event, agentId: unknown): Promise<CloudComponentsOutcome> => {
+    userActivation.requireActivated()
+    return dashboardService.cloudComponents(getProfileScopeUserId(), agentId)
   })
 
   ipcHandle('dashboards:placements', (_event, agentId: unknown): ComponentPlacement[] => {
@@ -118,14 +130,14 @@ export function registerDashboardHandlers(): void {
     return dashboardRefreshService.setParams(getProfileScopeUserId(), input)
   })
 
-  /** A component reference in a message, resolved to a component here or a reason, as data. Runs nothing. */
-  ipcHandle('dashboards:resolve-reference', (_event, input: unknown): ResolveReferenceOutcome => {
+  /** A component reference in a message, resolved to a component here or in an own cloud agent, or a reason, as data. Runs nothing. */
+  ipcHandle('dashboards:resolve-reference', (_event, input: unknown): Promise<ResolveReferenceOutcome> => {
     userActivation.requireActivated()
     return dashboardService.resolveReference(getProfileScopeUserId(), input)
   })
 
   /** The panel's chat for (dashboard, agent): the latest one, or a new one when there is none or `fresh` (README D12). */
-  ipcHandle('dashboards:panel-chat', (_event, input: unknown): PanelChatOutcome => {
+  ipcHandle('dashboards:panel-chat', (_event, input: unknown): Promise<PanelChatOutcome> => {
     userActivation.requireActivated()
     return panelChatService.open(getProfileScopeUserId(), input)
   })
@@ -140,11 +152,31 @@ export function registerDashboardHandlers(): void {
     return dashboardRefreshService.dropLease(getProfileScopeUserId(), tileIds)
   })
 
-  /** A frame for a tile, or for a component's preview: a URL on this profile's dash host. */
-  ipcHandle('dashboards:open-frame', (_event, target: unknown): DashboardFrameOutcome => {
+  /**
+   * A frame for a tile, or for a component's preview: a URL on this profile's
+   * dash host. A cloud tile, or a preview of a remote agent's component, is
+   * minted on core and relayed through main (D6.3); core's refusals are data.
+   */
+  ipcHandle('dashboards:open-frame', async (event, target: unknown): Promise<DashboardFrameOutcome> => {
     userActivation.requireActivated()
+    const outcome = await openFrame(target)
+    // A reload, crash or closed window never runs the frame's own release: its renderer's end does.
+    if (outcome.ok && event?.sender) ownDashboardFrame(event.sender, outcome.token)
+    return outcome
+  })
+
+  async function openFrame(target: unknown): Promise<DashboardFrameOutcome> {
     const userId = getProfileScopeUserId()
     const input = target && typeof target === 'object' ? (target as Record<string, unknown>) : {}
+    const cloud = typeof input.tileId === 'string'
+      ? await cloudFrames.openTile(userId, input.tileId)
+      : await cloudFrames.openPreview(userId, input.agentId, input.component, input.skill)
+    if (cloud) {
+      if (!cloud.ok) return cloud
+      const { token, url } = dashboardFrameServer.registerRemote(cloud.frame, userId)
+      cloudFrames.registered(token, cloud.tileId)
+      return { ok: true, token, url }
+    }
     let found: ReturnType<typeof dashboardService.resolveComponent> = null
     if (typeof input.tileId === 'string') {
       const resolved = dashboardService.resolveTile(userId, input.tileId)
@@ -163,7 +195,7 @@ export function registerDashboardHandlers(): void {
       userId
     )
     return { ok: true, token, url }
-  })
+  }
 
   /** The ids an agent highlighted on one of the active profile's tiles and still holds; [] when none or not its tile. */
   ipcHandle('dashboards:highlight', (_event, tileId: unknown): string[] => {
@@ -185,9 +217,12 @@ export function registerDashboardHandlers(): void {
    * had loaded again (false): `dashboards_tiles` reports it can highlight only
    * while the page now loaded listens.
    */
-  ipcHandle('dashboards:highlight-ready', (_event, tileId: unknown, ready?: unknown): boolean => {
+  ipcHandle('dashboards:highlight-ready', (_event, tileId: unknown, ready?: unknown): boolean | Promise<boolean> => {
     userActivation.requireActivated()
-    const resolved = dashboardService.resolveTile(getProfileScopeUserId(), tileId)
+    const userId = getProfileScopeUserId()
+    // A cloud tile's readiness is core's page state (D6.5), as on core's web host.
+    if (typeof tileId === 'string' && cloudFrames.isCloudTile(userId, tileId)) return cloudFrames.highlightReady(userId, tileId, ready !== false)
+    const resolved = dashboardService.resolveTile(userId, tileId)
     if (!resolved) return false
     if (ready === false) {
       tileHighlights.unmarkReady(resolved.tile.id)
@@ -200,6 +235,8 @@ export function registerDashboardHandlers(): void {
 
   ipcHandle('dashboards:release-frame', (_event, token: unknown): boolean => {
     userActivation.requireActivated()
+    dashboardFrameOwners.forget(token)
+    cloudFrames.released(token)
     return dashboardFrameServer.release(token)
   })
 }
