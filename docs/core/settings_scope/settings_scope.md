@@ -87,6 +87,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 - **The default guest user is treated as the only profile when active.** No "Profile" group is shown; the agent list collapses to Default-scope-only.
 - **Sharing local chats is installation-wide.** `showLocalDataInAllProfiles` is a boolean in `app_settings`, defaults to true, and is read on every chat lookup, so toggling it takes effect at once; the renderer re-fetches the chat list, trash and open chat when it changes.
 - **Sidebar section headings are installation-wide.** `showAgentSidebarSections` is a boolean in `app_settings`, defaults to true, and is edited under Settings → Features → Interface. It changes labels/spacing without changing scope or group ordering.
+- **Capabilities are installation-wide.** `notesCapability` and `dashboardsCapability` (`unset`/`on`/`off`) live in `app_settings`, so Notes and Dashboards are on or off for every profile together even though their records are per profile. The first-run decision therefore counts records across all profiles. See [Capabilities](../../ui/capabilities/capabilities.md).
 - **Theme is not scoped.** Stored in `localStorage` and shared across all profiles on the machine (unchanged from prior behavior).
 - **Window and sidebar layout are not scoped either.** The main window's saved bounds live in main's `window-state.json` and the sidebar's open state in `localStorage`; both belong to the machine. See [App Shell → Across launches](../../ui/app_shell/app_shell.md#across-launches).
 

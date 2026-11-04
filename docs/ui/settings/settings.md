@@ -41,6 +41,11 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 2. **Profile → Agents** manages only agents supplied by the active Cinna server. It groups them under that server's host, includes hidden agents, offers Enable/Disable and Sync, and exposes Settings for enabled rows. Sync/reauthentication failures and visibility-write errors stay visible beside the relevant controls.
 3. **Agents sidebar → Add an agent → Advanced options → A2A agent** opens a modal for a direct connection. Enter a card URL and optional access token, optionally Test Connection, then Save Agent. Creation stays open on failure and closes only after successful save. Direct A2A, ACP and Managed connections are configured from their own agent page's **Settings** action; there is no separate Default Remote agents tab.
 
+### Capabilities
+
+1. Open Features: **Capabilities** is the first section, above AI Functions. It has two switches, **Notes** and **Dashboards**, each described by what it adds and that turning it off keeps the data.
+2. Turning one on adds its sidebar tab and entry points at once; turning it off removes them. See [Capabilities](../capabilities/capabilities.md).
+
 ### Appearance preferences
 
 1. Open Features → Interface to choose **System**, **Dark** or **Light**, or change **Extra UI animation**. Dark is the theme fallback; extra animation is on by default.

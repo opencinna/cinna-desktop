@@ -8,7 +8,7 @@ The chats that are working or have a result nobody has looked at yet are drawn t
 
 - **Active block** — an **Active** label with a lightning icon, then its rows, then a divider, above [Pinned](../chat_list_order/chat_list_order.md) and every [group](chat_list_grouping.md). Drawn only while it has a row. It has no chevron and cannot be collapsed: it exists to be seen, and the switch is how it goes away.
 - **Active chat** — one that is **running** (main reports a run on it, or it is the open chat while its turn streams, before the list has polled the run) or holds an **unread result** — completed, needs input or failed, never a cancel. This is exactly the test the row's own spinner and result icon use ([Sidebar Session Status](../session_status/session_status.md)), so a row in the block always shows why it is there, and a row with an icon is never left out.
-- **Show Active group** — the third switch in the **Chats list options** menu, below a separator from the two groupings. Checked while on.
+- **Show Active group** — the third switch in the **Chats list options** menu, below a separator from the two groupings. A switch row like the other two, on while the switch is on.
 - **The hold** — the block's membership changes only while the pointer is off the list, no row's right-click menu is open and no row is being renamed.
 
 ## User Stories / Flows

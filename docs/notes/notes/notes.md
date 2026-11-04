@@ -23,9 +23,13 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 5. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; a completely selected message preserves its Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
 6. Right-clicking a linked [file reference](../../chat/file_references/file_references.md#right-clicking-a-reference) saves the file's whole contents instead. A markdown file is titled by its frontmatter `title:`, first H1 or first heading, anything else by its file name; markdown and `.txt` are saved as written, other text files in a fenced code block tagged with their language.
 
+### Turning Notes on
+
+Notes is an optional [capability](../../ui/capabilities/capabilities.md): off for a new user, on for one who already has a note outside the trash in any profile. While off there is no Notes tab, no Save to Notes in the message right-click menu and no `?` note picker in the composer (the character types as text, and the hint teaching it is held back). Turning it on in Settings → Features → Capabilities adds the tab at the end of the rail; turning it off hides all of that, keeps every note, and moves the sidebar to Chats if Notes was open. The notes themselves, their IPC and the 30-day trash cleanup do not depend on the switch.
+
 ### Switching to Notes
 
-1. User clicks the **NotebookPen** icon on the sidebar's left edge tab rail.
+1. User clicks the **NotebookPen** icon on the sidebar's left edge tab rail (the last tab but one, before Dashboards, once Notes is on).
 2. The sidebar body swaps from Chats / Jobs to the notes list. `activeNoteId` is reset to `null`, and the main area lands on the **"Select a note to view."** empty state — auto-selecting the first note would be misleading when notes can live inside a collapsed folder.
 3. Switching back to Chats reopens the chat that was open last if it is still in the list, and otherwise the first chat or the New Chat screen. Switching to Jobs lands on its empty pane.
 

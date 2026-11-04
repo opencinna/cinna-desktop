@@ -121,6 +121,8 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 
 **Agent connection tooltip** · hover or focus the `Local agent connection` / `Remote agent connection` status; assert `tooltip` details and Escape dismissal. Use a folder path or loopback host as the witness. Never expect endpoint paths, URL credentials or tokens in the tooltip.
 
+**Capabilities** · Notes and Dashboards are off for a fresh user. The `capabilities` fixture option (default `['notes', 'dashboards']`) turns them on through `window.api.settings.set` after `skipOnboarding()` and waits for the tabs, relying on the `settings:changed` push to reach the open window; a spec of the fresh-user default uses `test.use({ capabilities: [] })`.
+
 **Agents sidebar sections** · Settings → Features → switch `Show sections in Agents sidebar` defaults on. Check `settings.getAll().showAgentSidebarSections`, relaunch, then verify the UI retains it; clicking the text label must change the same persisted value. A renderer mutation mock alone cannot prove this round trip.
 
 **Pasted and image attachments** (`composer-paste.spec.ts`) · a pasted image is saved as `<userData>/tmp/pasted/Pasted image YYYY-MM-DD at HH.MM.SS.png` — read the name from that folder rather than building it from a clock. An image attachment renders as a 64×64 thumbnail: in the composer a `button` `Preview <filename>` (holding an `img` once the thumbnail loads) plus a sibling `button` `Remove <filename>`; under a sent user bubble the same `Preview <filename>` with no Remove. The preview shows `img` named `<filename>`; `Download <filename>` is present for a sent file and absent for a composer one. The modal has no dialog role — scope by the `div[tabindex="-1"]` holding `Close preview`.

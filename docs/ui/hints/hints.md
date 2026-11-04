@@ -25,7 +25,7 @@ The shortcuts (`@`, `#`, `/`, `?`, `~`, double-ESC, the `?`-then-Enter note expa
 1. The user lands on the new-chat screen. After a short grace period — so nothing flashes during the view transition — the first hint fades in at the bottom.
 2. Every few seconds, scaled to the length of the line, the bar crossfades to the next eligible hint.
 3. Rotation holds while the pointer rests on the bar, while the composer has a picker or modal open, and while the window is in the background.
-4. Only hints the user can act on right now appear — a profile with no notes never sees the `?` tips.
+4. Only hints the user can act on right now appear — a profile with no notes never sees the `?` tips, nor does anyone with the Notes [capability](../capabilities/capabilities.md) off, since the picker does not open then.
 
 ### Getting a contextual hint
 

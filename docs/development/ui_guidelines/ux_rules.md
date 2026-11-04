@@ -69,6 +69,7 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 - Split button for "default action + alternatives": primary half runs the default, chevron half opens the menu. With no valid default, the whole button is the menu (`Open in…`).
 - Menus are portaled via `usePopover` and marked `role="menu"` / `role="menuitem"` with an `aria-label`; every test and every E2E spec finds them by that name.
 - The current default is marked with a check inside the menu; the menu never explains itself in prose unless it is empty.
+- An on/off setting inside a menu is one item with a switch (rule 14), never a pair of check-marked items that cancel each other.
 
 ## 9. A surface that names a file is asserting that file exists
 
@@ -133,6 +134,45 @@ A user who meets one kind of record in three places learns it once. Draw it thre
 
 **Origin:** service credentials were listed in three places — Settings → Local and Remote credentials, the agent's Credentials tab and the attach picker — and each drew the record differently: "API token · complete · Owned" as prose in one, "name · ready · slack.com" in another, cards in the third. The server line read "Server: http://localhost:5173" as plain text, remote records had no way back to Core, and every row carried Edit, Delete, Move up and Detach as text buttons. None of it broke rule 12, because each surface matched its own neighbours; the user found it by looking at the same credential in two places.
 
+## 14. A binary setting is one switch, wherever it appears
+
+A setting with two states is a single labelled switch named after the *non-default* state, in a settings card or a menu alike. Two items where checking one unchecks the other ("Fixed" / "On Hover") make the user read both labels to learn one bit, and look like two independent checkboxes that fight each other.
+
+- In a menu the item is `MenuSwitchItem` (`role="menuitemcheckbox"`, the settings toggle's visual at menu size); the menu stays open so the switch is seen to move. A check mark stays for a real choice among three or more, or for marking the current default of an action menu (rule 8).
+- One switch visual in the app: `SwitchTrack` / `switchTrackClass` (`ui/SwitchTrack.tsx`, sizes `md` for settings, `sm` for menus). A new hand-drawn toggle is a finding.
+- Exception: a switch that removes the very control its menu hangs from (the voice menu's "Show audio input") closes the menu.
+
+**Origin:** right-clicking the sidebar button offered "Fixed" and "On Hover" as two check-marked items; the user read them as two checkboxes disabling each other.
+
+## 15. Optional capabilities are off until the user turns them on
+
+A feature that is experimental, or not needed for the general scenario (chat with agents, run jobs), does not claim a permanent place in the app's chrome by default. It is a switch in Settings → Features → **Capabilities**, off for new users, and turning it on is what adds its sidebar tab, menu entries and create actions.
+
+- **Existing users keep what they use.** Introducing the switch migrates once: on if the user already has at least one record of that kind, off otherwise, then the decision is stored and never re-derived.
+- **Off hides the way in, not the data.** Entry points that create content in a disabled capability are hidden; links from existing content to existing records may stay. Nothing is deleted.
+- When reviewing a new top-level surface (sidebar tab, top-bar button, composer control), ask whether a user who never needs it would miss it. If not, it belongs behind a Capabilities switch — report that as a suggestion; it needs the user's decision.
+
+**Origin:** Notes and Dashboards each took a sidebar tab for every user, including those who never made a note or a dashboard.
+
+## 16. Heavy ambient motion waits for an idle user
+
+Ambient animation is decoration, and decoration must never compete with work. Every ambient animation is classed as one of two kinds, and the class is written down beside the idle tracker (`useUserIdle`):
+
+- **Heavy** — large-area, long or attention-pulling motion (the grid lightning burst across the composer): plays only when the user has been idle app-wide (no pointer, key, wheel or input anywhere in the window for the idle threshold, window focused and visible), and rarely. Any activity fades it out.
+- **Subtle** — small, brief, local motion (a border glow, a button shimmer): may play while the user is active, on a slow cadence.
+- Both stop under `prefers-reduced-motion` and when Extra UI animation is off. A new ambient animation that does not say which class it is, or a heavy one gated only on its own element's focus, is a finding.
+
+**Origin:** the lightning burst fired every 12–24 s whenever the composer itself was untouched, so it played while the user read, scrolled and clicked elsewhere.
+
+## 17. Same place and form, different role: make the difference visible
+
+When one element serves two roles in different states — the sidebar shows a *list* of chats, agents or notes, and in Settings a *menu* of sections — the user must be able to tell which role it has at a glance. Same position and shape is right (nothing moves, rule 1); same look is not.
+
+- Mark the role with a quiet, persistent difference: a tinted surface token (the sidebar's `--color-sidebar-menu-bg` in Settings), dimmed neighbours. Colour and opacity only, never layout.
+- Navigation that exists in one state stays reachable in the other: the sidebar tabs remain in Settings, dimmed, and leave Settings on click. A screen whose only exit is a Back button is a finding.
+
+**Origin:** Settings replaced the sidebar's list with its section menu on the identical surface and hid the tabs, so the menu read as another list and "← Back" was the only way out.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -154,3 +194,7 @@ A user who meets one kind of record in three places learns it once. Draw it thre
 16. Open a form, type into it, then press every other control that opens a form. Is the input lost? High.
 17. Read one row's actions. A labelled verb repeated on every row (rather than an icon button with a title): finding.
 18. A new or changed modal: is it built on `app-modal-scrim` + `app-modal-panel` (UI Guidelines, "Surface Materials"), with only what sits on it solid? A new inline block that asks the user something: is it an `ambient-block`? A solid modal shell or a flat-filled ask block is a finding.
+19. Any setting with exactly two states: is it one switch (`MenuSwitchItem` in a menu, `SettingsSwitch` in settings)? Two mutually exclusive items or a second switch visual: finding (rule 14).
+20. A new sidebar tab, top-bar button or composer control: is it core to the general scenario? If not, suggest a Capabilities switch (rule 15).
+21. A new or changed animation: heavy or subtle, and is it gated accordingly? Move the pointer continuously for the idle threshold: does any heavy motion start? Finding (rule 16).
+22. An element whose role changes with the view (list vs. menu): screenshot both states side by side. Indistinguishable, or navigation lost in one of them: finding (rule 17).

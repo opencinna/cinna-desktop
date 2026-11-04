@@ -80,6 +80,15 @@ Drive it with the real mouse (`page.mouse.move` in steps), never with `hover()` 
 
 Report a breach under rule 1 (something appears, vanishes or moves under the pointer), rule 7 (content that restates the row) or rule 8 (popover wiring), and name which of the two needs it fails.
 
+## Switches, capabilities, motion and roles (rules 14–17)
+
+Grep the diff for these whatever surface it touches; each is cheap to miss because the screen looks fine in a single screenshot.
+
+- **Two-state settings (rule 14).** `menuitemradio` pairs, two items toggling one value, a `Check` icon marking an on/off state, or any `role="switch"` not drawn with the shared toggle. In a menu the answer is `MenuSwitchItem`.
+- **New permanent chrome (rule 15).** A new sidebar tab, top-bar button or composer control: say whether a user who never needs it would miss it. If not, suggest a Settings → Features → Capabilities switch (off by default, migrated on for users who already have records). Suggestion, not finding — it needs the user's call.
+- **Animation (rule 16).** Any new `@keyframes`, `animation:`, interval or `setTimeout` loop driving motion: is it classed heavy or subtle in the comment by the idle tracker, and gated accordingly? A heavy one that plays while the user moves the pointer is a finding; in a full pass, keep moving the pointer past the idle threshold and watch.
+- **Role changes (rule 17).** An element whose content changes role between views (the sidebar as list vs. Settings menu): screenshot both states side by side. Identical surfaces, or navigation that exists in one state and is gone in the other, is a finding.
+
 ## Read the diff, then look at the screen
 
 `git diff HEAD` and every untracked file: list every component that renders something. Then drive the built app — the rules about jumping, truncation and banners cannot be judged from JSX.

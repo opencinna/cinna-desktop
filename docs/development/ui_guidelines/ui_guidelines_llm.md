@@ -213,15 +213,12 @@ Disabled: `disabled:opacity-30 disabled:cursor-not-allowed` (or `disabled:opacit
 
 ## Toggle Switch Pattern
 
-```
-relative w-9 h-5 rounded-full transition-colors shrink-0
-  enabled: bg-[var(--color-accent)]
-  disabled: bg-[var(--color-border)]
+One switch visual in the app (ux_rules rule 14), defined once in `ui/SwitchTrack.tsx` in two sizes: `md` (36×20, the settings switch) and `sm` (28×16, the same switch scaled to a menu row or a compact line inside a modal). On is `--color-accent`, off is `--color-border`, the thumb is white. Never hand-draw a track and thumb.
 
-  thumb: absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform
-    enabled: left-[18px]
-    disabled: left-0.5
-```
+- **`SettingsSwitch`** (`settings/SettingsLayout.tsx`) — the whole control: a `role="switch"` button named by a `<label htmlFor={id}>`. Use it, or `SettingsToggleRow`, whenever a label sits beside the switch.
+- **`MenuSwitchItem`** (`ui/MenuSwitchItem.tsx`) — a boolean inside a menu: the whole row is the control (`role="menuitemcheckbox"`) with the `sm` switch at its right edge.
+- **`switchTrackClass(checked, size)` / `switchThumbClass(checked, size)`** — the visual alone, for a button you keep yourself because it needs more than `SettingsSwitch` offers: an `aria-label` instead of a label (card headers, the schedule switch), `e.stopPropagation()` in a clickable header, a `title`, or an extra state such as `AgentCard`'s danger ring after a failed toggle. Add disabled styling (`disabled:opacity-50`) after the track class; never override its colour.
+- **`<SwitchTrack checked size>`** — the visual as an `aria-hidden` decoration, for a row that is itself the control.
 
 ## Status Indicator Pattern
 
@@ -262,4 +259,5 @@ hover:border-[var(--color-text-muted)] transition-colors
 - `src/renderer/src/components/ui/ContextMenu.tsx` — the shell of every right-click menu (Chats row `ChatRowMenu`, a sidebar folder-agent row's `AgentRowMenu`, agent chips in `AgentChip.tsx` — which a plain click opens too); build a new one on it rather than copying a menu. `ContextMenu` portals, opens at the pointer, keeps 8px inside the window, focuses the first enabled item, wraps ArrowUp/ArrowDown (over `menuitem`, `menuitemradio` and `menuitemcheckbox` rows alike — the voice input menu's microphone picks and its switch row), and closes on Escape, Tab, outside `pointerdown`, a scroll of an ancestor of `anchor` (not the streaming transcript), resize and blur. A menu that had to be pushed up to fit is pinned by its bottom edge and grows upward, with the `error` line *above* the items, so the item just clicked stays under the pointer; one that fits below the pointer shows the error last. Re-decided on every size change through a `ResizeObserver`. `useContextMenuAction(onClose).run(action, fallback)` runs one pick at a time, closes on success and keeps the menu open with the reason on failure (ux_rules §6). `CONTEXT_MENU_ITEM` / `CONTEXT_MENU_SURFACE` are `OpenInMenu`'s `MENU_ITEM` / `MENU_SURFACE` with a focus mark and a narrower `w-44`
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Settings shell, tab routing
 - `src/renderer/src/components/settings/SettingsLayout.tsx` — the settings section/card/row/status primitives
+- `src/renderer/src/components/ui/SwitchTrack.tsx` — the one toggle switch visual (`SwitchTrack`, `switchTrackClass`, `switchThumbClass`; sizes `md` / `sm`); `SettingsSwitch` and `ui/MenuSwitchItem.tsx` are the ready-made controls built on it (Toggle Switch Pattern)
 - `src/renderer/src/stores/ui.store.ts` — `activeView`, `settingsTab`, `theme`

@@ -123,6 +123,10 @@ Dashboard runs take the agent's lock **shared**, with owner `'dashboard'`, throu
 - Missing credentials short-circuit before any run: the answer is the cached result with a sentence in `error` (`missingCredentialsMessage`), stored nowhere.
 - `after_turn` source: `runExecutionState.onRunClosed(listener(chatId, agentId))`, wired in `hub/core.ts` to `afterTurn(getProfileScopeUserId(), agentId)`. `runClosed` now carries the agent id (null when the turn ended before one was resolved).
 
+### Capability gate
+
+`createDashboardRefreshService` takes an `enabled()` dep (production: `capabilityService.isOn('dashboards')`; default always on). `warmUp` returns `[]` and `scheduleRan` returns `[]` while off; `syncTimer` arms no interval timer, and a running one stops itself at its next tick even with a live lease. Leases, direct refreshes and previews do not consult it. The renderer side (tab, Add to dashboard…, origin pill/mark, linked names in `componentParts.tsx`) reads `useCapabilities().dashboardsEnabled`. See [Capabilities (tech)](../capabilities/capabilities_tech.md).
+
 ### The agent's tile tools
 
 `conductorBridge.providers` registers `dashboardTileToolProviderFor` when the session has the kit binding (`binding.artifacts`, the same gate as the artifact tool), the chat has an `originDashboardId` and the chat's agent is the session's. That is a necessary check only: **each call re-reads** the chat (visible to the profile, not deleted, same agent, origin set), the dashboard and the tiles, and answers `no_dashboard` otherwise.

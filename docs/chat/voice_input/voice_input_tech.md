@@ -21,7 +21,7 @@
 - `src/preload/index.ts` — `window.api.speech.status()` and `window.api.speech.transcribe(request)`.
 
 **Renderer** (`src/renderer/src/components/chat/voice/`)
-- `VoiceInputButton.tsx` — the button, its right-click menu (`ContextMenu` with `MicrophoneItem` radio rows and a `MenuSwitch` checkbox row), the blocked hint, the hide-and-toast action, the headphone registration and the send-after-text logic.
+- `VoiceInputButton.tsx` — the button, its right-click menu (`ContextMenu` with `MicrophoneItem` radio rows and a `MenuSwitchItem` checkbox row, always checked — turning it off hides the button this menu belongs to, so the handler is `hide`), the blocked hint, the hide-and-toast action, the headphone registration and the send-after-text logic.
 - `useVoiceRecorder.ts` — `useVoiceRecorder({ deviceId, onText, onError })`: `getUserMedia`, a 16 kHz `AudioContext`, the worklet, WAV encoding and the `speech.transcribe` call. Exposes `state`, `current()` (the live state, ahead of the render) and `toggle()`.
 - `recorderWorklet.js` — the `cinna-recorder` AudioWorklet; imported with `?url&no-inline` because the renderer CSP blocks `blob:` and `data:` modules.
 - `wav.ts` — `encodeWav(samples, rate)` (16-bit PCM mono), `concatSamples(chunks)` and `sampleLevels(samples)` (peak and RMS, rounded to 4 places, for the log).

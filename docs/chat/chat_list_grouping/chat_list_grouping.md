@@ -6,7 +6,7 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 ## Core Concepts
 
-- **Chats list options menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is one flat list. Both off is the default. Below a separator, a third switch, **Show Active group**, off by default, draws running and unread chats in their own block above everything — see [the Active block](active_block.md).
+- **Chats list options menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each a labelled row with the app's switch at its right edge (a check mark would read as the current pick, not an on/off setting). Either, both or neither; neither is one flat list. Both off is the default. Below a separator, a third switch, **Show Active group**, off by default, draws running and unread chats in their own block above everything — see [the Active block](active_block.md).
 - **Who group** — one per counterpart, the same counterpart the [row summary](../chat_row_summary/chat_row_summary.md)'s who line names:
   - an **agent** — its type icon and name, the icon in the agent's [color](../../agents/agents/agent_colors.md) when the user chose one;
   - a **chat mode** — a chat icon in the mode's colour and the mode's name;

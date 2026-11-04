@@ -20,6 +20,10 @@ The chat beside a dashboard, and what the agent is told about the tile in front 
 
 ## User Stories / Flows
 
+### Turning Dashboards on
+
+Dashboards is an optional [capability](../capabilities/capabilities.md): off for a new user, on for one with a dashboard in any profile. Off, there is no Dashboards tab, a component card and an agent's Dashboards tab list and preview components but offer no **Add to dashboard…**, the "From dashboard" pill and chat-row mark are hidden, and a card's dashboard names are plain text. Nothing runs in the background either: no launch warm-up, no `while_open_every` timer, no schedule-fed refresh. Placed tiles and their cached data are kept and come back when it is turned on again (timers re-arm at the next lease renewal, within about 20 s; warm-up waits for the next profile start). What the user or an agent asks for directly still runs.
+
 ### Getting a component onto a dashboard
 
 1. The user asks an agent for something to keep — "a view of my open deals I can keep on a dashboard". The agent builds `dashboards/<name>/`, checks it with the skill's `check_component.py`, and prints the component's reference on a line of its own.

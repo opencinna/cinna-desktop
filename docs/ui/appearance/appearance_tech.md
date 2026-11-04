@@ -15,6 +15,7 @@ Implementation companion to [Appearance](appearance.md).
 - `src/renderer/src/utils/theme.ts` — `Theme`, `ThemePreference`, `readThemePreference`, `resolveTheme` shared with the tray root.
 - `src/renderer/src/stores/ui.store.ts` — persisted preferences, resolved theme, OS/storage listeners and HMR cleanup.
 - `src/renderer/src/components/ui/AmbientGrid.tsx` — `makeTrails`, grid/border state, interaction and visibility lifecycle.
+- `src/renderer/src/hooks/useUserIdle.ts` — the app-wide idle tracker: `HEAVY_AMBIENT_IDLE_MS` (45 s) and `subscribeUserIdle(thresholdMs, listener)`; the doc comment there defines the heavy and subtle classes.
 - `src/renderer/src/hooks/useAmbientButtons.ts` — one secondary-button scheduler per mounted Shell.
 - `src/renderer/src/components/layout/TopBar.tsx` — header-wave scheduler.
 - `src/renderer/src/components/layout/ChatTransition.tsx` — chat-switch DOM snapshot and diagonal fading curtain; hosted by `MainArea`.
@@ -71,6 +72,12 @@ System is resolved before IPC; main never receives `system`. The handler updates
 | New-chat logo sweep | 6–9 s after the logo is shown (5 s draw + 1–4 s); 4–9 s after a visibility/motion change, never before the draw has finished | 4.2–5.6 s | 8–18 s |
 
 Grid/border state is per host; the secondary-button singleton, header scheduler and logo sweep are independent, so their effects can overlap with a surface burst.
+
+### Idle tracking (heavy motion)
+
+`useUserIdle.ts` keeps one shared set of passive, capture-phase window listeners (`pointermove` throttled to one per 250 ms, `pointerdown`, `keydown`, `wheel`, `scroll`, `input`) installed while there is at least one subscriber. Each subscriber has a threshold and a timer set once per quiet stretch: when it fires it re-checks the clock and waits out the remainder if activity happened meanwhile. Foreground means `document.hasFocus()`, visible and the active element not an `IFRAME`; losing it flips every subscriber to not idle, and regaining it counts as activity. Subscribers start not idle.
+
+`AmbientGrid` subscribes with `HEAVY_AMBIENT_IDLE_MS`. `scheduleBurst` arms the next `play` only while idle, not `interacting` (textarea), visible and not reduced-motion; first burst delay `BURST_FIRST_DELAY_MS` (2–6 s), later ones `BURST_INTERVAL_MS` (40–90 s). Becoming active runs `fadeBurst`: the burst is drawn in its own `.ambient-grid-burst-layer` with its own `data-fading` and 350 ms opacity transition, so a border glow running beside it is not faded with it (the host-level `data-fading` still belongs to textarea `quiet`). The border glow timers are unchanged.
 
 ### Secondary buttons and header wave
 

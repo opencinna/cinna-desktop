@@ -15,7 +15,7 @@
 ### Renderer — Layout
 
 - `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; `SidebarButton` (toggle, or dock in hover docking, with the right-click Sidebar docking menu) + Tasks + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
-- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; in hover docking adds `is-floating` and portals the edge band (see [Sidebar docking](#sidebar-docking)); renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
+- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; in hover docking adds `is-floating` and portals the edge band (see [Sidebar docking](#sidebar-docking)); renders Chats/Jobs/Agents/Notes tab content or the settings menu (the card gets `is-menu` in Settings; `SidebarTabs` renders in both); footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
 - `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note, dashboard (`DashboardView`) and local/external agent pages; mounts `useLiveRunWatch`, `useReadChatResult` and `useReadJobResult` once above the individual workspaces. Only activeView=chat supplies a visible chat ID, and only activeView=job-detail a visible job ID, for foreground result acknowledgement; [status details](../../chat/session_status/session_status_tech.md#renderer-components).
 
@@ -60,7 +60,7 @@
 | `sidebarDocking` | `'fixed' \| 'hover'`, persisted as `cinna-sidebar-docking` (only `hover` means hover; anything else is fixed). `setSidebarDocking` writes the key and clears `sidebarPeek`; `'fixed'` also sets `sidebarOpen: true`, writing `cinna-sidebar-open` **before** the docking key so another window reacting to the docking event never reads the old closed state beside it. The `storage` listener (`syncAppearance`) applies a changed mode the same way, and a null key rereads it |
 | `sidebarPeek` | Hover docking only: floating on screen now. Not persisted; always starts `false`. Set by `useSidebarHoverDock` through `setSidebarPeek`, and by `revealSidebar` |
 | `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent, external-agent or dashboard |
-| `sidebarTab` | Chats / Jobs / Notes / Agents / Dashboards, retained when opening a cross-tab view such as Inbox |
+| `sidebarTab` | Chats / Jobs / Agents / Notes / Dashboards (the last two only while their capability is on), retained when opening a cross-tab view such as Inbox |
 | `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
 | `agentPageMode` | `chat` or `settings`, initially `chat`; row selection sets chat mode explicitly |
 | `pendingAgentId` | One-shot new-chat preselection consumed only by the non-embedded workspace |
@@ -123,7 +123,10 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - `overflow: hidden` on the inner sidebar is required so its rounded corners clip child content; popovers escape this via `createPortal`
 - Two body modes:
   - `activeView === 'settings'` — Back button, "Settings" header, vertical menu items + Trash with a divider
-  - otherwise — the tab rail and the list selected by `sidebarTab`: `ChatList`, `JobsList`, `NotesList` or `LocalAgentsList`
+  - the tab rail renders in either case (`SidebarTabs`): in Settings `.app-sidebar-tabs.is-dimmed` and no tab `aria-pressed`, each button named `Open <label>`; `handleSwitchTab` treats `settings` like the tabless views (`LEAVABLE_VIEWS`) so even the previously selected tab leaves Settings. `TAB_ITEMS` is filtered by `isSidebarTabEnabled` from `useCapabilities`; see [Capabilities](../capabilities/capabilities_tech.md)
+  - otherwise — the list selected by `sidebarTab`: `ChatList`, `JobsList`, `NotesList` or `LocalAgentsList`
+- **Sidebar CSS (`main.css`).** `.app-sidebar.is-menu` paints `--color-sidebar-menu-bg` (light: accent 5% over `--color-bg-secondary`; dark: a translucent lift layered by `background-image` over the card's own dark glass, so it reads lifted rather than warmer); the card's `background-color` transitions over 160 ms. `.sidebar-tab:not([aria-pressed='true']):hover` adds `inset -5px 0 5px -3px var(--color-sidebar-tab-shadow)` (the resting state is the same shadow at zero so it interpolates; reduced motion drops the shadow transition); dark theme also sets `--color-sidebar-tab-hover-bg`. `.is-dimmed .sidebar-tab` is 0.45 opacity (0.6 in dark, where the rail is already faint) and 1 on hover or `:focus-visible`.
+- The top-bar docking menu is one `MenuSwitchItem` (`role="menuitemcheckbox"`) rendered in the shared `MENU_SURFACE` at `w-52`; `SidebarButton` focuses it once the popover is positioned and returns focus to the button on Escape.
 - Footer is `UserMenu compact` / spacer / `LocalDevStatusButton` / `UpdateStatusButton` / `InterfaceMenu`.
 - Returning to the already selected Agents tab from Inbox restores `external-agent` when `activeExternalAgentId` exists; otherwise it uses the tab's folder-agent view.
 - `LocalAgentsList` reads `showAgentSidebarSections` from `useAppSettings`, defaulting on unless explicitly false. The same group ordering renders with or without headers; flattening adds no empty-group placeholder.

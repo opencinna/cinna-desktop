@@ -13,7 +13,8 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
 - **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes, dashboards and folder/external agent pages.
-- **Dashboards tab** — The fifth sidebar tab (`Chats | Jobs | Notes | Agents | Dashboards`). Like Chats it comes back to the dashboard that was open, and the list opens the first one itself when none is: a dashboard is a screen to look at, not a folder to choose from. The main area shows the `dashboard` view. See [Dashboards](../dashboards/dashboards.md).
+- **Sidebar tab rail** — The diary-book tabs on the card's left edge: `Chats | Jobs | Agents`, then **Notes** and **Dashboards** once those [capabilities](../capabilities/capabilities.md) are on. The two optional tabs are last so turning one on appends a tab and moves none. A tab's hover sinks it under the card: a dark shade grows from its right edge (and, in dark theme, the tab lightens slightly so there is something to darken); the selected tab never sinks. In Settings the rail stays but is **dimmed** with no tab selected, because the section menu is the page then; a hovered or focused tab returns to full strength, and each is named `Open <tab>` (so it never shares a name with the menu's own Chats and Agents items) and leaves Settings for that tab.
+- **Dashboards tab** — The last sidebar tab (`Chats | Jobs | Agents | Notes | Dashboards`), present only while Dashboards is on. Like Chats it comes back to the dashboard that was open, and the list opens the first one itself when none is: a dashboard is a screen to look at, not a folder to choose from. The main area shows the `dashboard` view. See [Dashboards](../dashboards/dashboards.md).
 - **Window State** — The main window's normal (un-maximized) size and position plus whether it was maximized, kept by the main process in a small file in the app's data folder and reapplied whenever the main window is created. Belongs to the machine, not to a profile.
 
 ## User Stories / Flows
@@ -29,7 +30,7 @@ This is Fixed docking. In On Hover the same button does something else — see b
 
 ### Using the sidebar On Hover
 
-1. User picks **On Hover** in Settings → Features → Interface → **Sidebar docking**, or right-clicks the top-bar sidebar button and picks it from the **Sidebar docking** menu (the current mode carries a check; Escape or an outside click closes the menu).
+1. User picks **On Hover** in Settings → Features → Interface → **Sidebar docking**, or right-clicks the top-bar sidebar button and flips the **Show sidebar on hover** switch in the menu that opens (focus lands on it; the menu stays open so the switch is seen to move; Escape or an outside click closes it and returns focus to the button).
 2. The sidebar slides away as if collapsed, and the chat takes the full width.
 3. User moves the pointer to the left edge of the window — anywhere in the band about half the sidebar's width in from it, below the top bar — and keeps it there for a moment; the sidebar slides in over the chat with a shadow. The chat underneath does not move.
 4. User works in the sidebar — opens a chat, renames one, opens its right-click menu. It stays while the pointer is on it and while any menu, popover or dialog is open or a field inside it has focus.
@@ -54,7 +55,8 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 
 1. User clicks the avatar in the sidebar footer.
 2. Profile dropdown opens (portaled, so it escapes the sidebar's clip).
-3. User clicks "Settings"; main area switches to the settings page and the sidebar's content switches to the settings menu.
+3. User clicks "Settings"; main area switches to the settings page and the sidebar's content switches to the settings menu. The card takes a slightly lighter tint (`--color-sidebar-menu-bg`, colour only, so nothing moves) to say its body is a menu now, not a list, and the tab rail beside it is dimmed.
+4. Clicking a dimmed tab leaves Settings for that tab (Chats reopens the last chat). Back does the same as before.
 
 ### Toggling UI Preferences
 
@@ -140,7 +142,7 @@ App
     │           └── DashboardOriginPill → "From dashboard" pill (a chat a dashboard's panel started)
     └── flex row
         ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge band → peek)
-        │     ├── Settings menu OR Chats / Jobs / Notes / Agents / Dashboards tab content
+        │     ├── Settings menu OR Chats / Jobs / Agents / Notes / Dashboards tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)
         │           ├── Local-dev/update controls
