@@ -59,7 +59,7 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 
 ### Agent Page and Profile Settings
 
-- The page opens in chat mode; **Settings** exposes Overview, Connection and Interface, and **Start chat** returns to the same draft. Overview contains skills and readiness. Connection contains labeled protocol/endpoint details, automatic profile authentication and connection testing. Interface holds the agent's `⌘1`–`⌘9` shortcut; sync dropping the agent does not release it, so it re-applies if the agent returns under the same id.
+- The page opens in chat mode; **Settings** exposes Overview, Connection and Interface — and, for an agent the profile owns (the same test as **Develop**), **Dashboards**, listing the agent's dashboard components from core with Preview and Add to dashboard… ([Cloud Tiles](../../ui/dashboards/cloud_tiles.md)) — and **Start chat** returns to the same draft. Overview contains skills and readiness. Connection contains labeled protocol/endpoint details, automatic profile authentication and connection testing. Interface holds the agent's `⌘1`–`⌘9` shortcut; sync dropping the agent does not release it, so it re-applies if the agent returns under the same id.
 - Profile → Agents is a visibility and sync list for the active Cinna server only. Enabled rows have a Settings shortcut; hidden rows remain available to Enable. Sync failures and reauthentication remain on this page. Target types are backend metadata, not separate My Agents/Shared with Me/People settings groups.
 - The header server domain opens the configured Cinna server externally; the ⋯ menu's **Open on the server** opens this agent's own page there.
 - **Develop** prepares an eligible remote agent as a local coding connection when Local Development is ready; see [Local Development](../local_dev/local_dev.md#develop-a-remote-agent).
@@ -130,4 +130,5 @@ Desktop Navigation:
 - **[Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)** — JWT obtained via `getCinnaAccessToken()` which handles token refresh and rotation. Sync triggers on Cinna user activation
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — Remote sync starts on `activate()` and stops on `deactivate()`, following the same resource lifecycle gate as LLM/MCP providers
 - **External Agent Access API** — Backend surface at `/api/v1/external/` providing agent discovery (`GET /agents`) and per-target A2A endpoints (`/a2a/{target_type}/{target_id}/`)
+- **[Cloud Tiles](../../ui/dashboards/cloud_tiles.md)** — an owned cloud agent's components on desktop dashboards, backed by core blocks; its dashboard panel chat is an A2A chat continuing core's dashboard chat session
 - **[Settings Scope](../../core/settings_scope/settings_scope.md)** — defines why remote agents live in Profile scope and how `agent_overrides` overlays the synced `enabled` flag in `agentService.listMerged`

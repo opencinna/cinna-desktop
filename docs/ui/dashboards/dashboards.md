@@ -2,14 +2,14 @@
 
 ## Purpose
 
-A dashboard is a grid of live tiles the user keeps open to watch something over time — open deals, today's notes, a revenue chart. Each tile shows a **component** an agent built in its own folder; the user decides which components go where, and Cinna keeps them fresh while they are looked at. An [artifact](../../chat/artifacts/artifacts.md) is a frozen copy to hand to people; a dashboard component is a view the owner keeps.
+A dashboard is a grid of live tiles the user keeps open to watch something over time — open deals, today's notes, a revenue chart. Each tile shows a **component** an agent built in its own folder — or, for the user's own cloud agents, in their environment on the Cinna server ([Cloud Tiles](cloud_tiles.md)); the user decides which components go where, and Cinna keeps them fresh while they are looked at. An [artifact](../../chat/artifacts/artifacts.md) is a frozen copy to hand to people; a dashboard component is a view the owner keeps.
 
-The chat beside a dashboard, and what the agent is told about the tile in front of the user, are [Dashboard Chat](dashboard_chat.md). The implementation is [Dashboards (tech)](dashboards_tech.md).
+The chat beside a dashboard, and what the agent is told about the tile in front of the user, are [Dashboard Chat](dashboard_chat.md). Tiles of cloud agents are [Cloud Tiles](cloud_tiles.md). The implementation is [Dashboards (tech)](dashboards_tech.md).
 
 ## Core Concepts
 
 - **Dashboard** — A named grid, per profile (up to 20 per profile, names up to 80 characters). Reached from the **Dashboards** tab in the sidebar. Deleting one removes its tiles and their cached data and nothing else: the components stay in their agents' folders, and the chats its panel started stay as ordinary chats.
-- **Tile** — One placement of a component on a dashboard (up to 24 per dashboard). A tile **references** its component — the agent by its manifest id, the component by its folder name — and never copies it, so an agent that edits its component changes every tile showing it, and a moved or renamed agent folder keeps its tiles. It carries only the user's own choices: a title that replaces the component's, a size, its params, and a refresh override (any of the five refresh fields).
+- **Tile** — One placement of a component on a dashboard (up to 24 per dashboard). A tile **references** its component — the agent by its manifest id, the component by its folder name — and never copies it, so an agent that edits its component changes every tile showing it, and a moved or renamed agent folder keeps its tiles. It carries only the user's own choices: a title that replaces the component's, a size, its params, and a refresh override (any of the five refresh fields). A **cloud tile** references a cloud agent's component instead and is backed by a block on a core dashboard, which owns its params and data; see [Cloud Tiles](cloud_tiles.md).
 - **Component** — A folder an agent keeps under `dashboards/<name>/` (or a skill ships under `<skill>/dashboards/<name>/`), whose `component.json` says what to show, where the data comes from, how big it is and how fresh it should be. The format is core's `dashboards/1` protocol, bundled with the [kit contract](../../agents/local_agents/kit_contract.md); the agent learns it from the `cinna-dashboards` skill.
 - **View** — How a component draws: four native views — **markdown**, **table**, **list**, **metrics** — drawn in Cinna's own design from data of a shape the protocol defines, or **html**, the agent's own page in a sandboxed frame. A native view is preferred because it matches the app and costs nothing to host; a page is for what the four cannot draw (a chart).
 - **Source** — Where a component's data comes from: an **endpoint** (a script in the component's `api/` folder, given the params as JSON and printing one JSON value) or a **file** (`.md`, `.json` or `.csv` under the agent's `app-data/` or `files/`).
@@ -198,7 +198,7 @@ Chat: ComponentCard (reference → dashboards:resolve-reference)  ·  DashboardC
 - **A tile below the fold computes nothing until it is scrolled into view.** By design: the lease is for what is on screen.
 - **`stray_file` warnings** have no place in the UI.
 - **The add-on picker's component count** depends on the shape of core's catalog download path and reads the locally cached copy only; a skill never downloaded says nothing.
-- **Cloud agents have no dashboards** — only Cinna Desktop shows components; the `artifacts_publish` description says so, so an agent there uses an artifact.
+- **A cloud agent's component goes on a desktop dashboard only for its owner,** and those dashboards are not shown on the web; core's own web dashboards are a separate surface. See [Cloud Tiles](cloud_tiles.md#known-gaps).
 
 ## Integration Points
 
@@ -212,3 +212,5 @@ Chat: ComponentCard (reference → dashboards:resolve-reference)  ·  DashboardC
 - [Agent Turn](../../agents/local_agents/agent_turn.md): the turn lock the runs yield to; a turn's end triggers the after-turn refresh.
 - [App Shell](../app_shell/app_shell.md): the sidebar tab and the `dashboard` view.
 - [Dashboard Chat](dashboard_chat.md): the panel, its context and the chat's origin.
+- [Cloud Tiles](cloud_tiles.md): components of the user's own cloud agents, backed by core blocks.
+- [Remote Agents](../../agents/remote_agents/remote_agents.md): a cloud agent's page carries the same Dashboards tab.

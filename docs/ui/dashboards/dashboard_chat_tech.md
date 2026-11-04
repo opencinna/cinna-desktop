@@ -42,14 +42,16 @@ Nothing about the context is stored.
 
 ## IPC Channels
 
-- `dashboards:panel-chat` `{dashboardId, agentId, fresh?}` → `{ok: true, chatId}` or a refusal (`invalid_input`, `not_found`, `not_kit_agent`). Without `fresh`, the latest chat this profile sees (`listOwners`, not in the trash) with that origin and agent is returned; otherwise main creates an empty chat with the origin and title, then binds it `direct` to the agent through `chatService.update(…, {router: 'direct', agentId})` — the same update the agent page's composer makes for its new chat, which settles the owner.
+- `dashboards:panel-chat` `{dashboardId, agentId, fresh?}` (async) → `{ok: true, chatId}` or a refusal (`invalid_input`, `not_found`, `not_kit_agent`; for a cloud agent also `unreachable`, `reauth_required` and core's own codes). Without `fresh`, the latest chat this profile sees (`listOwners`, not in the trash) with that origin and agent is returned; otherwise main creates an empty chat with the origin and title, then binds it `direct` to the agent through `chatService.update(…, {router: 'direct', agentId})` — the same update the agent page's composer makes for its new chat, which settles the owner.
 - `run:start` `RunSendPayload.dashboardContext?` — wire-only; `useChatStream.startRun` adds it only when set.
 
 ## Services & Key Methods
 
 ### `runExecutionService.dashboardContextFor`
 
-Returns a `DashboardContextTurn` or null, never throws (a failure is logged and the turn runs without it — context is never a precondition). Returns null when the payload has none; the driver's `capabilities(agent).cwd` is false; the driver's commands are `catalog` and the message is a `/run:` match; `sanitizeDashboardContext` refuses; or the chat's `originDashboardId` (read through `visibleChat`) is not the context's `dashboardId`. Skipped for nested runs. Otherwise `dashboardContextTracker.forTurn(chatId, dashboardContextSection(context))`.
+Returns a `DashboardContextTurn` or null, never throws (a failure is logged and the turn runs without it — context is never a precondition). Returns null when the payload has none; the driver's `capabilities(agent).cwd` is false and the agent is not a Cinna-synced A2A agent (`driver.id === 'a2a'` with `capabilities.auth === 'cinna'`); the driver's commands are `catalog` and the message is a `/run:` match; `sanitizeDashboardContext` refuses; or the chat's `originDashboardId` (read through `visibleChat`) is not the context's `dashboardId`. Skipped for nested runs. Otherwise `dashboardContextTracker.forTurn(chatId, dashboardContextSection(context))`.
+
+For a Cinna-synced A2A agent the turn's `text` is always null and `payload` is `dashboardContextPayload(context)` — the section's JSON object, cut by the same rule — when the tracker says it is included (`forTurn(chatId, JSON.stringify(payload))`, so the hash is of the same compact form core hashes). `RunInput.dashboardContextPayload` → the driver's `dashboardContext` → `a2aMessageMetadata(fileIds, dashboardContext)` puts it in `message.metadata.cinna_dashboard_context` beside `cinna_file_ids`. Delivery is marked as for any turn, so a turn that never reached core sends it again next time.
 
 ### Sanitising and the wire format
 
@@ -71,7 +73,11 @@ Returns a `DashboardContextTurn` or null, never throws (a failure is logged and 
 
 ### Panel chat service
 
-`panelChat.open(userId, input)` validates the payload shape, then the dashboard (this profile's), then the agent: a kit agent on this machine (`dashboardService.isComponentAgent`), else `not_kit_agent` for another local agent and `not_found` for an unknown one. Titles use `panelChatTitle`.
+`panelChat.open(userId, input)` (async) validates the payload shape, then the dashboard (this profile's), then the agent: a kit agent on this machine (`dashboardService.isComponentAgent`), a cloud agent (`findCloudAgent`) → `openCloud`, else `not_kit_agent` for another local agent and `not_found` for an unknown one. Titles use `panelChatTitle`.
+
+### Cloud agents
+
+`openCloud`: the dashboard's `core_dashboard_id` (none → `not_found`: no cloud tile from that agent yet), then `coreDashboardsClient.openChat(core dashboard, core agent id, fresh)` → core's session id. Without `fresh`, the latest local chat for (dashboard, agent) is returned only when its `a2a_sessions` task id (`seededSession`) is that session; otherwise `createRemote` makes the chat as `create` does and seeds its `a2a_sessions` row for (chat, agent row) with `task_id` = the core session id, because core's A2A handler resumes a session by `message.taskId`. The row is keyed by (chat, agent), so a task id never reaches another agent's session (core refuses that with `-32001`). Core's refusals pass through as data; core answers 400 (`invalid_input`) when the agent has no active environment.
 
 ## Renderer Components
 
@@ -91,8 +97,8 @@ None. The panel width (default 400, minimum 300, at most 60% of the window) and 
 
 - The renderer's context is untrusted input; main re-validates every field, strips control and bidi characters, caps the block, and drops it unless the chat's recorded origin is that dashboard — a compromised renderer cannot attach a context to another chat.
 - The context never carries other agents' data, only their tiles' titles.
-- Only a kit agent running in a folder on this machine gets a context; nothing is sent to remote or A2A agents.
+- Only a kit agent running in a folder on this machine, or the user's own cloud agent in its dashboard chat, gets a context. A cloud agent receives it as A2A metadata of the turn, re-sanitised and capped by core; no other remote or A2A agent gets one.
 
 ## Tests
 
-`dashboardContext.test.ts` (main and renderer), `componentBridge.test.ts` (collect-context), `Tile.d5.test.tsx`, `panelChat.test.ts`, `runQueueService.test.ts`, `threadContextService.test.ts`, `conductorTranscript.test.ts`, `chatTitleService.test.ts`, `DashboardView.chat.test.tsx`, `DashboardChatPanel.layout.test.ts`, `DashboardOriginPill.test.tsx`; E2E `dashboard-panel.spec.ts` and the billed D3 test in `live-dashboards.spec.ts`.
+`dashboardContext.test.ts` (main and renderer; `dashboardContextPayload` key order), `a2aDriver.test.ts`, `a2aStreamingService.test.ts`, `run.routing.test.ts` (metadata, no text block), `componentBridge.test.ts` (collect-context), `Tile.d5.test.tsx`, `panelChat.test.ts`, `runQueueService.test.ts`, `threadContextService.test.ts`, `conductorTranscript.test.ts`, `chatTitleService.test.ts`, `DashboardView.chat.test.tsx`, `DashboardChatPanel.layout.test.ts`, `DashboardOriginPill.test.tsx`; E2E `dashboard-panel.spec.ts`, the panel test of `dashboard-cloud.spec.ts`, the billed D3 test in `live-dashboards.spec.ts` and L3 of `live-dashboard-cloud.spec.ts`.

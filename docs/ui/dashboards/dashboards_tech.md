@@ -1,6 +1,6 @@
 # Dashboards — Technical Details
 
-Implementation reference for [Dashboards](dashboards.md). The panel and the context block are [Dashboard Chat (tech)](dashboard_chat_tech.md).
+Implementation reference for [Dashboards](dashboards.md). The panel and the context block are [Dashboard Chat (tech)](dashboard_chat_tech.md); cloud tiles (`services/dashboards/remote/`, the frame relay, core's events) are [Cloud Tiles (tech)](cloud_tiles_tech.md).
 
 ## File Locations
 
@@ -19,7 +19,9 @@ Implementation reference for [Dashboards](dashboards.md). The panel and the cont
 - `src/main/services/conductorBridge.ts` (`providers`) offers the provider; `src/main/services/conductorMcpServer.ts` (`toolResult`) and `src/main/llm/toolProvider.ts` (`ToolExecutionResult.structuredContent`) carry `structuredContent` for every provider.
 - `src/main/services/dashboards/panelChat.ts`, `dashboardContext.ts` — see [Dashboard Chat (tech)](dashboard_chat_tech.md).
 - `src/main/services/dashboards/dashboardsSkill.ts` — `cinna-dashboards` skill location, per-engine delivery, the Claude plugin, the prompt section, `skillDashboardComponentCount`.
-- `src/main/db/dashboards.ts` — `dashboardRepo`; `src/main/db/migrations/dashboards.ts` — `migrateDashboards`.
+- `src/main/db/dashboards.ts` — `dashboardRepo`, `isCloudTileRow`; `src/main/db/migrations/dashboards.ts` — `migrateDashboards`.
+- `src/main/services/dashboards/remote/` — cloud tiles: see [Cloud Tiles (tech)](cloud_tiles_tech.md#file-locations).
+- `src/main/services/htmlPreview/frameOwners.ts` and `src/main/host/desktop/dashboardFrameOwners.ts` — every frame a webContents opened is released when it reloads, crashes or is destroyed (React cleanups do not run then), local and cloud alike.
 - `src/main/ipc/dashboards.ipc.ts` — `registerDashboardHandlers` (registered from `ipc/index.ts`).
 - `src/main/kit/dashboardsProtocol.ts` — the protocol's constants (name and script patterns, timeouts, limits, the schema's and bridge's bundle paths); `dashboardsProtocolParity.test.ts` holds each equal to the bundled schema.
 - `src/main/services/htmlPreview/dashboardFrameServer.ts` — `createDashboardFrameServer(deps)`, `dashboardFrameCsp()`; `dashboardHelper.ts` — `dashboardHelperScript()`, `injectDashboardHelper()`.
@@ -49,14 +51,14 @@ Implementation reference for [Dashboards](dashboards.md). The panel and the cont
 
 ## Database Schema
 
-`src/main/db/migrations/dashboards.ts` (after `users`, creation only plus one idempotent column add); Drizzle in `src/main/db/schema.ts`:
+`src/main/db/migrations/dashboards.ts` (after `users`, creation plus idempotent column adds); Drizzle in `src/main/db/schema.ts`. The D6 columns (`dashboards.core_dashboard_id`, `core_server`; `dashboard_tiles.source`, `remote_agent_id`, `core_block_id`, `cloud_component_json`) are in [Cloud Tiles (tech)](cloud_tiles_tech.md#database-schema).
 
 - `dashboards` — `id`, `profile_user_id` (→ `users`, cascade), `name`, `sort_order`, timestamps.
 - `dashboard_tiles` — `dashboard_id` (→ `dashboards`, cascade), `agent_manifest_id` (the agent's manifest id, not its folder), `component` (folder name), `skill` (null for the agent's own; added by `hasColumn` check), `title` (null = the component's), `size`, `position`, `params_json` (the stored set; defaults copied in at `addTile`, never after), `refresh_override_json` (`{maxAge?, manual?, whileOpenEvery?, afterTurn?, onAppStart?}`; `whileOpenEvery: null` turns the component's off, a `false` flag overrides a `true`), timestamps.
 - `dashboard_tile_results` — primary key (`tile_id`, `params_hash`): `result_json`, `fetched_at`, `error`, `duration_ms`, `too_large`, `updated_at`. At most three param sets are kept per tile. A failure writes `error` and never clears `result_json`.
 - `chats.origin_dashboard_id`, `chats.initial_title` — `migrations/chats.ts`. Deleting a dashboard nulls `origin_dashboard_id` on its chats (`dashboardRepo.delete`), and deletes results and tiles explicitly as well as by cascade, because a handle may have foreign keys off.
 
-Dashboards are per profile; the agents whose components they show are folder agents, which live in the default scope.
+Dashboards are per profile; the agents whose components they show are folder agents, which live in the default scope, or the profile's own synced cloud agents (`source = 'remote'` tiles).
 
 ## IPC Channels
 
@@ -64,13 +66,13 @@ All validated again in the service; every answer, refusals included, is data (`D
 
 - `dashboards:list`, `:create` (name), `:rename` ({dashboardId, name}), `:delete`, `:reorder` (ordered ids), `:tiles` (dashboard id → dashboard + `TileView[]`).
 - `dashboards:add-tile` (`AddTileInput`: an existing `dashboardId` or a `newDashboardName`), `:update-tile`, `:move-tile` ({tileId, toIndex}), `:remove-tile`.
-- `dashboards:components` (one agent's or every kit agent's), `:placements` (agent id).
+- `dashboards:components` (one agent's or every kit agent's), `:placements` (agent id), `:cloud-components` (a cloud agent's, from core; [Cloud Tiles (tech)](cloud_tiles_tech.md#ipc-channels)).
 - `dashboards:tile-result` (cached, runs nothing), `:ensure-fresh` ({tileId, reason}) — **`visible` and `manual` only; `after_turn`, `interval`, `launch`, `params` and `schedule` are main's own and are refused here** — `:preview` ({agentId, component, skill, params?}) runs once and never caches; `params`, when non-empty, are checked as a tile's are and drawn from the preview target's budget.
 - `dashboards:set-params` ({tileId, params}) → `{ok, tile}` — a native filter's change or a page's `setParams`; validate, store, publish, recompute (`params`). `dashboards:call` ({target: {tileId} or {agentId, component, skill}, endpoint, params?}) → `{ok, value}` — a page's `tools/call`.
 - Error codes added by D4 (`DashboardsErrorCode`): `rate_limited`, `needs_credentials` (a `requires_credentials` slot is not ready: nothing ran), `call_failed` (the endpoint ran or was stopped and gave no value). They come back as data like the rest.
 - D5: `dashboards:highlight` (tile id → the ids held, `[]` when none or not this profile's tile), `dashboards:clear-highlight` (tile id; the owner picked something — no push, the renderer already shows it), `dashboards:highlight-ready` ({tileId, ready?} — a page's `cinna/highlight-ready`, or `false` when its document was replaced). All three resolve the tile to the active profile first.
 - `dashboards:lease` (tile ids), `:drop-lease` (ids, or none for all).
-- `dashboards:open-frame` (`{tileId}` or `{agentId, component, skill}` → `{token, url}`; refused unless the component is valid and its view is `html`), `:release-frame` (token).
+- `dashboards:open-frame` (`{tileId}` or `{agentId, component, skill}` → `{token, url}`; refused unless the component is valid and its view is `html`; the opening webContents is recorded), `:release-frame` (token).
 - `dashboards:resolve-reference` ({reference, chatAgentId}) → `ComponentReferenceResolution`.
 - `dashboards:panel-chat` — [Dashboard Chat (tech)](dashboard_chat_tech.md).
 - Push: `dashboards:tile-changed` `{tileId}` via `host/events` (`publishEvent`), on every start and end of a run; the renderer invalidates that tile's result query **and the tiles list** (`['dashboards','tiles']`), because params an agent set from main reach the filter row and a page's params only through it. `dashboards:tile-highlight` `{tileId, ids}` when an agent set or cleared a highlight (`ids: []` clears); `window.api.dashboards.onTileHighlight`.
@@ -81,7 +83,7 @@ All validated again in the service; every answer, refusals included, is data (`D
 
 `componentScanner.ts` applies, by hand, the rules in the bundle's `protocols/dashboards.schema.json` and reports its `x-check-codes` (`script_missing`, `network_reference`, `root_relative_path`, `fetch_endpoint`, `sandbox_unsupported`, …) with agent-relative paths and severities. `conformance.test.ts` runs the validator over the kit's `conformance/dashboards/` cases; `dashboardsProtocolParity.test.ts` holds the constants in `dashboardsProtocol.ts` equal to the schema. The schema is core's: a disagreement is settled there and the desktop follows — never the reverse. The scanner's `missingCredentials` come from the agent's credential slots as `localAgentService` reports them (`componentAgentFrom`), judged by `credentialSlotReady`.
 
-A tile's state is `ok`, `agent_missing` (no agent with that manifest id, or two), `component_missing`, or `invalid`.
+A tile's state is `ok`, `agent_missing` (no agent with that manifest id, or two), `component_missing`, or `invalid`; a cloud tile can also be `wrong_server` ([Cloud Tiles (tech)](cloud_tiles_tech.md#tile-states)).
 
 ### The endpoint runner
 
@@ -149,6 +151,7 @@ URL: `cinna-preview://dash-<H>/<tile>/<entry>` on the existing `cinna-preview` s
 - **CORS** `Access-Control-Allow-Origin: *`: the frame's opaque origin makes every request cross-origin. `Cache-Control: no-store`, `nosniff`, `Referrer-Policy: no-referrer`.
 - **Sandbox** `DASHBOARD_FRAME_SANDBOX` = `allow-scripts allow-forms allow-modals` — the HTML preview's flags without `allow-top-navigation-by-user-activation`. No `allow-same-origin`: the page cannot reach `window.parent`'s DOM or `window.api`, and keeps no storage.
 - **Navigation guard.** `previewFrameNavigation` keeps a subframe inside its own `…/<tile>/` prefix (parsed, so `..` and encodings are normalised first): a page cannot load another tile's or another preview's URL.
+- **A cloud tile's frame** is registered with `registerRemote`: the same host, token, CSP, headers and navigation rule, with the bytes relayed from core's `/d/v/` and nothing injected (core's page already carries the bridge). See [Cloud Tiles (tech)](cloud_tiles_tech.md#the-frame-relay).
 - **The bridge is injected byte for byte.** `injectDashboardHelper` puts `<script>` + the bundled `protocols/dashboards-bridge.js` right after `<head …>`, else `<html …>`, else after a doctype, else first. The page's own bytes are untouched either side (latin1 maps one byte to one character, so the offset is a byte offset); a UTF-16 page is returned unchanged since the helper would corrupt it. The file is read from this build's bundle, never a workshop kit's, because the host side of its wire (`componentBridge.ts`) ships with the build; `getBundledContractDir()` missing throws `contract_missing`. The desktop keeps no fork of it.
 - `src/renderer/index.html`'s app CSP already allows `frame-src cinna-preview:`.
 
@@ -210,4 +213,4 @@ URL: `cinna-preview://dash-<H>/<tile>/<entry>` on the existing `cinna-preview` s
 
 ## Tests
 
-`componentScanner.test.ts`, `conformance.test.ts`, `dashboardService.test.ts`, `dashboardRefreshService.test.ts`, `endpointRunner.test.ts`, `dashboardsSkill.test.ts`, `dashboardFrameServer.test.ts`, `htmlPreviewGuards.test.ts`, `turnLock.test.ts`, `cinnaNode.test.ts`, `shutdown.test.ts` (quit kills dashboard runs), `componentBridge.test.ts`, `componentReferences.test.tsx`, `ComponentCard.test.tsx`, `Tile.test.tsx`, `Tile.d4.test.tsx`, `Tile.d5.test.tsx`, `dashboardTileTools.test.ts`, `dashboardsToolsProtocolParity.test.ts`, `dashboards.ipc.test.ts`, `TileFilters.test.tsx`, `EditTileDialog.test.tsx`, `tileParams.test.ts`, `DashboardsList.test.tsx`, `AgentDashboardsTab.test.tsx`, `componentReference.test.ts`. E2E: `dashboards.spec.ts`, `dashboard-cards.spec.ts`, `dashboard-panel.spec.ts`, `dashboard-interactive.spec.ts`, `dashboard-agent-tiles.spec.ts`, and the billed `live-dashboards.spec.ts` (see [E2E](../../development/e2e/e2e_llm.md)).
+Cloud tiles' tests are listed in [Cloud Tiles (tech)](cloud_tiles_tech.md#tests). `frameOwners.test.ts`, `componentScanner.test.ts`, `conformance.test.ts`, `dashboardService.test.ts`, `dashboardRefreshService.test.ts`, `endpointRunner.test.ts`, `dashboardsSkill.test.ts`, `dashboardFrameServer.test.ts`, `htmlPreviewGuards.test.ts`, `turnLock.test.ts`, `cinnaNode.test.ts`, `shutdown.test.ts` (quit kills dashboard runs), `componentBridge.test.ts`, `componentReferences.test.tsx`, `ComponentCard.test.tsx`, `Tile.test.tsx`, `Tile.d4.test.tsx`, `Tile.d5.test.tsx`, `dashboardTileTools.test.ts`, `dashboardsToolsProtocolParity.test.ts`, `dashboards.ipc.test.ts`, `TileFilters.test.tsx`, `EditTileDialog.test.tsx`, `tileParams.test.ts`, `DashboardsList.test.tsx`, `AgentDashboardsTab.test.tsx`, `componentReference.test.ts`. E2E: `dashboards.spec.ts`, `dashboard-cards.spec.ts`, `dashboard-panel.spec.ts`, `dashboard-interactive.spec.ts`, `dashboard-agent-tiles.spec.ts`, and the billed `live-dashboards.spec.ts` (see [E2E](../../development/e2e/e2e_llm.md)).
