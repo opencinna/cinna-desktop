@@ -312,7 +312,7 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     const page = cinna.page
     await page.getByRole('button', { name: 'Dashboards', exact: true }).click()
-    await page.getByRole('button', { name: 'My dashboard 1', exact: true }).click()
+    await page.getByRole('button', { name: 'My dashboard, 1 tile', exact: true }).click()
     const tile = page.getByTestId('dashboard-grid').getByRole('group', { name: 'Follow-ups', exact: true })
     const row = tile.locator('li', { hasText: SELECTED.title })
     await expect(row).toBeVisible({ timeout: 60_000 })
@@ -354,6 +354,140 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
     expect(reply, 'the reply names the selected item').toMatch(/Marisol/)
     expect(reply, 'the reply names the selected item').toMatch(/Q3 forecast/i)
     for (const other of FOLLOW_UPS.filter((f) => f !== SELECTED)) expect(reply, `not about ${other.title}`).not.toContain(other.title)
+  })
+})
+
+/**
+ * D5 on a real agent: asked in the dashboard's chat panel to show only won
+ * deals and highlight one, the agent calls `dashboards_update_tile` itself.
+ * The tile's stored stage becomes `won`, it redraws with the won deals, and
+ * the named deal's row is highlighted. The deal ids are only in
+ * `app-data/deals.json`, which the prompt names.
+ */
+const TILE_AGENT = 'Deal Board Desk'
+const DEALS = [
+  { id: 'deal-orsini', title: 'Orsini Logistics renewal', stage: 'open' },
+  { id: 'deal-brandt', title: 'Brandt Pharma pilot', stage: 'open' },
+  { id: 'deal-halvorsen', title: 'Halvorsen Shipping fleet licence', stage: 'won' },
+  { id: 'deal-quist', title: 'Quist Retail upgrade', stage: 'won' },
+  { id: 'deal-mbeki', title: 'Mbeki Foods expansion', stage: 'lost' }
+]
+const TILE_PROMPT = 'On my Deals tile, show only the won deals and highlight the Halvorsen one. The deal data with ids is in app-data/deals.json.'
+
+for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
+  test.use({
+    engine: true,
+    realLogin: engine.realLogin,
+    liveEngineCheck: { engine: engine.name, binary: engine.realLogin?.binary ?? null }
+  })
+
+  test(`[${entry}] D5: asked in the panel, the agent filters its tile to won deals and highlights one`, async ({ cinna }) => {
+    test.setTimeout(10 * 60_000)
+    if (engine.name === 'opencode') requireLiveKey()
+    test.skip(engine.skipReason !== null, engine.skipReason ?? '')
+
+    await cinna.skipOnboarding()
+    if (engine.name === 'opencode') console.log(`live-dashboards ${entry}: default mode on ${await seedOpenAiDefaultMode(cinna)}`)
+    await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+    const root = await addAgentRoot(cinna)
+    const agent = await createFolderAgent(cinna, root, TILE_AGENT, 'Keeps my sales deals.')
+    if (engine.runtime !== null) {
+      const outcome = await cinna.page.evaluate(async ({ agentId, runtime }) => {
+        const got = await window.api.localAgents.get(agentId)
+        if (!got.ok) return { ok: false as const, message: got.message }
+        return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: got.value.stamps['cinna-agent.json']! })
+      }, { agentId: agent.id, runtime: engine.runtime })
+      expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
+    }
+    mkdirSync(join(agent.path, 'app-data'), { recursive: true })
+    writeFileSync(join(agent.path, 'app-data', 'deals.json'), JSON.stringify(DEALS, null, 2))
+    const component = join(agent.path, 'dashboards', 'deals')
+    mkdirSync(join(component, 'api'), { recursive: true })
+    writeFileSync(join(component, 'component.json'), JSON.stringify({
+      schema_version: 1, title: 'Deals', view: 'list',
+      source: { endpoint: 'items' },
+      endpoints: { items: { script: 'api/items.mjs', description: 'Deals from app-data/deals.json in one stage. Params: stage.' } },
+      params: { stage: { type: 'enum', label: 'Stage', values: ['open', 'won', 'lost'], default: 'open' } },
+      size: 'm'
+    }, null, 2))
+    writeFileSync(join(component, 'api', 'items.mjs'), [
+      "import { readFileSync } from 'node:fs'",
+      "const params = JSON.parse(readFileSync(0, 'utf8') || '{}')",
+      "const deals = JSON.parse(readFileSync('app-data/deals.json', 'utf8'))",
+      'console.log(JSON.stringify({ items: deals.filter((d) => d.stage === params.stage).map((d) => ({ id: d.id, title: d.title, subtitle: d.stage })) }))',
+      ''
+    ].join('\n'))
+    const added = await cinna.page.evaluate(async (agentId) => {
+      await window.api.localAgents.rescan()
+      return window.api.dashboards.addTile({ newDashboardName: 'My dashboard', agentId, component: 'deals' })
+    }, agent.id)
+    expect(added.ok, JSON.stringify(added)).toBe(true)
+    if (!added.ok) return
+
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    const page = cinna.page
+    await page.getByRole('button', { name: 'Dashboards', exact: true }).click()
+    await page.getByRole('button', { name: 'My dashboard, 1 tile', exact: true }).click()
+    const tile = page.getByTestId('dashboard-grid').getByRole('group', { name: 'Deals', exact: true })
+    await expect(tile.getByText('Orsini Logistics renewal', { exact: true })).toBeVisible({ timeout: 60_000 })
+
+    await tile.hover()
+    await tile.getByRole('button', { name: 'Ask about Deals', exact: true }).click()
+    const panel = page.getByTestId('dashboard-chat-panel')
+    await expect(panel.getByTestId('dashboard-context-chip')).toHaveText(/^Deals/)
+    const composer = panel.getByRole('combobox', { name: 'Type a message...', exact: true })
+    await composer.fill(TILE_PROMPT)
+    await composer.press('Enter')
+
+    const started = Date.now()
+    const asks: string[] = []
+    let chatId = ''
+    try {
+      await expect.poll(async () => {
+        const allow = page.getByRole('button', { name: 'Allow once', exact: true })
+        if (await allow.count() > 0) {
+          asks.push((await allow.first().locator('xpath=ancestor::*[4]').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300))
+          await allow.first().click().catch(() => undefined)
+          return 'asked'
+        }
+        const chat = (await page.evaluate(() => window.api.chat.list())).find((c) => c.originDashboardId)
+        if (!chat) return 'no panel chat yet'
+        chatId = chat.id
+        const full = await page.evaluate((id) => window.api.chat.get(id), chat.id)
+        const messages = full?.messages ?? []
+        const last = messages[messages.length - 1]
+        if (full?.activeRunId || last?.role !== 'assistant' || !last.content) return 'running'
+        return 'done'
+      }, { timeout: 5 * 60_000, intervals: [1000], message: 'the panel turn ends' }).toBe('done')
+    } finally {
+      if (chatId) {
+        const path = test.info().outputPath('d5-transcript.md')
+        writeFileSync(path, `# ${engine.label}\n\n## Permission asks (${asks.length})\n${asks.map((a) => `- ${a}`).join('\n')}\n\n## Chat\n\n${await transcript(page, chatId)}`)
+        console.log(`live-dashboards ${entry}: D5 transcript ${path}`)
+      }
+    }
+    console.log(`live-dashboards ${entry}: D5 panel turn took ${Math.round((Date.now() - started) / 1000)} s, ${asks.length} permission ask(s)`)
+    await page.screenshot({ path: test.info().outputPath('d5-tile.png') })
+
+    await test.step('the tile’s stored stage is won and it shows the won deals', async () => {
+      await expect.poll(async () => {
+        const tiles = await page.evaluate((id) => window.api.dashboards.tiles(id), added.dashboard.id)
+        return tiles.ok ? tiles.tiles[0].tile.params.stage : 'no tiles'
+      }, { timeout: 30_000 }).toBe('won')
+      await expect(tile.getByText('Halvorsen Shipping fleet licence', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(tile.getByText('Orsini Logistics renewal', { exact: true })).toHaveCount(0)
+      await expect(tile.getByTestId('tile-filters').getByLabel('Stage', { exact: true })).toHaveValue('won')
+    })
+
+    await test.step('the Halvorsen row is highlighted by the agent', async () => {
+      const lit = tile.locator('li[data-highlighted="true"]')
+      await expect(lit.first()).toBeVisible({ timeout: 30_000 })
+      console.log(`live-dashboards ${entry}: highlighted rows ${JSON.stringify(await lit.allInnerTexts())}`)
+      await expect(tile.locator('li', { hasText: 'Halvorsen Shipping fleet licence' })).toHaveAttribute('data-highlighted', 'true')
+      await expect(tile.locator('li', { hasText: 'Halvorsen Shipping fleet licence' })).toHaveAttribute('title', `Highlighted by ${TILE_AGENT}`)
+    })
   })
 })
 
