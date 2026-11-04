@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `358f1d8edf2f682e`.
+Your current kit is version `46a02dd68c41ab0b`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,36 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.21.0 — cloud agents' components on cinna-core dashboards
+
+Additive. Every 1.x folder stays valid and no component needs to change: the same
+`dashboards/` folder now also shows on the owner's dashboards in cinna-core when
+the agent runs in the cloud. No bridge change; no new codes.
+
+### Changed (wording only)
+
+- **`protocols/dashboards-tools.schema.json`** — Cinna Desktop, and cinna-core for
+  cloud agents, register `dashboards_tiles` and `dashboards_update_tile`; a host
+  without dashboards registers neither. The tool descriptions no longer say the
+  cloud has no dashboards.
+- **`protocols/dashboards.schema.json`**:
+  - `x-web-view.sandbox`: a host serving pages over http(s) also sends the
+    sandbox as the CSP `sandbox` directive and adds `frame-ancestors <its app
+    origin>`, so the page is sandboxed even when opened top-level.
+  - `refresh.on_app_start`: a host without an app launch (cinna-core) ignores it;
+    tiles there refresh when opened.
+  - `x-endpoint-convention.runtimes[".js"]`: on cinna-core, the environment's
+    `node`.
+  - `x-references.containment` and the `bundle:` agent segment: a reference
+    resolves to an agent the viewer has on that host (a kit agent on a desktop,
+    an owned agent in cinna-core).
+- **`skills/cinna-dashboards/SKILL.md`** and **`guides/14-dashboards.md`** — cloud
+  agents are a dashboards host; in the cloud, tiles refresh on open and
+  `on_app_start` is ignored.
+
+`protocols/dashboards-bridge.js` is unchanged, byte for byte; its header still
+names contract 1.20.0.
 
 ## 1.20.0 — an agent acts on its own tiles, and pages draw what it highlights
 
