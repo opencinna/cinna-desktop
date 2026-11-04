@@ -155,7 +155,7 @@ test('two references become two cards, a backticked one stays text; Add to dashb
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('My dashboard')
     const grid = page.getByTestId('dashboard-grid')
     await expect(grid.getByRole('group', { name: 'Daily notes' }).getByText('Call')).toBeVisible({ timeout: 30_000 })
-    await expect(grid.getByRole('group')).toHaveCount(1)
+    await expect(grid.locator('[data-tile-id]')).toHaveCount(1) // not getByRole('group'): a tile with params adds its filters <fieldset>
   })
 
   await test.step('Copy reference writes the canonical id form, also for the card written by slug', async () => {

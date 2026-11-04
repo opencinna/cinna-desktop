@@ -377,10 +377,14 @@ test('7 the panel on a cloud tile opens core’s dashboard chat and sends the co
   expect(sent.message.taskId).toBe(session)
   expect(sent.text).toBe(question)
   expect(sent.text).not.toContain('<dashboard_context>')
-  const context = sent.message.metadata?.cinna_dashboard_context as { dashboard?: string; focused?: { title?: string; component?: string } } | undefined
+  const context = sent.message.metadata?.cinna_dashboard_context as { dashboard?: string; focused?: { title?: string; component?: string; tile_id?: string } } | undefined
   expect(context, JSON.stringify(sent.message.metadata)).toBeTruthy()
   expect(context!.dashboard).toBe(DASHBOARD)
   expect(context!.focused).toMatchObject({ title: 'Open deals', component: 'open-deals' })
+  // Core's tile tools find the focused tile by its block id; a component match only works while it is placed once.
+  const dealsBlocks = [...core.blocks.values()].filter((block) => block.dashboardId === backing)
+  expect(dealsBlocks).toHaveLength(1)
+  expect(context!.focused!.tile_id).toBe(dealsBlocks[0].id)
 })
 
 test('8 core’s socket events reach the tile: a highlight marks the row, an update re-reads the data', async ({ cinna }) => {

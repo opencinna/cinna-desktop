@@ -246,7 +246,7 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
       const expected = visibleText(chosen!.view, data, chosen!.source, dir)
       expect(expected, `a string the tile should show, from ${JSON.stringify(data).slice(0, 300)}`).not.toBe('')
       const grid = page.getByTestId('dashboard-grid')
-      await expect(grid.getByRole('group')).toHaveCount(1)
+      await expect(grid.locator('[data-tile-id]')).toHaveCount(1) // not getByRole('group'): a tile with params adds its filters <fieldset>
       await expect(grid.getByRole('group', { name: title }).getByText(expected, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
     })
   })
