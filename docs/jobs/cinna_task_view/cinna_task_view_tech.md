@@ -105,7 +105,7 @@
 
 - **Profile scope.** Every cinna IPC handler calls `userActivation.requireActivated()` and resolves the user id via `getProfileScopeUserId()`. cinna-core enforces task-level access via the OAuth bearer (owner OR session participant). The desktop never accepts a `taskId` from the renderer without first proving the user is activated.
 - **Bearer token isolation.** `cinnaApiService.cinnaFetch` resolves the bearer in the main process via `getCinnaAccessToken(userId)`. The renderer never sees it. `CinnaReauthRequired` is mapped to `CinnaApiError('reauth_required')`.
-- **External URL open.** "Open on Cinna" routes through `app:open-external` which restricts to `http:` / `https:`.
+- **External URL open.** "Open on Cinna" routes through `app:open-external` which restricts to `http:` / `https:` (and `mailto:`, for dashboards).
 - **Markdown rendering.** react-markdown is HTML-escape-by-default. No `rehype-raw` is wired in, so server-controlled comment/activity content cannot inject raw HTML. `rehypeHighlight` only adds syntax-highlight class names — no DOM injection. If a future change adds `rehype-raw`, add `rehype-sanitize` first.
 - **Logger discipline.** `createLogger('cinna-api')` (main) and `createLogger('cinna-task-view')` / `createLogger('task-attachment-download')` / `createLogger('job-run-row')` (renderer). Comment bodies + attachment filenames are NOT logged; only ids, counts, status, and timings. Network errors include URL + status + first 200 chars of the response body for diagnostics.
 

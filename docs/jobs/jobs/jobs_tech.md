@@ -26,7 +26,7 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 - `src/main/ipc/job.ipc.ts` — `registerJobHandlers()` — all `job:*` and `jobFolder:*` channels wrapped via `ipcHandle()`, each calls `userActivation.requireActivated()` then delegates to `jobService`. Includes `job:set-agents` (replaces the job's agent set, mirroring `job:set-mcp-providers`), `job:run-origin` (run id → `JobRunOrigin | null` for the chat-page banner), folder channels `jobFolder:list/create/update/delete/reorder`, and `job:reorder` (for moving + reordering jobs across groups).
 - `src/main/services/runExecutionService.ts` — `reportRefusal(chatId, message)` records ordinary setup failures before/around stream ownership. `preserveOnRefusal` skips pre-acceptance job finalization for a pending next-message answer; its failed transaction leaves the request retryable. Activated IPC setup stays in `src/main/ipc/run.ipc.ts`. See [execution lifetime and acceptance](../../chat/messaging/turn_completion.md#outcome-and-lifetime).
 - `src/main/ipc/cinna.ipc.ts` — `registerCinnaHandlers()` — `cinna:list-agents`, `cinna:get-task-view` delegating to `cinnaApiService`
-- `src/main/ipc/app.ipc.ts` — `app:open-external` handler — restricts to `http:` / `https:` before `shell.openExternal`
+- `src/main/ipc/app.ipc.ts` — `app:open-external` handler — restricts to `http:` / `https:` / `mailto:` before `shell.openExternal`
 - `src/main/ipc/index.ts` — `registerJobHandlers()` and `registerCinnaHandlers()` registered in `registerAllIpcHandlers()`
 - `src/main/errors.ts` — `JobError` + `JobErrorCode` (`not_found | not_activated | unsupported_type | missing_dependency | invalid_input`); `CinnaApiError` + `CinnaApiErrorCode` (`not_cinna_user | missing_server_url | reauth_required | request_failed | invalid_response`)
 
@@ -178,7 +178,7 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 - `cinna:get-task-view(taskId)` — `CinnaTaskViewDto` (task detail + comments + standalone attachments) — see [Cinna Task Run View tech](../cinna_task_view/cinna_task_view_tech.md)
 - `files:download-task-attachment({ taskId, attachmentId, filename })` — save-as for a `TaskAttachment`; distinct from `files:download` because the URL is task-scoped
 - `chat:show-in-list(chatId)` — `{ success: true }`. Promotes a hidden (job-spawned) chat into the main Chats list by clearing `chats.hidden_from_list`.
-- `app:open-external(url)` — `{ success: true } | { success: false, error: 'unsupported_protocol' | 'invalid_url' | 'open_failed' }`. Restricted to `http:` / `https:`; `invalid_url` means the string did not parse, `open_failed` that `shell.openExternal` rejected a valid link.
+- `app:open-external(url)` — `{ success: true } | { success: false, error: 'unsupported_protocol' | 'invalid_url' | 'open_failed' }`. Restricted to `http:` / `https:` / `mailto:` (`mailto:` for a dashboard list item's `url` and a dashboard page's confirmed link; every other scheme is `unsupported_protocol`); `invalid_url` means the string did not parse, `open_failed` that `shell.openExternal` rejected a valid link.
 
 ## Services & Key Methods
 
@@ -265,7 +265,7 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 - **Profile scope.** Every `jobsRepo` / `jobFoldersRepo` / `jobRunsRepo` query filters by `userId` (the active profile). Cross-profile access requires guessing both the entity id AND owning the right session — defense-in-depth even though all ids are already opaque.
 - **Reorder authorization.** `jobService.reorderJobs` walks the submitted `orderedJobIds` and refuses the batch if any id is missing from the active profile or soft-deleted — a malicious renderer can't trip the transaction into touching another user's row even by guessing an id.
 - **Cinna tokens.** `cinnaApiService` resolves tokens inside the main process via `getCinnaAccessToken(userId)`; the renderer never sees them. `CinnaReauthRequired` is mapped to `CinnaApiError('reauth_required', ...)` so the IPC boundary carries a stable code.
-- **External URL open.** `app:open-external` validates `protocol === 'http:' || 'https:'` before invoking `shell.openExternal`, mirroring the renderer's `setWindowOpenHandler` policy.
+- **External URL open.** `app:open-external` validates `protocol` as `http:`, `https:` or `mailto:` before invoking `shell.openExternal`. The window's `setWindowOpenHandler` (`src/main/index.ts`) stays `http(s)` only: `mailto:` is allowed here because a dashboard's list items and its confirm dialog (see [Dashboards](../../ui/dashboards/dashboards.md#links-a-page-asks-to-open)) can name one, and nothing else opens a mail client.
 - **Logger discipline.** `createLogger('job')` and `createLogger('cinna-api')`. Prompts and Cinna task bodies are NOT logged; only IDs, status, and timing. Network errors include URL + status code, not response bodies beyond the first 200 chars.
 - **Transactional execution.** Ordinary desktop preparation includes chat, attachments, run, task and association/start writes. Remote acceptance cannot be rolled back; local run/link failure preserves the accepted task and receipt. See [transaction boundaries](execution_tech.md).
 

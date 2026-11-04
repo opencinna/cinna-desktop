@@ -197,6 +197,20 @@ is what lets *Re-run from the last message* (`taskService.reopenForRerun`, which
 reopens the terminal run with the task) turn a failed or needs-review occurrence
 into a completed one.
 
+`settleByRun` returns the binding id of each row whose status the call changed. A
+row already settled with the same status (a second report of the same outcome) is
+rewritten but not returned, so a caller that reacts to "completed" reacts once; a
+re-run turning failed into completed is returned. `jobService.reportRunCompletion`
+passes those ids, when the run succeeded, to `notifyScheduleRunCompleted`
+(`src/main/services/localScheduleEvents.ts`). The same event is raised from
+`reconcileOccurrence` when it moves a row to `completed` that was not, and from
+`executeScheduledCommand` when a quiet `OK` command completes. So an occurrence
+announces completion once, from whichever path settles it. A binding that belongs
+to a job schedule (the Jobs tab) is not announced: the event carries an agent's
+manifest schedule name, and its one listener is dashboards' schedule-fed tiles
+(see [Dashboards](../../ui/dashboards/dashboards.md#schedule-fed-tiles)). A
+listener that throws is logged and never reaches the settling path.
+
 Startup reconciliation marks an orphaned ordinary desktop attempt interrupted
 when its receipt was committed before launch and no live local turn remains.
 Only attempts owned by this desktop qualify; a handoff or another desktop's

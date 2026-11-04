@@ -9,12 +9,13 @@ The chat beside a dashboard, and what the agent is told about the tile in front 
 ## Core Concepts
 
 - **Dashboard** — A named grid, per profile (up to 20 per profile, names up to 80 characters). Reached from the **Dashboards** tab in the sidebar. Deleting one removes its tiles and their cached data and nothing else: the components stay in their agents' folders, and the chats its panel started stay as ordinary chats.
-- **Tile** — One placement of a component on a dashboard (up to 24 per dashboard). A tile **references** its component — the agent by its manifest id, the component by its folder name — and never copies it, so an agent that edits its component changes every tile showing it, and a moved or renamed agent folder keeps its tiles. It carries only the user's own choices: a title that replaces the component's, a size, its params, and a refresh override.
+- **Tile** — One placement of a component on a dashboard (up to 24 per dashboard). A tile **references** its component — the agent by its manifest id, the component by its folder name — and never copies it, so an agent that edits its component changes every tile showing it, and a moved or renamed agent folder keeps its tiles. It carries only the user's own choices: a title that replaces the component's, a size, its params, and a refresh override (any of the five refresh fields).
 - **Component** — A folder an agent keeps under `dashboards/<name>/` (or a skill ships under `<skill>/dashboards/<name>/`), whose `component.json` says what to show, where the data comes from, how big it is and how fresh it should be. The format is core's `dashboards/1` protocol, bundled with the [kit contract](../../agents/local_agents/kit_contract.md); the agent learns it from the `cinna-dashboards` skill.
 - **View** — How a component draws: four native views — **markdown**, **table**, **list**, **metrics** — drawn in Cinna's own design from data of a shape the protocol defines, or **html**, the agent's own page in a sandboxed frame. A native view is preferred because it matches the app and costs nothing to host; a page is for what the four cannot draw (a chart).
 - **Source** — Where a component's data comes from: an **endpoint** (a script in the component's `api/` folder, given the params as JSON and printing one JSON value) or a **file** (`.md`, `.json` or `.csv` under the agent's `app-data/` or `files/`).
 - **Size** — One of five presets on a 12-column grid: Small (3×2), Medium (6×2), Large (6×4), Wide (12×2), Tall (3×4). The grid narrows to 6 columns below about 900 px and 3 below about 440; a preset is narrowed to fit, never grown.
-- **Refresh rule** — `refresh.max_age` (default **15 minutes**) says how old data may be before a visible tile recomputes. A tile may override it with another max age, or **Manual**.
+- **Params** — The values a component declares it can be set by (`params` in `component.json`: `enum`, `month`, `date`, `date_range`, `number`, `boolean`, `text`). A tile stores them; the endpoint receives them. `current` (a month) and `today` (a date) are words the tile keeps and main turns into a value each time it runs, so "current" follows the calendar.
+- **Refresh rule** — The component's `refresh`: `max_age` (default **15 minutes**) says how old data may be before a visible tile recomputes; `while_open_every` (at least 1 minute) recomputes it on a timer while it is on screen; `after_turn` and `on_app_start` are flags; `schedule` names the agent schedule that feeds it. A tile may override each of the first four, or choose **Manual**. The tile's override is laid over the component's field by field, and every place that decides when to run reads that one **effective** rule.
 - **Component reference** — A line an agent prints to offer a component: `cinna://component/<agent>/<name>` or `…/<agent>/<skill>/<name>`, where `<agent>` is `id:<manifest id>`, `bundle:<bundle id>` or a bare slug. In a chat it is drawn as a **component card**.
 
 ## User Stories / Flows
@@ -30,8 +31,10 @@ The chat beside a dashboard, and what the agent is told about the tile in front 
 
 1. The user opens **Dashboards** in the sidebar tab strip. The tab comes back to the dashboard that was open, as Chats comes back to its chat; with none open it opens the first. **+** makes a dashboard; right-click renames or deletes one.
 2. Each tile shows its last good data at once and recomputes behind it when stale. A tile just scrolled into view for the first time recomputes if it is stale, focused or not.
-3. On hover a tile's top strip shows its age, **Refresh**, **Ask** (see [Dashboard Chat](dashboard_chat.md)), the component's suggested questions and a **⋯** menu: size, **Edit tile…** (title and refresh rule), **Open agent**, **Remove…**.
-4. **Edit layout** in the header turns the tiles into drag handles; releasing sends one move. **Refresh** in the header recomputes every tile that can run.
+3. On hover a tile's top strip shows its age, **Refresh**, **Ask** (see [Dashboard Chat](dashboard_chat.md)), the component's suggested questions and a **⋯** menu: size, **Edit tile…** (title and the refresh rule), **Open agent**, **Remove…**.
+4. A component with params gets a **filter row** under the tile's top strip (native views). Changing a control sends the whole set to main, which checks it, stores it on the tile and recomputes; the data arrives as for any refresh. See [Params and filters](#params-and-filters).
+5. **Edit tile…** shows four selects beside the Manual switch — *Recompute when older than*, *While on screen, every*, *After a chat turn of its agent*, *When Cinna starts* — each starting with the component's own value ("Component: every 15 minutes"), which is no override. Choosing anything else stores it on the tile and it wins. Manual greys the four out and keeps their values, so the dialog does not change height.
+6. **Edit layout** in the header turns the tiles into drag handles; releasing sends one move. **Refresh** in the header recomputes every tile that can run.
 
 ### When a tile cannot be drawn
 
@@ -44,6 +47,8 @@ Every state is drawn inside the tile, at the tile's size, so nothing around it m
 - **Too large to keep** — a result over 1 MB is shown but not stored, and is gone after a restart.
 - **The agent is not on this machine / the component is gone** — a sentence and **Remove**.
 - **The component has problems** — the error findings, in the words of core's checker.
+- **A filter value was refused** — an inline notice under the filter row ("Value refused: …", or "Not applied: …" when a rate limit stopped it); the controls go back to the stored values. A page, which has no filter row, shows it as the tile's mark.
+- **A schedule feeds the tile and will not run here** — "Fed by <name>, which is off on this device" with **Turn on…**, which opens the agent's Schedules tab; or "…which this agent no longer has." It is said, never silent, because the tile would otherwise age without a reason.
 - **A credential is missing** — "This needs the “crm” credential, which is not set up for this agent yet." with a link to the agent's Credentials tab; nothing runs.
 
 ## Business Rules
@@ -63,7 +68,49 @@ The renderer never decides when to recompute. It says "these tiles are on screen
 - **Same params join, new params supersede.** A second request for a run in flight with the same params gets the running one; a newer call for the same tile and endpoint cancels the older.
 - **Output is data.** Anything a script prints is parsed first and then has credential values redacted from its strings before it is cached or shown.
 
-What the schema also defines — `refresh.while_open_every`, `on_app_start`, a `schedule` feeding a tile — is **read and validated but not acted on yet** (see Known gaps).
+The reasons main itself has for a run, besides the renderer's two (`visible`, `manual`): `after_turn`, `interval`, `launch`, `params` and `schedule`. The renderer may not ask for any of them, so it cannot force a recompute by naming one.
+
+- **While open (`interval`).** A tile whose effective rule has `while_open_every` gets a main-owned timer **while it holds a lease** and no longer: a lapsed or dropped lease, or a profile close, stops it. The lease renewal starts, re-times (an edited period) or stops the timer. A tick runs only when the last attempt is at least half a period old, so a visible or after-turn run moments ago is not followed at once by another. A Manual tile never ticks.
+- **Launch warm-up (`launch`).** Once the profile is ready, each tile whose effective `on_app_start` is true and whose cache is empty or older than its max age recomputes, **one at a time**, off the boot path. A tile with missing credentials is skipped. A profile close or quit stops it between tiles and cancels the one running. `CINNA_DASHBOARD_WARMUP=off` turns it off. A Manual tile is warmed only while it has no data.
+- **Params (`params`).** A change of params always recomputes, Manual or not: the user just asked for different data.
+- **Overrides read the same rule everywhere.** An override of `after_turn: false` stops a component that says true; `while_open_every: null` turns off an interval the component states.
+
+### Params and filters
+
+- **Main replaces the whole set.** A change arrives as the tile's complete params, not a patch. Each value is checked against the component's declared spec; a name the component does not declare is dropped; a key left out or `null` means "no value", so the default applies. One bad value refuses the whole change with a sentence naming the param ("Region must be one of …"), and nothing is stored or run. The renderer therefore merges a change over the params it last sent, so two quick picks do not lose the first.
+- **Defaults are stored when a tile is added, and never again.** Adding copies each param's declared default onto the tile. A later change never writes a default in, and a cleared control stores nothing, so a stored `current` stays the word and the calendar keeps moving it. A tile added before its component grew a param simply has none stored, and the default applies.
+- **Native views draw the filter row.** One control per param, in the declared order: a select for `enum`, a month or date input, two date inputs for `date_range` (either end may be empty: an open range), a text or number input, a checkbox. Text and numbers wait about 600 ms after the last keystroke, so typing does not recompute per key; everything else applies on the pick. An html page has no row: it sets its own params with `setParams`, and the same validation applies to it.
+- **What fits shows; the rest sits behind "Filters ⋯".** Each control's width is fixed by its type and never by its value, so a pick can never move a filter into or out of the popover. The row is always the same height, with or without a notice, which lies over the content under it. A refusal puts the controls back to what main stored and says why in the inline notice; it closes nothing.
+- **The per-target budget.** See [Calls from a page](#calls-from-a-page). A params change counts against the tile's budget, because a page calling `setParams` in a loop would otherwise recompute without end; a refused value costs nothing.
+
+### Calls from a page
+
+A web component's page may run one of **its own endpoints** with `cinna.call(endpoint, args)` (a `tools/call` on the wire): a drill-down such as the history of the deal the user clicked, which no cached result holds.
+
+- **Never cached, one value back.** It runs once with the tile's params under the call's own arguments, and the page receives the endpoint's JSON as the tool result. It does not touch the tile's data.
+- **Only declared endpoints.** A name not among the component's `endpoints` is refused. An argument for a declared param is checked as a filter value is; any other argument is the endpoint's own and passes if its name is a valid param name. The arguments are capped at 64 KB.
+- **The same gates as a refresh.** An invalid component, missing credentials (`needs_credentials`, nothing is spawned), the endpoint's own timeout, the runner's caps and the turn lock apply. The newest call per (tile, endpoint) wins; the older one is replaced.
+- **At most 30 a minute per target.** A target is a tile, or a component being previewed. In any sliding minute, `tools/call`s, the tile's params changes and a preview run with params all draw on the same 30; over it the page receives `rate_limited` and nothing runs. **Opening a preview does not count**: it sends no params and is the user's own click. The limit exists because a page is untrusted code that could otherwise spawn a process per animation frame.
+- **Every failure is data, in a sentence the page can show.** `rate_limited`, `needs_credentials`, and `call_failed` for an endpoint that ran (or was stopped) and gave no value: a timeout, a non-zero exit, output that is not JSON or is too large, a busy folder, a newer call. A refusal reaches the page as a tool result marked as an error, never as a rejected transport.
+- **The same bridge also carries `setParams`, `cinna.ask` and `cinna.openLink`.** `ask` puts text in the chat panel's composer for the user to send or not — it never sends (see [Dashboard Chat](dashboard_chat.md)); it is refused where there is no panel.
+
+### Links a page asks to open
+
+A page's `cinna.openLink(url)` (`ui/open-link`) never opens anything by itself.
+
+- **Only `http`, `https` and `mailto`.** Anything else is refused before the user is asked. A `mailto:` link reads "Write to <address>?"; a web link reads "Open <host> in your browser?" and shows the **full** URL, because a URL built from the data on screen can carry that data out, so the page's own click is not consent.
+- **One at a time.** A second request while one is on screen is refused, not queued.
+- **A decline closes the page's links.** After the user cancels, the page's further links are refused without asking, so it cannot loop the dialog, until the page re-initializes (a reload starts over). A dialog that failed to open the link says so inside itself and is not a decline.
+- A native list item's `url` is the user's own click on a row Cinna draws, so it opens without this dialog; it is held to the same schemes (`http`, `https`, `mailto`) by `app:open-external`.
+
+### Schedule-fed tiles
+
+A component may name the agent schedule whose runs write the file or data its source reads (`refresh.schedule`). Such a tile is not driven by age.
+
+- **A completed run re-reads it.** When that schedule's run completes, each tile showing the component on this profile's dashboards re-reads its source once, **lease or not**: the schedule wrote what the source reads, and the user should find it fresh on return. A file source is read **without** its `refresh.command`, since the schedule already did that work.
+- **Refresh does the same.** There is no "run the schedule now": Refresh only re-reads.
+- **The hover line says what feeds it** — "Fed by <name> · next run 14:00" — and the Refresh tooltip names the schedule. Schedules run only on devices that opted in; see the off-device state above.
+- **Completion is announced once** per occurrence, from whichever path settles it. See [Local Schedules](../../jobs/tasks/local_schedules_tech.md).
 
 ### Components are read on demand, never cached
 
@@ -98,7 +145,7 @@ Every kit agent — not a bare folder — gets the `cinna-dashboards` skill, wit
 
 ### Web views
 
-An html component's page runs in a sandboxed frame with an opaque origin: no top navigation (not even inside a click: the frame's sandbox omits `allow-top-navigation-by-user-activation`, so leaving a tile can only ever be something the host draws), no storage or cookies, no workers, no nested frames, and it can load only files of its own component folder. Its data and its endpoints arrive only through the bridge: the page calls `onData` to receive the result, and the host runs the endpoint. The bridge file is core's, injected unchanged.
+An html component's page runs in a sandboxed frame with an opaque origin: no top navigation (not even inside a click: the frame's sandbox omits `allow-top-navigation-by-user-activation`, so leaving a tile can only ever be something the host draws), no storage or cookies, no workers, no nested frames, and it can load only files of its own component folder. Its data and its endpoints arrive only through the bridge: the page calls `onData` to receive the result, `call` to run a drill-down, and `setParams`, `ask` and `openLink` to ask the host; the host runs the endpoint and decides. The bridge file is core's, injected unchanged.
 
 ## Architecture Overview
 
@@ -118,8 +165,9 @@ Chat: ComponentCard (reference → dashboards:resolve-reference)  ·  DashboardC
 ## Known Gaps
 
 - **No fallback for a web view that never calls `setContext`.** The chat panel then gets an empty summary and selection for that tile. A host-side fallback (reading the page's microdata) needs a bridge method, and the bridge is core's file.
-- **Bridge methods not built:** `tools/call` (a page's `cinna.call`), `cinna/params-changed` (`setParams`, dropped), `ui/open-link` and `ui/message`. Each gets a JSON-RPC error, so `cinna.call` rejects. The endpoint-from-a-page path, storing `setParams`, and the open-link confirm are the next phase.
-- **Schedule-fed tiles and the other refresh fields** (`while_open_every`, `on_app_start`, `schedule`) are accepted and validated, not acted on.
+- **The filter row is native views only.** An html component draws its own controls and calls `setParams`; a preview of one keeps the page's params for the trial run only and stores nothing.
+- **The interval needs a lease.** A tile that is off screen, or on a hidden window, does not tick; it recomputes when it is next seen and stale.
+- **Launch warm-up is one tile at a time,** so a profile with many `on_app_start` tiles fills in over time rather than at once.
 - **A tile below the fold computes nothing until it is scrolled into view.** By design: the lease is for what is on screen.
 - **`stray_file` warnings** have no place in the UI.
 - **The add-on picker's component count** depends on the shape of core's catalog download path and reads the locally cached copy only; a skill never downloaded says nothing.
@@ -133,6 +181,7 @@ Chat: ComponentCard (reference → dashboards:resolve-reference)  ·  DashboardC
 - [Artifacts](../../chat/artifacts/artifacts.md): what to publish instead when the thing is a snapshot.
 - [Agent Skills](../../agents/local_agents/skills.md) and the engine docs: how `cinna-dashboards` reaches each engine.
 - [Commands](../../agents/local_agents/commands.md): a file-sourced component's `refresh.command` is a `/run:` command.
+- [Local Schedules](../../jobs/tasks/local_schedules_tech.md): the schedule-completed event that re-reads a schedule-fed tile.
 - [Agent Turn](../../agents/local_agents/agent_turn.md): the turn lock the runs yield to; a turn's end triggers the after-turn refresh.
 - [App Shell](../app_shell/app_shell.md): the sidebar tab and the `dashboard` view.
 - [Dashboard Chat](dashboard_chat.md): the panel, its context and the chat's origin.
