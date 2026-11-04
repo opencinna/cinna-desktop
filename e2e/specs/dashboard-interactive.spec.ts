@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { Locator } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine, type FakeAcpEngine } from '../fixtures/fakeAcpEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
@@ -139,6 +140,22 @@ function tile(cinna: CinnaApp, title: string) {
 }
 function frameOf(cinna: CinnaApp, title: string) {
   return tile(cinna, title).frameLocator('[data-testid="dashboard-frame"]')
+}
+
+/**
+ * Clicks `target` inside a dashboard page until the page's own handler saw it
+ * (`landed`). A dashboard page is a cross-origin, out-of-process frame: in the
+ * first moments after its load Chromium can still route a click at its spot to
+ * the `<iframe>` element in the host window, and the page never hears of it.
+ * A probe caught exactly that (pointerdown/click on IFRAME in the host, ~50 ms
+ * after the frame's load, the page's text unchanged). Retry only when the page
+ * shows no sign of the click, so a click that landed is never sent twice.
+ */
+async function clickInFreshFrame(target: Locator, landed: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await target.click()
+    await landed()
+  }).toPass({ timeout: 15_000, intervals: [250, 500, 1_000] })
 }
 
 async function storedTile(cinna: CinnaApp, dashboardId: string, tileId: string) {
@@ -420,7 +437,10 @@ test('cinna.openLink asks with the full URL: Open opens it (web or mailto), java
   await expect(links.locator('#result')).toHaveText('ready', { timeout: 30_000 })
 
   await test.step('Open: the browser gets the URL and the page’s promise resolves', async () => {
-    await links.getByRole('button', { name: 'Open example', exact: true }).click()
+    // The page's handler writes "waiting" before it asks; still "ready" means the click never reached the page.
+    await clickInFreshFrame(links.getByRole('button', { name: 'Open example', exact: true }), () =>
+      expect(links.locator('#result')).not.toHaveText('ready', { timeout: 1_000 })
+    )
     await expect(confirm).toBeVisible()
     await expect(confirm.getByTestId('open-link-url')).toHaveText('https://example.com/x')
     await page.screenshot({ path: `${SHOTS}/open-link-confirm.png` })
@@ -476,6 +496,7 @@ const ASK = pageComponent(
     '  await cinna.ready',
     '  const result = document.getElementById("result")',
     '  document.getElementById("ask").addEventListener("click", function () {',
+    '    result.textContent = "asking"',
     '    cinna.ask("Why is Acme late?").then(function () { result.textContent = "asked" }, function (error) { result.textContent = "rejected: " + error.message })',
     '  })',
     '  result.textContent = "ready"',
@@ -524,7 +545,10 @@ test.describe('ask', () => {
     const panel = page.getByTestId('dashboard-chat-panel')
     await expect(panel).toHaveCount(0)
 
-    await asking.getByRole('button', { name: 'Ask about Acme', exact: true }).click()
+    // "asking" is written before the ask; still "ready" means the click never reached the page.
+    await clickInFreshFrame(asking.getByRole('button', { name: 'Ask about Acme', exact: true }), () =>
+      expect(asking.locator('#result')).not.toHaveText('ready', { timeout: 1_000 })
+    )
     await expect(panel).toBeVisible()
     await expect(asking.locator('#result')).toHaveText('asked')
     await expect(tile(cinna, 'Late deals')).toHaveAttribute('data-focused', 'true')
@@ -662,7 +686,9 @@ test.describe('launch warm-up', () => {
     const page = cinna.page
 
     await test.step('both get a cache, then the app restarts with the dashboard not open', async () => {
-      for (const id of Object.values(tileIds)) await page.evaluate((tileId) => window.api.dashboards.ensureFresh(tileId, 'manual'), id)
+      // arrange()'s relaunch already runs the launch warm-up, which gives both uncached tiles their
+      // first run. A manual ensureFresh here raced it: when the warm-up's run of warm-fresh had
+      // finished first, the manual one made it run twice. Wait for the warm-up's runs instead.
       await expect.poll(() => [runsOf(agentPath, 'warm-fresh').length, runsOf(agentPath, 'warm-stale').length], { timeout: 30_000 }).toEqual([1, 1])
       await expect.poll(async () => {
         const results = await Promise.all(Object.values(tileIds).map((id) => page.evaluate((tileId) => window.api.dashboards.tileResult(tileId), id)))
