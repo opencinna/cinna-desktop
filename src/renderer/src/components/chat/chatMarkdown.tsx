@@ -2,13 +2,15 @@ import type { Components, ExtraProps, Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { chatMarkdownComponents } from './fileRefs'
+import { ChatTable } from './ChatTable'
 import { ComponentCardList } from '../dashboards/ComponentCard'
 import { COMPONENT_REFS_TAG, chatUrlTransform, componentRefItems, remarkComponentReferences } from '../dashboards/componentReferences'
 
 /**
  * The one markdown configuration every chat message renders with
  * (`MessageBubble`, for a reply and for the user's own message): GFM, the
- * user's line breaks, file references and commands (`fileRefs`), and
+ * user's line breaks, file references and commands (`fileRefs`), tables
+ * that can keep their header in view (`ChatTable`), and
  * component references as cards (`componentReferences`) with the
  * `urlTransform` that keeps their hrefs. Module-level, so identities never
  * change and the memoized renderer never re-parses for nothing.
@@ -26,6 +28,7 @@ function ComponentRefsElement({ node, ...props }: ExtraProps & { 'data-refs'?: u
 
 export const chatMessageComponents = {
   ...chatMarkdownComponents,
+  table: ChatTable,
   [COMPONENT_REFS_TAG]: ComponentRefsElement
 } as Components
 

@@ -1014,6 +1014,111 @@
     font-weight: 600;
     opacity: 0.7;
   }
+  /* Sticky table headers (Settings → Features → Interface), in the chat
+     transcript only: its scroller carries `data-sticky-tables`. The table is
+     not a scroll container here (`overflow: visible`; the cells round their
+     own corners), so the header cells stick to the transcript. A table too
+     wide for the bubble is marked `data-table-scrolls` by `ChatTable` and
+     keeps the sideways scroll above (its header then scrolls with it).
+
+     Where it sticks: as high as nothing covers it, with no text readable
+     above it. The top bar is floating buttons over the transcript, not a
+     surface. With the sidebar docked, the transcript starts right of the
+     buttons and the header sits just below the transcript's top fade; with
+     no docked sidebar the buttons lie over the transcript, and the header
+     sits just below them. MessageStream picks `--sticky-table-top`. A sticky
+     inset is measured from the scroller's content edge, below its padding
+     (`--transcript-pt`), so the padding comes back out.
+
+     When it leaves: as the table's last row arrives under it, not at the
+     table's bottom edge (a header over no rows says nothing). Sticky alone
+     can only stop at the table's edge, so `ChatTable` slides it up with that
+     row through `--head-shift`.
+
+     How it looks stuck (`data-head-stuck`, set by `ChatTable`): the same
+     header, opaque (the same 70% look mixed over what the table sits on,
+     `--table-under`; the user bubble sets its own), with a slight shadow
+     under it as if the rows pass beneath. A band the height of the inset
+     above it (`th::before`), filled with that colour, hides the rows passing
+     above the header. A soft glow of the same colour on the outer sides and
+     top fills the cut-outs of the header's rounded top corners, where the
+     rows' side borders otherwise showed as stray lines. Solid, not frosted:
+     a backdrop-filter blurs nothing under the transcript's top-fade mask,
+     and with the mask off the frost had a hard edge where this glow fades
+     out. Band and glow show only while stuck, so at rest nothing covers the
+     text above a table. Header cells paint over the next cell's spill, the
+     last one under its neighbour, so no glow lands on another header cell.
+
+     The table's frame (top, sides, rounded corners) is drawn by the cells
+     here, not the table, so the header row carries its share of the frame
+     when it leaves the table's top; at rest the frame looks as before. */
+  .markdown-body {
+    --sticky-head-shadow: color-mix(in srgb, black 55%, transparent);
+  }
+  [data-theme="light"] .markdown-body {
+    --sticky-head-shadow: color-mix(in srgb, black 16%, transparent);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) {
+    overflow: visible;
+    border: none;
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) th {
+    position: sticky;
+    top: calc(var(--sticky-table-top, 0px) - var(--transcript-pt, 0px));
+    transform: translateY(var(--head-shift, 0px));
+    z-index: 2;
+    opacity: 1;
+    color: color-mix(in srgb, var(--color-text) 70%, var(--table-under, var(--color-bg)));
+    background: color-mix(in srgb, var(--color-bg-secondary) 70%, var(--table-under, var(--color-bg)));
+    border-color: color-mix(in srgb, var(--color-border) 70%, var(--table-under, var(--color-bg)));
+    border-top: 1px solid var(--color-border);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) th:last-child:not(:first-child) {
+    z-index: 1;
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls])[data-head-stuck] th {
+    box-shadow: 0 3px 5px -3px var(--sticky-head-shadow);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls])[data-head-stuck] th:first-child {
+    box-shadow: -6px -3px 8px 0 var(--table-under, var(--color-bg)), 0 3px 5px -3px var(--sticky-head-shadow);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls])[data-head-stuck] th:last-child {
+    box-shadow: 6px -3px 8px 0 var(--table-under, var(--color-bg)), 0 3px 5px -3px var(--sticky-head-shadow);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls])[data-head-stuck] th:first-child:last-child {
+    box-shadow: -6px -3px 8px 0 var(--table-under, var(--color-bg)), 6px -3px 8px 0 var(--table-under, var(--color-bg)), 0 3px 5px -3px var(--sticky-head-shadow);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls])[data-head-stuck] th::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    bottom: calc(100% + 1px);
+    height: var(--sticky-table-top, 0px);
+    pointer-events: none;
+    background: var(--table-under, var(--color-bg));
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tr > :first-child {
+    border-left: 1px solid var(--color-border);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tr > :last-child {
+    border-right: 1px solid var(--color-border);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tbody tr:last-child td {
+    border-bottom: 1px solid var(--color-border);
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) thead tr > :first-child {
+    border-top-left-radius: 8px;
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) thead tr > :last-child {
+    border-top-right-radius: 8px;
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tbody tr:last-child > :first-child {
+    border-bottom-left-radius: 8px;
+  }
+  [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tbody tr:last-child > :last-child {
+    border-bottom-right-radius: 8px;
+  }
   .markdown-body a {
     color: var(--color-accent);
     text-decoration: underline;

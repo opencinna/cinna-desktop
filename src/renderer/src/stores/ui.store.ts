@@ -70,6 +70,7 @@ export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
 ]
 const VERBOSE_KEY = 'cinna-verbose-mode'
 const ANIMATION_KEY = 'cinna-extra-ui-animation'
+const STICKY_TABLE_HEADERS_KEY = 'cinna-sticky-table-headers'
 // Only the sidebar's open state is remembered; the view, tab and chat are not,
 // so the app always starts on the new-chat screen.
 const SIDEBAR_KEY = 'cinna-sidebar-open'
@@ -276,6 +277,8 @@ interface UIStore {
   theme: Theme
   themePreference: ThemePreference
   extraUIAnimation: boolean
+  /** A long table in the chat keeps its header row in view while it scrolls past. On by default. */
+  stickyTableHeaders: boolean
   logsOpen: boolean
   agentStatusOpen: boolean
   /** Agent whose status detail the overlay should show (null = grid view). */
@@ -338,6 +341,7 @@ interface UIStore {
   toggleTheme: () => void
   setThemePreference: (preference: ThemePreference) => void
   setExtraUIAnimation: (enabled: boolean) => void
+  setStickyTableHeaders: (enabled: boolean) => void
   setLogsOpen: (open: boolean) => void
   setAgentStatusOpen: (open: boolean) => void
   setAgentStatusDetailId: (id: string | null) => void
@@ -389,6 +393,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
   extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0',
+  stickyTableHeaders: localStorage.getItem(STICKY_TABLE_HEADERS_KEY) !== '0',
   logsOpen: false,
   agentStatusOpen: false,
   agentStatusDetailId: null,
@@ -495,6 +500,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
     localStorage.setItem(ANIMATION_KEY, extraUIAnimation ? '1' : '0')
     set({ extraUIAnimation })
   },
+  setStickyTableHeaders: (stickyTableHeaders) => {
+    localStorage.setItem(STICKY_TABLE_HEADERS_KEY, stickyTableHeaders ? '1' : '0')
+    set({ stickyTableHeaders })
+  },
   setLogsOpen: (open) => set({ logsOpen: open }),
   setAgentStatusOpen: (open) => set({ agentStatusOpen: open }),
   setAgentStatusDetailId: (id) => set({ agentStatusDetailId: id }),
@@ -588,6 +597,9 @@ const syncAppearance = (event: StorageEvent): void => {
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })
+  }
+  if (event.key === STICKY_TABLE_HEADERS_KEY || event.key === null) {
+    useUIStore.setState({ stickyTableHeaders: localStorage.getItem(STICKY_TABLE_HEADERS_KEY) !== '0' })
   }
   if (event.key === SIDEBAR_DOCKING_KEY || event.key === null) {
     const sidebarDocking = readSidebarDocking()

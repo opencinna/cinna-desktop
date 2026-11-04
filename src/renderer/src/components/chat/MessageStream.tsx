@@ -648,6 +648,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   }, [artifactCards, artifactsSupport.supported, chatId])
   const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds, sentVersion } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
+  const stickyTableHeaders = useUIStore((s) => s.stickyTableHeaders)
+  // With no sidebar docked, the top bar's buttons float over the transcript,
+  // so a stuck table header sits below them rather than at the top.
+  const sidebarDocked = useUIStore((s) => s.sidebarDocking === 'fixed' && s.sidebarOpen)
   // **While a request block is answerable, new content must not move it.** A
   // second ask arriving under a pinned view scrolled the first block's buttons
   // away and put the second's exactly where the pointer was, so a click aimed at
@@ -925,12 +929,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     <div
       ref={containerRef}
       onContextMenu={messageContextMenu.onContextMenu}
-      className="flex-1 overflow-y-auto px-4 pb-4 pt-[calc(var(--topbar-h)+12px)]"
+      // Tables in this transcript keep their header row in view (main.css,
+      // against `--transcript-pt` and `--sticky-table-top`).
+      data-sticky-tables={stickyTableHeaders || undefined}
+      className="flex-1 overflow-y-auto px-4 pb-4 [--transcript-pt:calc(var(--topbar-h)+12px)] [--transcript-fade:10px] pt-[var(--transcript-pt)]"
       style={{
         paddingBottom: bottomPadding ? bottomPadding + 41 : undefined,
+        ['--sticky-table-top' as string]: sidebarDocked ? 'var(--transcript-fade)' : 'var(--topbar-h)',
         // Fade the transcript itself so no text survives at the clipped edge.
-        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 10px)',
-        maskImage: 'linear-gradient(to bottom, transparent 0, black 10px)'
+        // Sticky table headers stop just below this fade (main.css).
+        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black var(--transcript-fade))',
+        maskImage: 'linear-gradient(to bottom, transparent 0, black var(--transcript-fade))'
       }}
     >
       <div data-sidebar-band-limit ref={contentRef} className="max-w-3xl mx-auto space-y-3">

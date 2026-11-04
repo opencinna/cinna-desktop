@@ -63,6 +63,8 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setSidebarDocking = useUIStore((s) => s.setSidebarDocking)
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
+  const stickyTableHeaders = useUIStore((s) => s.stickyTableHeaders)
+  const setStickyTableHeaders = useUIStore((s) => s.setStickyTableHeaders)
   const showTasksButton = useUIStore((s) => s.showTasksButton)
   const setShowTasksButton = useUIStore((s) => s.setShowTasksButton)
   const showVoiceInput = useUIStore((s) => s.showVoiceInput)
@@ -283,6 +285,14 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             checked={extraUIAnimation}
             onToggle={() => setExtraUIAnimation(!extraUIAnimation)}
             title={extraUIAnimation ? 'Extra UI animation is enabled' : 'Extra UI animation is disabled'}
+          />
+          <SettingsToggleRow
+            id="feature-sticky-table-headers"
+            label="Sticky table headers"
+            description="While you scroll through a long table in a chat, its header row stays at the top until the table’s last row passes. A table too wide for the message scrolls sideways, and its header scrolls with it."
+            checked={stickyTableHeaders}
+            onToggle={() => setStickyTableHeaders(!stickyTableHeaders)}
+            title={stickyTableHeaders ? 'Table headers stay in view while you scroll' : 'Table headers scroll away with the table'}
           />
           <SettingsToggleRow
             id="feature-tasks-button"

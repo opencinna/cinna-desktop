@@ -265,7 +265,7 @@ export function MessageBubble({
       <div className="flex flex-col items-end gap-1">
         {showsPill && <div className="relative group max-w-[80%]">
           <div
-            className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
+            className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] [--table-under:var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <FileRefContext.Provider value={fileRefs}>
               <ComponentRefScopeContext.Provider value={componentScope}>

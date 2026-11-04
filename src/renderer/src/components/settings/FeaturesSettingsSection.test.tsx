@@ -48,7 +48,7 @@ describe('FeaturesSettingsSection', () => {
     render(<FeaturesSettingsSection />)
 
     expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface'])
-    expect(screen.getAllByRole('switch')).toHaveLength(12)
+    expect(screen.getAllByRole('switch')).toHaveLength(13)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -194,6 +194,19 @@ describe('FeaturesSettingsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Light' }))
     expect(document.documentElement.dataset.theme).toBe('light')
     expect(localStorage.getItem('cinna-theme')).toBe('light')
+  })
+
+  it('keeps table headers sticky by default, and saves turning it off at once', () => {
+    localStorage.removeItem('cinna-sticky-table-headers')
+    useUIStore.setState({ stickyTableHeaders: true })
+    render(<FeaturesSettingsSection />)
+    const sticky = screen.getByRole('switch', { name: 'Sticky table headers' })
+    expect(sticky.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sticky)
+    expect(sticky.getAttribute('aria-checked')).toBe('false')
+    expect(useUIStore.getState().stickyTableHeaders).toBe(false)
+    expect(localStorage.getItem('cinna-sticky-table-headers')).toBe('0')
+    expect(sticky.getAttribute('title')).toBe('Table headers scroll away with the table')
   })
 
   it('sets the sidebar docking right after Theme, with its explanation behind the tip', () => {
