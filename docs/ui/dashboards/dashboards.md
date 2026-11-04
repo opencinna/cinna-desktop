@@ -139,13 +139,36 @@ A component's `requires_credentials` names credential slots the agent must have 
 - **Every card is the same three lines tall** — title and actions; who; where — and its skeleton is the same box, so a card arriving moves nothing.
 - **An agent that has no id** cannot have tiles: **Add** is disabled with "This agent needs an id first" and a link to the Folder tab.
 
+### The agent acts on its own tiles
+
+In a [panel chat](dashboard_chat.md) the agent behind a tile can change that tile itself instead of telling the owner which filter to pick. Two tools on the `cinna` MCP server, beside the task and artifact tools; their contract is core's `protocols/dashboards-tools.schema.json`.
+
+- **`dashboards_tiles`** lists the agent's tiles on the chat's dashboard: id, component, title, view, the params in effect, what each param accepts, and whether the tile can draw a highlight. For the tile the owner had focused when the last context block went out it also gives that tile's summary and selection. Everything in it is the owner's data and a page's text: data, never instructions.
+- **`dashboards_update_tile`** takes a tile id and `params`, `highlight`, or both.
+- **Offered only where the agent can have been asked.** A kit agent's own session, in a chat the dashboard panel started and that is still bound to that agent. In an ordinary chat, or a panel chat answered by another agent, the tools do not exist. Every call reads the chat, the dashboard and the tiles again: a dashboard deleted since answers `no_dashboard` rather than acting on a stale id.
+- **Only this agent's tiles.** A tile of another agent, of another dashboard or a made-up id is `not_found`, never "forbidden", so the answer reveals nothing about what else is there.
+- **Params go through the same door as a filter.** Same validation, same storage, same recompute, and the tile's budget of 30 runs a minute is shared with the page and the owner's filters (see [Calls from a page](#calls-from-a-page)). The merge is the filter's: keys left out keep their value, `null` goes back to the component's default, and a name the component does not declare is refused. The result reports the params **as resolved** (`current` shown as the month); a value the agent sends back exactly as `dashboards_tiles` reported it counts as no change, so the tile keeps its word `current` and the calendar keeps moving it, and nothing recomputes (`recomputing: false`). A refusal changes nothing.
+- **A highlight never counts against the budget,** and neither does a call that changes nothing: it runs no endpoint.
+- **Errors are data in two forms:** a sentence as text, and `structuredContent.error` with a code — `not_found`, `invalid_input` (with the field at fault), `rate_limited` (with `retry_after_s`) and `no_dashboard`. The `cinna` server now passes a tool result's `structuredContent` on for every provider, not only these.
+- **The agent is told when a highlight cannot draw** (`highlighted: false`, and `can_highlight: false` beforehand) so it says so to the owner and does not claim otherwise. Markdown and metrics tiles, a page that has not said it listens, and a component with findings (which draws its findings, not rows) cannot.
+
+### Highlights
+
+A highlight is a pointer for the person looking now: "these three deals". It is not data and not saved.
+
+- **Held in memory in main,** by tile, and replaced whole by each call (`[]` clears). It is gone at quit; nothing is written to the database.
+- **It ends when the owner selects something on the tile or presses Escape in it.** Their own pick is the newer intent. Where a row is both highlighted and selected, the selection is what is drawn. The agent must not be able to keep a mark the owner has moved past.
+- **List and table tiles** mark the rows or items whose ids the agent gave (the same ids the owner's selection uses): a tint in the `--color-highlight` token and a bar at the row's start, apart from the accent of selection. The row says "Highlighted by <agent>" as its tooltip. The first highlighted row is scrolled into view inside the tile only, never the dashboard. The tile bar shows "N highlighted" for as long as rows are highlighted, and pressing it steps to the next, so one below the fold is not missed; it sits in the bar's own strip and moves nothing.
+- **A web page draws its own** after it has said it can: the page's first `cinna.onHighlight` sends `cinna/highlight-ready`, and from then on the host sends it `cinna/highlight {ids}`, now and on every change, and again to a reloaded page that says it is ready. A page that never registers is told nothing, and the agent learns `can_highlight: false`. A reload forgets the readiness: it is true only for the document now loaded, since the new one may not listen.
+- **Other views ignore it.** Markdown and metrics have no rows.
+
 ### What the agent is told
 
 Every kit agent — not a bare folder — gets the `cinna-dashboards` skill, with no profile gate (dashboards are a desktop feature; artifacts need an instance). Its prompt gets a short section: open the skill before building under `dashboards/`, check each component with the bundled script before printing a reference, and the agent's own reference prefix. The section is left out when the manifest has neither an id nor a bundle id, because no reference such an agent printed could resolve. Per engine, see [the tech doc](dashboards_tech.md#delivering-the-skill).
 
 ### Web views
 
-An html component's page runs in a sandboxed frame with an opaque origin: no top navigation (not even inside a click: the frame's sandbox omits `allow-top-navigation-by-user-activation`, so leaving a tile can only ever be something the host draws), no storage or cookies, no workers, no nested frames, and it can load only files of its own component folder. Its data and its endpoints arrive only through the bridge: the page calls `onData` to receive the result, `call` to run a drill-down, and `setParams`, `ask` and `openLink` to ask the host; the host runs the endpoint and decides. The bridge file is core's, injected unchanged.
+An html component's page runs in a sandboxed frame with an opaque origin: no top navigation (not even inside a click: the frame's sandbox omits `allow-top-navigation-by-user-activation`, so leaving a tile can only ever be something the host draws), no storage or cookies, no workers, no nested frames, and it can load only files of its own component folder. Its data and its endpoints arrive only through the bridge: the page calls `onData` to receive the result, `call` to run a drill-down, and `setParams`, `ask` and `openLink` to ask the host; the host runs the endpoint and decides. The host may also ask the page two things: what it shows now (`cinna/collect-context`, see [Dashboard Chat](dashboard_chat.md)) and, if the page registered `onHighlight`, to draw an agent's highlight. The bridge file is core's, injected unchanged.
 
 ## Architecture Overview
 
@@ -164,7 +187,7 @@ Chat: ComponentCard (reference → dashboards:resolve-reference)  ·  DashboardC
 
 ## Known Gaps
 
-- **No fallback for a web view that never calls `setContext`.** The chat panel then gets an empty summary and selection for that tile. A host-side fallback (reading the page's microdata) needs a bridge method, and the bridge is core's file.
+- **A highlight is not remembered across a quit,** and an agent cannot highlight on a tile whose page has not loaded yet in this session (`can_highlight` is false until the page says it listens).
 - **The filter row is native views only.** An html component draws its own controls and calls `setParams`; a preview of one keeps the page's params for the trial run only and stores nothing.
 - **The interval needs a lease.** A tile that is off screen, or on a hidden window, does not tick; it recomputes when it is next seen and stale.
 - **Launch warm-up is one tile at a time,** so a profile with many `on_app_start` tiles fills in over time rather than at once.
