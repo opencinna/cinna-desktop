@@ -53,9 +53,13 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 3. System follows live OS appearance; the sidebar footer Theme shortcut selects a fixed opposite theme. Extra animation governs quick stationary-text chat curtains, the new-chat logo's draw and sweep, and the shared decorative grid, border and header effects, and respects reduced motion. Switching it off does not disable composer draft restoration or message actions. See [Appearance](../appearance/appearance.md).
 4. **Sidebar docking**, between Theme and Extra UI animation, chooses **Fixed** or **On Hover**; its explanation sits behind the label's info tip. It is stored and shared like the theme, and the top-bar sidebar button's right-click menu sets the same value. See [App Shell](../app_shell/app_shell.md#using-the-sidebar-on-hover).
 
+### Sticky table headers
+
+1. Open Features → Interface → **Sticky table headers** (on by default, saved per device like the theme) to keep a long table's header row in view while a chat scrolls past it. See [Conversation UI](../../chat/conversation_ui/conversation_ui.md).
+
 ### Tasks button
 
-1. Open Features → Interface → **Tasks button**, the row right after Extra UI animation (on by default).
+1. Open Features → Interface → **Tasks button**, the row right after Sticky table headers (on by default).
 2. Off removes the top bar's Tasks button; the [Tasks view](../../jobs/tasks_view/tasks_view.md) is then not reachable, and turning it off while that view is open returns to the chats rather than leaving a page with no way back to it.
 3. Like the appearance preferences, it is a renderer preference saved immediately, machine-wide and shared between app windows, and stays usable while service-backed settings are unavailable.
 

@@ -119,6 +119,7 @@ Grid/border state is per host; the secondary-button singleton, header scheduler 
 |---|---|
 | `cinna-theme` localStorage | `system`, `dark`, `light`; missing/invalid → System |
 | `cinna-extra-ui-animation` localStorage | Setters write `1`/`0`; only `0` disables, so missing/other values → enabled |
+| `cinna-sticky-table-headers` localStorage | Setter writes `1`/`0`; only `0` disables, so missing/other → enabled. Not decorative motion: reduced motion and Extra UI animation do not affect it. See [Conversation UI (tech)](../../chat/conversation_ui/conversation_ui_tech.md#sticky-table-headers) |
 | `prefers-color-scheme: dark` | Resolves System in main-window and popup renderers |
 | `prefers-reduced-motion: reduce` | Suppresses decorative effects without rewriting the preference |
 
