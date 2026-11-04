@@ -304,7 +304,7 @@ function PanelChat({
     if (!pendingPrompt || !chat || pendingPrompt.agentId !== agentId || sent.current === pendingPrompt.seq) return
     sent.current = pendingPrompt.seq
     if (pendingPrompt.fill) {
-      fillChatComposer(chatId, pendingPrompt.prompt)
+      fillChatComposer(chatId, pendingPrompt.prompt, { onlyIfEmpty: true })
       onPromptSent(pendingPrompt.seq)
       return
     }

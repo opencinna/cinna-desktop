@@ -489,6 +489,12 @@ describe('the dashboard header', () => {
     await waitFor(() => expect(useComposerDraftStore.getState().drafts[key]?.text).toBe('Why did W3 drop?'))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(runStart).not.toHaveBeenCalled()
+    // The owner is typing: a later ask never touches the draft (cinna-core's rule too).
+    act(() => useComposerDraftStore.getState().update(key, () => ({ text: 'my own question' })))
+    send({ jsonrpc: '2.0', id: 3, method: 'ui/message', params: { role: 'user', content: [{ type: 'text', text: 'And W4?' }], _meta: { cinna: { nonce } } } })
+    expect(posted.find((m) => m.id === 3)).toEqual({ jsonrpc: '2.0', id: 3, result: {} })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)) })
+    expect(useComposerDraftStore.getState().drafts[key]?.text).toBe('my own question')
   })
 
   it('the composer gaining focus asks the focused page what is selected; an empty answer drops the quoted text from the chip and the send', async () => {

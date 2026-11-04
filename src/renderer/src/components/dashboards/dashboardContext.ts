@@ -1,5 +1,5 @@
 import {
-  DASHBOARD_CONTEXT_MAX_CHARS,
+  DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS,
   type CollectedPageContext,
   resolveParamWords,
   type DashboardContext,
@@ -49,7 +49,7 @@ function oneLine(value: unknown): string {
 }
 
 /** Cut at the cap, marking the cut. */
-export function capSummary(summary: string, max = DASHBOARD_CONTEXT_MAX_CHARS): string {
+export function capSummary(summary: string, max = DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS): string {
   return summary.length <= max ? summary : `${summary.slice(0, max - 1)}…`
 }
 

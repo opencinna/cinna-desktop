@@ -6,7 +6,7 @@ import {
   dashboardContextSection,
   sanitizeDashboardContext
 } from './dashboardContext'
-import { DASHBOARD_CONTEXT_MAX_CHARS, type DashboardContext } from '../../../shared/dashboards'
+import { DASHBOARD_CONTEXT_MAX_CHARS, DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS, type DashboardContext } from '../../../shared/dashboards'
 
 const sample: DashboardContext = {
   dashboardId: 'd1',
@@ -60,13 +60,13 @@ describe('sanitizeDashboardContext', () => {
     const out = sanitizeDashboardContext({
       ...sample,
       dashboard: 'Sales\u0000 ‮overview\n',
-      focused: { ...sample.focused, title: 'De\u0007als\tnow', summary: `row 1\u0001\r\nrow 2${'x'.repeat(DASHBOARD_CONTEXT_MAX_CHARS)}`, selection: ['a\u0000b'] }
+      focused: { ...sample.focused, title: 'De\u0007als\tnow', summary: `row 1\u0001\r\nrow 2${'x'.repeat(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)}`, selection: ['a\u0000b'] }
     })!
     expect(out.dashboard).toBe('Sales overview')
     expect(out.focused.title).toBe('Deals now')
     expect(out.focused.selection).toEqual(['ab'])
     expect(out.focused.summary.startsWith('row 1\nrow 2x')).toBe(true)
-    expect(out.focused.summary).toHaveLength(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(out.focused.summary).toHaveLength(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)
     expect(out.focused.summary.endsWith('…')).toBe(true)
   })
 })
@@ -86,7 +86,7 @@ describe('dashboardContextSection', () => {
     expect(json.focused.skill).toBe('crm')
   })
 
-  it('caps the whole block at 8,000 characters, the summary giving way first', () => {
+  it('caps the whole block at 12,000 characters, the summary giving way first', () => {
     const long = sanitizeDashboardContext({ ...sample, focused: { ...sample.focused, summary: '"'.repeat(7_000) } })!
     const out = dashboardContextSection(long)
     expect(out.length).toBeLessThanOrEqual(DASHBOARD_CONTEXT_MAX_CHARS)
@@ -185,6 +185,7 @@ describe('the owner’s selected text (D5)', () => {
     const crowded = sanitizeDashboardContext({
       ...sample,
       focused: { ...sample.focused, summary: 's'.repeat(7_000), selectedText: '"'.repeat(2_000) },
+      alsoYours: Array.from({ length: 24 }, (_, i) => `${i}`.padEnd(200, 'a')),
       otherTiles: Array.from({ length: 24 }, (_, i) => `${i}`.padEnd(250, 't'))
     })!
     const out = dashboardContextSection(crowded)
@@ -192,6 +193,7 @@ describe('the owner’s selected text (D5)', () => {
     const json = JSON.parse(out.split('\n')[1])
     expect(json.focused.summary).toBe('')
     expect(json.other_tiles).toHaveLength(24)
+    expect(json.also_yours).toHaveLength(24)
     expect(json.focused.selected_text.length).toBeLessThan(2_000)
     expect(json.focused.selected_text.endsWith('…')).toBe(true)
   })

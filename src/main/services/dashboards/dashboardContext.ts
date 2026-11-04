@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import {
   DASHBOARD_CONTEXT_MAX_CHARS,
+  DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS,
   MAX_DASHBOARD_NAME_LENGTH,
   MAX_TILES_PER_DASHBOARD,
   MAX_TILE_TITLE_LENGTH,
@@ -120,7 +121,7 @@ export function sanitizeDashboardContext(raw: unknown): DashboardContext | null 
       params: focusedParams,
       selection,
       dataAge,
-      summary: text(f.summary, DASHBOARD_CONTEXT_MAX_CHARS),
+      summary: text(f.summary, DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS),
       ...(selectedText ? { selectedText } : {})
     },
     alsoYours,

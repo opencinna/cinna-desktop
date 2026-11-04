@@ -467,8 +467,11 @@ export interface DashboardContext {
   otherTiles: string[]
 }
 
-/** The cap on the context's summary, and on the whole serialized block. */
-export const DASHBOARD_CONTEXT_MAX_CHARS = 8_000
+/** The cap on the whole serialized `<dashboard_context>` block (the same in cinna-core). */
+export const DASHBOARD_CONTEXT_MAX_CHARS = 12_000
+
+/** The cap on the focused tile's summary inside the block. */
+export const DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS = 8_000
 
 /**
  * The panel's chat for (dashboard, agent) (README D12): one session per agent

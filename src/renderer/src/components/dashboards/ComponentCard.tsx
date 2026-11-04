@@ -28,8 +28,11 @@ export interface ComponentRefScope {
 export const ComponentRefScopeContext = createContext<ComponentRefScope>({ chatId: null, agentId: null })
 
 /** Put text in a chat's composer, after what is typed there, and focus it. Never sends. */
-export function fillChatComposer(chatId: string, text: string): void {
+export function fillChatComposer(chatId: string, text: string, options: { onlyIfEmpty?: boolean } = {}): void {
   const key = composerDraftKey(useAuthStore.getState().currentUser?.id, `chat:${chatId}`)
+  const draft = useComposerDraftStore.getState().drafts[key]
+  // A page's cinna.ask never touches what the owner is typing (the same rule as cinna-core's web host).
+  if (options.onlyIfEmpty && draft && draft.text.trim() !== '') return
   useComposerDraftStore.getState().update(key, (draft) => ({
     text: draft.text.trim() === '' ? text : `${draft.text.replace(/\s+$/, '')}\n\n${text}`
   }))

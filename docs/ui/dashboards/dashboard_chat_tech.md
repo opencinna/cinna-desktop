@@ -19,7 +19,7 @@ Implementation reference for [Dashboard Chat](dashboard_chat.md).
 
 ### Shared and preload
 
-- `src/shared/dashboards.ts` — `DashboardContext`, `DASHBOARD_CONTEXT_MAX_CHARS`, `PanelChatInput`, `PanelChatOutcome`.
+- `src/shared/dashboards.ts` — `DashboardContext`, `DASHBOARD_CONTEXT_MAX_CHARS` (12,000, the whole block, matching cinna-core), `DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS` (8,000, the focused summary), `PanelChatInput`, `PanelChatOutcome`.
 - `src/shared/ipcPayloads.ts` — `RunSendPayload.dashboardContext`; `ChatData.originDashboardId` (preload types).
 - `src/preload/index.ts` — `dashboards.panelChat`.
 

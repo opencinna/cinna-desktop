@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DASHBOARD_CONTEXT_MAX_CHARS, type ComponentInfo, type TileResultDto, type TileView } from '../../../../shared/dashboards'
+import { DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS, type ComponentInfo, type TileResultDto, type TileView } from '../../../../shared/dashboards'
 import { CHIP_QUOTE_CHARS, buildDashboardContext, coalescePerKey, contextChipLabel, contextChipTitle, contextIdentity, dataAgeText, selectionKeyOf, summarizeCollected, summarizeTile, webContextFromCollected } from './dashboardContext'
 import type { CollectedPageContext } from '../../../../shared/dashboards'
 
@@ -71,10 +71,10 @@ describe('summarizeTile', () => {
 
   it('caps every summary at 8,000 chars', () => {
     const summary = summarizeTile('html', null, [], { summary: 'x'.repeat(20_000), selection: [] })
-    expect(summary).toHaveLength(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(summary).toHaveLength(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)
     expect(summary.endsWith('…')).toBe(true)
     const wide = { columns: [{ key: 'v' }], rows: Array.from({ length: 40 }, () => ({ v: 'y'.repeat(500) })) }
-    expect(summarizeTile('table', wide, [], null).length).toBe(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(summarizeTile('table', wide, [], null).length).toBe(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)
   })
 
   it('no data, or data of the wrong shape: an empty summary', () => {
@@ -247,7 +247,7 @@ describe('a page’s collect-context answer', () => {
   it('caps the lines and the length like every summary', () => {
     const many = collected({ microdata: Array.from({ length: 100 }, (_, i) => ({ id: `i${i}`, properties: { v: 'x'.repeat(200) } })) })
     const summary = summarizeCollected(many)
-    expect(summary.length).toBeLessThanOrEqual(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(summary.length).toBeLessThanOrEqual(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS)
     expect(summarizeCollected(collected({ microdata: Array.from({ length: 50 }, (_, i) => ({ id: `i${i}`, properties: {} })) }))).toContain('(40 of 50 shown)')
   })
 
