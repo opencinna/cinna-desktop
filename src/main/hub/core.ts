@@ -34,6 +34,7 @@ import { conductorBridge } from '../services/conductorBridge'
 import { artifactService } from '../services/artifacts/artifactService'
 import { dashboardRefreshService } from '../services/dashboards/dashboardRefreshService'
 import { onRunClosed } from '../services/runExecutionState'
+import { onScheduleRunCompleted } from '../services/localScheduleEvents'
 import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
 import { chatModeService } from '../services/chatModeService'
@@ -85,6 +86,10 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   onRunClosed((_chatId, agentId) => {
     if (agentId && userActivation.isActivated()) dashboardRefreshService.afterTurn(getProfileScopeUserId(), agentId)
   })
+  // A schedule's run completed: the active profile's tiles it feeds re-read what it wrote (README D4).
+  onScheduleRunCompleted(({ userId, agentId, name }) => {
+    if (userActivation.isActivated() && getProfileScopeUserId() === userId) dashboardRefreshService.scheduleRan(userId, agentId, name)
+  })
   remoteTurnRecoveryService.onRetryDue((userId) => {
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })
@@ -127,6 +132,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
       } catch (err) {
         createLogger('uv-prewarm').warn('could not check for local agents to pre-warm', { error: err instanceof Error ? err.message : String(err) })
       }
+      // Tiles whose component says `on_app_start`, one at a time, off the boot path
+      // (README D4); a profile close or quit cancels it. `CINNA_DASHBOARD_WARMUP=off` skips it.
+      if (userActivation.isActivated()) void dashboardRefreshService.warmUp(getProfileScopeUserId()).catch(() => {})
     })
   })
 }

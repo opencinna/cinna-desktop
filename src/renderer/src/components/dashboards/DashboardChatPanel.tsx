@@ -9,6 +9,7 @@ import { useUIStore } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { ComposerSendExtrasContext, type ComposerSendExtras } from '../chat/composerSendContext'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
+import { fillChatComposer } from './ComponentCard'
 import { contextChipParts } from './dashboardContext'
 
 /** The panel's narrowest and default widths, px; it never takes more than 60% of the window. */
@@ -44,11 +45,16 @@ export function panelLayout(
 const HEADER_ICON_BUTTON =
   'flex items-center rounded-md p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50'
 
-/** A suggested question waiting for the panel's chat: sent once that chat is on screen. */
+/**
+ * A suggested question waiting for the panel's chat: sent once that chat is
+ * on screen. With `fill` (a page's `cinna.ask`, D14) it is put in the
+ * composer instead, and never sent.
+ */
 export interface PendingPrompt {
   agentId: string
   prompt: string
   seq: number
+  fill?: boolean
 }
 
 /** The chip over the panel's composer: what goes with the next message (README D7). */
@@ -287,13 +293,18 @@ function PanelChat({
   const pendingUser = useChatStore((s) => s.pendingUserMessage)
   const empty = !!chat && (chat.messages?.length ?? 0) === 0 && !isStreaming && !pendingUser && !chat.activeRunId
 
-  // A question pressed on a tile: sent once this agent's chat is loaded, with the context.
+  // A question pressed on a tile: sent once this agent's chat is loaded, with the context; a page's ask only fills the composer.
   const sent = useRef<number | null>(null)
   useEffect(() => {
     if (!pendingPrompt || !chat || pendingPrompt.agentId !== agentId || sent.current === pendingPrompt.seq) return
     sent.current = pendingPrompt.seq
+    if (pendingPrompt.fill) {
+      fillChatComposer(chatId, pendingPrompt.prompt)
+      onPromptSent(pendingPrompt.seq)
+      return
+    }
     void submit(pendingPrompt.prompt).finally(() => onPromptSent(pendingPrompt.seq))
-  }, [pendingPrompt, chat, agentId, submit, onPromptSent])
+  }, [pendingPrompt, chat, chatId, agentId, submit, onPromptSent])
 
   const top = (
     <div className="mx-auto mb-1.5 w-full max-w-3xl px-4">

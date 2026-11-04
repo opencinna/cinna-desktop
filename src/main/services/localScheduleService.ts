@@ -24,6 +24,7 @@ import { manifestPath, readWithStamp } from '../kit/manifestIo'
 import type { LocalScheduleSaveInput, LocalScheduleDeleteInput, LocalScheduleEditorSnapshot, LocalScheduleHistoryInput, LocalScheduleHistoryPage, LocalScheduleStopInput, ScheduleCommandOutcome } from '../../shared/localSchedules'
 import type { TaskScript } from '../../shared/taskScript'
 import { taskRunsHere } from '../../shared/tasks'
+import { notifyScheduleRunCompleted } from './localScheduleEvents'
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -111,6 +112,7 @@ export function reconcileOccurrence(row: ScheduleOccurrenceRow, persist = true):
       localScheduleRepo.updateOccurrence(row.userId, row.id, { status, reason, finishedAt })
       if (finishedAt != null) localScheduleRepo.completed(row.userId, row.bindingId, finishedAt)
     })
+    if (status === 'completed' && row.status !== 'completed') notifyScheduleRunCompleted(row.userId, row.bindingId)
   }
   return { ...row, status, reason, finishedAt }
 }
@@ -428,6 +430,7 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
         const live = localScheduleRepo.get(scope.profileUserId, binding.id)
         if (live) localScheduleRepo.save({ ...live, lastCompletedAt: outcome.finishedAt })
       })
+      notifyScheduleRunCompleted(scope.profileUserId, binding.id)
       return
     }
     getDb().transaction(() => {

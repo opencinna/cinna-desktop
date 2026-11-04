@@ -1,6 +1,6 @@
 import type { DashboardFrameTarget, DashboardViewKind, TileResultDto, TileSize } from '../../../../shared/dashboards'
 import { ListView, MarkdownView, MetricsView, TableView, type ViewSelection } from './views/nativeViews'
-import { WebView } from './views/WebView'
+import { WebView, type BridgeActions } from './views/WebView'
 
 /** "just now", "4 min ago", "3 h ago", "2 d ago". */
 export function ageLabel(fetchedAt: number | null, now = Date.now()): string {
@@ -36,7 +36,8 @@ export function TileBody({
   meta,
   loading,
   selection,
-  onContext
+  onContext,
+  actions
 }: {
   view: DashboardViewKind
   result: TileResultDto | null
@@ -47,6 +48,8 @@ export function TileBody({
   selection?: ViewSelection
   /** A tile on a dashboard: the page's `setContext` (html view). */
   onContext?: (context: { summary: string; selection: string[] }) => void
+  /** The page's setParams and ask (html view, D4). */
+  actions?: BridgeActions
 }): React.JSX.Element {
   const hasData = !!result && result.data !== null
   if (view === 'html') {
@@ -58,6 +61,7 @@ export function TileBody({
           meta={meta}
           title={meta.title}
           onContext={onContext}
+          actions={actions}
           data={hasData ? { value: result!.data, fetchedAt: result!.fetchedAt, stale: result!.stale } : null}
         />
         {!hasData && result?.error && !loading && (

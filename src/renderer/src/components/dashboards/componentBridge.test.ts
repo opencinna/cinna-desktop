@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createBridgeSession, readModelContext } from './componentBridge'
+import { MAX_ASK_TEXT, createBridgeSession, linkTarget, readModelContext } from './componentBridge'
 
 /** The host's checks on a dashboard frame's messages (spike §3's cases). */
 
@@ -114,7 +114,10 @@ describe('the component bridge', () => {
  * throw nor leave an unhandled rejection.
  */
 describe('the kit bridge against this host', () => {
-  async function wire(onContext?: (context: { summary: string; selection: string[] }) => void) {
+  async function wire(
+    onContext?: (context: { summary: string; selection: string[] }) => void,
+    extra: Partial<Parameters<typeof createBridgeSession>[0]> = {}
+  ) {
     const { readFileSync } = await import('node:fs')
     const { DASHBOARDS_BRIDGE_REPO_PATH } = await import('../../../../main/kit/dashboardsProtocol')
     const DASHBOARDS_BRIDGE_SCRIPT = readFileSync(DASHBOARDS_BRIDGE_REPO_PATH, 'utf8')
@@ -134,7 +137,8 @@ describe('the kit bridge against this host', () => {
       hostContext: () => ({ theme: 'dark', styles: { variables: { '--cinna-bg': '#111' } } }),
       meta: () => ({ component: 'chart', title: 'Chart', params: { month: '2026-11' }, size: 'l' }),
       onInitialized: () => session.sendData({ weeks: [1] }, { stale: true, fetchedAt: 5 }),
-      onContext
+      onContext,
+      ...extra
     })
     const documentStub = { documentElement: { style: { setProperty: () => {}, colorScheme: '' }, setAttribute: () => {} } }
     new Function('window', 'document', DASHBOARDS_BRIDGE_SCRIPT)(frame, documentStub)
@@ -205,5 +209,180 @@ describe('setContext on the host', () => {
     expect(readModelContext({ structuredContent: { summary: 's', selection: ['x', '', 3, null, { id: 1 }, Number.NaN] } })).toEqual({ summary: 's', selection: ['x', '3'] })
     expect(readModelContext(null)).toEqual({ summary: '', selection: [] })
     expect(readModelContext({ structuredContent: { selection: Array.from({ length: 500 }, (_, i) => `r${i}`) } }).selection).toHaveLength(200)
+  })
+})
+
+describe('the D4 bridge methods (kit bridge against this host)', () => {
+  async function wired(extra: Partial<Parameters<typeof createBridgeSession>[0]>) {
+    const { readFileSync } = await import('node:fs')
+    const { DASHBOARDS_BRIDGE_REPO_PATH } = await import('../../../../main/kit/dashboardsProtocol')
+    const script = readFileSync(DASHBOARDS_BRIDGE_REPO_PATH, 'utf8')
+    const listeners: Array<(event: { source: unknown; data: unknown }) => void> = []
+    const frame: Record<string, unknown> = {
+      parent: { postMessage: (data: unknown) => queueMicrotask(() => session.receive({ source: frame, origin: 'null', data: JSON.parse(JSON.stringify(data)) })) },
+      addEventListener: (_type: string, listener: (event: { source: unknown; data: unknown }) => void) => listeners.push(listener)
+    }
+    const session = createBridgeSession({
+      frameWindow: () => frame,
+      post: (message) => queueMicrotask(() => listeners.forEach((l) => l({ source: frame.parent, data: JSON.parse(JSON.stringify(message)) }))),
+      hostContext: () => ({ theme: 'light', styles: { variables: {} } }),
+      meta: () => ({ component: 'chart', title: 'Chart', params: {}, size: 'm' }),
+      onInitialized: () => {},
+      ...extra
+    })
+    const documentStub = { documentElement: { style: { setProperty: () => {}, colorScheme: '' }, setAttribute: () => {} } }
+    new Function('window', 'document', script)(frame, documentStub)
+    const cinna = frame.cinna as Record<string, (...args: unknown[]) => Promise<unknown>> & { ready: Promise<unknown> }
+    await cinna.ready
+    return { cinna, session }
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('cinna.call runs the endpoint through call and resolves with its value', async () => {
+    const call = vi.fn(async () => ({ ok: true as const, value: { rows: [1, 2] } }))
+    const { cinna } = await wired({ call })
+    await expect(cinna.call('week_detail', { week: 'W1' })).resolves.toEqual({ rows: [1, 2] })
+    expect(call).toHaveBeenCalledWith('week_detail', { week: 'W1' })
+  })
+
+  it('cinna.call rejects with the endpoint’s message when it fails or is refused', async () => {
+    const call = vi.fn(async () => ({ ok: false as const, code: 'limit_reached' as const, message: 'Too many calls from this tile.' }))
+    const { cinna } = await wired({ call })
+    await expect(cinna.call('week_detail')).rejects.toEqual({ message: 'Too many calls from this tile.' })
+    expect(call).toHaveBeenCalledWith('week_detail', {})
+  })
+
+  it('cinna.call rejects with a message when the IPC itself throws', async () => {
+    const { cinna } = await wired({ call: vi.fn(async () => { throw new Error('ipc gone') }) })
+    await expect(cinna.call('week_detail')).rejects.toEqual({ message: 'week_detail could not be run.' })
+  })
+
+  it('cinna.setParams hands the params to onParams, without the bridge’s _meta', async () => {
+    const onParams = vi.fn()
+    const { cinna } = await wired({ onParams })
+    cinna.setParams({ month: '2026-10' })
+    await flush(); await flush()
+    expect(onParams).toHaveBeenCalledWith({ month: '2026-10' })
+  })
+
+  it('cinna.ask hands the text to onAsk (it never sends), capped; no panel rejects', async () => {
+    const onAsk = vi.fn(() => true)
+    const { cinna } = await wired({ onAsk })
+    await expect(cinna.ask('Why did W3 drop?')).resolves.toEqual({})
+    expect(onAsk).toHaveBeenCalledWith('Why did W3 drop?')
+    await cinna.ask('x'.repeat(MAX_ASK_TEXT + 50))
+    expect((onAsk.mock.calls.at(-1) as unknown as [string])[0]).toHaveLength(MAX_ASK_TEXT)
+    const noPanel = await wired({ onAsk: () => false })
+    await expect(noPanel.cinna.ask('hi')).rejects.toEqual({ message: 'There is no chat to ask here.' })
+  })
+
+  it('cinna.openLink waits for the owner: opened resolves, declined rejects, and only http(s) is asked about', async () => {
+    let decide: (opened: boolean) => void = () => {}
+    const openLink = vi.fn(() => new Promise<boolean>((resolve) => { decide = resolve }))
+    const { cinna } = await wired({ openLink })
+    let settled = false
+    const first = cinna.openLink('https://example.com/deals?id=7').then(() => { settled = true })
+    await flush(); await flush()
+    expect(openLink).toHaveBeenCalledWith('https://example.com/deals?id=7')
+    expect(settled).toBe(false)
+    // A second link while the first is on screen is refused, not stacked.
+    await expect(cinna.openLink('https://example.com/other')).rejects.toEqual({ message: 'Another link is waiting for the owner.' })
+    decide(true)
+    await first
+    expect(settled).toBe(true)
+
+    const declined = cinna.openLink('https://example.com/b')
+    await flush(); await flush()
+    decide(false)
+    await expect(declined).rejects.toEqual({ message: 'The link was not opened.' })
+
+    openLink.mockClear()
+    for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'cinna://agent/x', 'not a url']) {
+      await expect(cinna.openLink(url)).rejects.toEqual({ message: 'Only web (http, https) and mailto links open from a dashboard.' })
+    }
+    expect(openLink).not.toHaveBeenCalled()
+  })
+
+  it('after the owner declines a link, the page’s next ones are refused without asking until it re-initialises', async () => {
+    const posted: Array<Record<string, unknown>> = []
+    const frame = {}
+    let n = 0
+    let decide: (opened: boolean) => void = () => {}
+    const openLink = vi.fn(() => new Promise<boolean>((resolve, reject) => {
+      decide = (opened) => (opened === null ? reject(new Error('gone')) : resolve(opened))
+    }))
+    const session = createBridgeSession({
+      frameWindow: () => frame,
+      post: (message) => posted.push(message as Record<string, unknown>),
+      hostContext: () => ({ theme: 'light', styles: { variables: {} } }),
+      meta: () => ({ component: 'c', title: 'C', params: {}, size: 'm' }),
+      onInitialized: () => {},
+      openLink,
+      newNonce: () => `n-${++n}`
+    })
+    const init = (id: number) => session.receive({ source: frame, origin: 'null', data: { jsonrpc: '2.0', id, method: 'ui/initialize' } })
+    const ask = (id: number) => session.receive({
+      source: frame, origin: 'null',
+      data: { jsonrpc: '2.0', id, method: 'ui/open-link', params: { url: 'https://example.com/', _meta: { cinna: { nonce: `n-${n}` } } } }
+    })
+    const answer = (id: number) => posted.find((m) => m.id === id)
+    init(1)
+    // A failure to ask (not the owner's no) leaves links open.
+    ask(2)
+    decide(null as never)
+    await flush()
+    expect(answer(2)).toMatchObject({ error: { message: 'The link was not opened.' } })
+    ask(3)
+    expect(openLink).toHaveBeenCalledTimes(2)
+    decide(false)
+    await flush()
+    expect(answer(3)).toMatchObject({ error: { message: 'The link was not opened.' } })
+    ask(4)
+    ask(5)
+    expect(openLink).toHaveBeenCalledTimes(2)
+    expect(answer(4)).toMatchObject({ error: { message: 'The owner declined a link from this page.' } })
+    expect(answer(5)).toMatchObject({ error: { message: 'The owner declined a link from this page.' } })
+    // A new document asks again.
+    init(6)
+    ask(7)
+    expect(openLink).toHaveBeenCalledTimes(3)
+    decide(true)
+    await flush()
+    expect(answer(7)).toEqual({ jsonrpc: '2.0', id: 7, result: {} })
+  })
+
+  it('drops an answer that arrives after the page re-initialised', async () => {
+    let resolveCall: (value: { ok: true; value: unknown }) => void = () => {}
+    const posted: Array<Record<string, unknown>> = []
+    const frame = {}
+    let n = 0
+    const session = createBridgeSession({
+      frameWindow: () => frame,
+      post: (message) => posted.push(message as Record<string, unknown>),
+      hostContext: () => ({ theme: 'light', styles: { variables: {} } }),
+      meta: () => ({ component: 'c', title: 'C', params: {}, size: 'm' }),
+      onInitialized: () => {},
+      call: () => new Promise((resolve) => { resolveCall = resolve }),
+      newNonce: () => `n-${++n}`
+    })
+    session.receive({ source: frame, origin: 'null', data: { jsonrpc: '2.0', id: 1, method: 'ui/initialize' } })
+    session.receive({ source: frame, origin: 'null', data: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'e', _meta: { cinna: { nonce: 'n-1' } } } } })
+    session.receive({ source: frame, origin: 'null', data: { jsonrpc: '2.0', id: 1, method: 'ui/initialize' } })
+    const count = posted.length
+    resolveCall({ ok: true, value: 1 })
+    await flush()
+    expect(posted).toHaveLength(count)
+  })
+})
+
+describe('linkTarget', () => {
+  it('accepts http, https and mailto only', () => {
+    expect(linkTarget('https://a.example/x')?.host).toBe('a.example')
+    expect(linkTarget('http://a.example')?.protocol).toBe('http:')
+    expect(linkTarget('mailto:a@b.c')?.protocol).toBe('mailto:')
+    expect(linkTarget('javascript:alert(1)')).toBeNull()
+    expect(linkTarget('file:///etc/passwd')).toBeNull()
+    expect(linkTarget('data:text/html,hi')).toBeNull()
+    expect(linkTarget(42)).toBeNull()
   })
 })

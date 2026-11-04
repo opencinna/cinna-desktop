@@ -30,6 +30,7 @@ const component: ComponentInfo = {
   source: { endpoint: 'deals' },
   maxAge: '15m',
   refreshCommand: null,
+  refresh: { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null },
   params: {},
   valid: true,
   findings: [],

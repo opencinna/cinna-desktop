@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
-import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type ComponentPrompt, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { TILE_SIZES, TILE_SIZE_LABELS, resolveParamWords, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
 import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
 import { ConfirmDialog } from './DashboardDialog'
 import { EditTileDialog } from './EditTileDialog'
 import { TileBody, TileSkeleton, ageLabel } from './TileBody'
-import { MissingCredentials, errorFindings, openAgentTab } from './componentParts'
+import { COMPONENT_LINK, MissingCredentials, errorFindings, openAgentTab } from './componentParts'
+import { FILTER_ROW_TOP, TileFilters, hasFilterRow } from './TileFilters'
 import type { ViewSelection } from './views/nativeViews'
 
 /** What a tile on a dashboard with the chat panel gets (README D3); a tile without it has no Ask. */
@@ -24,6 +26,23 @@ export interface TileChat {
   onAsk: () => void
   /** A suggested question: focus, open the panel and send it with the context. */
   onPrompt: (prompt: ComponentPrompt) => void
+  /** The page's `cinna.ask`: focus, open the panel and put the text in its composer; never sends (D14). */
+  onFill: (text: string) => void
+}
+
+/** "14:00" today, "Mon 14:00" this week, "12 Nov 14:00" later. */
+export function nextRunLabel(at: number, now = Date.now()): string {
+  const when = new Date(at)
+  const time = when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const today = new Date(now)
+  if (when.toDateString() === today.toDateString()) return time
+  if (at - now < 6 * 24 * 3600_000) return `${when.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
+  return `${when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`
+}
+
+/** "Fed by Nightly ranking · next run 02:00": the hover line of a schedule-fed tile. */
+export function scheduleLine(schedule: TileScheduleState, now = Date.now()): string {
+  return `Fed by ${schedule.name}${schedule.nextRunAt !== null ? ` · next run ${nextRunLabel(schedule.nextRunAt, now)}` : ''}`
 }
 
 /** How many suggested questions fit on the hover bar for a tile this wide; the rest are in ⋯. */
@@ -81,6 +100,32 @@ export function Tile({
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [editing, setEditing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  /** Bumped when a filter change is refused: the controls go back to the stored values. */
+  const [paramsRevision, setParamsRevision] = useState(0)
+  /** Why the last filter change was not applied, shown under the filter row. */
+  const [filterNotice, setFilterNotice] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  /**
+   * The params main last stored (`stored`), and the ones last sent (`sent`),
+   * which the next change merges over: a change names only what changed, and
+   * `tile.params` lags until the tiles query refetches, so two quick picks
+   * must not drop the first. Both follow `tile.params` when it changes.
+   */
+  const [stored, setStored] = useState<Record<string, unknown>>(tile.params)
+  const storedRef = useRef(tile.params)
+  const sentRef = useRef(tile.params)
+  const requestRef = useRef(0)
+  const tileParamsKey = JSON.stringify(tile.params)
+  const seenParamsKey = useRef(tileParamsKey)
+  if (seenParamsKey.current !== tileParamsKey) {
+    seenParamsKey.current = tileParamsKey
+    storedRef.current = tile.params
+    // A change on its way is merged over what it was sent with, not over this.
+    if (requestRef.current === 0) sentRef.current = tile.params
+  }
+  useEffect(() => {
+    setStored(storedRef.current)
+  }, [tileParamsKey])
   const ref = useRef<HTMLDivElement>(null)
 
   // Whether the tile is on screen (inside the scrolled grid): the view leases what is shown.
@@ -110,6 +155,51 @@ export function Tile({
       .catch(() => setRefreshError('The tile could not be refreshed.'))
   }
 
+  /**
+   * A filter or the page's setParams names what it changed (`undefined`:
+   * back to the default); main replaces the whole set, so it goes merged over
+   * the params last sent. Main validates, stores and recomputes; the result
+   * arrives as a tile change. A refusal puts the controls back to what main
+   * stored and says why under the filter row (a page has no row: the mark).
+   */
+  const setParams = (changed: Record<string, unknown>): void => {
+    const next: Record<string, unknown> = { ...sentRef.current }
+    for (const [name, value] of Object.entries(changed)) {
+      if (value === undefined) delete next[name]
+      else next[name] = value
+    }
+    sentRef.current = next
+    const request = ++requestRef.current
+    const latest = (): boolean => request === requestRef.current
+    setRefreshError(null)
+    setFilterNotice(null)
+    const refused = (message: string): void => {
+      if (!latest()) return
+      requestRef.current = 0
+      sentRef.current = storedRef.current
+      if (filters) setFilterNotice(message)
+      else setRefreshError(message)
+      setStored(storedRef.current)
+      setParamsRevision((n) => n + 1)
+    }
+    void window.api.dashboards
+      .setParams({ tileId: tile.id, params: next })
+      .then((outcome) => {
+        if (!outcome.ok) {
+          refused(outcome.code === 'rate_limited' ? `Not applied: ${outcome.message}` : `Value refused: ${outcome.message}`)
+          return
+        }
+        storedRef.current = outcome.tile?.params ?? next
+        void queryClient.invalidateQueries({ queryKey: ['dashboards', 'tiles'] })
+        // An earlier answer behind a later change leaves the controls on the later values.
+        if (!latest()) return
+        requestRef.current = 0
+        sentRef.current = storedRef.current
+        setStored(storedRef.current)
+      })
+      .catch(() => refused('Not applied: the filter could not be sent.'))
+  }
+
   const openAgent = (): void => {
     if (component) openAgentTab(component.agentId, 'dashboards')
   }
@@ -132,6 +222,39 @@ export function Tile({
   const onBar = prompts.slice(0, promptsOnBar(span.cols))
   const inMenu = prompts.slice(onBar.length)
   const selection: ViewSelection | undefined = chat ? { selected: chat.selected, onPick: chat.onPick } : undefined
+  const filters = ok && hasFilterRow(component!.view, component!.params)
+  // The schedule that writes what the source reads (D4); one that will not run here is said, never silent.
+  const schedule = ok ? (view.schedule ?? null) : null
+  const scheduleOff = schedule && (!schedule.exists || !schedule.onThisDevice) ? schedule : null
+  const scheduleNotice = scheduleOff && (
+    <p data-testid="tile-schedule-notice" className="m-0 text-[11px] text-[var(--color-text-secondary)]">
+      {scheduleOff.exists ? (
+        <>
+          Fed by {scheduleOff.name}, which is off on this device.{' '}
+          <button type="button" className={COMPONENT_LINK} onClick={() => openAgentTab(component!.agentId, 'schedules')}>
+            Turn on…
+          </button>
+        </>
+      ) : (
+        `Fed by ${scheduleOff.name}, which this agent no longer has.`
+      )}
+    </p>
+  )
+  const refreshTitle = schedule
+    ? `Re-read what ${schedule.name} wrote${schedule.nextRunAt !== null ? ` (next run ${nextRunLabel(schedule.nextRunAt)})` : ''}`
+    : 'Refresh'
+  const body = ok && (
+    <TileBody
+      view={component!.view!}
+      result={data}
+      loading={result.isPending}
+      frameTarget={{ tileId: tile.id }}
+      meta={{ component: tile.component, title: displayTitle, params: resolveParamWords(tile.params, component!.params), size: tile.size }}
+      selection={selection}
+      onContext={chat?.onContext}
+      actions={{ onParams: setParams, onAsk: canAsk ? (text) => { chat!.onFill(text); return true } : undefined }}
+    />
+  )
 
   return (
     <div
@@ -151,7 +274,7 @@ export function Tile({
       } : undefined}
       style={{ gridColumn: `span ${span.cols}`, gridRow: `span ${span.rows}` }}
       // The focus ring is a box-shadow: focusing a tile moves nothing (ux rule 1).
-      className={`group relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-[var(--color-bg)] outline-none ${
+      className={`@container group relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-[var(--color-bg)] outline-none ${
         dragging ? 'border-[var(--color-accent)] opacity-60' : 'border-[var(--color-border)]'
       } ${chat?.focused ? 'ring-2 ring-[var(--color-accent)]' : ''}`}
       onContextMenu={(event) => {
@@ -160,7 +283,7 @@ export function Tile({
       }}
     >
       {/* Below the bar's strip: the content scrolls inside and never sits under the bar. */}
-      <div data-testid="tile-content" className={`absolute inset-x-0 bottom-0 ${BAR_HEIGHT_TOP} overflow-auto`}>
+      <div data-testid="tile-content" className={`absolute inset-x-0 bottom-0 ${filters ? FILTER_ROW_TOP : BAR_HEIGHT_TOP} overflow-auto`}>
         {unavailable ? (
           <div className="flex h-full flex-col items-start justify-center gap-2 p-3">
             <p className="text-[11px] text-[var(--color-text-secondary)]">{unavailable}</p>
@@ -174,18 +297,34 @@ export function Tile({
           </div>
         ) : !ok || result.isPending ? (
           <TileSkeleton />
+        ) : scheduleNotice && !hasData ? (
+          // Instead of the empty state: nothing will fill this tile here until the schedule runs.
+          <div className="flex h-full flex-col items-start justify-center p-3">{scheduleNotice}</div>
+        ) : scheduleNotice ? (
+          // Above the cached data, which stays readable.
+          <div className="flex h-full flex-col">
+            <div className="shrink-0 border-b border-[var(--color-border)] px-3 py-1.5">{scheduleNotice}</div>
+            <div className="relative min-h-0 flex-1 overflow-auto">{body}</div>
+          </div>
         ) : (
-          <TileBody
-            view={component!.view!}
-            result={data}
-            loading={result.isPending}
-            frameTarget={{ tileId: tile.id }}
-            meta={{ component: tile.component, title: displayTitle, params: resolveParamWords(tile.params, component!.params), size: tile.size }}
-            selection={selection}
-            onContext={chat?.onContext}
-          />
+          body
         )}
       </div>
+
+      {/* The filters: a row of fixed height under the bar, always drawn, so nothing moves (D4). */}
+      {filters && (
+        <div className={`absolute inset-x-0 ${BAR_HEIGHT_TOP}`}>
+          <TileFilters
+            tileId={tile.id}
+            specs={component!.params}
+            params={stored}
+            revision={paramsRevision}
+            notice={filterNotice}
+            onDismissNotice={() => setFilterNotice(null)}
+            onChange={setParams}
+          />
+        </div>
+      )}
 
       {/* Corner marks: they sit over the content and never move it. */}
       <div className="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1">
@@ -224,6 +363,12 @@ export function Tile({
           }`}
         >
         {ok && <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]">{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
+        {schedule && !scheduleOff && (
+          // Only where the tile is wide enough to keep its title readable; Refresh's tooltip says it everywhere.
+          <span data-testid="tile-schedule-line" title={scheduleLine(schedule)} className="hidden max-w-[14rem] truncate text-[10px] text-[var(--color-text-muted)] @sm:inline">
+            · {scheduleLine(schedule)}
+          </span>
+        )}
         {onBar.map((prompt, index) => (
           <button key={index} type="button" title={prompt.prompt} onClick={() => chat!.onPrompt(prompt)} className={BAR_TEXT_BUTTON}>
             {prompt.label}
@@ -235,7 +380,7 @@ export function Tile({
           </button>
         )}
         {ok && (
-          <button type="button" onClick={refresh} title="Refresh" aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
+          <button type="button" onClick={refresh} title={refreshTitle} aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
             <RefreshCw size={12} className={data?.refreshing ? 'animate-spin' : undefined} />
           </button>
         )}

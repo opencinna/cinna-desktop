@@ -14,9 +14,9 @@ export function registerAppHandlers(): void {
   // dialog (the renderer's clipboard needs a focused document).
   ipcHandle('clipboard:write-text', (_event, text: unknown) => writeClipboardText(text))
 
-  // Open an external URL via the OS. Restrict to http(s) so a malicious/
-  // misconfigured caller can't shell out to custom protocols. Mirrors the
-  // policy already enforced in the renderer's `setWindowOpenHandler`.
+  // Open an external URL via the OS. Restrict to http(s) and `mailto:` so a
+  // malicious/misconfigured caller can't shell out to custom protocols. The
+  // window's `setWindowOpenHandler` (src/main/index.ts) stays http(s) only.
   //
   // Two different failures, answered with two codes: a string that is not a
   // link at all, and a link the OS refused to open (no default browser, a
@@ -29,7 +29,9 @@ export function registerAppHandlers(): void {
     } catch {
       return { success: false as const, error: 'invalid_url' }
     }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    // `mailto:` beside the web: a list item's `url` may be one (the dashboards
+    // schema allows `^(https?://|mailto:)`), and a page's openLink is confirmed first.
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:') {
       return { success: false as const, error: 'unsupported_protocol' }
     }
     try {

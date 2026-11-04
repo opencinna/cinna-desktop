@@ -274,6 +274,9 @@ import {
   type TileResultDto,
   type ResolveReferenceInput,
   type PanelChatInput,
+  type DashboardCallInput,
+  type DashboardCallOutcome,
+  type SetTileParamsInput,
   type PanelChatOutcome,
   type ResolveReferenceOutcome,
   type TileView,
@@ -2431,8 +2434,12 @@ const api = {
     ensureFresh: (tileId: string, reason: DashboardRefreshReason): Promise<DashboardsOutcome<{ result: TileResultDto }>> =>
       ipcRenderer.invoke('dashboards:ensure-fresh', { tileId, reason }),
     /** Run a component once for a preview; never cached. */
-    preview: (agentId: string, component: string, skill: string | null = null): Promise<DashboardsOutcome<{ result: TileResultDto }>> =>
-      ipcRenderer.invoke('dashboards:preview', { agentId, component, skill }),
+    preview: (agentId: string, component: string, skill: string | null = null, params?: Record<string, unknown>): Promise<DashboardsOutcome<{ result: TileResultDto }>> =>
+      ipcRenderer.invoke('dashboards:preview', { agentId, component, skill, params }),
+    /** `cinna.call` from a component page: one of its own endpoints, run once, never cached. */
+    call: (input: DashboardCallInput): Promise<DashboardCallOutcome> => ipcRenderer.invoke('dashboards:call', input),
+    /** A tile's params from a native filter or `cinna.setParams`: validated, persisted, recomputed. */
+    setParams: (input: SetTileParamsInput): Promise<DashboardsOutcome<{ tile: TileDto }>> => ipcRenderer.invoke('dashboards:set-params', input),
     /** The panel's chat for (dashboard, agent): the latest one, or a new one with `fresh`. */
     panelChat: (input: PanelChatInput): Promise<PanelChatOutcome> => ipcRenderer.invoke('dashboards:panel-chat', input),
     /** A component reference from a message, resolved against this machine's agents; reading runs nothing. */

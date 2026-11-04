@@ -56,16 +56,19 @@ export const localScheduleRepo = {
   },
   /**
    * Settle the occurrences that launched `runId` from its outcome, and move
-   * their bindings' `lastCompletedAt`. Returns how many rows changed.
+   * their bindings' `lastCompletedAt`. Returns the binding id of each row whose
+   * status this call changed: a row already settled with the same status (a
+   * second report of the same outcome) is rewritten but not returned, so a
+   * caller's "schedule completed" fires once; a re-run's failed → completed is.
    */
-  settleByRun(userId: string, runId: string, patch: { status: 'completed' | 'failed' | 'cancelled'; reason: string | null; finishedAt: number }): number {
-    const rows = getDb().select({ id: localScheduleOccurrences.id, bindingId: localScheduleOccurrences.bindingId }).from(localScheduleOccurrences)
+  settleByRun(userId: string, runId: string, patch: { status: 'completed' | 'failed' | 'cancelled'; reason: string | null; finishedAt: number }): string[] {
+    const rows = getDb().select({ id: localScheduleOccurrences.id, bindingId: localScheduleOccurrences.bindingId, status: localScheduleOccurrences.status }).from(localScheduleOccurrences)
       .where(and(eq(localScheduleOccurrences.userId, userId), eq(localScheduleOccurrences.runId, runId))).all()
     for (const row of rows) {
       this.updateOccurrence(userId, row.id, patch)
       this.completed(userId, row.bindingId, patch.finishedAt)
     }
-    return rows.length
+    return rows.filter((row) => row.status !== patch.status).map((row) => row.bindingId)
   },
   updateOccurrence(userId: string, id: string, patch: Partial<Omit<ScheduleOccurrenceRow, 'id' | 'userId' | 'bindingId'>>): void {
     getDb().update(localScheduleOccurrences).set(patch).where(and(eq(localScheduleOccurrences.userId, userId), eq(localScheduleOccurrences.id, id))).run()

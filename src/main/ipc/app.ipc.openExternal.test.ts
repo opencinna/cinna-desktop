@@ -42,9 +42,17 @@ describe('app:open-external', () => {
     expect(openExternal).not.toHaveBeenCalled()
   })
 
-  it('refuses any scheme but http and https', async () => {
-    expect(await open('file:///etc/passwd')).toEqual({ success: false, error: 'unsupported_protocol' })
+  it('refuses any scheme but http, https and mailto', async () => {
+    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'cinna://component/x/y', 'data:text/html,hi', 'tel:+100', 'ftp://example.com/']) {
+      expect(await open(url)).toEqual({ success: false, error: 'unsupported_protocol' })
+    }
     expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('opens a mailto link (a list item’s url may be one)', async () => {
+    openExternal.mockResolvedValue(undefined)
+    expect(await open('mailto:ann@example.com?subject=Deal')).toEqual({ success: true })
+    expect(openExternal).toHaveBeenCalledWith('mailto:ann@example.com?subject=Deal')
   })
 
   it('reports an OS refusal of a valid link as open_failed, not invalid_url', async () => {

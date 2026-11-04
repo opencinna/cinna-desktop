@@ -1,4 +1,4 @@
-import { DASHBOARD_BRIDGE_PROTOCOL } from '../../../../shared/dashboards'
+import { DASHBOARD_BRIDGE_PROTOCOL, type DashboardCallOutcome } from '../../../../shared/dashboards'
 
 /**
  * The host side of one dashboard frame's bridge (MCP Apps JSON-RPC over
@@ -23,10 +23,20 @@ import { DASHBOARD_BRIDGE_PROTOCOL } from '../../../../shared/dashboards'
  *   sends `ui/notifications/tool-result` and
  *   `ui/notifications/host-context-changed`. `ui/update-model-context`
  *   (`cinna.setContext`) is answered `{}` and its `{summary, selection}` handed
- *   to `onContext` (D3: the chat panel's context). `cinna/params-changed`
- *   (`setParams`) is dropped until D4. Any other request —
- *   `tools/call`, `ui/message`, `ui/open-link` — gets a JSON-RPC error, so
- *   `cinna.call` rejects with `{message}`; any other notification is dropped.
+ *   to `onContext` (D3: the chat panel's context).
+ * - **D4 methods**, each only where the host gives the dependency (otherwise
+ *   a JSON-RPC error, so the page's promise rejects with `{message}`):
+ *   `tools/call` (`cinna.call`) runs one of the component's own endpoints
+ *   through `call` and is answered as an MCP tool result — `structuredContent`
+ *   plus the JSON as text, or `isError` with the message as text;
+ *   `cinna/params-changed` (`setParams`, a notification) hands the params to
+ *   `onParams`; `ui/message` (`cinna.ask`) hands the text to `onAsk`, which
+ *   fills the panel's composer and never sends (D14); `ui/open-link`
+ *   (`cinna.openLink`) refuses anything but http(s) and mailto, allows one waiting link
+ *   at a time, and is answered only after the owner decides in `openLink`
+ *   (D17). An answer that arrives after the page re-initialised is dropped:
+ *   the request died with the old document.
+ * - Any other request gets a JSON-RPC error; any other notification is dropped.
  */
 
 export interface BridgeHostContext {
@@ -61,6 +71,14 @@ export interface BridgeSessionDeps {
    * what is selected, kept as the tile's last context for the chat panel (D3).
    */
   onContext?: (context: { summary: string; selection: string[] }) => void
+  /** `tools/call`: run one of the component's own endpoints once (main checks the spec, the rate and the timeout). */
+  call?: (endpoint: string, params: Record<string, unknown>) => Promise<DashboardCallOutcome>
+  /** `cinna/params-changed`: the page's new params for its tile (or preview). */
+  onParams?: (params: Record<string, unknown>) => void
+  /** `ui/message`: text for the chat panel's composer, never sent; false when there is no panel here. */
+  onAsk?: (text: string) => boolean
+  /** `ui/open-link`: ask the owner; resolves true once the link opened, false when declined or it failed. */
+  openLink?: (url: string) => Promise<boolean>
   newNonce?: () => string
 }
 
@@ -73,6 +91,48 @@ function randomNonce(): string {
 }
 
 const METHOD_NOT_FOUND = -32601
+const INVALID_PARAMS = -32602
+const REQUEST_FAILED = -32000
+
+/** `cinna.ask` text beyond this is cut: a page cannot fill the composer with a book. */
+export const MAX_ASK_TEXT = 4000
+
+/** Only these leave the app from a page (http, https, mailto), and only after the owner confirms (D17). */
+export function linkTarget(raw: unknown): URL | null {
+  if (typeof raw !== 'string' || raw.length > 4096) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:' ? url : null
+  } catch {
+    return null
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** A copy without the bridge's `_meta`. */
+function withoutMeta(record: Record<string, unknown>): Record<string, unknown> {
+  const { _meta: _ignored, ...rest } = record
+  return rest
+}
+
+/** The text parts of an MCP `content` array, joined. */
+function contentText(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => (isPlainObject(part) && part.type === 'text' && typeof part.text === 'string' ? part.text : null))
+    .filter((part): part is string => part !== null)
+    .join('\n')
+}
+
+/** An endpoint's answer as an MCP tool result, which the kit's `cinna.call` reads. */
+export function toolResult(outcome: DashboardCallOutcome): Record<string, unknown> {
+  if (!outcome.ok) return { isError: true, content: [{ type: 'text', text: outcome.message }] }
+  const value = outcome.value === undefined ? null : outcome.value
+  return { structuredContent: value, content: [{ type: 'text', text: JSON.stringify(value) }] }
+}
 
 /** Where the bridge carries the nonce on a message it sends. */
 function nonceOf(message: Record<string, unknown>): unknown {
@@ -121,6 +181,14 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
   const newNonce = deps.newNonce ?? randomNonce
   let nonce: string | null = null
   let initialized = false
+  /** A `ui/open-link` confirm is on screen: a second one is refused, never stacked. */
+  let linkWaiting = false
+  /**
+   * The owner declined a link from this document: the rest are refused
+   * without asking, so a page cannot loop the dialog. A new `ui/initialize`
+   * (a reload) asks again.
+   */
+  let linksDeclined = false
 
   return {
     /** Judge one `message` event from the window; answers the page when it should. */
@@ -142,6 +210,7 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
         if (!isRequest) return 'rejected'
         nonce = newNonce()
         initialized = false
+        linksDeclined = false
         const meta = deps.meta()
         deps.post({
           jsonrpc: '2.0',
@@ -172,11 +241,75 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
         deps.post({ jsonrpc: '2.0', id, result: {} })
         return 'accepted'
       }
-      if (isRequest) {
-        deps.post({ jsonrpc: '2.0', id, error: { code: METHOD_NOT_FOUND, message: `${message.method} is not available here.` } })
+      if (message.method === 'cinna/params-changed' && !isRequest) {
+        const params = isPlainObject(message.params) ? message.params.params : undefined
+        if (!deps.onParams || !isPlainObject(params)) return 'ignored'
+        deps.onParams(withoutMeta(params))
         return 'accepted'
       }
-      return 'ignored'
+      if (!isRequest) return 'ignored'
+
+      const fail = (code: number, text: string): void => {
+        deps.post({ jsonrpc: '2.0', id, error: { code, message: text } })
+      }
+      // Answered later: only to the document that asked (a reload starts a new nonce).
+      const asked = nonce
+      const answerLater = (reply: Record<string, unknown>): void => {
+        if (nonce === asked) deps.post({ jsonrpc: '2.0', id, ...reply })
+      }
+      const params = isPlainObject(message.params) ? message.params : {}
+
+      if (message.method === 'tools/call' && deps.call) {
+        const name = params.name
+        const args = params.arguments === undefined ? {} : params.arguments
+        if (typeof name !== 'string' || name === '' || !isPlainObject(args)) {
+          fail(INVALID_PARAMS, 'tools/call needs an endpoint name and an object of arguments.')
+          return 'accepted'
+        }
+        deps
+          .call(name, withoutMeta(args))
+          .catch((): DashboardCallOutcome => ({ ok: false, code: 'invalid_input', message: `${name} could not be run.` }))
+          .then((outcome) => answerLater({ result: toolResult(outcome) }))
+        return 'accepted'
+      }
+      if (message.method === 'ui/message' && deps.onAsk) {
+        const text = contentText(params.content).trim().slice(0, MAX_ASK_TEXT)
+        if (text === '') {
+          fail(INVALID_PARAMS, 'ui/message needs text content.')
+          return 'accepted'
+        }
+        if (deps.onAsk(text)) deps.post({ jsonrpc: '2.0', id, result: {} })
+        else fail(METHOD_NOT_FOUND, 'There is no chat to ask here.')
+        return 'accepted'
+      }
+      if (message.method === 'ui/open-link' && deps.openLink) {
+        const url = linkTarget(params.url)
+        if (!url) {
+          fail(INVALID_PARAMS, 'Only web (http, https) and mailto links open from a dashboard.')
+          return 'accepted'
+        }
+        if (linksDeclined) {
+          fail(REQUEST_FAILED, 'The owner declined a link from this page.')
+          return 'accepted'
+        }
+        if (linkWaiting) {
+          fail(REQUEST_FAILED, 'Another link is waiting for the owner.')
+          return 'accepted'
+        }
+        linkWaiting = true
+        deps
+          .openLink(url.href)
+          // A failure to ask is not the owner's no: it does not close links for the page.
+          .catch(() => null)
+          .then((opened) => {
+            linkWaiting = false
+            if (opened === false && nonce === asked) linksDeclined = true
+            answerLater(opened ? { result: {} } : { error: { code: REQUEST_FAILED, message: 'The link was not opened.' } })
+          })
+        return 'accepted'
+      }
+      fail(METHOD_NOT_FOUND, `${message.method} is not available here.`)
+      return 'accepted'
     },
 
     /** The source's data: the cached result (`stale`) first, then fresh. Only after `initialized`. */

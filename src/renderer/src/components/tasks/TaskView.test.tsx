@@ -858,7 +858,7 @@ describe('the other states', () => {
     await act(async () => {
       screen.getByRole('button', { name: 'The pull request' }).click()
     })
-    await screen.findByText('Only http and https links can be opened.')
+    await screen.findByText('Only web (http, https) and mailto links can be opened.')
     expect(screen.queryByText('unsupported_protocol')).toBeNull()
   })
 

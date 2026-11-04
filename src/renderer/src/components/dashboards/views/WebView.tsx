@@ -3,6 +3,18 @@ import { DASHBOARD_FRAME_SANDBOX } from '../../../../../shared/htmlPreview'
 import type { DashboardFrameTarget } from '../../../../../shared/dashboards'
 import { useUIStore } from '../../../stores/ui.store'
 import { createBridgeSession, readHostContext, type BridgeSession, type BridgeTileMeta } from '../componentBridge'
+import { coalescePerKey } from '../dashboardContext'
+import { OpenLinkDialog } from '../OpenLinkDialog'
+
+/** What the page may ask of its host beyond data and context (D4); each absent one is refused. */
+export interface BridgeActions {
+  /** `cinna.setParams`: persisted on the tile, or kept by a preview. Coalesced: the partials of a window merged, oldest first. */
+  onParams?: (params: Record<string, unknown>) => void
+  /** `cinna.ask`: fill the panel's composer (never send); false when there is no panel. Coalesced like setParams. */
+  onAsk?: (text: string) => boolean
+}
+
+type LinkAsk = { url: string; resolve: (opened: boolean) => void }
 
 /**
  * Talk to one frame: answer its handshake, hand it the data — the cached
@@ -13,11 +25,17 @@ export function useComponentBridge(
   iframeRef: React.RefObject<HTMLIFrameElement | null>,
   meta: BridgeTileMeta,
   data: { value: unknown; fetchedAt: number | null; stale: boolean } | null,
-  onContext?: (context: { summary: string; selection: string[] }) => void
+  onContext?: (context: { summary: string; selection: string[] }) => void,
+  bridge: {
+    target?: DashboardFrameTarget
+    actions?: BridgeActions
+    /** The owner is asked before a page's link opens; resolves whether it opened. */
+    askLink?: (url: string) => Promise<boolean>
+  } = {}
 ): void {
   const theme = useUIStore((s) => s.theme)
-  const latest = useRef({ meta, data, theme, onContext })
-  latest.current = { meta, data, theme, onContext }
+  const latest = useRef({ meta, data, theme, onContext, ...bridge })
+  latest.current = { meta, data, theme, onContext, ...bridge }
   const sessionRef = useRef<BridgeSession | null>(null)
   const sentAt = useRef<number | null>(null)
 
@@ -34,8 +52,29 @@ export function useComponentBridge(
       hostContext: () => readHostContext(latest.current.theme),
       meta: () => latest.current.meta,
       onInitialized: () => send(session),
-      onContext: (context) => latest.current.onContext?.(context)
+      onContext: (context) => latest.current.onContext?.(context),
+      call: (endpoint, params) => {
+        const target = latest.current.target
+        if (!target) return Promise.resolve({ ok: false as const, code: 'invalid_input' as const, message: 'This page cannot call its endpoints here.' })
+        return window.api.dashboards.call({ target, endpoint, params })
+      },
+      // A page posting on every keystroke or pointer move reaches the tile a few times a second; params are merged, the ask is the latest.
+      onParams: (params) => queue.push('params', { params }),
+      onAsk: (text) => {
+        if (!latest.current.actions?.onAsk) return false
+        queue.push('ask', { text })
+        return true
+      },
+      openLink: (url) => latest.current.askLink?.(url) ?? Promise.resolve(false)
     })
+    const queue = coalescePerKey<{ params?: Record<string, unknown>; text?: string }>((key, value) => {
+      const actions = latest.current.actions
+      if (key === 'params' && value.params) actions?.onParams?.(value.params)
+      else if (key === 'ask' && value.text !== undefined) actions?.onAsk?.(value.text)
+    }, undefined, (waiting, next) =>
+      // Each setParams names only what it changed: a burst of month, then owner, keeps both.
+      waiting.params && next.params ? { params: { ...waiting.params, ...next.params } } : next
+    )
     sessionRef.current = session
     const onMessage = (event: MessageEvent): void => {
       session.receive({ source: event.source, origin: event.origin, data: event.data })
@@ -43,6 +82,7 @@ export function useComponentBridge(
     window.addEventListener('message', onMessage)
     return () => {
       window.removeEventListener('message', onMessage)
+      queue.cancel()
       sessionRef.current = null
     }
   }, [iframeRef])
@@ -72,7 +112,8 @@ export function WebView({
   meta,
   data,
   title,
-  onContext
+  onContext,
+  actions
 }: {
   target: DashboardFrameTarget
   meta: BridgeTileMeta
@@ -80,13 +121,29 @@ export function WebView({
   title: string
   /** The page's `setContext`; a tile keeps the last one for the chat panel (D3). */
   onContext?: (context: { summary: string; selection: string[] }) => void
+  /** setParams and ask (D4). */
+  actions?: BridgeActions
 }): React.JSX.Element {
   const [state, setState] = useState<FrameState>({ status: 'loading' })
+  const [link, setLink] = useState<LinkAsk | null>(null)
+  const linkRef = useRef<LinkAsk | null>(null)
+  linkRef.current = link
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const key = 'tileId' in target ? `tile:${target.tileId}` : `component:${target.agentId}:${target.component}`
   const targetRef = useRef(target)
   targetRef.current = target
-  useComponentBridge(iframeRef, meta, data, onContext)
+  useComponentBridge(iframeRef, meta, data, onContext, {
+    target,
+    actions,
+    // The bridge allows one waiting link per frame; the page hears the answer after the owner decides.
+    askLink: (url) => new Promise<boolean>((resolve) => setLink({ url, resolve }))
+  })
+  // A frame that goes away with a link on screen answers it: not opened.
+  useEffect(() => () => linkRef.current?.resolve(false), [])
+  const closeLink = (opened: boolean): void => {
+    link?.resolve(opened)
+    setLink(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -115,9 +172,11 @@ export function WebView({
     }
   }, [key])
 
+  const linkDialog = link && <OpenLinkDialog url={link.url} onDone={closeLink} />
   if (state.status === 'failed') return <p className="px-3 py-2 text-[11px] text-[var(--color-danger)]">{state.error}</p>
   if (state.status === 'loading') return <div className="h-full w-full" />
   return (
+    <>
     <iframe
       // Keyed by URL: a new token is a new frame, never a navigation from the old path.
       key={state.url}
@@ -129,5 +188,7 @@ export function WebView({
       referrerPolicy="no-referrer"
       className="block h-full w-full border-0 bg-transparent"
     />
+    {linkDialog}
+    </>
   )
 }

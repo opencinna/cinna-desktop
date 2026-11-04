@@ -359,6 +359,16 @@ describe('re-running a job-owned task', () => {
     expect(localScheduleRepo.get(USER, bindingId)?.lastCompletedAt).toBe(settled?.finishedAt)
   })
 
+  it('settleByRun answers only the rows whose status it changed, so the schedule-completed event fires once', async () => {
+    const { runId, bindingId } = await scheduledRun()
+    const { localScheduleRepo } = await import('../db/localSchedules')
+    expect(localScheduleRepo.settleByRun(USER, runId, { status: 'completed', reason: null, finishedAt: 70000 })).toEqual([bindingId])
+    expect(localScheduleRepo.settleByRun(USER, runId, { status: 'completed', reason: null, finishedAt: 80000 })).toEqual([])
+    // A re-run that turns a failed occurrence completed is a change again.
+    expect(localScheduleRepo.settleByRun(USER, runId, { status: 'failed', reason: 'Broke', finishedAt: 90000 })).toEqual([bindingId])
+    expect(localScheduleRepo.settleByRun(USER, runId, { status: 'completed', reason: null, finishedAt: 100000 })).toEqual([bindingId])
+  })
+
   it('a failed re-run fails run, task and occurrence again', async () => {
     const { chatId, runId, taskId, occurrenceId } = await scheduledRun()
     jobService.reportRunCompletion(chatId, 'failed', 'The app quit during this turn.')

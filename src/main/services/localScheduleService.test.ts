@@ -716,3 +716,34 @@ describe('scheduled shell commands', () => {
     expect(() => localScheduleService.stop({ ...scope, profileUserId: 'other' }, { profileUserId: USER, bindingId: binding.id, occurrenceId: receipt.id })).toThrow('profile changed')
   })
 })
+
+describe('a completed run is told to listeners (dashboards, README D4)', () => {
+  it('once for a prompt run (on the scheduler’s next pass) and once for a quiet command, naming the agent and the schedule', async () => {
+    const { onScheduleRunCompleted } = await import('./localScheduleEvents')
+    const events: unknown[] = []
+    const off = onScheduleRunCompleted((event) => events.push(event))
+    try {
+      const binding = enable()
+      check()
+      await settled(binding.id)
+      // The prompt run's occurrence is persisted completed by the next pass, which tells listeners.
+      await vi.waitFor(() => { check(BASE + 60000); expect(events).toHaveLength(1) })
+      // A later pass over the settled occurrence tells nobody again.
+      check(BASE + 60000)
+      expect(events).toEqual([{ userId: USER, bindingId: binding.id, agentId: AGENT, manifestId: MANIFEST, name: 'Daily check' }])
+
+      events.length = 0
+      definition = { ...definition, name: 'Quiet', schedule_type: 'script_trigger', command: 'printf "OK"' }
+      state.runScheduled.mockResolvedValue(commandOutcome())
+      localScheduleRepo.save({ ...localScheduleRepo.get(USER, binding.id)!, enabled: false })
+      localScheduleService.enable(scope, review(), BASE)
+      const quiet = localScheduleRepo.list(USER).find((row) => row.name === 'Quiet')!
+      check()
+      await settled(quiet.id)
+      await vi.waitFor(() => expect(events).toHaveLength(1))
+      expect(events[0]).toMatchObject({ bindingId: quiet.id, agentId: AGENT, name: 'Quiet' })
+    } finally {
+      off()
+    }
+  })
+})

@@ -6,6 +6,7 @@ function component(over: Partial<ComponentInfo> = {}): ComponentInfo {
   return {
     agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
     description: '', view: 'table', size: 'm', source: { endpoint: 'e' }, maxAge: '15m', refreshCommand: null,
+    refresh: { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null },
     params: { month: { type: 'month', default: 'current' } }, prompts: [], valid: true, findings: [], missingCredentials: [],
     ...over
   }
@@ -16,7 +17,8 @@ function tile(id: string, title: string, over: Partial<ComponentInfo> | null = {
     tile: { id, dashboardId: 'd1', agentManifestId: 'sales', component: over?.name ?? 'deals', skill: null, title: null, size: 'm', position: 0, params, refreshOverride: null },
     displayTitle: title,
     state: over === null ? 'agent_missing' : 'ok',
-    component: over === null ? null : component(over)
+    component: over === null ? null : component(over),
+    schedule: null
   }
 }
 
@@ -179,6 +181,26 @@ describe('coalescePerKey (setContext flooding)', () => {
       // Usable again after cancel.
       queue.push('t1', 103)
       expect(flushed.at(-1)).toEqual(['t1', 103])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('with merge, folds the values waiting in a window instead of keeping only the newest', () => {
+    vi.useFakeTimers()
+    try {
+      const flushed: [string, Record<string, unknown>][] = []
+      const queue = coalescePerKey<Record<string, unknown>>((key, value) => flushed.push([key, value]), 250, (waiting, next) => ({ ...waiting, ...next }))
+      queue.push('t1', { stage: 'lost' })
+      queue.push('t1', { month: '2026-02' })
+      queue.push('t1', { owner: 'Ann' })
+      queue.push('t1', { month: '2026-03' })
+      vi.advanceTimersByTime(250)
+      expect(flushed).toEqual([['t1', { stage: 'lost' }], ['t1', { month: '2026-03', owner: 'Ann' }]])
+      // The next window starts empty.
+      queue.push('t1', { stage: 'won' })
+      vi.advanceTimersByTime(250)
+      expect(flushed.at(-1)).toEqual(['t1', { stage: 'won' }])
     } finally {
       vi.useRealTimers()
     }

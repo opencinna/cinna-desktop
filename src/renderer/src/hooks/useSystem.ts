@@ -30,7 +30,7 @@ export type OpenExternalResult =
  * it (`ux_rules.md` §1, §7).
  */
 export function describeOpenExternalFailure(code: string | null | undefined): string {
-  if (code === 'unsupported_protocol') return 'Only http and https links can be opened.'
+  if (code === 'unsupported_protocol') return 'Only web (http, https) and mailto links can be opened.'
   if (code === 'invalid_url') return 'That is not a link this can open.'
   if (code === 'open_failed') return 'Your system could not open that link.'
   return 'That link could not be opened.'
@@ -38,7 +38,7 @@ export function describeOpenExternalFailure(code: string | null | undefined): st
 
 /**
  * Open a URL in the user's default browser via the main process (which guards
- * to `http:`/`https:` only). Wraps `window.api.system.openExternal` so
+ * to `http:`, `https:` and `mailto:`). Wraps `window.api.system.openExternal` so
  * components don't reach into the contextBridge surface directly — and so the
  * refusal arrives as something a person can read rather than as its code.
  */

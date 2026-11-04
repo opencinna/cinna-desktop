@@ -53,7 +53,9 @@ import {
   parseDuration,
   type ComponentFinding,
   type ComponentInfo,
+  type ComponentParamSpec,
   type ComponentPrompt,
+  type ComponentRefreshRule,
   type ComponentSource,
   type DashboardViewKind,
   type TileSize
@@ -168,12 +170,18 @@ export interface ComponentSpec {
   entry: string
   source: ComponentSource
   endpoints: Record<string, ComponentEndpoint>
-  params: Record<string, { type: string; default?: unknown }>
+  params: Record<string, ComponentParamSpec>
   maxAge: string
   maxAgeMs: number
   refreshCommand: string | null
   /** `refresh.after_turn`: re-read the tile when a turn of its agent ends (README D3). */
   afterTurn: boolean
+  /** `refresh.while_open_every` (≥ 1m), or null. */
+  whileOpenEvery: string | null
+  /** `refresh.on_app_start`: warm up once after the profile is ready (README D4). */
+  onAppStart: boolean
+  /** `refresh.schedule`: the manifest schedule whose runs write what the source reads, or null. */
+  schedule: string | null
   /** `prompts[]`, trimmed: the suggested questions (README D13). */
   prompts: ComponentPrompt[]
   size: TileSize
@@ -635,7 +643,7 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
   }
 
   // params
-  const params: Record<string, { type: string; default?: unknown }> = {}
+  const params: Record<string, ComponentParamSpec> = {}
   const rawParams = doc.params
   if (rawParams !== undefined && rawParams !== null) {
     if (!isRecord(rawParams)) out.error(at, 'invalid_type', '`params` must be an object of name → {type, …}.', 'params')
@@ -665,7 +673,13 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
           ok = false
           out.error(at, 'invalid_value', `\`${field}.default\` does not fit type ${kind}.`, `${field}.default`)
         }
-        if (ok) params[name] = spec.default === undefined || spec.default === null ? { type: kind } : { type: kind, default: spec.default }
+        if (ok) {
+          const entry: ComponentParamSpec = { type: kind }
+          if (typeof spec.label === 'string') entry.label = spec.label.trim()
+          if (kind === 'enum') entry.values = [...(values as string[])]
+          if (spec.default !== undefined && spec.default !== null) entry.default = spec.default
+          params[name] = entry
+        }
       }
     }
   }
@@ -674,6 +688,9 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
   let maxAge = DEFAULT_MAX_AGE
   let refreshCommand: string | null = null
   let afterTurn = false
+  let whileOpenEvery: string | null = null
+  let onAppStart = false
+  let schedule: string | null = null
   const refresh = doc.refresh
   if (refresh !== undefined && refresh !== null) {
     if (!isRecord(refresh)) out.error(at, 'invalid_type', '`refresh` must be an object.', 'refresh')
@@ -688,11 +705,13 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
         const seconds = durationSeconds(every)
         if (seconds === null) out.error(at, 'duration_invalid', `\`refresh.while_open_every\` ${JSON.stringify(every)} is not a duration like 5m.`, 'refresh.while_open_every')
         else if (seconds * 1000 < MIN_WHILE_OPEN_EVERY_MS) out.error(at, 'while_open_every_too_short', `\`refresh.while_open_every\` ${String(every)} is shorter than 1m.`, 'refresh.while_open_every')
+        else whileOpenEvery = every as string
       }
       for (const flag of ['after_turn', 'on_app_start'] as const) {
         if (has(refresh, flag) && typeof refresh[flag] !== 'boolean') out.error(at, 'invalid_type', `\`refresh.${flag}\` must be true or false.`, `refresh.${flag}`)
       }
       afterTurn = refresh.after_turn === true
+      onAppStart = refresh.on_app_start === true
       const command = refresh.command
       if (command !== undefined && command !== null) {
         const match = typeof command === 'string' ? RUN_REFERENCE_PATTERN.exec(command) : null
@@ -704,10 +723,11 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
           }
         }
       }
-      const schedule = refresh.schedule
-      if (schedule !== undefined && schedule !== null) {
-        if (!isStr(schedule, SCHEDULE_NAME_MAX)) out.error(at, 'invalid_type', '`refresh.schedule` must be a schedule name or null.', 'refresh.schedule')
+      const rawSchedule = refresh.schedule
+      if (rawSchedule !== undefined && rawSchedule !== null) {
+        if (!isStr(rawSchedule, SCHEDULE_NAME_MAX)) out.error(at, 'invalid_type', '`refresh.schedule` must be a schedule name or null.', 'refresh.schedule')
         else {
+          schedule = rawSchedule as string
           const known = manifestNames(ctx.manifest, 'schedules')
           if (known !== null && !known.has(schedule)) {
             out.warn(at, 'refresh_schedule_unknown', `\`refresh.schedule\` ${JSON.stringify(schedule)} is not in ${MANIFEST_FILE} \`schedules\`.`, 'refresh.schedule')
@@ -756,6 +776,9 @@ export function validateComponentSpec(doc: Record<string, unknown>, ctx: Validat
       maxAgeMs: parseDuration(maxAge) ?? 15 * 60_000,
       refreshCommand,
       afterTurn,
+      whileOpenEvery,
+      onAppStart,
+      schedule,
       // Checked above: a spec exists only when every entry has a label and a prompt.
       prompts: Array.isArray(doc.prompts)
         ? (doc.prompts as Array<{ label: string; prompt: string }>).map((p) => ({ label: p.label.trim(), prompt: p.prompt.trim() }))
@@ -923,6 +946,7 @@ function inspect(ctx: AgentContext, root: ComponentRoot, name: string): ScannedC
       maxAge: DEFAULT_MAX_AGE,
       refreshCommand: null,
       params: {},
+      refresh: defaultRefreshRule(),
       prompts: [],
       valid: false,
       findings,
@@ -957,12 +981,23 @@ function inspect(ctx: AgentContext, root: ComponentRoot, name: string): ScannedC
       maxAge: spec.maxAge,
       refreshCommand: spec.refreshCommand,
       params: spec.params,
+      refresh: refreshRuleOf(spec),
       prompts: spec.prompts,
       valid: true,
       findings: checked.findings,
       missingCredentials: missingCredentials(ctx.agent, spec.requiresCredentials)
     }
   }
+}
+
+/** The refresh rule of a component that states none (or is invalid): the schema's defaults. */
+export function defaultRefreshRule(): ComponentRefreshRule {
+  return { maxAge: DEFAULT_MAX_AGE, whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null }
+}
+
+/** A valid component's `refresh`, as the renderer is shown it. */
+export function refreshRuleOf(spec: ComponentSpec): ComponentRefreshRule {
+  return { maxAge: spec.maxAge, whileOpenEvery: spec.whileOpenEvery, afterTurn: spec.afterTurn, onAppStart: spec.onAppStart, command: spec.refreshCommand, schedule: spec.schedule }
 }
 
 /** The `requires_credentials` names whose slot is not ready for the agent (README D16). */

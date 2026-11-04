@@ -262,6 +262,14 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
     setPendingPrompt({ agentId: view.component.agentId, prompt: prompt.prompt, seq: promptSeq.current })
   }, [ask])
 
+  // A page's cinna.ask (D14): into the composer of the tile's agent's chat, for the user to send or not.
+  const fillComposer = useCallback((view: TileView, text: string) => {
+    if (!view.component || view.state === 'agent_missing') return
+    ask(view)
+    promptSeq.current += 1
+    setPendingPrompt({ agentId: view.component.agentId, prompt: text, seq: promptSeq.current, fill: true })
+  }, [ask])
+
   const chatFor = (view: TileView): TileChat => ({
     focused: view.tile.id === focusedTileId,
     selected: selections[view.tile.id] ?? [],
@@ -275,7 +283,8 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
     onClearSelection: () => setSelections((all) => ({ ...all, [view.tile.id]: [] })),
     onContext: (web) => contextQueue.current?.push(view.tile.id, web),
     onAsk: () => ask(view),
-    onPrompt: (prompt) => sendPrompt(view, prompt)
+    onPrompt: (prompt) => sendPrompt(view, prompt),
+    onFill: (text) => fillComposer(view, text)
   })
 
   const panelAgentName = tiles.find((view) => view.component?.agentId === panelAgentId)?.component?.agentName ?? ''

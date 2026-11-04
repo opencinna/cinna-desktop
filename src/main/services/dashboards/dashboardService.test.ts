@@ -147,6 +147,62 @@ describe('tiles', () => {
     expect(order()).toEqual([ids[2], ids[1]])
   })
 
+  it('take the full refresh override from Edit tile, the interval at least 1m (D4)', () => {
+    const d = service.create('p1', 'Sales')
+    if (!d.ok) throw new Error()
+    const t = addDeals(d.dashboard.id)
+    if (!t.ok) throw new Error()
+    const update = (refreshOverride: object) => service.updateTile('p1', { tileId: t.tile.id, refreshOverride })
+    expect(update({ whileOpenEvery: '5m', afterTurn: false, onAppStart: true })).toMatchObject({
+      ok: true, tile: { refreshOverride: { whileOpenEvery: '5m', afterTurn: false, onAppStart: true } }
+    })
+    // Null turns a component's interval off, and is kept as such.
+    expect(update({ whileOpenEvery: null })).toMatchObject({ ok: true, tile: { refreshOverride: { whileOpenEvery: null } } })
+    expect(service.resolveTile('p1', t.tile.id)?.tile.refreshOverride).toEqual({ whileOpenEvery: null })
+    for (const bad of [{ whileOpenEvery: '59s' }, { whileOpenEvery: 'often' }, { afterTurn: 'yes' }, { onAppStart: 1 }]) {
+      expect(update(bad)).toMatchObject({ ok: false, code: 'invalid_input' })
+    }
+  })
+
+  it('keep params set from a filter or the page, checked against the component’s params (D4)', () => {
+    const d = service.create('p1', 'Sales')
+    if (!d.ok) throw new Error()
+    const t = addDeals(d.dashboard.id)
+    if (!t.ok) throw new Error()
+    expect(service.setParams('p1', { tileId: t.tile.id, params: { month: '2026-09', nope: 1 } })).toMatchObject({ ok: true, tile: { params: { month: '2026-09' } } })
+    expect(service.resolveTile('p1', t.tile.id)?.tile.params).toEqual({ month: '2026-09' })
+    expect(service.setParams('p1', { tileId: t.tile.id, params: { month: 'September' } })).toMatchObject({ ok: false, code: 'invalid_input', message: 'month must be a month (YYYY-MM) or current.' })
+    expect(service.resolveTile('p1', t.tile.id)?.tile.params).toEqual({ month: '2026-09' })
+    expect(service.setParams('p2', { tileId: t.tile.id, params: { month: '2026-10' } })).toMatchObject({ ok: false, code: 'not_found' })
+    // The set replaces the old one: a key left out (a cleared field) goes, and its default applies again.
+    expect(service.setParams('p1', { tileId: t.tile.id, params: {} })).toMatchObject({ ok: true, tile: { params: {} } })
+  })
+
+  it('say which schedule feeds them, whether it runs on this device, and when next (D4)', () => {
+    const fed = { ...list, refresh: { schedule: 'nightly' } }
+    kitAgent('m2', { inbox: fed, plain: list })
+    writeFileSync(join(base, 'm2', 'cinna-agent.json'), JSON.stringify({ id: 'm2', schedules: [{ name: 'nightly' }] }))
+    const onDevice = new Map<string, { onThisDevice: boolean; nextRunAt: number | null }>()
+    const svc = createDashboardService({ agents: () => agents, scheduleOnDevice: (userId, manifestId, name) => onDevice.get(`${userId}|${manifestId}|${name}`) ?? { onThisDevice: false, nextRunAt: null } })
+    const d = svc.create('p1', 'Inbox')
+    if (!d.ok) throw new Error()
+    const inbox = svc.addTile('p1', { dashboardId: d.dashboard.id, agentId: 'folder:m2', component: 'inbox' })
+    const plain = svc.addTile('p1', { dashboardId: d.dashboard.id, agentId: 'folder:m2', component: 'plain' })
+    if (!inbox.ok || !plain.ok) throw new Error()
+    expect(svc.resolveTile('p1', inbox.tile.id)?.view.schedule).toEqual({ name: 'nightly', exists: true, onThisDevice: false, nextRunAt: null })
+    expect(svc.resolveTile('p1', plain.tile.id)?.view.schedule).toBeNull()
+    onDevice.set('p1|m2|nightly', { onThisDevice: true, nextRunAt: 42 })
+    const views = svc.tiles('p1', d.dashboard.id)
+    expect(views.ok && views.tiles.find((v) => v.tile.id === inbox.tile.id)?.schedule).toEqual({ name: 'nightly', exists: true, onThisDevice: true, nextRunAt: 42 })
+    // Gone from the manifest: said as such, never as running here.
+    writeFileSync(join(base, 'm2', 'cinna-agent.json'), JSON.stringify({ id: 'm2', schedules: [] }))
+    expect(svc.resolveTile('p1', inbox.tile.id)?.view.schedule).toEqual({ name: 'nightly', exists: false, onThisDevice: false, nextRunAt: null })
+    // The default reads the local scheduler's opt-in: no binding here is off.
+    const real = createDashboardService({ agents: () => agents })
+    writeFileSync(join(base, 'm2', 'cinna-agent.json'), JSON.stringify({ id: 'm2', schedules: [{ name: 'nightly' }] }))
+    expect(real.resolveTile('p1', inbox.tile.id)?.view.schedule).toEqual({ name: 'nightly', exists: true, onThisDevice: false, nextRunAt: null })
+  })
+
   it('say in place when the agent or component is gone, or the spec broke', () => {
     const d = service.create('p1', 'Sales')
     if (!d.ok) throw new Error()

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { TILE_SIZE_SPANS, resolveParamWords, type ComponentInfo, type TileSize } from '../../../../shared/dashboards'
 import { DashboardDialog } from './DashboardDialog'
@@ -23,10 +23,14 @@ export function ComponentPreview({
   /** The area the preview lives in: every size fits it, at one scale, so changing size moves nothing around it. */
   box: { width: number; height: number }
 }): React.JSX.Element {
+  // A page's setParams in a preview: kept here, never stored, and the source re-runs with them.
+  const [pageParams, setPageParams] = useState<Record<string, unknown>>({})
   const preview = useQuery({
-    queryKey: ['dashboards', 'preview', component.agentId, component.skill, component.name],
+    queryKey: ['dashboards', 'preview', component.agentId, component.skill, component.name, pageParams],
+    // The last good data stays on screen while the source re-runs with the page's params.
+    placeholderData: (previous) => previous,
     queryFn: async () => {
-      const outcome = await window.api.dashboards.preview(component.agentId, component.name, component.skill)
+      const outcome = await window.api.dashboards.preview(component.agentId, component.name, component.skill, pageParams)
       if (!outcome.ok) throw new Error(outcome.message)
       return outcome.result
     },
@@ -55,7 +59,8 @@ export function ComponentPreview({
             result={preview.data ?? null}
             loading={preview.isPending}
             frameTarget={{ agentId: component.agentId, component: component.name, skill: component.skill }}
-            meta={{ component: component.name, title: component.title, params: resolveParamWords({}, component.params), size }}
+            meta={{ component: component.name, title: component.title, params: resolveParamWords(pageParams, component.params), size }}
+            actions={{ onParams: (changed) => setPageParams((current) => ({ ...current, ...changed })) }}
           />
         </div>
       ) : null}

@@ -13,6 +13,7 @@ import { MarkdownView } from './views/nativeViews'
 const COMPONENT: ComponentInfo = {
   agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
   description: '', view: 'list', size: 'wide', source: { endpoint: 'e' }, maxAge: '15m', refreshCommand: null,
+  refresh: { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null },
   params: {}, prompts: [], valid: true, findings: [], missingCredentials: []
 }
 
@@ -20,7 +21,8 @@ const VIEW: TileView = {
   tile: { id: 't1', dashboardId: 'd1', agentManifestId: 'sales', component: 'deals', skill: null, title: 'Deals', size: 'wide', position: 0, params: {}, refreshOverride: null },
   displayTitle: 'Deals',
   state: 'ok',
-  component: COMPONENT
+  component: COMPONENT,
+  schedule: null
 }
 
 let result: TileResultDto

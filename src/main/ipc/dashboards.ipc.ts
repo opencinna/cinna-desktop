@@ -7,6 +7,7 @@ import { panelChatService } from '../services/dashboards/panelChat'
 import type {
   ComponentInfo,
   ComponentPlacement,
+  DashboardCallOutcome,
   DashboardDto,
   DashboardFrameOutcome,
   DashboardsOutcome,
@@ -92,16 +93,28 @@ export function registerDashboardHandlers(): void {
 
   ipcHandle('dashboards:ensure-fresh', (_event, input?: { tileId?: unknown; reason?: unknown }): Promise<DashboardsOutcome<{ result: TileResultDto }>> => {
     userActivation.requireActivated()
-    // `after_turn` is main's own reason (a turn of the tile's agent ended); the renderer may not use it to force a recompute.
+    // `after_turn`, `interval`, `launch`, `params` and `schedule` are main's own reasons; the renderer may not use them to force a recompute.
     if (input?.reason !== 'visible' && input?.reason !== 'manual') {
       return Promise.resolve({ ok: false, code: 'invalid_input', message: 'That refresh reason is not accepted here.' })
     }
     return dashboardRefreshService.ensureFresh(getProfileScopeUserId(), input?.tileId, input?.reason)
   })
 
-  ipcHandle('dashboards:preview', (_event, input?: { agentId?: unknown; component?: unknown; skill?: unknown }): Promise<DashboardsOutcome<{ result: TileResultDto }>> => {
+  ipcHandle('dashboards:preview', (_event, input?: { agentId?: unknown; component?: unknown; skill?: unknown; params?: unknown }): Promise<DashboardsOutcome<{ result: TileResultDto }>> => {
     userActivation.requireActivated()
-    return dashboardRefreshService.preview(getProfileScopeUserId(), input?.agentId, input?.component, input?.skill)
+    return dashboardRefreshService.preview(getProfileScopeUserId(), input?.agentId, input?.component, input?.skill, input?.params)
+  })
+
+  /** `tools/call` from a component's page: one of its own endpoints, run once, never cached; refusals and failures are data. */
+  ipcHandle('dashboards:call', (_event, input: unknown): Promise<DashboardCallOutcome> => {
+    userActivation.requireActivated()
+    return dashboardRefreshService.call(getProfileScopeUserId(), input)
+  })
+
+  /** A tile's params from a native filter or `cinna.setParams`: validated, kept, recomputed (reason `params`, main's own). */
+  ipcHandle('dashboards:set-params', (_event, input: unknown): Promise<DashboardsOutcome<{ tile: TileDto }>> => {
+    userActivation.requireActivated()
+    return dashboardRefreshService.setParams(getProfileScopeUserId(), input)
   })
 
   /** A component reference in a message, resolved to a component here or a reason, as data. Runs nothing. */

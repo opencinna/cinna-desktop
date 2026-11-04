@@ -78,6 +78,33 @@ export interface ComponentFinding {
   message: string
 }
 
+/**
+ * One param the owner can set (`params.<name>` in component.json). Native
+ * views draw a control per param in a fixed filter row (D4): `enum` a select
+ * of `values`, `month` a month picker, `date` / `date_range` date inputs,
+ * `text`, `number`, `boolean`.
+ */
+export interface ComponentParamSpec {
+  type: string
+  label?: string
+  default?: unknown
+  /** `enum` only. */
+  values?: string[]
+}
+
+/** `refresh` as the component states it, defaults applied. */
+export interface ComponentRefreshRule {
+  maxAge: string
+  /** Recompute this often while the tile is on screen (≥ 1m), or null. */
+  whileOpenEvery: string | null
+  afterTurn: boolean
+  onAppStart: boolean
+  /** `/run:<name>`, or null. */
+  command: string | null
+  /** The agent schedule that feeds this tile (its runs write the data the source reads), or null. */
+  schedule: string | null
+}
+
 /** One suggested question: `label` on the button, `prompt` the text sent. */
 export interface ComponentPrompt {
   label: string
@@ -109,7 +136,9 @@ export interface ComponentInfo {
   /** `refresh.command` (`/run:<name>`), or null. */
   refreshCommand: string | null
   /** The params the owner can set, with their types and defaults; `{}` when invalid. */
-  params: Record<string, { type: string; default?: unknown }>
+  params: Record<string, ComponentParamSpec>
+  /** The component's own refresh rule, for Edit tile and the tile's hover line (the tile override wins). */
+  refresh: ComponentRefreshRule
   /** `prompts[]`: suggested questions the agent wrote (README D13); on the hover bar and as panel starters. */
   prompts: ComponentPrompt[]
   /** No error finding. Warnings never make a component invalid. */
@@ -124,12 +153,18 @@ export interface ComponentInfo {
   missingCredentials: string[]
 }
 
-/** The user's per-tile change to the component's refresh rule (D1: max-age and manual only). */
+/** The user's per-tile change to the component's refresh rule (Edit tile). Absent fields keep the component's. */
 export interface TileRefreshOverride {
   /** Replaces `refresh.max_age`. */
   maxAge?: string
   /** Never recompute on its own once it has data; only on Refresh. */
   manual?: boolean
+  /** Replaces `refresh.while_open_every`; null turns it off. */
+  whileOpenEvery?: string | null
+  /** Replaces `refresh.after_turn`. */
+  afterTurn?: boolean
+  /** Replaces `refresh.on_app_start`. */
+  onAppStart?: boolean
 }
 
 export interface DashboardDto {
@@ -171,6 +206,25 @@ export interface TileView {
   displayTitle: string
   state: TileComponentState
   component: ComponentInfo | null
+  /** The schedule that feeds the tile (`refresh.schedule`), as it stands on this device; null when none. */
+  schedule: TileScheduleState | null
+}
+
+/**
+ * A schedule-fed tile (D4): the tile re-reads when that schedule's run
+ * completes; Refresh only re-reads. A schedule that is off on this device
+ * (schedules run only after the device opts in) is said, never silent:
+ * "Fed by <name>, which is off on this device" with Turn on… → the agent's
+ * Schedules tab.
+ */
+export interface TileScheduleState {
+  name: string
+  /** The schedule exists in the agent's manifest. */
+  exists: boolean
+  /** It runs on this device. */
+  onThisDevice: boolean
+  /** Epoch ms of its next run here, or null (off, or unknown). */
+  nextRunAt: number | null
 }
 
 /**
@@ -195,8 +249,13 @@ export interface TileResultDto {
   notice: string | null
 }
 
-/** `after_turn`: main's own reason when a turn of the tile's agent ended (only where `refresh.after_turn` and a live lease). */
-export type DashboardRefreshReason = 'visible' | 'manual' | 'after_turn'
+/**
+ * Why a tile is asked to be fresh. Only `visible` and `manual` come from the
+ * renderer; the rest are main's own: `after_turn` (a turn of its agent ended),
+ * `interval` (`while_open_every` while leased), `launch` (the `on_app_start`
+ * warm-up), `params` (its params changed), `schedule` (its feeding schedule ran).
+ */
+export type DashboardRefreshReason = 'visible' | 'manual' | 'after_turn' | 'interval' | 'launch' | 'params' | 'schedule'
 
 /** Where a component sits: one row per tile showing it. */
 export interface ComponentPlacement {
@@ -214,6 +273,12 @@ export type DashboardsErrorCode =
   | 'component_invalid'
   | 'needs_identity'
   | 'not_kit_agent'
+  /** `tools/call` above `DASHBOARD_CALLS_PER_MINUTE` for its tile or preview frame. */
+  | 'rate_limited'
+  /** A `requires_credentials` slot is not ready: nothing ran. */
+  | 'needs_credentials'
+  /** The endpoint ran (or was stopped) and gave no value: timeout, non-zero exit, not JSON, too large, busy, replaced. */
+  | 'call_failed'
 
 export type DashboardsOutcome<T> = ({ ok: true } & T) | { ok: false; code: DashboardsErrorCode; message: string }
 
@@ -394,3 +459,32 @@ export interface PanelChatInput {
 }
 
 export type PanelChatOutcome = DashboardsOutcome<{ chatId: string }>
+
+/** At most this many `tools/call`s per minute per tile (or per preview frame); above it the page gets a refusal. */
+export const DASHBOARD_CALLS_PER_MINUTE = 30
+
+/**
+ * `cinna.call(endpoint, params)` / `tools/call` from a component's page (D4):
+ * one of the component's own endpoints, run once, never cached — a
+ * drill-down. Main checks the endpoint exists in the spec, the rate limit,
+ * credentials and the timeout; the newest call per (frame, endpoint) wins.
+ */
+export interface DashboardCallInput {
+  target: DashboardFrameTarget
+  endpoint: string
+  params?: Record<string, unknown>
+}
+
+/** The endpoint's JSON value, or a refusal/failure the page receives as an `isError` result. */
+export type DashboardCallOutcome = DashboardsOutcome<{ value: unknown }>
+
+/**
+ * `cinna.setParams` / `cinna/params-changed`, or a native filter control:
+ * main validates each value against the component's params (unknown names
+ * dropped, a bad value refused), persists them on the tile, and recomputes
+ * it (reason `params`); the result arrives as a tile change.
+ */
+export interface SetTileParamsInput {
+  tileId: string
+  params: Record<string, unknown>
+}

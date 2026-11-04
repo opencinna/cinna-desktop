@@ -31,6 +31,7 @@ import { agentRepo } from '../db/agents'
 import { taskRepo } from '../db/tasks'
 import { takeAgentStatusReportInChat } from '../tasks/agentStatusReports'
 import { localScheduleRepo } from '../db/localSchedules'
+import { notifyScheduleRunCompleted } from './localScheduleEvents'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
 import type { JobRunOrigin, JobExecuteResult } from '../../shared/jobs'
@@ -510,11 +511,13 @@ export const jobService = {
     // `reconcileOccurrence` settles it from the run on its next pass anyway.
     try {
       const finished = jobRunsRepo.getById(run.userId, run.id)?.finishedAt?.getTime() ?? Date.now()
-      localScheduleRepo.settleByRun(run.userId, run.id, {
+      const settled = localScheduleRepo.settleByRun(run.userId, run.id, {
         status: outcome === 'succeeded' ? 'completed' : outcome,
         reason: outcome === 'succeeded' ? null : errorMessage ?? null,
         finishedAt: finished
       })
+      // A schedule's run wrote what its tiles read (dashboards, README D4).
+      if (outcome === 'succeeded') for (const bindingId of new Set(settled)) notifyScheduleRunCompleted(run.userId, bindingId)
     } catch (err) {
       logger.warn('could not record the run outcome on its schedule occurrence', {
         runId: run.id,

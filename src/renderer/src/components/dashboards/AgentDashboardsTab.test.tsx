@@ -13,6 +13,7 @@ import { AgentDashboardsTab } from './AgentDashboardsTab'
 const BASE: ComponentInfo = {
   agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
   description: '', view: 'list', size: 'wide', source: { endpoint: 'e' }, maxAge: '15m', refreshCommand: null,
+  refresh: { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null },
   params: {}, prompts: [], valid: true, findings: [], missingCredentials: []
 }
 const BROKEN: ComponentInfo = {

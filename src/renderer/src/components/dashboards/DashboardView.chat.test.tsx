@@ -30,11 +30,13 @@ import { SidebarTabs } from '../layout/SidebarTabs'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useAuthStore } from '../../stores/auth.store'
+import { composerDraftKey, useComposerDraftStore } from '../../stores/composerDraft.store'
 
 function info(over: Partial<ComponentInfo>): ComponentInfo {
   return {
     agentId: 'folder:sales', manifestId: 'sales', agentName: 'Sales Agent', name: 'deals', skill: null, title: 'Deals',
     description: '', view: 'table', size: 'wide', source: { endpoint: 'e' }, maxAge: '15m', refreshCommand: null,
+    refresh: { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null },
     params: {}, prompts: [], valid: true, findings: [], missingCredentials: [],
     ...over
   }
@@ -45,7 +47,8 @@ function tileView(id: string, title: string, component: ComponentInfo, size: Til
     tile: { id, dashboardId: 'd1', agentManifestId: component.manifestId, component: component.name, skill: null, title, size, position: 0, params, refreshOverride: null },
     displayTitle: title,
     state: 'ok',
-    component
+    component,
+    schedule: null
   }
 }
 
@@ -450,5 +453,30 @@ describe('the dashboard header', () => {
     expect(button.className).toContain('min-w-[6.5rem]')
     expect(screen.getByRole('heading', { level: 1, name: 'Sales overview' }).className).toContain('text-xl')
   })
-})
 
+  it('a page’s cinna.ask focuses its tile, opens the panel and fills that chat’s composer, never sending', async () => {
+    // Mutation: make the fill a send (drop `fill` from the pending prompt) and runStart is called.
+    const PAGE = tileView('t4', 'Weekly chart', info({ name: 'chart', view: 'html' }), 'm')
+    const api = window.api as unknown as { dashboards: Record<string, unknown> }
+    api.dashboards.tiles = async () => ({ ok: true, dashboard: { id: 'd1', name: 'Sales overview', sortOrder: 0, tileCount: 2, createdAt: 0, updatedAt: 0 }, tiles: [DEALS, PAGE] })
+    api.dashboards.openFrame = async () => ({ ok: true, token: 'tok', url: 'cinna-preview://dash-h/t4/index.html' })
+    api.dashboards.releaseFrame = async () => {}
+    show()
+    const iframe = (await screen.findByTestId('dashboard-frame')) as HTMLIFrameElement
+    const win = iframe.contentWindow!
+    const posted: Array<Record<string, unknown>> = []
+    vi.spyOn(win, 'postMessage').mockImplementation(((message: unknown) => { posted.push(message as Record<string, unknown>) }) as never)
+    const send = (data: Record<string, unknown>) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'null', source: win })) })
+    send({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} })
+    const nonce = (posted[0].result as { _meta: { cinna: { nonce: string } } })._meta.cinna.nonce
+    send({ jsonrpc: '2.0', id: 2, method: 'ui/message', params: { role: 'user', content: [{ type: 'text', text: 'Why did W3 drop?' }], _meta: { cinna: { nonce } } } })
+    expect(posted.find((m) => m.id === 2)).toEqual({ jsonrpc: '2.0', id: 2, result: {} })
+    expect(useUIStore.getState().dashboardPanelOpen).toBe(true)
+    expect(tileEl('Weekly chart').dataset.focused).toBe('true')
+    await waitFor(() => expect(screen.getByTestId('workspace').dataset.chatId).toBe('chat-folder:sales'))
+    const key = composerDraftKey('alice', 'chat:chat-folder:sales')
+    await waitFor(() => expect(useComposerDraftStore.getState().drafts[key]?.text).toBe('Why did W3 drop?'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(runStart).not.toHaveBeenCalled()
+  })
+})

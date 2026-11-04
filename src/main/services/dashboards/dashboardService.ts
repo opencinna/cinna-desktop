@@ -19,8 +19,10 @@ import { localAgentService } from '../localAgents/localAgentService'
 import { desktopStateService } from '../localAgents/desktopStateService'
 import { kitAgentDeliverableSkills } from '../agentSkillsPlugin'
 import { isPinnedSkill, SKILLS_DIR } from '../../kit/skills'
-import { COMPONENT_NAME_PATTERN } from '../../kit/dashboardsProtocol'
-import { readComponent, scanComponents, type ComponentAgent, type ComponentSkillFolder, type ScannedComponent } from './componentScanner'
+import { COMPONENT_NAME_PATTERN, MIN_WHILE_OPEN_EVERY_MS } from '../../kit/dashboardsProtocol'
+import { localScheduleRepo } from '../../db/localSchedules'
+import { readAgentManifest, readComponent, scanComponents, type ComponentAgent, type ComponentSkillFolder, type ScannedComponent } from './componentScanner'
+import { normalizeTileParams } from './tileParams'
 import { formatComponentReference, parseComponentReference } from '../../../shared/componentReference'
 import {
   MAX_DASHBOARDS_PER_PROFILE,
@@ -40,6 +42,7 @@ import {
   type DashboardsOutcome,
   type TileDto,
   type TileRefreshOverride,
+  type TileScheduleState,
   type TileView,
   type ResolveReferenceOutcome,
   type UpdateTileInput
@@ -64,6 +67,33 @@ export interface DashboardServiceDeps {
   agents: () => ComponentAgent[]
   /** The other local agents (bare folders), for references only. */
   otherAgents?: () => OtherAgent[]
+  /** Whether a manifest schedule runs on this device for the profile, and when next: the local scheduler's opt-in. */
+  scheduleOnDevice?: (userId: string, manifestId: string, name: string) => { onThisDevice: boolean; nextRunAt: number | null }
+}
+
+/**
+ * The local scheduler's per-device opt-in for an agent's manifest schedule:
+ * a binding that is on, and its next due time. Read from the binding only;
+ * a definition that changed since it was turned on is turned off by the
+ * scheduler's own next pass.
+ */
+export function scheduleOnDevice(userId: string, manifestId: string, name: string): { onThisDevice: boolean; nextRunAt: number | null } {
+  try {
+    const binding = localScheduleRepo.list(userId).find((row) => row.manifestId === manifestId && row.name === name && row.definition.executionType !== 'job')
+    if (!binding?.enabled || binding.reason) return { onThisDevice: false, nextRunAt: null }
+    return { onThisDevice: true, nextRunAt: binding.nextDueAt ?? null }
+  } catch (err) {
+    logger.debug('could not read a schedule binding', { error: err instanceof Error ? err.message : String(err) })
+    return { onThisDevice: false, nextRunAt: null }
+  }
+}
+
+/** The names of the agent manifest's `schedules[]`, or null when it has no readable manifest. */
+function manifestScheduleNames(agent: ComponentAgent): Set<string> | null {
+  const manifest = agent.manifest === undefined ? readAgentManifest(agent.path) : agent.manifest
+  if (!isRecord(manifest)) return null
+  const schedules = Array.isArray(manifest.schedules) ? manifest.schedules : []
+  return new Set(schedules.filter(isRecord).map((entry) => entry.name).filter((name): name is string => typeof name === 'string'))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -171,7 +201,12 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
   }
 }
 
-/** A refresh override as the user may set it in D1: a max age and Manual. */
+/**
+ * A refresh override as the user may set it in Edit tile: a max age, Manual,
+ * the interval (null turns the component's off; at least 1m), after-turn and
+ * on-app-start. Absent fields keep the component's; `false` on a flag is kept,
+ * since it overrides a component that says true.
+ */
 export function normalizeRefreshOverride(value: unknown): TileRefreshOverride | null | 'invalid' {
   if (value === null || value === undefined) return null
   if (typeof value !== 'object' || Array.isArray(value)) return 'invalid'
@@ -184,6 +219,19 @@ export function normalizeRefreshOverride(value: unknown): TileRefreshOverride | 
   if (input.manual !== undefined) {
     if (typeof input.manual !== 'boolean') return 'invalid'
     if (input.manual) out.manual = true
+  }
+  if (input.whileOpenEvery !== undefined) {
+    if (input.whileOpenEvery === null) out.whileOpenEvery = null
+    else {
+      const ms = parseDuration(input.whileOpenEvery)
+      if (ms === null || ms < MIN_WHILE_OPEN_EVERY_MS) return 'invalid'
+      out.whileOpenEvery = String(input.whileOpenEvery)
+    }
+  }
+  for (const flag of ['afterTurn', 'onAppStart'] as const) {
+    if (input[flag] === undefined) continue
+    if (typeof input[flag] !== 'boolean') return 'invalid'
+    out[flag] = input[flag] as boolean
   }
   return Object.keys(out).length > 0 ? out : null
 }
@@ -235,14 +283,25 @@ export function createDashboardService(deps: DashboardServiceDeps = { agents: de
     return matches.length === 1 ? matches[0] : null
   }
 
-  function resolveRow(row: DashboardTileRow): ResolvedTile {
+  const onDevice = deps.scheduleOnDevice ?? scheduleOnDevice
+
+  /** The schedule that feeds a tile (`refresh.schedule`), as it stands on this device. */
+  function scheduleState(userId: string, agent: ComponentAgent | null, scanned: ScannedComponent | null): TileScheduleState | null {
+    const name = scanned?.spec?.schedule
+    if (!agent || !name) return null
+    const exists = manifestScheduleNames(agent)?.has(name) ?? false
+    const device = exists && agent.manifestId ? onDevice(userId, agent.manifestId, name) : { onThisDevice: false, nextRunAt: null }
+    return { name, exists, onThisDevice: device.onThisDevice, nextRunAt: device.onThisDevice ? device.nextRunAt : null }
+  }
+
+  function resolveRow(userId: string, row: DashboardTileRow): ResolvedTile {
     const tile = toTileDto(row)
     const agent = agentByManifestId(tile.agentManifestId)
     // A skill that is gone reads as a component that is gone.
     const scanned = agent ? readComponent(agent, tile.component, tile.skill) : null
     const state = !agent ? 'agent_missing' : !scanned ? 'component_missing' : scanned.spec ? 'ok' : 'invalid'
     const displayTitle = tile.title ?? scanned?.info.title ?? tile.component
-    return { tile, agent, scanned, view: { tile, displayTitle, state, component: scanned?.info ?? null } }
+    return { tile, agent, scanned, view: { tile, displayTitle, state, component: scanned?.info ?? null, schedule: scheduleState(userId, agent, scanned) } }
   }
 
   return {
@@ -282,14 +341,32 @@ export function createDashboardService(deps: DashboardServiceDeps = { agents: de
       if (typeof dashboardId !== 'string') return refuse('not_found', 'That dashboard is gone.')
       const row = dashboardRepo.list(userId).find((entry) => entry.id === dashboardId)
       if (!row) return refuse('not_found', 'That dashboard is gone.')
-      return { ok: true, dashboard: toDashboardDto(row), tiles: dashboardRepo.tiles(userId, dashboardId).map((tile) => resolveRow(tile).view) }
+      return { ok: true, dashboard: toDashboardDto(row), tiles: dashboardRepo.tiles(userId, dashboardId).map((tile) => resolveRow(userId, tile).view) }
     },
 
     /** One tile and what it shows, or null when the tile is not this profile's. */
     resolveTile(userId: string, tileId: unknown): ResolvedTile | null {
       if (typeof tileId !== 'string') return null
       const row = dashboardRepo.tile(userId, tileId)
-      return row ? resolveRow(row) : null
+      return row ? resolveRow(userId, row) : null
+    },
+
+    /**
+     * A tile's params from a native filter or `cinna.setParams`: the whole
+     * set, each value checked against the component's `params` (a bad one
+     * refuses the change, a name it does not declare is dropped, a key left
+     * out or null falls back to its default), then kept on the tile in place
+     * of the old set. Recomputing is the caller's (the refresh service).
+     */
+    setParams(userId: string, input: unknown): DashboardsOutcome<{ tile: TileDto }> {
+      const value = isRecord(input) ? input : {}
+      const resolved = this.resolveTile(userId, value.tileId)
+      if (!resolved) return refuse('not_found', 'That tile is gone.')
+      if (!resolved.scanned?.spec) return refuse('component_invalid', 'This component has problems to fix before its params can change.')
+      const merged = normalizeTileParams(value.params, resolved.scanned.spec.params)
+      if (!merged.ok) return refuse('invalid_input', merged.message)
+      const row = dashboardRepo.updateTile(userId, resolved.tile.id, { paramsJson: JSON.stringify(merged.params) })
+      return row ? { ok: true, tile: toTileDto(row) } : refuse('not_found', 'That tile is gone.')
     },
 
     /** A component of a kit agent, by agent row id, skill (null for its own) and name; null when there is none. */

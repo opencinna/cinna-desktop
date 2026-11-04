@@ -245,6 +245,24 @@ describe('validation by core’s codes', () => {
     expect(check({ ...good, prompts: [{ label: 'x' }] }).info.prompts).toEqual([])
   })
 
+  it('gives each param its label and enum values, and the refresh rule with the schema’s defaults (D4)', () => {
+    const full = check({
+      ...good,
+      params: { stage: { type: 'enum', label: ' Stage ', values: ['lead', 'won'], default: 'lead' }, month: { type: 'month', default: 'current' }, q: { type: 'text', label: 'Search' } },
+      refresh: { max_age: '5m', while_open_every: '2m', after_turn: true, on_app_start: true, schedule: 'nightly' }
+    })
+    expect(full.info.params).toEqual({
+      stage: { type: 'enum', label: 'Stage', values: ['lead', 'won'], default: 'lead' },
+      month: { type: 'month', default: 'current' },
+      q: { type: 'text', label: 'Search' }
+    })
+    expect(full.info.refresh).toEqual({ maxAge: '5m', whileOpenEvery: '2m', afterTurn: true, onAppStart: true, command: null, schedule: 'nightly' })
+    expect(full.spec).toMatchObject({ whileOpenEvery: '2m', onAppStart: true, schedule: 'nightly' })
+    const defaults = { maxAge: '15m', whileOpenEvery: null, afterTurn: false, onAppStart: false, command: null, schedule: null }
+    expect(check({ ...good, refresh: undefined }).info.refresh).toEqual(defaults)
+    expect(check({ ...good, view: 'pie' }).info.refresh).toEqual(defaults)
+  })
+
   it('scans a web view’s page files for what the sandbox blocks, outside api/', () => {
     const html = { ...good, view: 'html' }
     const { info } = check(html, {

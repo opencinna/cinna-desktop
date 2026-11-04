@@ -234,9 +234,11 @@ export const CONTEXT_FLUSH_MS = 250
  * Per-key throttle for `setContext`: the first value for a key goes at once,
  * later ones within `ms` are coalesced to the latest and flushed when the
  * window ends. A page posting on every pointer move re-renders the dashboard
- * a few times a second, not on every message.
+ * a few times a second, not on every message. With `merge`, a waiting value
+ * is folded into by the next one instead of replaced (a page's setParams
+ * names only what it changed, so each partial must survive the window).
  */
-export function coalescePerKey<T>(flush: (key: string, value: T) => void, ms = CONTEXT_FLUSH_MS) {
+export function coalescePerKey<T>(flush: (key: string, value: T) => void, ms = CONTEXT_FLUSH_MS, merge?: (waiting: T, next: T) => T) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const waiting = new Map<string, T>()
   const open = (key: string): void => {
@@ -255,7 +257,7 @@ export function coalescePerKey<T>(flush: (key: string, value: T) => void, ms = C
   return {
     push(key: string, value: T): void {
       if (timers.has(key)) {
-        waiting.set(key, value)
+        waiting.set(key, merge && waiting.has(key) ? merge(waiting.get(key) as T, value) : value)
         return
       }
       flush(key, value)
