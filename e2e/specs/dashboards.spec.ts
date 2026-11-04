@@ -75,7 +75,7 @@ test('three components added from the agent tab render on a dashboard, and a reo
     await expect(frame.locator('#title')).toHaveText('Signups this week', { timeout: 30_000 })
     await expect(frame.locator('rect')).toHaveCount(7)
     // The kit template, on the kit's bridge: its Python source got `current` as this month,
-    // and a click's `cinna.call` (D3/D4) rejects with {message}, which the page shows.
+    // and a click's `cinna.call` (D4) runs its own week_detail endpoint as a drill-down.
     // Below the fold at this window size: only a tile on screen computes, so bring it there.
     await grid.getByRole('group', { name: 'Revenue by week' }).scrollIntoViewIfNeeded()
     const revenue = grid.getByRole('group', { name: 'Revenue by week' }).frameLocator('[data-testid="dashboard-frame"]')
@@ -84,7 +84,7 @@ test('three components added from the agent tab render on a dashboard, and a reo
     const now = new Date()
     await expect(revenue.locator('#month')).toHaveValue(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
     await revenue.locator('rect.bar').first().click()
-    await expect(revenue.locator('#detail-list')).toHaveText('Could not load the week: tools/call is not available here.')
+    await expect(revenue.locator('#detail-list li')).toHaveText(['Acme renewal: 9,800 EUR', 'Globex pilot: 4,200 EUR'], { timeout: 30_000 })
     await expect.poll(() => (existsSync(runsFile) ? readFileSync(runsFile, 'utf8') : '')).not.toBe('')
   })
 

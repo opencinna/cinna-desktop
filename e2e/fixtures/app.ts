@@ -80,6 +80,9 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   const realHome = process.env.HOME ?? ''
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value
+  // No dashboard tile warms up at launch: a spec's tiles run only when it
+  // shows them. Set before `extra`, so a spec of the warm-up can turn it on.
+  env.CINNA_DASHBOARD_WARMUP = 'off'
   // A spec's own variables go in *before* the sandbox ones, so no spec can
   // point the app at the developer's real `HOME` or profile by accident.
   for (const [key, value] of Object.entries(extra)) env[key] = value
