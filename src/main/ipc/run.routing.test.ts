@@ -16,6 +16,11 @@ vi.mock('../services/tasksSkillService', () => ({ tasksSkillLabel: () => 'cinna-
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: handoverOfTask, listForOrigin: () => [], toDto: (row: unknown) => row } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: openRunRequests } }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
+const dashboardTile = vi.fn((_profileUserId: string, _tileId: string): Record<string, unknown> | null => null)
+vi.mock('../db/dashboards', () => ({
+  dashboardRepo: { tile: (profileUserId: string, tileId: string) => dashboardTile(profileUserId, tileId) },
+  isCloudTileRow: (row: { source?: string }) => row.source === 'remote'
+}))
 const handoffPending = vi.hoisted(() => vi.fn(() => false))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: handoffPending } }))
 
@@ -987,6 +992,14 @@ describe('the dashboard context (D3)', () => {
     await send({ chatId: 'chat-1', content: 'changed', dashboardContext: { ...context, focused: { ...context.focused, selection: ['d-21'] } } })
     input = await driverInput()
     expect(input.dashboardContext).toMatchObject({ focused: { selection: ['d-21'] } })
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+
+    // The focused tile is a cloud tile here: core finds it by its block id, never by the desktop's tile id.
+    dashboardTile.mockReturnValueOnce({ id: 't-1', dashboardId: 'dash-1', source: 'remote', coreBlockId: 'core-block-9' })
+    await send({ chatId: 'chat-1', content: 'which tile?', dashboardContext: { ...context, focused: { ...context.focused, selection: ['d-30'] } } })
+    input = await driverInput()
+    expect((input.dashboardContext as { focused: Record<string, unknown> }).focused.tile_id).toBe('core-block-9')
+    expect(JSON.stringify(input.dashboardContext)).not.toContain('"t-1"')
     ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
 
     // A hand-added A2A agent (its own token, no Cinna behind it) gets none.

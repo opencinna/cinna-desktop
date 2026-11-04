@@ -24,6 +24,7 @@ import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
 import { commandService, resolveCommandRunner } from './localAgents/commandService'
 import { dashboardContextPayload, dashboardContextSection, dashboardContextTracker, sanitizeDashboardContext, type DashboardContextTurn } from './dashboards/dashboardContext'
 import { localAgentService } from './localAgents/localAgentService'
+import { dashboardRepo, isCloudTileRow } from '../db/dashboards'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import type { StreamPort } from './a2aStreamingService'
@@ -834,7 +835,7 @@ function dashboardContextFor(input: {
       return null
     }
     if (overA2a) {
-      const payload = dashboardContextPayload(context)
+      const payload = dashboardContextPayload(context, focusedCoreBlockId(input.profileUserId, context.dashboardId, context.focused.tileId))
       const turn = dashboardContextTracker.forTurn(input.chatId, JSON.stringify(payload), context)
       return { text: null, delivered: turn.delivered, payload: turn.text === null ? null : payload }
     }
@@ -842,6 +843,20 @@ function dashboardContextFor(input: {
   } catch (error) {
     // Context, never a precondition: the turn runs without it.
     logger.warn('the dashboard context could not be built', { chatId: input.chatId, error: error instanceof Error ? error.message : String(error) })
+    return null
+  }
+}
+
+/** The focused tile's core block id when it is a cloud tile on this dashboard, else null (core then matches by component). */
+function focusedCoreBlockId(profileUserId: string, dashboardId: string, tileId: string): string | null {
+  if (!tileId) return null
+  try {
+    const tile = dashboardRepo.tile(profileUserId, tileId)
+    if (!tile || tile.dashboardId !== dashboardId || !isCloudTileRow(tile)) return null
+    return tile.coreBlockId ?? null
+  } catch (error) {
+    // The context still goes, without the block id (core then matches by component).
+    logger.warn('the focused cloud tile could not be read', { tileId, error: error instanceof Error ? error.message : String(error) })
     return null
   }
 }

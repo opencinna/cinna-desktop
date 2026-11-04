@@ -224,6 +224,24 @@ describe('dashboardContextPayload (D6.6, A2A metadata)', () => {
     expect(JSON.stringify(dashboardContextPayload(sample))).toBe(JSON.stringify(dashboardContextPayload(structuredClone(sample))))
   })
 
+  it('names the focused cloud tile by its core block id, first, and never by the desktop’s own tile id', () => {
+    const payload = dashboardContextPayload(sample, 'b0c0ffee-0000-4000-8000-000000000001') as { focused: Record<string, unknown> }
+    expect(Object.keys(payload.focused)[0]).toBe('tile_id')
+    expect(payload.focused.tile_id).toBe('b0c0ffee-0000-4000-8000-000000000001')
+    for (const without of [dashboardContextPayload(sample), dashboardContextPayload(sample, null)] as { focused: Record<string, unknown> }[]) {
+      expect(without.focused).not.toHaveProperty('tile_id')
+      expect(without.focused).not.toHaveProperty('tileId')
+    }
+    expect(payload.focused).not.toHaveProperty('tileId')
+  })
+
+  it('fits 12,000 characters of JSON with the block id, the summary giving way first', () => {
+    const big = { ...sample, focused: { ...sample.focused, summary: 'x'.repeat(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS) }, otherTiles: Array.from({ length: 20 }, (_, i) => `${'t'.repeat(400)} ${i}`) }
+    const payload = dashboardContextPayload(big, 'b0c0ffee-0000-4000-8000-000000000001') as { focused: { summary: string; tile_id: string } }
+    expect(JSON.stringify(payload).length).toBeLessThanOrEqual(DASHBOARD_CONTEXT_MAX_CHARS)
+    expect(payload.focused.tile_id).toBe('b0c0ffee-0000-4000-8000-000000000001')
+  })
+
   it('fits 12,000 characters of JSON, the summary giving way first', () => {
     const big = { ...sample, focused: { ...sample.focused, summary: 'x'.repeat(DASHBOARD_CONTEXT_SUMMARY_MAX_CHARS) }, otherTiles: Array.from({ length: 20 }, (_, i) => `${'t'.repeat(400)} ${i}`) }
     const payload = dashboardContextPayload(big) as { focused: { summary: string } }

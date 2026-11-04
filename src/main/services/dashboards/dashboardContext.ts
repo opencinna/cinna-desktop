@@ -129,11 +129,12 @@ export function sanitizeDashboardContext(raw: unknown): DashboardContext | null 
   }
 }
 
-function wire(ctx: DashboardContext): string {
+function wire(ctx: DashboardContext, coreBlockId?: string | null): string {
   const { focused } = ctx
   return JSON.stringify({
     dashboard: ctx.dashboard,
     focused: {
+      ...(coreBlockId ? { tile_id: coreBlockId } : {}),
       component: focused.component,
       ...(focused.skill ? { skill: focused.skill } : {}),
       title: focused.title,
@@ -167,10 +168,13 @@ export function dashboardContextSection(ctx: DashboardContext): string {
  * (`message.metadata.cinna_dashboard_context`, D6.6): the same snake_case
  * keys as the section's JSON line, which is core's `MessageCreate.dashboard_context`
  * shape, cut by the same rule to {@link DASHBOARD_CONTEXT_MAX_CHARS} of JSON
- * (core refuses a longer one).
+ * (core refuses a longer one). `coreBlockId` is the focused cloud tile's core
+ * block, sent as `focused.tile_id`: core's tile tools find the focused tile by
+ * it, and only fall back to a component match when the component is placed
+ * once. The desktop's own tile id is never sent (core would match nothing).
  */
-export function dashboardContextPayload(ctx: DashboardContext): Record<string, unknown> {
-  return JSON.parse(fit(ctx, wire)) as Record<string, unknown>
+export function dashboardContextPayload(ctx: DashboardContext, coreBlockId?: string | null): Record<string, unknown> {
+  return JSON.parse(fit(ctx, (current) => wire(current, coreBlockId))) as Record<string, unknown>
 }
 
 /** `render(ctx)` cut to at most {@link DASHBOARD_CONTEXT_MAX_CHARS}: the summary gives way first, then the rest in order. */
