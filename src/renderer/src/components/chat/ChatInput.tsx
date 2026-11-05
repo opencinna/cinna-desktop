@@ -2156,7 +2156,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         onDrop={handleDrop}
         style={minimal ? undefined : {
           borderColor: inputBorderColor,
-          backgroundColor: modeColor ? modeColor.bg : undefined,
+          // The mode's tint is translucent: laid over the opaque input colour,
+          // not in its place, or the notice panel tucked under the box's top
+          // edge shows through as a band.
+          backgroundImage: modeColor ? `linear-gradient(${modeColor.bg}, ${modeColor.bg})` : undefined,
           '--ambient-input-tint': inputBorderColor
         } as CSSProperties}
       >
