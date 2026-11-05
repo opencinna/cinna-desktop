@@ -48,6 +48,7 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 
 - Always a confirm dialog, with the object named, the recoverable part first ("the folder can be put back from the Trash") and the consequence stated plainly. Copy must match the schema: if chats survive with a dangling binding, say that, not "chats are removed".
 - Prefer the recoverable operation (`shell.trashItem`) over the irreversible one (`rm -rf`).
+- **In a managed list the confirm is the row's own** (`ManagedListRow`'s `confirm`; ui_guidelines "Managed List Pattern"): the row swaps to the question with the object named, Cancel focused and the danger button, Escape cancels it without closing the dialog around it, and both are inert while the action runs. Where nothing has been sent yet (a person still being chosen in a Share dialog) there is nothing to confirm.
 - **Undismissable while pending.** Escape, outside-click and Cancel are ignored while the action runs; the button reads `Deleting…`. Dismissing would cancel nothing and hide what is happening.
 - Own the mutation in a component that outlives the dialog, so a success handler that clears state cannot be dropped with the dialog.
 - A refusal because the object is **busy** (a turn in progress) is explained as busy, not as a failure: "nothing was removed".

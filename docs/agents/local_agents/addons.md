@@ -2,7 +2,7 @@
 
 ## Purpose
 
-An agent page's **Addons** tab is one list of what a folder agent — kit or bare — runs with beyond its own instructions: MCP connectors and, for a kit agent, skills and marketplace plugins, with **one Add** over every source the user may use. A connector added there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat. Skills are documented in [Agent Skills](skills.md) (pin, update, re-fetch, remove, share) and plugins in [Marketplace Plugins](plugins.md); this doc covers the list, the picker, the directory behind it, the admin's policy, the connectors and the connector requirements a kit agent's manifest carries.
+An agent page's **Addons** tab is one list of what a folder agent — kit or bare — runs with beyond its own instructions: MCP connectors and, for a kit agent, skills and marketplace plugins, with **one Add** over every source the user may use. A connector added there is offered to every session of that agent, whichever chat it runs in. Without addons, the user had to engage the same connectors again in each chat. Skills are documented in [Agent Skills](skills.md) (pin, update, re-fetch, remove, publish) and plugins in [Marketplace Plugins](plugins.md); this doc covers the list, the picker, the directory behind it, the admin's policy, the connectors and the connector requirements a kit agent's manifest carries.
 
 ## Core Concepts
 

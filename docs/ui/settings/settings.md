@@ -38,7 +38,7 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 ### Choosing the correct Agents settings
 
 1. **Default → Agents** manages the machine's registered folders, runtime defaults and task concurrency; its internal tab id remains `local-agents`.
-2. **Profile → Agents** manages only agents supplied by the active Cinna server. It groups them under that server's host, includes hidden agents, offers Enable/Disable and Sync, and exposes Settings for enabled rows. Sync/reauthentication failures and visibility-write errors stay visible beside the relevant controls.
+2. **Profile → Agents** manages only agents supplied by the active Cinna server. It is one titled section per server (its host, with a (?) tip saying what the list is, and **Sync** beside the title), a standard card per agent — type icon, name, description — with a settings icon for enabled rows (its slot is held, empty, while the agent is hidden, so the switch never moves) and one switch, **Show *name* in Desktop**, that shows or hides it; hidden agents stay listed. Sync/reauthentication failures and visibility-write errors stay visible beside the relevant controls.
 3. **Agents sidebar → Add an agent → Advanced options → A2A agent** opens a modal for a direct connection. Enter a card URL and optional access token, optionally Test Connection, then Save Agent. Creation stays open on failure and closes only after successful save. Direct A2A, ACP and Managed connections are configured from their own agent page's **Settings** action; there is no separate Default Remote agents tab.
 
 ### Capabilities
