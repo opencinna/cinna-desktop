@@ -4,7 +4,7 @@ import { StrictMode, createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutoAttachedCredential, CredentialSetupDto, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
 import { useFinishSetupStore } from '../../../stores/finishSetup.store'
-import { useFinishSetup } from './FinishSetupDialog'
+import { notReadyNote, useFinishSetup } from './FinishSetupDialog'
 
 /**
  * The Finish setup dialog: what each slot row says, the two writes, and that
@@ -19,7 +19,7 @@ const record = (over: Partial<ServiceCredentialDto>): ServiceCredentialDto => ({
 })
 const slot = (over: Partial<CredentialSetupSlot>): CredentialSetupSlot => ({
   name: 'acme', type: 'api_token', optional: false, envPrefix: null, state: 'missing', attached: null,
-  expectedKeys: [], presentKeys: [], options: [], ...over
+  expectedKeys: [], presentKeys: [], options: [], notReady: null, ...over
 })
 let setup: CredentialSetupDto
 const setupState = vi.fn(async () => ({ ok: true, value: setup }))
@@ -28,7 +28,7 @@ let skillAttached: AutoAttachedCredential[] = []
 const setupSkills = vi.fn(async () => ({ ok: true, value: skillAttached }))
 const skillSlot = (over: Partial<CredentialSetupSkillSlot>): CredentialSetupSkillSlot => ({
   slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], description: null, state: 'missing', attached: null,
-  typeMismatch: null, notLocal: null, options: [], provision: null, ...over
+  typeMismatch: null, notLocal: null, notReady: null, options: [], provision: null, ...over
 })
 const openCredentials = vi.fn(async (): Promise<unknown> => ({ created: false, revealed: false }))
 const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): Promise<unknown> => {
@@ -130,6 +130,7 @@ describe('Finish setup', () => {
       slots: [
         slot({ name: 'env', state: 'env', envPrefix: 'ENV_', expectedKeys: ['ENV_KEY'], presentKeys: ['ENV_KEY'] }),
         slot({ name: 'extra', optional: true }),
+        slot({ name: 'half', notReady: record({ id: 'h-1', origin: 'local', cloudId: null, name: 'Half done', status: 'incomplete' }) }),
         slot({
           name: 'acme', envPrefix: 'ACME_', expectedKeys: ['ACME_TOKEN'],
           attached: { credential: record({ name: 'Old Acme', localUseAllowed: false }), state: 'local_use_not_allowed' },
@@ -147,6 +148,7 @@ describe('Finish setup', () => {
     expect(within(row('env')).getByText('Set')).toBeTruthy()
     expect(within(row('extra')).getByText('Optional')).toBeTruthy()
     expect(within(row('extra')).getByText('None of your credentials fits it. Attach one on the Credentials tab.')).toBeTruthy()
+    expect(within(row('half')).getByText('Half done fits it, but some of its values are missing. Fill them in Settings → Credentials.')).toBeTruthy()
     expect(within(row('acme')).getByText('Missing')).toBeTruthy()
     expect(within(row('acme')).getByRole('img', { name: 'The owner must allow use on your computer' })).toBeTruthy()
     expect(within(row('acme')).getByText('or enter it on this computer')).toBeTruthy()
@@ -300,7 +302,8 @@ describe('Finish setup', () => {
           }),
           skillSlot({ slot: 'crm', type: 'odoo', skills: ['crm-sync'] }),
           skillSlot({ slot: 'mail', type: 'email_imap', skills: ['inbox'], provision: 'not_allowed_locally' }),
-          skillSlot({ slot: 'vault', skills: ['vault-read'], notLocal: record({ id: 'v-1', name: 'Vault key', serviceUri: 'vault', ownerEmail: 'admin@example.com' }) })
+          skillSlot({ slot: 'vault', skills: ['vault-read'], notLocal: record({ id: 'v-1', name: 'Vault key', serviceUri: 'vault', ownerEmail: 'admin@example.com' }) }),
+          skillSlot({ slot: 'drive', skills: ['drive-read'], notReady: record({ id: 'g-1', name: 'Work Drive', type: 'google_drive', oauthStatus: 'reauth_required' }) })
         ]
       }
       renderHarness()
@@ -314,6 +317,9 @@ describe('Finish setup', () => {
       expect(within(skillRow('crm')).getByText('None of your credentials fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
       expect(within(skillRow('mail')).getByText('The publisher provides it, but not for use on this computer.')).toBeTruthy()
       expect(within(skillRow('vault')).getByText('Vault key is shared with you, but not for use on this computer. admin@example.com can turn on Allow local use.')).toBeTruthy()
+      // A record that fits but would not be ready is never offered: the row says why instead.
+      expect(within(skillRow('drive')).getByText('Work Drive fits it, but its Google access has to be reconnected first.')).toBeTruthy()
+      expect(within(skillRow('drive')).queryByRole('button', { name: 'Use this' })).toBeNull()
 
       fireEvent.click(within(skillRow('erp-api')).getByRole('button', { name: 'Use this' }))
       await waitFor(() => expect(attach).toHaveBeenCalledWith(AGENT, 'acct', 'erp-1'))
@@ -374,5 +380,16 @@ describe('Finish setup', () => {
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(setupSkills).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('notReadyNote', () => {
+  const base = { id: 'x', origin: 'cloud' as const, cloudId: 'x', name: 'ERP', type: 'api_token', serviceUri: 'erp', notes: null, status: 'complete', isPlaceholder: false,
+    relation: 'owned' as const, ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null }
+  it('says why a fitting record is not offered, by its cause, and nothing without one', () => {
+    expect(notReadyNote(null)).toBeNull()
+    expect(notReadyNote({ ...base, isPlaceholder: true })).toBe('ERP fits it, but some of its values are missing. Fill them in on Cinna.')
+    expect(notReadyNote({ ...base, keyBlocked: 'insecure_base_url' } as never)).toBe('ERP fits it, but this computer refused its address as unsafe.')
+    expect(notReadyNote({ ...base, oauthStatus: 'pending_authorization' } as never)).toBe('ERP fits it, but its Google access has to be reconnected first.')
   })
 })

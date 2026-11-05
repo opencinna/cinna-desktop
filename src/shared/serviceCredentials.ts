@@ -136,6 +136,11 @@ export interface CredentialSetupSlot {
   presentKeys: string[]
   /** The active account's and this computer's records that fit, best first (the account's first within a tier); empty when connected. */
   options: CredentialSetupOption[]
+  /**
+   * When no usable record is offered: the best record that fits but would not be ready once attached
+   * (values missing, a Google grant to redo, a refused key delivery), so the dialog can say why.
+   */
+  notReady: ServiceCredentialDto | null
 }
 /**
  * Per slot answer of Core's `POST /skills/packages/{uuid}/revisions/{n}/provision-local`.
@@ -170,6 +175,11 @@ export interface CredentialSetupSkillSlot {
    * computer may not use (Allow local use is off), so the dialog can say why it is not offered.
    */
   notLocal: ServiceCredentialDto | null
+  /**
+   * When no usable record is offered: the best record that fits but would not be ready once attached
+   * (values missing, a Google grant to redo, a refused key delivery), so the dialog can say why.
+   */
+  notReady: ServiceCredentialDto | null
   /** The active account's and this computer's records that fit strictly, best first (the account's first within a tier); empty when connected. */
   options: CredentialSetupOption[]
   /** What the last `provision-local` call this app session answered for this slot, if any. */

@@ -1034,6 +1034,21 @@ describe('auto-attach and the Finish setup state', () => {
     expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref])).toEqual([['local', byName.id], ['local', byUri.id], [key('account-b'), 'uri']])
   })
 
+  it('never offers or attaches a record attaching would leave unready, and names the best one as notReady', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('half', 'Acme half', 'acme-api', { relation: 'owned', status: 'incomplete' })]
+    await login('account-b')
+    // The only fitting record has values missing: not attached, not offered, and the slot says why.
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual([])
+    expect(service.setupState(a.id).slots[0]).toMatchObject({ options: [], notReady: { name: 'Acme half' } })
+    // A usable one beside it is attached alone, and nothing is said about the other.
+    world.metadata.push(rec('full', 'Acme full', 'acme-api', { relation: 'owned' })); await service.sync(); await sleep()
+    expect(service.setupState(a.id).slots[0]).toMatchObject({ notReady: null })
+    expect(service.setupState(a.id).slots[0].options.map(o => o.ref)).toEqual(['full'])
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'acme', credentialName: 'Acme full' }])
+  })
+
   it('appends through attach without dropping what is there', async () => {
     const a = kitAgent([slot('acme', 'acme-api')])
     world.metadata = [rec('one', 'Acme one', 'acme-api'), rec('two', 'Acme two', 'acme-api')]
@@ -1075,6 +1090,15 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
     } finally { turn.release() }
     expect(await service.autoAttachSkills(a.id, { onBusy })).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
     expect(onBusy).toHaveBeenCalledOnce()
+  })
+
+  it('never attaches or offers a placeholder for a skill slot, and names it as notReady', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('erp-1', 'ERP', 'erp-api', { is_placeholder: true })]
+    await login('account-b')
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual([])
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', options: [], notReady: { name: 'ERP' } })
   })
 
   it('attaches the one record whose type and Service URI are the slot, and says it was a skill slot', async () => {

@@ -134,6 +134,15 @@ function isOAuth(m: Pick<ServiceCredentialDto, 'type'>): boolean { return isGoog
  */
 function pendingOAuth(m: Pick<ServiceCredentialDto, 'type' | 'oauthStatus'>): boolean { return isOAuth(m) && m.oauthStatus === 'pending_authorization' }
 function oauthUnavailable(m: Pick<ServiceCredentialDto, 'type' | 'oauthStatus'>): boolean { return isOAuth(m) && m.oauthStatus !== 'ready' }
+/**
+ * A record that attaching would leave unready until someone fixes the record itself: values missing
+ * (a placeholder, an incomplete record), a Google grant not ready, an issued key whose delivery was
+ * refused. Never offered and never attached without asking. Values not fetched yet and an expired
+ * share are fetched again on attach, and a paused key recovers by itself, so those still count.
+ */
+function unusableOnceAttached(m: ServiceCredentialDto): boolean {
+  return m.isPlaceholder || m.status !== 'complete' || oauthUnavailable(m) || (isKey(m) && !!m.keyBlocked)
+}
 function unavailableReason(status: string | null): string { return status === 'expired' ? 'key_expired' : AGENT_API_KEY_PAUSED_STATUSES.includes(status ?? '') ? 'key_paused' : 'key_revoked' }
 function keyStub(data: Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -1097,7 +1106,7 @@ export const serviceCredentialService = {
       const a = agent(id)
       const picks = new Map<string, { slot: string; credentialName: string }>()
       const mine = state(a).accounts[account.key] ?? []
-      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m))
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m) && !unusableOnceAttached(m))
       for (const slot of a.credentials) {
         if (slotState(slot) !== 'missing') continue
         const pick = autoMatch(spec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
@@ -1153,7 +1162,7 @@ export const serviceCredentialService = {
       const slots = open()
       const a = agent(id)
       const mine = state(a).accounts[account.key] ?? []
-      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m))
+      const pool = repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !pendingOAuth(m) && !unusableOnceAttached(m))
       const picks = new Map<string, { slot: SkillSlot; credentialName: string }>()
       for (const slot of slots) {
         const pick = autoMatch(skillSlotSpec(slot), pool.filter(m => !mine.some(v => v.ref === m.cloudId) && !picks.has(m.cloudId!)))
@@ -1228,16 +1237,22 @@ export const serviceCredentialService = {
       ...(account ? pool.map(m => ({ ...m, option: { group: account.key, ref: m.cloudId!, credential: m } })) : []),
       ...localPool.map(m => ({ ...m, option: { group: 'local', ref: m.id, credential: m } }))
     ]
-    const offered = (slotSpec: SlotSpec): CredentialSetupOption[] => slotCandidates(slotSpec, tagged).map(m => m.option)
+    const usable = tagged.filter(m => !unusableOnceAttached(m.option.credential))
+    const unusable = tagged.filter(m => unusableOnceAttached(m.option.credential))
+    const offered = (slotSpec: SlotSpec): CredentialSetupOption[] => slotCandidates(slotSpec, usable).map(m => m.option)
+    // When nothing usable is offered: the best record that fits but would not be ready, so the dialog says why.
+    const notReadyFor = (slotSpec: SlotSpec): ServiceCredentialDto | null => slotCandidates(slotSpec, unusable)[0]?.option.credential ?? null
     const slots: CredentialSetupSlot[] = a.credentials.map(slot => {
       const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
       const verdict = slotState(slot)
+      const options = verdict === 'connected' ? [] : offered(spec(slot))
       return {
         name: slot.name, type: slot.type, optional: slot.optional, envPrefix: slot.envPrefix,
         state: verdict,
         attached: judged ? { credential: credentialDto(judged.row!), state: attachmentState(judged.row) } : null,
         expectedKeys: slot.expectedKeys, presentKeys: slot.presentKeys,
-        options: verdict === 'connected' ? [] : offered(spec(slot))
+        options,
+        notReady: verdict === 'connected' || options.length > 0 ? null : notReadyFor(spec(slot))
       }
     })
     const attached = attachedMetadata(a)
@@ -1251,6 +1266,7 @@ export const serviceCredentialService = {
         attached: attachment ? { credential: withoutState(attachment), state: attachment.state } : null,
         typeMismatch: typeMismatch ? withoutState(typeMismatch) : null,
         notLocal,
+        notReady: filled || options.length > 0 ? null : notReadyFor(skillSlotSpec(slot)),
         options,
         provision: provisionOf(account, slot)
       }

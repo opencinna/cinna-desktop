@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from 'lucide-react'
-import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot } from '../../../../../shared/serviceCredentials'
+import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
 import { unwrapLocalAgentOutcome } from '../../../../../shared/localAgents'
 import { credentialResult, useCredentialSetup } from '../../../hooks/useServiceCredentials'
 import { LOCAL_AGENTS_KEY, localAgentKey } from '../../../hooks/useLocalAgents'
@@ -56,13 +56,26 @@ export function skillSlotStatus(slot: CredentialSetupSkillSlot, autoAttached: re
 
 /** A skill slot drawn by the agent slot's row: records only, no `.env` names. */
 function asSlotRow(slot: CredentialSetupSkillSlot): CredentialSetupSlot {
-  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options }
+  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options, notReady: slot.notReady }
 }
 
 /** Who needs a skill slot, in one line. */
 function neededBy(slot: CredentialSetupSkillSlot): string {
   const names = slot.skills.join(', ')
   return `Needed by ${slot.skills.length === 1 ? 'skill' : 'skills'} ${names} · ${slot.type}`
+}
+
+/**
+ * A record that fits the slot but would not be ready once attached, so it is not offered: why, in
+ * one line. Null when there is none.
+ */
+export function notReadyNote(dto: ServiceCredentialDto | null): string | null {
+  if (!dto) return null
+  if (dto.oauthStatus === 'pending_authorization' || dto.oauthStatus === 'reauth_required') return `${dto.name} fits it, but its Google access has to be reconnected first.`
+  if (dto.keyBlocked) return `${dto.name} fits it, but this computer refused its address as unsafe.`
+  return dto.origin === 'local'
+    ? `${dto.name} fits it, but some of its values are missing. Fill them in Settings → Credentials.`
+    : `${dto.name} fits it, but some of its values are missing. Fill them in on Cinna.`
 }
 
 /** Why nothing is offered for a missing skill slot, in one line. */
@@ -76,7 +89,7 @@ function skillSlotNote(slot: CredentialSetupSkillSlot): string {
       ? `${slot.notLocal.name} is shared with you, but not for use on this computer. ${owner} can turn on Allow local use.`
       : `${slot.notLocal.name} is shared with you, but not for use on this computer.`
   }
-  return `None of your credentials fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
+  return notReadyNote(slot.notReady) ?? `None of your credentials fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
 }
 
 /** An offered record by its group and ref: a local record's id and Core's id share no namespace. */
@@ -360,6 +373,7 @@ export function FinishSetupDialog({
           <SlotRow
             key={slot.name}
             slot={slot}
+            emptyNote={notReadyNote(slot.notReady) ?? undefined}
             status={finishSetupStatus(slot, autoAttached)}
             drafts={drafts}
             onDraft={onDraft}
