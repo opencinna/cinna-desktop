@@ -108,7 +108,7 @@ test('a kit agent’s Overview shows its prompts as markdown, with author notes 
 
   await test.step('there is no Prompts tab, and Addons sits after Overview', async () => {
     await expect(page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab')).toHaveText([
-      'Overview', 'Addons', 'Credentials', 'Commands1', 'Schedules', 'Tasks', 'Permissions', 'Folder2', 'Interface'
+      'Overview', 'Addons', 'Credentials', 'Commands1', 'Schedules', 'Tasks', 'Dashboards', 'Permissions', 'Folder2', 'Interface'
     ])
     await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveCount(0)
   })
