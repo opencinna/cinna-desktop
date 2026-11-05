@@ -26,11 +26,11 @@ Main
 - `src/main/ipc/chat.ipc.ts`, `src/main/ipc/local_agent.ipc.ts` — channels below
 
 Renderer
-- `src/renderer/src/components/chat/GuidedBuildInvitation.tsx` — invitation, `GUIDED_BUILD_STARTERS`, `guidedBuildPlaceholder`, the capabilities popover, Skip guidance
+- `src/renderer/src/components/chat/GuidedBuildNotice.tsx` — `GUIDED_BUILD_HEADING`, `GUIDED_BUILD_NOTICE_TEXT`, `guidedBuildPlaceholder`, `useGuidedBuildNotice(agentId)` (the accent row, `panelLabel` `Guidance`, Skip guidance through `useMarkGuidedBuildDone`, reading the mutation's own state)
 - `src/renderer/src/components/chat/BuildBriefCard.tsx` — the card, `useStartBuilding`
 - `src/renderer/src/components/chat/MessageStream.tsx` — matches the tool by name and provider, `activeBriefKey`
-- `src/renderer/src/components/layout/ChatWorkspace.tsx` — `guidedInvite`, `ReservedPromptSlot`, the guided request on send
-- `src/renderer/src/components/chat/ChatInput.tsx` — `fill` handle method, `placeholder` prop, `data-chat-composer` attribute
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — `guidedInvite`, the empty `guided-build-slot` and the `new-chat-above-composer` half with the `noticeReach` reserve, the guided request on send
+- `src/renderer/src/components/chat/ChatInput.tsx` — `placeholder`, `guidedBuildAgentId` and `onNoticePanelHeight` props, the anchored notice panel (`composer-notice-anchor`), `data-chat-composer` attribute
 - `src/renderer/src/components/chat/ComposerReadiness.tsx` — `openAgentCredentials`
 - `src/renderer/src/stores/ui.store.ts` — `agentPageTabRequest` (one-shot; `LocalAgentPage` takes it at first paint)
 - `src/renderer/src/hooks/useNewChatFlow.ts`, `useChat.ts`, `useLocalAgents.ts` (`useMarkGuidedBuildDone`)
@@ -61,7 +61,7 @@ Renderer
 
 ## Renderer Components
 
-- `ChatWorkspace` shows the invitation when `appSettings.guidedFirstBuild` is true, the router is direct, one agent is picked and `useComposerFolder` reports it unbuilt. It sends `guidedBuild: true` through `NewChatOptions`, only when `rootAgentId` exists. The example prompts and their readiness refusal are the else branch.
+- `ChatWorkspace` offers the guidance (heading, empty prompt slot, `guidedBuildAgentId` to the composer) when `appSettings.guidedFirstBuild` is true, the router is direct, one agent is picked and `useComposerFolder` reports it unbuilt. It sends `guidedBuild: true` through `NewChatOptions`, only when `rootAgentId` exists. The example prompts and their readiness refusal are the else branch.
 - `BuildBriefCard` renders read-only unless `active`; the latest brief (`LatestBrief`) additionally requires the agent query to report `unbuilt`. Apply writes `runtime.complexity` through `useSetLocalAgentRuntime` (with `KEEP_ENGINE`), and is hidden when the manifest names a concrete model. Start building runs `useStartBuilding`, a hook-level mutation because the card unmounts when the new chat becomes active; a failed marker after the chat started is a toast.
 - `MessageStream` shows a refused call (`toolError`, or a streaming error) as the plain tool row.
 
@@ -79,4 +79,4 @@ Renderer
 
 `e2e/specs/live-guided-build.spec.ts` is the billed spec, `@live`, on `CINNA_E2E_LIVE_ENGINE=opencode|claude|codex` (passed on all three). Four tests: a daily-check job interviewed into a brief and built through Start building (the folder gains a script, skill or schedule beyond the scaffold); a task instead of a job, not attempted, folder unchanged; two area starts interviewed into a role. It asserts outcomes (persisted tool rows, the card, the folder), not wording, and writes a transcript to the test's output folder. Cost and what it proves are in its header; about $0.10–0.30 on gpt-5.6-luna.
 
-Unit: `guidedBuild.test.ts`, `buildBriefToolProvider.test.ts`, `chatService.guidedBuild.test.ts`, `src/shared/buildBrief.test.ts`, `BuildBriefCard.test.tsx`, `GuidedBuildInvitation.test.tsx`, `MessageStream.buildBrief.test.tsx`, `ChatWorkspace.guided.test.tsx`, plus `codexLauncher.test.ts`, `acpDriver.test.ts` and `configGenerator.test.ts` for the delta above.
+Unit: `guidedBuild.test.ts`, `buildBriefToolProvider.test.ts`, `chatService.guidedBuild.test.ts`, `src/shared/buildBrief.test.ts`, `BuildBriefCard.test.tsx`, `GuidedBuildNotice.test.tsx`, `MessageStream.buildBrief.test.tsx`, `ChatWorkspace.guided.test.tsx`, `ChatInput.guidedBuild.test.tsx`, plus `codexLauncher.test.ts`, `acpDriver.test.ts` and `configGenerator.test.ts` for the delta above.

@@ -12,7 +12,7 @@ import { SCAFFOLD_SCRIPT_FILES, SCAFFOLD_SKILL_FILES } from '../../src/main/serv
  * the agent built. Billed; `CINNA_E2E_LIVE_ENGINE=opencode|claude|codex`
  * picks the engine (`e2e/fixtures/liveEngine.ts`).
  *
- * Everything is driven as a person would: the invitation's starter fills the
+ * Everything is driven as a person would: the job is typed into the guided
  * composer, the agent's questions are answered in the question modal (the
  * recommended option, else the first), permission asks are allowed once, and
  * the brief card's Start building opens the building chat.
@@ -47,7 +47,7 @@ test.use(liveEngineOptions())
 const AGENT = 'News Digest'
 const DESCRIPTION = 'Keeps me up to date on AI news.'
 /**
- * The "Check something daily" starter as a new user fills it: when and what,
+ * A daily check as a new user types it: when and what,
  * but not where from or how it reaches them — so the interview has something
  * to ask.
  */
@@ -60,8 +60,9 @@ const MAX_ROUNDS = 6
 /** Permission asks a build may raise before the run counts as stuck. */
 const MAX_ASKS = 40
 
-function invitation(page: Page, name = AGENT): Locator {
-  return page.getByRole('region', { name: `Set up ${name}`, exact: true })
+/** The composer's guided-build row (it names no agent: one shows at a time). */
+function invitation(page: Page): Locator {
+  return page.getByRole('listitem').filter({ hasText: 'this chat starts with guidance' })
 }
 
 function guidedComposer(page: Page, name = AGENT): Locator {
@@ -92,12 +93,13 @@ async function arrange(cinna: CinnaApp, name = AGENT, description = DESCRIPTION)
   return { agentId: agent.id, folder: agent.path }
 }
 
-/** The agent page's new-chat composer, with the invitation on it. */
+/** The agent page's new-chat composer, with the guided-build row on it. */
 async function openAgent(page: Page, name = AGENT): Promise<void> {
   await expect(async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
     await page.getByRole('button', { name, exact: true }).click()
-    await expect(invitation(page, name)).toBeVisible({ timeout: 2000 })
+    await expect(guidedComposer(page, name)).toBeVisible({ timeout: 2000 })
+    await expect(invitation(page)).toBeVisible({ timeout: 2000 })
   }).toPass({ timeout: 30_000 })
 }
 
@@ -236,10 +238,8 @@ test('a daily-check job is interviewed into a brief, and Start building gets the
   const log: string[] = []
   const before = builtParts(folder)
 
-  await test.step('the invitation fills the composer and the job is sent', async () => {
+  await test.step('the job is typed into the guided composer and sent', async () => {
     await openAgent(page)
-    await invitation(page).getByRole('button', { name: 'Check something daily', exact: true }).click()
-    await expect(guidedComposer(page)).toBeFocused()
     await guidedComposer(page).fill(JOB)
     await guidedComposer(page).press('Enter')
     await expect.poll(() => chatIdsFor(page, agentId)).toHaveLength(1)

@@ -44,6 +44,12 @@ export interface ComposerNotice {
   /** A × at the end of the line, for a row the person may put away (an offer). */
   onDismiss?: () => void
   dismissLabel?: string
+  /**
+   * What a panel holding only offers (accent rows) is called, when this row is
+   * not a skill link: "Guidance" for the guided first build. Rows without one
+   * read as "Skill link"; offers of two kinds together as "Agent status".
+   */
+  panelLabel?: string
   /** Behind a toggle, opened in place: more findings, the rest of a long story. */
   details?: ReactNode
   detailsLabel?: string
@@ -73,7 +79,8 @@ export function ComposerNoticePanel({ notices }: { notices: ComposerNotice[] }):
     : notices.some((n) => n.tone === 'warning') ? 'warning'
     : 'accent'
   // An offer alone (every row accent) is not the agent's status; it is named for what it is.
-  const label = notices.every((n) => n.tone === 'accent') ? 'Skill link' : 'Agent status'
+  const offerLabels = new Set(notices.map((n) => n.panelLabel ?? 'Skill link'))
+  const label = notices.every((n) => n.tone === 'accent') && offerLabels.size === 1 ? [...offerLabels][0] : 'Agent status'
   return (
     <div role="status" aria-label={label} data-tone={tone} className="composer-notice-panel relative mx-3 -mb-3 rounded-t-xl pb-3">
       <span aria-hidden="true" className="composer-notice-border" />

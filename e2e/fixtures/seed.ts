@@ -20,8 +20,8 @@ export async function addAgentRoot(cinna: CinnaApp, name = 'agents-root'): Promi
  * Scaffold a folder agent into `root` from the bundled kit contract.
  *
  * A fresh scaffold is `unbuilt`, and with `guidedFirstBuild` on (the default)
- * its new-chat composer shows the guided-build invitation instead of the
- * example prompts, under a different placeholder, and its first chat is
+ * its new-chat screen hides the example prompts and its composer offers the
+ * guided build in a notice row, under a different placeholder, and its first chat is
  * guided (an extra turn-header section). Every spec that is not about that
  * wants an ordinary agent, so this marks the guided build dismissed — the
  * marker Skip guidance writes, under `userData` — unless `unbuilt: true`

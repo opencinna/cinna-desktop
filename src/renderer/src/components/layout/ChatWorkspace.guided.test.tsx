@@ -3,9 +3,10 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 
 /**
- * The new-chat screen with one blank kit agent picked: the invitation stands
- * in for the example prompts, the composer says what to type, and a send asks
- * main for a guided chat. Anything else is the ordinary screen.
+ * The new-chat screen with one blank kit agent picked: the example prompts'
+ * row is drawn empty, the composer offers the guidance (its notice row) and
+ * says what to type, and a send asks main for a guided chat. Anything else is
+ * the ordinary screen.
  */
 const fixtures = vi.hoisted(() => {
   window.api = { app: { setTheme: async () => {} } } as never
@@ -47,12 +48,14 @@ vi.mock('../chat/ChatInput', async () => {
   return {
     ChatInput: forwardRef(function ChatInput(props: {
       placeholder?: string
+      guidedBuildAgentId?: string | null
       onNewChat?: (message: string) => unknown
       onTogglePendingAgent?: (id: string) => void
     }, ref) {
       const [filled, setFilled] = useState('')
       useImperativeHandle(ref, () => ({ focus: () => {}, clearInput: () => {}, fill: setFilled }))
       return <div>
+        <output data-testid="guided-row">{props.guidedBuildAgentId ?? '(none)'}</output>
         <output data-testid="placeholder">{props.placeholder === undefined ? '(default)' : props.placeholder}</output>
         <output data-testid="filled">{filled}</output>
         <button onClick={() => void props.onNewChat?.('check my Gmail')}>Send</button>
@@ -84,13 +87,15 @@ beforeEach(() => {
   useUIStore.setState({ activeView: 'chat', pendingAgentId: null, pendingModeId: null, draftingAgentIds: [] })
 })
 
-it('invites in place of the example prompts, fills the composer, and asks for a guided chat', () => {
+it('hides the example prompts, offers the guidance in the composer, and asks for a guided chat', () => {
   mount()
-  expect(screen.getByRole('heading', { name: 'Set up Mail helper' })).toBeTruthy()
   expect(screen.queryByText('Example prompts')).toBeNull()
+  expect(screen.getByTestId('guided-build-slot')).toBeTruthy()
+  // Mutation: keep the starters or the popover in the slot.
+  expect(within(screen.getByTestId('new-chat-prompt-slot')).queryAllByRole('button')).toHaveLength(0)
+  expect(screen.queryByText('What can agents do?')).toBeNull()
+  expect(screen.getByTestId('guided-row').textContent).toBe('a1')
   expect(screen.getByTestId('placeholder').textContent).toBe('Describe what Mail helper should do for you…')
-  fireEvent.click(screen.getByRole('button', { name: 'Interview me' }))
-  expect(screen.getByTestId('filled').textContent).toBe('I’m not sure yet what you should do — interview me.')
   fireEvent.click(screen.getByText('Send'))
   expect(fixtures.startNewChat).toHaveBeenCalledWith(expect.objectContaining({ agentIds: ['a1'], guidedBuild: true }))
 })
@@ -102,7 +107,8 @@ it.each([
 ])('is the ordinary screen when %s, and a send asks for nothing', (_label, arrange) => {
   arrange()
   mount()
-  expect(screen.queryByRole('heading', { name: 'Set up Mail helper' })).toBeNull()
+  expect(screen.queryByTestId('guided-build-slot')).toBeNull()
+  expect(screen.getByTestId('guided-row').textContent).toBe('(none)')
   expect(screen.getByText('Example prompts')).toBeTruthy()
   expect(screen.getByTestId('placeholder').textContent).toBe('(default)')
   fireEvent.click(screen.getByText('Send'))
@@ -112,21 +118,22 @@ it.each([
 it.each([
   ['the settings are not loaded yet', 'a1', () => { fixtures.settings = undefined }],
   ['the folder list cannot answer yet', 'folder:new', () => { fixtures.pending = true }]
-])('is undetermined while %s — no prompts, no invitation, a blank placeholder — then the invitation', (_label, agentId, arrange) => {
+])('is undetermined while %s — no prompts, no guidance row, a blank placeholder — then guided', (_label, agentId, arrange) => {
   // Mutation: fall back to the ordinary screen meanwhile, and the example
   // prompts and "Type a message..." paint first, then give way (rule 1).
   arrange()
   if (agentId !== 'a1') fixtures.folder = null
   const view = mount(agentId)
   expect(screen.queryByText('Example prompts')).toBeNull()
-  expect(screen.queryByRole('heading', { name: 'Set up Mail helper' })).toBeNull()
+  expect(screen.getByTestId('guided-row').textContent).toBe('(none)')
   expect(screen.getByTestId('guided-build-undetermined')).toBeTruthy()
   expect(screen.getByTestId('placeholder').textContent).toBe('')
   fixtures.settings = { defaultMultiAgentRouting: 'human', guidedFirstBuild: true }
   fixtures.folder = { id: agentId, kind: 'kit', unbuilt: true, name: 'Mail helper' }
   fixtures.pending = false
   view.rerender()
-  expect(screen.getByRole('heading', { name: 'Set up Mail helper' })).toBeTruthy()
+  expect(screen.getByTestId('guided-row').textContent).toBe(agentId)
+  expect(screen.getByTestId('guided-build-slot')).toBeTruthy()
   expect(screen.queryByTestId('guided-build-undetermined')).toBeNull()
 })
 
@@ -141,63 +148,43 @@ it('is the ordinary screen at once for an agent the merged list has and the fold
 it('is the ordinary screen once a second agent is picked', () => {
   mount()
   fireEvent.click(screen.getByText('Toggle agent'))
-  expect(screen.queryByRole('heading', { name: 'Set up Mail helper' })).toBeNull()
+  expect(screen.getByTestId('guided-row').textContent).toBe('(none)')
   fireEvent.click(screen.getByText('Send'))
   expect(fixtures.startNewChat).toHaveBeenCalledWith(expect.not.objectContaining({ guidedBuild: true }))
 })
 
-it('on the main New chat screen, says the invitation in the generic heading’s own box', () => {
+it('on the main New chat screen, asks its question in the generic heading’s own box, at the same margin', () => {
   const view = mount('a1', false)
-  // Mutation: a second heading in the prompt slot, or the generic one left in
-  // place, and the invitation is a block that pushes the composer down.
+  // Mutation: a second heading, a line under it, or a margin of its own, and
+  // picking the agent by "@" or Skip guidance moves the composer.
   const headings = screen.getAllByRole('heading')
-  expect(headings.map((h) => h.textContent)).toEqual(['Set up Mail helper'])
+  expect(headings.map((h) => h.textContent)).toEqual(['What kind of agent will this be?'])
   expect(headings[0].tagName).toBe('H1')
   const box = headings[0].parentElement as HTMLElement
-  expect(box.textContent).toContain('A blank agent.')
-  // The line is paid for by the box's margin: mb-8 becomes mb-3.
-  expect(box.className).toContain('mb-3')
-  expect(within(screen.getByTestId('new-chat-prompt-slot')).queryByText(/A blank agent/)).toBeNull()
-  expect(screen.getByRole('button', { name: 'Interview me' })).toBeTruthy()
-  // Skip guidance: the same box says the generic text again.
+  expect(box.querySelector('p')).toBeNull()
+  expect(box.className).toContain('mb-8')
+  const boxClass = box.className
+  // Skip guidance: the same box says the generic text again, nothing else changes.
   fixtures.folder = { id: 'a1', kind: 'kit', unbuilt: false, name: 'Mail helper' }
   view.rerender()
   const generic = screen.getByRole('heading', { name: 'What can I help with?' })
   expect(generic.parentElement).toBe(box)
-  expect(box.className).toContain('mb-8')
-  expect(box.textContent).not.toContain('A blank agent.')
+  expect(box.className).toBe(boxClass)
 })
 
-it('on the embedded agent page, keeps the invitation’s own heading', () => {
+it('on the embedded agent page, shows no heading at all', () => {
   mount()
-  const heading = screen.getByRole('heading', { name: 'Set up Mail helper' })
-  expect(heading.tagName).toBe('H2')
-  expect(screen.getByTestId('new-chat-prompt-slot').contains(heading)).toBe(true)
+  expect(screen.queryAllByRole('heading')).toHaveLength(0)
 })
 
-it('keeps the invitation’s height for the prompts after Skip guidance, until the agents change', () => {
-  // Mutation: drop the reservation and the composer moves up when the shorter prompts replace the invitation.
-  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    return { height: this.dataset.testid === 'new-chat-prompt-slot' ? 127 : 0 } as DOMRect
-  })
-  try {
-    const view = mount()
-    const slot = () => screen.getByTestId('new-chat-prompt-slot')
-    expect(slot().style.minHeight).toBe('')
-    // Skip guidance: the agent reads as built, the example prompts come back.
-    fixtures.folder = { id: 'a1', kind: 'kit', unbuilt: false, name: 'Mail helper' }
-    view.rerender()
-    expect(screen.getByText('Example prompts')).toBeTruthy()
-    expect(slot().style.minHeight).toBe('127px')
-    fireEvent.click(screen.getByText('Toggle agent'))
-    expect(slot().style.minHeight).toBe('')
-  } finally {
-    rect.mockRestore()
-  }
-})
-
-it('reserves nothing when the invitation never showed', () => {
-  fixtures.folder = { id: 'a1', kind: 'kit', unbuilt: false, name: 'Mail helper' }
-  mount()
-  expect(screen.getByTestId('new-chat-prompt-slot').style.minHeight).toBe('')
+it('draws the guided and undetermined slots at the example-prompt row’s footprint, and reserves nothing', () => {
+  // Mutation: give the empty slot a footprint of its own, and guided ↔
+  // undetermined ↔ prompts moves the composer in the centered column.
+  const view = mount()
+  const guided = screen.getByTestId('guided-build-slot').className
+  expect(guided.split(' ')).toEqual(expect.arrayContaining(['mb-3', 'min-h-10']))
+  expect(screen.getByTestId('new-chat-prompt-slot').getAttribute('style')).toBeNull()
+  fixtures.settings = undefined
+  view.rerender()
+  expect(screen.getByTestId('guided-build-undetermined').className).toBe(guided)
 })

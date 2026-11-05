@@ -65,6 +65,7 @@ import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
 import { ComposerNoticePanel } from './ComposerNoticePanel'
 import { useSkillLinkNotice } from './SkillLinkNotice'
+import { useGuidedBuildNotice } from './GuidedBuildNotice'
 import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
 import { openNewAgentWithSkill } from './skillLinkNewAgent'
 import { parseSkillLink } from '../../../../shared/skillLink'
@@ -126,6 +127,17 @@ interface ChatInputProps {
   sendHold?: string | null
   /** The empty composer's placeholder, when the screen above it has a better one than "Type a message...". */
   placeholder?: string
+  /**
+   * The blank agent whose next chat starts the guided first build, while the
+   * new-chat screen offers it: the panel's first row, with Skip guidance.
+   */
+  guidedBuildAgentId?: string | null
+  /**
+   * On an empty screen (no chat) the notice panel is drawn out of the flow,
+   * above the box's top edge; this reports how far it reaches up (0 when
+   * there is none), so the screen reserves that space above the box.
+   */
+  onNoticePanelHeight?: (height: number) => void
   /**
    * Minimal view's cloud presentation: the same composer, restyled by class
    * only (borderless frosted glass, no toolbar row, no notice panel) so the
@@ -281,12 +293,6 @@ function findTriggerToken(
 export interface ChatInputHandle {
   focus: () => void
   clearInput: () => void
-  /**
-   * Replace the draft with `text` and focus it, selecting its first
-   * `⟨…⟩` placeholder so typing replaces it (the guided-build starters).
-   * Never sends.
-   */
-  fill: (text: string) => void
   /** Focus the input with the caret at the end of the draft (leaving minimal view). */
   focusAtEnd: () => void
   /** Whether a file drop would be taken now — the same rule the composer's own drop target applies. */
@@ -321,6 +327,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChatLike,
     sendHold = null,
     placeholder,
+    guidedBuildAgentId = null,
+    onNoticePanelHeight,
     minimal = false,
     onCloudShownChange
   },
@@ -510,20 +518,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       setInput('')
       const el = textareaRef.current
       if (el) el.style.height = 'auto'
-    },
-    fill: (text: string) => {
-      setInput(text)
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        el.focus()
-        el.style.height = 'auto'
-        el.style.height = Math.min(el.scrollHeight, 180) + 'px'
-        const start = text.indexOf('⟨')
-        const end = start >= 0 ? text.indexOf('⟩', start) : -1
-        if (start >= 0 && end > start) el.setSelectionRange(start, end + 1)
-        else el.setSelectionRange(text.length, text.length)
-      })
     }
   }))
 
@@ -1148,7 +1142,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // A skill link pasted or clicked on this composer: the offer, above every other row.
   const skillLinkKey = skillLinkChatKey(chatId)
   const skillLinkNotice = useSkillLinkNotice(skillLinkKey, directTarget, { onNewAgent: openNewAgentWithSkill })
-  const notices = [...(skillLinkNotice ? [skillLinkNotice] : []), ...readinessNotices, ...sessionNotices]
+  // A blank agent's guided first build, offered on the new-chat screen: the first row.
+  const guidedBuildNotice = useGuidedBuildNotice(chatId === null ? guidedBuildAgentId : null)
+  const notices = [
+    ...(guidedBuildNotice ? [guidedBuildNotice] : []),
+    ...(skillLinkNotice ? [skillLinkNotice] : []),
+    ...readinessNotices,
+    ...sessionNotices
+  ]
   // An open chat whose prompt cache has gone cold over a large context. In the
   // notice slot only when nothing there says the turn cannot run, nor has since
   // the hook's last snapshot (no swap under the pointer when readiness clears).
@@ -2064,6 +2065,24 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     attachError
   })
   const cloudShown = minimal && !cloudEmpty
+  // The anchored panel's reach above the box, for the empty screen's reserve.
+  const noticeAnchorRef = useRef<HTMLDivElement>(null)
+  const onNoticePanelHeightRef = useRef(onNoticePanelHeight)
+  onNoticePanelHeightRef.current = onNoticePanelHeight
+  const noticeAnchored = chatId === null && notices.length > 0
+  useLayoutEffect(() => {
+    const el = noticeAnchorRef.current
+    if (!noticeAnchored || !el) {
+      onNoticePanelHeightRef.current?.(0)
+      return
+    }
+    const report = (): void => onNoticePanelHeightRef.current?.(el.getBoundingClientRect().height)
+    report()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(report)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [noticeAnchored])
   const onCloudShownChangeRef = useRef(onCloudShownChange)
   onCloudShownChangeRef.current = onCloudShownChange
   useLayoutEffect(() => { onCloudShownChangeRef.current?.(cloudShown) }, [cloudShown])
@@ -2158,7 +2177,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       {/* No box of its own; the cloud hides it. */}
       <div className={minimal ? 'hidden' : 'contents'}>
         {notices.length > 0
-          ? <ComposerNoticePanel notices={notices} />
+          ? noticeAnchored
+            // An empty screen (New chat, an agent page): out of the flow, its
+            // bottom tucked behind the box's top edge where the in-flow panel
+            // sits, growing upward. The box stays where it is whatever rows
+            // come and go (picking an agent by "@", Skip guidance, a readiness
+            // fix: ux_rules rule 1), and the screen reserves the reported
+            // height above the box, moving the heading and prompts instead of
+            // covering them. The panel's own -mb-3 makes this box 12 px
+            // shorter than it, so bottom-full puts the panel's last 12 px
+            // under the input card (z-[1]), as in an open chat.
+            ? <div ref={noticeAnchorRef} data-testid="composer-notice-anchor" className="absolute inset-x-4 bottom-full"><ComposerNoticePanel notices={notices} /></div>
+            : <ComposerNoticePanel notices={notices} />
           : cacheNotice && <CacheExpiryNotice notice={cacheNotice.notice} onNewChat={onNewChatLike} onDismiss={cacheNotice.dismiss} />}
       </div>
       {finishSetupDialog}

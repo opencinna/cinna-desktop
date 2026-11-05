@@ -8,8 +8,8 @@ import { splitTurnHeader } from '../fixtures/turnHeader'
 
 /**
  * Guided first build: a freshly scaffolded kit agent (`LocalAgentDto.unbuilt`)
- * offers an invitation on its new-chat composer instead of the example
- * prompts, and a `build_brief_propose` the agent proposed renders as a brief
+ * hides the example prompts on its new-chat screens and offers the guidance in
+ * a composer notice row with Skip guidance, and a `build_brief_propose` the agent proposed renders as a brief
  * card whose Start building opens the building chat.
  *
  * ## What is real and what is not
@@ -37,10 +37,9 @@ const AGENT = 'Inbox Helper'
 const OTHER = 'Second Helper'
 const MODEL = 'qwen3:8b'
 const REPLY = 'Building it now.'
-const STARTERS = ['Help me with a job', 'Check something daily', 'Work on files I send', 'Interview me']
 const INTERVIEW_TEXT = 'I’m not sure yet what you should do — interview me.'
-const JOB_TEXT =
-  'You’ll help me with ⟨job⟩. You’ll work with ⟨Gmail / a folder / a website⟩, and I’ll add the access you need in Credentials.'
+const GUIDANCE_TEXT = 'New agent — this chat starts with guidance, then builds it with you.'
+const GUIDED_HEADING = 'What kind of agent will this be?'
 
 const CHAT_TITLE = 'Planning the inbox helper'
 const BRIEF_SUMMARY = 'Sort the morning inbox and flag what needs a reply.'
@@ -57,8 +56,16 @@ const BRIEF = {
 /** `composeBuildMessage` for {@link BRIEF} with nothing optional included. */
 const BUILD_MESSAGE = `${BRIEF_PROMPT}\n\nSet up:\n- Schedules — every weekday at 8\n- Credentials: Gmail`
 
-function invitation(page: Page, name = AGENT): Locator {
-  return page.getByRole('region', { name: `Set up ${name}`, exact: true })
+/** The composer's guided-build row. It names no agent: one composer shows at a time. */
+function invitation(page: Page): Locator {
+  return page.getByRole('listitem').filter({ hasText: GUIDANCE_TEXT })
+}
+
+/** The composer's input card: its top edge must not move when the row comes or goes. */
+async function composerTop(page: Page): Promise<number> {
+  const box = await page.locator('textarea[data-chat-composer]').first().boundingBox()
+  if (!box) throw new Error('no composer on screen')
+  return box.y
 }
 
 function guidedComposer(page: Page, name = AGENT): Locator {
@@ -92,15 +99,29 @@ async function arrangeAgent(cinna: CinnaApp): Promise<string> {
   return agent.id
 }
 
-test('a new kit agent shows the invitation; a starter fills the composer without sending; the popover opens', async ({ cinna }) => {
+test('a new kit agent hides the example prompts and offers the guidance in its composer, on both empty screens', async ({ cinna }) => {
   await arrangeAgent(cinna)
   const page = cinna.page
   await openAgent(page, AGENT)
 
-  const invite = invitation(page)
-  await expect(invite.getByRole('heading', { name: `Set up ${AGENT}`, level: 2 })).toBeVisible()
-  await expect(invite.getByRole('button')).toHaveText([...STARTERS, 'What can agents do?', 'Skip guidance'])
+  const row = invitation(page)
+  await expect(row).toBeVisible()
+  // Its one button, named by the visible label (StableLabel keeps the hidden "Skipping…" in the DOM).
+  await expect(row.getByRole('button')).toHaveCount(1)
+  await expect(row.getByRole('button', { name: 'Skip guidance', exact: true })).toBeVisible()
+  // In the composer's notice panel: "Guidance" alone, "Agent status" beside a readiness row.
+  await expect(page.getByRole('status', { name: /^(Guidance|Agent status)$/ }).filter({ has: row })).toBeVisible()
+  // The message on the left, Skip guidance on its right, on one line.
+  const sentence = await row.getByText(GUIDANCE_TEXT, { exact: true }).boundingBox()
+  const skip = await row.getByRole('button', { name: 'Skip guidance', exact: true }).boundingBox()
+  expect(sentence && skip).toBeTruthy()
+  expect(skip!.x).toBeGreaterThan(sentence!.x + sentence!.width - 1)
+  expect(Math.abs((skip!.y + skip!.height / 2) - (sentence!.y + sentence!.height / 2))).toBeLessThan(2)
+  // No starters, no capability popover, no example prompts, no heading of its own.
+  await expect(page.getByRole('button', { name: 'What can agents do?' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Interview me' })).toHaveCount(0)
   await expect(page.getByRole('listbox', { name: 'Example prompts' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: GUIDED_HEADING })).toHaveCount(0)
   await expect(guidedComposer(page)).toBeVisible()
   await expect(composer(page)).toHaveCount(0)
 
@@ -113,29 +134,35 @@ test('a new kit agent shows the invitation; a starter fills the composer without
     await page.getByRole('button', { name: `Start a new chat with ${AGENT}` }).click()
     await expect(invitation(page)).toBeVisible({ timeout: 1000 })
   }).toPass()
-  // Here the screen's own heading box says it, in place of "What can I help with?".
-  await expect(page.getByRole('heading', { name: `Set up ${AGENT}`, level: 1 })).toBeVisible()
+  // Here the screen's own heading box asks it, in place of "What can I help with?".
+  await expect(page.getByRole('heading', { name: GUIDED_HEADING, level: 1 })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'What can I help with?' })).toHaveCount(0)
   await expect(guidedComposer(page)).toBeVisible()
-
-  await invitation(page).getByRole('button', { name: 'Help me with a job', exact: true }).click()
-  await expect(guidedComposer(page)).toHaveValue(JOB_TEXT)
-  await expect(guidedComposer(page)).toBeFocused()
-  // Its first placeholder is selected, so typing replaces it.
-  expect(await guidedComposer(page).evaluate((el: HTMLTextAreaElement) => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('⟨job⟩')
-  // Filled, not sent.
+  await expect(page.getByRole('listbox', { name: 'Example prompts' })).toHaveCount(0)
+  // Typing is the person's; nothing is sent until they send.
+  await guidedComposer(page).fill(INTERVIEW_TEXT)
   await expect(invitation(page)).toBeVisible()
   expect(await page.evaluate(() => window.api.chat.list())).toEqual([])
 
-  await invitation(page).getByRole('button', { name: 'What can agents do?', exact: true }).click()
-  const popover = page.getByRole('dialog', { name: 'What can agents do?', exact: true })
-  await expect(popover.getByRole('listitem')).toHaveCount(7)
-  await expect(popover.getByRole('listitem').first()).toHaveText(
-    'Credentials — Keeps the access it needs (an account, a key) in its Credentials tab.'
-  )
-  await expect(invitation(page).getByRole('button', { name: 'What can agents do?', exact: true })).toHaveAttribute('aria-expanded', 'true')
-  await page.keyboard.press('Escape')
-  await expect(popover).toHaveCount(0)
+  // The panel is drawn out of the flow, above the box, and the screen reserves
+  // its reach: it covers neither the heading nor the prompt slot, and Skip
+  // guidance moves the heading and slot, never the box being typed in.
+  const panel = page.getByTestId('composer-notice-anchor')
+  const clearOf = async (): Promise<void> => {
+    const p = await panel.boundingBox()
+    const heading = await page.getByRole('heading', { level: 1 }).boundingBox()
+    const slot = await page.getByTestId('new-chat-prompt-slot').boundingBox()
+    expect(p && heading && slot).toBeTruthy()
+    expect(p!.y).toBeGreaterThanOrEqual(heading!.y + heading!.height)
+    expect(p!.y).toBeGreaterThanOrEqual(slot!.y + slot!.height - 1)
+  }
+  await clearOf()
+  const top = await composerTop(page)
+  await invitation(page).getByRole('button', { name: 'Skip guidance', exact: true }).click()
+  await expect(invitation(page)).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'What can I help with?', level: 1 })).toBeVisible()
+  expect(await composerTop(page)).toBe(top)
+  if (await panel.count()) await clearOf()
 })
 
 test('Skip guidance removes the invitation, and it stays gone after reselecting the agent', async ({ cinna }) => {
@@ -147,15 +174,19 @@ test('Skip guidance removes the invitation, and it stays gone after reselecting 
   }, OTHER)
   await openAgent(page, AGENT)
   await expect(invitation(page)).toBeVisible()
+  const top = await composerTop(page)
 
   await invitation(page).getByRole('button', { name: 'Skip guidance', exact: true }).click()
   await expect(invitation(page)).toHaveCount(0)
   await expect(composer(page)).toBeVisible()
+  // The row leaving moves nothing: the panel was anchored out of the flow.
+  expect(await composerTop(page)).toBe(top)
   await expect(guidedComposer(page)).toHaveCount(0)
 
   // Another unbuilt agent still invites; coming back to the first does not.
   await page.getByRole('button', { name: OTHER, exact: true }).click()
-  await expect(invitation(page, OTHER)).toBeVisible()
+  await expect(guidedComposer(page, OTHER)).toBeVisible()
+  await expect(invitation(page)).toBeVisible()
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { name: AGENT, level: 1 })).toBeVisible()
   await expect(composer(page)).toBeVisible()
@@ -281,7 +312,7 @@ test.describe('the brief card', () => {
     return (fake.received('session/prompt')[index].params?.prompt as { type: string; text: string }[]).map((p) => p.text).join('')
   }
 
-  test('a message sent from the invitation starts a guided chat', async ({ cinna }) => {
+  test('a message sent from the guided composer starts a guided chat', async ({ cinna }) => {
     const { fake, agentId } = await arrangeEngine(cinna)
     await cinna.relaunch()
     await cinna.skipOnboarding()
@@ -290,8 +321,8 @@ test.describe('the brief card', () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
     await answerAgentsFolder(cinna)
     await page.getByRole('button', { name: `Start a new chat with ${AGENT}` }).click()
-    await invitation(page).getByRole('button', { name: 'Interview me', exact: true }).click()
-    await expect(guidedComposer(page)).toHaveValue(INTERVIEW_TEXT)
+    await expect(invitation(page)).toBeVisible()
+    await guidedComposer(page).fill(INTERVIEW_TEXT)
     await guidedComposer(page).press('Enter')
     await expect(page.getByText(REPLY, { exact: true })).toBeVisible({ timeout: 30_000 })
 

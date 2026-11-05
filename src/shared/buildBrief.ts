@@ -45,17 +45,6 @@ export const BUILD_BRIEF_CAPABILITY_LABELS: Record<BuildBriefCapabilityId, strin
   artifacts: 'Published dashboards'
 }
 
-/** One line each, in plain words: the "What can agents do?" popover and the card's rows. */
-export const BUILD_BRIEF_CAPABILITY_HINTS: Record<BuildBriefCapabilityId, string> = {
-  credentials: 'Keeps the access it needs (an account, a key) in its Credentials tab.',
-  schedules: 'Runs on its own at set times, from its Schedules tab.',
-  status: 'Shows how things stand right on the agent, so you see it at a glance.',
-  commands: 'One-click /run: commands for jobs you start often.',
-  skills: 'A separate skill for each kind of request, so each stays simple.',
-  multi_agent: 'Hands part of the work to another agent.',
-  artifacts: 'Publishes dashboards and reports you open in Cinna.'
-}
-
 /** The manifest's work-complexity tier an effort level is applied as (`runtime.complexity`). */
 export const BUILD_BRIEF_EFFORT_COMPLEXITY: Record<BuildBriefEffortLevel, 'simple' | 'medium' | 'complex'> = {
   low: 'simple',
