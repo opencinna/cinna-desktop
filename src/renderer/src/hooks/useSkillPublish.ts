@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { SkillPublishInput, SkillPublishOutcome } from '../../../shared/skillPublish'
+import type { SkillGetLatestOutcome, SkillPublishInput, SkillPublishOutcome } from '../../../shared/skillPublish'
 import { LOCAL_AGENTS_KEY, localAgentKey } from './useLocalAgents'
 import { readCatalogItemsFromCache } from './useCatalog'
 
@@ -22,6 +22,24 @@ export function usePublishSkill() {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) })
       void readCatalogItemsFromCache(queryClient)
+    }
+  })
+}
+
+/**
+ * Get Version N (`window.api.skillPublish.getLatest`): bring a linked skill's
+ * newer version into its folder; with `replace`, unshared changes go to a
+ * backup folder first. Every answer is data. As with a share, the agent is
+ * read again at the hook level, so the row's version and sync state follow
+ * even when the caller (the row's confirm, the Share dialog) has gone.
+ */
+export function useGetLatestSkill() {
+  const queryClient = useQueryClient()
+  return useMutation<SkillGetLatestOutcome, Error, { agentId: string; name: string; replace?: boolean }>({
+    mutationFn: ({ agentId, name, replace }) => window.api.skillPublish.getLatest(agentId, name, replace === true),
+    onSettled: (_result, _error, { agentId }) => {
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) })
     }
   })
 }

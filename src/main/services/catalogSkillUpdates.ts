@@ -172,8 +172,9 @@ function withNotCachedDisconnect(
 }
 
 /**
- * `latestRevision` (with its `latestVersion` label) and the skill's catalog
- * `title` from the active profile's cached listing on every catalog row, and `updatable` when it is past the pin and the person may change the
+ * `latestRevision` (with its `latestVersion` label), the skill's catalog
+ * `title` and the person's `access` to the package from the active profile's
+ * cached listing on every catalog row (never a marketplace one), and `updatable` when it is past the pin and the person may change the
  * agent; {@link withDisconnectedWarning} on a row the listing no longer
  * has, and {@link withNotCachedDisconnect} on a row whose download was
  * refused as not available. An agent without catalog rows comes back as it
@@ -187,9 +188,11 @@ export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
     const latest = new Map<string, number>()
     const latestLabel = new Map<string, string | null>()
     const titles = new Map<string, string>()
+    const access = new Map<string, 'use' | 'edit' | 'maintain'>()
     for (const item of listing?.items ?? []) {
       if (item.kind !== 'skill') continue
       const key = item.uuid.toLowerCase()
+      if (item.access === 'use' || item.access === 'edit' || item.access === 'maintain') access.set(key, item.access)
       const number = item.latest?.revision_number
       if (typeof number === 'number') {
         latest.set(key, number)
@@ -212,7 +215,14 @@ export function withCatalogSkillUpdates(agent: LocalAgentDto): LocalAgentDto {
         const latestRevision = latest.get(key) ?? null
         const updatable =
           changeable && latestRevision !== null && typeof row.revisionNumber === 'number' && latestRevision > row.revisionNumber
-        const folded = { ...row, title: titles.get(key) ?? null, latestRevision, latestVersion: latestLabel.get(key) ?? null, updatable }
+        const folded = {
+          ...row,
+          title: titles.get(key) ?? null,
+          latestRevision,
+          latestVersion: latestLabel.get(key) ?? null,
+          updatable,
+          access: access.get(key) ?? null
+        }
         const warned =
           absenceCounts && listingInstance !== null && !skills.has(key) ? withDisconnectedWarning(folded, listingInstance) : folded
         return withNotCachedDisconnect(warned, agent.id, link, loaded && skills.has(key))

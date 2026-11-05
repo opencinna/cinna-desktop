@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sha256Of, skillTgz } from '../kit/testSupport/skillTar'
+import { CORE_BUILT_ERP_LOOKUP, sha256Of, skillTgz } from '../kit/testSupport/skillTar'
 import { SERVICE_CREDENTIALS_CHANGED } from '../../shared/serviceCredentials'
 
 /**
@@ -78,6 +78,20 @@ vi.mock('./localAgents/scannerService', () => ({
 vi.mock('./serviceCredentials/service', () => ({ serviceCredentialService: { autoAttachSkills, detachUnusedAutoAttachments } }))
 vi.mock('../db/agents', () => ({ agentRepo: { listFolder: (user: string) => (user === USER ? registry.rows : []) } }))
 vi.mock('../db/agentRoots', () => ({ agentRootRepo: { list: (user: string) => (user === USER ? registry.roots : []) } }))
+/** Run just before the manifest guard compares its stamp: lets a test change the file underneath. */
+const manifestRace = vi.hoisted(() => ({ before: null as null | (() => void) }))
+vi.mock('../kit/manifestIo', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../kit/manifestIo')>()
+  return {
+    ...actual,
+    writeIfUnchanged: (...args: Parameters<typeof actual.writeIfUnchanged>) => {
+      const before = manifestRace.before
+      manifestRace.before = null
+      before?.()
+      return actual.writeIfUnchanged(...args)
+    }
+  }
+})
 vi.mock('./localAgents/gitService', () => ({
   gitService: { readShareRemote: async () => ({ ...remote, refusal: null }) }
 }))
@@ -162,6 +176,7 @@ beforeEach(() => {
   catalogSkillService._reset()
   catalogLocalInstalls._reset(join(root, 'catalog-device.json'))
   noteTeamBehind(new Map())
+  manifestRace.before = null
 })
 
 afterEach(() => {
@@ -1186,5 +1201,246 @@ describe('the Inbox items (Disconnected)', () => {
       refused()
       expect(compute(listed([failedRow()]), [KEY()])).toEqual({ items: [], clear: [] })
     })
+  })
+})
+
+describe('the pin row’s access to its package (co-maintainers D1)', () => {
+  it('carries the listing’s access on a catalog row, matched without case, null when not listed, and never on a marketplace row', () => {
+    const item = skillItem(1, skillTgz('erp-lookup'), { uuid: UUID.toUpperCase(), access: 'maintain' })
+    listing.value = { items: [item], agents: [] }
+    const agent = {
+      path: agentDir,
+      skills: [
+        { name: 'erp-lookup', source: 'catalog', packageUuid: UUID, revisionNumber: 1, issues: [] },
+        { name: 'other', source: 'catalog', packageUuid: '0b6f3c1e-9999-4222-8333-444455556666', revisionNumber: 1, issues: [] },
+        { name: 'market', source: 'marketplace', entryUuid: UUID, issues: [] },
+        { name: 'own', source: 'authored', issues: [] }
+      ]
+    }
+    const out = withCatalogSkillUpdates(agent as never).skills ?? []
+    expect(out[0]).toMatchObject({ access: 'maintain' })
+    expect(out[1]).toMatchObject({ access: null })
+    expect(out[2]).not.toHaveProperty('access')
+    expect(out[3]).not.toHaveProperty('access')
+    ;(item as { access: string }).access = 'edit'
+    expect(withCatalogSkillUpdates(agent as never).skills?.[0]).toMatchObject({ access: 'edit' })
+  })
+})
+
+describe('Edit skill: a pin becomes a linked copy (co-maintainers D2)', () => {
+  const pinOf = (revision: number, archive: Buffer, name = 'erp-lookup', uuid = UUID): Record<string, unknown> => ({
+    package_id: 'test.cinna.skill.erp-lookup',
+    package_uuid: uuid,
+    name,
+    revision_number: revision,
+    version: `${revision}.0`,
+    archive_sha256: sha256Of(archive)
+  })
+  const ledger = (): string => join(agentDir, 'publications.json')
+  const manifestBytes = (): string => readFileSync(join(agentDir, 'cinna-agent.json'), 'utf8')
+  /** The copy's tree hash, as core computes it over `skills/<name>/`. */
+  const folderHash = async (): Promise<string> => {
+    const { collectSkillTree, skillTreeHash } = await import('../kit/skillPack')
+    const tree = collectSkillTree(join(agentDir, 'skills', 'erp-lookup'))
+    if (!tree.ok) throw new Error('unreadable copy')
+    return skillTreeHash('erp-lookup', tree.tree.files)
+  }
+
+  it('puts back a folder an interrupted swap left set aside, and then refuses as folder_exists', async () => {
+    const v1 = skillTgz('erp-lookup', 'First.')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    listing.value = { items: [skillItem(1, v1, { access: 'edit' })], agents: [] }
+    serve({ 1: v1 })
+    const aside = join(agentDir, 'skills', `.erp-lookup.cinna-previous-1-${Date.now() - 60_000}`)
+    mkdirSync(aside, { recursive: true })
+    writeFileSync(join(aside, 'notes.txt'), 'mine')
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'folder_exists' })
+    expect(readdirSync(join(agentDir, 'skills'))).toEqual(['erp-lookup'])
+    expect(readFileSync(join(agentDir, 'skills', 'erp-lookup', 'notes.txt'), 'utf8')).toBe('mine')
+    expect(cinnaFetchBytes).not.toHaveBeenCalled()
+  })
+
+  it('copies the latest revision writable into skills/<name>/, records it, drops the pin and reports the removal', async () => {
+    const v1 = skillTgz('erp-lookup', 'First.')
+    const v2 = skillTgz('erp-lookup', 'Second.')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    // Behind: the pin holds 1, the catalog's latest is 2 — the copy is taken at 2.
+    listing.value = { items: [skillItem(2, v2, { access: 'edit' })], agents: [] }
+    serve({ 1: v1, 2: v2 })
+    detachUnusedAutoAttachments.mockClear()
+
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    expect(cinnaFetchBytes.mock.calls.map((call) => call[1])).toEqual([`/api/v1/skills/packages/${UUID}/revisions/2/download`])
+
+    const copy = join(agentDir, 'skills', 'erp-lookup')
+    expect(readFileSync(join(copy, 'SKILL.md'), 'utf8')).toContain('description: Second.')
+    // Writable, the executable bit kept; nothing staged left beside it.
+    expect(statSync(copy).mode & 0o777).toBe(0o755)
+    expect(statSync(join(copy, 'scripts')).mode & 0o777).toBe(0o755)
+    expect(statSync(join(copy, 'SKILL.md')).mode & 0o777).toBe(0o644)
+    expect(statSync(join(copy, 'scripts', 'run.sh')).mode & 0o777).toBe(0o755)
+    expect(readdirSync(join(agentDir, 'skills'))).toEqual(['erp-lookup'])
+
+    // Linked to the package at the copied revision, as Share records one; no hash from the listing, so the copy's own.
+    expect(JSON.parse(readFileSync(ledger(), 'utf8'))).toEqual({
+      publications: [],
+      skills: [
+        {
+          platform_url: HOST,
+          name: 'erp-lookup',
+          package_id: 'test.cinna.skill.erp-lookup',
+          package_uuid: UUID,
+          revision_number: 2,
+          content_hash: await folderHash()
+        }
+      ]
+    })
+    expect(manifest().catalog_skills).toEqual([])
+    // Now an own skill of the agent, not a pin.
+    expect(agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve).map((row) => [row.name, row.source])).toEqual([
+      ['erp-lookup', 'authored']
+    ])
+    expect(publishEvent).toHaveBeenCalledWith('local-agent:changed', { rootId: 'root-1', agentId: AGENT_ID, reason: 'rescan' })
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1))
+    expect(deletes()[0].slice(0, 2)).toEqual([
+      PROFILE,
+      `/api/v1/catalog/items/${UUID}/local-installs/${catalogLocalInstalls.deviceId()}?host_manifest_id=${MANIFEST_ID}`
+    ])
+    await vi.waitFor(() => expect(detachUnusedAutoAttachments).toHaveBeenCalledWith(AGENT_ID))
+  })
+
+  it('records the catalog’s content hash when the listing carries it, and keeps the slots the pin declared', async () => {
+    const archive = Buffer.from(CORE_BUILT_ERP_LOOKUP.base64, 'base64')
+    writeManifest({ catalog_skills: [pinOf(1, archive)] })
+    serve({ 1: archive })
+    listing.value = { items: [skillItem(1, archive, { access: 'maintain' })], agents: [] }
+    await catalogSkillService.ensurePinned(USER, AGENT_ID)
+    const pinned = agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve)
+    expect(pinned[0].credentials.map((slot) => slot.slot)).toEqual(['erp-api'])
+    // The hash core reports for the revision: the same tree hash over what it serves (O2).
+    const { collectSkillTree, skillTreeHash } = await import('../kit/skillPack')
+    const cached = collectSkillTree(join(revisionDir(1), 'erp-lookup'))
+    if (!cached.ok) throw new Error('unreadable cache')
+    const hash = skillTreeHash('erp-lookup', cached.tree.files)
+    listing.value = {
+      items: [skillItem(1, archive, { access: 'maintain', latest: { revision_number: 1, version: '1.0', published_at: '', published_by: null, release_notes: null, content_hash: hash.toUpperCase() } })],
+      agents: []
+    }
+
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: true, revisionNumber: 1 })
+    expect(JSON.parse(readFileSync(ledger(), 'utf8')).skills[0]).toMatchObject({ revision_number: 1, content_hash: hash })
+    // The copy declares the pin's slots as an own skill, so what was attached for them is still in use
+    // (`detachUnusedAutoAttachments` counts every row's declared slots, authored ones included).
+    const own = agentSkillRows(agentDir, manifest(), catalogSkillCache.resolve)
+    expect(own.map((row) => [row.source, row.credentials.map((slot) => slot.slot)])).toEqual([['authored', ['erp-api']]])
+  })
+
+  it('removes the copy and writes nothing when it does not hash to the catalog’s content hash', async () => {
+    const v1 = skillTgz('erp-lookup')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    const before = manifestBytes()
+    listing.value = {
+      items: [skillItem(1, v1, { access: 'edit', latest: { revision_number: 1, version: '1.0', published_at: '', published_by: null, release_notes: null, content_hash: 'a'.repeat(64) } })],
+      agents: []
+    }
+    serve({ 1: v1 })
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'download_mismatch' })
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
+    expect(existsSync(ledger())).toBe(false)
+    expect(manifestBytes()).toBe(before)
+    expect(deletes()).toEqual([])
+  })
+
+  it('refuses before touching anything: no edit access, a folder already there, an agent not theirs to change, a clash', async () => {
+    const v1 = skillTgz('erp-lookup')
+    const otherUuid = '0b6f3c1e-2222-4222-8333-444455556666'
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    serve({ 1: v1 })
+    writeFileSync(ledger(), '{"publications": [], "kept": true}\n')
+    const ledgerBefore = readFileSync(ledger(), 'utf8')
+    const untouched = (manifestBefore: string): void => {
+      expect(manifestBytes()).toBe(manifestBefore)
+      expect(readFileSync(ledger(), 'utf8')).toBe(ledgerBefore)
+      expect(cinnaFetchBytes).not.toHaveBeenCalled()
+      expect(deletes()).toEqual([])
+    }
+
+    // Can use only.
+    listing.value = { items: [skillItem(1, v1, { access: 'use' })], agents: [] }
+    let before = manifestBytes()
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toEqual({
+      ok: false,
+      code: 'not_editor',
+      message: 'Ask a maintainer of this skill for edit access, then try again.'
+    })
+    untouched(before)
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
+
+    // skills/<name>/ already there: left exactly as it was.
+    listing.value = { items: [skillItem(1, v1, { access: 'edit' })], agents: [] }
+    mkdirSync(join(agentDir, 'skills', 'erp-lookup'), { recursive: true })
+    writeFileSync(join(agentDir, 'skills', 'erp-lookup', 'notes.txt'), 'mine')
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toEqual({
+      ok: false,
+      code: 'folder_exists',
+      message: 'Rename or remove skills/erp-lookup/ first.'
+    })
+    untouched(before)
+    expect(readdirSync(join(agentDir, 'skills', 'erp-lookup'))).toEqual(['notes.txt'])
+    rmSync(join(agentDir, 'skills'), { recursive: true })
+
+    // A team agent shared to use only (U9): its pins are not the person's, edit access to the skill or not.
+    remote.ownRepo = true
+    remote.originUrl = `${HOST}/git/r1.git`
+    listing.value = {
+      items: [skillItem(1, v1, { access: 'maintain' })],
+      agents: [{ repoId: 'r1', bundleId: 'b', cloneUrl: `${HOST}/git/r1.git`, access: 'use' }]
+    }
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'read_only' })
+    untouched(before)
+    remote.ownRepo = false
+    remote.originUrl = null
+
+    // Two pins of one name (the row's clash).
+    writeManifest({ catalog_skills: [pinOf(1, v1), pinOf(1, v1, 'erp-lookup', otherUuid)] })
+    before = manifestBytes()
+    listing.value = { items: [skillItem(1, v1, { access: 'edit' })], agents: [] }
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'clash' })
+    untouched(before)
+
+    // No such pin.
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'nope')).toMatchObject({ ok: false, code: 'not_found' })
+    untouched(before)
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
+  })
+
+  it('undoes the copy and the record when cinna-agent.json changes underneath the pin’s removal', async () => {
+    const v1 = skillTgz('erp-lookup')
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    listing.value = { items: [skillItem(1, v1, { access: 'edit' })], agents: [] }
+    serve({ 1: v1 })
+    const earlier = { platform_url: HOST, name: 'other', package_id: 'p', package_uuid: 'u', revision_number: 1, content_hash: 'h' }
+    writeFileSync(ledger(), `${JSON.stringify({ publications: [{ kept: true }], skills: [earlier] })}\n`)
+    const ledgerBefore = readFileSync(ledger(), 'utf8')
+    let edited = ''
+    manifestRace.before = () => {
+      // The agent writes its manifest while the verb is between its read and its write.
+      writeManifest({ catalog_skills: [pinOf(1, v1)], description: 'changed underneath' })
+      edited = manifestBytes()
+    }
+
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'manifest_modified' })
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
+    expect(readFileSync(ledger(), 'utf8')).toBe(ledgerBefore)
+    expect(manifestBytes()).toBe(edited)
+    expect(deletes()).toEqual([])
+
+    // Without a ledger before, the one written is removed again.
+    rmSync(ledger())
+    writeManifest({ catalog_skills: [pinOf(1, v1)] })
+    manifestRace.before = () => writeManifest({ catalog_skills: [pinOf(1, v1)], description: 'again' })
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'manifest_modified' })
+    expect(existsSync(ledger())).toBe(false)
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
   })
 })

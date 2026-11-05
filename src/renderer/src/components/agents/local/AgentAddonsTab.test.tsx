@@ -31,6 +31,9 @@ let statusesPending: Promise<never> | null = null
 type Outcome = { ok: true; name: string; revisionNumber: number } | { ok: false; code: string; message: string }
 const updateSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
 const removeSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
+const makeEditableSkill = vi.fn<(agentId: string, name: string) => Promise<Outcome>>()
+type GetOutcome = { ok: true; name: string; revisionNumber: number; version: string | null; backupPath: string | null } | { ok: false; code: string; message: string }
+const getLatestSkill = vi.fn<(agentId: string, name: string, replace?: boolean) => Promise<GetOutcome>>()
 const ensureSkills = vi.fn<(agentId: string) => Promise<unknown>>()
 const updateMarketplaceSkill = vi.fn<(agentId: string, name: string) => Promise<unknown>>()
 const removeMarketplaceSkill = vi.fn<(agentId: string, name: string) => Promise<unknown>>()
@@ -63,7 +66,8 @@ window.api = {
   localAgents: { listMcpProviders, attachMcpProvider, detachMcpProvider, openPath },
   mcp: { list: async () => providers, onStatusChanged: () => () => {}, upsert, agentsUsing: async () => [] },
   sharing: { statuses: () => statusesPending ?? Promise.resolve({ success: true, value: shareStatuses }) },
-  catalogSkills: { update: updateSkill, remove: removeSkill, ensure: ensureSkills },
+  catalogSkills: { update: updateSkill, remove: removeSkill, ensure: ensureSkills, makeEditable: makeEditableSkill },
+  skillPublish: { getLatest: getLatestSkill },
   marketplaceSkills: { update: updateMarketplaceSkill, remove: removeMarketplaceSkill, ensure: ensureMarketplaceSkills, status: marketplaceStatus }
 } as never
 
@@ -658,6 +662,149 @@ describe('the Skills section — a catalog skill’s actions', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
+  it('offers Who can use on a catalog pin only to a maintainer of its package, whatever the agent’s access, and opens its People', async () => {
+    const api = window.api as unknown as { sharing: Record<string, unknown>; catalog?: unknown }
+    api.sharing.itemPeople = vi.fn(async () => ({ success: true, value: { visible: true, people: [], selfUserId: null } }))
+    api.catalog = { items: vi.fn(async () => ({ success: true, value: null })) }
+    // A team agent shared to use only: the pin's verbs are not offered, Who can use (about the package) is.
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    renderTab({
+      skills: [
+        pin('erp-lookup', { title: 'ERP lookup', access: 'maintain' }),
+        pin('csv-tools', { access: 'edit', packageUuid: '7f1e2d3c-4b5a-4968-8776-655443322110' }),
+        pin('pdf-tools', { access: null, packageUuid: '8f1e2d3c-4b5a-4968-8776-655443322110' })
+      ]
+    })
+    await waitFor(() => expect(listMcpProviders).toHaveBeenCalled())
+    const who = await within((document.querySelector('[data-skill-row="erp-lookup"]')!.closest('li') as HTMLElement)).findByRole('button', { name: 'Who can use ERP lookup…' })
+    expect(who.getAttribute('title')).toBe('Who can use ERP lookup…')
+    expect(within(row('csv-tools')).queryByRole('button', { name: 'Who can use csv-tools…' })).toBeNull()
+    expect(within(row('pdf-tools')).queryByRole('button', { name: 'Who can use pdf-tools…' })).toBeNull()
+    fireEvent.click(who)
+    const dialog = await screen.findByRole('dialog', { name: 'Who can use ERP lookup' })
+    await within(dialog).findByText('No one else has access yet.')
+    expect(api.sharing.itemPeople).toHaveBeenCalledWith('6f1e2d3c-4b5a-4968-8776-655443322110')
+  })
+
+  it('offers Edit on a catalog pin the person may edit or maintain, only on an agent they may change', async () => {
+    renderTab({
+      skills: [
+        pin('erp-lookup', { access: 'edit' }),
+        pin('csv-tools', { access: 'maintain' }),
+        pin('pdf-tools', { access: 'use' }),
+        pin('xls-tools', { access: null })
+      ]
+    })
+    await screen.findByRole('button', { name: 'Make erp-lookup editable…' })
+    expect(within(row('erp-lookup')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Make erp-lookup editable…',
+      'Remove erp-lookup from this agent'
+    ])
+    expect(within(row('csv-tools')).getByRole('button', { name: 'Make csv-tools editable…' })).toBeTruthy()
+    expect(within(row('pdf-tools')).queryByRole('button', { name: 'Make pdf-tools editable…' })).toBeNull()
+    expect(within(row('xls-tools')).queryByRole('button', { name: 'Make xls-tools editable…' })).toBeNull()
+  })
+
+  it('offers no Edit on an agent shared with the user to use only, nor while its access is loading', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    renderTab({ skills: [pin('erp-lookup', { access: 'maintain' })] })
+    await screen.findByRole('button', { name: 'Who can use erp-lookup…' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByRole('button', { name: 'Make erp-lookup editable…' })).toBeNull()
+  })
+
+  it('makes a pin editable only after the confirm inside the card, one confirm at a time, and shows a refusal last', async () => {
+    let finish!: (outcome: Outcome) => void
+    makeEditableSkill.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    renderTab({ skills: [pin('erp-lookup', { title: 'ERP lookup', access: 'edit', latestRevision: 3, latestVersion: '1.2.0', updatable: true })] })
+    // Remove's confirm open first; asking Edit swaps it for Edit's, never both.
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove ERP lookup from this agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Make ERP lookup editable…' }))
+    const confirm = screen.getByRole('group', { name: 'Make ERP lookup editable…' })
+    expect((document.querySelector('[data-skill-row="erp-lookup"]')!.closest('li') as HTMLElement).contains(confirm)).toBe(true)
+    expect(confirm.querySelector('p')!.textContent).toBe(
+      'Make ERP lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 3 (1.2.0), linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
+    )
+    // While it is open the row's other verbs wait.
+    expect((screen.getByRole('button', { name: 'Remove ERP lookup from this agent' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Update ERP lookup to Version 3 (1.2.0)' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(makeEditableSkill).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Make ERP lookup editable…' }))
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Make editable' }))
+    await waitFor(() => expect(makeEditableSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
+    expect((within(confirm).getByRole('button', { name: 'Making editable…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(confirm).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => finish({ ok: false, code: 'folder_exists', message: 'Rename or remove skills/erp-lookup/ first.' }))
+    expect(within(confirm).getByRole('button', { name: 'Make editable' })).toBeTruthy()
+    const alert = within((document.querySelector('[data-skill-row="erp-lookup"]')!.closest('li') as HTMLElement)).getByRole('alert')
+    expect(alert.textContent).toBe('Rename or remove skills/erp-lookup/ first.')
+    expect((document.querySelector('[data-skill-row="erp-lookup"]')!.closest('li') as HTMLElement).firstElementChild!.lastElementChild).toBe(alert)
+  })
+
+  it('closes the Edit confirm and re-reads the agent once the pin is a linked copy', async () => {
+    makeEditableSkill.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
+    const { client } = renderTab({ skills: [pin('erp-lookup', { access: 'maintain' })] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    fireEvent.click(await screen.findByRole('button', { name: 'Make erp-lookup editable…' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Make erp-lookup editable…' })).getByRole('button', { name: 'Make editable' }))
+    await waitFor(() => expect(makeEditableSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['local-agents'] }))
+    expect(within(row('erp-lookup')).queryByRole('alert')).toBeNull()
+  })
+
+  it('puts Who can use in one place on pin and own rows: after Share / Make editable, before Reveal / Remove', async () => {
+    renderTab({
+      skills: [
+        pin('erp-lookup', { access: 'maintain' }),
+        pin('own-one', {
+          source: 'authored',
+          path: 'skills/own-one/SKILL.md',
+          packageId: undefined,
+          packageUuid: undefined,
+          shareable: true,
+          shared: { packageUuid: 'pkg-2', packageId: 'test.own', revisionNumber: 1, access: 'maintain' }
+        })
+      ]
+    })
+    await screen.findByRole('button', { name: 'Make erp-lookup editable…' })
+    expect(within(row('erp-lookup')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Make erp-lookup editable…',
+      'Who can use erp-lookup…',
+      'Remove erp-lookup from this agent'
+    ])
+    expect(within(row('own-one')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Share a new version of own-one…',
+      'Who can use own-one…',
+      'Reveal SKILL.md of own-one'
+    ])
+  })
+
+  it('names the version the copy will be in the Edit confirm when the pin is already at the latest', async () => {
+    renderTab({ skills: [pin('erp-lookup', { access: 'edit', revisionNumber: 2, version: '1.1.0', latestRevision: 2, updatable: false })] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Make erp-lookup editable…' }))
+    expect(screen.getByRole('group', { name: 'Make erp-lookup editable…' }).querySelector('p')!.textContent).toBe(
+      'Make erp-lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 2 (1.1.0), linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
+    )
+  })
+
+  it('offers no Edit or Who can use on a marketplace pin, whatever it carries', async () => {
+    marketplaceStatus.mockResolvedValue({ ok: true, pins: [] })
+    renderTab({
+      skills: [
+        pin('pdf-report', {
+          source: 'marketplace', access: 'maintain', entryUuid: '3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f', marketplaceUuid: 'm',
+          marketplaceName: 'Team skills', archiveSha256: 'd'.repeat(64), commitHash: null
+        } as Partial<LocalAgentSkill>)
+      ]
+    })
+    await screen.findByRole('button', { name: 'Remove pdf-report from this agent' })
+    expect(within(row('pdf-report')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Remove pdf-report from this agent'
+    ])
+  })
+
   it('offers Add on every agent; on a team agent shared to use only the picker says why no skill can be added', async () => {
     extraEntries = [{
       ref: { source: 'core-catalog', id: 'pkg-csv' }, kind: 'skill', name: 'csv', title: 'CSV tools', summary: 'Reads CSV.', description: '',
@@ -811,5 +958,100 @@ describe('the Skills section — a marketplace skill', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: 'Remove skill' }))
     await waitFor(() => expect(removeMarketplaceSkill).toHaveBeenCalledWith('folder:a', 'pdf-report'))
     expect(removeSkill).not.toHaveBeenCalled()
+  })
+})
+
+describe('the Skills section — an own skill linked to a newer catalog version (co-maintainers D3)', () => {
+  const linked = (name: string, extra: Partial<LocalAgentSkill> = {}): LocalAgentSkill => ({
+    name, description: `${name} things.`, version: null, source: 'authored', path: `skills/${name}/SKILL.md`,
+    deliverable: true, issues: [], credentials: [], shareable: true,
+    shared: { packageUuid: '6f1e2d3c-4b5a-4968-8776-655443322110', packageId: `io.example.skill.${name}`, revisionNumber: 1, access: 'edit' },
+    latest: { revisionNumber: 2, version: '1.0.1', publishedBy: 'Ann' },
+    ...extra
+  })
+  const card = (name: string): HTMLElement => (document.querySelector(`[data-skill-row="${name}"]`) as HTMLElement).closest('li') as HTMLElement
+  const labels = (name: string): (string | null)[] => within(card(name)).getAllByRole('button').map((b) => b.getAttribute('aria-label'))
+
+  it('says which version is available and who shared it in Get’s and Replace’s names, with no line; nothing on changed', async () => {
+    renderTab({
+      skills: [
+        linked('behind-one', { sync: 'behind' }),
+        linked('diverged-one', { sync: 'diverged', latest: { revisionNumber: 3, version: null, publishedBy: null } }),
+        linked('changed-one', { sync: 'changed' }),
+        linked('in-sync', { sync: 'in_sync' })
+      ]
+    })
+    const get = await screen.findByRole('button', { name: 'Get Version 2 of behind-one — shared by Ann' })
+    expect(get.getAttribute('title')).toBe('Get Version 2 of behind-one — shared by Ann')
+    expect(labels('behind-one')[0]).toBe('Get Version 2 of behind-one — shared by Ann')
+    // The icon's name carries the fact: no muted line under the title.
+    expect(within(card('behind-one')).queryByText(/available/)).toBeNull()
+
+    // Who shared it unknown: the name stops at the version.
+    expect(labels('diverged-one')[0]).toBe('Replace diverged-one with Version 3…')
+    expect(within(card('diverged-one')).getByRole('button', { name: 'Replace diverged-one with Version 3…' }).getAttribute('title')).toBe(
+      'Replace diverged-one with Version 3…'
+    )
+    expect(within(card('diverged-one')).queryByText(/available/)).toBeNull()
+    expect(within(card('diverged-one')).queryByRole('button', { name: /^Get Version/ })).toBeNull()
+
+    for (const name of ['changed-one', 'in-sync']) {
+      expect(labels(name).some((label) => /^(Get|Replace)/.test(label ?? ''))).toBe(false)
+    }
+  })
+
+  it('gets the newer version in place, spinning, with the other rows’ verbs locked, and shows a refusal last', async () => {
+    let finish!: (outcome: GetOutcome) => void
+    getLatestSkill.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    renderTab({
+      skills: [
+        linked('erp-lookup', { sync: 'behind' }),
+        { name: 'csv', description: '', version: null, source: 'catalog', path: '/cache/x/SKILL.md', deliverable: true, issues: [], credentials: [], packageUuid: '7f1e2d3c-4b5a-4968-8776-655443322110', revisionNumber: 1, latestRevision: 1, updatable: false }
+      ]
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get Version 2 of erp-lookup — shared by Ann' }))
+    await waitFor(() => expect(getLatestSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup', false))
+    expect((screen.getByRole('button', { name: 'Get Version 2 of erp-lookup — shared by Ann' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Get Version 2 of erp-lookup — shared by Ann' }).querySelector('.animate-spin')).not.toBeNull()
+    expect((screen.getByRole('button', { name: 'Remove csv from this agent' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => finish({ ok: false, code: 'download_failed', message: 'The newer version couldn’t be downloaded. Nothing was changed.' }))
+    const alert = within(card('erp-lookup')).getByRole('alert')
+    expect(alert.textContent).toBe('The newer version couldn’t be downloaded. Nothing was changed.')
+    expect(card('erp-lookup').firstElementChild!.lastElementChild).toBe(alert)
+    expect((screen.getByRole('button', { name: 'Remove csv from this agent' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('replaces only after the confirm inside the card, which names the backup, and closes it on success', async () => {
+    getLatestSkill.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3, version: null, backupPath: '/u/skill-backups/a/erp-lookup-x' })
+    const { client } = renderTab({ skills: [linked('erp-lookup', { sync: 'diverged', latest: { revisionNumber: 3, version: null, publishedBy: 'Ann' } })] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }))
+    expect(getLatestSkill).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('group', { name: 'Replace erp-lookup with Version 3…' })
+    expect(card('erp-lookup').contains(confirm)).toBe(true)
+    expect(confirm.querySelector('p')!.textContent).toBe(
+      'Replace erp-lookup with Version 3? Your changes that were never shared are moved to a backup folder outside this agent, and the skill’s files become Version 3.'
+    )
+    // While it is open the row's verbs wait.
+    expect((screen.getByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Share a new version of erp-lookup…' }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(getLatestSkill).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }))
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Replace' }))
+    await waitFor(() => expect(getLatestSkill).toHaveBeenCalledWith('folder:a', 'erp-lookup', true))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['local-agents'] }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(within(card('erp-lookup')).queryByRole('alert')).toBeNull()
+  })
+
+  it('offers no Get or Replace, and no line, on an agent shared with the user to use only', async () => {
+    shareStatuses = [{ agentId: 'folder:a', remote: { kind: 'cinna', access: 'use' } }]
+    renderTab({ skills: [linked('erp-lookup', { sync: 'behind', shareable: false }), linked('csv', { sync: 'diverged', shareable: false })] })
+    await waitFor(() => expect(document.querySelector('[data-skill-row="erp-lookup"]')).not.toBeNull())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(within(card('erp-lookup')).queryByText(/available/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Get Version/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Replace/ })).toBeNull()
   })
 })

@@ -20,6 +20,7 @@ import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineL
 import { installUserCommandWorkspace, userCommandService } from '../services/userCommands'
 import { installFolderMovedListener, localAgentService } from '../services/localAgents/localAgentService'
 import { catalogSkillService } from '../services/catalogSkillService'
+import { skillPublishService } from '../services/skillPublishService'
 import { marketplaceSkillService } from '../services/marketplaceSkillService'
 import { marketplacePluginService } from '../services/marketplacePluginService'
 import { pinnedSkillAutoFetch } from '../services/pinnedSkillAutoFetch'
@@ -144,6 +145,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     catalogSkillService.collectGarbage()
     marketplaceSkillService.collectGarbage()
     marketplacePluginService.collectGarbage()
+    // A crash mid Get Version N / Edit skill can leave a skill's folder set aside under a dot-name.
+    skillPublishService.recoverLeftovers()
   })
   userActivation.onProfileReady(() => { pinnedSkillAutoFetch.retryAllMissing() })
   // The managed uv and the template's Python, so a kit agent's first `uv run` does not wait on a

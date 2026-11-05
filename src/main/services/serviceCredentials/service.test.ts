@@ -1204,6 +1204,14 @@ except CredentialMissing as e:
       expect(group(a, 'account-b')).toEqual(['erp-1', 'notes'])
     })
 
+    it('keeps an auto entry when the pin declaring its slot becomes an own copy (Edit skill)', async () => {
+      const a = await attachedAgent([catalog('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
+      // The pin is gone and skills/erp-orders/ declares the same slot as an authored skill.
+      a.skills = [skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])]
+      expect(await service.detachUnusedAutoAttachments(a.id)).toEqual([])
+      expect(group(a, 'account-b')).toEqual(['erp-1', 'crm-1', 'notes'])
+    })
+
     it('keeps an auto entry an agent credential slot is judged by', async () => {
       const a = await attachedAgent([skill('erp-orders', [{ slot: 'erp-api' }]), skill('crm-sync', [{ slot: 'crm' }])])
       const erp = service.attachments(a.id).find(v => v.ref === 'erp-1')!.credential!

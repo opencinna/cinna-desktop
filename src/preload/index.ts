@@ -229,7 +229,7 @@ import type {
   MarketplaceSkillOutcome,
   MarketplaceSkillStatusResult
 } from '../shared/marketplaceSkills'
-import type { SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
+import type { SkillGetLatestOutcome, SkillPublishInput, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../shared/skillPublish'
 import type {
   AddonActionResult,
   AddonDirectoryResult,
@@ -2279,7 +2279,8 @@ const api = {
   /**
    * Catalog skills pinned in a kit agent's `catalog_skills[]`: add the latest
    * version of a skill package, move a pin to the latest version, drop one,
-   * and fetch every pinned revision this computer lacks. Every answer is data,
+   * turn one into an editable copy linked to its package, and fetch every
+   * pinned revision this computer lacks. Every answer is data,
    * refusals included. See `src/shared/catalogSkills.ts`.
    */
   catalogSkills: {
@@ -2289,6 +2290,9 @@ const api = {
       ipcRenderer.invoke('catalog-skills:update', { agentId, name }),
     remove: (agentId: string, name: string): Promise<CatalogSkillOutcome> =>
       ipcRenderer.invoke('catalog-skills:remove', { agentId, name }),
+    /** Edit skill: the pin becomes `skills/<name>/` at the package's latest version, linked to it. */
+    makeEditable: (agentId: string, name: string): Promise<CatalogSkillOutcome> =>
+      ipcRenderer.invoke('catalog-skills:make-editable', { agentId, name }),
     ensure: (agentId: string): Promise<CatalogSkillEnsureResult> =>
       ipcRenderer.invoke('catalog-skills:ensure', { agentId })
   },
@@ -2350,14 +2354,18 @@ const api = {
 
   /**
    * Share a kit agent's own skill (`skills/<name>/`) to the catalog: what it
-   * would become, then the share itself. Every answer is data, refusals
+   * would become, then the share itself; and bring a linked skill's newer
+   * version into its folder. Every answer is data, refusals
    * included. See `src/shared/skillPublish.ts`.
    */
   skillPublish: {
     preview: (agentId: string, name: string): Promise<SkillPublishPreviewOutcome> =>
       ipcRenderer.invoke('skill-publish:preview', { agentId, name }),
     publish: (input: SkillPublishInput): Promise<SkillPublishOutcome> =>
-      ipcRenderer.invoke('skill-publish:publish', input)
+      ipcRenderer.invoke('skill-publish:publish', input),
+    /** Get Version N: the linked package's latest version into `skills/<name>/`; `replace` keeps unshared changes in a backup folder. */
+    getLatest: (agentId: string, name: string, replace = false): Promise<SkillGetLatestOutcome> =>
+      ipcRenderer.invoke('skill-publish:get-latest', { agentId, name, replace })
   },
 
   /**

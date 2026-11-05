@@ -115,6 +115,15 @@ export function useRemoveCatalogSkill() {
   })
 }
 
+/** Edit skill: the pin becomes an own copy linked to its package; the row re-reads as an authored one. */
+export function useMakeCatalogSkillEditable() {
+  const queryClient = useQueryClient()
+  return useMutation<CatalogSkillOutcome, Error, { agentId: string; name: string }>({
+    mutationFn: ({ agentId, name }) => window.api.catalogSkills.makeEditable(agentId, name),
+    onSettled: (_result, _error, { agentId }) => refreshAfterSkillChange(queryClient, agentId)
+  })
+}
+
 export function useEnsureCatalogSkills() {
   const queryClient = useQueryClient()
   return useMutation<CatalogSkillEnsureResult, Error, { agentId: string }>({

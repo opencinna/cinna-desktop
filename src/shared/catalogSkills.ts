@@ -6,8 +6,8 @@
  *
  * Channels (`catalogSkills.ipc.ts`; literal, as `registration.test.ts` reads
  * them): `catalog-skills:add` {@link CatalogSkillAddInput},
- * `catalog-skills:update` and `catalog-skills:remove`
- * {@link CatalogSkillNameInput}, `catalog-skills:ensure`
+ * `catalog-skills:update`, `catalog-skills:remove` and
+ * `catalog-skills:make-editable` {@link CatalogSkillNameInput}, `catalog-skills:ensure`
  * {@link CatalogSkillEnsureInput}.
  */
 
@@ -46,6 +46,9 @@ export interface CatalogSkillEnsureInput {
  * * `manifest_modified` — `cinna-agent.json` changed while the skill was downloading; nothing was written.
  * * `write_failed` — the manifest or the cache could not be written.
  * * `reauth_required` — the Cinna session has to be renewed.
+ * * `not_editor` — Edit skill: the listing gives this person less than `edit` on the package.
+ * * `folder_exists` — Edit skill: `skills/<name>/` is already there; nothing was written.
+ * * `download_mismatch` — Edit skill: the copied files do not hash to the version's `content_hash`; the copy was removed.
  */
 export type CatalogSkillRefusal =
   | 'no_account'
@@ -63,9 +66,15 @@ export type CatalogSkillRefusal =
   | 'manifest_modified'
   | 'write_failed'
   | 'reauth_required'
+  | 'not_editor'
+  | 'folder_exists'
+  | 'download_mismatch'
 
 /**
- * What Add, Update and Remove answer. After Add and Update main fills the skill slots in the
+ * What Add, Update, Remove and Make editable answer. After Make editable the
+ * pin is gone and `skills/<name>/` holds `revisionNumber`'s files, linked to
+ * the package in `publications.json`.
+ * After Add and Update main fills the skill slots in the
  * background without holding the verb up; what it attached arrives on `SERVICE_CREDENTIALS_CHANGED`
  * (`ServiceCredentialsChangedPayload.autoAttached`).
  */
@@ -74,7 +83,7 @@ export type CatalogSkillOutcome =
       ok: true
       /** The pin's name. */
       name: string
-      /** The revision now pinned; for a remove, the one that was. */
+      /** The revision now pinned; for a remove, the one that was; for Make editable, the one copied. */
       revisionNumber: number
     }
   | { ok: false; code: CatalogSkillRefusal; message: string }

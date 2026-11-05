@@ -123,6 +123,14 @@ export const CATALOG_SKILL_TEXT = {
   removeButton: 'Remove skill',
   removing: 'Removing…',
   removeFailed: 'The skill could not be removed.',
+  /** Edit skill (an editor or maintainer of the package): the pin becomes an own copy linked to it. */
+  edit: (skill: string) => `Make ${skill} editable…`,
+  /** `version` names the version the copy is taken at: the package's latest, whether or not the pin is behind it. */
+  editConfirm: (skill: string, name: string, version: string | null) =>
+    `Make ${skill} editable in this agent? Its files move into skills/${name}/${version ? ` as ${version}` : ''}, linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.`,
+  editButton: 'Make editable',
+  editing: 'Making editable…',
+  editFailed: 'The skill could not be made editable.',
   cancel: 'Cancel',
   /** The Inbox card: "Update available for erp-lookup in Invoices". */
   updateAvailableIn: (skill: string, agent: string) => `Update available for ${skill} in ${agent}`,
@@ -169,7 +177,31 @@ export const SKILL_SHARE_TEXT = {
   whoCanUseAction: (skill: string) => `Who can use ${skill}…`,
   whoCanUseTitle: (skill: string) => `Who can use ${skill}`,
   peopleNoAccess: 'Only a maintainer can change who has access to this skill.',
-  close: 'Close'
+  close: 'Close',
+  /** The row's icon (tooltip and name) on a `behind` skill; it alone says a newer version exists, and who shared it. */
+  getVersion: (skill: string, revision: number, by: string | null = null) => `Get Version ${revision} of ${skill}${by ? ` — shared by ${by}` : ''}`,
+  /** The row's icon (tooltip and name) on a `diverged` skill: opens its confirm inside the card. */
+  replaceWith: (skill: string, revision: number, by: string | null = null) => `Replace ${skill} with Version ${revision}…${by ? ` — shared by ${by}` : ''}`,
+  replaceConfirm: (skill: string, revision: number) =>
+    `Replace ${skill} with Version ${revision}? Your changes that were never shared are moved to a backup folder outside this agent, and the skill’s files become Version ${revision}.`,
+  replaceButton: 'Replace',
+  replacing: 'Replacing…',
+  getFailed: 'The newer version couldn’t be brought in.',
+  /** A share refused, or previewed, as stale (S5): last before the dialog's buttons. */
+  stale: (by: string | null, revision: number) => `${by ?? 'Someone'} shared Version ${revision} since your copy. Get it first, then share your changes.`,
+  /** The Share dialog's button beside {@link stale}. */
+  getVersionButton: (revision: number) => `Get Version ${revision}`,
+  /** Under {@link stale} when the copy has unshared changes: Get is not offered there, Replace on the row is. */
+  staleHasChanges: (revision: number) =>
+    `Your copy has changes that were never shared. Replace on the skill’s row gets Version ${revision} and keeps your files in a backup folder.`,
+  getting: 'Getting…',
+  /** A first share while packages of this name the person may edit exist (S6). */
+  shareAs: 'Share as',
+  newVersionOf: (publisher: string | null, skill: string) => `New version of ${publisher ? `${publisher}’s` : 'the catalog’s'} ${skill}`,
+  separateSkill: 'A separate skill',
+  /** In place of Who can use while sharing as another person's package's next version. */
+  candidateKeepsAccess: (publisher: string | null) =>
+    `Who can use it stays as ${publisher ? `${publisher} set it` : 'it is'}.`
 } as const
 
 /**

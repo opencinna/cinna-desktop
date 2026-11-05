@@ -40,6 +40,12 @@ export interface CatalogLatestWire {
   published_at: string
   published_by: CatalogPersonWire | null
   release_notes: string | null
+  /**
+   * Skills: the revision's tree hash (core's `hash_workspace_tree`, what
+   * `publications.json` `skills[].content_hash` records). Sent by a core with
+   * the skill co-maintainers change; absent from an older one.
+   */
+  content_hash?: string | null
 }
 
 /** One of the caller's installs: an agent in Cinna (`cloud`), or one a desktop reported (`local`). */

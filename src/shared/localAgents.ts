@@ -486,6 +486,13 @@ export interface LocalAgentSkill {
    */
   updatable?: boolean
   /**
+   * `catalog` rows only: the person's access to the pinned package in the
+   * active profile's cached catalog listing; null when the listing does not
+   * have it. `edit` or `maintain` offers Edit (the pin becomes a linked copy
+   * under `skills/`), `maintain` also Who can use. Never on a marketplace row.
+   */
+  access?: 'use' | 'edit' | 'maintain' | null
+  /**
    * `authored` rows only: this skill's `skills[]` entry in the agent's
    * `publications.json` for the active Cinna account's server — it was shared
    * to that catalog — or null. Read at list time, not from the folder scan.
@@ -497,6 +504,17 @@ export interface LocalAgentSkill {
    * shared one, `edit` or `maintain` on its package in the cached listing.
    */
   shareable?: boolean
+  /**
+   * `authored` rows with a {@link shared} record only: where the folder stands
+   * against the catalog (skill co-maintainers S4). `in_sync` — it holds the
+   * recorded version unchanged; `changed` — edits not shared yet; `behind` —
+   * the catalog has a newer version and the folder is unchanged (Get Version
+   * N); `diverged` — both (Replace with Version N…); `unknown` — the listing
+   * does not have the package, or the folder could not be hashed.
+   */
+  sync?: LocalAgentSkillSync
+  /** `authored` rows with a {@link shared} record only: the package's latest version in the cached listing, or null. */
+  latest?: LocalAgentSkillLatest | null
   /** `marketplace` rows only: the pin's `entry_uuid` (the marketplace entry), as written. */
   entryUuid?: string
   /** `marketplace` rows only: the pin's `marketplace_uuid`, as written. */
@@ -509,7 +527,22 @@ export interface LocalAgentSkill {
   commitHash?: string | null
 }
 
-/** Where an authored skill was shared: the package and the version the last share created. */
+/** Where a linked own skill stands against its catalog package (`LocalAgentSkill.sync`). */
+export type LocalAgentSkillSync = 'in_sync' | 'changed' | 'behind' | 'diverged' | 'unknown'
+
+/** A package's latest version as the cached listing gives it. */
+export interface LocalAgentSkillLatest {
+  revisionNumber: number
+  /** The publisher's label, e.g. `1.0.1`, or null. */
+  version: string | null
+  /** The display name of who shared it, or null. */
+  publishedBy: string | null
+}
+
+/**
+ * Where an authored skill is linked: the package, and the version the folder
+ * holds (written by a share, an Edit skill or a Get Version N).
+ */
 export interface LocalAgentSkillShared {
   packageUuid: string
   packageId: string

@@ -9,6 +9,7 @@ import { useListedShareStatus } from '../../../hooks/useSharing'
 import {
   catalogSkillOutcomeMessage,
   useEnsureCatalogSkills,
+  useMakeCatalogSkillEditable,
   useRemoveCatalogSkill,
   useUpdateCatalogSkill
 } from '../../../hooks/useCatalogSkills'
@@ -21,8 +22,8 @@ import {
 import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CATALOG_SKILL_TEXT, SKILL_SHARE_TEXT } from '../../../utils/catalogItems'
-import { usePublishSkill } from '../../../hooks/useSkillPublish'
-import type { SkillPublishInput } from '../../../../../shared/skillPublish'
+import { useGetLatestSkill, usePublishSkill } from '../../../hooks/useSkillPublish'
+import type { SkillPublishInput, SkillPublishRefused } from '../../../../../shared/skillPublish'
 import { ShareSkillDialog } from './ShareSkillDialog'
 import { WhoCanUseSkillDialog } from './sharing/WhoCanUseSkillDialog'
 import { MCPProviderCard } from '../../settings/MCPProviderCard'
@@ -30,7 +31,7 @@ import { SettingsButton, SettingsInfoTip, SettingsSection } from '../../settings
 import { mcpProblem } from '../../settings/mcpPresentation'
 import { ADDON_KIND } from './AddonRow'
 import { AddonPicker } from './AddonPicker'
-import { SkillRow, needsAttention, type CatalogRowActions, type CatalogVerb } from './SkillRow'
+import { SkillRow, needsAttention, type CatalogRowActions, type CatalogVerb, type SkillSyncActions } from './SkillRow'
 import { PluginRow, pluginHasProblem, pluginNeedsAttention, type PluginRowActions } from './PluginRow'
 import type { PluginPinStatus } from '../../../../../shared/addons/plugins'
 import { DEFAULT_AGENT_ENGINE, effectiveEngine } from '../../../../../shared/engine'
@@ -209,6 +210,7 @@ export function AgentAddonsTab({
   const updateSkill = useUpdateCatalogSkill()
   const ensureSkills = useEnsureCatalogSkills()
   const removeSkill = useRemoveCatalogSkill()
+  const makeSkillEditable = useMakeCatalogSkillEditable()
   // Marketplace rows: the same, over their own verbs, and where each pin stands.
   const updateMarketplaceSkill = useUpdateMarketplaceSkill()
   const ensureMarketplaceSkills = useEnsureMarketplaceSkills()
@@ -251,14 +253,21 @@ export function AgentAddonsTab({
       .catch((err) => setPluginError({ name, message: unwrapIpcError(err, fallback) }))
       .finally(() => setPluginBusy(null))
   }
-  const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb } | null>(null)
+  // One verb at a time across the skill rows: a catalog pin's, or an own linked skill's Get ('get').
+  const [skillBusy, setSkillBusy] = useState<{ name: string; verb: CatalogVerb | 'get' } | null>(null)
   const [skillError, setSkillError] = useState<{ name: string; message: string } | null>(null)
-  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  // Which row's confirm is open, and which one (Remove, Edit or Replace): one at a time across the list.
+  const [confirmingSkill, setConfirmingSkill] = useState<{ key: string; verb: 'remove' | 'edit' | 'replace' } | null>(null)
   // Share a skill: owned here, so the share outlives its dialog (rule 5); the
   // dialog closes on success only and shows a refusal itself (rule 6).
   const publishSkill = usePublishSkill()
+  // Get Version N, from a row or from the Share dialog: owned here for the same reason.
+  const getLatestSkill = useGetLatestSkill()
   const [sharingSkill, setSharingSkill] = useState<string | null>(null)
-  const [shareError, setShareError] = useState<string | null>(null)
+  // The share's refusal: its sentence, and the refusal itself for what the dialog does with it (stale, candidates).
+  const [shareError, setShareErrorState] = useState<{ message: string; refusal: SkillPublishRefused | null } | null>(null)
+  const setShareError = (message: string | null, refusal: SkillPublishRefused | null = null): void =>
+    setShareErrorState(message === null ? null : { message, refusal })
   // Who can use a shared skill: the dialog owns its own write and closes on Close only.
   const [peopleOf, setPeopleOf] = useState<{ uuid: string; name: string } | null>(null)
   const sharingRow = sharingSkill ? (agent.skills ?? []).find((skill) => skill.source === 'authored' && skill.name === sharingSkill) ?? null : null
@@ -269,7 +278,7 @@ export function AgentAddonsTab({
       .mutateAsync(input)
       .then((result) => {
         if (result.ok) setSharingSkill((current) => (current === input.name ? null : current))
-        else setShareError(result.message || SKILL_SHARE_TEXT.shareFailed)
+        else setShareError(result.message || SKILL_SHARE_TEXT.shareFailed, result)
       })
       .catch((err) => setShareError(unwrapIpcError(err, SKILL_SHARE_TEXT.shareFailed)))
   }
@@ -289,7 +298,7 @@ export function AgentAddonsTab({
 
   const runSkillVerb = (
     name: string,
-    verb: CatalogVerb,
+    verb: CatalogVerb | 'get',
     run: () => Promise<{ ok: true } | { ok: false; message: string }>,
     fallback: string
   ): void => {
@@ -299,7 +308,7 @@ export function AgentAddonsTab({
     run()
       .then((result) => {
         if (!result.ok) setSkillError({ name, message: catalogSkillOutcomeMessage(result, fallback) })
-        else if (verb === 'remove') setConfirmingRemove(null)
+        else if (verb === 'remove' || verb === 'edit' || verb === 'get') setConfirmingSkill(null)
       })
       .catch((err) => setSkillError({ name, message: unwrapIpcError(err, fallback) }))
       .finally(() => setSkillBusy(null))
@@ -322,10 +331,10 @@ export function AgentAddonsTab({
     return {
       readOnly,
       sharedEditable,
-      busy: skillBusy?.name === key ? skillBusy.verb : null,
+      busy: skillBusy?.name === key && skillBusy.verb !== 'get' ? skillBusy.verb : null,
       locked: skillBusy !== null && skillBusy.name !== key,
       error: skillError?.name === key ? skillError.message : null,
-      confirming: confirmingRemove === key,
+      confirming: confirmingSkill?.key === key && confirmingSkill.verb !== 'replace' ? confirmingSkill.verb : null,
       onUpdate: () => runSkillVerb(key, 'update', update, CATALOG_SKILL_TEXT.updateFailed),
       onEnsure: () =>
         runSkillVerb(
@@ -353,10 +362,45 @@ export function AgentAddonsTab({
         ),
       onAskRemove: () => {
         setSkillError(null)
-        setConfirmingRemove(key)
+        setConfirmingSkill({ key, verb: 'remove' })
       },
-      onCancelRemove: () => setConfirmingRemove(null),
-      onRemove: () => runSkillVerb(key, 'remove', remove, CATALOG_SKILL_TEXT.removeFailed)
+      onCancelRemove: () => setConfirmingSkill(null),
+      onRemove: () => runSkillVerb(key, 'remove', remove, CATALOG_SKILL_TEXT.removeFailed),
+      onAskEdit: () => {
+        setSkillError(null)
+        setConfirmingSkill({ key, verb: 'edit' })
+      },
+      onCancelEdit: () => setConfirmingSkill(null),
+      // Catalog pins only (SkillRow offers Edit on no marketplace row); on success the rescan turns the row into the authored one.
+      onEdit: () =>
+        runSkillVerb(
+          key,
+          'edit',
+          () => makeSkillEditable.mutateAsync({ agentId: agent.id, name: skill.name }),
+          CATALOG_SKILL_TEXT.editFailed
+        )
+    }
+  }
+
+  // An own skill linked to a package (`shared`) whose folder is behind it or diverged from it,
+  // on an agent the person may change (as Share): Get Version N, or Replace after its confirm.
+  const syncActionsFor = (skill: LocalAgentSkill): SkillSyncActions | undefined => {
+    if (readOnly || skill.source !== 'authored' || !skill.shared || (skill.sync !== 'behind' && skill.sync !== 'diverged')) return undefined
+    const key = `authored:${skill.name}`
+    const get = (replace: boolean): void =>
+      runSkillVerb(key, 'get', () => getLatestSkill.mutateAsync({ agentId: agent.id, name: skill.name, replace }), SKILL_SHARE_TEXT.getFailed)
+    return {
+      busy: skillBusy?.name === key,
+      locked: skillBusy !== null && skillBusy.name !== key,
+      error: skillError?.name === key ? skillError.message : null,
+      confirming: confirmingSkill?.key === key && confirmingSkill.verb === 'replace',
+      onGet: () => get(false),
+      onAskReplace: () => {
+        setSkillError(null)
+        setConfirmingSkill({ key, verb: 'replace' })
+      },
+      onCancelReplace: () => setConfirmingSkill(null),
+      onReplace: () => get(true)
     }
   }
 
@@ -456,6 +500,7 @@ export function AgentAddonsTab({
       skill={skill}
       revealError={revealError?.skill === skill.name ? revealError.message : null}
       catalogActions={skill.source !== 'authored' ? catalogActionsFor(skill) : undefined}
+      syncActions={syncActionsFor(skill)}
       marketplaceStatus={skill.source === 'marketplace' ? statusOf(skill) : undefined}
       onFinishSetup={onFinishSetup}
       onShare={
@@ -469,7 +514,9 @@ export function AgentAddonsTab({
       onWhoCanUse={
         skill.source === 'authored' && skill.shared
           ? () => setPeopleOf({ uuid: skill.shared!.packageUuid, name: skill.name })
-          : undefined
+          : skill.source === 'catalog' && skill.packageUuid
+            ? () => setPeopleOf({ uuid: skill.packageUuid!, name: skill.title || skill.name })
+            : undefined
       }
       onReveal={() => {
         setRevealError(null)
@@ -575,8 +622,15 @@ export function AgentAddonsTab({
           agentId={agent.id}
           skill={sharingRow}
           pending={publishSkill.isPending}
-          error={shareError}
+          error={shareError?.message ?? null}
+          refusal={shareError?.refusal ?? null}
           onShare={shareSkill}
+          onGetLatest={async () => {
+            // The stale refusal is answered by this Get; the dialog then previews again.
+            const result = await getLatestSkill.mutateAsync({ agentId: agent.id, name: sharingRow.name })
+            if (result.ok) setShareError(null)
+            return result
+          }}
           onCancel={() => {
             if (publishSkill.isPending) return
             setSharingSkill(null)

@@ -1,4 +1,4 @@
-import { ArrowUpCircle, ExternalLink, FileText, Loader2, RotateCw, Share2, Trash2, Users } from 'lucide-react'
+import { ArrowUpCircle, ExternalLink, FileText, Loader2, Pencil, Replace, RotateCw, Share2, Trash2, Users } from 'lucide-react'
 import type { LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
 import { MARKETPLACE_SKILL_TEXT } from '../../../utils/marketplaceSkills'
@@ -32,7 +32,7 @@ function skillHealth(skill: LocalAgentSkill): CredentialHealth {
 }
 
 /** A catalog row's verb in flight. */
-export type CatalogVerb = 'update' | 'ensure' | 'remove'
+export type CatalogVerb = 'update' | 'ensure' | 'remove' | 'edit'
 
 /**
  * What a catalog row can do, and its state, owned by the tab so a verb in
@@ -50,7 +50,8 @@ export interface CatalogRowActions {
   /** Another row's verb is running. */
   locked: boolean
   error: string | null
-  confirming: boolean
+  /** Which confirm is open inside the card, if any; one at a time. */
+  confirming: 'remove' | 'edit' | null
   onUpdate: () => void
   onEnsure: () => void
   /**
@@ -62,6 +63,31 @@ export interface CatalogRowActions {
   onAskRemove: () => void
   onCancelRemove: () => void
   onRemove: () => void
+  /** Edit skill: opens its confirm; offered on a catalog pin whose package the person may edit. */
+  onAskEdit: () => void
+  onCancelEdit: () => void
+  onEdit: () => void
+}
+
+/**
+ * Get Version N on an own skill linked to a catalog package (`skill.shared`),
+ * owned by the tab like the catalog rows' verbs and sharing their lock.
+ * Offered only on an agent the person may change.
+ */
+export interface SkillSyncActions {
+  /** Get (or Replace) is running on this row. */
+  busy: boolean
+  /** Another row's verb is running. */
+  locked: boolean
+  error: string | null
+  /** Replace's confirm is open inside the card. */
+  confirming: boolean
+  /** `behind`: bring the newer version in. */
+  onGet: () => void
+  /** `diverged`: open the confirm; Replace keeps the folder in a backup first. */
+  onAskReplace: () => void
+  onCancelReplace: () => void
+  onReplace: () => void
 }
 
 /** Whether a catalog row's revision is not on this computer, so Try again can fetch it. */
@@ -119,13 +145,20 @@ function slotHealth(credential: LocalAgentSkillCredential): CredentialHealth | n
  *
  * An authored skill shared to the catalog shows, to a maintainer of its
  * package (the listing's access), a Who can use icon that opens the skill's
- * People.
+ * People. When its package has a newer version than the folder holds, a
+ * muted line under the title says which and who shared it; on a folder
+ * without unshared changes (`behind`) Get Version N brings it in, and on one
+ * with them (`diverged`) Replace with Version N… opens a confirm inside the
+ * card naming the backup folder the changes go to.
  *
  * A catalog row's actions are icons on the title line (rule 13): Update when
  * the catalog has a newer version, Try again when the pinned revision is not
  * on this computer, Check again on a Disconnected row with no copy here, and
- * Remove, whose confirm opens inside the card. Update
- * and Remove are not shown on an agent shared with the user to use only. A
+ * Edit (a catalog pin whose package the person may edit: the pin becomes an
+ * own copy linked to it) and Remove, each with its confirm inside the card,
+ * one open at a time. Update, Edit and Remove are not shown on an agent shared
+ * with the user to use only. A catalog pin's maintainer also gets Who can use,
+ * which is about the package, so it is shown whatever the agent's state. A
  * verb in flight spins its icon; a refusal is the card's last line (rule 6).
  */
 export function SkillRow({
@@ -136,6 +169,7 @@ export function SkillRow({
   onWhoCanUse,
   onFinishSetup,
   catalogActions,
+  syncActions,
   marketplaceStatus
 }: {
   skill: LocalAgentSkill
@@ -145,9 +179,14 @@ export function SkillRow({
   onFinishSetup?: () => void
   /** Authored rows the person may share (`skill.shareable`): opens the Share dialog. */
   onShare?: () => void
-  /** Authored rows shared to the catalog: opens Who can use, offered only to a maintainer of the package. */
+  /**
+   * Authored rows shared to the catalog, and catalog pins: opens Who can use,
+   * offered only to a maintainer of the package (`shared.access` / `access`).
+   */
   onWhoCanUse?: () => void
   catalogActions?: CatalogRowActions
+  /** Authored rows linked to a package, on an agent the person may change: Get Version N and Replace. */
+  syncActions?: SkillSyncActions
   /** Marketplace rows: where the pin stands against its marketplace, once read. */
   marketplaceStatus?: MarketplaceSkillPinStatus | null
 }): React.JSX.Element {
@@ -178,8 +217,12 @@ export function SkillRow({
         ? `Version ${skill.version}`
         : null
   // Try again's failure is often the very sentence the amber issue above says.
-  const actionError =
-    catalogActions?.error && !skill.issues.some((issue) => issue.message === catalogActions.error) ? catalogActions.error : null
+  const rowError = catalogActions?.error ?? syncActions?.error ?? null
+  const actionError = rowError && !skill.issues.some((issue) => issue.message === rowError) ? rowError : null
+  // A linked own skill whose package moved on: Get or Replace act on it, and their names say who shared it.
+  const newer =
+    !catalog && skill.shared && (skill.sync === 'behind' || skill.sync === 'diverged') && skill.latest ? skill.latest : null
+  const syncDisabled = !syncActions || syncActions.busy || syncActions.locked || syncActions.confirming
   const hasFile = !skill.issues.some((issue) => issue.code === 'missing_skill_md' || issue.code === 'not_a_directory')
   const shown = skill.credentials.slice(0, MAX_SLOT_CHIPS)
   const hidden = skill.credentials.length - shown.length
@@ -192,8 +235,28 @@ export function SkillRow({
   const finishSetup =
     onFinishSetup && skill.deliverable && skill.credentials.some((credential) => credential.filled === false) ? onFinishSetup : null
   const marketplaceUpdate = marketplace && marketplaceStatus?.state === 'update_available' ? marketplaceStatus : null
+  // A catalog pin (never a marketplace one) carries the person's access to its package from the listing.
+  const pinAccess = skill.source === 'catalog' ? (skill.access ?? null) : null
+  // Who can use is about the package, not the agent: offered to its maintainer whatever the agent's U9 state.
+  const whoCanUse = catalog ? pinAccess === 'maintain' : skill.shared?.access === 'maintain'
+  const editable = !!catalogActions && !catalogActions.readOnly && (pinAccess === 'edit' || pinAccess === 'maintain')
+  // The version the copy is taken at: the package's latest, which is the pin's own when it is not behind.
+  const editVersion =
+    skill.updatable && typeof skill.latestRevision === 'number'
+      ? catalogVersionLabel(skill.latestRevision, skill.latestVersion)
+      : typeof skill.revisionNumber === 'number'
+        ? catalogVersionLabel(skill.revisionNumber, skill.version)
+        : null
+  const verbsDisabled = !catalogActions || catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming !== null
   // The pin names no URL; the status lookup brings the entry's, while it is still visible.
   const marketplaceSource = marketplace ? (marketplaceStatus?.repositoryUrl ?? null) : null
+  // One place on every row (rule 13): after Share / Make editable, before Reveal / Remove.
+  const whoCanUseButton =
+    whoCanUse && onWhoCanUse ? (
+      <SettingsIconButton onClick={onWhoCanUse} title={SKILL_SHARE_TEXT.whoCanUseAction(title)} aria-label={SKILL_SHARE_TEXT.whoCanUseAction(title)}>
+        <Users size={14} />
+      </SettingsIconButton>
+    ) : null
   return (
     <AddonRow
       kind="skill"
@@ -226,20 +289,36 @@ export function SkillRow({
       status={<CredentialStatusGlyph health={skillHealth(skill)} />}
       actions={
         <>
+        {newer && syncActions && skill.sync === 'behind' && (
+          <SettingsIconButton
+            onClick={syncActions.onGet}
+            disabled={syncDisabled}
+            title={SKILL_SHARE_TEXT.getVersion(skill.name, newer.revisionNumber, newer.publishedBy)}
+            aria-label={SKILL_SHARE_TEXT.getVersion(skill.name, newer.revisionNumber, newer.publishedBy)}
+          >
+            <BusyIcon busy={syncActions.busy}>
+              <ArrowUpCircle size={14} />
+            </BusyIcon>
+          </SettingsIconButton>
+        )}
+        {newer && syncActions && skill.sync === 'diverged' && (
+          <SettingsIconButton
+            onClick={syncActions.onAskReplace}
+            disabled={syncDisabled}
+            title={SKILL_SHARE_TEXT.replaceWith(skill.name, newer.revisionNumber, newer.publishedBy)}
+            aria-label={SKILL_SHARE_TEXT.replaceWith(skill.name, newer.revisionNumber, newer.publishedBy)}
+          >
+            <BusyIcon busy={syncActions.busy}>
+              <Replace size={14} />
+            </BusyIcon>
+          </SettingsIconButton>
+        )}
         {!catalog && skill.shareable && onShare && (
           <SettingsIconButton onClick={onShare} title={shareLabel} aria-label={shareLabel}>
             <Share2 size={14} />
           </SettingsIconButton>
         )}
-        {!catalog && skill.shared?.access === 'maintain' && onWhoCanUse && (
-          <SettingsIconButton
-            onClick={onWhoCanUse}
-            title={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
-            aria-label={SKILL_SHARE_TEXT.whoCanUseAction(skill.name)}
-          >
-            <Users size={14} />
-          </SettingsIconButton>
-        )}
+        {!catalog && whoCanUseButton}
         {!catalog && (
           <SettingsIconButton
             onClick={onReveal}
@@ -263,7 +342,7 @@ export function SkillRow({
             {marketplaceUpdate && !catalogActions.readOnly && (
               <SettingsIconButton
                 onClick={catalogActions.onUpdate}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                disabled={verbsDisabled}
                 title={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
                 aria-label={MARKETPLACE_SKILL_TEXT.updateTo(title, marketplaceUpdate.latestVersion)}
               >
@@ -275,7 +354,7 @@ export function SkillRow({
             {!marketplace && skill.updatable && !catalogActions.readOnly && typeof skill.latestRevision === 'number' && (
               <SettingsIconButton
                 onClick={catalogActions.onUpdate}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                disabled={verbsDisabled}
                 title={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
                 aria-label={CATALOG_SKILL_TEXT.updateTo(title, catalogVersionLabel(skill.latestRevision, skill.latestVersion))}
               >
@@ -287,7 +366,7 @@ export function SkillRow({
             {notHere(skill) && (
               <SettingsIconButton
                 onClick={catalogActions.onEnsure}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                disabled={verbsDisabled}
                 title={CATALOG_SKILL_TEXT.tryAgain(title)}
                 aria-label={CATALOG_SKILL_TEXT.tryAgain(title)}
               >
@@ -299,7 +378,7 @@ export function SkillRow({
             {disconnectedNotHere(skill) && (
               <SettingsIconButton
                 onClick={catalogActions.onCheck}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                disabled={verbsDisabled}
                 title={CATALOG_SKILL_TEXT.checkAgain(title)}
                 aria-label={CATALOG_SKILL_TEXT.checkAgain(title)}
               >
@@ -308,11 +387,24 @@ export function SkillRow({
                 </BusyIcon>
               </SettingsIconButton>
             )}
+            {editable && (
+              <SettingsIconButton
+                onClick={catalogActions.onAskEdit}
+                disabled={verbsDisabled}
+                title={CATALOG_SKILL_TEXT.edit(title)}
+                aria-label={CATALOG_SKILL_TEXT.edit(title)}
+              >
+                <BusyIcon busy={catalogActions.busy === 'edit'}>
+                  <Pencil size={14} />
+                </BusyIcon>
+              </SettingsIconButton>
+            )}
+            {whoCanUseButton}
             {!catalogActions.readOnly && (
               <SettingsIconButton
                 danger
                 onClick={catalogActions.onAskRemove}
-                disabled={catalogActions.busy !== null || catalogActions.locked || catalogActions.confirming}
+                disabled={verbsDisabled}
                 title={CATALOG_SKILL_TEXT.remove(title)}
                 aria-label={CATALOG_SKILL_TEXT.remove(title)}
               >
@@ -321,6 +413,7 @@ export function SkillRow({
             )}
           </>
         )}
+        {catalog && !catalogActions && whoCanUseButton}
         </>
       }
     >
@@ -381,8 +474,46 @@ export function SkillRow({
           ))}
         </ul>
       )}
+      {syncActions && newer && skill.sync === 'diverged' && (
+        <AnimatedCollapse open={syncActions.confirming}>
+          <div
+            role="group"
+            aria-label={SKILL_SHARE_TEXT.replaceWith(skill.name, newer.revisionNumber)}
+            className="border-t border-[var(--color-border)] px-4 py-3"
+          >
+            <p className="mb-3 text-[13px]">{SKILL_SHARE_TEXT.replaceConfirm(skill.name, newer.revisionNumber)}</p>
+            <div className="flex gap-2">
+              <SettingsButton disabled={syncActions.busy} onClick={syncActions.onReplace}>
+                {syncActions.busy ? SKILL_SHARE_TEXT.replacing : SKILL_SHARE_TEXT.replaceButton}
+              </SettingsButton>
+              <SettingsButton disabled={syncActions.busy} onClick={syncActions.onCancelReplace}>
+                {CATALOG_SKILL_TEXT.cancel}
+              </SettingsButton>
+            </div>
+          </div>
+        </AnimatedCollapse>
+      )}
+      {catalogActions && editable && (
+        <AnimatedCollapse open={catalogActions.confirming === 'edit'}>
+          <div
+            role="group"
+            aria-label={CATALOG_SKILL_TEXT.edit(title)}
+            className="border-t border-[var(--color-border)] px-4 py-3"
+          >
+            <p className="mb-3 text-[13px]">{CATALOG_SKILL_TEXT.editConfirm(title, skill.name, editVersion)}</p>
+            <div className="flex gap-2">
+              <SettingsButton disabled={catalogActions.busy === 'edit'} onClick={catalogActions.onEdit}>
+                {catalogActions.busy === 'edit' ? CATALOG_SKILL_TEXT.editing : CATALOG_SKILL_TEXT.editButton}
+              </SettingsButton>
+              <SettingsButton disabled={catalogActions.busy === 'edit'} onClick={catalogActions.onCancelEdit}>
+                {CATALOG_SKILL_TEXT.cancel}
+              </SettingsButton>
+            </div>
+          </div>
+        </AnimatedCollapse>
+      )}
       {catalogActions && (
-        <AnimatedCollapse open={catalogActions.confirming}>
+        <AnimatedCollapse open={catalogActions.confirming === 'remove'}>
           <div
             role="group"
             aria-label={CATALOG_SKILL_TEXT.remove(title)}

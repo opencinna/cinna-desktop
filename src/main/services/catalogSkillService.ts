@@ -29,6 +29,8 @@
  */
 
 import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { agentRepo } from '../db/agents'
 import { agentRootRepo } from '../db/agentRoots'
@@ -48,7 +50,11 @@ import { activeListing, linkedEntry } from './catalogSkillUpdates'
 import { libraryTrust } from './libraryTrust'
 import { gitService } from './localAgents/gitService'
 import { manifestPath, readManifest, readWithStamp, writeIfUnchanged } from '../kit/manifestIo'
-import { MAX_ARCHIVE_BYTES, readSkillArchive, SkillArchiveError } from '../kit/skillArchive'
+import { MAX_ARCHIVE_BYTES, readSkillArchive, SkillArchiveError, writeEditableSkillTree } from '../kit/skillArchive'
+import { collectSkillTree, skillTreeHash, type SkillTree } from '../kit/skillPack'
+import { PUBLICATIONS_FILE, upsertSkillPublication } from '../kit/publications'
+import { sweepSkillLeftovers } from '../kit/skillLeftovers'
+import { leftoverBackup } from './skillBackups'
 import {
   catalogPinClashes,
   catalogSkillRefOf,
@@ -90,7 +96,10 @@ const SENTENCES: Record<CatalogSkillRefusal, string> = {
   too_large: 'The skill is larger than 16 MB.',
   manifest_modified: 'cinna-agent.json changed while the skill was downloading. Try again.',
   write_failed: 'The skill could not be saved on this computer.',
-  reauth_required: 'Sign in to Cinna again to download this skill.'
+  reauth_required: 'Sign in to Cinna again to download this skill.',
+  not_editor: 'Ask a maintainer of this skill for edit access, then try again.',
+  folder_exists: 'Rename or remove the skill’s folder under skills/ first.',
+  download_mismatch: 'The downloaded files did not match the published version, so nothing was changed.'
 }
 
 /** The sentence for an agent whose pins are not the user's to change (`changeability`). */
@@ -377,11 +386,56 @@ function latestPinOf(item: CatalogItem): CatalogSkillPin | null {
   }
 }
 
+/**
+ * The listing item's latest revision, brought into this computer's cache (both
+ * digests checked, as a pin's download) and read as a tree, for a verb that
+ * copies it into `skills/<name>/` writable: Edit skill, and Get Version N
+ * (`skillPublishService.getLatest`). `dir` is the agent asking (how a 404 is
+ * worded); `name` the skill's folder name when it is not the item's.
+ */
+export async function latestRevisionTree(
+  profile: string,
+  host: string,
+  item: CatalogItem,
+  dir: string,
+  name?: string
+): Promise<{ ok: true; pin: CatalogSkillPin; tree: SkillTree } | Refused> {
+  const latest = latestPinOf(item)
+  const target = latest ? targetOf({ ...latest, ...(name ? { name } : {}) }) : null
+  if (!latest || !target) return refused('not_in_catalog')
+  const fetched = await phrased(await fetchRevision(profile, host, target), teamTrackedOf(dir))
+  if (!fetched.ok) return fetched
+  const cached = catalogSkillCache.resolve(target)
+  if (cached.state !== 'ready') return refused('write_failed')
+  const collected = collectSkillTree(cached.dir)
+  if (!collected.ok) return refused('write_failed')
+  return { ok: true, pin: latest, tree: collected.tree }
+}
+
 /** Why `name` cannot be pinned beside what the agent already has, or null. `except` is the pin being replaced. */
 function clashOf(dir: string, pins: CatalogSkillPin[], name: string, except: number | null): boolean {
   if (PLATFORM_SKILL_NAMES.has(name)) return true
   if (scanAgentSkills(dir).some((skill) => skill.name === name)) return true
   return pins.some((pin, index) => index !== except && pin && typeof pin === 'object' && pin.name === name)
+}
+
+/** Whether anything — a link included, even a dangling one — is at `path`. */
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Remove `dir` when it is an empty folder; anything else stays. Never throws. */
+function removeIfEmpty(dir: string): void {
+  try {
+    rmdirSync(dir)
+  } catch {
+    /* not empty, or gone */
+  }
 }
 
 /** Tell the scanner and the renderer that what an agent's skills resolve to moved. */
@@ -644,6 +698,135 @@ export const catalogSkillService = {
       logger.info('catalog skill removed', { agentId, name })
       void detachUnusedCredentials(agentId)
       return { ok: true as const, name, revisionNumber: typeof pin?.revision_number === 'number' ? pin.revision_number : 0 }
+    })
+  },
+
+  /**
+   * Edit skill (skill co-maintainers S2): the pin `name` becomes a linked
+   * copy — the package's **latest** revision copied, writable, into
+   * `skills/<name>/`, its `publications.json` `skills[]` entry naming the
+   * package and that revision, and the pin dropped — so Share sends the
+   * person's changes as the package's next version. Refused, before anything
+   * is touched, on an agent the person may not change (U9), without `edit` or
+   * `maintain` on the package, when `skills/<name>/` is already there, or
+   * when the pin clashes. A failure after the copy undoes it: the folder goes
+   * and `publications.json` is put back as it was.
+   */
+  async makeEditable(userId: string, agentId: string, name: string): Promise<CatalogSkillOutcome> {
+    return guarded('make editable', async () => {
+      const who = account()
+      if ('ok' in who) return who
+      const kit = locateKit(userId, agentId)
+      if ('ok' in kit) return kit
+      const pins = pinsOf(readManifest(manifestPath(kit.dir)))
+      const index = pins.findIndex((pin) => pin?.name === name)
+      const current = index === -1 ? null : pins[index]
+      if (!current || typeof current.package_uuid !== 'string' || !isCatalogPinName(name)) return refused('not_found')
+      const { listing, item } = await skillItem(who.profile, current.package_uuid)
+      const access = await changeability(kit.dir, listing)
+      if (access !== 'ok') return refused(access)
+      const latest = item ? latestPinOf(item) : null
+      if (!item || !latest) return refused('not_in_catalog')
+      if (item.access !== 'edit' && item.access !== 'maintain') return refused('not_editor')
+      // A crash in an earlier swap may have left this skill's folder set aside under a dot-name.
+      if (sweepSkillLeftovers(kit.dir, name, leftoverBackup(agentId)).restored.length > 0) settle(kit.rootId, agentId)
+      const skillsDir = join(kit.dir, 'skills')
+      const finalDir = join(skillsDir, name)
+      if (lexists(finalDir)) return refused('folder_exists', `Rename or remove skills/${name}/ first.`)
+      if (clashOf(kit.dir, pins, name, index)) return refused('clash')
+
+      // The latest revision, whatever the pin holds: the copy is what Share sends the next version from.
+      const collected = await latestRevisionTree(who.profile, who.host, item, kit.dir, name)
+      if (!collected.ok) return collected
+
+      // Staged beside skills/<name>/ under a dot-name the skills scan and the watcher skip, then one rename.
+      const createdSkillsDir = !existsSync(skillsDir)
+      const staging = join(skillsDir, `.${name}.cinna-staging-${process.pid}-${Date.now()}`)
+      const dropStaging = (): void => {
+        rmSync(staging, { recursive: true, force: true })
+        if (createdSkillsDir) removeIfEmpty(skillsDir)
+      }
+      let contentHash: string
+      try {
+        mkdirSync(skillsDir, { recursive: true })
+        writeEditableSkillTree(staging, collected.tree)
+        const copy = collectSkillTree(staging)
+        if (!copy.ok) {
+          dropStaging()
+          return refused('write_failed')
+        }
+        const ownHash = skillTreeHash(name, copy.tree.files)
+        // The catalog's own hash of the revision when the listing carries it (core with the
+        // co-maintainers change). Without it, the copy's own hash: the archive was already checked
+        // against both digests, and the tree on disk hashes as core's does (O2).
+        const declared = typeof item.latest?.content_hash === 'string' ? item.latest.content_hash.trim().toLowerCase() : ''
+        if (declared !== '' && declared !== ownHash) {
+          logger.warn('catalog skill copy does not match its content hash', { name, revision: latest.revision_number })
+          dropStaging()
+          return refused('download_mismatch')
+        }
+        contentHash = declared !== '' ? declared : ownHash
+        if (lexists(finalDir)) {
+          dropStaging()
+          return refused('folder_exists', `Rename or remove skills/${name}/ first.`)
+        }
+        renameSync(staging, finalDir)
+      } catch (err) {
+        dropStaging()
+        logger.warn('catalog skill could not be copied into the agent', { name, error: err instanceof Error ? err.message : String(err) })
+        return refused('write_failed')
+      }
+
+      const ledger = join(kit.dir, PUBLICATIONS_FILE)
+      let ledgerBefore: Buffer | null = null
+      const undo = (): void => {
+        rmSync(finalDir, { recursive: true, force: true })
+        if (createdSkillsDir) removeIfEmpty(skillsDir)
+        try {
+          if (ledgerBefore === null) rmSync(ledger, { force: true })
+          else writeFileSync(ledger, ledgerBefore)
+        } catch (err) {
+          logger.warn('publications.json could not be put back', { error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      try {
+        ledgerBefore = existsSync(ledger) ? readFileSync(ledger) : null
+        // As Share records a version (`skillPublishService.publish`).
+        upsertSkillPublication(kit.dir, {
+          platform_url: who.host,
+          name,
+          package_id: latest.package_id,
+          package_uuid: latest.package_uuid,
+          revision_number: latest.revision_number,
+          content_hash: contentHash
+        })
+      } catch (err) {
+        undo()
+        return refused('write_failed', `${PUBLICATIONS_FILE} could not be written: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300))
+      }
+
+      let written: ReturnType<typeof writePins>
+      try {
+        written = writePins(kit.dir, (fresh) => {
+          const at = fresh.findIndex((pin) => pin?.name === name)
+          if (at === -1) return refused('not_found')
+          if (!pinsPackage(fresh[at], latest.package_uuid)) return refused('manifest_modified')
+          return fresh.filter((_, other) => other !== at)
+        })
+      } catch (err) {
+        undo()
+        throw err
+      }
+      if (!written.ok) {
+        undo()
+        return written
+      }
+      settle(kit.rootId, agentId)
+      if (written.manifestId) void catalogLocalInstalls.reportSkillRemoved(who.profile, latest.package_uuid, written.manifestId)
+      logger.info('catalog skill made editable', { agentId, name, revision: latest.revision_number })
+      // The copy declares the pin's slots as an own skill, so what was attached for them stays.
+      void detachUnusedCredentials(agentId)
+      return { ok: true as const, name, revisionNumber: latest.revision_number }
     })
   },
 

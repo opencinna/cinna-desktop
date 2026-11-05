@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, w
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
-import { collectSkillTree, MAX_SKILL_UPLOAD_BYTES, packSkillTarGz, skillTreeHash } from './skillPack'
+import { collectSkillTree, MAX_SKILL_UPLOAD_BYTES, packSkillTarGz, skillTreeHash, skillTreeStamp } from './skillPack'
 import { readSkillArchive } from './skillArchive'
 
 /**
@@ -170,5 +170,37 @@ describe('skillTreeHash', () => {
       { path: 'SKILL.md', data: Buffer.from(SKILL_MD) }
     ]
     expect(skillTreeHash('erp-lookup', files)).toBe('bf75b2cae131606896b5f8c5349c5b354e607f766239256631cdf36345a2c82a')
+  })
+})
+
+describe('Finder’s .DS_Store (skill co-maintainers D3)', () => {
+  const hash = (): string => {
+    const tree = collectSkillTree(skillDir)
+    if (!tree.ok) throw new Error('unreadable')
+    return skillTreeHash('erp-lookup', tree.tree.files)
+  }
+
+  it('is neither packed nor hashed, at any depth, so a revealed skill does not read as changed', () => {
+    const before = hash()
+    const packed = members(pack()).map((m) => m.name)
+    writeFileSync(join(skillDir, '.DS_Store'), 'finder')
+    writeFileSync(join(skillDir, 'scripts', '.DS_Store'), 'finder')
+    expect(hash()).toBe(before)
+    expect(members(pack()).map((m) => m.name)).toEqual(packed)
+    // Another dotfile still counts.
+    writeFileSync(join(skillDir, '.keep'), '')
+    expect(hash()).not.toBe(before)
+  })
+
+  it('does not move the tree stamp either, while a real edit does', () => {
+    const before = skillTreeStamp(skillDir)
+    expect(before).not.toBeNull()
+    writeFileSync(join(skillDir, 'scripts', '.DS_Store'), 'finder')
+    // The folder holding it is touched by the add, so compare only the size and the count.
+    expect(skillTreeStamp(skillDir)!.split('\0').slice(2)).toEqual(before!.split('\0').slice(2))
+    writeFileSync(join(skillDir, 'notes.md'), 'more')
+    expect(skillTreeStamp(skillDir)).not.toBe(before)
+    symlinkSync(join(skillDir, 'notes.md'), join(skillDir, 'link.md'))
+    expect(skillTreeStamp(skillDir)).toBeNull()
   })
 })

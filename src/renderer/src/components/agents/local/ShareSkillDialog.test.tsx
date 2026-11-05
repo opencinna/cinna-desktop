@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto, LocalAgentSkill } from '../../../../../shared/localAgents'
-import type { SkillPublishOutcome, SkillPublishPreviewOutcome } from '../../../../../shared/skillPublish'
+import type { SkillGetLatestOutcome, SkillPublishOutcome, SkillPublishPreviewOutcome } from '../../../../../shared/skillPublish'
 
 /**
  * Share a skill, from the agent's Skills section: the row's icon action, its
@@ -15,6 +15,7 @@ import type { SkillPublishOutcome, SkillPublishPreviewOutcome } from '../../../.
 
 const preview = vi.fn<(agentId: string, name: string) => Promise<SkillPublishPreviewOutcome>>()
 const publish = vi.fn<(input: unknown) => Promise<SkillPublishOutcome>>()
+const getLatest = vi.fn<(agentId: string, name: string, replace?: boolean) => Promise<SkillGetLatestOutcome>>()
 window.api = {
   localAgents: { listMcpProviders: async () => [], openPath: async () => ({ success: true }) },
   mcp: { list: async () => [], onStatusChanged: () => () => {}, agentsUsing: async () => [] },
@@ -24,7 +25,7 @@ window.api = {
   },
   catalogSkills: {},
   catalog: { items: async () => ({ success: true, value: null }) },
-  skillPublish: { preview, publish }
+  skillPublish: { preview, publish, getLatest }
 } as never
 
 const { AgentAddonsTab } = await import('./AgentAddonsTab')
@@ -49,7 +50,9 @@ const READY: SkillPublishPreviewOutcome = {
       }
     ],
     canProvide: true,
-    providersCarried: true
+    providersCarried: true,
+    editablePackages: [],
+    stale: null
   }
 }
 
@@ -98,6 +101,9 @@ async function openDialog(name = 'Share erp-lookup…', title = 'Share erp-looku
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // A queued answer a test left unused must not reach the next one.
+  preview.mockReset()
+  getLatest.mockReset()
   preview.mockResolvedValue(READY)
 })
 
@@ -236,7 +242,8 @@ describe('ShareSkillDialog', () => {
     const dialog = await openDialog()
     await within(dialog).findByText('Version 1 (1.0.0)')
     fireEvent.change(within(dialog).getByLabelText('Find a person', { selector: 'input' }), { target: { value: 'bo' } })
-    fireEvent.click(await within(dialog).findByRole('option', { name: 'Bob <bob@x.test>' }))
+    // The results list is portaled to the body, outside the dialog.
+    fireEvent.click(await screen.findByRole('option', { name: 'Bob <bob@x.test>' }))
     const list = within(dialog).getByRole('list', { name: 'People' })
     expect(within(list).getByText('Bob <bob@x.test>').className).not.toContain('line-through')
     expect(within(dialog).queryByText('Everyone can use it — Can use is not sent')).toBeNull()
@@ -277,5 +284,228 @@ describe('ShareSkillDialog', () => {
     expect((await within(dialog).findByRole('alert')).textContent).toBe('A file that can hold a secret is in this skill (.env).')
     expect(screen.getByRole('dialog', { name: 'Share erp-lookup' })).toBeTruthy()
     expect((within(dialog).getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+/** A first share's preview that finds packages of this name the person may edit (S6). */
+function withCandidates(...publishers: string[]): SkillPublishPreviewOutcome {
+  const base = (READY as Extract<SkillPublishPreviewOutcome, { ok: true }>).preview
+  return {
+    ok: true,
+    preview: {
+      ...base,
+      editablePackages: publishers.map((publisher, index) => ({
+        packageUuid: `pkg-${index}`,
+        packageId: `test.cinna.skill.erp-lookup.${publisher.toLowerCase()}`,
+        publisher,
+        access: 'edit',
+        latestRevisionNumber: 2 + index,
+        latestVersion: '1.0.1'
+      }))
+    }
+  }
+}
+
+describe('ShareSkillDialog: Share as, for a skill someone else shares (co-maintainers D4)', () => {
+  it('defaults to the next version of the first editable package: its version and id, no access or credential choices', async () => {
+    preview.mockResolvedValue(withCandidates('Ann', 'Cy'))
+    publish.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3, version: '1.0.2', packageUuid: 'pkg-0', packageId: 'p', recorded: true })
+    renderTab([skill()])
+    const dialog = await openDialog()
+    const group = await within(dialog).findByRole('group', { name: 'Share as' })
+    expect(within(group).getAllByRole('radio').map((radio) => [radio.parentElement!.textContent, (radio as HTMLInputElement).checked])).toEqual([
+      ['New version of Ann’s erp-lookup', true],
+      ['New version of Cy’s erp-lookup', false],
+      ['A separate skill', false]
+    ])
+    expect(within(dialog).getByText('Version 3')).toBeTruthy()
+    expect(within(dialog).getByText('test.cinna.skill.erp-lookup.ann').tagName).toBe('CODE')
+    // Who can use and the credential choices are not offered (left in place, hidden), a line says why.
+    expect(within(dialog).queryByRole('checkbox', { name: 'Everyone on this server can use it' })).toBeNull()
+    expect(within(dialog).queryByRole('combobox', { name: 'What people need for erp.example.com' })).toBeNull()
+    expect(within(dialog).getByText('Who can use it stays as Ann set it.')).toBeTruthy()
+    expect(within(dialog).getByText('People who can use it keep access.')).toBeTruthy()
+
+    fireEvent.click(within(group).getByRole('radio', { name: 'New version of Cy’s erp-lookup' }))
+    expect(within(dialog).getByText('Version 4')).toBeTruthy()
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'From B' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }))
+    await waitFor(() => expect(publish).toHaveBeenCalled())
+    expect(publish.mock.calls[0][0]).toEqual({
+      agentId: 'folder:a',
+      name: 'erp-lookup',
+      releaseNotes: 'From B',
+      packageUuid: 'pkg-1',
+      baseRevisionNumber: 3,
+      publisherCredentials: []
+    })
+  })
+
+  it('shares a separate skill as today’s first share, with new_package', async () => {
+    preview.mockResolvedValue(withCandidates('Ann'))
+    publish.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 1, version: '1.0.0', packageUuid: 'u', packageId: 'p', recorded: true })
+    renderTab([skill()])
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('radio', { name: 'A separate skill' }))
+    expect(within(dialog).getByText('Version 1 (1.0.0)')).toBeTruthy()
+    expect(within(dialog).getByText('test.cinna.skill.erp-lookup').tagName).toBe('CODE')
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }), { target: { value: 'cred-1' } })
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Everyone on this server can use it' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }))
+    await waitFor(() => expect(publish).toHaveBeenCalled())
+    expect(publish.mock.calls[0][0]).toEqual({
+      agentId: 'folder:a',
+      name: 'erp-lookup',
+      releaseNotes: '',
+      people: [],
+      everyone: true,
+      newPackage: true,
+      publisherCredentials: [{ slot: 'erp.example.com', credentialId: 'cred-1' }]
+    })
+  })
+
+  it('switching Share as moves nothing above the note: the choice-dependent blocks are below it', async () => {
+    preview.mockResolvedValue(withCandidates('Ann'))
+    renderTab([skill()])
+    const dialog = await openDialog()
+    await within(dialog).findByRole('group', { name: 'Share as' })
+    const body = dialog.querySelector('[data-share-skill-body]') as HTMLElement
+    const note = within(dialog).getByRole('textbox', { name: 'Note (optional)' })
+    const noteRow = note.closest('label') as HTMLElement
+    const upToNote = (): Element[] => {
+      const rows = [...body.children]
+      return rows.slice(0, rows.indexOf(noteRow) + 1)
+    }
+    const before = upToNote()
+    // Share as, the intro (one sentence swapped in one cell), the version and id, then the note.
+    expect(before[0]).toBe(within(dialog).getByRole('group', { name: 'Share as' }))
+    expect(before).toHaveLength(4)
+    const swaps = [...dialog.querySelectorAll('[data-share-swap]')]
+    expect(swaps).toHaveLength(1)
+    expect(before[1]).toBe(swaps[0])
+    // Below the note: what the next version keeps, as lines.
+    expect(noteRow.nextElementSibling!.hasAttribute('data-share-keeps-access')).toBe(true)
+    expect(body.lastElementChild!.hasAttribute('data-share-keeps-providers')).toBe(true)
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'A separate skill' }))
+    // The same elements, in the same order, up to and including the note.
+    const after = upToNote()
+    expect(after).toHaveLength(before.length)
+    after.forEach((element, index) => expect(element).toBe(before[index]))
+    // Who can use and the credential choices appear below it.
+    const below = [...body.children].slice(after.length)
+    expect(below.some((row) => within(row as HTMLElement).queryByRole('checkbox', { name: 'Everyone on this server can use it' }))).toBe(true)
+    expect(below.some((row) => within(row as HTMLElement).queryByRole('combobox', { name: 'What people need for erp.example.com' }))).toBe(true)
+    expect(dialog.querySelector('[data-share-keeps-access]')).toBeNull()
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }))
+    upToNote().forEach((element, index) => expect(element).toBe(before[index]))
+  })
+
+  it('keeps the note disabled and unfocused until the preview answers, then focuses it', async () => {
+    let answer!: (outcome: SkillPublishPreviewOutcome) => void
+    preview.mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    renderTab([skill()])
+    const dialog = await openDialog()
+    const note = within(dialog).getByRole('textbox', { name: 'Note (optional)' }) as HTMLTextAreaElement
+    expect(note.disabled).toBe(true)
+    expect(document.activeElement).not.toBe(note)
+    answer(withCandidates('Ann'))
+    await within(dialog).findByRole('group', { name: 'Share as' })
+    await waitFor(() => expect(note.disabled).toBe(false))
+    expect(document.activeElement).toBe(note)
+  })
+
+  it('previews again when the share finds an editable package the preview did not list, and stays open', async () => {
+    preview.mockResolvedValueOnce(READY).mockResolvedValueOnce(withCandidates('Ann'))
+    publish.mockResolvedValue({
+      ok: false,
+      code: 'editable_package_exists',
+      message: 'You can edit Ann’s skill. Share this as a new version of it, or as a separate skill.',
+      candidates: []
+    })
+    renderTab([skill()])
+    const dialog = await openDialog()
+    await within(dialog).findByText('Version 1 (1.0.0)')
+    expect(within(dialog).queryByRole('group', { name: 'Share as' })).toBeNull()
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'Kept' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }))
+    expect(await within(dialog).findByRole('group', { name: 'Share as' })).toBeTruthy()
+    expect(preview).toHaveBeenCalledTimes(2)
+    expect(within(dialog).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }) as HTMLInputElement).toHaveProperty('checked', true)
+    expect((within(dialog).getByRole('textbox', { name: 'Note (optional)' }) as HTMLTextAreaElement).value).toBe('Kept')
+    expect(screen.getByRole('dialog', { name: 'Share erp-lookup' })).toBeTruthy()
+  })
+})
+
+describe('ShareSkillDialog: a copy behind the package (co-maintainers D4)', () => {
+  const shared = { packageUuid: 'u', packageId: 'p', revisionNumber: 2 }
+
+  it('says so before Share when the preview is stale, disables Share, and after Get Version N previews again', async () => {
+    preview.mockResolvedValueOnce(later({ stale: { latestRevision: 3, version: '1.0.2', publishedBy: 'Ann' } })).mockResolvedValueOnce(later())
+    let done!: (outcome: SkillGetLatestOutcome) => void
+    getLatest.mockReturnValue(new Promise((resolve) => { done = resolve }))
+    renderTab([skill({ shared, sync: 'behind', latest: { revisionNumber: 3, version: '1.0.2', publishedBy: 'Ann' } })])
+    const dialog = await openDialog('Share a new version of erp-lookup…', 'Share a new version of erp-lookup')
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.querySelector('p')!.textContent).toBe('Ann shared Version 3 since your copy. Get it first, then share your changes.')
+    // Last before the buttons (rule 6).
+    expect(alert.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Share' }).parentElement)
+    expect((within(dialog).getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Get Version 3' }))
+    await waitFor(() => expect(getLatest).toHaveBeenCalledWith('folder:a', 'erp-lookup', false))
+    expect((await within(dialog).findByRole('button', { name: 'Getting…' }) as HTMLButtonElement).disabled).toBe(true)
+    done({ ok: true, name: 'erp-lookup', revisionNumber: 3, version: '1.0.2', backupPath: null })
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull())
+    expect(preview).toHaveBeenCalledTimes(2)
+    expect((within(dialog).getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('keeps the dialog and the note on a stale refusal; Get is offered only over a folder without unshared changes', async () => {
+    preview.mockResolvedValue(later())
+    publish.mockResolvedValue({
+      ok: false,
+      code: 'stale',
+      message: 'Ann shared Version 3 since your copy. Get it first, then share your changes.',
+      stale: { latestRevision: 3, version: null, publishedBy: 'Ann' }
+    })
+    const view = renderTab([skill({ shared, sync: 'in_sync' })])
+    let dialog = await openDialog('Share a new version of erp-lookup…', 'Share a new version of erp-lookup')
+    await within(dialog).findByText('Version 4 (1.0.0)')
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'Mine' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }))
+    const alert = await within(dialog).findByRole('alert')
+    // One sentence, not the stale line and the same refusal again.
+    expect(within(dialog).getAllByRole('alert')).toHaveLength(1)
+    expect(alert.querySelector('p')!.textContent).toBe('Ann shared Version 3 since your copy. Get it first, then share your changes.')
+    expect(within(alert).getByRole('button', { name: 'Get Version 3' })).toBeTruthy()
+    expect(alert.querySelector('[data-share-stale-changes]')).toBeNull()
+    expect((within(dialog).getByRole('textbox', { name: 'Note (optional)' }) as HTMLTextAreaElement).value).toBe('Mine')
+    expect((within(dialog).getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(true)
+    view.unmount()
+
+    renderTab([skill({ shared, sync: 'changed' })])
+    dialog = await openDialog('Share a new version of erp-lookup…', 'Share a new version of erp-lookup')
+    await within(dialog).findByText('Version 4 (1.0.0)')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }))
+    const changed = await within(dialog).findByRole('alert')
+    expect(changed.querySelector('p')!.textContent).toBe('Ann shared Version 3 since your copy. Get it first, then share your changes.')
+    expect(within(changed).queryByRole('button')).toBeNull()
+    // No Get over unshared changes: a sentence points at Replace on the row.
+    expect(changed.querySelector('[data-share-stale-changes]')!.textContent).toBe(
+      'Your copy has changes that were never shared. Replace on the skill’s row gets Version 3 and keeps your files in a backup folder.'
+    )
+  })
+
+  it('shows a failed Get in the dialog and keeps Share disabled', async () => {
+    preview.mockResolvedValue(later({ stale: { latestRevision: 3, version: null, publishedBy: null } }))
+    getLatest.mockResolvedValue({ ok: false, code: 'download_failed', message: 'The newer version couldn’t be downloaded. Nothing was changed.' })
+    renderTab([skill({ shared, sync: 'behind' })])
+    const dialog = await openDialog('Share a new version of erp-lookup…', 'Share a new version of erp-lookup')
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Get Version 3' }))
+    await waitFor(() => expect(within(dialog).getAllByRole('alert')).toHaveLength(2))
+    expect(within(dialog).getAllByRole('alert')[0].querySelector('p')!.textContent).toBe('Someone shared Version 3 since your copy. Get it first, then share your changes.')
+    expect(within(dialog).getAllByRole('alert')[1].textContent).toBe('The newer version couldn’t be downloaded. Nothing was changed.')
+    expect((within(dialog).getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

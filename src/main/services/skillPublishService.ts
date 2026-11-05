@@ -35,9 +35,10 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { getProfileScopeUserId } from '../auth/scope'
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { leftoverBackup, skillBackupDir } from './skillBackups'
 import { publishEvent } from '../host/events'
 import { CinnaApiError, LocalAgentError } from '../errors'
 import { CinnaSessionChanged } from '../auth/cinna-session'
@@ -49,7 +50,12 @@ import { libraryService } from './libraryService'
 import { activeListing, changeableFromLink, linkedEntry } from './catalogSkillUpdates'
 import { localAgentService } from './localAgents/localAgentService'
 import { scannerService } from './localAgents/scannerService'
-import { findSkillPublication, upsertSkillPublication } from '../kit/publications'
+import { findSkillPublication, PUBLICATIONS_FILE, upsertSkillPublication } from '../kit/publications'
+import { writeEditableSkillTree } from '../kit/skillArchive'
+import { latestRevisionTree } from './catalogSkillService'
+import { folderTreeHash, syncOf } from './skillPublications'
+import { sweepSkillLeftovers } from '../kit/skillLeftovers'
+import { agentRepo } from '../db/agents'
 import { setFrontmatterLine } from '../kit/miniYaml'
 import { parseSkillFrontmatter, SKILL_FILE, SKILLS_DIR, type FrontmatterValue } from '../kit/skills'
 import {
@@ -63,6 +69,8 @@ import {
 import { LOCAL_AGENT_CHANGED_CHANNEL, type LocalAgentDto, type LocalAgentSkill } from '../../shared/localAgents'
 import type { CatalogItem } from '../../shared/catalogItems'
 import type {
+  SkillEditableCandidate,
+  SkillGetLatestOutcome,
   SkillPublishCandidate,
   SkillPublishInput,
   SkillPublishOutcome,
@@ -70,7 +78,8 @@ import type {
   SkillPublishPreviewOutcome,
   SkillPublishRefusal,
   SkillPublishRefused,
-  SkillPublishSlot
+  SkillPublishSlot,
+  SkillStaleBase
 } from '../../shared/skillPublish'
 
 const logger = createLogger('skill-publish')
@@ -104,7 +113,20 @@ export const SKILL_PUBLISH_SENTENCES: Record<SkillPublishRefusal, string> = {
   not_publisher: 'Ask a maintainer for edit access — you can use this skill but not share new versions of it.',
   package_not_found: 'This skill is no longer in the catalog, or you can no longer see it.',
   reauth_required: 'Sign in to Cinna again, then share once more.',
-  failed: 'Try again — the skill couldn’t be shared.'
+  failed: 'Try again — the skill couldn’t be shared.',
+  stale: 'Someone shared a newer version since your copy. Get it first, then share your changes.',
+  editable_package_exists: 'You can edit a skill of this name that someone else shares. Choose whether this is a new version of it or a separate skill.',
+  not_linked: 'This skill is not linked to a skill in your catalog, so there is no newer version to get.',
+  up_to_date: 'This skill already holds the latest version.',
+  has_changes: 'This skill has changes you have not shared, so the newer version was not brought in. Nothing was changed.',
+  download_failed: 'The newer version couldn’t be downloaded. Nothing was changed.',
+  download_mismatch: 'The downloaded files did not match the published version, so nothing was changed.',
+  write_failed: 'The newer version couldn’t be put in this agent’s folder. Nothing was changed.'
+}
+
+/** The stale-share sentence: who shared which version since the folder's copy (S5). */
+export function staleSentence(stale: SkillStaleBase): string {
+  return `${stale.publishedBy ?? 'Someone'} shared Version ${stale.latestRevision} since your copy. Get it first, then share your changes.`
 }
 
 function refused(code: SkillPublishRefusal, message?: string): SkillPublishRefused {
@@ -237,6 +259,18 @@ export function catalogRefusal(status: number, body: unknown): SkillPublishRefus
       const uuid = text(detail?.package_uuid)
       return { ...refused('package_exists'), ...(uuid ? { packageUuid: uuid } : {}) }
     }
+    case 'stale_base': {
+      const latest = detail?.latest_revision_number
+      if (typeof latest !== 'number' || !Number.isInteger(latest) || latest < 1) return refused('stale')
+      const stale: SkillStaleBase = {
+        latestRevision: latest,
+        version: text(detail?.latest_version) || null,
+        publishedBy: text(record(detail?.published_by)?.display_name) || null
+      }
+      return { ...refused('stale', staleSentence(stale)), stale }
+    }
+    case 'editable_package_exists':
+      return { ...refused('editable_package_exists', message || undefined), candidates: editableCandidatesOf(detail?.candidates) }
     case 'skill_name_mismatch':
     case 'grants_require_users_visibility':
     case 'not_publisher':
@@ -270,6 +304,27 @@ function candidatesOf(raw: unknown): SkillPublishCandidate[] {
   })
 }
 
+/** core's `EditableCandidate` list; entries without a package are dropped. */
+export function editableCandidatesOf(raw: unknown): SkillEditableCandidate[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): SkillEditableCandidate[] => {
+    const row = record(item)
+    const packageUuid = str(row?.package_uuid)
+    if (!row || packageUuid === '') return []
+    const latest = row.latest_revision_number
+    return [
+      {
+        packageUuid,
+        packageId: str(row.package_id),
+        publisher: str(record(row.publisher)?.display_name) || null,
+        access: str(row.access),
+        latestRevisionNumber: typeof latest === 'number' && Number.isInteger(latest) && latest >= 1 ? latest : null,
+        latestVersion: str(row.latest_version) || null
+      }
+    ]
+  })
+}
+
 /** core's `SkillPublishPreview` as the dialog reads it; null when it is not one. */
 export function toPreviewDto(name: string, body: unknown): SkillPublishPreviewDto | null {
   const row = record(body)
@@ -282,6 +337,11 @@ export function toPreviewDto(name: string, body: unknown): SkillPublishPreviewDt
     ]
   })
   const next = row.next_revision_number
+  const latest = row.latest_revision_number
+  const stale: SkillStaleBase | null =
+    row.stale === true && typeof latest === 'number' && Number.isInteger(latest) && latest >= 1
+      ? { latestRevision: latest, version: str(row.latest_version) || null, publishedBy: str(record(row.latest_published_by)?.display_name) || null }
+      : null
   return {
     name,
     version: row.version,
@@ -292,7 +352,9 @@ export function toPreviewDto(name: string, body: unknown): SkillPublishPreviewDt
     nextRevisionNumber: typeof next === 'number' && Number.isInteger(next) && next >= 1 ? next : 1,
     credentials,
     canProvide: true,
-    providersCarried: true
+    providersCarried: true,
+    editablePackages: editableCandidatesOf(row.editable_packages),
+    stale
   }
 }
 
@@ -355,10 +417,36 @@ async function listedSkill(profile: string, packageUuid: string): Promise<Catalo
   }
 }
 
-/** The `meta` form field of a publish. Who may use it travels on a first share only. */
-export function publishMeta(input: SkillPublishInput, packageUuid: string | null): Record<string, unknown> {
+/** The package's listing row from a fresh read, else the cached one. Null when neither has it. */
+async function freshSkill(profile: string, packageUuid: string): Promise<CatalogItem | null> {
+  const find = (items: readonly CatalogItem[] | undefined): CatalogItem | null =>
+    items?.find((item) => item.kind === 'skill' && item.uuid.toLowerCase() === packageUuid.toLowerCase()) ?? null
+  try {
+    const fresh = find((await libraryService.refresh(profile))?.items)
+    if (fresh) return fresh
+  } catch (err) {
+    if (err instanceof CinnaReauthRequired || (err instanceof CinnaApiError && err.code === 'reauth_required')) throw err
+    logger.warn('catalog listing could not be refreshed for Get Version N', { error: String(err) })
+  }
+  return find(libraryService.cached(profile)?.items)
+}
+
+const revisionNumberOf = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : null
+
+/**
+ * The `meta` form field of a publish. Who may use it travels on a first share
+ * only. `baseRevisionNumber` is the version the folder holds (S5): core
+ * refuses the share as `stale_base` when it is not the package's latest. A
+ * first share that is a separate skill although an editable package of the
+ * name exists carries `new_package` (S6).
+ */
+export function publishMeta(input: SkillPublishInput, packageUuid: string | null, baseRevisionNumber: number | null = null): Record<string, unknown> {
   const meta: Record<string, unknown> = {}
   if (packageUuid) meta.package_uuid = packageUuid
+  const base = packageUuid ? revisionNumberOf(baseRevisionNumber) : null
+  if (base !== null) meta.base_revision_number = base
+  if (!packageUuid && input.newPackage === true) meta.new_package = true
   const notes = typeof input.releaseNotes === 'string' ? input.releaseNotes.trim() : ''
   if (notes !== '') meta.release_notes = notes.slice(0, 10_000)
   if (!packageUuid) {
@@ -460,6 +548,20 @@ async function packageIdOf(profile: string, name: string, skillDir: string, pack
   }
 }
 
+/**
+ * {@link sweepSkillLeftovers} for the skill `name` of an agent, before its row is read: a folder
+ * put back makes the next scan see it. Nothing when the agent is unknown.
+ */
+function sweepAgentLeftovers(userId: string, agentId: string, name: string): void {
+  let dir: string
+  try {
+    dir = localAgentService.get(userId, agentId).path
+  } catch {
+    return
+  }
+  if (sweepSkillLeftovers(dir, name, leftoverBackup(agentId)).restored.length > 0) scannerService.markAllRootsDirty()
+}
+
 function settle(rootId: string, agentId: string): void {
   scannerService.markAllRootsDirty()
   publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId, agentId, reason: 'rescan' })
@@ -486,7 +588,101 @@ async function guarded<T extends { ok: boolean }>(verb: string, run: () => Promi
   }
 }
 
+/* ------------------------------------------------------- Get Version N */
+
+export { leftoverBackup, skillBackupDir }
+
+
+/**
+ * {@link moveTree} copied the folder but could neither finish the move nor
+ * put the source back: the source may be partly removed, and the one full
+ * copy is at {@link copyAt}.
+ */
+export class MoveTreeIncomplete extends Error {
+  constructor(
+    readonly copyAt: string,
+    cause: unknown
+  ) {
+    super(`the folder was copied to ${copyAt} but could not be moved: ${errorText(cause)}`, { cause })
+    this.name = 'MoveTreeIncomplete'
+  }
+}
+
+/** The file operations {@link moveTree} uses; replaced in tests to make one of them fail. */
+export interface MoveTreeOps {
+  rename: (from: string, to: string) => void
+  copy: (from: string, to: string, overwrite: boolean) => void
+  remove: (path: string) => void
+}
+
+const fsMoveOps: MoveTreeOps = {
+  rename: renameSync,
+  copy: (from, to, overwrite) =>
+    cpSync(from, to, { recursive: true, errorOnExist: !overwrite, force: overwrite, preserveTimestamps: true, verbatimSymlinks: true }),
+  remove: (path) => rmSync(path, { recursive: true, force: true })
+}
+
+/**
+ * Move a folder: one rename, or — across volumes, where rename fails with
+ * `EXDEV` — a copy then a removal of the source. Throws when it cannot, with
+ * the source whole: a failed copy removes the partial copy, and a source that
+ * cannot be removed after the copy is filled back from the copy (which is
+ * then removed). Throws {@link MoveTreeIncomplete}, naming the full copy,
+ * when even that fails.
+ */
+export function moveTree(from: string, to: string, ops: MoveTreeOps = fsMoveOps): void {
+  try {
+    ops.rename(from, to)
+    return
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EXDEV') throw err
+  }
+  try {
+    ops.copy(from, to, false)
+  } catch (err) {
+    try {
+      ops.remove(to)
+    } catch {
+      /* the source is whole; a partial copy outside it is only clutter */
+    }
+    throw err
+  }
+  try {
+    ops.remove(from)
+  } catch (err) {
+    // Some of the source may be gone: every file it had is in the copy, so copy them back over it.
+    try {
+      ops.copy(to, from, true)
+    } catch (restoreErr) {
+      logger.error('folder copied but neither moved nor put back', { from, to, error: errorText(restoreErr) })
+      throw new MoveTreeIncomplete(to, err)
+    }
+    try {
+      ops.remove(to)
+    } catch (cleanupErr) {
+      logger.warn('a copy of a folder that could not be moved was left behind', { to, error: errorText(cleanupErr) })
+    }
+    throw err
+  }
+}
+
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
 export const skillPublishService = {
+  /**
+   * Once per app start: put back skill folders a crash left set aside, and remove stale staged
+   * copies, in every folder agent ({@link sweepSkillLeftovers}). Synchronous; **never throws.**
+   */
+  recoverLeftovers(): void {
+    try {
+      for (const row of agentRepo.listFolder(getSettingsScopeUserId())) {
+        if (row.localPath) sweepSkillLeftovers(row.localPath, undefined, leftoverBackup(row.id))
+      }
+    } catch (err) {
+      logger.warn('skill leftovers could not be swept', { error: errorText(err) })
+    }
+  },
+
   /** What sharing the skill `name` of an agent would produce, from core's preview. */
   async preview(userId: string, agentId: string, name: string): Promise<SkillPublishPreviewOutcome> {
     return guarded('preview', async () => {
@@ -499,7 +695,12 @@ export const skillPublishService = {
       const recorded = findSkillPublication(target.dir, who.host, name)
       const answer = await cinnaSend(who.profile, PUBLISH_PREVIEW_PATH, {
         method: 'POST',
-        json: { name, frontmatter: frontmatterOf(target.skillDir), ...(recorded ? { package_uuid: recorded.package_uuid } : {}) }
+        json: {
+          name,
+          frontmatter: frontmatterOf(target.skillDir),
+          // With the version the folder holds, core answers whether a share would be stale.
+          ...(recorded ? { package_uuid: recorded.package_uuid, base_revision_number: recorded.revision_number } : {})
+        }
       })
       if (!answer.ok) {
         const refusal = catalogRefusal(answer.status, answer.body)
@@ -511,6 +712,140 @@ export const skillPublishService = {
         ? withPreviousProviders(parsed, await listedSkill(who.profile, parsed.packageUuid), selfId(who.profile))
         : parsed
       return { ok: true as const, preview }
+    })
+  },
+
+  /**
+   * Get Version N (skill co-maintainers S4): bring the linked package's
+   * latest version into `skills/<name>/` and record it. Offered from
+   * `behind`; from `diverged` only with `replace`, which moves the folder to
+   * {@link skillBackupDir} first. Refused, before anything is touched, on an
+   * agent the person may not change (as Share), without a record for this
+   * server or the package in the listing, when the folder already holds the
+   * latest (`up_to_date`) and on unshared changes without `replace`
+   * (`has_changes`). The version is downloaded through the catalog skill
+   * cache (both digests), copied writable into a staging folder beside the
+   * skill and checked against the listing's `content_hash` (a mismatch
+   * touches nothing); then the folder is moved aside, the copy renamed into
+   * place and `publications.json` updated. A failure after the move puts the
+   * folder and the ledger back.
+   */
+  async getLatest(userId: string, agentId: string, name: string, options: { replace?: boolean } = {}): Promise<SkillGetLatestOutcome> {
+    return guarded('get latest', async () => {
+      const replace = options?.replace === true
+      const who = account()
+      if ('ok' in who) return who
+      // Before the skill is looked up: a crash in an earlier swap may have left its folder set aside.
+      sweepAgentLeftovers(userId, agentId, name)
+      const target = locateSkill(userId, agentId, name)
+      if ('ok' in target) return target
+      const unchangeable = unchangeableRefusal(who.profile, target.dir)
+      if (unchangeable) return unchangeable
+      const recorded = findSkillPublication(target.dir, who.host, name)
+      if (!recorded) return refused('not_linked')
+      // A fresh read: the newer version may be known to core and not yet to the cached listing
+      // (the Share dialog's stale line comes from core's own preview).
+      const item = await freshSkill(who.profile, recorded.package_uuid)
+      if (!item) return refused('package_not_found')
+      // On the bytes, not a stat: this decides whether the person's files are replaced.
+      const state = syncOf(target.skillDir, recorded, item, true)
+      if (state.latest === null) return refused('package_not_found')
+      if (state.sync === 'unknown') return refused('unreadable', 'A file in this skill could not be read, so nothing was changed.')
+      if (state.sync === 'in_sync' || state.sync === 'changed') return refused('up_to_date')
+      if (state.sync === 'diverged' && !replace) return refused('has_changes')
+
+      const fetched = await latestRevisionTree(who.profile, who.host, item, target.dir, name)
+      if (!fetched.ok) {
+        if (fetched.code === 'reauth_required' || fetched.code === 'no_account') return refused(fetched.code)
+        if (fetched.code === 'hash_mismatch') return refused('download_mismatch')
+        if (fetched.code === 'not_in_catalog') return refused('package_not_found')
+        return refused('download_failed', fetched.code === 'download_failed' ? fetched.message : undefined)
+      }
+      const revisionNumber = fetched.pin.revision_number
+      const version = typeof fetched.pin.version === 'string' ? fetched.pin.version : null
+
+      // Staged beside skills/<name>/ under a dot-name the skills scan and the watcher skip.
+      const skillsDir = join(target.dir, SKILLS_DIR)
+      const tag = `${process.pid}-${Date.now()}`
+      const staging = join(skillsDir, `.${name}.cinna-staging-${tag}`)
+      let contentHash: string
+      try {
+        writeEditableSkillTree(staging, fetched.tree)
+        const copy = collectSkillTree(staging)
+        if (!copy.ok) throw new Error('the copy could not be read back')
+        const ownHash = skillTreeHash(name, copy.tree.files)
+        const declared = typeof item.latest?.content_hash === 'string' ? item.latest.content_hash.trim().toLowerCase() : ''
+        if (declared !== '' && declared !== ownHash) {
+          logger.warn('skill copy does not match its content hash', { name, revision: revisionNumber })
+          rmSync(staging, { recursive: true, force: true })
+          return refused('download_mismatch')
+        }
+        contentHash = declared !== '' ? declared : ownHash
+      } catch (err) {
+        rmSync(staging, { recursive: true, force: true })
+        logger.warn('skill version could not be staged', { name, error: errorText(err) })
+        return refused('write_failed')
+      }
+
+      // The folder as it is goes aside: into a backup outside the agent when replacing edits,
+      // else beside it under a dot-name, removed once the new one is in place.
+      const backup = replace ? skillBackupDir(agentId, name) : null
+      const aside = backup ?? join(skillsDir, `.${name}.cinna-previous-${tag}`)
+      // The check above ran before the download: an edit made since then would be moved aside
+      // and deleted with no backup. Hashed again on the bytes, with nothing awaited from here to
+      // the swap. With replace the folder goes to a backup whatever it holds.
+      if (!replace) {
+        const now = folderTreeHash(target.skillDir, name, true)
+        if (now !== recorded.content_hash.trim().toLowerCase()) {
+          rmSync(staging, { recursive: true, force: true })
+          if (now === null) return refused('unreadable', 'A file in this skill could not be read, so nothing was changed.')
+          return refused('has_changes')
+        }
+      }
+      try {
+        if (backup) mkdirSync(dirname(backup), { recursive: true })
+        moveTree(target.skillDir, aside)
+      } catch (err) {
+        rmSync(staging, { recursive: true, force: true })
+        logger.warn('skill folder could not be moved aside', { name, error: errorText(err) })
+        if (err instanceof MoveTreeIncomplete) {
+          return refused('write_failed', `The skill’s folder couldn’t be moved aside, and a full copy of its files is in ${err.copyAt}.`)
+        }
+        return refused('write_failed')
+      }
+      const ledger = join(target.dir, PUBLICATIONS_FILE)
+      let ledgerBefore: Buffer | null = null
+      let swapped = false
+      try {
+        renameSync(staging, target.skillDir)
+        swapped = true
+        ledgerBefore = existsSync(ledger) ? readFileSync(ledger) : null
+        upsertSkillPublication(target.dir, { ...recorded, revision_number: revisionNumber, content_hash: contentHash })
+      } catch (err) {
+        logger.warn('skill version could not be put in place; putting the folder back', { name, error: errorText(err) })
+        try {
+          if (swapped) rmSync(target.skillDir, { recursive: true, force: true })
+          rmSync(staging, { recursive: true, force: true })
+          moveTree(aside, target.skillDir)
+          if (ledgerBefore !== null) writeFileSync(ledger, ledgerBefore)
+        } catch (restoreErr) {
+          const at = restoreErr instanceof MoveTreeIncomplete ? restoreErr.copyAt : aside
+          logger.error('skill folder could not be put back', { name, at, error: errorText(restoreErr) })
+          return refused('write_failed', `The newer version couldn’t be put in place, and the skill’s files are now in ${at}.`)
+        }
+        return refused('write_failed')
+      }
+      if (!backup) {
+        // The swap and the record are done: a set-aside copy that will not go is no failure (the sweep moves it out later).
+        try {
+          rmSync(aside, { recursive: true, force: true })
+        } catch (err) {
+          logger.warn('the replaced skill folder could not be removed', { name, aside, error: errorText(err) })
+        }
+      }
+      settle(target.rootId, target.agentId)
+      logger.info('skill brought to the latest version', { agentId: target.agentId, name, revision: revisionNumber, replaced: replace })
+      return { ok: true as const, name, revisionNumber, version, backupPath: backup }
     })
   },
 
@@ -538,7 +873,14 @@ export const skillPublishService = {
       if (archive.length > MAX_SKILL_UPLOAD_BYTES) return refused('too_large')
 
       const recorded = findSkillPublication(target.dir, who.host, name)
-      const meta = publishMeta(input, recorded?.package_uuid ?? null)
+      // A first share the person chose to make the next version of an editable package (S6):
+      // that package, based on the latest version they were shown.
+      const chosen = !recorded && typeof input?.packageUuid === 'string' && input.packageUuid.trim() !== '' ? input.packageUuid.trim() : null
+      const meta = recorded
+        ? publishMeta(input, recorded.package_uuid, recorded.revision_number)
+        : chosen
+          ? publishMeta({ ...input, publisherCredentials: [] }, chosen, revisionNumberOf(input.baseRevisionNumber))
+          : publishMeta(input, null)
       let answer = await upload(who.profile, name, archive, meta)
       if (!answer.ok && answer.code === 'package_exists' && !recorded && answer.packageUuid) {
         // The person's own package of this name: this share is its next version,
@@ -549,7 +891,10 @@ export const skillPublishService = {
         const { visibility: _visibility, grants: _grants, ...kept } = meta
         answer = await upload(who.profile, name, archive, { ...kept, package_uuid: answer.packageUuid })
       }
-      if (!answer.ok) return refused(answer.code, answer.message)
+      if (!answer.ok) {
+        const { packageUuid: _uuid, ...refusal } = answer
+        return refusal
+      }
 
       const revision = answer.body
       const revisionNumber = revision.revision_number as number
@@ -563,7 +908,8 @@ export const skillPublishService = {
         if (result.bytes) tree = { ...tree, files: tree.files.map((file) => (file.path === SKILL_FILE ? { ...file, data: result.bytes as Buffer } : file)) }
       }
       const packageId = (await packageIdOf(who.profile, name, target.skillDir, packageUuid)) ?? recorded?.package_id ?? null
-      // As the catalog computed it; the same hash over the folder as sent, version written, when it did not say.
+      // As the catalog computed it, which equals the folder's own once the version line is
+      // written (O1); the same hash over the folder as sent, version written, when it did not say.
       const contentHash = text(revision.content_hash) || skillTreeHash(name, tree.files)
       if (packageUuid !== '' && packageId) {
         try {

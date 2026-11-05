@@ -297,3 +297,26 @@ export function writeSkillTree(target: string, archive: SkillArchive): void {
   for (const dir of folders) chmodSync(join(target, ...dir.split('/')), 0o555)
   chmodSync(target, 0o555)
 }
+
+/**
+ * Lay a skill tree out as `<target>/` (which must not exist yet) with the
+ * modes of a folder the person edits — files 0644 (0755 when marked
+ * executable), folders 0755 — where {@link writeSkillTree} writes the
+ * cache's read-only ones. What Edit skill copies a pinned revision into
+ * `skills/<name>/` with.
+ */
+export function writeEditableSkillTree(target: string, tree: SkillArchive): void {
+  mkdirSync(target, { recursive: false, mode: 0o755 })
+  chmodSync(target, 0o755)
+  for (const dir of tree.dirs) {
+    const path = join(target, ...dir.split('/'))
+    mkdirSync(path, { recursive: true, mode: 0o755 })
+    chmodSync(path, 0o755)
+  }
+  for (const file of tree.files) {
+    const path = join(target, ...file.path.split('/'))
+    mkdirSync(join(path, '..'), { recursive: true, mode: 0o755 })
+    writeFileSync(path, file.data, { flag: 'wx' })
+    chmodSync(path, file.executable ? 0o755 : 0o644)
+  }
+}

@@ -2,6 +2,7 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { skillPublishService } from '../services/skillPublishService'
 import type {
+  SkillGetLatestOutcome,
   SkillPublishInput,
   SkillPublishOutcome,
   SkillPublishPerson,
@@ -13,7 +14,8 @@ import { ipcHandle } from './_wrap'
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /**
- * Sharing a kit agent's own skill to the catalog: preview, then publish.
+ * Sharing a kit agent's own skill to the catalog: preview, then publish; and
+ * Get Version N, which brings a linked skill's newer version into its folder.
  * Thin: activation gate, scope, delegate. Folder agents live in the settings
  * scope like every `local-agent:*` channel; the service reads the active Cinna
  * profile itself. Only ids, names and the person's choices cross, and every
@@ -34,7 +36,18 @@ export function registerSkillPublishHandlers(): void {
       // Checked field by field in the service.
       people: Array.isArray(input?.people) ? (input.people as SkillPublishPerson[]) : [],
       everyone: input?.everyone === true,
-      publisherCredentials: Array.isArray(input?.publisherCredentials) ? (input.publisherCredentials as SkillPublisherCredential[]) : []
+      publisherCredentials: Array.isArray(input?.publisherCredentials) ? (input.publisherCredentials as SkillPublisherCredential[]) : [],
+      ...(typeof input?.packageUuid === 'string' && input.packageUuid !== '' ? { packageUuid: input.packageUuid } : {}),
+      ...(typeof input?.baseRevisionNumber === 'number' ? { baseRevisionNumber: input.baseRevisionNumber } : {}),
+      newPackage: input?.newPackage === true
     })
   })
+
+  ipcHandle(
+    'skill-publish:get-latest',
+    (_event, input?: { agentId?: unknown; name?: unknown; replace?: unknown }): Promise<SkillGetLatestOutcome> => {
+      userActivation.requireActivated()
+      return skillPublishService.getLatest(getSettingsScopeUserId(), str(input?.agentId), str(input?.name), { replace: input?.replace === true })
+    }
+  )
 }

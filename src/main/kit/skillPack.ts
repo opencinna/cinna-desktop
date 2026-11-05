@@ -48,6 +48,17 @@ const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 ])
 /** Files never packed, at any depth: core's `NESTED_EXCLUDED_FILE_GLOBS`. */
 const SKIPPED_FILE_SUFFIXES = ['.pyc', '.pyo'] as const
+/**
+ * Files never packed or hashed, at any depth, by name: Finder's `.DS_Store`
+ * (Reveal opens Finder in the folder), which would otherwise travel with a
+ * share and make an untouched linked copy read as changed.
+ */
+const SKIPPED_FILE_NAMES: ReadonlySet<string> = new Set(['.DS_Store'])
+
+/** Whether a file named `name` is left out of the pack and the hash. */
+function skippedFile(name: string): boolean {
+  return SKIPPED_FILE_NAMES.has(name) || SKIPPED_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix))
+}
 
 export interface SkillTreeFile {
   /** POSIX path inside the skill folder, e.g. `SKILL.md`, `scripts/run.sh`. */
@@ -109,7 +120,7 @@ export function collectSkillTree(skillDir: string): { ok: true; tree: SkillTree 
         dirs.push(childRel)
         walk(childAbs, childRel)
       } else if (entry.isFile()) {
-        if (SKIPPED_FILE_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) continue
+        if (skippedFile(entry.name)) continue
         try {
           const stat = lstatSync(childAbs)
           found.push({ path: childRel, abs: childAbs, size: stat.size, executable: (stat.mode & 0o111) !== 0 })
@@ -141,6 +152,51 @@ export function collectSkillTree(skillDir: string): { ok: true; tree: SkillTree 
     }
   }
   return { ok: true, tree: { dirs: dirs.sort(byPath), files } }
+}
+
+/**
+ * What {@link collectSkillTree} would read, as a cheap key: the newest mtime
+ * over the folder, every folder in it and every file it packs, their total
+ * size and the file count, walked with the same skips and without reading a
+ * byte. Any edit, add, remove or rename inside moves it, so a tree hash can
+ * be kept against it (`skillPublications`' sync state). Null when the folder
+ * cannot be walked.
+ */
+export function skillTreeStamp(skillDir: string): string | null {
+  let newest = 0
+  let size = 0
+  let files = 0
+  const walk = (abs: string): boolean => {
+    let entries: Dirent[]
+    try {
+      newest = Math.max(newest, lstatSync(abs).mtimeMs)
+      entries = readdirSync(abs, { withFileTypes: true })
+    } catch {
+      return false
+    }
+    for (const entry of entries) {
+      const childAbs = join(abs, entry.name)
+      if (entry.isDirectory()) {
+        if (SKIPPED_DIRS.has(entry.name)) continue
+        if (!walk(childAbs)) return false
+      } else if (entry.isFile()) {
+        if (skippedFile(entry.name)) continue
+        try {
+          const stat = lstatSync(childAbs)
+          newest = Math.max(newest, stat.mtimeMs, stat.ctimeMs)
+          size += stat.size
+          files += 1
+        } catch {
+          return false
+        }
+      } else {
+        // A link or a special file: the hash cannot be taken either.
+        return false
+      }
+    }
+    return true
+  }
+  return walk(skillDir) ? `${skillDir}\0${newest}\0${size}\0${files}` : null
 }
 
 /* ------------------------------------------------------------------- tar */
