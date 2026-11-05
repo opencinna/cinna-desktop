@@ -21,27 +21,27 @@ export interface ComposerNotice {
   textId?: string
   /** The full account, for the tooltip on the line. */
   title?: string
+  /**
+   * At the end of the line, after the text. A label that changes width while
+   * it runs is drawn in a {@link StableLabel}, so it never moves the text
+   * (ux_rules rule 1).
+   */
   action?: ReactNode
   /**
-   * The action on its own line under the text, for one whose width changes
-   * while it runs (a login's pending label, then Cancel): beside the text it
-   * would take that width from the line and move everything left of it
-   * (ux_rules rule 1); below, it widens into free space.
+   * The action on its own line under the text instead, only for one that grows
+   * far past any width worth reserving while it runs (a login: "Waiting for
+   * sign-in in your browser…", then Cancel). At the line's end it would take
+   * that width from the text and move it (ux_rules rule 1); below, it widens
+   * into free space.
    */
   actionBelow?: boolean
   /**
-   * Keep the line under the text even when `action` is empty, at one button's
-   * height, so a row whose actions come and go as its state settles (a skill
-   * link resolving) never changes height (ux_rules rule 1).
-   */
-  reserveActionLine?: boolean
-  /**
-   * Line 1 on one line, truncated, instead of wrapping to two: for a row whose
-   * sentence swaps as it settles (a skill link answering), so it never grows
-   * a line (ux_rules rule 1). Put the whole sentence in `title`.
+   * The text on one line, truncated, instead of wrapping to two: for a row
+   * whose sentence or actions swap as it settles (a skill link answering), so
+   * it never grows a line (ux_rules rule 1). Put the whole sentence in `title`.
    */
   singleLine?: boolean
-  /** A × at the end of the first line, for a row the person may put away (an offer). */
+  /** A × at the end of the line, for a row the person may put away (an offer). */
   onDismiss?: () => void
   dismissLabel?: string
   /** Behind a toggle, opened in place: more findings, the rest of a long story. */
@@ -90,7 +90,12 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
   return (
     <li className="px-3 py-2">
       <div className="flex items-center gap-2">
-        <Icon size={13} aria-hidden="true" className={`shrink-0 ${TONE_TEXT[notice.tone]}`} />
+        {/* A zero-width button as the line's strut: every row is at least one
+            button tall, so a row whose buttons come and go as it settles (a
+            skill link answering, then checking its credentials) never changes
+            height, and two single-line rows swapped in one render match. */}
+        <NoticeButton aria-hidden="true" tabIndex={-1} className="invisible w-0 !px-0 !border-x-0 overflow-hidden">{'\u00a0'}</NoticeButton>
+        <Icon size={13} aria-hidden="true" className={`-ml-2 shrink-0 ${TONE_TEXT[notice.tone]}`} />
         <p id={notice.textId} title={notice.title} className={`min-w-0 flex-1 text-xs leading-snug text-[var(--color-text)] ${notice.singleLine ? 'truncate' : 'line-clamp-2 break-words'}`}>
           {notice.text}
         </p>
@@ -101,7 +106,7 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
             <ChevronDown size={11} aria-hidden="true" className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
           </button>
         )}
-        {notice.action && !notice.actionBelow && <div className="shrink-0">{notice.action}</div>}
+        {notice.action && !notice.actionBelow && <div className="flex shrink-0 items-center gap-2">{notice.action}</div>}
         {notice.onDismiss && (
           <button type="button" onClick={notice.onDismiss} aria-label={notice.dismissLabel ?? 'Dismiss'} title={notice.dismissLabel ?? 'Dismiss'}
             className={NOTICE_DISMISS_BUTTON}>
@@ -109,15 +114,8 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
           </button>
         )}
       </div>
-      {((notice.action && notice.actionBelow) || notice.reserveActionLine) && (
-        <div className="flex items-center pl-[21px] pt-1.5">
-          {/* A zero-width button as the line's strut: the reserved line is one
-              button tall whether it holds buttons or only a sentence. */}
-          {notice.reserveActionLine && (
-            <NoticeButton aria-hidden="true" tabIndex={-1} className="invisible w-0 !px-0 !border-x-0 overflow-hidden">{'\u00a0'}</NoticeButton>
-          )}
-          {notice.action}
-        </div>
+      {notice.action && notice.actionBelow && (
+        <div className="flex items-center pl-[21px] pt-1.5">{notice.action}</div>
       )}
       {notice.details && (
         <AnimatedCollapse open={open}>
@@ -125,6 +123,21 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
         </AnimatedCollapse>
       )}
     </li>
+  )
+}
+
+/**
+ * A button label that swaps for its pending one at a fixed width: both are
+ * laid out in one grid cell and the hidden one keeps the width, so `Adding…`
+ * or `Checking…` never moves the text or the button beside it. Either may
+ * carry its 12 px icon.
+ */
+export function StableLabel({ label, pending, pendingLabel }: { label: ReactNode; pending: boolean; pendingLabel: ReactNode }): React.JSX.Element {
+  return (
+    <span className="grid">
+      <span aria-hidden={pending} className={`col-start-1 row-start-1 flex items-center gap-1 ${pending ? 'invisible' : ''}`}>{label}</span>
+      <span aria-hidden={!pending} className={`col-start-1 row-start-1 flex items-center gap-1 ${pending ? '' : 'invisible'}`}>{pendingLabel}</span>
+    </span>
   )
 }
 

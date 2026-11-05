@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Download, FileWarning, FolderOpen, KeyRound, Loader2, RefreshCw, WifiOff } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { FindingText, NoticeButton } from './ComposerNoticePanel'
+import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
 import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
@@ -244,9 +244,14 @@ function ReadinessActionButton({ action, tip }: {
       timer.current = setTimeout(() => { timer.current = null; setFeedback(false) }, 600)
       action.run()
     }}>
-    {isCheck ? <RefreshCw size={12} className={pending ? 'animate-spin' : undefined} />
-      : pending && <Loader2 size={12} className="animate-spin" />}
-    {pending ? action.pendingLabel : action.label}
+    {action.cancel
+      // A login's pending label ("Waiting for sign-in in your browser…") is far wider than Log in,
+      // and Cancel comes with it: sized to both, the idle button would be mostly padding. On its own
+      // line under the sentence (`actionBelow`) it widens into free space instead.
+      ? <>{pending && <Loader2 size={12} className="animate-spin" />}{pending ? action.pendingLabel : action.label}</>
+      : <StableLabel pending={pending}
+          label={<>{isCheck && <RefreshCw size={12} />}{action.label}</>}
+          pendingLabel={<>{isCheck ? <RefreshCw size={12} className="animate-spin" /> : <Loader2 size={12} className="animate-spin" />}{action.pendingLabel}</>} />}
   </NoticeButton>
   if (!action.cancel && !tip) return button
   // Always wrapped when a cancel exists, so the button keeps its place in the
@@ -296,7 +301,8 @@ export function readinessNoticeItem(readiness: ComposerReadiness, reasonId: stri
     text,
     textId: reasonId,
     title: title ?? undefined,
-    // A login's button grows into "Waiting for sign-in…" and Cancel.
+    // The one row whose action stays under its text: a login's button grows into "Waiting for
+    // sign-in in your browser…" and Cancel, wider than any reservation worth drawing (ux_rules rule 1).
     actionBelow: action.cancel !== undefined,
     action: <ReadinessActionButton key={reasonId + action.label} action={action} tip={tip} />
   }
@@ -384,7 +390,8 @@ export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSe
 
 /** One prompted skill's sentence: the slot named when it is one, counted when several. */
 function skillCredentialSentence(skill: LocalAgentSkill, missing: readonly LocalAgentSkillCredential[], code: boolean): string {
-  const name = skill.source !== 'authored' && skill.title ? skill.title : skill.name
+  // The folder name, as Finish setup names the skill ("Needed by skill invoice-reader").
+  const name = skill.name
   if (missing.length > 1) return `${name} needs ${missing.length} credentials this agent doesn’t have.`
   const slot = code ? `\`${missing[0].slot}\`` : missing[0].slot
   return `${name} needs a credential this agent doesn’t have: ${slot}.`
@@ -394,9 +401,9 @@ function skillCredentialSentence(skill: LocalAgentSkill, missing: readonly Local
  * After Add to agent or Update, the skills main named once its fill of their slots settled
  * (`skill-credential-prompt` store) that still lack a credential, as a row whose action is Finish
  * setup. Read live from the folder's DTO (`skillsLackingCredentials`), so the row goes on its own
- * once they are filled. Two lines, the action under the text at a reserved height with a ×, the
- * shape of the skill-link offer it follows, so swapping one for the other keeps the panel's height
- * (ux_rules rule 1). Only the × puts the prompt away; Finish setup leaves it until the slots fill.
+ * once they are filled. One truncated line, Finish setup and a × at its end, the shape of the
+ * skill-link offer it follows, so swapping one for the other keeps the panel's height (ux_rules
+ * rule 1). Only the × puts the prompt away; Finish setup leaves it until the slots fill.
  */
 export function skillCredentialsNotice(
   folder: LocalAgentDto | null,
@@ -416,8 +423,6 @@ export function skillCredentialsNotice(
     title: lacking.map(({ skill, missing }) => skillCredentialSentence(skill, missing, false)).join(' '),
     // The count or slot changes as slots fill; the line never wraps into a second one meanwhile.
     singleLine: true,
-    actionBelow: true,
-    reserveActionLine: true,
     action: <NoticeButton onClick={onFinishSetup}>Finish setup</NoticeButton>,
     onDismiss,
     dismissLabel: 'Dismiss skill credential prompt'

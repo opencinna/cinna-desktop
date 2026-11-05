@@ -7,8 +7,9 @@ import type { SkillLinkResolution, SkillLinkSkill } from '../../../../shared/ski
 
 /**
  * The skill-link offer row in every README §4 state: what it says, which
- * actions it carries, and that it always keeps its reserved second line, so
- * the row never changes height as the lookup answers (ux_rules rule 1).
+ * actions it carries, and that it is always one truncated line held one
+ * button tall, the actions at its end, so the row never changes height as the
+ * lookup answers (ux_rules rule 1).
  */
 
 const login = vi.hoisted(() => ({ mutateAsync: vi.fn(), isPending: false }))
@@ -61,26 +62,30 @@ function wrapper({ children }: { children: ReactNode }) {
 /** The offer alone is named for what it is; beside another row, the panel is the agent's status. */
 const panel = (): HTMLElement => screen.getByRole('status', { name: /^(Skill link|Agent status)$/ })
 /**
- * The row's second line: present in every state, held one button tall by its
- * strut — a zero-width, aria-hidden button that is always its first child.
+ * The row's one line, in every state: the sentence truncated rather than
+ * wrapped, held one button tall by its strut — a zero-width, aria-hidden
+ * button that is always its first child — and the × at its end.
  */
-function expectReservedLine(): HTMLElement {
+function expectOneLine(): HTMLElement {
   const row = panel().querySelector('li')!
-  const line = row.children[1] as HTMLElement
-  expect(line).toBeTruthy()
+  const line = row.firstElementChild as HTMLElement
+  // Nothing under the line but the Details drawer.
+  expect(Array.from(row.children).slice(1).every((el) => !el.querySelector('button'))).toBe(true)
   const strut = line.firstElementChild as HTMLElement
   expect(strut.tagName).toBe('BUTTON')
   expect(strut.getAttribute('aria-hidden')).toBe('true')
   expect(strut.getAttribute('tabindex')).toBe('-1')
+  expect(line.querySelector('p')!.className).toContain('truncate')
+  expect(line.lastElementChild!.getAttribute('aria-label')).toBe('Dismiss skill link')
   return line
 }
 
-/** The settling row: the checking sentence, no actions, the reserved line and the ×, at the offer's height. */
+/** The settling row: the checking sentence, no actions but the ×, on the offer's one line. */
 function expectSettlingRow(): void {
   expect(panel().querySelector('li p')!.textContent).toBe('Added ERP lookup. Checking its credentials…')
   expect(panel().querySelector('li p')!.getAttribute('title')).toBe('Added ERP lookup. Checking its credentials…')
-  const line = expectReservedLine()
-  expect(line.children).toHaveLength(1)
+  const line = expectOneLine()
+  expect(within(line).getAllByRole('button')).toHaveLength(1)
   expect(screen.queryByRole('button', { name: /Add to|Update to|New agent/ })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Details' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Dismiss skill link' })).toBeTruthy()
@@ -107,8 +112,9 @@ beforeEach(() => {
 describe('the skill-link offer row', () => {
   it('pending: a lookup line at the row’s full height, and the accent tone when it is the only row', () => {
     show(new Promise(() => {}))
-    expect(screen.getByTitle('Looking up test.erp on cinna.test…')).toBeTruthy()
-    expect(within(expectReservedLine()).getByText('Nothing is added until you choose.')).toBeTruthy()
+    expect(screen.getByTitle('Looking up test.erp on cinna.test… Nothing is added until you choose.')).toBeTruthy()
+    // The note sits after the sentence, on its line: nothing is offered yet, but the row is already one button tall.
+    expect(within(expectOneLine()).getByText('Nothing is added until you choose.').closest('p')).toBeTruthy()
     expect(panel().getAttribute('data-tone')).toBe('accent')
     expect(panel().getAttribute('aria-label')).toBe('Skill link')
     expect(screen.queryByRole('button', { name: 'Add to Invoices' })).toBeNull()
@@ -117,7 +123,7 @@ describe('the skill-link offer row', () => {
     const sentence = panel().querySelector('li p')!
     expect(sentence.className).toContain('truncate')
     expect(sentence.className).not.toContain('line-clamp-2')
-    expect(sentence.getAttribute('title')).toBe('Looking up test.erp on cinna.test…')
+    expect(sentence.getAttribute('title')).toBe('Looking up test.erp on cinna.test… Nothing is added until you choose.')
   })
 
   it('the panel takes the warning tone when a warning row sits beside the offer', () => {
@@ -137,25 +143,29 @@ describe('the skill-link offer row', () => {
     fireEvent.click(hostLink)
     expect(openExternal).toHaveBeenCalledWith('https://cinna.test')
     expect(resolve).toHaveBeenCalledWith({ origin: 'https://cinna.test', packageId: 'test.erp', agentId: 'folder:a' })
-    const line = expectReservedLine()
+    // Message left, then Details, Add, New agent and the × on the same line.
+    const line = expectOneLine()
     const buttons = within(line).getAllByRole('button')
-    expect(buttons[0]).toBe(addButton)
-    expect(buttons[1].getAttribute('aria-label')).toBe('New agent with this skill')
+    expect(buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details', 'Add to Invoices', 'New agent with this skill', 'Dismiss skill link'])
+    expect(buttons[1]).toBe(addButton)
     expect(addButton.getAttribute('aria-disabled')).toBeNull()
     expect(addButton.className).toContain('composer-notice-button-primary')
     expect(screen.getByRole('button', { name: 'Dismiss skill link' })).toBeTruthy()
-    fireEvent.click(buttons[1])
+    fireEvent.click(buttons[2])
     expect(onNewAgent).toHaveBeenCalledWith(SKILL, expect.objectContaining({ link: LINK }))
   })
 
-  it('ok with Add disabled: the reason on the second line, New agent still offered', async () => {
+  it('ok with Add disabled: the reason on the line after the title, in place of the facts; New agent still offered', async () => {
     show(ok({ agentId: AGENT.id, agentName: 'Invoices', verdict: 'read_only' }))
     const addButton = await screen.findByRole('button', { name: 'Add to Invoices' })
     expect(addButton.getAttribute('aria-disabled')).toBe('true')
     // Disabled, it is not drawn as the first choice.
     expect(addButton.className).not.toContain('composer-notice-button-primary')
     expect(addButton.className).toContain('aria-disabled:!opacity-50')
-    expect(within(expectReservedLine()).getByText(/shared with you to use/)).toBeTruthy()
+    const sentence = expectOneLine().querySelector('p')!
+    expect(sentence.textContent).toBe('ERP lookup · Invoices is shared with you to use, so its skills can’t be changed here.')
+    // The facts it stands in for stay in the tooltip.
+    expect(sentence.getAttribute('title')).toContain('Version 3 (3.0) · by Ada on cinna.test')
     fireEvent.click(addButton)
     expect(add).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'New agent with this skill' }).getAttribute('aria-disabled')).toBeNull()
@@ -176,19 +186,20 @@ describe('the skill-link offer row', () => {
     const addButton = screen.getByRole('button', { name: 'Add to Invoices' })
     expect(addButton.getAttribute('aria-disabled')).toBe('true')
     expect(within(addButton).getByText('Adding…').getAttribute('aria-hidden')).toBe('false')
-    expectReservedLine()
+    expectOneLine()
     await act(async () => finish({ ok: true, name: 'erp-lookup', revisionNumber: 3 }))
     expect(useSkillLinkOfferStore.getState().offer?.settling).toEqual({ agentId: 'folder:a', since: 0, title: 'ERP lookup' })
     expectSettlingRow()
   })
 
-  it('an Add refusal shows in the row and closes nothing', async () => {
+  it('an Add refusal takes the line beside the button and closes nothing', async () => {
     add.mockResolvedValue({ ok: false, code: 'clash', message: 'This agent already has a skill with that name.' })
     show(ok())
     fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('This agent already has a skill with that name.')
-    expect(expectReservedLine().contains(alert)).toBe(true)
+    expect(expectOneLine().querySelector('p')!.contains(alert)).toBe(true)
+    expect(alert.closest('p')!.getAttribute('title')).toBe('This agent already has a skill with that name. ERP lookup · Version 3 (3.0) · by Ada on cinna.test')
     expect(useSkillLinkOfferStore.getState().offer).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
   })
@@ -204,7 +215,7 @@ describe('the skill-link offer row', () => {
     update.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
     show({ state: 'already_added', ...base, target: { agentId: AGENT.id, agentName: 'Invoices', verdict: 'already_added', pinName: 'erp-lookup', pinnedRevision: 2, behind: true } })
     expect(await screen.findByText('ERP lookup is already on Invoices (Version 2)')).toBeTruthy()
-    expectReservedLine()
+    expectOneLine()
     fireEvent.click(screen.getByRole('button', { name: 'Update to Version 3' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
     await waitFor(() => expectSettlingRow())
@@ -214,14 +225,14 @@ describe('the skill-link offer row', () => {
     show({ state: 'already_added', ...base, target: { agentId: AGENT.id, agentName: 'Invoices', verdict: 'already_added', pinName: 'erp-lookup', pinnedRevision: 3, behind: false } })
     expect(await screen.findByText('ERP lookup is already on Invoices (Version 3)')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Update/ })).toBeNull()
-    expectReservedLine()
+    expectOneLine()
   })
 
   it('other_profile: Switch to that account, which moves the offer along', async () => {
     login.mutateAsync.mockResolvedValue({ success: true })
     show({ state: 'other_profile', host: 'acme.test', origin: 'https://acme.test', profileId: 'p2', profileName: 'Me at Acme', title: 'ERP (Acme)' })
     expect(await screen.findByText('ERP (Acme) is on acme.test, not your current account.')).toBeTruthy()
-    expectReservedLine()
+    expectOneLine()
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Me at Acme' }))
     await waitFor(() => expect(login.mutateAsync).toHaveBeenCalledWith({ userId: 'p2' }))
     await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toMatchObject({ chatKey: 'new', pendingFrom: null }))
@@ -245,7 +256,7 @@ describe('the skill-link offer row', () => {
   it('not_connected: Connect… goes through the connect confirm step', async () => {
     show({ state: 'not_connected', host: 'acme.test', origin: 'https://acme.test' })
     expect(await screen.findByText('This skill is on acme.test. Connect to it first.')).toBeTruthy()
-    expectReservedLine()
+    expectOneLine()
     fireEvent.click(screen.getByRole('button', { name: 'Connect…' }))
     expect(deliverPasted).toHaveBeenCalledWith('cinna://connect?server=https%3A%2F%2Facme.test')
   })
@@ -253,7 +264,8 @@ describe('the skill-link offer row', () => {
   it('no_access: says so, with nothing to click but ×', async () => {
     show({ state: 'no_access', host: 'cinna.test', origin: 'https://cinna.test' })
     expect(await screen.findByText('You don’t have access to this skill on cinna.test.')).toBeTruthy()
-    expect(within(expectReservedLine()).queryByRole('button')).toBeNull()
+    expect(within(expectOneLine()).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Dismiss skill link'])
+    expect(screen.getByTitle('You don’t have access to this skill on cinna.test. Ask whoever shared it.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss skill link' }))
     expect(useSkillLinkOfferStore.getState().offer).toBeNull()
   })
@@ -262,7 +274,7 @@ describe('the skill-link offer row', () => {
     show({ state: 'reauth_required', host: 'cinna.test', origin: 'https://cinna.test' })
     expect(await screen.findByText('Sign in to cinna.test again to look this skill up.')).toBeTruthy()
     expect(screen.queryByText(/Couldn’t reach/)).toBeNull()
-    const line = expectReservedLine()
+    const line = expectOneLine()
     resolve.mockResolvedValue(ok())
     fireEvent.click(within(line).getByRole('button', { name: 'Try again' }))
     expect(await screen.findByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
@@ -293,7 +305,7 @@ describe('the skill-link offer row', () => {
   it('offline: Try again asks again', async () => {
     show({ state: 'offline', host: 'cinna.test', origin: 'https://cinna.test' })
     expect(await screen.findByText('Couldn’t reach cinna.test to look this skill up.')).toBeTruthy()
-    expectReservedLine()
+    expectOneLine()
     resolve.mockResolvedValue(ok())
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(await screen.findByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
@@ -321,7 +333,7 @@ describe('where the offer lives', () => {
     resolve.mockReturnValue(new Promise(() => {}))
     act(() => useSkillLinkOfferStore.getState().raise({ ...LINK, packageId: 'test.other' }, 'chat-1'))
     expect(await screen.findByText(/Looking up/)).toBeTruthy()
-    expect(panel().querySelector('li p')!.textContent).toBe('Looking up test.other on cinna.test…')
+    expect(panel().querySelector('li p')!.textContent).toBe('Looking up test.other on cinna.test… Nothing is added until you choose.')
     expect(screen.queryByText(/ERP lookup/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'New agent with this skill' })).toBeNull()
   })
@@ -351,7 +363,7 @@ describe('where the offer lives', () => {
     act(() => useSkillLinkOfferStore.getState().moveTo('chat-2'))
     view.rerender(<Harness chatKey="chat-2" />)
     expect(useSkillLinkOfferStore.getState().offer?.chatKey).toBe('chat-2')
-    expect(screen.getByTitle('Looking up test.erp on cinna.test…')).toBeTruthy()
+    expect(screen.getByTitle('Looking up test.erp on cinna.test… Nothing is added until you choose.')).toBeTruthy()
   })
 })
 

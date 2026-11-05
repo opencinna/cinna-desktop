@@ -111,6 +111,8 @@ describe('RefusableExamplePrompts', () => {
 })
 
 describe('composer recheck feedback', () => {
+  /** The icon of the label on screen; a `StableLabel` keeps the other one laid out, invisible. */
+  const shownIcon = (button: HTMLElement): SVGElement | null => button.querySelector('.grid > span:not(.invisible) svg')
   it('shows the refresh icon and holds immediate checks for 600 ms without losing focus or duplicating requests', async () => {
     vi.useFakeTimers()
     const run = vi.fn()
@@ -124,18 +126,39 @@ describe('composer recheck feedback', () => {
     }
     render(<ReadinessRow readiness={readiness} />)
     const button = screen.getByRole('button', { name: 'Check again' })
-    expect(button.querySelector('svg')?.classList.contains('lucide-refresh-cw')).toBe(true)
+    expect(shownIcon(button)?.classList.contains('lucide-refresh-cw')).toBe(true)
     button.focus()
     fireEvent.click(button)
     await act(async () => { await vi.advanceTimersByTimeAsync(599) })
     expect(screen.getByRole('button', { name: 'Checking…' })).toBe(button)
     expect(button.getAttribute('aria-busy')).toBe('true')
-    expect(button.querySelector('svg')?.classList.contains('animate-spin')).toBe(true)
+    // The shown label's icon spins (the hidden idle one only sizes the button).
+    expect(shownIcon(button)?.classList.contains('animate-spin')).toBe(true)
     expect(document.activeElement).toBe(button)
     fireEvent.click(button)
     expect(run).toHaveBeenCalledOnce()
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     expect(screen.getByRole('button', { name: 'Check again' }).getAttribute('aria-busy')).toBe('false')
+    expect(shownIcon(button)?.classList.contains('animate-spin')).toBe(false)
+  })
+
+  it('keeps both labels laid out in one cell, so Checking… never changes the button’s width', () => {
+    const readiness: ComposerReadiness = {
+      notice: { state: 'unreachable', reason: 'Down.' },
+      refusal: { state: 'unreachable', reason: 'Down.' },
+      blocksSend: true,
+      text: 'Down.',
+      title: null,
+      action: { label: 'Re-authenticate', pendingLabel: 'Signing in…', pending: false, run: vi.fn() }
+    }
+    const view = render(<ReadinessRow readiness={readiness} />)
+    const button = screen.getByRole('button', { name: 'Re-authenticate' })
+    // Both labels are in the button, the idle one shown, the pending one invisible but sizing it.
+    expect(button.textContent).toBe('Re-authenticateSigning in…')
+    expect(screen.getByText('Signing in…').className).toContain('invisible')
+    view.rerender(<ReadinessRow readiness={{ ...readiness, action: { ...readiness.action!, pending: true } }} />)
+    expect(screen.getByRole('button', { name: 'Signing in…' })).toBe(button)
+    expect(screen.getByText('Re-authenticate').className).toContain('invisible')
   })
 })
 
@@ -168,7 +191,7 @@ describe('Antigravity’s first login', () => {
     expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Log in' }))).toBe(false)
     view.rerender(<ReadinessRow readiness={login('codex', true)} />)
     expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Cancel' }))).toBe(false)
-    // An action without a Cancel stays beside the sentence.
+    // An action without a Cancel stays at the end of the sentence's line, as on every other row.
     view.rerender(<ReadinessRow readiness={{ ...login('codex'), action: { label: 'Check again', pendingLabel: 'Checking…', pending: false, run: vi.fn() } }} />)
     expect(line.parentElement!.contains(screen.getByRole('button', { name: 'Check again' }))).toBe(true)
   })
@@ -188,19 +211,20 @@ describe('skillCredentialsNotice', () => {
     return <ComposerNoticePanel notices={notice ? [notice] : []} />
   }
 
-  it('names the one slot a prompted skill lacks, by the skill’s catalog title', () => {
+  it('names the one slot a prompted skill lacks, by the skill’s folder name as Finish setup does, never its catalog title', () => {
     const folder = agent([skill('erp-orders', [cred('erp-api', false), cred('erp-ok', true)], { title: 'ERP Orders' })])
     const notice = skillCredentialsNotice(folder, ['erp-orders'], vi.fn(), vi.fn())!
-    expect(notice).toMatchObject({ key: 'skill-credentials', tone: 'warning', title: 'ERP Orders needs a credential this agent doesn’t have: erp-api.' })
+    expect(notice).toMatchObject({ key: 'skill-credentials', tone: 'warning', title: 'erp-orders needs a credential this agent doesn’t have: erp-api.' })
     render(<Row notice={notice} />)
     expect(screen.getByText('erp-api').tagName).toBe('CODE')
-    expect(screen.getByText(/ERP Orders needs a credential this agent doesn’t have/)).toBeTruthy()
+    expect(screen.getByText(/erp-orders needs a credential this agent doesn’t have/)).toBeTruthy()
+    expect(screen.queryByText(/ERP Orders/)).toBeNull()
   })
 
   it('counts several, names the first prompted skill and lists them all in the title', () => {
     const folder = agent([
       skill('crm-sync', [cred('crm', false)], { source: 'authored', title: 'Ignored for an own skill' }),
-      skill('erp-orders', [cred('erp-api', false), cred('erp-db', false)])
+      skill('erp-orders', [cred('erp-api', false), cred('erp-db', false)], { title: 'ERP Orders' })
     ])
     const notice = skillCredentialsNotice(folder, ['erp-orders', 'crm-sync'], vi.fn(), vi.fn())!
     render(<Row notice={notice} />)
@@ -233,15 +257,18 @@ describe('skillCredentialsNotice', () => {
     expect(finish).toHaveBeenCalledTimes(1)
   })
 
-  it('has the skill-link offer’s two-line shape: the action under the text, a reserved line and a ×', () => {
+  it('has the skill-link offer’s one-line shape: text, then Finish setup and the × at the line’s end', () => {
     const notice = skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), ['erp'], vi.fn(), vi.fn())!
-    expect(notice).toMatchObject({ actionBelow: true, reserveActionLine: true, singleLine: true })
+    expect(notice).toMatchObject({ singleLine: true })
     const { container } = render(<Row notice={notice} />)
     const row = container.querySelector('li')!
-    // Line one (icon, text, ×), then line two (the strut and Finish setup).
-    expect(row.children).toHaveLength(2)
-    expect(row.children[0].querySelector('button[aria-label="Dismiss skill credential prompt"]')).toBeTruthy()
-    expect(row.children[1].textContent).toContain('Finish setup')
+    expect(row.children).toHaveLength(1)
+    const line = row.children[0]
+    expect(line.querySelector('p')!.className).toContain('truncate')
+    // The strut first (the row is one button tall), the × last, Finish setup just before it.
+    expect(line.firstElementChild!.getAttribute('aria-hidden')).toBe('true')
+    expect(line.lastElementChild!.getAttribute('aria-label')).toBe('Dismiss skill credential prompt')
+    expect(line.lastElementChild!.previousElementSibling!.textContent).toBe('Finish setup')
   })
 
   it('folds into the folder’s credentials row when there is one: no second row, the skill sentence in its tooltip', () => {

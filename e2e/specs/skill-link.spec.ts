@@ -233,7 +233,8 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
     const reads = core.listingReads()
     expect(await pasteText(page, httpsLink(core))).toBe(true)
     await expect(composer(page)).toHaveValue('')
-    await expect(row.getByRole('paragraph')).toHaveText(`Looking up ${PACKAGE_ID} on ${core.hostLabel}…`)
+    // The note follows the sentence on its one line.
+    await expect(row.getByRole('paragraph')).toHaveText(`Looking up ${PACKAGE_ID} on ${core.hostLabel}… Nothing is added until you choose.`)
     await expect(row.getByText('Nothing is added until you choose.', { exact: true })).toBeVisible()
     await expect(row.getByRole('button', { name: /^Add to/ })).toHaveCount(0)
     // The lookup reads the listing again rather than answering from the cache.
@@ -315,9 +316,9 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
 })
 
 test('S1b the row keeps its height when the lookup answers', async ({ cinna }) => {
-  // ux_rules rule 1: the reserved second line (a zero-width NoticeButton
+  // ux_rules rule 1: the row's one line (held by a zero-width NoticeButton
   // strut, ComposerNoticePanel) is one button tall in every state, so the row
-  // does not grow when Add / New agent replace the pending sentence.
+  // does not grow when Add / New agent appear at its end.
   await arrange(cinna, engine, core)
   const page = cinna.page
   await startChatWith(cinna, AGENT)
@@ -330,8 +331,16 @@ test('S1b the row keeps its height when the lookup answers', async ({ cinna }) =
   core.releaseListings()
   await expect(row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
   const answered = (await row.boundingBox())!.height
-  // Sub-pixel layout rounding differs between frames (71.875 vs 71.87497); a jump is a whole line.
+  // Sub-pixel layout rounding differs between frames; a jump is a whole line.
   expect(answered).toBeCloseTo(pending, 1)
+  // The actions sit at the end of the sentence's line, not on a line under it: their middles align.
+  const middle = (box: { y: number; height: number } | null): number => box!.y + box!.height / 2
+  const sentence = await row.getByRole('paragraph').boundingBox()
+  const add = await row.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).boundingBox()
+  expect(Math.abs(middle(add) - middle(sentence))).toBeLessThan(2)
+  expect(add!.x).toBeGreaterThan(sentence!.x + sentence!.width - 1)
+  // One line: no taller than the button plus the row's padding.
+  expect(answered).toBeLessThan(add!.height + 20)
 })
 
 test('S2 a cinna://skill deep link from argv raises the offer on the start screen', async ({ cinna }) => {
@@ -343,7 +352,9 @@ test('S2 a cinna://skill deep link from argv raises the offer on the start scree
   const page = cinna.page
   const row = offerRow(page)
   // No agent is picked on the start screen a launch opens: Add asks for one, New agent stays.
-  await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · Version 1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`)
+  // The reason stands after the title in place of the facts, which stay in the tooltip.
+  await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · Pick one agent to add it to, or make a new one.`)
+  await expect(row.getByRole('paragraph')).toHaveAttribute('title', new RegExp(`Version 1 \\(1\\.0\\.0\\) · by ${PUBLISHER}`))
   const add = row.getByRole('button', { name: 'Add to agent', exact: true })
   await expect(add).toBeDisabled()
   await expect(add).toHaveAttribute('title', 'Pick one agent to add it to, or make a new one.')
@@ -364,7 +375,7 @@ test('S3 a link the listing does not have says so and offers nothing; other serv
 
   await test.step('no_access: a package the listing does not hold', async () => {
     expect(await pasteText(page, httpsLink(core, 'com.acme.not-shared-with-you'))).toBe(true)
-    await expect(row.getByRole('paragraph')).toHaveText(`You don’t have access to this skill on ${core.hostLabel}.`)
+    await expect(row.getByRole('paragraph')).toHaveText(`You don’t have access to this skill on ${core.hostLabel}. Ask whoever shared it.`)
     await expect(row.getByText('Ask whoever shared it.', { exact: true })).toBeVisible()
     // The row's only button is its ×.
     await expect(row.getByRole('button')).toHaveCount(1)
@@ -406,7 +417,7 @@ test('S4 a use-only team agent cannot take the skill; New agent with this skill 
 
   await test.step('Add is disabled with its reason; New agent with this skill is offered', async () => {
     expect(await pasteText(page, httpsLink(core))).toBe(true)
-    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · Version 1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`)
+    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · ${reason}`)
     const add = row.getByRole('button', { name: `Add to ${TEAM_AGENT}`, exact: true })
     await expect(add).toBeDisabled()
     await expect(add).toHaveAttribute('title', reason)
