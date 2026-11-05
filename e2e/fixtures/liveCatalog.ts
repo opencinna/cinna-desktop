@@ -316,7 +316,7 @@ export async function shareSkill(
   await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeEnabled({ timeout: 30_000 })
   for (const person of input.people ?? []) {
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
-    await dialog.getByRole('option', { name: `${person.name} <${person.email}>` }).click()
+    await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
   }
   if (input.everyone) await dialog.getByRole('checkbox', { name: 'Everyone on this server can use it', exact: true }).check()
   for (const [slot, label] of Object.entries(input.provide ?? {})) {

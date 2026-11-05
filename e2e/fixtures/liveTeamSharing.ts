@@ -572,7 +572,7 @@ export async function shareWithTeam(
   for (const { person, access } of people) {
     const label = `${person.name} <${person.email}>`
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
-    await dialog.getByRole('option', { name: label }).click()
+    await dialog.page().getByRole('option', { name: label }).click()
     if (access) await dialog.getByRole('combobox', { name: `Access for ${label}` }).selectOption({ label: access })
   }
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()

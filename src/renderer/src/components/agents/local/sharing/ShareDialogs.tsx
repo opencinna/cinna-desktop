@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
-import { useDialogChrome } from '../../../settings/SettingsLayout'
+import { DIALOG_POPOVER_ATTR, useDialogChrome } from '../../../settings/SettingsLayout'
 import { unwrapIpcError } from '../../../../utils/ipcError'
 import { unwrapCatalogOutcome } from '../../../../../../shared/catalog'
 import type {
@@ -440,12 +440,67 @@ export function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>):
   return `${person.name} <${person.email}>`
 }
 
+/** Gap between the field and its dropdown, and the least kept to the window's edge. */
+const DROPDOWN_GAP = 4
+const DROPDOWN_EDGE = 8
+
+/**
+ * Where a field's portaled dropdown goes: `position: fixed`, as wide as the
+ * field, just below it, or just above it when it does not fit below and there
+ * is more room above. Re-measured on resize, on any scroll (the dialog body
+ * scrolls) and when the list or the dialog changes size, so it stays on the
+ * field. Null until measured.
+ */
+function useFieldDropdownPosition(
+  open: boolean,
+  fieldRef: React.RefObject<HTMLElement | null>,
+  listRef: React.RefObject<HTMLElement | null>
+): React.CSSProperties | null {
+  const [pos, setPos] = useState<React.CSSProperties | null>(null)
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    const measure = (): void => {
+      const field = fieldRef.current
+      if (!field) return
+      const r = field.getBoundingClientRect()
+      const height = listRef.current?.getBoundingClientRect().height ?? 0
+      const below = window.innerHeight - DROPDOWN_EDGE - (r.bottom + DROPDOWN_GAP)
+      const above = r.top - DROPDOWN_GAP - DROPDOWN_EDGE
+      const flip = height > below && above > below
+      setPos(
+        flip
+          ? { left: r.left, width: r.width, bottom: window.innerHeight - r.top + DROPDOWN_GAP }
+          : { left: r.left, width: r.width, top: r.bottom + DROPDOWN_GAP }
+      )
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    // Answers arriving change the list's height (and so whether it fits below),
+    // and a chip added above the field moves it without a scroll.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (listRef.current) observer?.observe(listRef.current)
+    const dialog = fieldRef.current?.closest('[role="dialog"]')
+    if (dialog) observer?.observe(dialog)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+      observer?.disconnect()
+    }
+  }, [open, fieldRef, listRef])
+  return pos
+}
+
 /**
  * A search field over the server's people, with its answers in a dropdown.
  *
  * **The dropdown floats over what is below it**, so opening, narrowing and
  * closing it while the user types moves nothing in the dialog (ux_rules rule
- * 1). It opens once two letters are typed and closes on a pick, on Escape
+ * 1). It is portaled to the body and fixed to the field, so the dialog's
+ * scrolling body never cuts it off. It opens once two letters are typed and closes on a pick, on Escape
  * (which then does not close the dialog) and when focus leaves the field.
  * Arrow keys move through the answers and Enter picks the highlighted one.
  *
@@ -482,6 +537,9 @@ export function PeopleSearch({
   else if (results.length === 0) message = search.kind === 'searching' ? SHARE_UI_TEXT.peopleSearching : SHARE_UI_TEXT.peopleNoneFound
   const shown = open && !picked && search.kind !== 'idle'
   const highlighted = Math.min(active, Math.max(results.length - 1, 0))
+  const fieldRef = useRef<HTMLInputElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const listPos = useFieldDropdownPosition(shown, fieldRef, listRef)
 
   const pick = (person: PersonSearchResult): void => {
     onPick(person)
@@ -500,7 +558,10 @@ export function PeopleSearch({
       <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleSearchLabel}</span>
       <div className="relative">
         <input
-          ref={inputRef}
+          ref={(node) => {
+            fieldRef.current = node
+            if (inputRef) inputRef.current = node
+          }}
           type="search"
           role="combobox"
           aria-expanded={shown}
@@ -540,15 +601,20 @@ export function PeopleSearch({
           }}
           className={FIELD}
         />
-        {shown && (
+        {shown && createPortal(
           <div
+            ref={listRef}
             id="share-people-results"
             role="listbox"
             aria-label={SHARE_UI_TEXT.peopleSearchLabel}
             data-people-results
+            {...{ [DIALOG_POPOVER_ATTR]: '' }}
             // Before the input's blur, so a click on an answer lands.
             onMouseDown={(event) => event.preventDefault()}
-            className="absolute inset-x-0 top-full z-10 mt-1 max-h-[7.5rem] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] py-0.5 shadow-lg"
+            // Portaled and fixed to the field: inside the dialog's scrolling
+            // body an absolute list was cut off at the dialog's edge.
+            style={listPos ?? { visibility: 'hidden' }}
+            className="fixed z-[60] max-h-[7.5rem] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] py-0.5 shadow-lg"
           >
             {message !== null ? (
               <p className="px-2.5 py-1.5 text-[11px] text-[var(--color-text-muted)]">{message}</p>
@@ -570,7 +636,8 @@ export function PeopleSearch({
                 </button>
               ))
             )}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
     </label>

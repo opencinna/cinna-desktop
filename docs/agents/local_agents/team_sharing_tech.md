@@ -203,7 +203,7 @@ Every handler calls `userActivation.requireActivated()`, runs in the settings sc
 
 - `REFRESH_INTERVAL_MS` (libraryService) — five minutes
 - Git timeouts are the root-update half's: local reads and the long network timeout per network child
-- `HISTORY_LIMIT` (gitService) — 30 versions; the people search asks for `limit=10` and waits `SEARCH_DEBOUNCE_MS` (250, `ShareDialogs.tsx`) after typing
+- `HISTORY_LIMIT` (gitService) — 30 versions; the people search asks for `limit=10` and waits `SEARCH_DEBOUNCE_MS` (250, `ShareDialogs.tsx`) after typing. `PeopleSearch`'s dropdown is portaled to `body` and `position: fixed` to the field (`useFieldDropdownPosition`: below, or above when it does not fit and there is more room; re-measured on resize, any scroll and a `ResizeObserver` on the list and the dialog), marked `DIALOG_POPOVER_ATTR` (`SettingsLayout.tsx`) so `useDialogChrome`'s outside-press handler ignores a press on it. Tests and specs find its `option`s on the page, not inside the dialog
 - `MAX_SUMMARY_DIFF_CHARS` 16 000 (what the summary reads), `MAX_SUMMARY_CHARS` 600 (what the field keeps), `MAX_DETAIL_CHARS` 300 (server words carried back)
 - `adoptionBrief.ts`: `MAX_FILE_DIFF_CHARS` 6 000 (one file's diff in the brief, cut at a line end with "… (N more lines not shown)"), `MAX_BRIEF_CHARS` 40 000 (the whole brief; diffs that do not fit become "… N more files are not shown here; read them in the folder.", the asks are never cut), its own `MAX_SUMMARY_CHARS` 1 500 (the agent's summary lifted into the Share changes field)
 

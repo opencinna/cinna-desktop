@@ -291,7 +291,12 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       await act(async () => { vi.advanceTimersByTime(400) })
       expect(searchPeople).toHaveBeenCalledTimes(1)
       expect(searchPeople).toHaveBeenCalledWith('bob')
-      expect(results()!.className).toContain('absolute')
+      expect(results()!.className).toContain('fixed')
+      // Outside the dialog, so its scrolling body cannot cut the list off.
+      expect(screen.getByRole('dialog').contains(results())).toBe(false)
+      // A real press: mousedown first, which the dialog must not take for a press outside it.
+      fireEvent.mouseDown(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
+      expect(screen.queryByRole('dialog')).not.toBeNull()
       fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
       // A pick closes the dropdown, empties the field for the next person, and
       // joins the list as "Can use".

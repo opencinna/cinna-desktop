@@ -475,9 +475,9 @@ describe('SharingTab — people', () => {
       const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })
       fireEvent.change(within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' }), { target: { value: 'bob' } })
       await act(async () => { vi.advanceTimersByTime(400) })
-      fireEvent.click(within(dialog).getByRole('option', { name: 'Bob <bob@x.test>' }))
+      fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
       // The pick closes the dropdown and stays in the field.
-      expect(within(dialog).queryByRole('listbox')).toBeNull()
+      expect(screen.queryByRole('listbox')).toBeNull()
       const field = within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' }) as HTMLInputElement
       expect(field.value).toBe('Bob <bob@x.test>')
       expect((within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel) as HTMLSelectElement).value).toBe('use')
@@ -486,7 +486,7 @@ describe('SharingTab — people', () => {
       fireEvent.change(field, { target: { value: 'Bob' } })
       expect((within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }) as HTMLButtonElement).disabled).toBe(true)
       await act(async () => { vi.advanceTimersByTime(400) })
-      fireEvent.click(within(dialog).getByRole('option', { name: 'Bob <bob@x.test>' }))
+      fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
       await act(async () => {
         fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
       })

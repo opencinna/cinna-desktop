@@ -505,8 +505,8 @@ export function useDialogChrome({
     }
     const onClick = (event: MouseEvent): void => {
       if (pending) return
-      // A press on an open info tip is not a press outside: the tip lives in <body>.
-      if ((event.target as Element | null)?.closest?.(`[${INFO_TIP_ATTR}]`)) return
+      // A press on an open info tip or a field's dropdown is not a press outside: both live in <body>.
+      if ((event.target as Element | null)?.closest?.(`[${INFO_TIP_ATTR}], [${DIALOG_POPOVER_ATTR}]`)) return
       if (modalRef.current && !modalRef.current.contains(event.target as Node)) onDismiss()
     }
     window.addEventListener('keydown', onKey)
@@ -525,6 +525,12 @@ export function useDialogChrome({
  * while it is open is the tip's.
  */
 export const INFO_TIP_ATTR = 'data-info-tip'
+
+/**
+ * Marks a dropdown a dialog's field portals into <body> (the people search's
+ * answers), so a press on it is not taken for a press outside the dialog.
+ */
+export const DIALOG_POPOVER_ATTR = 'data-dialog-popover'
 
 /**
  * The `(?)` beside a section title or a control's label, and the paragraph
