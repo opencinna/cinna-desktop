@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `01eede8be06ea6f1`.
+Your current kit is version `3f2cf9c0782faf1b`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -25,6 +25,37 @@ bundle's credential spec name, else (an agent that isn't a bundle install) to th
 credential's own name; a name is ready when any credential linked under it is
 usable, and a name no linked credential resolves to counts as missing. This is
 what core already did.
+
+## 1.22.0 — co-maintained catalog skills
+
+Additive and wording only. Every 1.x folder stays valid; no manifest or
+`publications.json` key is added, renamed or reshaped, and `kit.py validate` is
+unchanged. A person given **edit** on someone else's catalog skill can now change it
+from their own agent and share the change as that package's next version.
+
+### Changed (wording only)
+
+- **`schema/publications.schema.json`** — `skills[].revision_number` is the revision
+  the folder holds (written when it is shared, made editable from a pin, or brought
+  up to a newer version), no longer only the one the last publish created.
+  `skills[].content_hash` is that revision's content hash; the folder's own tree hash
+  against it tells unshared changes.
+- **`guides/08-knowledge-and-local-skills.md`**, "Skills from the catalog" — a pin is
+  read-only. To change a catalog skill the person may edit, the agent asks them to
+  press **Edit skill** on its row: the host turns the pin into `skills/<name>/`
+  linked to the same package, and its Share publishes the next version. The agent
+  never copies a pin's files into `skills/`, never edits the host's copy, never edits
+  `catalog_skills[]`; a private variant gets a different name. A linked folder whose
+  package has a newer version is brought up with **Get Version N**; a share from an
+  older version is refused.
+
+### Hosts
+
+The refusals behind this are cinna-core's: a desktop share whose folder is not at
+the package's latest revision is refused (`stale_base`), and a first share beside a
+same-name package the person may edit asks which they mean
+(`editable_package_exists`). A host keeps `revision_number` and `content_hash` as
+above whenever it shares, makes a pin editable, or gets a newer version.
 
 ## 1.21.0 — cloud agents' components on cinna-core dashboards
 
