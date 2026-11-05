@@ -27,6 +27,7 @@ Exported from the hook that uses them. They were tuned on recorded real trackpad
 
 - Phases advance on a `MINIMAL_TRANSITION_MS` timer; `useOverscrollExit` is enabled only in `cloud`, the wipe only in `full`.
 - Baseline (`MinimalBaseline`) is captured at entry: open ask ids and handoff state. `shouldRestoreMinimal` compares against it on every chat-store change.
+- A skill-link offer ends minimal view from outside this hook: `watchSkillLinkScreen` (`hooks/useSkillLinkIntents.ts`) subscribes to the offer store and calls `setMinimalView(false)` when an offer is raised or moved onto the composer on screen (`composerKeyOnScreen`). `shouldRestoreMinimal` and `MinimalBaseline` know nothing of it.
 - Focus: entering focuses the cloud unless focus is already inside the chat area; an auto-restore with focus nowhere lands it in the composer.
 - Key forwarding is a capture-phase `keydown` listener; it skips `defaultPrevented` events, editable targets and any open `OPEN_FLOATING_LAYER_SELECTOR` / `.app-modal-panel`.
 - The drop target is the whole chat area while minimal view is on and the composer accepts files; drag depth is counted so child enter/leave pairs do not flicker the overlay.

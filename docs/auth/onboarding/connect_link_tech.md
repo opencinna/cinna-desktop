@@ -5,16 +5,18 @@ Implementation companion to [connect_link.md](connect_link.md).
 ## File Locations
 
 ### Shared
+- `src/shared/serverOrigin.ts` — `normalizeServerOrigin()` and `MAX_URL_LENGTH`, moved here from `connectIntentService` so the skill-link parser applies the same origin rule; `connectIntentService` re-exports both
 - `src/shared/connectIntent.ts` — `ConnectIntent` (`serverUrl`, `receivedAt`), `CONNECT_INTENT_CHANNEL` (`'connect:intent'`), `CONNECT_SCHEME` (`'cinna'`), `CONNECT_INTENT_ARGV_FLAG` (`'--cinna-connect-intent='`)
 
 ### Main process
+- `src/main/host/desktop/deepLinkService.ts` (+ `deepLinkService.test.ts`) — the funnel: `deepLinkActionOf(raw)`, `deepLinkUrlFromArgv` (the same scan as `connectUrlFromArgv`), and `deepLinkService.{install, deliver, flush}`. `index.ts` calls only this for `open-url`, `second-instance`, the startup argv scan and `authCompleted`; `skill` goes to `skillLinkIntentService.ts`, everything else to `connectIntentService`
 - `src/main/host/desktop/connectIntentService.ts` — `normalizeServerOrigin()`, `parseConnectUrl()`, `connectUrlFromArgv()`, `registerConnectScheme()`, and the `connectIntentService` object (`install`, `deliver`, `flush`, `getPending`, `consume`, `installClipboardSource`, `checkClipboardOnce`, `reset`); module constants `MAX_URL_LENGTH` (2048, exported for the IPC layer), `LOOPBACK_HOSTS`, `CONNECT_ACTION`
 - `src/main/services/connectIntentService.test.ts` — the parser, the argv scan, the buffer, `consume(receivedAt)`, `checkClipboardOnce` and the `paste` source
 - `src/main/ipc/connect.ipc.ts` — `registerConnectHandlers()`
 - `src/main/window/focus.ts` — `installWindowResolver()`, `focusMainWindow()`
-- `src/main/index.ts` — the `cinna://` block at module scope: `registerConnectScheme()` (skipped when `CINNA_USER_DATA` is set), `requestSingleInstanceLock()`, the `second-instance` and `open-url` handlers, and the startup `connectUrlFromArgv(process.argv)` scan inside `startup()`, and the `installClipboardSource(…)` call: `clipboard.readText` on Linux, nothing on macOS or Windows, and under `CINNA_USER_DATA` only the `CINNA_E2E_CLIPBOARD_TEXT` seam (or nothing)
+- `src/main/index.ts` — the `cinna://` block at module scope: `registerConnectScheme()` (skipped when `CINNA_USER_DATA` is set), `requestSingleInstanceLock()`, the `second-instance` and `open-url` handlers (both `deepLinkService.deliver`), and the startup `deepLinkUrlFromArgv(process.argv)` scan inside `startup()`, and the `installClipboardSource(…)` call: `clipboard.readText` on Linux, nothing on macOS or Windows, and under `CINNA_USER_DATA` only the `CINNA_E2E_CLIPBOARD_TEXT` seam (or nothing)
 - `src/main/auth/cinna-oauth.ts` — `isCinnaOAuthInProgress()`
-- `src/main/services/authService.ts` — `connectIntentService.flush()` in the `finally` of `registerCinna` and `reauthCinna`
+- `src/main/services/authService.ts` — `desktopFeatures.authCompleted()` in the `finally` of `registerCinna` and `reauthCinna`, which `index.ts` wires to `focusMainWindow()` and `deepLinkService.flush()` (both slots)
 - `electron-builder.yml` — the top-level `protocols:` block (`name: Cinna Desktop`, `schemes: [cinna]`)
 
 ### Preload
@@ -49,7 +51,7 @@ None. The intent is process memory in main and store state in the renderer; noth
 
 ## Services & Key Methods
 
-`normalizeServerOrigin(raw)` → `{ ok: true, origin }` or `{ ok: false, reason }`. The reason is a **log** string, never shown: a refused link has no UI. Checks in order — non-empty, ≤ `MAX_URL_LENGTH`, parses as a URL, no `username`/`password`, has a `hostname`, `http:` only for a `LOOPBACK_HOSTS` member and otherwise `https:`. Returns `url.origin`.
+`normalizeServerOrigin(raw)` (now in `src/shared/serverOrigin.ts`) → `{ ok: true, origin }` or `{ ok: false, reason }`. The reason is a **log** string, never shown: a refused link has no UI. Checks in order — non-empty, ≤ `MAX_URL_LENGTH`, parses as a URL, no `username`/`password`, has a `hostname`, `http:` only for a `LOOPBACK_HOSTS` member and otherwise `https:`. Returns `url.origin`.
 
 `parseConnectUrl(raw)` → `ConnectIntent | null`. Length guard, `URL` parse, `protocol === 'cinna:'`, then the action from `url.hostname || url.pathname.replace(/^\/+/, '').split('/')[0]`, lowercased, compared to `'connect'`. Then `searchParams.get('server')` through `normalizeServerOrigin`. Every rejection logs at warn and returns null.
 

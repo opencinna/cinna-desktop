@@ -9,7 +9,7 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 | Term | Definition |
 |------|-----------|
 | **Connect intent** | The whole payload: `{ serverUrl, receivedAt }`. An origin and when it arrived. No token, no path, no query |
-| **The funnel** | `connectIntentService.deliver(rawUrl, source)` — the single place every delivery path lands in, so no caller can skip the validation, the buffer or the push |
+| **The funnel** | `deepLinkService.deliver(rawUrl, source)` — the single place every OS or test delivery lands in; it reads the link's action and hands it to that action's service, so no caller can skip the validation, the buffer or the push. A connect link then lands in `connectIntentService.deliver`, which a paste and the clipboard check call directly |
 | **Source** | Which path delivered it: `open-url` (macOS), `second-instance` (a link click while the app runs), `argv` (a cold launch on Linux/Windows), `test-argv` (the E2E flag), `clipboard` (the first-run clipboard check, Linux only), `paste` (a link pasted into onboarding's Server URL field) |
 | **Confirm step** | `ConnectIntentPanel` — the one screen a link is allowed to reach, and **the feature's security boundary** |
 | **Buffer** | One pending intent held in main until someone asks for it. A second link replaces the first |
@@ -101,6 +101,15 @@ The URL is parsed as untrusted input and reduced to the one field the flow needs
 - `connect:consume` may name an intent by its `receivedAt`; main then drops it only if that is still the pending one. The gate uses it for a late clipboard answer, so discarding that answer cannot take a link clicked a moment later with it
 - A *new* intent arriving while the onboarding screen is open redirects it back to the confirm step. It is matched on `receivedAt`, so the intent the confirm step just consumed cannot bounce a user who declined straight back into it
 
+### One funnel, two slots
+
+The `cinna://` scheme carries more than one action, so the OS hooks no longer call `connectIntentService` directly. `deepLinkService.deliver` reads the action (the authority, or the first path segment, as above) and routes it:
+
+- `skill` goes to `skillLinkIntentService` (`cinna://skill/<package_id>[?server=<origin>]`, see [Adding a skill from a link](../../agents/local_agents/skills.md#adding-a-skill-from-a-link)).
+- Anything else goes to `connectIntentService` exactly as before: `connect` is accepted there, and an unknown action is refused and logged there.
+
+Each action has **its own one-intent buffer**, and that is the point. A single shared slot would let a skill link evict a connect intent the person is reading in its confirm step, and the confirm step's later `consume` would drop whichever intent happened to be pending. Everything else is shared in shape, not in state: a second link of the same action replaces the first, nothing is pushed while an OAuth flow is in flight, and `flush()` (called when the flow settles) pushes whatever each slot holds. The skill slot has its own channels (`skill-link:*`) and no confirm panel of its own: the composer's offer is its confirm step.
+
 ### The clipboard read is narrow on purpose
 
 The clipboard is the user's private data, and the feature reads it only to look for one kind of text.
@@ -126,7 +135,7 @@ The clipboard is the user's private data, and the feature reads it only to look 
 
 ### The test-only argv form
 
-`--cinna-connect-intent=<url>` enters the **same funnel** as `open-url` and the argv scan. A real `open-url` event cannot be raised from Playwright — macOS delivers it through Launch Services and there is no supported way to fake that against a running app — so a spec using the flag exercises every line below the OS hook: the validation, the buffer, the push and the whole confirm step. Argv is **scanned**, not read at a fixed position, because the app already launches with other arguments (`--use-mock-keychain`, the app path in dev) and Chromium adds its own.
+`--cinna-connect-intent=<url>` enters the **same funnel** as `open-url` and the argv scan, and carries a `cinna://skill/…` link as well as a connect one (the flag's name is older than the second action). A real `open-url` event cannot be raised from Playwright — macOS delivers it through Launch Services and there is no supported way to fake that against a running app — so a spec using the flag exercises every line below the OS hook: the validation, the buffer, the push and the whole confirm step. Argv is **scanned**, not read at a fixed position, because the app already launches with other arguments (`--use-mock-keychain`, the app path in dev) and Chromium adds its own.
 
 ### Focus
 
@@ -144,6 +153,9 @@ landing page  ──►  cinna://connect?server=https://cinna.acme.com
       │   clipboard (Linux, first run, once, no push)    paste in Server URL
       │      connect:check-clipboard                    connect:deliver-pasted
       └───────────────────┴────────────────────┴──────────────────┘
+                          ▼
+        deepLinkService.deliver()  ── action? ──► skill: skillLinkIntentService (own slot, skill-link:*)
+                          │ connect (or unknown)
                           ▼
         connectIntentService.deliver()   parse → origin-only → buffer
                           │

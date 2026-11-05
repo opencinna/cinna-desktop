@@ -22,7 +22,7 @@ An open chat with only its transcript on screen. The sidebar, the top bar's butt
 ## Business Rules
 
 - **It never hides something that needs the user.** Entering is refused (menu button disabled, wipe does nothing) while the chat has a send error, an open top-level permission ask or agent question, an A2A input request, or a pending handoff awaiting review. Entering would hide exactly what needs an answer.
-- **It ends on its own when the chat starts needing the user:** a send error, an ask that was not open when minimal view began, a handoff that became pending since. Asks and a handoff already waiting at entry do not end it. A nested agent's ask is shown in its tool call's sub-thread and is not counted. Informational notices (prompt-cache expiry and the like) never restore.
+- **It ends on its own when the chat starts needing the user:** a send error, an ask that was not open when minimal view began, a handoff that became pending since. Asks and a handoff already waiting at entry do not end it. A nested agent's ask is shown in its tool call's sub-thread and is not counted. Informational notices (prompt-cache expiry and the like) never restore. A skill-link offer does, though it is not a problem: the cloud has no notice panel, so an offer raised on the open chat (a link pasted into the cloud, clicked in the transcript, or opened from the OS) would be invisible, and the person just acted on it. The rule lives with the offer, not in minimal view's own restore check ([Adding a skill from a link](../../agents/local_agents/skills.md#adding-a-skill-from-a-link)).
 - **It ends when the chat view does.** Any other view (Inbox, settings, a deep link) or closing the chat clears the flag; it does not wait for the user to return.
 - **The wipe is strict about what counts.** Every counted stroke must pass through the input card; wiping over the transcript alone never fires; a mouse button held (text selection) does not count. It starts over while a composer popup is open or voice is recording, and is off on the new-chat screen and in embedded workspaces. Without this, selecting text in the draft or reaching for the `[+]` menu entered minimal view.
 - **Double scroll-down needs the bottom.** The scroll that reaches the bottom, and its trackpad momentum tail, never count; only a second, separate attempt that began at the bottom does. Upward or sideways scrolling resets it. Without this a single flick down the transcript closed minimal view.
@@ -47,6 +47,7 @@ chat store (errors, asks) ---> useMinimalView <-- handoff query  v
 ## Integration Points
 
 - [Composer](../conversation_ui/conversation_ui.md) — the cloud is the same `ChatInput`; drafts, attachments and sending are unchanged.
+- [Agent Skills](../../agents/local_agents/skills.md#skill-links) — a raised skill-link offer ends minimal view.
 - [Ask User Question](../ask_user_question/ask_user_question.md) and permission asks — end minimal view.
 - [Appearance](../../ui/appearance/appearance.md) — the Interface menu hosts the toggle; sidebar docking is left untouched.
 - [App Shell](../../ui/app_shell/app_shell.md) — top bar and sidebar behaviour under `data-minimal`.
