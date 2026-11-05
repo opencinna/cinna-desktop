@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AlertTriangle } from 'lucide-react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState, type ReactNode } from 'react'
 import type { SkillLinkResolution, SkillLinkSkill } from '../../../../shared/skillLink'
 
@@ -23,7 +23,8 @@ window.api = { skillLinks: { resolve }, catalogSkills: { add, update }, connect:
 
 const { useSkillLinkNotice } = await import('./SkillLinkNotice')
 const { ComposerNoticePanel } = await import('./ComposerNoticePanel')
-const { useSkillLinkOfferStore } = await import('../../stores/skillLinkOffer.store')
+const { useSkillLinkOfferStore, SETTLING_FALLBACK_MS } = await import('../../stores/skillLinkOffer.store')
+const { useSkillCredentialPromptStore } = await import('../../stores/skillCredentialPrompt.store')
 const { LOCAL_AGENTS_KEY, localAgentKey } = await import('../../hooks/useLocalAgents')
 
 const LINK = { origin: 'https://cinna.test', packageId: 'test.erp', form: 'https' as const, serverGiven: true }
@@ -74,6 +75,17 @@ function expectReservedLine(): HTMLElement {
   return line
 }
 
+/** The settling row: the checking sentence, no actions, the reserved line and the ×, at the offer's height. */
+function expectSettlingRow(): void {
+  expect(panel().querySelector('li p')!.textContent).toBe('Added ERP lookup. Checking its credentials…')
+  expect(panel().querySelector('li p')!.getAttribute('title')).toBe('Added ERP lookup. Checking its credentials…')
+  const line = expectReservedLine()
+  expect(line.children).toHaveLength(1)
+  expect(screen.queryByRole('button', { name: /Add to|Update to|New agent/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Details' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Dismiss skill link' })).toBeTruthy()
+}
+
 function show(answer: SkillLinkResolution | Promise<SkillLinkResolution>, chatKey = 'chat-1', agent: { id: string; name: string } | null = AGENT) {
   resolve.mockReturnValue(answer instanceof Promise ? answer : Promise.resolve(answer))
   act(() => useSkillLinkOfferStore.getState().raise(LINK, chatKey))
@@ -82,6 +94,7 @@ function show(answer: SkillLinkResolution | Promise<SkillLinkResolution>, chatKe
 
 beforeEach(() => {
   useSkillLinkOfferStore.setState({ offer: null })
+  useSkillCredentialPromptStore.setState({ prompts: {}, settled: {} })
   resolve.mockReset()
   add.mockReset()
   update.mockReset()
@@ -154,7 +167,7 @@ describe('the skill-link offer row', () => {
     expect(screen.getByText(/Pick one agent/)).toBeTruthy()
   })
 
-  it('adding: a pending label at the same place, then the row goes on success', async () => {
+  it('adding: a pending label at the same place, then the row checks the credentials on success', async () => {
     let finish!: (value: unknown) => void
     add.mockReturnValue(new Promise((resolveAdd) => (finish = resolveAdd)))
     show(ok())
@@ -165,8 +178,8 @@ describe('the skill-link offer row', () => {
     expect(within(addButton).getByText('Adding…').getAttribute('aria-hidden')).toBe('false')
     expectReservedLine()
     await act(async () => finish({ ok: true, name: 'erp-lookup', revisionNumber: 3 }))
-    expect(useSkillLinkOfferStore.getState().offer).toBeNull()
-    expect(screen.queryByRole('status', { name: /^(Skill link|Agent status)$/ })).toBeNull()
+    expect(useSkillLinkOfferStore.getState().offer?.settling).toEqual({ agentId: 'folder:a', since: 0, title: 'ERP lookup' })
+    expectSettlingRow()
   })
 
   it('an Add refusal shows in the row and closes nothing', async () => {
@@ -194,7 +207,7 @@ describe('the skill-link offer row', () => {
     expectReservedLine()
     fireEvent.click(screen.getByRole('button', { name: 'Update to Version 3' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
-    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toBeNull())
+    await waitFor(() => expectSettlingRow())
   })
 
   it('already_added and current: no Update', async () => {
@@ -262,7 +275,7 @@ describe('the skill-link offer row', () => {
     const addButton = await screen.findByRole('button', { name: 'Add to Invoices' })
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     fireEvent.click(addButton)
-    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toBeNull())
+    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer?.settling).toBeTruthy())
     expect(invalidate).toHaveBeenCalledWith({ queryKey: LOCAL_AGENTS_KEY })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: localAgentKey('folder:a') })
   })
@@ -273,7 +286,7 @@ describe('the skill-link offer row', () => {
     const updateButton = await screen.findByRole('button', { name: 'Update to Version 3' })
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     fireEvent.click(updateButton)
-    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toBeNull())
+    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer?.settling).toBeTruthy())
     expect(invalidate).toHaveBeenCalledWith({ queryKey: localAgentKey('folder:a') })
   })
 
@@ -339,5 +352,54 @@ describe('where the offer lives', () => {
     view.rerender(<Harness chatKey="chat-2" />)
     expect(useSkillLinkOfferStore.getState().offer?.chatKey).toBe('chat-2')
     expect(screen.getByTitle('Looking up test.erp on cinna.test…')).toBeTruthy()
+  })
+})
+
+describe('after Add: checking its credentials', () => {
+  afterEach(() => vi.useRealTimers())
+
+  async function added(): Promise<void> {
+    add.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
+    show(ok())
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    await waitFor(() => expectSettlingRow())
+  }
+
+  it('reads the settle counter at the click: a fill that settles before Add answers still ends the wait', async () => {
+    let finish!: (value: unknown) => void
+    add.mockReturnValue(new Promise((resolveAdd) => (finish = resolveAdd)))
+    act(() => useSkillCredentialPromptStore.setState({ settled: { 'folder:a': 4 } }))
+    show(ok())
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    act(() => useSkillCredentialPromptStore.getState().settle('folder:a', []))
+    await act(async () => finish({ ok: true, name: 'erp-lookup', revisionNumber: 3 }))
+    await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toBeNull())
+  })
+
+  it('goes once the agent’s settle counter passes the click’s, and not on another agent’s', async () => {
+    await added()
+    act(() => useSkillCredentialPromptStore.getState().settle('folder:other', []))
+    expectSettlingRow()
+    // In the very render the counter moves, so a credential prompt raised with it takes the row’s place.
+    act(() => useSkillCredentialPromptStore.getState().settle('folder:a', ['erp-lookup']))
+    expect(screen.queryByRole('status', { name: /^(Skill link|Agent status)$/ })).toBeNull()
+    expect(useSkillLinkOfferStore.getState().offer).toBeNull()
+  })
+
+  it('goes after the fallback wait when no fill settles', async () => {
+    // The clock still runs for the lookup and Add; the jump below is the fake part.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await added()
+    act(() => { vi.advanceTimersByTime(SETTLING_FALLBACK_MS - 1000) })
+    expectSettlingRow()
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(useSkillLinkOfferStore.getState().offer).toBeNull()
+    expect(screen.queryByRole('status', { name: /^(Skill link|Agent status)$/ })).toBeNull()
+  })
+
+  it('the × still puts it away at once', async () => {
+    await added()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss skill link' }))
+    expect(useSkillLinkOfferStore.getState().offer).toBeNull()
   })
 })

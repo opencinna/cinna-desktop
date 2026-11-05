@@ -417,7 +417,8 @@ describe('skill credentials', () => {
     const [row] = agentSkillRows(agentDir, manifest(), undefined, marketplaceSkillCache.resolve)
     expect(row.credentials).toMatchObject([{ slot: 'pdf-api', type: 'api_token' }])
     await vi.waitFor(() => expect(publishEvent).toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED,
-      { autoAttached: { agentId: AGENT_ID, items: [{ slot: 'pdf-api', credentialName: 'PDF', skill: true }] } }, 'all'))
+      { autoAttached: { agentId: AGENT_ID, items: [{ slot: 'pdf-api', credentialName: 'PDF', skill: true }] },
+        skillSlotsSettled: { agentId: AGENT_ID, skills: ['pdf-report'] } }, 'all'))
     expect(detachUnusedAutoAttachments).not.toHaveBeenCalled()
   })
 
@@ -444,12 +445,19 @@ describe('skill credentials', () => {
     await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(1))
     expect(detachUnusedAutoAttachments).toHaveBeenCalledWith(AGENT_ID)
     expect(detachUnusedAutoAttachments.mock.invocationCallOrder[0]).toBeLessThan(autoAttachSkills.mock.invocationCallOrder[0])
+    // Nothing attached, and still the updated skill is named, so the composer can prompt for its slot.
+    await vi.waitFor(() => expect(publishEvent).toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED,
+      { skillSlotsSettled: { agentId: AGENT_ID, skills: ['pdf-report'] } }, 'all'))
 
     autoAttachSkills.mockClear()
+    publishEvent.mockClear()
     writeManifest({ marketplace_skills: [pinOf(v1)] })
     marketplaceSkillService.ensurePinnedInBackground(USER, AGENT_ID)
     await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID, expect.anything()))
     expect(existsSync(join(snapshotDir(v1), 'pdf-report', 'SKILL.md'))).toBe(true)
+    // A background fill names no skill and prompts for nothing.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(publishEvent).not.toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED, expect.anything(), 'all')
   })
 })
 

@@ -17,9 +17,9 @@ import { serviceCredentialCloud } from './cloud'
 import { createCredentialTokenServer, type CredentialTokenAnswer, type CredentialTokenRequest } from './tokenServer'
 import type { CinnaSendResult } from '../cinna-http'
 import { localBundle, validateLocal } from './transforms'
-import { autoMatch, isDeadKey, slotCandidates } from './slotMatch'
+import { autoMatch, isDeadKey, slotCandidates, type SlotSpec } from './slotMatch'
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -1210,7 +1210,8 @@ export const serviceCredentialService = {
   },
   /**
    * What the Finish setup dialog shows: each slot as the scanner judges it, the attachment
-   * it was judged by, and the active account's records that fit it.
+   * it was judged by, and the records that fit it, the active account's and this computer's
+   * ranked together (offered with or without an account, never attached without asking).
    */
   setupState(id: string): CredentialSetupDto {
     const a = agent(id)
@@ -1218,6 +1219,16 @@ export const serviceCredentialService = {
     const rows = resolve(a).filter(v => v.available && v.row)
     const mine = account ? state(a).accounts[account.key] ?? [] : []
     const pool = account ? repo.list(account.userId).filter(r => r.origin === 'cloud').map(credentialDto).filter(m => !mine.some(v => v.ref === m.cloudId) && !pendingOAuth(m)) : []
+    const attachedLocal = state(a).local
+    const localPool = repo.list(LOCAL).filter(r => r.origin === 'local').map(credentialDto).filter(m => !attachedLocal.some(v => v.ref === m.id) && !pendingOAuth(m))
+    // Both pools ranked in one pass, so a better tier on this computer beats a worse one in the account;
+    // within a tier the account's records come first (the ranking is stable). A local record is the
+    // 'local' group's, by its own id.
+    const tagged = [
+      ...(account ? pool.map(m => ({ ...m, option: { group: account.key, ref: m.cloudId!, credential: m } })) : []),
+      ...localPool.map(m => ({ ...m, option: { group: 'local', ref: m.id, credential: m } }))
+    ]
+    const offered = (slotSpec: SlotSpec): CredentialSetupOption[] => slotCandidates(slotSpec, tagged).map(m => m.option)
     const slots: CredentialSetupSlot[] = a.credentials.map(slot => {
       const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
       const verdict = slotState(slot)
@@ -1226,13 +1237,13 @@ export const serviceCredentialService = {
         state: verdict,
         attached: judged ? { credential: credentialDto(judged.row!), state: attachmentState(judged.row) } : null,
         expectedKeys: slot.expectedKeys, presentKeys: slot.presentKeys,
-        options: verdict === 'connected' || !account ? [] : slotCandidates(spec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m }))
+        options: verdict === 'connected' ? [] : offered(spec(slot))
       }
     })
     const attached = attachedMetadata(a)
     const skillSlots: CredentialSetupSkillSlot[] = collectSkillSlots(a.skills).map(slot => {
       const { attachment, filled, typeMismatch } = judgeSkillSlot(slot, attached)
-      const options = filled || !account ? [] : slotCandidates(skillSlotSpec(slot), pool).map(m => ({ group: account.key, ref: m.cloudId!, credential: m }))
+      const options = filled ? [] : offered(skillSlotSpec(slot))
       const notLocal = filled || options.length > 0 ? null : pool.find(m => m.relation !== 'owned' && m.type === slot.type && m.serviceUri === slot.slot && !m.localUseAllowed) ?? null
       return {
         slot: slot.slot, type: slot.type, skills: slot.skills, description: slot.description,

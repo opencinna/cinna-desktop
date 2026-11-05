@@ -105,11 +105,14 @@ export interface ServiceCredentialBundle {
   id: string; revision: string; entry: ServiceCredentialEntry
   service_account_file: Record<string, unknown> | null; ssh_key: null
 }
-/** A credential the Finish setup dialog offers for a slot: a record in the active profile's account. */
+/**
+ * A credential the Finish setup dialog offers for a slot: a record in the active profile's account,
+ * or one stored on this computer (only offered, never attached without asking).
+ */
 export interface CredentialSetupOption {
-  /** The account key, as `setAttachments` takes it. */
+  /** The account key, or `'local'` for a record on this computer, as `setAttachments` takes it. */
   group: string
-  /** Core's record id. */
+  /** Core's record id for an account record; the local record's id for `'local'`. */
   ref: string
   credential: ServiceCredentialDto
 }
@@ -131,7 +134,7 @@ export interface CredentialSetupSlot {
   expectedKeys: string[]
   /** As `LocalAgentCredentialState.presentKeys`: for a slot with no `fields`, every set name under `envPrefix`. */
   presentKeys: string[]
-  /** The active account's records that fit, best first; empty when connected. */
+  /** The active account's and this computer's records that fit, best first (the account's first within a tier); empty when connected. */
   options: CredentialSetupOption[]
 }
 /**
@@ -167,7 +170,7 @@ export interface CredentialSetupSkillSlot {
    * computer may not use (Allow local use is off), so the dialog can say why it is not offered.
    */
   notLocal: ServiceCredentialDto | null
-  /** The active account's records that fit strictly, best first; empty when connected. */
+  /** The active account's and this computer's records that fit strictly, best first (the account's first within a tier); empty when connected. */
   options: CredentialSetupOption[]
   /** What the last `provision-local` call this app session answered for this slot, if any. */
   provision: SkillProvisionOutcome | null
@@ -194,5 +197,11 @@ export interface ServiceCredentialsChangedPayload {
   lastSync?: number | null
   error?: string | null
   autoAttached?: { agentId: string; items: AutoAttachedCredential[] }
+  /**
+   * After Add to agent or Update of a skill: main's background fill of the agent's skill slots has
+   * settled (attached something, nothing, or was refused). The renderer reads what is still missing
+   * from the agent's own DTO; main only names the skills to prompt for.
+   */
+  skillSlotsSettled?: { agentId: string; skills: string[] }
 }
 export type ServiceCredentialResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }

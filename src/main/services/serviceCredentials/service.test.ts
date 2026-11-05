@@ -995,6 +995,45 @@ describe('auto-attach and the Finish setup state', () => {
     expect(service.attachments(a.id)).toEqual([])
   })
 
+  it('offers this computer’s records after the account’s, with or without an account, never one already attached', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    const mine = service.save({ name: 'Acme here', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-1' } })
+    const kept = service.save({ name: 'Acme kept', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-2' } })
+    service.save({ name: 'Unrelated', type: 'api_token', serviceUri: 'elsewhere', values: { api_token: 'local-fixture-secret-3' } })
+    await sleep()
+    // No account signed in: the local records that fit are still offered.
+    expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref, o.credential.name])).toEqual([['local', mine.id, 'Acme here'], ['local', kept.id, 'Acme kept']])
+    // One attached is not offered again (a scan that still calls the slot missing, so options show).
+    const judged = addAgent('bare') as any
+    judged.credentials = [slot('acme', 'acme-api')]
+    await service.setAttachments(judged.id, 'local', [kept.id])
+    expect(service.setupState(judged.id).slots[0].options.map(o => o.ref)).toEqual([mine.id])
+    // With an account: its records first, then this computer's; and none of them is attached without asking.
+    world.metadata = [rec('one', 'Acme one', 'acme-api', { relation: 'owned' }), rec('two', 'Acme two', 'acme-api', { relation: 'owned' })]
+    await login('account-b')
+    expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref])).toEqual([[key('account-b'), 'one'], [key('account-b'), 'two'], ['local', mine.id], ['local', kept.id]])
+    // One local record fits, and nothing in the account: still not attached without asking.
+    service.remove(kept.id)
+    world.metadata = []; await service.sync(); await sleep()
+    expect(service.setupState(a.id).slots[0].options.map(o => o.ref)).toEqual([mine.id])
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+  })
+
+  it('ranks the account’s and this computer’s records in one pass: a better tier here beats a worse one in the account', async () => {
+    const a = kitAgent([slot('acme', null)])
+    const byName = service.save({ name: 'acme', type: 'api_token', values: { api_token: 'local-fixture-secret-1' } })
+    const byUri = service.save({ name: 'Acme by URI here', type: 'api_token', serviceUri: 'acme', values: { api_token: 'local-fixture-secret-2' } })
+    world.metadata = [rec('uri', 'Acme by URI', 'acme', { relation: 'owned' })]
+    await login('account-b')
+    // Tier 1 (by name) on this computer first; then tier 2 (by Service URI), the account's before this computer's.
+    expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref])).toEqual([['local', byName.id], [key('account-b'), 'uri'], ['local', byUri.id]])
+    // The scanner's owned-before-shared tie-break holds across both pools too: a record shared with
+    // the user ranks after this computer's own within its tier.
+    world.metadata = [rec('uri', 'Acme by URI', 'acme')]; await service.sync(); await sleep()
+    expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref])).toEqual([['local', byName.id], ['local', byUri.id], [key('account-b'), 'uri']])
+  })
+
   it('appends through attach without dropping what is there', async () => {
     const a = kitAgent([slot('acme', 'acme-api')])
     world.metadata = [rec('one', 'Acme one', 'acme-api'), rec('two', 'Acme two', 'acme-api')]
@@ -1138,6 +1177,31 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
     // A local profile has no account to attach from or offer.
     expect(await service.autoAttachSkills(a.id)).toEqual([])
     expect(setup.skillSlots[0].options).toEqual([])
+  })
+
+  it('offers a fitting record on this computer, strictly, but never attaches it without asking', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    const here = service.save({ name: 'ERP here', type: 'api_token', serviceUri: 'erp-api', values: { api_token: 'local-fixture-secret-1' } })
+    service.save({ name: 'erp-api', type: 'api_token', values: { api_token: 'local-fixture-secret-2' } })
+    service.save({ name: 'ERP mail', type: 'email_imap', serviceUri: 'erp-api', values: { host: 'h', port: '993', username: 'u', password: 'local-fixture-secret-3' } })
+    await sleep()
+    // No account: still offered, and the shared-but-not-local hint stays away.
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', notLocal: null, options: [{ group: 'local', ref: here.id, credential: { name: 'ERP here' } }] })
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    // Alongside the account's, after them; and the one-fit auto-attach still takes only the cloud record.
+    world.metadata = [rec('far', 'ERP (cloud only)', 'erp-api', { local_use_allowed: false })]
+    await login('account-b')
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ notLocal: null, options: [{ group: 'local', ref: here.id }] })
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(service.attachments(a.id)).toEqual([])
+    world.metadata = [rec('erp-1', 'ERP', 'erp-api', { relation: 'owned' })]; await service.sync(); await sleep()
+    expect(service.setupState(a.id).skillSlots[0].options.map(o => [o.group, o.ref])).toEqual([[key('account-b'), 'erp-1'], ['local', here.id]])
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    expect(service.attachments(a.id).map(v => [v.group, v.ref])).toEqual([[key('account-b'), 'erp-1']])
+    // Attached by hand, it fills the slot and is no longer offered.
+    await service.setAttachments(a.id, key('account-b'), [])
+    await service.attach(a.id, 'local', here.id)
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'connected', attached: { credential: { name: 'ERP here' } }, options: [] })
   })
 
   it('writes what the skill runtime reads: the materialised file answers require_slot for the attached slot', async () => {

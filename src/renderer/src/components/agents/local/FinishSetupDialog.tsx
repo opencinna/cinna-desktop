@@ -76,7 +76,12 @@ function skillSlotNote(slot: CredentialSetupSkillSlot): string {
       ? `${slot.notLocal.name} is shared with you, but not for use on this computer. ${owner} can turn on Allow local use.`
       : `${slot.notLocal.name} is shared with you, but not for use on this computer.`
   }
-  return `Nothing in your account fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
+  return `None of your credentials fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
+}
+
+/** An offered record by its group and ref: a local record's id and Core's id share no namespace. */
+function optionKey(option: CredentialSetupOption): string {
+  return `${option.group}:${option.ref}`
 }
 
 /** The `.env` names a slot shows rows for: none once an attachment satisfies it, or when it declares no `fields`. */
@@ -208,7 +213,7 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
         notice={notice}
         busy={busy}
         unsaved={unsaved}
-        attachingRef={attach.isPending ? attach.variables?.option.ref ?? null : null}
+        attachingKey={attach.isPending && attach.variables ? optionKey(attach.variables.option) : null}
         savingKeys={save.isPending && !finishing ? Object.keys(save.variables?.values ?? {}) : []}
         finishing={save.isPending && finishing}
         onUse={(option) => {
@@ -292,7 +297,7 @@ export function FinishSetupDialog({
   notice,
   busy,
   unsaved,
-  attachingRef,
+  attachingKey,
   savingKeys,
   finishing,
   opening,
@@ -313,7 +318,7 @@ export function FinishSetupDialog({
   busy: boolean
   /** Something typed is not saved: the backdrop and Escape then close nothing. */
   unsaved: boolean
-  attachingRef: string | null
+  attachingKey: string | null
   savingKeys: readonly string[]
   /** Done is saving what was typed before it closes. */
   finishing: boolean
@@ -359,7 +364,7 @@ export function FinishSetupDialog({
             drafts={drafts}
             onDraft={onDraft}
             busy={busy}
-            attachingRef={attachingRef}
+            attachingKey={attachingKey}
             saving={savingKeys.some((key) => slot.expectedKeys.includes(key))}
             onUse={onUse}
             opening={opening}
@@ -383,7 +388,7 @@ export function FinishSetupDialog({
                 drafts={drafts}
                 onDraft={onDraft}
                 busy={busy}
-                attachingRef={attachingRef}
+                attachingKey={attachingKey}
                 saving={false}
                 onUse={onUse}
                 opening={opening}
@@ -450,7 +455,7 @@ function SlotRow({
   drafts,
   onDraft,
   busy,
-  attachingRef,
+  attachingKey,
   saving,
   onUse,
   opening,
@@ -468,7 +473,7 @@ function SlotRow({
   drafts: Record<string, string>
   onDraft: (key: string, value: string) => void
   busy: boolean
-  attachingRef: string | null
+  attachingKey: string | null
   saving: boolean
   onUse: (option: CredentialSetupOption) => void
   opening: boolean
@@ -550,7 +555,7 @@ function SlotRow({
       {slot.options.map((option) => (
         <CredentialRow
           compact
-          key={`${option.group}:${option.ref}`}
+          key={optionKey(option)}
           name={option.credential.name}
           type={option.credential.type}
           serviceUri={option.credential.serviceUri}
@@ -564,7 +569,7 @@ function SlotRow({
               aria-disabled={busy}
               onClick={() => onUse(option)}
             >
-              {attachingRef === option.ref ? (
+              {attachingKey === optionKey(option) ? (
                 <Loader2 size={12} className="animate-spin" aria-label="Connecting" />
               ) : (
                 'Use this'
@@ -672,7 +677,7 @@ function SlotRow({
 
       {slot.state === 'missing' && !slot.attached && slot.options.length === 0 && keys.length === 0 && !fieldless && (
         <div className="h-5 truncate text-[11px] leading-5 text-[var(--color-text-muted)]" title={emptyNote}>
-          {emptyNote ?? 'Nothing in your account fits it. Attach one on the Credentials tab.'}
+          {emptyNote ?? 'None of your credentials fits it. Attach one on the Credentials tab.'}
         </div>
       )}
     </div>

@@ -146,7 +146,7 @@ describe('Finish setup', () => {
     expect(within(row('env')).getByText('Set on this computer')).toBeTruthy()
     expect(within(row('env')).getByText('Set')).toBeTruthy()
     expect(within(row('extra')).getByText('Optional')).toBeTruthy()
-    expect(within(row('extra')).getByText(/Nothing in your account fits it/)).toBeTruthy()
+    expect(within(row('extra')).getByText('None of your credentials fits it. Attach one on the Credentials tab.')).toBeTruthy()
     expect(within(row('acme')).getByText('Missing')).toBeTruthy()
     expect(within(row('acme')).getByRole('img', { name: 'The owner must allow use on your computer' })).toBeTruthy()
     expect(within(row('acme')).getByText('or enter it on this computer')).toBeTruthy()
@@ -229,7 +229,7 @@ describe('Finish setup', () => {
     expect(vendor.querySelector('input')).toBeNull()
     expect(within(vendor).queryByRole('button', { name: 'Save' })).toBeNull()
     expect(within(vendor).getByRole('button', { name: 'Use this' })).toBeTruthy()
-    expect(within(vendor).queryByText(/Nothing in your account fits/)).toBeNull()
+    expect(within(vendor).queryByText(/None of your credentials/)).toBeNull()
     openCredentials.mockImplementationOnce(async () => ({ created: true, revealed: true }))
     fireEvent.click(within(vendor).getByRole('button', { name: 'Open credentials/.env' }))
     await waitFor(() => expect(openCredentials).toHaveBeenCalledWith(AGENT))
@@ -311,7 +311,7 @@ describe('Finish setup', () => {
       expect(within(skillRow('erp-api')).getByText('Needed by skills erp-orders, erp-invoices · api_token')).toBeTruthy()
       expect(within(skillRow('erp-api')).queryByRole('textbox')).toBeNull()
       expect(skillRow('erp-api').querySelector('input')).toBeNull()
-      expect(within(skillRow('crm')).getByText('Nothing in your account fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
+      expect(within(skillRow('crm')).getByText('None of your credentials fits it: it needs a credential of type odoo whose Service URI is crm.')).toBeTruthy()
       expect(within(skillRow('mail')).getByText('The publisher provides it, but not for use on this computer.')).toBeTruthy()
       expect(within(skillRow('vault')).getByText('Vault key is shared with you, but not for use on this computer. admin@example.com can turn on Allow local use.')).toBeTruthy()
 
@@ -339,6 +339,32 @@ describe('Finish setup', () => {
       fireEvent.click(screen.getByText('open'))
       await screen.findByTestId('finish-setup-skill-slot-erp-api')
       expect(setupSkills).toHaveBeenCalledTimes(2)
+    })
+
+    it('offers a record on this computer beside an account one with the same id, and attaches it to the local group', async () => {
+      let land!: (value: unknown) => void
+      attach.mockImplementationOnce(() => new Promise((resolve) => { land = resolve }) as never)
+      setup = {
+        ...setup,
+        slots: [],
+        skillSlots: [skillSlot({
+          slot: 'erp-api',
+          options: [
+            { group: 'acct', ref: 'same-id', credential: record({ id: 'c-row', name: 'ERP cloud', serviceUri: 'erp-api' }) },
+            { group: 'local', ref: 'same-id', credential: record({ id: 'same-id', origin: 'local', cloudId: null, name: 'ERP here', serviceUri: 'erp-api', relation: 'owned', ownerEmail: null, revision: null }) }
+          ]
+        })]
+      }
+      renderHarness()
+      fireEvent.click(screen.getByText('open'))
+      await screen.findByTestId('finish-setup-skill-slot-erp-api')
+      expect(within(skillRow('erp-api')).getByRole('img', { name: 'Stored on this computer' })).toBeTruthy()
+      fireEvent.click(within(skillRow('erp-api')).getByTitle('Use ERP here'))
+      await waitFor(() => expect(attach).toHaveBeenCalledWith(AGENT, 'local', 'same-id'))
+      // Only the pressed row spins, though the two share a ref.
+      expect(within(skillRow('erp-api')).getAllByLabelText('Connecting')).toHaveLength(1)
+      expect(within(skillRow('erp-api')).getByTitle('Use ERP here').querySelector('[aria-label="Connecting"]')).toBeTruthy()
+      await act(async () => land({ ok: true, value: [] }))
     })
 
     it('never opens the dialog by itself for a skill slot alone', async () => {

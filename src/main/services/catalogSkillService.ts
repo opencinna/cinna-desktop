@@ -488,20 +488,32 @@ function account(): { profile: string; host: string } | Refused {
  * the verbs start it without waiting (`provision-local` may take its full timeout per revision).
  * What it attached reaches the renderer on `SERVICE_CREDENTIALS_CHANGED` as `autoAttached`, so
  * Finish setup can say "Connected automatically".
+ *
+ * `skill` names the skill an Add to agent or Update just pinned: once the pass settles — attached
+ * something or nothing, refused by a running turn, or failed — one payload carries
+ * `skillSlotsSettled` with it, and the composer prompts for whatever that skill still lacks (read
+ * from the agent's DTO, not decided here). Background passes name no skill and never prompt.
  */
-export async function skillCredentials(agentId: string, onBusy?: () => void): Promise<AutoAttachedCredential[]> {
+export async function skillCredentials(agentId: string, options: { onBusy?: () => void; skill?: string } = {}): Promise<AutoAttachedCredential[]> {
+  const { onBusy, skill } = options
+  let items: AutoAttachedCredential[] = []
   try {
     const { serviceCredentialService } = await import('./serviceCredentials/service')
-    const items = await (onBusy ? serviceCredentialService.autoAttachSkills(agentId, { onBusy }) : serviceCredentialService.autoAttachSkills(agentId))
-    if (items.length) {
-      const payload: ServiceCredentialsChangedPayload = { autoAttached: { agentId, items } }
-      publishEvent(SERVICE_CREDENTIALS_CHANGED, payload, 'all')
-    }
-    return items
+    items = await (onBusy ? serviceCredentialService.autoAttachSkills(agentId, { onBusy }) : serviceCredentialService.autoAttachSkills(agentId))
   } catch (err) {
     logger.warn('skill credentials could not be attached', { agentId, error: err instanceof Error ? err.message : String(err) })
-    return []
+    items = []
   }
+  const payload: ServiceCredentialsChangedPayload = {
+    ...(items.length ? { autoAttached: { agentId, items } } : {}),
+    ...(skill !== undefined ? { skillSlotsSettled: { agentId, skills: [skill] } } : {})
+  }
+  try {
+    if (payload.autoAttached || payload.skillSlotsSettled) publishEvent(SERVICE_CREDENTIALS_CHANGED, payload, 'all')
+  } catch (err) {
+    logger.warn('skill credentials change could not be announced', { agentId, error: err instanceof Error ? err.message : String(err) })
+  }
+  return items
 }
 
 /** Agents whose background skill attach a holder refused, waiting for the agent to be free. */
@@ -513,14 +525,14 @@ const attachRetryPending = new Set<string>()
  * holder leaves — one pending retry per agent, and the retry does not arm another.
  */
 export function skillCredentialsInBackground(agentId: string): Promise<AutoAttachedCredential[]> {
-  return skillCredentials(agentId, () => {
+  return skillCredentials(agentId, { onBusy: () => {
     if (attachRetryPending.has(agentId)) return
     attachRetryPending.add(agentId)
     turnLock.whenFree(agentId, () => {
       attachRetryPending.delete(agentId)
       void skillCredentials(agentId)
     })
-  })
+  } })
 }
 
 /**
@@ -621,7 +633,7 @@ export const catalogSkillService = {
       settle(kit.rootId, agentId)
       reportInstalled(who.profile, pin, written.manifestId)
       logger.info('catalog skill added', { agentId, name: pin.name, revision: pin.revision_number })
-      void skillCredentials(agentId)
+      void skillCredentials(agentId, { skill: pin.name })
       return { ok: true as const, name: pin.name, revisionNumber: pin.revision_number }
     })
   },
@@ -641,6 +653,9 @@ export const catalogSkillService = {
       const access = await changeability(kit.dir, listing)
       if (access !== 'ok') return refused(access)
       if (typeof current.revision_number === 'number' && current.revision_number >= latest.revision_number) {
+        // Nothing to move, but a skill-link offer waits for this skill's fill to settle: run it
+        // (idempotent), which also prompts for whatever the skill still lacks.
+        void skillCredentials(agentId, { skill: name })
         return { ok: true as const, name, revisionNumber: current.revision_number }
       }
       // The pin keeps its name: the package's folder name is what the engines call it.
@@ -671,7 +686,7 @@ export const catalogSkillService = {
       reportInstalled(who.profile, latest, written.manifestId)
       logger.info('catalog skill updated', { agentId, name, revision: latest.revision_number })
       // A later version can drop a provider: what was attached for it goes, then the new slots fill.
-      void detachUnusedCredentials(agentId).then(() => skillCredentials(agentId))
+      void detachUnusedCredentials(agentId).then(() => skillCredentials(agentId, { skill: name }))
       return { ok: true as const, name, revisionNumber: latest.revision_number }
     })
   },

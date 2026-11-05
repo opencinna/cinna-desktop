@@ -8,6 +8,7 @@ import { refreshAfterSkillChange } from '../../hooks/useCatalogSkills'
 import { composerKeyOnScreen } from '../../hooks/useSkillLinkIntents'
 import { startAgentChat } from '../../utils/startAgentChat'
 import { useAuthStore } from '../../stores/auth.store'
+import { useSkillCredentialPromptStore } from '../../stores/skillCredentialPrompt.store'
 import { useLogin } from '../../hooks/useAuth'
 import { catalogCredentialSpecs } from '../../utils/catalogItems'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -112,6 +113,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
   const offer = useSkillLinkOfferStore((s) => s.offer)
   const dismiss = useSkillLinkOfferStore((s) => s.dismiss)
   const moveTo = useSkillLinkOfferStore((s) => s.moveTo)
+  const startSettling = useSkillLinkOfferStore((s) => s.startSettling)
   const profileId = useAuthStore((s) => s.currentUser?.id ?? null)
   const login = useLogin()
   const queryClient = useQueryClient()
@@ -119,6 +121,14 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
   // (`useSkillLinkIntents`), not this composer's: the start screen's composer
   // and a chat's are separate instances, and neither sees the other's key.
   const mine = offerShowsOn(offer, chatKey) ? offer : null
+  // After Add or Update the row waits for main's fill of the skill's slots; once the agent's settle
+  // counter passes the click's value it is gone in this very render, so the credential prompt that
+  // may follow takes its place without the panel changing height in between (ux_rules rule 1).
+  const settling = mine?.settling ?? null
+  const settledPast = useSkillCredentialPromptStore((s) => settling !== null && (s.settled[settling.agentId] ?? 0) > settling.since)
+  useEffect(() => {
+    if (settledPast && mine) dismiss(mine.id)
+  }, [settledPast, mine, dismiss])
 
   const [adding, setAdding] = useState(false)
   const [switching, setSwitching] = useState(false)
@@ -147,8 +157,10 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
     retry: false
   })
 
-  const onAdd = useCallback(async (packageUuid: string): Promise<void> => {
+  const onAdd = useCallback(async (packageUuid: string, title: string): Promise<void> => {
     if (!mine || !agentId) return
+    // Read at the click: main's fill may settle before Add's answer arrives.
+    const since = useSkillCredentialPromptStore.getState().settled[agentId] ?? 0
     setAdding(true)
     setActionError(null)
     try {
@@ -156,8 +168,9 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
       if (result.ok) {
         // The re-reads every other Add runs: the Addons rows, the catalog's pill, Finish setup.
         refreshAfterSkillChange(queryClient, agentId)
-        // Finish setup takes over on its own when a slot is unfilled.
-        dismiss(mine.id)
+        // The row stays, checking its credentials, until main's fill settles; a slot it cannot fill
+        // is then prompted for by the composer's skill-credential row in its place.
+        startSettling(mine.id, { agentId, since, title })
         return
       }
       setActionError(result.message)
@@ -166,17 +179,18 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
     } finally {
       setAdding(false)
     }
-  }, [mine, agentId, dismiss, queryClient])
+  }, [mine, agentId, startSettling, queryClient])
 
-  const onUpdate = useCallback(async (name: string): Promise<void> => {
+  const onUpdate = useCallback(async (name: string, title: string): Promise<void> => {
     if (!mine || !agentId) return
+    const since = useSkillCredentialPromptStore.getState().settled[agentId] ?? 0
     setAdding(true)
     setActionError(null)
     try {
       const result = await window.api.catalogSkills.update(agentId, name)
       if (result.ok) {
         refreshAfterSkillChange(queryClient, agentId)
-        dismiss(mine.id)
+        startSettling(mine.id, { agentId, since, title })
         return
       }
       setActionError(result.message)
@@ -185,7 +199,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
     } finally {
       setAdding(false)
     }
-  }, [mine, agentId, dismiss, queryClient])
+  }, [mine, agentId, startSettling, queryClient])
 
   const onSwitch = useCallback(async (profile: string): Promise<void> => {
     if (!mine) return
@@ -245,6 +259,16 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
     <span title={text} className="min-w-0 truncate text-[11px] text-[var(--color-text-secondary)]">{text}</span>
   )
 
+  if (settling) {
+    if (settledPast) return null
+    const text = `Added ${settling.title}. Checking its credentials…`
+    return {
+      ...base,
+      text: <span className="text-[var(--color-text-secondary)]">{text}</span>,
+      title: text
+    }
+  }
+
   const answer = query.data
   if (!answer) {
     const text = query.isError
@@ -293,7 +317,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
             {/* Disabled, it is not the first choice: the secondary style, fainter (not while Adding…, which is this button at work). */}
             <NoticeButton className={disabled && !adding ? 'aria-disabled:!opacity-50' : 'composer-notice-button-primary'} aria-disabled={disabled || undefined}
               aria-label={label} title={refusal ?? undefined}
-              onClick={() => { if (!disabled) void onAdd(skill.packageUuid) }}>
+              onClick={() => { if (!disabled) void onAdd(skill.packageUuid, skill.title) }}>
               <StableLabel label={label} pending={adding} pendingLabel="Adding…" />
             </NoticeButton>
             {newAgentButton(skill)}
@@ -315,7 +339,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
           <>
             {pinned.behind && (
               <NoticeButton className="composer-notice-button-primary" aria-disabled={holding || adding || undefined}
-                aria-label={`Update to Version ${skill.revisionNumber}`} onClick={() => { if (!holding && !adding) void onUpdate(pinned.pinName) }}>
+                aria-label={`Update to Version ${skill.revisionNumber}`} onClick={() => { if (!holding && !adding) void onUpdate(pinned.pinName, skill.title) }}>
                 <StableLabel label={`Update to Version ${skill.revisionNumber}`} pending={adding} pendingLabel="Updating…" />
               </NoticeButton>
             )}

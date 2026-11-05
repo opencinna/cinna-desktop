@@ -184,6 +184,28 @@ afterEach(() => {
 })
 
 describe('Add to agent', () => {
+  it('names the skill once its slot fill settles, whether it attached nothing, was refused by a turn, or failed', async () => {
+    const settled = { skillSlotsSettled: { agentId: AGENT_ID, skills: ['erp-lookup'] } }
+    autoAttachSkills.mockClear()
+    const credentialEvents = (): unknown[] => publishEvent.mock.calls.filter(([channel]) => channel === SERVICE_CREDENTIALS_CHANGED).map(([, payload]) => payload)
+    for (const pass of [
+      async () => [],
+      async (_id: string, options?: { onBusy?: () => void }) => { options?.onBusy?.(); return [] },
+      async () => { throw new Error('boom') }
+    ]) {
+      writeManifest({ catalog_skills: [] })
+      const archive = skillTgz('erp-lookup', 'Look things up in the ERP.')
+      listing.value = { items: [skillItem(3, archive)], agents: [] }
+      serve({ 3: archive })
+      publishEvent.mockClear()
+      autoAttachSkills.mockImplementationOnce(pass)
+      expect((await catalogSkillService.addToAgent(USER, AGENT_ID, UUID)).ok).toBe(true)
+      await vi.waitFor(() => expect(credentialEvents()).toEqual([settled]))
+    }
+    expect(autoAttachSkills).toHaveBeenCalledTimes(3)
+    autoAttachSkills.mockClear()
+  })
+
   it('downloads, checks both digests, caches read-only, writes the pin through the manifest guard and reports the install', async () => {
     const archive = skillTgz('erp-lookup', 'Look things up in the ERP.')
     listing.value = { items: [skillItem(3, archive)], agents: [] }
@@ -199,7 +221,9 @@ describe('Add to agent', () => {
     expect(publishEvent).not.toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED, expect.anything(), 'all')
     attach([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
     await vi.waitFor(() => expect(publishEvent).toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED,
-      { autoAttached: { agentId: AGENT_ID, items: [{ slot: 'erp-api', credentialName: 'ERP', skill: true }] } }, 'all'))
+      { autoAttached: { agentId: AGENT_ID, items: [{ slot: 'erp-api', credentialName: 'ERP', skill: true }] },
+        skillSlotsSettled: { agentId: AGENT_ID, skills: ['erp-lookup'] } }, 'all'))
+    expect(publishEvent.mock.calls.filter(([channel]) => channel === SERVICE_CREDENTIALS_CHANGED)).toHaveLength(1)
     expect(cinnaFetchBytes.mock.calls[0].slice(0, 2)).toEqual([PROFILE, `/api/v1/skills/packages/${UUID}/revisions/3/download`])
 
     expect(manifest().catalog_skills).toEqual([
@@ -396,9 +420,14 @@ describe('Update and Remove', () => {
       revision_number: 2,
       host_manifest_id: MANIFEST_ID
     })
-    // Already at the latest: nothing to do, nothing fetched again.
+    // Already at the latest: nothing fetched again, but the slot fill runs and settles under the
+    // skill's name, so a skill-link offer waiting on it does not sit until its fallback.
+    publishEvent.mockClear()
+    autoAttachSkills.mockImplementationOnce(async () => [])
     expect(await catalogSkillService.update(USER, AGENT_ID, 'erp-lookup')).toEqual({ ok: true, name: 'erp-lookup', revisionNumber: 2 })
     expect(cinnaFetchBytes).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(publishEvent).toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED,
+      { skillSlotsSettled: { agentId: AGENT_ID, skills: ['erp-lookup'] } }, 'all'))
   })
 
   it('drops the pin and tells core this agent no longer holds it', async () => {
@@ -573,6 +602,9 @@ describe('fetching what an agent pins (U7)', () => {
     catalogSkillService.ensurePinnedInBackground(USER, AGENT_ID)
     await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledWith(AGENT_ID, expect.anything()))
     expect(cachedFirst).toBe('ready')
+    // A background pass names no skill: nothing is announced, so the composer prompts for nothing.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(publishEvent).not.toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED, expect.anything(), 'all')
   })
 
   it('tries the background attach once more when the turn that refused it lets the agent go', async () => {

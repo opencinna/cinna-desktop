@@ -64,7 +64,7 @@ import { coreCall, refreshLibrary, runCommand, syncCredentials, type PersonApp }
 const NOT_LOCAL = 'The publisher provides it, but not for use on this computer.'
 const NOT_SHAREABLE = 'The publisher provides it, but cannot share it with you.'
 const nothingFits = (slot: string, type = 'api_token'): string =>
-  `Nothing in your account fits it: it needs a credential of type ${type} whose Service URI is ${slot}.`
+  `None of your credentials fits it: it needs a credential of type ${type} whose Service URI is ${slot}.`
 const EACH_OWN = 'Each person connects their own'
 
 /** A slot no other test or fixture credential carries. */

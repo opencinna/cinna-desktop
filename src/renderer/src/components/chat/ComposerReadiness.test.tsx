@@ -1,4 +1,4 @@
-import { act, render, screen, fireEvent } from '@testing-library/react'
+import { act, render, renderHook, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,7 +14,8 @@ import type { ComposerReadiness } from './ComposerReadiness'
 
 afterEach(() => vi.useRealTimers())
 
-const { isCatalogCommand, RefusableExamplePrompts, readinessNoticeItem } = await import('./ComposerReadiness')
+const { isCatalogCommand, RefusableExamplePrompts, readinessNoticeItem, skillCredentialsNotice, credentialRows, useDropSettledPrompts } = await import('./ComposerReadiness')
+const { useSkillCredentialPromptStore } = await import('../../stores/skillCredentialPrompt.store')
 const { ComposerNoticePanel } = await import('./ComposerNoticePanel')
 
 /** The readiness answer as the panel draws it: its one row. */
@@ -175,5 +176,107 @@ describe('Antigravity’s first login', () => {
   it('says nothing of the kind for another engine’s login', () => {
     render(<ReadinessRow readiness={login('codex')} />)
     expect(screen.queryByRole('button', { name: 'About Antigravity’s terms' })).toBeNull()
+  })
+})
+
+describe('skillCredentialsNotice', () => {
+  const cred = (slot: string, filled: boolean | undefined) => ({ slot, type: 'api_token', description: null, ...(filled === undefined ? {} : { filled }) })
+  const skill = (name: string, credentials: ReturnType<typeof cred>[], over: Record<string, unknown> = {}) =>
+    ({ name, description: '', version: null, source: 'catalog', path: '', deliverable: true, issues: [], credentials, ...over })
+  const agent = (skills: ReturnType<typeof skill>[]) => ({ id: 'folder:kit', skills }) as never
+  function Row({ notice }: { notice: ReturnType<typeof skillCredentialsNotice> }): React.JSX.Element {
+    return <ComposerNoticePanel notices={notice ? [notice] : []} />
+  }
+
+  it('names the one slot a prompted skill lacks, by the skill’s catalog title', () => {
+    const folder = agent([skill('erp-orders', [cred('erp-api', false), cred('erp-ok', true)], { title: 'ERP Orders' })])
+    const notice = skillCredentialsNotice(folder, ['erp-orders'], vi.fn(), vi.fn())!
+    expect(notice).toMatchObject({ key: 'skill-credentials', tone: 'warning', title: 'ERP Orders needs a credential this agent doesn’t have: erp-api.' })
+    render(<Row notice={notice} />)
+    expect(screen.getByText('erp-api').tagName).toBe('CODE')
+    expect(screen.getByText(/ERP Orders needs a credential this agent doesn’t have/)).toBeTruthy()
+  })
+
+  it('counts several, names the first prompted skill and lists them all in the title', () => {
+    const folder = agent([
+      skill('crm-sync', [cred('crm', false)], { source: 'authored', title: 'Ignored for an own skill' }),
+      skill('erp-orders', [cred('erp-api', false), cred('erp-db', false)])
+    ])
+    const notice = skillCredentialsNotice(folder, ['erp-orders', 'crm-sync'], vi.fn(), vi.fn())!
+    render(<Row notice={notice} />)
+    expect(screen.getByText('erp-orders needs 2 credentials this agent doesn’t have.')).toBeTruthy()
+    expect(notice.title).toBe('erp-orders needs 2 credentials this agent doesn’t have. crm-sync needs a credential this agent doesn’t have: crm.')
+  })
+
+  it('says nothing once filled, for a slot not judged, for an undeliverable or unprompted skill', () => {
+    expect(skillCredentialsNotice(agent([skill('erp', [cred('erp-api', true)])]), ['erp'], vi.fn(), vi.fn())).toBeNull()
+    expect(skillCredentialsNotice(agent([skill('erp', [cred('erp-api', undefined)])]), ['erp'], vi.fn(), vi.fn())).toBeNull()
+    expect(skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)], { deliverable: false })]), ['erp'], vi.fn(), vi.fn())).toBeNull()
+    expect(skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), ['other'], vi.fn(), vi.fn())).toBeNull()
+    expect(skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), undefined, vi.fn(), vi.fn())).toBeNull()
+    expect(skillCredentialsNotice(null, ['erp'], vi.fn(), vi.fn())).toBeNull()
+    // The first prompted skill that still lacks something leads.
+    const notice = skillCredentialsNotice(agent([skill('done', [cred('a', true)]), skill('erp', [cred('erp-api', false)])]), ['done', 'erp'], vi.fn(), vi.fn())
+    expect(notice?.title).toBe('erp needs a credential this agent doesn’t have: erp-api.')
+  })
+
+  it('opens Finish setup without putting the prompt away; only the × does', () => {
+    const finish = vi.fn()
+    const dismiss = vi.fn()
+    const notice = skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), ['erp'], finish, dismiss)!
+    render(<Row notice={notice} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }))
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(dismiss).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss skill credential prompt' }))
+    expect(dismiss).toHaveBeenCalledTimes(1)
+    expect(finish).toHaveBeenCalledTimes(1)
+  })
+
+  it('has the skill-link offer’s two-line shape: the action under the text, a reserved line and a ×', () => {
+    const notice = skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), ['erp'], vi.fn(), vi.fn())!
+    expect(notice).toMatchObject({ actionBelow: true, reserveActionLine: true, singleLine: true })
+    const { container } = render(<Row notice={notice} />)
+    const row = container.querySelector('li')!
+    // Line one (icon, text, ×), then line two (the strut and Finish setup).
+    expect(row.children).toHaveLength(2)
+    expect(row.children[0].querySelector('button[aria-label="Dismiss skill credential prompt"]')).toBeTruthy()
+    expect(row.children[1].textContent).toContain('Finish setup')
+  })
+
+  it('folds into the folder’s credentials row when there is one: no second row, the skill sentence in its tooltip', () => {
+    const folderRow = { key: 'folder-credentials', tone: 'warning' as const, icon: (() => null) as never, text: 'Missing ACME_KEY.', title: 'Missing ACME_KEY.' }
+    const prompt = skillCredentialsNotice(agent([skill('erp', [cred('erp-api', false)])]), ['erp'], vi.fn(), vi.fn())
+    expect(credentialRows(folderRow, prompt)).toEqual({
+      credentials: { ...folderRow, title: 'Missing ACME_KEY. erp needs a credential this agent doesn’t have: erp-api.' },
+      skillCredentials: null
+    })
+    expect(credentialRows(folderRow, null)).toEqual({ credentials: folderRow, skillCredentials: null })
+    expect(credentialRows(null, prompt)).toEqual({ credentials: null, skillCredentials: prompt })
+  })
+})
+
+describe('useDropSettledPrompts', () => {
+  const cred = (slot: string, filled: boolean) => ({ slot, type: 'api_token', description: null, filled })
+  const skill = (name: string, credentials: ReturnType<typeof cred>[]) =>
+    ({ name, description: '', version: null, source: 'catalog', path: '', deliverable: true, issues: [], credentials })
+  const agent = (skills: ReturnType<typeof skill>[]) => ({ id: 'folder:kit', skills }) as never
+
+  it('drops prompted skills that are gone or whose slots are all filled, and keeps those still lacking', () => {
+    useSkillCredentialPromptStore.setState({ prompts: { 'folder:kit': ['erp', 'crm', 'gone'] }, settled: {} })
+    const prompted = () => useSkillCredentialPromptStore.getState().prompts['folder:kit']
+    const { rerender } = renderHook(({ folder }) => useDropSettledPrompts(folder, prompted()), {
+      initialProps: { folder: agent([skill('erp', [cred('erp-api', false)]), skill('crm', [cred('crm', true)])]) }
+    })
+    expect(prompted()).toEqual(['erp'])
+    // Filled later (by hand, or Finish setup): the prompt goes with it, and nothing raises it again.
+    rerender({ folder: agent([skill('erp', [cred('erp-api', true)])]) })
+    expect(useSkillCredentialPromptStore.getState().prompts).toEqual({})
+  })
+
+  it('leaves the prompt alone while the folder is not known', () => {
+    useSkillCredentialPromptStore.setState({ prompts: { 'folder:kit': ['erp'] }, settled: {} })
+    renderHook(() => useDropSettledPrompts(null, ['erp']))
+    expect(useSkillCredentialPromptStore.getState().prompts).toEqual({ 'folder:kit': ['erp'] })
   })
 })

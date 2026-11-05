@@ -40,7 +40,18 @@ export interface SkillLinkOffer {
    * a screen change does not put it away. Cleared when the move settles.
    */
   pendingFrom?: string | null
+  /**
+   * Add to agent or Update went through and main is filling the skill's credential slots: the row
+   * says so, at its own height, until the agent's settle counter (`skillCredentialPrompt.store`)
+   * passes `since`, the value it had at the click, so the credential prompt that may follow takes
+   * its place in the same render instead of the composer moving twice (ux_rules rule 1). `title`
+   * is the skill's, for the sentence.
+   */
+  settling?: { agentId: string; since: number; title: string } | null
 }
+
+/** How long a settling offer waits for main's fill before it goes anyway. */
+export const SETTLING_FALLBACK_MS = 60_000
 
 interface SkillLinkOfferStore {
   offer: SkillLinkOffer | null
@@ -53,6 +64,8 @@ interface SkillLinkOfferStore {
   moveTo: (chatKey: string, options?: { from?: string }) => void
   /** With `id`, only that offer: a late answer must not put away a newer link. */
   dismiss: (id?: number) => void
+  /** Offer `id`'s Add went through: hold it as settling, gone by itself after {@link SETTLING_FALLBACK_MS} at the latest. */
+  startSettling: (id: number, settling: NonNullable<SkillLinkOffer['settling']>) => void
 }
 
 let nextId = 1
@@ -69,5 +82,11 @@ export const useSkillLinkOfferStore = create<SkillLinkOfferStore>((set, get) => 
     const offer = get().offer
     if (!offer || (id !== undefined && offer.id !== id)) return
     set({ offer: null })
+  },
+  startSettling: (id, settling) => {
+    const offer = get().offer
+    if (!offer || offer.id !== id) return
+    set({ offer: { ...offer, settling } })
+    setTimeout(() => get().dismiss(id), SETTLING_FALLBACK_MS)
   }
 }))

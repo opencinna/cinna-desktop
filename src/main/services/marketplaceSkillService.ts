@@ -442,7 +442,7 @@ export const marketplaceSkillService = {
       if (!written.ok) return written
       settle(kit.rootId, agentId)
       logger.info('marketplace skill added', { agentId, name: pin.name })
-      void skillCredentials(agentId)
+      void skillCredentials(agentId, { skill: pin.name })
       return { ok: true as const, name: pin.name, archiveSha256: pin.archive_sha256 }
     })
   },
@@ -488,7 +488,7 @@ export const marketplaceSkillService = {
       settle(kit.rootId, agentId)
       logger.info('marketplace skill updated', { agentId, name })
       // A later snapshot can drop a provider: what was attached for it goes, then the new slots fill.
-      void detachUnusedCredentials(agentId).then(() => skillCredentials(agentId))
+      void detachUnusedCredentials(agentId).then(() => skillCredentials(agentId, { skill: name }))
       return { ok: true as const, name, archiveSha256: latest.archive_sha256 }
     })
   },

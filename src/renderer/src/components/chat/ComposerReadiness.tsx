@@ -8,10 +8,11 @@ import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
 import { isSkillFinding } from '../../../../shared/kit/findings'
-import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto } from '../../../../shared/localAgents'
+import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../../shared/localAgents'
 import { useFinishSetup } from '../agents/local/FinishSetupDialog'
 import { useAgentAiCredentialIssue, type AiCredentialIssue } from '../../hooks/useAgentAiCredential'
 import { useUIStore } from '../../stores/ui.store'
+import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../stores/skillCredentialPrompt.store'
 import { useAgentActiveSessions } from '../../hooks/useAgentSessions'
 import { activeSessionSentence, openSessionTitle, runningSessionsOf, useOpenSession } from '../agents/AgentActiveSessionNotice'
 import { useCinnaReauth } from '../../hooks/useAuth'
@@ -381,6 +382,65 @@ export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSe
   }
 }
 
+/** One prompted skill's sentence: the slot named when it is one, counted when several. */
+function skillCredentialSentence(skill: LocalAgentSkill, missing: readonly LocalAgentSkillCredential[], code: boolean): string {
+  const name = skill.source !== 'authored' && skill.title ? skill.title : skill.name
+  if (missing.length > 1) return `${name} needs ${missing.length} credentials this agent doesn’t have.`
+  const slot = code ? `\`${missing[0].slot}\`` : missing[0].slot
+  return `${name} needs a credential this agent doesn’t have: ${slot}.`
+}
+
+/**
+ * After Add to agent or Update, the skills main named once its fill of their slots settled
+ * (`skill-credential-prompt` store) that still lack a credential, as a row whose action is Finish
+ * setup. Read live from the folder's DTO (`skillsLackingCredentials`), so the row goes on its own
+ * once they are filled. Two lines, the action under the text at a reserved height with a ×, the
+ * shape of the skill-link offer it follows, so swapping one for the other keeps the panel's height
+ * (ux_rules rule 1). Only the × puts the prompt away; Finish setup leaves it until the slots fill.
+ */
+export function skillCredentialsNotice(
+  folder: LocalAgentDto | null,
+  prompted: readonly string[] | undefined,
+  onFinishSetup: () => void,
+  onDismiss: () => void
+): ComposerNotice | null {
+  if (!folder || !prompted?.length) return null
+  const lacking = skillsLackingCredentials(folder, prompted)
+  if (lacking.length === 0) return null
+  const [first] = lacking
+  return {
+    key: 'skill-credentials',
+    tone: 'warning',
+    icon: KeyRound,
+    text: <FindingText text={skillCredentialSentence(first.skill, first.missing, true)} />,
+    title: lacking.map(({ skill, missing }) => skillCredentialSentence(skill, missing, false)).join(' '),
+    // The count or slot changes as slots fill; the line never wraps into a second one meanwhile.
+    singleLine: true,
+    actionBelow: true,
+    reserveActionLine: true,
+    action: <NoticeButton onClick={onFinishSetup}>Finish setup</NoticeButton>,
+    onDismiss,
+    dismissLabel: 'Dismiss skill credential prompt'
+  }
+}
+
+/**
+ * The credential rows the panel shows: with the folder's own credentials row on screen, the skill
+ * prompt is not a row of its own but a sentence in that row's tooltip, since both open the same
+ * Finish setup, which lists the agent's slots and the skills' together.
+ */
+export function credentialRows(
+  folderCredentials: ComposerNotice | null,
+  skillPrompt: ComposerNotice | null
+): { credentials: ComposerNotice | null; skillCredentials: ComposerNotice | null } {
+  if (!folderCredentials) return { credentials: null, skillCredentials: skillPrompt }
+  if (!skillPrompt?.title) return { credentials: folderCredentials, skillCredentials: null }
+  return {
+    credentials: { ...folderCredentials, title: [folderCredentials.title, skillPrompt.title].filter(Boolean).join(' ') },
+    skillCredentials: null
+  }
+}
+
 const AI_CREDENTIAL_TEXT: Record<Exclude<AiCredentialIssue, null>, string> = {
   missing: 'No AI credential is set for this agent.',
   inactive: 'This agent’s AI credential is switched off.'
@@ -480,8 +540,22 @@ export interface ComposerNotices {
 }
 
 /**
+ * Stop prompting for a skill once it is gone from the folder or no slot of it lacks anything, so a
+ * prompt never comes back on its own later (a slot emptied by hand is the Addons row's to say).
+ */
+export function useDropSettledPrompts(folder: LocalAgentDto | null, prompted: readonly string[] | undefined): void {
+  useEffect(() => {
+    if (!folder || !prompted?.length) return
+    const lacking = new Set(skillsLackingCredentials(folder, prompted).map(({ skill }) => skill.name))
+    const done = prompted.filter((name) => !lacking.has(name))
+    if (done.length) useSkillCredentialPromptStore.getState().drop(folder.id, done)
+  }, [folder, prompted])
+}
+
+/**
  * Every row of the composer's notice panel, in one order: the driver's
- * readiness answer, the folder's missing credentials, its AI credential, a
+ * readiness answer, the folder's missing credentials, what a just added or
+ * updated skill still lacks, its AI credential, a
  * declared model its CLI runtime no longer offers, its findings. A row the folder states itself replaces the readiness row that
  * says the same thing (`credentials_needed` by the credentials row, a
  * non-blocking `invalid` by the findings row), and takes over its id so Send's
@@ -497,7 +571,13 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
   const aiIssue = useAgentAiCredentialIssue(folder)
   const staleModel = useStaleModelNotice(folder)
   const { data: providers } = useProviders()
-  const credentials = folderCredentialsNotice(folder, finishSetup.open)
+  const folderId = folder?.id ?? null
+  const prompted = useSkillCredentialPromptStore((s) => (folderId ? s.prompts[folderId] : undefined))
+  useDropSettledPrompts(folder, prompted)
+  const skillPrompt = folderId
+    ? skillCredentialsNotice(folder, prompted, finishSetup.open, () => useSkillCredentialPromptStore.getState().dismiss(folderId))
+    : null
+  const { credentials, skillCredentials } = credentialRows(folderCredentialsNotice(folder, finishSetup.open), skillPrompt)
   const readinessItem = readinessNoticeItem(readiness, reasonId)
   const state = readiness.notice?.state
   const replacedBy = credentials && state === 'credentials_needed' ? credentials
@@ -509,6 +589,7 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
   const rows = [
     replacedBy ? null : readinessItem,
     credentials,
+    skillCredentials,
     aiCredentialNotice(folder, aiIssue, providers?.length === 0),
     staleModel,
     findings
