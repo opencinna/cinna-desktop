@@ -173,6 +173,16 @@ When one element serves two roles in different states — the sidebar shows a *l
 
 **Origin:** Settings replaced the sidebar's list with its section menu on the identical surface and hid the tabs, so the menu read as another list and "← Back" was the only way out.
 
+## 18. Where two surfaces overlap, the one on top is opaque
+
+A surface tucked under another — the composer notice panel behind the message box's top edge, a sticky header over scrolling rows — is drawn on the assumption that whatever covers it hides it. A translucent fill on the covering surface breaks that silently: the hidden part shows through as a band with straight edges that match neither shape.
+
+- **Tint over, never instead of.** A translucent colour (a chat mode's `rgba(…, 0.08)`, a `color-mix(… transparent)` accent) goes on top of the surface's opaque colour — a `background-image: linear-gradient(tint, tint)` over the solid `background-color` — not in place of it.
+- **Check every state the surface can be in.** The overlap often appears only in one variant (a mode colour, a theme, a notice present), so the healthy default looking right proves nothing.
+- **Frosted surfaces are the exception, by design.** A `backdrop-filter` blur is meant to let what is behind it through; it must not sit over a surface that was tucked under it to be hidden.
+
+**Origin:** on the new-chat screen a chat mode's 8%-alpha tint replaced the message box's opaque background, so the notice panel's tail, tucked 12 px under the box, showed through it as a grey band on every warning and offer row. It was visible in E2E screenshots for a while before the user spotted it by hand, because no state without a mode colour reproduced it.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -198,3 +208,4 @@ When one element serves two roles in different states — the sidebar shows a *l
 20. A new sidebar tab, top-bar button or composer control: is it core to the general scenario? If not, suggest a Capabilities switch (rule 15).
 21. A new or changed animation: heavy or subtle, and is it gated accordingly? Move the pointer continuously for the idle threshold: does any heavy motion start? Finding (rule 16).
 22. An element whose role changes with the view (list vs. menu): screenshot both states side by side. Indistinguishable, or navigation lost in one of them: finding (rule 17).
+23. Anything that tucks under or slides behind another surface (a notice panel, a sticky header, an overlay): screenshot it with every variant of the covering surface (each chat mode colour, both themes). Any part of the hidden surface showing through: finding (rule 18).
