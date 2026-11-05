@@ -1657,4 +1657,57 @@
     .cinna-logo-draw[data-animate] .cinna-logo-draw-lines path { transition: none; }
     .cinna-logo-sweep { display: none; }
   }
+
+  /* The compact managed list (ui/ManagedList.tsx): one tinted surface over
+     whatever is under it, so it reads on a page, in a card and on a glass
+     dialog alike. Rows carry no border of their own; a hairline between two
+     rows, inset by the row padding, goes away beside a hovered or confirming
+     row so the tint is not cut in half. */
+  .managed-list {
+    --ml-pad-x: 12px;
+    --ml-row-h: 40px;
+    border-radius: 10px;
+    padding: 3px;
+    background-color: color-mix(in srgb, var(--color-text) 3.5%, transparent);
+  }
+  .managed-list[data-scale="chrome"] {
+    --ml-pad-x: 10px;
+    --ml-row-h: 32px;
+  }
+  .managed-list-row {
+    position: relative;
+    min-height: var(--ml-row-h);
+    padding: 4px 6px 4px var(--ml-pad-x);
+    border-radius: 7px;
+    transition: background-color 120ms;
+  }
+  .managed-list-row[data-two-line] {
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+  .managed-list-row + .managed-list-row::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--ml-pad-x);
+    right: var(--ml-pad-x);
+    height: 1px;
+    background-color: color-mix(in srgb, var(--color-border) 75%, transparent);
+    pointer-events: none;
+  }
+  .managed-list-row:hover {
+    background-color: color-mix(in srgb, var(--color-text) 5%, transparent);
+  }
+  .managed-list-row[data-confirming] {
+    background-color: color-mix(in srgb, var(--color-danger) 9%, transparent);
+  }
+  .managed-list-row:hover::before,
+  .managed-list-row:hover + .managed-list-row::before,
+  .managed-list-row[data-confirming]::before,
+  .managed-list-row[data-confirming] + .managed-list-row::before {
+    opacity: 0;
+  }
+  .managed-list-message {
+    padding: 10px var(--ml-pad-x);
+  }
 }

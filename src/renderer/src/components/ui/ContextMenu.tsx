@@ -21,6 +21,12 @@ interface ContextMenuProps {
   label: string
   /** A failed pick's reason, shown last in the menu. */
   error?: string | null
+  /**
+   * Which edge `x` names: the menu's left edge (a pointer, a trigger at the
+   * start of a line), or its right edge, for a trigger at the end of a row
+   * whose menu would otherwise hang past it.
+   */
+  align?: 'left' | 'right'
   className?: string
   onClose: () => void
   children: ReactNode
@@ -31,10 +37,11 @@ interface ContextMenuProps {
  * inside the window; the first enabled item takes focus and the arrow keys
  * move between items. Closes on Escape, Tab, an outside click, a scroll that
  * moves the anchor, a resize and the window losing focus. Closing on a pick is
- * the caller's: see {@link useContextMenuAction}.
+ * the caller's: see {@link useContextMenuAction}. Escape and presses inside
+ * it stop at the menu, so a dialog it was opened from stays open.
  */
 export function ContextMenu({
-  x, y, anchor, label, error, className = CONTEXT_MENU_SURFACE, onClose, children
+  x, y, anchor, label, error, align = 'left', className = CONTEXT_MENU_SURFACE, onClose, children
 }: ContextMenuProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number }>({ left: x, top: y })
@@ -43,7 +50,8 @@ export function ContextMenu({
     if (!menu) return
     const clamp = (): void => {
       const rect = menu.getBoundingClientRect()
-      const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))
+      const start = align === 'right' ? x - rect.width : x
+      const left = Math.max(8, Math.min(start, window.innerWidth - rect.width - 8))
       // Pushed up to fit, the bottom edge stays put and anything arriving later
       // (an error line, a late item) grows the menu upward. Re-decided on every
       // size change: content shrinking back to fit below the pointer (a retried
@@ -59,19 +67,29 @@ export function ContextMenu({
     const observer = new ResizeObserver(clamp)
     observer.observe(menu)
     return () => observer.disconnect()
-  }, [x, y, error])
+  }, [x, y, error, align])
 
   useLayoutEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>(ENABLED_ITEMS)?.focus({ preventScroll: true })
     const outside = (event: PointerEvent): void => {
       if (!ref.current?.contains(event.target as Node)) onClose()
     }
+    // Escape is the menu's alone: a dialog under it (a window listener) must
+    // not close as well.
     const escape = (event: globalThis.KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.preventDefault()
+        event.stopPropagation()
         onClose()
       }
     }
+    // A press inside the menu is not a press outside whatever opened it: a
+    // dialog or the catalog that closes on an outside mousedown would
+    // otherwise close under the item being picked, since the menu is portaled
+    // to <body>.
+    const menu = ref.current
+    const contain = (event: MouseEvent): void => event.stopPropagation()
+    menu?.addEventListener('mousedown', contain)
     // Only a scroller holding the anchor moves it; the transcript scrolls on
     // its own while a turn streams and must not close the menu.
     const scroll = (event: Event): void => {
@@ -84,6 +102,7 @@ export function ContextMenu({
     window.addEventListener('resize', onClose)
     window.addEventListener('blur', onClose)
     return () => {
+      menu?.removeEventListener('mousedown', contain)
       document.removeEventListener('pointerdown', outside)
       document.removeEventListener('keydown', escape)
       window.removeEventListener('scroll', scroll, true)

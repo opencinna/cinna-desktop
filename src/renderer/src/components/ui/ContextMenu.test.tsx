@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenu } from './ContextMenu'
 
@@ -82,5 +82,49 @@ describe('ContextMenu placement', () => {
     rerender(menu(null, 400))
     expect(el.style.top).toBe('400px')
     expect(el.style.bottom).toBe('')
+  })
+})
+
+describe('ContextMenu opened from a button', () => {
+  it('puts its right edge at x when aligned right, still inside the window', () => {
+    const { rerender } = render(
+      <ContextMenu x={500} y={100} anchor={null} label="Actions" align="right" onClose={() => undefined}>
+        <button type="button" role="menuitem">Remove</button>
+      </ContextMenu>
+    )
+    expect(screen.getByRole('menu').style.left).toBe(`${500 - 176}px`)
+    rerender(
+      <ContextMenu x={100} y={100} anchor={null} label="Actions" align="right" onClose={() => undefined}>
+        <button type="button" role="menuitem">Remove</button>
+      </ContextMenu>
+    )
+    expect(screen.getByRole('menu').style.left).toBe('8px')
+  })
+
+  it('keeps a press and Escape inside the menu from reaching a dialog listening on the window', () => {
+    const onClose = vi.fn()
+    const windowMouseDown = vi.fn()
+    const windowEscape = vi.fn()
+    window.addEventListener('mousedown', windowMouseDown)
+    window.addEventListener('keydown', windowEscape)
+    try {
+      render(
+        <ContextMenu x={40} y={40} anchor={null} label="Actions" onClose={onClose}>
+          <button type="button" role="menuitem">Remove</button>
+        </ContextMenu>
+      )
+      const item = screen.getByRole('menuitem', { name: 'Remove' })
+      fireEvent.mouseDown(item)
+      expect(windowMouseDown).not.toHaveBeenCalled()
+      fireEvent.keyDown(item, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(windowEscape).not.toHaveBeenCalled()
+      // Outside the menu, a press still reaches the window.
+      fireEvent.mouseDown(document.body)
+      expect(windowMouseDown).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('mousedown', windowMouseDown)
+      window.removeEventListener('keydown', windowEscape)
+    }
   })
 })

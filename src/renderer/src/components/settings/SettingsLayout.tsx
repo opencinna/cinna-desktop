@@ -483,7 +483,19 @@ export function useDialogChrome({
   }, [])
 
   useEffect(() => {
+    // Dialogs stack: one opened from inside another (Share with a person over
+    // Who can use) is portaled after it. Only the topmost answers Escape, Tab
+    // and outside presses, so a press inside the upper dialog is not an
+    // outside press for the one beneath it.
+    const isTopmost = (): boolean => {
+      const own = modalRef.current
+      // A caller whose modal is not marked as one keeps the old behaviour.
+      if (!own?.matches('[role="dialog"][aria-modal="true"]')) return true
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
+      return dialogs[dialogs.length - 1] === own
+    }
     const onKey = (event: KeyboardEvent): void => {
+      if (!isTopmost()) return
       // Escape while an info tip is open is the tip's (it is portaled outside the modal).
       if (event.key === 'Escape' && !pending && document.querySelector(`[${INFO_TIP_ATTR}]`) === null) onDismiss()
       if (event.key !== 'Tab' || !modalRef.current) return
@@ -504,7 +516,7 @@ export function useDialogChrome({
       }
     }
     const onClick = (event: MouseEvent): void => {
-      if (pending) return
+      if (pending || !isTopmost()) return
       // A press on an open info tip or a field's dropdown is not a press outside: both live in <body>.
       if ((event.target as Element | null)?.closest?.(`[${INFO_TIP_ATTR}], [${DIALOG_POPOVER_ATTR}]`)) return
       if (modalRef.current && !modalRef.current.contains(event.target as Node)) onDismiss()
