@@ -199,6 +199,20 @@ This is rule 13 turned around. Rule 13 is one object drawn the same in every pla
 
 **Origin:** the skill-link offer and the skill-credential prompt put their buttons on a second line under the message, left-aligned, while every other row in the same panel put them on the right. The user saw the panel as inconsistent ("other dialogs always place message on the left and action buttons on the right, but here it's sometimes on the left under the message"), and named the principle behind it: a block with a certain layout that can hold different types of data should lay each of them out the same way, to avoid elements jumping. The second line had been added to keep the row's height stable (rule 1). A single line held one button tall, with fixed-width labels, does the same without the inconsistency.
 
+## 20. In a one-line row, the message keeps the line; actions stay short
+
+A row that holds a message and its actions on one line (a composer notice row, a status strip, a list row with buttons) exists to say something. Its buttons take the width they need and the message gets what is left, so long or many buttons squeeze the message to a few truncated words, or to nothing at a narrow width — and the row stops saying what it is for.
+
+- **One labelled action on the line.** The default action is a button; every alternative goes behind the chevron of a split button (rule 8), the way *Open in…* holds the other tools on the agent page. Two labelled buttons side by side on such a row is a finding.
+- **Short labels: a verb, at most one short word after it.** *Add*, *Reveal*, *Finish setup*, *Update to v3* — not *Add to Finance assistant*, *Update to Version 3*, *New agent with this skill*. Names of agents, skills and versions in full go in the sentence or the button's `title`, never the label. A label the row cannot hold at the narrowest width is a finding.
+- **Secondary controls are icons.** A details toggle, a dismiss, a copy: an icon button with a `title` and an `aria-label` naming what it does (*Show 3 more findings*), not a text link such as *Details ▾* or *3 more ▾*. Opening a row's details also lets its sentence wrap in full: what was cut at *…* is the first thing the user opened it to read.
+- **Every labelled action carries its icon**, as the menu items behind its chevron do (*+ Add*, *Update to v3* with its refresh glyph, *Finish setup* with its key).
+- **The chevron's menu opens below the button, on an opaque surface**, as *Open in…* does: it is a control over the composer, not glass over the transcript.
+- **An action that cannot run gives the default to one that can.** A disabled primary beside a live alternative reads as the row's answer being "no"; when Add is refused, the row's default becomes the alternative (*New agent*), and the refusal is said in the sentence.
+- **Measure it.** At the narrowest width the surface allows, the message keeps at least half the row. Less is a finding, with the widths.
+
+**Origin:** the composer notice panel's skill-link offer at a narrow composer: *Details ▾*, *Add to Finance assistant*, *New agent with this skill* and × left the sentence — the skill's name, version and publisher — a few characters wide, and *Update to Version 3* beside *New agent with this skill* did the same to the already-added row.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -226,3 +240,4 @@ This is rule 13 turned around. Rule 13 is one object drawn the same in every pla
 22. An element whose role changes with the view (list vs. menu): screenshot both states side by side. Indistinguishable, or navigation lost in one of them: finding (rule 17).
 23. Anything that tucks under or slides behind another surface (a notice panel, a sticky header, an overlay): screenshot it with every variant of the covering surface (each chat mode colour, both themes). Any part of the hidden surface showing through: finding (rule 18).
 24. Every block the change adds a kind of content or a state to (a notice panel row, a status line, a mixed list, a card that swaps states): put each kind and state it can hold side by side. Does each fill the same slots in the same places at the same height? A kind with its own arrangement (actions under the text instead of beside it, an extra line, a slot that grows) is a finding, unless the code argues rule 19's exception in a comment (rule 19).
+25. Every one-line row with actions (a notice row, a strip, a list row): screenshot it at the narrowest width the surface allows, with its longest real names. More than one labelled button on the line, a label longer than a verb and a short word, a text toggle where an icon would do, or a message left under half the row: finding (rule 20).

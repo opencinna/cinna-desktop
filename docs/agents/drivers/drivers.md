@@ -52,7 +52,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 ### A folder that fails its own check
 1. An assistant editing a kit agent leaves its manifest or command catalog failing validation. The scanner marks the folder `invalid` and lists the findings
 2. The manifest still parses and its id is the folder's own, so the driver answers `ok`. Send stays live and the turn runs
-3. The notice panel shows the first finding with **Reveal**, and any others under **N more**. When the folder validates again, the row goes away by itself
+3. The notice panel shows the first finding with **Reveal**, and any others behind a details chevron (*Show N more findings*). When the folder validates again, the row goes away by itself
 
 ### A catalog command to a refused folder agent
 1. A folder agent is refused — its manifest does not parse (`invalid`), say

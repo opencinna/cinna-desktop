@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, X } from 'lucide-react'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { usePopover } from '../ui/usePopover'
+import { MENU_ITEM } from '../agents/local/OpenInMenu'
 
 /**
  * `accent` is an offer, not a problem (a skill link's Add to agent): a panel
@@ -52,7 +55,12 @@ export interface ComposerNotice {
   panelLabel?: string
   /** Behind a toggle, opened in place: more findings, the rest of a long story. */
   details?: ReactNode
-  detailsLabel?: string
+  /**
+   * What the details toggle opens, as its `aria-label` and `title`: "Show 3
+   * more findings", "Details of weekly-report". The toggle is an icon (a
+   * chevron), never a text link on the line (ux_rules rule 20).
+   */
+  detailsName?: string
 }
 
 /** A composer notice's ×, shared by the panel's rows and the cache-expiry strip. */
@@ -78,6 +86,9 @@ interface LeavingRow { notice: ComposerNotice; index: number }
 
 /** Longest a leaving row is kept if its animationend never comes (a hidden window). */
 const LEAVE_FALLBACK_MS = 600
+
+/** How long {@link AnimatedCollapse} takes to fold a row's details. */
+const DETAILS_COLLAPSE_MS = 200
 
 /** Whether rows animate at all: not under reduced motion, nor where no animation ever ends (jsdom). */
 function rowsAnimate(): boolean {
@@ -194,10 +205,37 @@ function NoticeRow({ notice, unfold, leaving, onLeft }: {
   onLeft: (key: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  // Details folding up: the sentence stays unclamped until they have gone.
+  const [closing, setClosing] = useState(false)
+  const closingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (closingTimer.current !== null) clearTimeout(closingTimer.current) }, [])
+  const toggleDetails = (): void => {
+    if (closingTimer.current !== null) clearTimeout(closingTimer.current)
+    closingTimer.current = null
+    if (!open) {
+      setClosing(false)
+      setOpen(true)
+      return
+    }
+    setOpen(false)
+    // Re-clamped once the collapse has finished, so the line does not jump back
+    // to one line while the details are still folding under it. Under reduced
+    // motion and in jsdom (no animation) at once.
+    if (!rowsAnimate()) return
+    setClosing(true)
+    closingTimer.current = setTimeout(() => { closingTimer.current = null; setClosing(false) }, DETAILS_COLLAPSE_MS)
+  }
   // Read once, at the row's mount: a row keeps its key while its text changes.
   const [entering, setEntering] = useState(unfold)
   const Icon = notice.icon
   const motion = leaving ? 'composer-notice-row-leave' : entering ? 'composer-notice-row-enter' : ''
+  const hasDetails = notice.details !== undefined && notice.details !== null && notice.details !== false
+  // An opened row shows its whole sentence: what was cut at "…" is the first
+  // thing the user opened it to read (ux_rules rule 20). This growth is the
+  // user's own click, not the row reflowing under them, so rule 1 (and a
+  // single-line row's promise never to grow a line by itself) still holds.
+  const wrapped = hasDetails && (open || closing)
+  const clamp = wrapped ? 'break-words' : notice.singleLine ? 'truncate' : 'line-clamp-2 break-words'
   return (
     <li className={`px-3 py-2 ${motion}`} inert={leaving || undefined} aria-hidden={leaving || undefined}
       onAnimationEnd={(e) => {
@@ -212,14 +250,14 @@ function NoticeRow({ notice, unfold, leaving, onLeft }: {
             height, and two single-line rows swapped in one render match. */}
         <NoticeButton aria-hidden="true" tabIndex={-1} className="invisible w-0 !px-0 !border-x-0 overflow-hidden">{'\u00a0'}</NoticeButton>
         <Icon size={13} aria-hidden="true" className={`-ml-2 shrink-0 ${TONE_TEXT[notice.tone]}`} />
-        <p id={notice.textId} title={notice.title} className={`min-w-0 flex-1 text-xs leading-snug text-[var(--color-text)] ${notice.singleLine ? 'truncate' : 'line-clamp-2 break-words'}`}>
+        <p id={notice.textId} title={notice.title} className={`min-w-0 flex-1 text-xs leading-snug text-[var(--color-text)] ${clamp}`}>
           {notice.text}
         </p>
-        {notice.details && notice.detailsLabel && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-            className="flex shrink-0 items-center gap-0.5 text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors">
-            {notice.detailsLabel}
-            <ChevronDown size={11} aria-hidden="true" className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        {hasDetails && notice.detailsName && (
+          <button type="button" aria-expanded={open} aria-label={notice.detailsName} title={notice.detailsName}
+            onClick={toggleDetails}
+            className={`${NOTICE_DISMISS_BUTTON} ${open ? 'bg-[var(--color-bg-hover)] !text-[var(--color-text)]' : ''}`}>
+            <ChevronDown size={13} aria-hidden="true" className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
           </button>
         )}
         {notice.action && !notice.actionBelow && <div className="flex shrink-0 items-center gap-2">{notice.action}</div>}
@@ -233,7 +271,7 @@ function NoticeRow({ notice, unfold, leaving, onLeft }: {
       {notice.action && notice.actionBelow && (
         <div className="flex items-center pl-[21px] pt-1.5">{notice.action}</div>
       )}
-      {notice.details && (
+      {hasDetails && (
         <AnimatedCollapse open={open}>
           <div className="pl-[21px] pt-1.5">{notice.details}</div>
         </AnimatedCollapse>
@@ -264,9 +302,95 @@ export function StableLabel({ label, pending, pendingLabel }: { label: ReactNode
  * (`.composer-notice-button`, per theme) so it stands out from the tinted
  * panel as something to click. Icons inside it are size 12, as the badge's are.
  */
-export function NoticeButton({ className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
+export function NoticeButton({ className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { ref?: React.Ref<HTMLButtonElement> }): React.JSX.Element {
   return <button type="button" {...props}
     className={`composer-notice-button flex items-center gap-1 px-1.5 py-1 rounded-lg text-[11px] font-semibold tracking-wide whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] aria-disabled:cursor-default aria-disabled:opacity-70 transition-colors ${className}`} />
+}
+
+/** One alternative behind a {@link NoticeSplitButton}'s chevron. */
+export interface NoticeMenuItem {
+  label: string
+  icon: LucideIcon
+  onSelect: () => void
+  /** Shown, but refuses the click (the row is holding an answer, or at work). */
+  disabled?: boolean
+  title?: string
+}
+
+/**
+ * The opaque menu a notice's split button opens: a control over the composer,
+ * not glass over the transcript (ux_rules rule 20), so not `app-popover-surface`.
+ */
+const NOTICE_MENU_SURFACE =
+  'z-50 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-1 shadow-xl'
+
+/**
+ * A notice row's one labelled action with its alternatives behind a chevron,
+ * as *Open in…* holds the other tools (ux_rules rules 8 and 20): the line keeps
+ * one short label, and the message keeps the rest of the width.
+ *
+ * The primary half is named by its visible label ("Add", "Update to v3"); the
+ * long form ("Add weekly-report to Research") is its `title`. Its label may
+ * swap for a pending one in a {@link StableLabel}, at a fixed width. The
+ * chevron's `moreLabel` must not be the name of any item in the menu.
+ */
+export function NoticeSplitButton({ label, icon: Icon, title, pending = false, pendingLabel, disabled = false, onClick, moreLabel, menuLabel, items }: {
+  label: string
+  icon: LucideIcon
+  title?: string
+  pending?: boolean
+  pendingLabel?: string
+  /** `aria-disabled`: the half stays focusable and says why in its title. */
+  disabled?: boolean
+  onClick: () => void
+  /** The chevron's `aria-label` and `title`: "More ways to add". */
+  moreLabel: string
+  /** The menu's own name. */
+  menuLabel?: string
+  items: NoticeMenuItem[]
+}): React.JSX.Element {
+  const menu = usePopover<HTMLButtonElement>('below-right')
+  const menuDisabled = items.every((item) => item.disabled)
+  const content = <><Icon size={12} aria-hidden="true" />{label}</>
+  return (
+    <div className="flex shrink-0 items-stretch">
+      <NoticeButton className="composer-notice-button-primary !rounded-r-none" aria-label={label} title={title}
+        aria-disabled={disabled || undefined} onClick={() => { if (!disabled) onClick() }}>
+        {pendingLabel !== undefined
+          ? <StableLabel label={content} pending={pending} pendingLabel={pendingLabel} />
+          : content}
+      </NoticeButton>
+      <NoticeButton ref={menu.triggerRef} className="composer-notice-button-primary !rounded-l-none !px-1"
+        style={{ borderLeftColor: 'color-mix(in srgb, white 35%, var(--color-accent))' }}
+        aria-label={moreLabel} title={moreLabel} aria-haspopup="menu" aria-expanded={menu.open}
+        aria-disabled={menuDisabled || undefined}
+        onClick={() => { if (!menuDisabled || menu.open) menu.setOpen(!menu.open) }}>
+        <ChevronDown size={12} aria-hidden="true" />
+      </NoticeButton>
+      {menu.open && menu.style && createPortal(
+        <div ref={menu.popoverRef} role="menu" aria-label={menuLabel ?? moreLabel} style={menu.style} className={NOTICE_MENU_SURFACE}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.stopPropagation()
+            menu.setOpen(false)
+            menu.triggerRef.current?.focus()
+          }}>
+          {items.map((item) => {
+            const ItemIcon = item.icon
+            return (
+              <button key={item.label} type="button" role="menuitem" aria-label={item.label} title={item.title}
+                className={MENU_ITEM} disabled={item.disabled}
+                onClick={() => { menu.setOpen(false); item.onSelect() }}>
+                <ItemIcon size={12} aria-hidden="true" />
+                <span className="flex-1 truncate">{item.label}</span>
+              </button>
+            )
+          })}
+        </div>,
+        document.body
+      )}
+    </div>
+  )
 }
 
 /** The validator's markdown-ish sentence, with its `code` spans drawn as code rather than backticks. */

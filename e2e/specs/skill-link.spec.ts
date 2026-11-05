@@ -227,7 +227,7 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
   const page = cinna.page
   await startChatWith(cinna, AGENT)
   const row = offerRow(page)
-  const okText = `${TITLE} · Version 1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`
+  const okText = `${TITLE} · v1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`
 
   await test.step('while the fresh listing is held, the row says what it is looking up', async () => {
     core.holdListing(true)
@@ -237,7 +237,7 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
     // The note follows the sentence on its one line.
     await expect(row.getByRole('paragraph')).toHaveText(`Looking up ${PACKAGE_ID} on ${core.hostLabel}… Nothing is added until you choose.`)
     await expect(row.getByText('Nothing is added until you choose.', { exact: true })).toBeVisible()
-    await expect(row.getByRole('button', { name: /^Add to/ })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
     // The lookup reads the listing again rather than answering from the cache.
     await expect.poll(() => core.listingReads()).toBeGreaterThan(reads)
     await shot(page, 'pending', composerArea(page))
@@ -248,26 +248,50 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
     core.releaseListings()
     await expect(row.getByRole('paragraph')).toHaveText(okText)
     await expect(row.getByRole('paragraph')).toHaveAttribute('title', okText)
-    const add = row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })
+    // One short labelled action (ux_rules rule 20): the agent's name is in Add's title.
+    const add = row.getByRole('button', { name: 'Add', exact: true })
     await expect(add).toBeEnabled()
-    await expect(row.getByRole('button', { name: 'New agent with this skill', exact: true })).toBeEnabled()
+    await expect(add).toHaveAttribute('title', `Add ${TITLE} to ${AGENT}`)
+    await expect(row.getByRole('button', { name: 'New agent', exact: true })).toHaveCount(0)
     await expect(panel(page)).toHaveAttribute('data-tone', 'accent')
     await expect(panel(page).getByRole('listitem')).toHaveCount(1)
     await shot(page, 'ok', composerArea(page))
     await themeShots(page, 'ok-row')
   })
 
-  await test.step('Details shows the description', async () => {
-    const details = row.getByRole('button', { name: 'Details', exact: true })
+  await test.step('New agent with this skill waits behind Add’s chevron, on a menu below it', async () => {
+    const more = row.getByRole('button', { name: 'More ways to add', exact: true })
+    await more.click()
+    await expect(more).toHaveAttribute('aria-expanded', 'true')
+    const menu = page.getByRole('menu', { name: 'More ways to add', exact: true })
+    await expect(menu.getByRole('menuitem', { name: 'New agent with this skill', exact: true })).toBeEnabled()
+    const below = (await menu.boundingBox())!.y >= (await more.boundingBox())!.y
+    expect(below).toBe(true)
+    // Opaque in both themes: the message box under it must not show through (ux_rules rule 20).
+    const before = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
+    for (const theme of ['light', 'dark'] as const) {
+      await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme)
+      await shot(page, `ok-menu-${theme}`)
+    }
+    await page.evaluate((value) => { if (value) document.documentElement.setAttribute('data-theme', value) }, before)
+    await more.click()
+    await expect(menu).toHaveCount(0)
+  })
+
+  await test.step('the details chevron shows the description, and the whole sentence while open', async () => {
+    const details = row.getByRole('button', { name: `Details of ${TITLE}`, exact: true })
     await details.click()
     await expect(details).toHaveAttribute('aria-expanded', 'true')
     await expect(row.getByText(DESCRIPTION, { exact: true })).toBeVisible()
+    await expect(row.getByRole('paragraph').first()).not.toHaveClass(/\btruncate\b/)
+    await shot(page, 'details-open')
     await details.click()
     await expect(details).toHaveAttribute('aria-expanded', 'false')
+    await expect(row.getByRole('paragraph').first()).toHaveClass(/\btruncate\b/)
   })
 
   await test.step('Add pins the latest version into the agent and the row goes away', async () => {
-    await row.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).click()
+    await row.getByRole('button', { name: 'Add', exact: true }).click()
     await expect(row).toHaveCount(0)
     await expect.poll(() => catalogPins(agentPath).map((pin) => [pin.package_id, pin.name, pin.revision_number])).toEqual([
       [PACKAGE_ID, 'invoice-reader', 1]
@@ -298,15 +322,15 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
   await test.step('the same link again says it is already there; a newer version offers Update, which moves the pin', async () => {
     await startChatWith(cinna, AGENT)
     expect(await pasteText(page, httpsLink(core))).toBe(true)
-    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} is already on ${AGENT} (Version 1)`)
+    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} is already on ${AGENT} (v1)`)
     await expect(row.getByRole('button', { name: /^Update to/ })).toHaveCount(0)
-    await expect(row.getByRole('button', { name: /^Add to/ })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
     await row.getByRole('button', { name: 'Dismiss skill link', exact: true }).click()
     await expect(row).toHaveCount(0)
 
     addRevision(skill, '1.1.0')
     expect(await pasteText(page, httpsLink(core))).toBe(true)
-    const update = row.getByRole('button', { name: 'Update to Version 2', exact: true })
+    const update = row.getByRole('button', { name: 'Update to v2', exact: true })
     await expect(update).toBeEnabled()
     await update.click()
     await expect(row).toHaveCount(0)
@@ -331,7 +355,7 @@ test('S1b the row keeps its height when the lookup answers', async ({ cinna }) =
   const pending = (await row.boundingBox())!.height
   core.holdListing(false)
   core.releaseListings()
-  await expect(row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
+  await expect(row.getByRole('button', { name: 'Add', exact: true })).toBeEnabled()
   await noticePanelSettled(row)
   const answered = (await row.boundingBox())!.height
   // Sub-pixel layout rounding differs between frames; a jump is a whole line.
@@ -339,7 +363,7 @@ test('S1b the row keeps its height when the lookup answers', async ({ cinna }) =
   // The actions sit at the end of the sentence's line, not on a line under it: their middles align.
   const middle = (box: { y: number; height: number } | null): number => box!.y + box!.height / 2
   const sentence = await row.getByRole('paragraph').boundingBox()
-  const add = await row.getByRole('button', { name: `Add to ${AGENT}`, exact: true }).boundingBox()
+  const add = await row.getByRole('button', { name: 'Add', exact: true }).boundingBox()
   expect(Math.abs(middle(add) - middle(sentence))).toBeLessThan(2)
   expect(add!.x).toBeGreaterThan(sentence!.x + sentence!.width - 1)
   // One line: no taller than the button plus the row's padding.
@@ -354,15 +378,16 @@ test('S2 a cinna://skill deep link from argv raises the offer on the start scree
   })
   const page = cinna.page
   const row = offerRow(page)
-  // No agent is picked on the start screen a launch opens: Add asks for one, New agent stays.
-  // The reason stands after the title in place of the facts, which stay in the tooltip.
+  // No agent is picked on the start screen a launch opens: Add cannot run, so New agent is the row's
+  // one action (ux_rules rule 20). The reason stands after the title in place of the facts, which stay
+  // in the tooltip.
   await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · Pick one agent to add it to, or make a new one.`)
-  await expect(row.getByRole('paragraph')).toHaveAttribute('title', new RegExp(`Version 1 \\(1\\.0\\.0\\) · by ${PUBLISHER}`))
-  const add = row.getByRole('button', { name: 'Add to agent', exact: true })
-  await expect(add).toBeDisabled()
-  await expect(add).toHaveAttribute('title', 'Pick one agent to add it to, or make a new one.')
+  await expect(row.getByRole('paragraph')).toHaveAttribute('title', new RegExp(`v1 \\(1\\.0\\.0\\) · by ${PUBLISHER}`))
+  await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
   await expect(row.getByText('Pick one agent to add it to, or make a new one.', { exact: true })).toBeVisible()
-  await expect(row.getByRole('button', { name: 'New agent with this skill', exact: true })).toBeEnabled()
+  const newAgent = row.getByRole('button', { name: 'New agent', exact: true })
+  await expect(newAgent).toBeEnabled()
+  await expect(newAgent).toHaveAttribute('title', 'New agent with this skill')
   // The skill link went to its own slot, not to the connect confirm step.
   expect(await page.evaluate(() => window.api.connect.getPending())).toBeNull()
   await expect(page.getByText(/^Connect to .*\?$/)).toHaveCount(0)
@@ -382,8 +407,8 @@ test('S3 a link the listing does not have says so and offers nothing; other serv
     await expect(row.getByText('Ask whoever shared it.', { exact: true })).toBeVisible()
     // The row's only button is its ×.
     await expect(row.getByRole('button')).toHaveCount(1)
-    await expect(row.getByRole('button', { name: /^Add to/ })).toHaveCount(0)
-    await expect(row.getByRole('button', { name: 'New agent with this skill', exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'New agent', exact: true })).toHaveCount(0)
     await shot(page, 'no-access', composerArea(page))
   })
 
@@ -401,12 +426,12 @@ test('S3 a link the listing does not have says so and offers nothing; other serv
     await expect(row.getByRole('paragraph')).toHaveText(`Couldn’t reach ${core.hostLabel} to look this skill up.`, { timeout: 30_000 })
     const retry = row.getByRole('button', { name: 'Try again', exact: true })
     await expect(retry).toBeVisible()
-    await expect(row.getByRole('button', { name: /^Add to/ })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
     await shot(page, 'offline', composerArea(page))
     core.dropListing(false)
     await retry.click()
-    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · Version 1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`)
-    await expect(row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
+    await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · v1 (1.0.0) · by ${PUBLISHER} on ${core.hostLabel}`)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toBeEnabled()
   })
 })
 
@@ -418,23 +443,19 @@ test('S4 a use-only team agent cannot take the skill; New agent with this skill 
   const row = offerRow(page)
   const reason = `${TEAM_AGENT} is shared with you to use, so its skills can’t be changed here.`
 
-  await test.step('Add is disabled with its reason; New agent with this skill is offered', async () => {
+  await test.step('Add cannot run, so it is not offered: the reason is on the line and New agent is the row’s action', async () => {
     expect(await pasteText(page, httpsLink(core))).toBe(true)
     await expect(row.getByRole('paragraph')).toHaveText(`${TITLE} · ${reason}`)
-    const add = row.getByRole('button', { name: `Add to ${TEAM_AGENT}`, exact: true })
-    await expect(add).toBeDisabled()
-    await expect(add).toHaveAttribute('title', reason)
+    await expect(row.getByRole('button', { name: 'Add', exact: true })).toHaveCount(0)
+    await expect(row.getByRole('button', { name: 'More ways to add', exact: true })).toHaveCount(0)
     await expect(row.getByText(reason, { exact: true })).toBeVisible()
-    await expect(row.getByRole('button', { name: 'New agent with this skill', exact: true })).toBeEnabled()
-    await shot(page, 'add-disabled', composerArea(page))
-    // A press on the disabled Add installs nothing (aria-disabled: Playwright's click would refuse it).
-    await add.dispatchEvent('click')
-    await expect(add).toBeDisabled()
+    await expect(row.getByRole('button', { name: 'New agent', exact: true })).toBeEnabled()
+    await shot(page, 'add-refused')
     expect(core.requests.some((line) => line.includes('/revisions/'))).toBe(false)
   })
 
-  await test.step('New agent with this skill opens the new-agent flow named after the skill, and the agent it makes has the pin', async () => {
-    await row.getByRole('button', { name: 'New agent with this skill', exact: true }).click()
+  await test.step('New agent opens the new-agent flow named after the skill, and the agent it makes has the pin', async () => {
+    await row.getByRole('button', { name: 'New agent', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: `New agent with ${TITLE}`, exact: true })
     await expect(dialog).toBeVisible()
     const name = dialog.getByLabel('Name', { exact: true })

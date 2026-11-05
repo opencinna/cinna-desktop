@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { PackagePlus } from 'lucide-react'
-import { NoticeButton, StableLabel } from './ComposerNoticePanel'
-import type { ComposerNotice } from './ComposerNoticePanel'
+import { ArrowRightLeft, PackagePlus, Plug, Plus, RefreshCw, RotateCw, UserPlus } from 'lucide-react'
+import { NoticeButton, NoticeSplitButton, StableLabel } from './ComposerNoticePanel'
+import type { ComposerNotice, NoticeMenuItem } from './ComposerNoticePanel'
 import { NEW_CHAT_KEY, offerShowsOn, useSkillLinkOfferStore, type SkillLinkOffer } from '../../stores/skillLinkOffer.store'
 import { refreshAfterSkillChange } from '../../hooks/useCatalogSkills'
 import { composerKeyOnScreen } from '../../hooks/useSkillLinkIntents'
@@ -19,7 +19,9 @@ import type { SkillLinkResolution, SkillLinkSkill, SkillLinkTargetRefusal } from
  *
  * An offer, not a problem: the `accent` tone, so a panel holding only this row
  * never reads as an error. One truncated line — the sentence on the left, the
- * actions and the × at its end, as on every row — at one button's height
+ * details chevron, one short labelled action (its alternative, New agent with
+ * this skill, behind the split button's chevron) and the × at its end, as on
+ * every row (ux_rules rule 20) — at one button's height
  * whether or not it holds buttons, and with labels that keep their width while
  * they run, so the row does not grow, shrink or reflow as the lookup answers,
  * the composer's agent changes, or Add runs (ux_rules rule 1). Nothing installs
@@ -43,7 +45,7 @@ function hostOf(origin: string | null): string | null {
 }
 
 function versionText(skill: SkillLinkSkill): string {
-  return skill.versionLabel ? `Version ${skill.revisionNumber} (${skill.versionLabel})` : `Version ${skill.revisionNumber}`
+  return skill.versionLabel ? `v${skill.revisionNumber} (${skill.versionLabel})` : `v${skill.revisionNumber}`
 }
 
 function refusalText(verdict: SkillLinkTargetRefusal, agentName: string | null, skill: SkillLinkSkill): string {
@@ -262,18 +264,25 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
       ? {
           ...base,
           ...line(<>Couldn’t look up <PackageCode id={mine.link.packageId} /> on {linkHost}.</>, text),
-          action: <NoticeButton onClick={() => void query.refetch()}>Try again</NoticeButton>
+          action: <NoticeButton onClick={() => void query.refetch()}><RotateCw size={12} aria-hidden="true" />Try again</NoticeButton>
         }
       : { ...base, ...line(<>Looking up <PackageCode id={mine.link.packageId} /> on {linkHost}…</>, text, 'Nothing is added until you choose.', null) }
   }
 
   // The answer on screen is the last one while the next is asked: nothing acts on it meanwhile.
   const holding = query.isPlaceholderData || query.isFetching
+  const newAgentBusy = holding || adding
+  const newAgent = (skill: SkillLinkSkill): void => { if (!holding && !adding) handlers.onNewAgent(skill, mine) }
+  /** The row's one action when Add or Update is not on offer: New agent, short, the long form in its title. */
   const newAgentButton = (skill: SkillLinkSkill): React.ReactNode => (
-    <NoticeButton aria-label="New agent with this skill" aria-disabled={holding || adding || undefined}
-      onClick={() => { if (!holding && !adding) handlers.onNewAgent(skill, mine) }}>New agent with this skill</NoticeButton>
+    <NoticeButton title="New agent with this skill" aria-disabled={newAgentBusy || undefined}
+      onClick={() => newAgent(skill)}><UserPlus size={12} aria-hidden="true" />New agent</NoticeButton>
   )
-  const details = (skill: SkillLinkSkill): Partial<ComposerNotice> => ({ details: <SkillDetails skill={skill} />, detailsLabel: 'Details' })
+  /** What the chevron beside Add or Update holds. */
+  const newAgentItems = (skill: SkillLinkSkill): NoticeMenuItem[] => [
+    { label: 'New agent with this skill', icon: UserPlus, disabled: newAgentBusy, onSelect: () => newAgent(skill) }
+  ]
+  const details = (skill: SkillLinkSkill): Partial<ComposerNotice> => ({ details: <SkillDetails skill={skill} />, detailsName: `Details of ${skill.title}` })
 
   switch (answer.state) {
     case 'ok': {
@@ -282,48 +291,44 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
       const account = answer.serverGiven ? '' : ' · your current account'
       const text = `${facts}${answer.host}${account}`
       // While the next answer is asked (the composer's agent changed), the
-      // previous one names the previous agent: the label follows the
+      // previous one names the previous agent: the title follows the
       // composer, and the previous refusal is not said of the new agent.
       const refusal = verdict.verdict === 'ok' || holding ? null : refusalText(verdict.verdict, verdict.agentName, skill)
       // A refusal says why Add is off where it is read: after the title, in place of the facts,
       // which a truncated line would otherwise cut it from. The facts stay in the tooltip.
       const agentName = holding ? target?.name ?? null : verdict.agentName ?? target?.name ?? null
-      const label = agentName && (holding || verdict.verdict !== 'no_agent') ? `Add to ${agentName}` : 'Add to agent'
-      const disabled = (verdict.verdict !== 'ok') || holding || adding
+      const addTitle = `Add ${skill.title} to ${agentName && (holding || verdict.verdict !== 'no_agent') ? agentName : 'this agent'}`
       return {
         ...base,
         ...details(skill),
         ...(refusal
           ? line(<><span className="font-medium">{skill.title}</span> · <span className="text-[var(--color-text-secondary)]">{refusal}</span></>, `${skill.title} · ${refusal} ${text}`)
           : line(<><span className="font-medium">{skill.title}</span>{facts.slice(skill.title.length)}<HostLink host={answer.host} origin={answer.origin} />{account}</>, text)),
-        action: <>
-          {/* Disabled, it is not the first choice: the secondary style, fainter (not while Adding…, which is this button at work). */}
-          <NoticeButton className={disabled && !adding ? 'aria-disabled:!opacity-50' : 'composer-notice-button-primary'} aria-disabled={disabled || undefined}
-            aria-label={label} title={refusal ?? undefined}
-            onClick={() => { if (!disabled) void onAdd(skill.packageUuid, skill.title) }}>
-            <StableLabel label={label} pending={adding} pendingLabel="Adding…" />
-          </NoticeButton>
-          {newAgentButton(skill)}
-        </>
+        // Add refused: no disabled Add to read past; the one action that can run is the row's
+        // default, and the refusal is said in the sentence (ux_rules rule 20).
+        action: refusal
+          ? newAgentButton(skill)
+          : <NoticeSplitButton label="Add" icon={Plus} title={addTitle} pending={adding} pendingLabel="Adding…"
+              disabled={verdict.verdict !== 'ok' || holding || adding}
+              onClick={() => void onAdd(skill.packageUuid, skill.title)}
+              moreLabel="More ways to add" items={newAgentItems(skill)} />
       }
     }
     case 'already_added': {
       const { skill, target: pinned } = answer
       const onAgent = pinned.agentName || target?.name || 'this agent'
-      const text = `${skill.title} is already on ${onAgent}${pinned.pinnedRevision !== null ? ` (Version ${pinned.pinnedRevision})` : ''}`
+      const text = `${skill.title} is already on ${onAgent}${pinned.pinnedRevision !== null ? ` (v${pinned.pinnedRevision})` : ''}`
+      const update = `Update to v${skill.revisionNumber}`
       return {
         ...base,
         ...details(skill),
         ...line(text, text),
-        action: <>
-          {pinned.behind && (
-            <NoticeButton className="composer-notice-button-primary" aria-disabled={holding || adding || undefined}
-              aria-label={`Update to Version ${skill.revisionNumber}`} onClick={() => { if (!holding && !adding) void onUpdate(pinned.pinName, skill.title) }}>
-              <StableLabel label={`Update to Version ${skill.revisionNumber}`} pending={adding} pendingLabel="Updating…" />
-            </NoticeButton>
-          )}
-          {newAgentButton(skill)}
-        </>
+        action: pinned.behind
+          ? <NoticeSplitButton label={update} icon={RefreshCw} title={`Update ${skill.title} on ${onAgent} to v${skill.revisionNumber}`}
+              pending={adding} pendingLabel="Updating…" disabled={holding || adding}
+              onClick={() => void onUpdate(pinned.pinName, skill.title)}
+              moreLabel="More actions" items={newAgentItems(skill)} />
+          : newAgentButton(skill)
       }
     }
     case 'other_profile': {
@@ -334,8 +339,9 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
       return {
         ...base,
         ...line(text, text),
-        action: <NoticeButton aria-disabled={held || undefined} aria-label={`Switch to ${answer.profileName}`} onClick={() => { if (!held) void onSwitch(answer.profileId) }}>
-          <StableLabel label={`Switch to ${answer.profileName}`} pending={pending} pendingLabel="Switching…" />
+        // The account's name is in the title, not the label (ux_rules rule 20).
+        action: <NoticeButton aria-disabled={held || undefined} aria-label="Switch account" title={`Switch to ${answer.profileName}`} onClick={() => { if (!held) void onSwitch(answer.profileId) }}>
+          <StableLabel label={<><ArrowRightLeft size={12} aria-hidden="true" />Switch account</>} pending={pending} pendingLabel="Switching…" />
         </NoticeButton>
       }
     }
@@ -352,7 +358,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
               if (holding) return
               // The connect confirm step, through the same funnel as a clicked connect link.
               void window.api.connect.deliverPasted(`cinna://connect?server=${encodeURIComponent(origin)}`)
-            }}>Connect…</NoticeButton>
+            }}><Plug size={12} aria-hidden="true" />Connect…</NoticeButton>
           : undefined
       }
     }
@@ -366,7 +372,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
         ...base,
         ...line(text, text),
         action: <NoticeButton aria-disabled={query.isFetching || undefined} onClick={() => { if (!query.isFetching) void query.refetch() }}>
-          <StableLabel label="Try again" pending={query.isFetching} pendingLabel="Trying…" />
+          <StableLabel label={<><RotateCw size={12} aria-hidden="true" />Try again</>} pending={query.isFetching} pendingLabel="Trying…" />
         </NoticeButton>
       }
     }
@@ -377,7 +383,7 @@ export function useSkillLinkNotice(chatKey: string, target: AgentLike, handlers:
         ...base,
         ...line(text, text),
         action: <NoticeButton aria-disabled={query.isFetching || undefined} onClick={() => { if (!query.isFetching) void query.refetch() }}>
-          <StableLabel label="Try again" pending={query.isFetching} pendingLabel="Trying…" />
+          <StableLabel label={<><RotateCw size={12} aria-hidden="true" />Try again</>} pending={query.isFetching} pendingLabel="Trying…" />
         </NoticeButton>
       }
     }

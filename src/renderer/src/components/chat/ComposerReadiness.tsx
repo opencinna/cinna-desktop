@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, Download, FileWarning, FolderOpen, KeyRound, Loader2, RefreshCw, WifiOff } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, FileWarning, FolderOpen, KeyRound, Loader2, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
@@ -236,6 +236,8 @@ function ReadinessActionButton({ action, tip }: {
   useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current) }, [])
   const pending = action.pending || feedback
   const isCheck = action.label === 'Check again'
+  // Log in and Re-authenticate both sign in; Check again refreshes (its glyph spins while it runs).
+  const ActionIcon = isCheck ? RefreshCw : LogIn
   const button = <NoticeButton aria-disabled={pending || undefined} aria-busy={pending}
     onClick={() => {
       if (action.pending || timer.current !== null) return
@@ -248,9 +250,9 @@ function ReadinessActionButton({ action, tip }: {
       // A login's pending label ("Waiting for sign-in in your browser…") is far wider than Log in,
       // and Cancel comes with it: sized to both, the idle button would be mostly padding. On its own
       // line under the sentence (`actionBelow`) it widens into free space instead.
-      ? <>{pending && <Loader2 size={12} className="animate-spin" />}{pending ? action.pendingLabel : action.label}</>
+      ? <>{pending ? <Loader2 size={12} className="animate-spin" /> : <ActionIcon size={12} aria-hidden="true" />}{pending ? action.pendingLabel : action.label}</>
       : <StableLabel pending={pending}
-          label={<>{isCheck && <RefreshCw size={12} />}{action.label}</>}
+          label={<><ActionIcon size={12} aria-hidden="true" />{action.label}</>}
           pendingLabel={<>{isCheck ? <RefreshCw size={12} className="animate-spin" /> : <Loader2 size={12} className="animate-spin" />}{action.pendingLabel}</>} />}
   </NoticeButton>
   if (!action.cancel && !tip) return button
@@ -262,7 +264,7 @@ function ReadinessActionButton({ action, tip }: {
     {tip}
     {button}
     {!pending && action.copyCommand && <CopyCommandButton key={action.copyCommand} command={action.copyCommand} />}
-    {action.pending && action.cancel && <NoticeButton onClick={action.cancel}>Cancel</NoticeButton>}
+    {action.pending && action.cancel && <NoticeButton onClick={action.cancel}><X size={12} aria-hidden="true" />Cancel</NoticeButton>}
   </div>
 }
 
@@ -273,7 +275,7 @@ function CopyCommandButton({ command }: { command: string }): React.JSX.Element 
     void window.api.clipboard.writeText(command)
       .then((result) => setCopied(result.success ? 'yes' : 'failed'))
       .catch(() => setCopied('failed'))
-  }}>{copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</NoticeButton>
+  }}>{copied === 'yes' ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}{copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</NoticeButton>
 }
 
 const ICON: Record<Exclude<AgentReadinessState, 'ok'>, LucideIcon> = {
@@ -350,7 +352,7 @@ export function useFolderFindingsNotice(folder: LocalAgentDto | null): ComposerN
     icon: FileWarning,
     text: <><span className="text-[var(--color-text-muted)]">{first.path || 'Agent folder'}:</span> <FindingText text={first.message} /></>,
     title: `${first.message} The agent still runs; fix the folder so it behaves as declared.`,
-    detailsLabel: rest.length > 0 ? `${rest.length} more` : undefined,
+    detailsName: rest.length > 0 ? `Show ${rest.length} more ${rest.length === 1 ? 'finding' : 'findings'}` : undefined,
     details: rest.length > 0
       ? <ul className="space-y-1 text-[11px] leading-snug text-[var(--color-text-secondary)]">
           {rest.map((finding, i) => <li key={`${finding.code}-${i}`}>
@@ -384,7 +386,7 @@ export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSe
     icon: KeyRound,
     text,
     title: text,
-    action: <NoticeButton onClick={onFinishSetup}>Finish setup</NoticeButton>
+    action: <NoticeButton onClick={onFinishSetup}><KeyRound size={12} aria-hidden="true" />Finish setup</NoticeButton>
   }
 }
 
@@ -423,7 +425,7 @@ export function skillCredentialsNotice(
     title: lacking.map(({ skill, missing }) => skillCredentialSentence(skill, missing, false)).join(' '),
     // The count or slot changes as slots fill; the line never wraps into a second one meanwhile.
     singleLine: true,
-    action: <NoticeButton onClick={onFinishSetup}>Finish setup</NoticeButton>,
+    action: <NoticeButton onClick={onFinishSetup}><KeyRound size={12} aria-hidden="true" />Finish setup</NoticeButton>,
     onDismiss,
     dismissLabel: 'Dismiss skill credential prompt'
   }
@@ -490,8 +492,8 @@ export function aiCredentialNotice(folder: LocalAgentDto | null, issue: AiCreden
     icon: KeyRound,
     text: AI_CREDENTIAL_TEXT[issue],
     action: noCredentials
-      ? <NoticeButton onClick={openAiCredentialsSettings}>Add credential</NoticeButton>
-      : <NoticeButton onClick={() => openAgentRuntimeSettings(folder.id)}>Choose credential</NoticeButton>
+      ? <NoticeButton onClick={openAiCredentialsSettings}><Plus size={12} aria-hidden="true" />Add credential</NoticeButton>
+      : <NoticeButton onClick={() => openAgentRuntimeSettings(folder.id)}><KeyRound size={12} aria-hidden="true" />Choose credential</NoticeButton>
   }
 }
 
@@ -519,7 +521,7 @@ export function staleModelNotice(
       // The panel focuses its Model select once it shows it.
       useUIStore.getState().setPendingRuntimeModelFocusId(folder.id)
       openAgentRuntimeSettings(folder.id)
-    }}>Choose model</NoticeButton>
+    }}><Cpu size={12} aria-hidden="true" />Choose model</NoticeButton>
   }
 }
 
@@ -630,7 +632,7 @@ export function useActiveSessionNotices(agents: readonly { id: string; name: str
       title: sentence,
       // Named "Open" as it reads; the sentence it acts on describes it, so
       // several rows' Opens are told apart (ux_rules §10).
-      action: <NoticeButton aria-describedby={textId} title={openSessionTitle(latest)} onClick={() => openSession(latest)}>Open</NoticeButton>
+      action: <NoticeButton aria-describedby={textId} title={openSessionTitle(latest)} onClick={() => openSession(latest)}><ArrowUpRight size={12} aria-hidden="true" />Open</NoticeButton>
     }
   })
 }

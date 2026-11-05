@@ -223,6 +223,12 @@ Disabled: `disabled:opacity-30 disabled:cursor-not-allowed` (or `disabled:opacit
 - `p-1 rounded transition-colors`
 - Delete: `hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]`
 
+### Composer Notice Buttons
+A composer notice row (`ComposerNoticePanel.tsx`) is one line, and its message keeps the width (ux_rules rule 20). Build its controls from the panel's own exports, not hand-drawn buttons:
+- **`NoticeButton`** — the one labelled action: a verb and at most one short word, with a size-12 lucide icon in front. Long names go in the sentence or the `title`.
+- **`NoticeSplitButton`** — when the row has an alternative: the primary half (`+ Add`, `Update to v3`) with a chevron half that opens the other choices as a menu below-right. The menu is opaque (`bg-secondary`, border, `shadow-xl`), not `app-popover-surface`, because it sits over the composer. The chevron's `moreLabel` must not be the name of a menu item.
+- **The details toggle** — an icon-only chevron (`notice.detailsName` gives its `aria-label` and `title`, e.g. *Show 3 more findings*), styled as the ×. Never a text link on the line. Open, it shows the row's full sentence.
+
 ### Preview Modal Header Controls
 - **Every control in a preview modal's header is 26 px tall with `rounded-lg` corners**, the height of the agent chip under the composer: labelled actions (Run…, Contents), icon buttons (Filter, Download, ⋯, Close) and segmented toggles (Tree / Table, Rendered / Source). The card-header `p-1` size above made them a step smaller than the chips the user just left.
 - Build them from `src/renderer/src/components/ui/modalHeader.ts` — `MODAL_HEADER_ACTION`, `MODAL_HEADER_ICON` (14 px icon), `MODAL_HEADER_SEGMENTS` around `MODAL_HEADER_SEGMENT` buttons — and add only the colours. Used by File Preview, Artifact Preview and the file ⋯ menu's trigger.

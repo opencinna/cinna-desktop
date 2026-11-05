@@ -1,4 +1,4 @@
-import { TimerOff, X } from 'lucide-react'
+import { Plus, TimerOff, X } from 'lucide-react'
 import { NOTICE_DISMISS_BUTTON, NoticeButton } from './ComposerNoticePanel'
 import { formatTokens, formatUsd } from '../../utils/telemetryFormat'
 import type { CacheExpiryNotice as CacheExpiryNoticeData } from '../../../../shared/sessionTelemetryDerived'
@@ -74,7 +74,7 @@ export function CacheExpiryNotice({ notice, onNewChat, onDismiss }: CacheExpiryN
           <span className="font-semibold">{title}.</span>{' '}
           <span className="text-[var(--color-text-secondary)]">{body}</span>
         </p>
-        {onNewChat && <div className="shrink-0"><NoticeButton title={NEW_CHAT_HINT} onClick={onNewChat}>New chat</NoticeButton></div>}
+        {onNewChat && <div className="shrink-0"><NoticeButton title={NEW_CHAT_HINT} onClick={onNewChat}><Plus size={12} aria-hidden="true" />New chat</NoticeButton></div>}
         <button type="button" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}
           className={NOTICE_DISMISS_BUTTON}>
           <X size={13} aria-hidden="true" />

@@ -9,7 +9,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * values, and which runs on OpenCode in a sandbox with no AI credential. The
  * panel — `status` "Agent status" over the message box — carries one row each
  * for the missing credentials (Finish setup), the AI credential (Add
- * credential, since the sandbox has none to choose from) and the findings (first finding, "1 more", Reveal); the agent
+ * credential, since the sandbox has none to choose from) and the findings (first finding, its details chevron, Reveal); the agent
  * page no longer repeats the finding as a banner, and the findings do not
  * block Send. Fixing the manifest on disk drops the findings row through the
  * folder watcher, with no relaunch. Model-free: nothing is sent.
@@ -46,7 +46,7 @@ test('composer notice panel: findings, credentials and AI credential rows on a f
   await cinna.page.getByRole('button', { name: AGENT, exact: true }).click()
 
   const panel = cinna.page.getByRole('status', { name: 'Agent status' })
-  // The panel's own rows; an expanded "1 more" adds a nested list of its own.
+  // The panel's own rows; an expanded findings row adds a nested list of its own.
   const rows = panel.getByRole('listitem').filter({ has: cinna.page.getByRole('paragraph') })
 
   await test.step('the panel carries the three rows, in order', async () => {
@@ -63,7 +63,7 @@ test('composer notice panel: findings, credentials and AI credential rows on a f
     )
     await expect(findings.getByRole('code')).toHaveText('credentials[0].service_uri')
     await expect(findings.getByRole('button', { name: 'Reveal', exact: true })).toBeVisible()
-    const more = findings.getByRole('button', { name: '1 more', exact: true })
+    const more = findings.getByRole('button', { name: 'Show 1 more finding', exact: true })
     await expect(more).toHaveAttribute('aria-expanded', 'false')
     await more.click()
     await expect(more).toHaveAttribute('aria-expanded', 'true')

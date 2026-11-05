@@ -464,9 +464,9 @@
     background-color: var(--color-bg-secondary);
     border-color: color-mix(in srgb, var(--color-text-muted) 60%, var(--color-border));
   }
-  /* A notice's primary action, when the row is an offer with two (a skill
-     link's Add to agent beside New agent with this skill): accent-filled, so
-     the first choice reads as the first. After the light-theme rules, so it
+  /* A notice's primary action, when the row is an offer (a skill link's Add,
+     or Update to v3, with New agent behind the split button's chevron):
+     accent-filled, so the first choice reads as the first. After the light-theme rules, so it
      wins over the secondary fill in both themes. */
   .composer-notice-button.composer-notice-button-primary {
     background-color: var(--color-accent);

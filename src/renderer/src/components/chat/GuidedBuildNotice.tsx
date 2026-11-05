@@ -1,4 +1,4 @@
-import { Compass } from 'lucide-react'
+import { Compass, SkipForward } from 'lucide-react'
 import { useMarkGuidedBuildDone } from '../../hooks/useLocalAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { NoticeButton, StableLabel, type ComposerNotice } from './ComposerNoticePanel'
@@ -46,7 +46,7 @@ export function useGuidedBuildNotice(agentId: string | null): ComposerNotice | n
     action: (
       <NoticeButton aria-disabled={pending || undefined}
         onClick={() => { if (!pending) skip.mutate({ agentId }) }}>
-        <StableLabel label="Skip guidance" pending={pending} pendingLabel="Skipping…" />
+        <StableLabel label={<><SkipForward size={12} aria-hidden="true" />Skip guidance</>} pending={pending} pendingLabel="Skipping…" />
       </NoticeButton>
     )
   }

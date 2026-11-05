@@ -69,7 +69,7 @@ const panel = (): HTMLElement => screen.getByRole('status', { name: /^(Skill lin
 function expectOneLine(): HTMLElement {
   const row = panel().querySelector('li')!
   const line = row.firstElementChild as HTMLElement
-  // Nothing under the line but the Details drawer.
+  // Nothing under the line but the details drawer.
   expect(Array.from(row.children).slice(1).every((el) => !el.querySelector('button'))).toBe(true)
   const strut = line.firstElementChild as HTMLElement
   expect(strut.tagName).toBe('BUTTON')
@@ -86,8 +86,8 @@ function expectSettlingRow(): void {
   expect(panel().querySelector('li p')!.getAttribute('title')).toBe('Added ERP lookup. Checking its credentials…')
   const line = expectOneLine()
   expect(within(line).getAllByRole('button')).toHaveLength(1)
-  expect(screen.queryByRole('button', { name: /Add to|Update to|New agent/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Details' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Add$|Update to|New agent|More / })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Details of/ })).toBeNull()
   expect(screen.getByRole('button', { name: 'Dismiss skill link' })).toBeTruthy()
 }
 
@@ -117,7 +117,7 @@ describe('the skill-link offer row', () => {
     expect(within(expectOneLine()).getByText('Nothing is added until you choose.').closest('p')).toBeTruthy()
     expect(panel().getAttribute('data-tone')).toBe('accent')
     expect(panel().getAttribute('aria-label')).toBe('Skill link')
-    expect(screen.queryByRole('button', { name: 'Add to Invoices' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
     // The package id as code; one line that truncates, the whole sentence in its tooltip.
     expect(screen.getByText('test.erp').tagName).toBe('CODE')
     const sentence = panel().querySelector('li p')!
@@ -134,46 +134,68 @@ describe('the skill-link offer row', () => {
     expect(panel().getAttribute('aria-label')).toBe('Agent status')
   })
 
-  it('ok: title, version, publisher and host; Add to the agent first, New agent second', async () => {
+  it('ok: title, version, publisher and host; Add first, New agent with this skill behind its chevron', async () => {
     show(ok())
-    const addButton = await screen.findByRole('button', { name: 'Add to Invoices' })
-    expect(panel().querySelector('li p')!.textContent).toBe('ERP lookup · Version 3 (3.0) · by Ada on cinna.test')
+    const addButton = await screen.findByRole('button', { name: 'Add' })
+    expect(panel().querySelector('li p')!.textContent).toBe('ERP lookup · v3 (3.0) · by Ada on cinna.test')
     const hostLink = screen.getByRole('link', { name: 'cinna.test' })
     expect(hostLink.getAttribute('title')).toBe('https://cinna.test')
     fireEvent.click(hostLink)
     expect(openExternal).toHaveBeenCalledWith('https://cinna.test')
     expect(resolve).toHaveBeenCalledWith({ origin: 'https://cinna.test', packageId: 'test.erp', agentId: 'folder:a' })
-    // Message left, then Details, Add, New agent and the × on the same line.
+    // Message left, then the details chevron, Add with its chevron, and the × on the same line:
+    // one labelled action (ux_rules rule 20), the agent's name in its title rather than its label.
     const line = expectOneLine()
     const buttons = within(line).getAllByRole('button')
-    expect(buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details', 'Add to Invoices', 'New agent with this skill', 'Dismiss skill link'])
+    expect(buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details of ERP lookup', 'Add', 'More ways to add', 'Dismiss skill link'])
     expect(buttons[1]).toBe(addButton)
+    expect(addButton.textContent).toContain('Add')
+    expect(addButton.getAttribute('title')).toBe('Add ERP lookup to Invoices')
     expect(addButton.getAttribute('aria-disabled')).toBeNull()
     expect(addButton.className).toContain('composer-notice-button-primary')
-    expect(screen.getByRole('button', { name: 'Dismiss skill link' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'New agent with this skill' })).toBeNull()
     fireEvent.click(buttons[2])
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'New agent with this skill' }))
     expect(onNewAgent).toHaveBeenCalledWith(SKILL, expect.objectContaining({ link: LINK }))
+    expect(add).not.toHaveBeenCalled()
   })
 
-  it('ok with Add disabled: the reason on the line after the title, in place of the facts; New agent still offered', async () => {
+  it('details: the chevron opens the description and lets the sentence wrap in full', async () => {
+    show(ok())
+    const toggle = await screen.findByRole('button', { name: 'Details of ERP lookup' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    const sentence = panel().querySelector('li p')!
+    expect(sentence.className).toContain('truncate')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('Look things up.')).toBeTruthy()
+    expect(sentence.className).not.toContain('truncate')
+    fireEvent.click(toggle)
+    expect(sentence.className).toContain('truncate')
+  })
+
+  it('ok but refused: no disabled Add; New agent is the row’s one action, the reason on the line in place of the facts', async () => {
     show(ok({ agentId: AGENT.id, agentName: 'Invoices', verdict: 'read_only' }))
-    const addButton = await screen.findByRole('button', { name: 'Add to Invoices' })
-    expect(addButton.getAttribute('aria-disabled')).toBe('true')
-    // Disabled, it is not drawn as the first choice.
-    expect(addButton.className).not.toContain('composer-notice-button-primary')
-    expect(addButton.className).toContain('aria-disabled:!opacity-50')
-    const sentence = expectOneLine().querySelector('p')!
+    const newAgent = await screen.findByRole('button', { name: 'New agent' })
+    const line = expectOneLine()
+    expect(within(line).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details of ERP lookup', 'New agent', 'Dismiss skill link'])
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More ways to add' })).toBeNull()
+    expect(newAgent.getAttribute('title')).toBe('New agent with this skill')
+    expect(newAgent.getAttribute('aria-disabled')).toBeNull()
+    const sentence = line.querySelector('p')!
     expect(sentence.textContent).toBe('ERP lookup · Invoices is shared with you to use, so its skills can’t be changed here.')
     // The facts it stands in for stay in the tooltip.
-    expect(sentence.getAttribute('title')).toContain('Version 3 (3.0) · by Ada on cinna.test')
-    fireEvent.click(addButton)
+    expect(sentence.getAttribute('title')).toContain('v3 (3.0) · by Ada on cinna.test')
+    fireEvent.click(newAgent)
+    expect(onNewAgent).toHaveBeenCalledWith(SKILL, expect.objectContaining({ link: LINK }))
     expect(add).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'New agent with this skill' }).getAttribute('aria-disabled')).toBeNull()
   })
 
-  it('no agent picked: Add to agent, disabled, says to pick one', async () => {
+  it('no agent picked: New agent alone, and the line says to pick one', async () => {
     show(ok({ agentId: null, agentName: null, verdict: 'no_agent' }), 'new', null)
-    expect((await screen.findByRole('button', { name: 'Add to agent' })).getAttribute('aria-disabled')).toBe('true')
+    expect(await screen.findByRole('button', { name: 'New agent' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
     expect(screen.getByText(/Pick one agent/)).toBeTruthy()
   })
 
@@ -181,9 +203,9 @@ describe('the skill-link offer row', () => {
     let finish!: (value: unknown) => void
     add.mockReturnValue(new Promise((resolveAdd) => (finish = resolveAdd)))
     show(ok())
-    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
     expect(add).toHaveBeenCalledWith('folder:a', 'uuid-1')
-    const addButton = screen.getByRole('button', { name: 'Add to Invoices' })
+    const addButton = screen.getByRole('button', { name: 'Add' })
     expect(addButton.getAttribute('aria-disabled')).toBe('true')
     expect(within(addButton).getByText('Adding…').getAttribute('aria-hidden')).toBe('false')
     expectOneLine()
@@ -195,13 +217,13 @@ describe('the skill-link offer row', () => {
   it('an Add refusal takes the line beside the button and closes nothing', async () => {
     add.mockResolvedValue({ ok: false, code: 'clash', message: 'This agent already has a skill with that name.' })
     show(ok())
-    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('This agent already has a skill with that name.')
     expect(expectOneLine().querySelector('p')!.contains(alert)).toBe(true)
-    expect(alert.closest('p')!.getAttribute('title')).toBe('This agent already has a skill with that name. ERP lookup · Version 3 (3.0) · by Ada on cinna.test')
+    expect(alert.closest('p')!.getAttribute('title')).toBe('This agent already has a skill with that name. ERP lookup · v3 (3.0) · by Ada on cinna.test')
     expect(useSkillLinkOfferStore.getState().offer).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy()
   })
 
   it('the refusal it was raised with (New agent’s failed add) shows on arrival', async () => {
@@ -211,21 +233,27 @@ describe('the skill-link offer row', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('The skill could not be downloaded.')
   })
 
-  it('already_added and behind: Update to the latest', async () => {
+  it('already_added and behind: Update to the latest, New agent behind its chevron', async () => {
     update.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
     show({ state: 'already_added', ...base, target: { agentId: AGENT.id, agentName: 'Invoices', verdict: 'already_added', pinName: 'erp-lookup', pinnedRevision: 2, behind: true } })
-    expect(await screen.findByText('ERP lookup is already on Invoices (Version 2)')).toBeTruthy()
-    expectOneLine()
-    fireEvent.click(screen.getByRole('button', { name: 'Update to Version 3' }))
+    expect(await screen.findByText('ERP lookup is already on Invoices (v2)')).toBeTruthy()
+    const line = expectOneLine()
+    expect(within(line).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details of ERP lookup', 'Update to v3', 'More actions', 'Dismiss skill link'])
+    const updateButton = screen.getByRole('button', { name: 'Update to v3' })
+    expect(updateButton.getAttribute('title')).toBe('Update ERP lookup on Invoices to v3')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'New agent with this skill' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(updateButton)
     await waitFor(() => expect(update).toHaveBeenCalledWith('folder:a', 'erp-lookup'))
     await waitFor(() => expectSettlingRow())
   })
 
   it('already_added and current: no Update', async () => {
     show({ state: 'already_added', ...base, target: { agentId: AGENT.id, agentName: 'Invoices', verdict: 'already_added', pinName: 'erp-lookup', pinnedRevision: 3, behind: false } })
-    expect(await screen.findByText('ERP lookup is already on Invoices (Version 3)')).toBeTruthy()
+    expect(await screen.findByText('ERP lookup is already on Invoices (v3)')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Update/ })).toBeNull()
-    expectOneLine()
+    expect(within(expectOneLine()).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Details of ERP lookup', 'New agent', 'Dismiss skill link'])
   })
 
   it('other_profile: Switch to that account, which moves the offer along', async () => {
@@ -233,7 +261,9 @@ describe('the skill-link offer row', () => {
     show({ state: 'other_profile', host: 'acme.test', origin: 'https://acme.test', profileId: 'p2', profileName: 'Me at Acme', title: 'ERP (Acme)' })
     expect(await screen.findByText('ERP (Acme) is on acme.test, not your current account.')).toBeTruthy()
     expectOneLine()
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to Me at Acme' }))
+    const switchButton = screen.getByRole('button', { name: 'Switch account' })
+    expect(switchButton.getAttribute('title')).toBe('Switch to Me at Acme')
+    fireEvent.click(switchButton)
     await waitFor(() => expect(login.mutateAsync).toHaveBeenCalledWith({ userId: 'p2' }))
     await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toMatchObject({ chatKey: 'new', pendingFrom: null }))
   })
@@ -242,8 +272,8 @@ describe('the skill-link offer row', () => {
     let finish!: (value: unknown) => void
     login.mutateAsync.mockReturnValue(new Promise((resolveLogin) => (finish = resolveLogin)))
     show({ state: 'other_profile', host: 'acme.test', origin: 'https://acme.test', profileId: 'p2', profileName: 'Me at Acme', title: 'ERP (Acme)' })
-    fireEvent.click(await screen.findByRole('button', { name: 'Switch to Me at Acme' }))
-    const button = screen.getByRole('button', { name: 'Switch to Me at Acme' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    const button = screen.getByRole('button', { name: 'Switch account' })
     expect(within(button).getByText('Switching…').getAttribute('aria-hidden')).toBe('false')
     expect(button.getAttribute('aria-disabled')).toBe('true')
     expect(screen.getByText('ERP (Acme) is on acme.test, not your current account.')).toBeTruthy()
@@ -277,14 +307,14 @@ describe('the skill-link offer row', () => {
     const line = expectOneLine()
     resolve.mockResolvedValue(ok())
     fireEvent.click(within(line).getByRole('button', { name: 'Try again' }))
-    expect(await screen.findByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy()
     expect(resolve).toHaveBeenCalledTimes(2)
   })
 
   it('a successful Add runs the re-reads every other Add runs', async () => {
     add.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
     show(ok())
-    const addButton = await screen.findByRole('button', { name: 'Add to Invoices' })
+    const addButton = await screen.findByRole('button', { name: 'Add' })
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     fireEvent.click(addButton)
     await waitFor(() => expect(useSkillLinkOfferStore.getState().offer?.settling).toBeTruthy())
@@ -295,7 +325,7 @@ describe('the skill-link offer row', () => {
   it('a successful Update runs them too', async () => {
     update.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
     show({ state: 'already_added', ...base, target: { agentId: AGENT.id, agentName: 'Invoices', verdict: 'already_added', pinName: 'erp-lookup', pinnedRevision: 2, behind: true } })
-    const updateButton = await screen.findByRole('button', { name: 'Update to Version 3' })
+    const updateButton = await screen.findByRole('button', { name: 'Update to v3' })
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     fireEvent.click(updateButton)
     await waitFor(() => expect(useSkillLinkOfferStore.getState().offer?.settling).toBeTruthy())
@@ -308,7 +338,7 @@ describe('the skill-link offer row', () => {
     expectOneLine()
     resolve.mockResolvedValue(ok())
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    expect(await screen.findByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy()
     expect(resolve).toHaveBeenCalledTimes(2)
   })
 })
@@ -329,13 +359,14 @@ describe('where the offer lives', () => {
 
   it('a second link on the same composer shows its lookup line, never the first link’s skill', async () => {
     show(ok())
-    expect(await screen.findByRole('button', { name: 'Add to Invoices' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy()
     resolve.mockReturnValue(new Promise(() => {}))
     act(() => useSkillLinkOfferStore.getState().raise({ ...LINK, packageId: 'test.other' }, 'chat-1'))
     expect(await screen.findByText(/Looking up/)).toBeTruthy()
     expect(panel().querySelector('li p')!.textContent).toBe('Looking up test.other on cinna.test… Nothing is added until you choose.')
     expect(screen.queryByText(/ERP lookup/)).toBeNull()
-    expect(screen.queryByRole('button', { name: 'New agent with this skill' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More ways to add' })).toBeNull()
   })
 
   it('the agent changing holds every action on the last answer, and names the new agent', async () => {
@@ -345,17 +376,24 @@ describe('where the offer lives', () => {
     expect(await screen.findByText(/shared with you to use/)).toBeTruthy()
     resolve.mockReturnValue(new Promise((r) => (answer = r)))
     view.rerender(<Harness chatKey="chat-1" agent={{ id: 'folder:b', name: 'Reports' }} />)
-    const addButton = await screen.findByRole('button', { name: 'Add to Reports' })
+    const addButton = await screen.findByRole('button', { name: 'Add' })
+    expect(addButton.getAttribute('title')).toBe('Add ERP lookup to Reports')
     expect(addButton.getAttribute('aria-disabled')).toBe('true')
     // The previous agent's refusal is not said of this one.
     expect(screen.queryByText(/shared with you to use/)).toBeNull()
-    const newAgent = screen.getByRole('button', { name: 'New agent with this skill' })
-    expect(newAgent.getAttribute('aria-disabled')).toBe('true')
-    fireEvent.click(newAgent)
+    const more = screen.getByRole('button', { name: 'More ways to add' })
+    expect(more.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(more)
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.click(addButton)
+    expect(add).not.toHaveBeenCalled()
     expect(onNewAgent).not.toHaveBeenCalled()
     await act(async () => answer(ok({ agentId: 'folder:b', agentName: 'Reports', verdict: 'ok' })))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Add to Reports' }).getAttribute('aria-disabled')).toBeNull())
-    expect(screen.getByRole('button', { name: 'New agent with this skill' }).getAttribute('aria-disabled')).toBeNull()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add' }).getAttribute('aria-disabled')).toBeNull())
+    expect(screen.getByRole('button', { name: 'More ways to add' }).getAttribute('aria-disabled')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'More ways to add' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New agent with this skill' }))
+    expect(onNewAgent).toHaveBeenCalledTimes(1)
   })
 
   it('moveTo survives the switch it announces', () => {
@@ -373,7 +411,7 @@ describe('after Add: checking its credentials', () => {
   async function added(): Promise<void> {
     add.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3 })
     show(ok())
-    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
     await waitFor(() => expectSettlingRow())
   }
 
@@ -382,7 +420,7 @@ describe('after Add: checking its credentials', () => {
     add.mockReturnValue(new Promise((resolveAdd) => (finish = resolveAdd)))
     act(() => useSkillCredentialPromptStore.setState({ settled: { 'folder:a': 4 } }))
     show(ok())
-    fireEvent.click(await screen.findByRole('button', { name: 'Add to Invoices' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
     act(() => useSkillCredentialPromptStore.getState().settle('folder:a', []))
     await act(async () => finish({ ok: true, name: 'erp-lookup', revisionNumber: 3 }))
     await waitFor(() => expect(useSkillLinkOfferStore.getState().offer).toBeNull())
