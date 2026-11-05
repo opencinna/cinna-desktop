@@ -30,6 +30,12 @@ export interface CinnaEndpoints {
   instance_name?: string
   /** Present (≥ 1) on instances that keep published artifacts; absent hides every artifact surface. */
   artifacts?: number
+  /**
+   * Optional. The origin of the instance's web app, where a browser opens an
+   * install link, when it differs from the origin a desktop signed in with
+   * (`services/cinnaServerOrigins.ts`). Older cores do not send it.
+   */
+  web_origin?: string
 }
 
 export interface CinnaUserProfile {
@@ -91,9 +97,10 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
 
 /**
  * Discover Cinna server OAuth endpoints via .well-known/cinna-desktop.
- * Results are cached per server URL for the session.
+ * Results are cached per server URL for the session. `signal` aborts the
+ * request (a caller bounding its wait); a cached answer ignores it.
  */
-export async function discoverCinnaEndpoints(serverUrl: string): Promise<CinnaEndpoints> {
+export async function discoverCinnaEndpoints(serverUrl: string, signal?: AbortSignal): Promise<CinnaEndpoints> {
   const cached = endpointCache.get(serverUrl)
   if (cached) {
     logger.debug(`Using cached endpoints for ${serverUrl}`)
@@ -102,7 +109,7 @@ export async function discoverCinnaEndpoints(serverUrl: string): Promise<CinnaEn
 
   const discoveryUrl = `${serverUrl.replace(/\/$/, '')}${DISCOVERY_PATH}`
   logger.info(`Discovering endpoints at ${discoveryUrl}`)
-  const data = (await fetchJson(discoveryUrl)) as CinnaEndpoints
+  const data = (await fetchJson(discoveryUrl, signal ? { signal } : undefined)) as CinnaEndpoints
 
   if (!data.authorization_endpoint || !data.token_endpoint || !data.userinfo_endpoint) {
     logger.error('Invalid discovery response: missing required endpoints', data)

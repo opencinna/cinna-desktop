@@ -69,7 +69,7 @@ All columns are nullable — NULL for `local_user` accounts. Migration uses `has
 ### `src/main/auth/cinna-oauth.ts`
 
 - `CINNA_CLOUD_URL` — `'https://opencinna.io'`
-- `discoverCinnaEndpoints(serverUrl)` — GET `{serverUrl}/.well-known/cinna-desktop`, returns `{ authorization_endpoint, token_endpoint, userinfo_endpoint }`, cached per server URL
+- `discoverCinnaEndpoints(serverUrl, signal?)` — GET `{serverUrl}/.well-known/cinna-desktop`, returns `{ authorization_endpoint, token_endpoint, userinfo_endpoint }` plus the optional `instance_name`, `artifacts`, `local_dev` and `web_origin` (the web app's origin where it differs from the one a desktop signs in with; older cores omit it; read by `services/cinnaServerOrigins.ts` for skill links), cached per server URL. `signal` aborts the request for a caller that bounds its wait; a cached answer ignores it
 - `startCinnaOAuthFlow(serverUrl)` — Full PKCE flow: discover → port → verifier/challenge → state → open browser → await callback → exchange code → fetch userinfo → return `{ clientId, accessToken, refreshToken, expiresIn, profile: { email, displayName } }`
 - `abortCinnaOAuthFlow()` — Aborts active OAuth callback server
 - `refreshCinnaTokens(serverUrl, clientId, refreshToken)` — POST to token endpoint with `grant_type=refresh_token`; throws `CinnaReauthRequired` on replay detection (`invalid_grant`, `token_reuse_detected`)

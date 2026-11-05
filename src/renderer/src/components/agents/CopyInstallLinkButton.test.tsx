@@ -16,8 +16,11 @@ import type { CatalogItem } from '../../../../shared/catalogItems'
 vi.mock('../settings/CatalogCardCredentials', () => ({ CatalogCardCredentials: () => null }))
 
 const writeText = vi.fn<(text: string) => Promise<{ success: boolean }>>()
+/** Main's answer for the server's web app origin; by default it has nothing better than the stored one. */
+const installOrigin = vi.fn<() => Promise<{ origin: string | null; fromDiscovery: boolean }>>()
 window.api = {
   clipboard: { writeText },
+  skillLinks: { installOrigin },
   catalog: { item: vi.fn(() => new Promise(() => {})) },
   system: { openExternal: vi.fn() }
 } as never
@@ -27,6 +30,8 @@ const { SkillRow } = await import('./local/SkillRow')
 const { CatalogItemDetailView } = await import('./CatalogItemViews')
 const { CatalogSurfaceProvider } = await import('./catalogSurface')
 const { useAuthStore } = await import('../../stores/auth.store')
+const { useSkillInstallLink } = await import('./CopyInstallLinkButton')
+const { renderHook, waitFor } = await import('@testing-library/react')
 
 const LINK = 'https://cinna.test/get/skill/test.erp'
 const LABEL = 'Copy install link for ERP lookup'
@@ -45,6 +50,7 @@ const row = (s: LocalAgentSkill) => render(createElement(SkillRow, { skill: s, r
 
 beforeEach(() => {
   writeText.mockReset().mockResolvedValue({ success: true })
+  installOrigin.mockReset().mockResolvedValue({ origin: 'https://cinna.test', fromDiscovery: true })
   useAuthStore.setState({ currentUser: { id: 'p1', type: 'cinna_user', cinnaServerUrl: 'https://cinna.test/' } as never })
 })
 
@@ -146,5 +152,98 @@ describe('on a catalog skill’s detail', () => {
   it('is not offered on an agent', () => {
     render(<CatalogItemDetailView view={view('cloud_agent') as never} action={null} error={null} onBack={vi.fn()} />, { wrapper })
     expect(screen.queryByRole('button', { name: LABEL })).toBeNull()
+  })
+})
+
+describe('useSkillInstallLink', () => {
+  const BACKEND = 'http://localhost:8000/'
+  const backendProfile = () => useAuthStore.setState({ currentUser: { id: 'p2', type: 'cinna_user', cinnaServerUrl: BACKEND } as never })
+
+  it('names the server’s web app once main answers, on a profile signed in on the backend', async () => {
+    backendProfile()
+    installOrigin.mockResolvedValue({ origin: 'http://localhost:5173', fromDiscovery: true })
+    const { result } = renderHook(() => useSkillInstallLink('test.erp'), { wrapper })
+    // There from the first render, on the stored origin, so the button never appears late.
+    expect(result.current).toBe('http://localhost:8000/get/skill/test.erp')
+    await waitFor(() => expect(result.current).toBe('http://localhost:5173/get/skill/test.erp'))
+    expect(installOrigin).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['main has no origin', () => installOrigin.mockResolvedValue({ origin: null, fromDiscovery: false })],
+    ['main refuses', () => installOrigin.mockRejectedValue(new Error('not activated'))]
+  ])('keeps the stored origin when %s', async (_label, arrange) => {
+    backendProfile()
+    arrange()
+    const { result } = renderHook(() => useSkillInstallLink('test.erp'), { wrapper })
+    await waitFor(() => expect(installOrigin).toHaveBeenCalled())
+    await act(async () => {})
+    expect(result.current).toBe('http://localhost:8000/get/skill/test.erp')
+  })
+
+  it('a row on a split-origin server copies the web app’s link', async () => {
+    backendProfile()
+    installOrigin.mockResolvedValue({ origin: 'http://localhost:5173', fromDiscovery: true })
+    row(skill({ source: 'catalog', packageId: 'test.erp', packageUuid: 'u1', title: 'ERP lookup', path: '' }))
+    await waitFor(() => expect(installOrigin).toHaveBeenCalled())
+    await act(async () => {})
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: LABEL })))
+    expect(writeText).toHaveBeenCalledWith('http://localhost:5173/get/skill/test.erp')
+  })
+
+  it('asks main nothing without a package id to link', () => {
+    backendProfile()
+    const { result } = renderHook(() => useSkillInstallLink(null), { wrapper })
+    expect(result.current).toBeNull()
+    expect(installOrigin).not.toHaveBeenCalled()
+  })
+
+  describe('how long an answer stands', () => {
+    /** One client for every mount, as the app has: a later mount reads what an earlier one fetched. */
+    const shared = () => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      return ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    }
+    const later = (ms: number) => {
+      const now = Date.now()
+      vi.spyOn(Date, 'now').mockReturnValue(now + ms)
+    }
+    afterEach(() => vi.restoreAllMocks())
+
+    it('a fallback after a failed discovery is asked again once it is 30 s old', async () => {
+      backendProfile()
+      installOrigin.mockResolvedValueOnce({ origin: 'http://localhost:8000', fromDiscovery: false })
+      installOrigin.mockResolvedValue({ origin: 'http://localhost:5173', fromDiscovery: true })
+      const sharedWrapper = shared()
+      const first = renderHook(() => useSkillInstallLink('test.erp'), { wrapper: sharedWrapper })
+      await waitFor(() => expect(installOrigin).toHaveBeenCalledTimes(1))
+      await act(async () => {})
+      first.unmount()
+      later(31_000)
+      const { result } = renderHook(() => useSkillInstallLink('test.erp'), { wrapper: sharedWrapper })
+      await waitFor(() => expect(result.current).toBe('http://localhost:5173/get/skill/test.erp'))
+      expect(installOrigin).toHaveBeenCalledTimes(2)
+    })
+
+    it('an answer the server gave stands for the session', async () => {
+      backendProfile()
+      installOrigin.mockResolvedValue({ origin: 'http://localhost:5173', fromDiscovery: true })
+      const sharedWrapper = shared()
+      const first = renderHook(() => useSkillInstallLink('test.erp'), { wrapper: sharedWrapper })
+      await waitFor(() => expect(first.result.current).toBe('http://localhost:5173/get/skill/test.erp'))
+      first.unmount()
+      later(60 * 60_000)
+      const { result } = renderHook(() => useSkillInstallLink('test.erp'), { wrapper: sharedWrapper })
+      await act(async () => {})
+      expect(result.current).toBe('http://localhost:5173/get/skill/test.erp')
+      expect(installOrigin).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('asks main nothing without a Cinna account', () => {
+    useAuthStore.setState({ currentUser: { id: 'local', type: 'local_user' } as never })
+    const { result } = renderHook(() => useSkillInstallLink('test.erp'), { wrapper })
+    expect(result.current).toBeNull()
+    expect(installOrigin).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,8 @@ import { ipcHandle } from './_wrap'
  * else. `resolve` reads the catalog and the person's agents, so it is behind
  * `userActivation.requireActivated()`, in the settings scope where folder
  * agents live (`catalogSkills.ipc.ts`). Its every answer is data.
+ * `install-origin` (the origin Copy install link names) is gated the same way
+ * and answers as data too.
  */
 export function registerSkillLinkHandlers(): void {
   ipcHandle('skill-link:get-pending', async (): Promise<SkillLinkIntent | null> => skillLinkIntentService.getPending())
@@ -34,4 +36,9 @@ export function registerSkillLinkHandlers(): void {
       })
     }
   )
+
+  ipcHandle('skill-link:install-origin', (): Promise<{ origin: string | null; fromDiscovery: boolean }> => {
+    userActivation.requireActivated()
+    return skillLinkService.installOrigin()
+  })
 }

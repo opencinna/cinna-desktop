@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Check, Link2 } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { formatSkillLink } from '../../../../shared/skillLink'
@@ -16,17 +17,36 @@ export function copyInstallLinkLabel(name: string): string {
 export const COPIED_REVERT_MS = 1500
 export const COPY_INSTALL_LINK_FAILED = 'Couldn’t copy the install link — the clipboard refused it.'
 
+/** How long a stored-origin fallback (main could not read the server's discovery) stands before it is asked again. */
+const FALLBACK_STALE_MS = 30_000
+
 /**
  * The shared link for a catalog skill of the active Cinna account
  * (`https://<server>/get/skill/<package_id>`), or null when there is none to
  * give: no Cinna account, a server the skill-link grammar would refuse, or no
  * package id.
+ *
+ * `<server>` is the server's web app, which main reads from its discovery
+ * document (`web_origin`): a profile signed in on the backend origin would
+ * otherwise copy a link no browser can open. Until main answers, and when it
+ * has nothing better, it is the stored origin — so the link is there from the
+ * first render and the button never appears late. A fallback after a failed
+ * discovery is not kept for the session: it goes stale after 30 s.
  */
 export function useSkillInstallLink(packageId: string | null | undefined): string | null {
-  const server = useAuthStore((s) => (s.currentUser?.type === 'cinna_user' ? (s.currentUser.cinnaServerUrl ?? null) : null))
-  if (!server || !packageId) return null
-  const origin = normalizeServerOrigin(server)
-  return origin.ok ? formatSkillLink(origin.origin, packageId) : null
+  const user = useAuthStore((s) => (s.currentUser?.type === 'cinna_user' ? s.currentUser : null))
+  const server = user?.cinnaServerUrl ?? null
+  const stored = server ? normalizeServerOrigin(server) : null
+  const linkable = stored?.ok === true && !!packageId
+  const installOrigin = useQuery({
+    queryKey: ['skill-link', 'install-origin', user?.id ?? null, server],
+    queryFn: () => window.api.skillLinks.installOrigin(),
+    enabled: linkable,
+    // An answer the server gave is final; a fallback after a failed discovery is asked again.
+    staleTime: (query) => (query.state.data?.fromDiscovery ? Infinity : FALLBACK_STALE_MS)
+  })
+  if (!stored?.ok || !packageId) return null
+  return formatSkillLink(installOrigin.data?.origin ?? stored.origin, packageId)
 }
 
 const BARE_ICON =

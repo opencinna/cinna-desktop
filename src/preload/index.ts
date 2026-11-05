@@ -1806,6 +1806,11 @@ const api = {
     /** What the link offers on `agentId` (README §4), read from a fresh listing. Always data, never a thrown code. */
     resolve: (input: SkillLinkResolveInput): Promise<SkillLinkResolution> =>
       ipcRenderer.invoke('skill-link:resolve', input),
+    /**
+     * The origin Copy install link names: the active server's web app, else its stored origin. Always data.
+     * `fromDiscovery` false: a fallback after a failed discovery, worth asking again later.
+     */
+    installOrigin: (): Promise<{ origin: string | null; fromDiscovery: boolean }> => ipcRenderer.invoke('skill-link:install-origin'),
     /** Fires when a skill deep link arrives while the app is running. Returns an unsubscribe. */
     onIntent: (handler: (intent: SkillLinkIntent) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, intent: SkillLinkIntent): void => handler(intent)

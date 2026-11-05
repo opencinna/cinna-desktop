@@ -41,6 +41,20 @@ vi.mock('./cinna-http', () => ({ cinnaFetch: vi.fn(), cinnaFetchBytes: vi.fn() }
 vi.mock('../db/users', () => ({ userRepo: { list: () => users.rows } }))
 const broadcastReauthRequired = vi.hoisted(() => vi.fn())
 vi.mock('../auth/reauth-notify', () => ({ broadcastReauthRequired }))
+/** Each server's discovery document, by the URL it is asked with; a missing one is a failed fetch, a `hang` one never answers. */
+const discovery = vi.hoisted(() => ({ docs: {} as Record<string, unknown>, hang: new Set<string>() }))
+const discover = vi.hoisted(() =>
+  vi.fn(async (serverUrl: string, _signal?: AbortSignal): Promise<unknown> => {
+    if (discovery.hang.has(serverUrl)) return new Promise(() => {})
+    const doc = discovery.docs[serverUrl]
+    if (doc === undefined) throw new Error(`HTTP 404 from ${serverUrl}`)
+    return doc
+  })
+)
+vi.mock('../auth/cinna-oauth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth/cinna-oauth')>()),
+  discoverCinnaEndpoints: discover
+}))
 vi.mock('./libraryService', () => ({
   catalogItemPath: (uuid: string) => `/api/v1/catalog/items/${encodeURIComponent(uuid)}`,
   libraryService: {
@@ -75,6 +89,7 @@ vi.mock('./localAgents/gitService', () => ({
 const { skillLinkService } = await import('./skillLinkService')
 const { CinnaReauthRequired } = await import('../auth/cinna-oauth')
 const { CinnaApiError } = await import('../errors')
+const { DISCOVERY_WAIT_MS } = await import('./cinnaServerOrigins')
 const { removeTree } = await import('./catalogSkillCache')
 const { libraryTrust } = await import('./libraryTrust')
 
@@ -148,6 +163,9 @@ beforeEach(() => {
   refresh.mockReset()
   refresh.mockImplementation(async () => listings.fresh)
   broadcastReauthRequired.mockReset()
+  discovery.docs = {}
+  discovery.hang = new Set()
+  discover.mockClear()
 })
 
 afterEach(() => {
@@ -214,6 +232,8 @@ describe('skillLinkService.resolve', () => {
 
   it('not_connected: no profile is on that server', async () => {
     users.rows.push({ id: 'local', type: 'local_user', displayName: 'Local', cinnaServerUrl: OTHER_HOST })
+    // The active server answers its discovery, naming only itself.
+    discovery.docs[`${HOST}/`] = { authorization_endpoint: `${HOST}/a`, token_endpoint: `${HOST}/t`, userinfo_endpoint: `${HOST}/u` }
     expect(await resolve(AGENT_ID, OTHER_HOST)).toEqual({ state: 'not_connected', host: 'other.test', origin: OTHER_HOST })
     expect(refresh).not.toHaveBeenCalled()
   })
@@ -332,5 +352,175 @@ describe('skillLinkService.resolve', () => {
       origin: HOST
     })
     expect(refresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('skillLinkService.resolve on a server with two origins (web app and backend)', () => {
+  const BACKEND = 'http://localhost:8000'
+  const WEB = 'http://localhost:5173'
+  /** What core's `/.well-known/cinna-desktop` sends: endpoints on both origins, `web_origin` on newer cores. */
+  const docOf = (over: Record<string, unknown> = {}) => ({
+    authorization_endpoint: `${WEB}/oauth/authorize`,
+    token_endpoint: `${BACKEND}/api/v1/oauth/token`,
+    userinfo_endpoint: `${BACKEND}/api/v1/oauth/userinfo`,
+    web_origin: WEB,
+    ...over
+  })
+  const discoveredUrls = () => discover.mock.calls.map(([url]) => url)
+  /** Endpoints that name `origin` only, for a server with no second origin. */
+  const plainDoc = (origin: string) => ({ authorization_endpoint: `${origin}/a`, token_endpoint: `${origin}/t`, userinfo_endpoint: `${origin}/u` })
+  const onServer = (stored: string, doc: unknown = docOf()) => {
+    hosts.active = stored
+    users.rows = [{ id: PROFILE, type: 'cinna_user', displayName: 'Me at work', cinnaServerUrl: `${stored}/` }]
+    discovery.docs[`${stored}/`] = doc
+  }
+
+  it('exact match asks no discovery at all', async () => {
+    onServer(BACKEND)
+    expect(await resolve(AGENT_ID, BACKEND)).toMatchObject({ state: 'ok', origin: BACKEND })
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: OTHER_HOST })
+    expect(await resolve(AGENT_ID, OTHER_HOST)).toMatchObject({ state: 'other_profile' })
+    expect(discover).not.toHaveBeenCalled()
+  })
+
+  it('a web-app link on a profile stored as the backend → ok, naming the profile’s server', async () => {
+    onServer(BACKEND)
+    expect(await resolve(AGENT_ID, WEB)).toMatchObject({ state: 'ok', origin: BACKEND, host: 'localhost:8000', serverGiven: true, target: { verdict: 'ok' } })
+    expect(refresh).toHaveBeenCalledWith(PROFILE)
+    // Only the profile's own server was asked, never the origin the link names.
+    expect(discoveredUrls()).toEqual([`${BACKEND}/`])
+  })
+
+  it('a backend link on a profile stored as the web app → ok through the endpoints, even without web_origin', async () => {
+    onServer(WEB, docOf({ web_origin: undefined }))
+    expect(await resolve(AGENT_ID, BACKEND)).toMatchObject({ state: 'ok', origin: WEB, host: 'localhost:5173' })
+    expect(discoveredUrls()).toEqual([`${WEB}/`])
+  })
+
+  it('already_added keeps the profile’s server too', async () => {
+    onServer(BACKEND)
+    writeManifest({ catalog_skills: [pinOf(3)] })
+    expect(await resolve(AGENT_ID, WEB)).toMatchObject({ state: 'already_added', origin: BACKEND, host: 'localhost:8000' })
+  })
+
+  it('other_profile: another profile’s server answers on the link’s origin', async () => {
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: `${BACKEND}/` })
+    discovery.docs[`${HOST}/`] = docOf({ authorization_endpoint: `${HOST}/a`, token_endpoint: `${HOST}/t`, userinfo_endpoint: `${HOST}/u`, web_origin: undefined })
+    discovery.docs[`${BACKEND}/`] = docOf()
+    expect(await resolve(AGENT_ID, WEB)).toEqual({
+      state: 'other_profile',
+      host: 'localhost:8000',
+      origin: BACKEND,
+      profileId: OTHER,
+      profileName: 'Me at Acme',
+      title: null
+    })
+    expect(refresh).not.toHaveBeenCalled()
+    expect(discoveredUrls().sort()).toEqual([`${BACKEND}/`, `${HOST}/`])
+  })
+
+  it('offline, not not_connected, when the active profile’s discovery fails: Try again on its server', async () => {
+    hosts.active = BACKEND
+    users.rows = [{ id: PROFILE, type: 'cinna_user', displayName: 'Me at work', cinnaServerUrl: `${BACKEND}/` }]
+    expect(await resolve(AGENT_ID, WEB)).toEqual({ state: 'offline', host: 'localhost:8000', origin: BACKEND })
+    expect(discoveredUrls()).toEqual([`${BACKEND}/`])
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('offline on the active server, not other_profile, when the active profile’s discovery fails and another profile claims the origin', async () => {
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: `${BACKEND}/` })
+    discovery.docs[`${BACKEND}/`] = docOf()
+    expect(await resolve(AGENT_ID, WEB)).toMatchObject({ state: 'offline', origin: HOST })
+    expect(discoveredUrls()).toContain(`${HOST}/`)
+  })
+
+  it('offline on the link’s origin when only another profile’s discovery fails', async () => {
+    onServer(BACKEND, plainDoc(BACKEND))
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: OTHER_HOST })
+    expect(await resolve(AGENT_ID, WEB)).toEqual({ state: 'offline', host: 'localhost:5173', origin: WEB })
+  })
+
+  it('not_connected when the profile’s server names other origins only', async () => {
+    onServer(BACKEND, docOf({ web_origin: 'https://dashboard.example.com', authorization_endpoint: `${BACKEND}/a` }))
+    expect(await resolve(AGENT_ID, WEB)).toEqual({ state: 'not_connected', host: 'localhost:5173', origin: WEB })
+  })
+
+  it('authorization_endpoint alone does not claim an origin: a shared identity provider is no match', async () => {
+    onServer(BACKEND, plainDoc(BACKEND))
+    discovery.docs[`${BACKEND}/`] = { ...plainDoc(BACKEND), authorization_endpoint: `${WEB}/oauth/authorize` }
+    expect(await resolve(AGENT_ID, WEB)).toEqual({ state: 'not_connected', host: 'localhost:5173', origin: WEB })
+  })
+
+  it('two other profiles claiming the link’s origin match neither: not_connected, never first-wins', async () => {
+    onServer(HOST, plainDoc(HOST))
+    users.rows.push(
+      { id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: `${BACKEND}/` },
+      { id: 'profile-third', type: 'cinna_user', displayName: 'Me at Beta', cinnaServerUrl: OTHER_HOST }
+    )
+    discovery.docs[`${BACKEND}/`] = docOf()
+    discovery.docs[OTHER_HOST] = { ...plainDoc(OTHER_HOST), web_origin: WEB }
+    expect(await resolve(AGENT_ID, WEB)).toEqual({ state: 'not_connected', host: 'localhost:5173', origin: WEB })
+  })
+
+  it('the active profile’s claim wins over other profiles claiming the same origin', async () => {
+    onServer(BACKEND)
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: OTHER_HOST })
+    discovery.docs[OTHER_HOST] = { ...plainDoc(OTHER_HOST), web_origin: WEB }
+    expect(await resolve(AGENT_ID, WEB)).toMatchObject({ state: 'ok', origin: BACKEND })
+  })
+
+  it('offline, not a hang, when the profile’s discovery never answers', async () => {
+    onServer(BACKEND)
+    discovery.hang.add(`${BACKEND}/`)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const answer = resolve(AGENT_ID, WEB)
+      await vi.advanceTimersByTimeAsync(DISCOVERY_WAIT_MS)
+      expect(await answer).toEqual({ state: 'offline', host: 'localhost:8000', origin: BACKEND })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('asks every profile’s server at once: two that never answer cost one wait, not two', async () => {
+    onServer(BACKEND)
+    users.rows.push({ id: OTHER, type: 'cinna_user', displayName: 'Me at Acme', cinnaServerUrl: OTHER_HOST })
+    discovery.hang.add(`${BACKEND}/`).add(OTHER_HOST)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let settled = false
+      const answer = resolve(AGENT_ID, WEB).finally(() => {
+        settled = true
+      })
+      await vi.advanceTimersByTimeAsync(DISCOVERY_WAIT_MS)
+      expect(settled).toBe(true)
+      expect(await answer).toEqual({ state: 'offline', host: 'localhost:8000', origin: BACKEND })
+      // Each request was handed a signal, and it was aborted at the wait.
+      expect(discover.mock.calls.map(([, signal]) => signal?.aborted)).toEqual([true, true])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('skillLinkService.installOrigin', () => {
+  it('the web app’s origin when the server sends one, else the stored origin', async () => {
+    users.rows = [{ id: PROFILE, type: 'cinna_user', displayName: 'Me at work', cinnaServerUrl: 'http://localhost:8000/' }]
+    discovery.docs['http://localhost:8000/'] = {
+      authorization_endpoint: 'http://localhost:8000/a',
+      token_endpoint: 'http://localhost:8000/t',
+      userinfo_endpoint: 'http://localhost:8000/u',
+      web_origin: 'http://localhost:5173'
+    }
+    expect(await skillLinkService.installOrigin()).toEqual({ origin: 'http://localhost:5173', fromDiscovery: true })
+    discovery.docs = {}
+    // A fallback, said to be one, so the renderer asks again later.
+    expect(await skillLinkService.installOrigin()).toEqual({ origin: 'http://localhost:8000', fromDiscovery: false })
+  })
+
+  it('null with no Cinna profile active', async () => {
+    users.rows = [{ id: PROFILE, type: 'local_user', displayName: 'Local', cinnaServerUrl: null }]
+    expect(await skillLinkService.installOrigin()).toEqual({ origin: null, fromDiscovery: false })
+    expect(discover).not.toHaveBeenCalled()
   })
 })

@@ -330,7 +330,8 @@ test('S1b the row keeps its height when the lookup answers', async ({ cinna }) =
   core.releaseListings()
   await expect(row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
   const answered = (await row.boundingBox())!.height
-  expect(answered).toBe(pending)
+  // Sub-pixel layout rounding differs between frames (71.875 vs 71.87497); a jump is a whole line.
+  expect(answered).toBeCloseTo(pending, 1)
 })
 
 test('S2 a cinna://skill deep link from argv raises the offer on the start screen', async ({ cinna }) => {

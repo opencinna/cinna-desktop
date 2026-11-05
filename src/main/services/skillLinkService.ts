@@ -25,6 +25,7 @@ import { localAgentService } from './localAgents/localAgentService'
 import { changeability, clashOf, latestPinOf, locateKit, pinsOf, pinsPackage } from './catalogSkillService'
 import { normalizeServerOrigin } from '../../shared/serverOrigin'
 import { CinnaApiError } from '../errors'
+import { knownOriginsOf, webOriginOf } from './cinnaServerOrigins'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { broadcastReauthRequired } from '../auth/reauth-notify'
 import type { CatalogItem } from '../../shared/catalogItems'
@@ -132,6 +133,52 @@ async function targetOf(
   return { agentId, agentName, verdict: 'ok' }
 }
 
+type CinnaProfile = ReturnType<typeof userRepo.list>[number]
+
+/** Where a link's origin landed among the person's profiles (`profileOn`). */
+type ProfileMatch =
+  | { kind: 'match'; other: CinnaProfile | null; origin: string }
+  | { kind: 'none' }
+  /** No profile matched, but a profile's server could not be asked: answer on `origin` (offline). */
+  | { kind: 'unknown'; origin: string }
+
+/**
+ * The profile a link's `origin` (not the active profile's stored one) is on,
+ * and that profile's stored origin, which the answer names: the server the
+ * skill would come from. A profile stored on exactly that origin first, with
+ * no network; else one whose server also answers on it (web app vs backend,
+ * `knownOriginsOf`). Every profile's discovery runs at once, so the wait is one
+ * `DISCOVERY_WAIT_MS` window; the active profile wins, and among the others
+ * only a single claimant counts (two claiming one origin is no match, never
+ * first-wins). No match while some profile's server could not be asked is
+ * `unknown`, not `none`: the person may well be on that server. Only each
+ * profile's own discovery is asked, never the link's origin.
+ */
+async function profileOn(origin: string, active: string, activeOrigin: string | null): Promise<ProfileMatch> {
+  const profiles = userRepo.list().filter((user) => user.type === 'cinna_user')
+  const others = profiles.filter((user) => user.id !== active)
+  const exact = others.find((user) => originOf(user.cinnaServerUrl) === origin)
+  if (exact) return { kind: 'match', other: exact, origin }
+
+  const askable = (user: CinnaProfile | undefined): user is CinnaProfile & { cinnaServerUrl: string } =>
+    user !== undefined && user.cinnaServerUrl !== null
+  const activeUser = activeOrigin !== null ? profiles.find((user) => user.id === active) : undefined
+  const ask = (user: CinnaProfile | undefined) => (askable(user) ? knownOriginsOf(user.cinnaServerUrl) : Promise.resolve(null))
+  const [activeKnown, ...othersKnown] = await Promise.all([ask(activeUser), ...others.map(ask)])
+
+  if (activeOrigin !== null && activeKnown?.origins.has(origin)) return { kind: 'match', other: null, origin: activeOrigin }
+  // The active server could not be asked: the link may well be on it, so no
+  // other profile's claim may take it (Try again, not Switch to …).
+  if (activeOrigin !== null && activeKnown?.discovered === false) return { kind: 'unknown', origin: activeOrigin }
+  const claimants = others.filter((_user, index) => othersKnown[index]?.origins.has(origin))
+  const stored = claimants.length === 1 ? originOf(claimants[0].cinnaServerUrl) : null
+  if (stored !== null) return { kind: 'match', other: claimants[0], origin: stored }
+  if (claimants.length > 1) logger.warn('more than one profile’s server answers on a skill link’s origin; matching none', { origin })
+
+  if (othersKnown.some((known) => known?.discovered === false)) return { kind: 'unknown', origin }
+  return { kind: 'none' }
+}
+
 async function resolveLink(
   userId: string,
   input: SkillLinkResolveInput,
@@ -147,12 +194,21 @@ async function resolveLink(
     origin = normalized.origin
   }
   if (origin === null) return { state: 'not_connected', host: null, origin: null }
-  const host = hostOf(origin)
   reached(origin)
 
+  let other: CinnaProfile | null = null
   if (origin !== activeOrigin) {
-    const other = userRepo.list().find((user) => user.type === 'cinna_user' && user.id !== active && originOf(user.cinnaServerUrl) === origin)
-    if (!other) return { state: 'not_connected', host, origin }
+    const match = await profileOn(origin, active, activeOrigin)
+    if (match.kind === 'none') return { state: 'not_connected', host: hostOf(origin), origin }
+    // A server that could not be asked is not one the person is off: Try again, not Connect….
+    if (match.kind === 'unknown') return { state: 'offline', host: hostOf(match.origin), origin: match.origin }
+    other = match.other
+    origin = match.origin
+    reached(origin)
+  }
+  const host = hostOf(origin)
+
+  if (other !== null) {
     // That profile's last listing, for the title only: it never answers access.
     let title: string | null = null
     if (typeof input.packageId === 'string') {
@@ -216,6 +272,24 @@ export const skillLinkService = {
         return { state: 'reauth_required', host: hostOf(known), origin: known }
       }
       return known === null ? { state: 'not_connected', host: null, origin: null } : { state: 'offline', host: hostOf(known), origin: known }
+    }
+  },
+
+  /**
+   * The origin Copy install link names for the active profile: its server's
+   * web app (`web_origin`), where a browser can open `/get/skill/…`, else
+   * the stored origin; null with no Cinna profile active. `fromDiscovery`
+   * false is a fallback (discovery failed or timed out) the renderer asks
+   * again for later. Never throws.
+   */
+  async installOrigin(): Promise<{ origin: string | null; fromDiscovery: boolean }> {
+    try {
+      const user = userRepo.list().find((row) => row.id === getProfileScopeUserId())
+      if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) return { origin: null, fromDiscovery: false }
+      return await webOriginOf(user.cinnaServerUrl)
+    } catch (err) {
+      logger.warn('install link origin could not be read', { error: err instanceof Error ? err.message : String(err) })
+      return { origin: null, fromDiscovery: false }
     }
   }
 }
