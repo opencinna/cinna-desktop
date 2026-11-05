@@ -1228,10 +1228,25 @@ describe('setEnvValues', () => {
     expect(existsSync(join(agentDir, ENV))).toBe(false)
   })
 
-  it('refuses while a turn holds the agent, and changes nothing', () => {
+  it('saves while a turn holds the agent, and leaves the turn its hold', () => {
     declare()
     writeFileSync(join(agentDir, ENV), '# WEATHER_API_KEY=\n')
     const handle = turnLock.acquireShared(agentId, 'turn')
+    try {
+      localAgentService.setEnvValues(USER, agentId, { WEATHER_API_KEY: 'x' })
+      expect(turnLock.isLocked(agentId)).toBe(true)
+      expect(turnLock.isExclusivelyLocked(agentId)).toBe(false)
+    } finally {
+      handle.release()
+    }
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toBe('WEATHER_API_KEY=x\n')
+    expect(turnLock.isLocked(agentId)).toBe(false)
+  })
+
+  it('refuses while the desktop holds the agent exclusively, and changes nothing', () => {
+    declare()
+    writeFileSync(join(agentDir, ENV), '# WEATHER_API_KEY=\n')
+    const handle = turnLock.acquire(agentId, 'editor')
     try {
       let refusal: unknown
       try {

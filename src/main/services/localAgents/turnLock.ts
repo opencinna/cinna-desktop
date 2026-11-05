@@ -17,6 +17,9 @@
  * every shared acquisition is refused while an exclusive one is held — except
  * that {@link TurnLock.withSharedLock} waits a few seconds out a `credentials`
  * write, which is short and may be a background auto-attach the user never saw.
+ * One desktop write is deliberately shared: Finish setup filling the slots'
+ * values into `credentials/.env` (one atomic rename), so a running turn does
+ * not stop the user supplying a credential the agent asked for.
  * A dashboard run's hold is *preemptible* (`onPreempt`): an exclusive
  * acquisition stops such runs and takes their place instead of refusing.
  *

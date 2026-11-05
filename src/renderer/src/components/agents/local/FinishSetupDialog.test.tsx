@@ -186,9 +186,9 @@ describe('Finish setup', () => {
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-weather')
     fireEvent.change(field('weather', 'WEATHER_API_KEY'), { target: { value: 'k' } })
-    setEnvValues.mockImplementationOnce(async () => ({ ok: false, code: 'turn_in_progress', name: 'LocalAgentError', message: 'This agent is running. Nothing was changed — save again when it finishes.' }))
+    setEnvValues.mockImplementationOnce(async () => ({ ok: false, code: 'turn_in_progress', name: 'LocalAgentError', message: 'Cinna is updating this agent. Nothing was changed — save again in a moment.' }))
     fireEvent.click(within(row('weather')).getByRole('button', { name: 'Save' }))
-    expect(await within(dialog()).findByRole('alert')).toHaveProperty('textContent', 'This agent is running. Nothing was changed — save again when it finishes.')
+    expect(await within(dialog()).findByRole('alert')).toHaveProperty('textContent', 'Cinna is updating this agent. Nothing was changed — save again in a moment.')
     expect(field('weather', 'WEATHER_API_KEY').value).toBe('k')
   })
 

@@ -1267,8 +1267,9 @@ export const localAgentService = {
    * Only names the manifest's slots declare are accepted; a value must be
    * non-empty and one line (`envValueProblem`). The file is merged in place —
    * other lines and comments kept, a `# KEY=` seed replaced where it stands —
-   * and written 0600 through a temp file and a rename. Refused while a turn
-   * runs (nothing is changed), and refused when no ignore rule covers `.env`.
+   * and written 0600 through a temp file and a rename. Allowed while a turn
+   * runs (a shared hold); refused only while the desktop's own exclusive write
+   * holds the agent (nothing is changed), and when no ignore rule covers `.env`.
    *
    * Values are never logged and never returned: the answer is the slots'
    * states as the rescan reads them, names only.
@@ -1298,14 +1299,17 @@ export const localAgentService = {
     }
 
     const { root, agentDir } = this.locate(userId, agentId)
+    // Shared, like a turn: a running turn does not block filling its slots (the
+    // write is one atomic rename, and the next tool call reads the new values),
+    // while the desktop's own exclusive folder writes still keep this out.
     let handle: { release: () => void }
     try {
-      handle = turnLock.acquire(agentId, 'credentials')
+      handle = turnLock.acquireShared(agentId, 'credentials-env')
     } catch (err) {
       if (err instanceof LocalAgentError && err.code === 'turn_in_progress') {
         throw new LocalAgentError(
           'turn_in_progress',
-          'This agent is running. Nothing was changed — save again when it finishes.'
+          'Cinna is updating this agent. Nothing was changed — save again in a moment.'
         )
       }
       throw err
