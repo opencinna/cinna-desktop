@@ -98,7 +98,7 @@ The finished root looks like this:
 Read guides on demand. The ladder tells you which one to open and when. Do not read
 all fourteen up front, and do not add a capability whose trigger has not fired.
 
-When the user wants to keep an eye on something over time in Cinna Desktop, build a
+When the user wants to keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent, build a
 dashboard component in `dashboards/<name>/` (`guides/14-dashboards.md`), not an artifact.
 
 ## 4. The three roles you switch between
@@ -156,4 +156,4 @@ It compares `.cinna-kit/VERSION` against `https://opencinna.io/api/agent-start/v
 
 ---
 
-Kit version 1baa7d60cc599cbf · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html
+Kit version 01eede8be06ea6f1 · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html

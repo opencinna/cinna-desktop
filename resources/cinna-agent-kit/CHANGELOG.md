@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `1baa7d60cc599cbf`.
+Your current kit is version `01eede8be06ea6f1`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -52,6 +52,9 @@ the agent runs in the cloud. No bridge change; no new codes.
 - **`skills/cinna-dashboards/SKILL.md`** and **`guides/14-dashboards.md`** — cloud
   agents are a dashboards host; in the cloud, tiles refresh on open and
   `on_app_start` is ignored.
+- **`kit.json`** (the `dashboards` rung's trigger), **`README.md`** and
+  **`START.md`** — the dashboards trigger names Cinna for a cloud agent beside
+  Cinna Desktop.
 
 `protocols/dashboards-bridge.js` is unchanged, byte for byte; its header still
 names contract 1.20.0.
