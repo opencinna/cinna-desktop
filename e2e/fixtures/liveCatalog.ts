@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { repoRoot } from '../playwright.config'
 import type { Locator } from '@playwright/test'
 import type { CinnaApp } from './app'
+import { expectAccess, removeAccess } from './managedList'
 import { installFakeAcpEngine, type FakeAcpEngine } from './fakeAcpEngine'
 import {
   expect,
@@ -310,10 +311,10 @@ export async function shareSkill(
   }
 ): Promise<void> {
   await openSkills(app, agent)
-  const verb = input.newVersion ? `Share a new version of ${skill}…` : `Share ${skill}…`
+  const verb = input.newVersion ? `Publish a new version of ${skill}…` : `Publish ${skill}…`
   await skillRow(app, skill, 'Authored').getByRole('button', { name: verb, exact: true }).click()
-  const dialog = app.page.getByRole('dialog', { name: input.newVersion ? `Share a new version of ${skill}` : `Share ${skill}` })
-  await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeEnabled({ timeout: 30_000 })
+  const dialog = app.page.getByRole('dialog', { name: input.newVersion ? `Publish a new version of ${skill}` : `Publish ${skill}` })
+  await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
   for (const person of input.people ?? []) {
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
     await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
@@ -323,7 +324,7 @@ export async function shareSkill(
     await dialog.getByRole('combobox', { name: `What people need for ${slot}`, exact: true }).selectOption({ label })
   }
   if (input.note) await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(input.note)
-  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 }
 
@@ -806,27 +807,23 @@ export async function openWhoCanUse(app: PersonApp, agent: string, skill: string
   return dialog
 }
 
-/** In the Who can use dialog: `Remove <name>` → the row's confirm `Remove`; waits until the row left. */
+/** In the Who can use dialog: the row's ⋯ → Remove access… → the row's confirm `Remove`; waits until the row left. */
 export async function removeFromWhoCanUse(dialog: Locator, name: string): Promise<void> {
-  await dialog.getByRole('button', { name: `Remove ${name}`, exact: true }).click()
-  await expect(dialog.getByText(`Remove ${name}’s access?`, { exact: true })).toBeVisible()
-  await dialog.getByRole('button', { name: 'Remove', exact: true }).click()
-  await expect(dialog.getByText(`Remove ${name}’s access?`, { exact: true })).toHaveCount(0, { timeout: 30_000 })
-  await expect(dialog.getByRole('button', { name: `Remove ${name}`, exact: true })).toHaveCount(0)
+  await removeAccess(dialog, name)
 }
 
-/** In the Who can use dialog: Share with a person… → `person` at `access` → Add; waits until the list is back with their row. */
+/** In the Who can use dialog: Share → `person` at `access` → Add; waits until the list is back with their row. */
 export async function addToWhoCanUse(
   dialog: Locator,
   person: SharingPerson,
   access: 'use' | 'edit' | 'maintain' = 'use',
   beforeAdd?: () => Promise<void>
 ): Promise<void> {
-  await dialog.getByRole('button', { name: 'Share with a person…', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
   await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
   await dialog.getByRole('combobox', { name: 'Access', exact: true }).selectOption(access)
   await beforeAdd?.()
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
-  await expect(dialog.getByRole('combobox', { name: `Access for ${person.name}`, exact: true })).toHaveValue(access, { timeout: 30_000 })
+  await expectAccess(dialog, person.name, access, 30_000)
 }

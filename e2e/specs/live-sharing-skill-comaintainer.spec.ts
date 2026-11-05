@@ -20,6 +20,7 @@ import {
   type CatalogFixture
 } from '../fixtures/liveCatalog'
 import { coreCall, refreshLibrary, type PersonApp, type SharingPerson } from '../fixtures/liveTeamSharing'
+import { accessPicker, expectAccess, pickAccess } from '../fixtures/managedList'
 
 /**
  * Skill co-maintainers against the real local cinna-core
@@ -36,13 +37,13 @@ import { coreCall, refreshLibrary, type PersonApp, type SharingPerson } from '..
  *      B's note, `published_by` B, `base_revision_number` 1.
  * (c)  C, still on Version 1, sees an ordinary Update to Version 2.
  * 8.   A's row offers Get Version 2 — shared by B.
- * (a)  A, still at Version 1, opens Share a new version: the stale line names
+ * (a)  A, still at Version 1, opens Publish a new version: the stale line names
  *      B and Version 2, Share is disabled, the dialog stays; its Get brings
  *      Version 2 (B's files, record revision 2); A's scripted edit then
  *      shares as Version 3 based on 2. B's row then gets Version 3 (the row's
  *      own Get).
  * (b)  A second agent of B's with a hand-written `skills/<same name>/` and no
- *      record: the first-share dialog asks Share as, defaulting to the next
+ *      record: the first-share dialog asks Publish as, defaulting to the next
  *      version of A's skill.
  *
  * Also a screenshot of the Share dialog with the people list open
@@ -121,9 +122,9 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
 
   await test.step('1. A shares the skill with B and C at Can use (people list screenshot)', async () => {
     await openSkills(a, agentA)
-    await skillRow(a, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
-    const dialog = a.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
-    await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeEnabled({ timeout: 30_000 })
+    await skillRow(a, skill, 'Authored').getByRole('button', { name: `Publish ${skill}…`, exact: true }).click()
+    const dialog = a.page.getByRole('dialog', { name: `Publish ${skill}`, exact: true })
+    await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
     const search = dialog.getByRole('combobox', { name: 'Find a person' })
     await search.fill(personB.name)
     const optionB = a.page.getByRole('option', { name: `${personB.name} <${personB.email}>` })
@@ -148,7 +149,7 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     await search.fill(personC.name)
     await a.page.getByRole('option', { name: `${personC.name} <${personC.email}>` }).click()
     await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(`Version 1 from A ${fixture.tag}`)
-    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 
     const item = await skillItem(fixture, personA.token, skill)
@@ -179,18 +180,17 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     await freshSkills(b, agentB)
     const row = skillRow(b, skill, 'From the catalog')
     await expect(row.getByRole('button', { name: `Remove ${skill} from this agent`, exact: true })).toBeVisible({ timeout: 30_000 })
-    for (const name of [`Make ${skill} editable…`, `Who can use ${skill}…`, `Share ${skill}…`, `Share a new version of ${skill}…`]) {
+    for (const name of [`Make ${skill} editable…`, `Who can use ${skill}…`, `Publish ${skill}…`, `Publish a new version of ${skill}…`]) {
       await expect(row.getByRole('button', { name, exact: true })).toHaveCount(0)
     }
   })
 
   await test.step('4. A raises B to Maintainer in Who can use', async () => {
     const dialog = await openWhoCanUse(a, agentA, skill)
-    const access = dialog.getByRole('combobox', { name: `Access for ${personB.name}`, exact: true })
-    await expect(access).toHaveValue('use')
-    await access.selectOption('maintain')
-    await expect(access).toHaveValue('maintain')
-    await expect(access).toBeEnabled({ timeout: 30_000 })
+    await expectAccess(dialog, personB.name, 'use')
+    await pickAccess(dialog, personB.name, 'maintain')
+    await expectAccess(dialog, personB.name, 'maintain')
+    await expect(accessPicker(dialog, personB.name)).toBeEnabled({ timeout: 30_000 })
     await dialog.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     await expect.poll(async () => (await skillItem(fixture, personB.token, skill))?.access, { timeout: 30_000 }).toBe('maintain')
@@ -202,7 +202,7 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     await expect(row.getByRole('button', { name: `Make ${skill} editable…`, exact: true })).toBeVisible({ timeout: 30_000 })
     await row.getByRole('button', { name: `Who can use ${skill}…`, exact: true }).click()
     const people = b.page.getByRole('dialog', { name: `Who can use ${skill}`, exact: true })
-    await expect(people.getByRole('combobox', { name: `Access for ${personC.name}`, exact: true })).toHaveValue('use', { timeout: 30_000 })
+    await expectAccess(people, personC.name, 'use', 30_000)
     await people.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(people).toHaveCount(0)
   })
@@ -215,7 +215,7 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     await expect(confirm).toContainText(`Make ${skill} editable in this agent? Its files move into skills/${skill}/`)
     await confirm.getByRole('button', { name: 'Make editable', exact: true }).click()
     const authored = skillRow(b, skill, 'Authored')
-    await expect(authored.getByRole('button', { name: `Share a new version of ${skill}…`, exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(authored.getByRole('button', { name: `Publish a new version of ${skill}…`, exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(skillRow(b, skill, 'From the catalog')).toHaveCount(0)
 
     expect(statSync(folderB).isDirectory()).toBe(true)
@@ -283,15 +283,15 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
   })
 
   await test.step('(a) + 9. A’s share from Version 1 is stale; the dialog’s Get brings B’s Version 2; A’s edit shares as Version 3 on base 2', async () => {
-    await skillRow(a, skill, 'Authored').getByRole('button', { name: `Share a new version of ${skill}…`, exact: true }).click()
-    const dialog = a.page.getByRole('dialog', { name: `Share a new version of ${skill}`, exact: true })
-    const staleLine = dialog.getByText(`${personB.name} shared Version 2 since your copy. Get it first, then share your changes.`, { exact: true })
+    await skillRow(a, skill, 'Authored').getByRole('button', { name: `Publish a new version of ${skill}…`, exact: true }).click()
+    const dialog = a.page.getByRole('dialog', { name: `Publish a new version of ${skill}`, exact: true })
+    const staleLine = dialog.getByText(`${personB.name} published Version 2 since your copy. Get it first, then publish your changes.`, { exact: true })
     await expect(staleLine).toBeVisible({ timeout: 30_000 })
-    await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeDisabled()
+    await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled()
     await dialog.getByRole('button', { name: 'Get Version 2', exact: true }).click()
     await expect(staleLine).toHaveCount(0, { timeout: 60_000 })
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeEnabled({ timeout: 30_000 })
+    await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
     // 9: A's folder holds B's files, and A's record says Version 2.
     expect(readFileSync(skillMdA, 'utf8')).toBe(readFileSync(join(folderB, 'SKILL.md'), 'utf8'))
     expect(skillRecord(builtA.path, skill)).toMatchObject({ package_uuid: uuid, revision_number: 2 })
@@ -319,13 +319,13 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     expect(skillRecord(builtB.path, skill)).toMatchObject({ package_uuid: uuid, revision_number: 3 })
   })
 
-  await test.step('(b) a hand-written skills/<same name>/ in B’s second agent: Share as defaults to the next version of A’s', async () => {
+  await test.step('(b) a hand-written skills/<same name>/ in B’s second agent: Publish as defaults to the next version of A’s', async () => {
     const forked = await buildAgent(b, fixture, { name: agentB2, skill: { name: skill, description: 'Tips for answering, forked.', body: 'Be brief, forked.\n' } })
     expect(skillRecord(forked.path, skill)).toBeUndefined()
     await freshSkills(b, agentB2)
-    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
-    const dialog = b.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
-    const shareAs = dialog.getByRole('group', { name: 'Share as', exact: true })
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Publish ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Publish ${skill}`, exact: true })
+    const shareAs = dialog.getByRole('group', { name: 'Publish as', exact: true })
     const nextOfA = shareAs.getByRole('radio', { name: `New version of ${personA.name}’s ${skill}`, exact: true })
     await expect(nextOfA).toBeChecked({ timeout: 30_000 })
     await expect(shareAs.getByRole('radio', { name: 'A separate skill', exact: true })).not.toBeChecked()
@@ -393,11 +393,11 @@ test('co-maintainer extra: a share refused as stale at publish time keeps the di
   appendLine(join(folderB, 'SKILL.md'), markerB)
   await b.page.evaluate(() => window.api.localAgents.rescan())
 
-  await test.step('B opens Share a new version on a current copy; A shares Version 2 before B presses Share', async () => {
+  await test.step('B opens Publish a new version on a current copy; A shares Version 2 before B presses Publish', async () => {
     await freshSkills(b, builtB.name)
-    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share a new version of ${skill}…`, exact: true }).click()
-    const dialog = b.page.getByRole('dialog', { name: `Share a new version of ${skill}`, exact: true })
-    const share = dialog.getByRole('button', { name: 'Share', exact: true })
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Publish a new version of ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Publish a new version of ${skill}`, exact: true })
+    const share = dialog.getByRole('button', { name: 'Publish', exact: true })
     await expect(share).toBeEnabled({ timeout: 30_000 })
     await expect(dialog.locator('[data-share-stale]')).toHaveCount(0)
     const note = dialog.getByRole('textbox', { name: 'Note (optional)' })
@@ -408,8 +408,8 @@ test('co-maintainer extra: a share refused as stale at publish time keeps the di
     expect(published.ok && published.revisionNumber, JSON.stringify(published)).toBe(2)
 
     await share.click()
-    await expect(dialog.getByText(`${personA.name} shared Version 2 since your copy. Get it first, then share your changes.`, { exact: true })).toBeVisible({ timeout: 30_000 })
-    await expect(dialog.getByText('Your copy has changes that were never shared. Replace on the skill’s row gets Version 2 and keeps your files in a backup folder.', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(`${personA.name} published Version 2 since your copy. Get it first, then publish your changes.`, { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(dialog.getByText('Your copy has changes that were never published. Replace on the skill’s row gets Version 2 and keeps your files in a backup folder.', { exact: true })).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Get Version 2', exact: true })).toHaveCount(0)
     await expect(dialog).toBeVisible()
     await expect(note).toHaveValue(noteB)
@@ -428,7 +428,7 @@ test('co-maintainer extra: a share refused as stale at publish time keeps the di
     await expect(row.getByRole('button', { name: /^Get Version/ })).toHaveCount(0)
     await replace.click()
     const confirm = row.getByRole('group', { name: `Replace ${skill} with Version 2…`, exact: true })
-    await expect(confirm).toContainText(`Replace ${skill} with Version 2? Your changes that were never shared are moved to a backup folder outside this agent`)
+    await expect(confirm).toContainText(`Replace ${skill} with Version 2? Your changes that were never published are moved to a backup folder outside this agent`)
     await confirm.getByRole('button', { name: 'Replace', exact: true }).click()
     await expect(row.getByRole('button', { name: /^(Replace|Get Version) / })).toHaveCount(0, { timeout: 60_000 })
 
@@ -458,11 +458,11 @@ test('co-maintainer extra: hand-written folders share as the next version of A�
 
   await test.step('New version of A’s (the default) → Version 2 of A’s package, shared by B on base 1', async () => {
     await freshSkills(b, fork.name)
-    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
-    const dialog = b.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Publish ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Publish ${skill}`, exact: true })
     await expect(dialog.getByRole('radio', { name: `New version of ${personA.name}’s ${skill}`, exact: true })).toBeChecked({ timeout: 30_000 })
     await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(`B's fork ${fixture.tag}`)
-    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 
     expect(await packagesNamed(fixture, personB, skill)).toEqual([uuid])
@@ -474,13 +474,13 @@ test('co-maintainer extra: hand-written folders share as the next version of A�
 
   await test.step('A separate skill → a second package, published by B, linked from that folder', async () => {
     await freshSkills(b, separate.name)
-    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
-    const dialog = b.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Publish ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Publish ${skill}`, exact: true })
     const own = dialog.getByRole('radio', { name: 'A separate skill', exact: true })
     await expect(own).toBeEnabled({ timeout: 30_000 })
     await own.check()
     await expect(dialog.getByRole('radio', { name: `New version of ${personA.name}’s ${skill}`, exact: true })).not.toBeChecked()
-    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 60_000 })
 
     const named = await packagesNamed(fixture, personB, skill)

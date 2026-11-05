@@ -283,7 +283,7 @@ describe('preview', () => {
     expect(await skillPublishService.preview(USER, AGENT_ID, 'erp-lookup')).toEqual({
       ok: false,
       code: 'skill_invalid',
-      message: 'This skill can’t be shared yet: SKILL.md frontmatter has no description.'
+      message: 'This skill can’t be published yet: SKILL.md frontmatter has no description.'
     })
     writeSkill()
     cinnaSend.mockResolvedValue(refusal(403, { code: 'not_publisher', message: "You can't publish new versions of this skill." }))
@@ -303,7 +303,7 @@ describe('publish preflight: nothing is sent', () => {
     expect(outcome).toEqual({
       ok: false,
       code: 'secrets',
-      message: 'A file that can hold a secret is in this skill (scripts/.env). Move it out of the skill’s folder before sharing — nothing was sent.'
+      message: 'A file that can hold a secret is in this skill (scripts/.env). Move it out of the skill’s folder before publishing — nothing was sent.'
     })
     expect(cinnaSend).not.toHaveBeenCalled()
   })
@@ -313,7 +313,7 @@ describe('publish preflight: nothing is sent', () => {
     expect(await skillPublishService.publish(USER, { agentId: AGENT_ID, name: 'erp-lookup' })).toMatchObject({
       ok: false,
       code: 'skill_invalid',
-      message: 'This skill can’t be shared yet: The name in SKILL.md does not match the folder name.'
+      message: 'This skill can’t be published yet: The name in SKILL.md does not match the folder name.'
     })
     expect(cinnaSend).not.toHaveBeenCalled()
   })
@@ -498,7 +498,7 @@ describe('catalogRefusal: every code core answers, as a sentence', () => {
     [422, { code: 'skill_too_large', message: 'x' }, 'too_large', SKILL_PUBLISH_SENTENCES.too_large],
     [400, { code: 'skill_archive_invalid', message: 'This skill archive cannot be used: it is empty.' }, 'skill_archive_invalid', 'The catalog could not unpack this skill: it is empty.'],
     [422, { code: 'skill_invalid', message: 'This skill cannot be published: SKILL.md has no description.' }, 'skill_invalid', 'This skill cannot be published: SKILL.md has no description.'],
-    [422, { code: 'skill_contains_secrets', message: 'x', paths: ['a/.env', 'b.pem'] }, 'skill_contains_secrets', 'The catalog refused files that look like credentials (a/.env, b.pem). Remove them from the skill and share again.'],
+    [422, { code: 'skill_contains_secrets', message: 'x', paths: ['a/.env', 'b.pem'] }, 'skill_contains_secrets', 'The catalog refused files that look like credentials (a/.env, b.pem). Remove them from the skill and publish again.'],
     [422, { code: 'invalid_publisher_credential', message: 'Only the person who first shared this skill can provide credentials for it.' }, 'invalid_publisher_credential', 'Only the person who first shared this skill can provide credentials for it.'],
     [409, { code: 'skill_name_mismatch', message: 'x' }, 'skill_name_mismatch', SKILL_PUBLISH_SENTENCES.skill_name_mismatch],
     [409, { code: 'package_exists', message: 'x' }, 'package_exists', SKILL_PUBLISH_SENTENCES.package_exists],
@@ -506,7 +506,7 @@ describe('catalogRefusal: every code core answers, as a sentence', () => {
     [403, { code: 'not_publisher', message: 'x' }, 'not_publisher', SKILL_PUBLISH_SENTENCES.not_publisher],
     [404, { code: 'package_not_found', message: 'x' }, 'package_not_found', SKILL_PUBLISH_SENTENCES.package_not_found],
     [409, { code: 'invalid_grants', message: 'A maintainer must be a person.' }, 'invalid_grants', 'The catalog did not accept that list of people: A maintainer must be a person.'],
-    [500, { code: 'boom', message: 'Internal error' }, 'failed', 'The skill couldn’t be shared: Internal error']
+    [500, { code: 'boom', message: 'Internal error' }, 'failed', 'The skill couldn’t be published: Internal error']
   ]
   it.each(cases)('%i %o → %s', (status, detail, code, message) => {
     expect(catalogRefusal(status, { detail })).toMatchObject({ ok: false, code, message })
@@ -515,7 +515,7 @@ describe('catalogRefusal: every code core answers, as a sentence', () => {
   it('carries the package of package_exists, and reads a bare 403 / 422 list', () => {
     expect(catalogRefusal(409, { detail: { code: 'package_exists', package_uuid: UUID } }).packageUuid).toBe(UUID)
     expect(catalogRefusal(403, { detail: 'Forbidden' })).toMatchObject({ code: 'not_publisher' })
-    expect(catalogRefusal(422, { detail: [{ loc: ['meta'] }] })).toMatchObject({ code: 'failed', message: 'The skill couldn’t be shared: the request was not accepted' })
+    expect(catalogRefusal(422, { detail: [{ loc: ['meta'] }] })).toMatchObject({ code: 'failed', message: 'The skill couldn’t be published: the request was not accepted' })
   })
 })
 
@@ -852,7 +852,7 @@ describe('the Share dialog’s guards in main (co-maintainers D4)', () => {
     cinnaSend.mockResolvedValue(
       refusal(409, {
         code: 'stale_base',
-        message: 'Ann shared Version 2 since your copy. Get it first, then share your changes.',
+        message: 'Ann published Version 2 since your copy. Get it first, then publish your changes.',
         latest_revision_number: 2,
         latest_version: '1.0.1',
         published_by: { user_id: 'u-ann', display_name: 'Ann' }
@@ -861,7 +861,7 @@ describe('the Share dialog’s guards in main (co-maintainers D4)', () => {
     expect(await skillPublishService.publish(USER, { agentId: AGENT_ID, name: 'erp-lookup', releaseNotes: 'Mine' })).toEqual({
       ok: false,
       code: 'stale',
-      message: 'Ann shared Version 2 since your copy. Get it first, then share your changes.',
+      message: 'Ann published Version 2 since your copy. Get it first, then publish your changes.',
       stale: { latestRevision: 2, version: '1.0.1', publishedBy: 'Ann' }
     })
     expect(partsOf(uploads()[0]).meta).toEqual({ package_uuid: UUID, base_revision_number: 1, release_notes: 'Mine' })

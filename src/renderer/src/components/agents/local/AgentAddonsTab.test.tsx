@@ -724,7 +724,7 @@ describe('the Skills section — a catalog skill’s actions', () => {
     const confirm = screen.getByRole('group', { name: 'Make ERP lookup editable…' })
     expect((document.querySelector('[data-skill-row="erp-lookup"]')!.closest('li') as HTMLElement).contains(confirm)).toBe(true)
     expect(confirm.querySelector('p')!.textContent).toBe(
-      'Make ERP lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 3 (1.2.0), linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
+      'Make ERP lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 3 (1.2.0), linked to the catalog skill, and Publish sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
     )
     // While it is open the row's other verbs wait.
     expect((screen.getByRole('button', { name: 'Remove ERP lookup from this agent' }) as HTMLButtonElement).disabled).toBe(true)
@@ -754,7 +754,7 @@ describe('the Skills section — a catalog skill’s actions', () => {
     expect(within(row('erp-lookup')).queryByRole('alert')).toBeNull()
   })
 
-  it('puts Who can use in one place on pin and own rows: after Share / Make editable, before Reveal / Remove', async () => {
+  it('puts Who can use in one place on pin and own rows: after Publish / Make editable, before Reveal / Remove', async () => {
     renderTab({
       skills: [
         pin('erp-lookup', { access: 'maintain' }),
@@ -775,7 +775,7 @@ describe('the Skills section — a catalog skill’s actions', () => {
       'Remove erp-lookup from this agent'
     ])
     expect(within(row('own-one')).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
-      'Share a new version of own-one…',
+      'Publish a new version of own-one…',
       'Who can use own-one…',
       'Reveal SKILL.md of own-one'
     ])
@@ -785,7 +785,7 @@ describe('the Skills section — a catalog skill’s actions', () => {
     renderTab({ skills: [pin('erp-lookup', { access: 'edit', revisionNumber: 2, version: '1.1.0', latestRevision: 2, updatable: false })] })
     fireEvent.click(await screen.findByRole('button', { name: 'Make erp-lookup editable…' }))
     expect(screen.getByRole('group', { name: 'Make erp-lookup editable…' }).querySelector('p')!.textContent).toBe(
-      'Make erp-lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 2 (1.1.0), linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
+      'Make erp-lookup editable in this agent? Its files move into skills/erp-lookup/ as Version 2 (1.1.0), linked to the catalog skill, and Publish sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.'
     )
   })
 
@@ -1030,11 +1030,11 @@ describe('the Skills section — an own skill linked to a newer catalog version 
     const confirm = screen.getByRole('group', { name: 'Replace erp-lookup with Version 3…' })
     expect(card('erp-lookup').contains(confirm)).toBe(true)
     expect(confirm.querySelector('p')!.textContent).toBe(
-      'Replace erp-lookup with Version 3? Your changes that were never shared are moved to a backup folder outside this agent, and the skill’s files become Version 3.'
+      'Replace erp-lookup with Version 3? Your changes that were never published are moved to a backup folder outside this agent, and the skill’s files become Version 3.'
     )
     // While it is open the row's verbs wait.
     expect((screen.getByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Share a new version of erp-lookup…' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Publish a new version of erp-lookup…' }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
     expect(getLatestSkill).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Replace erp-lookup with Version 3… — shared by Ann' }))

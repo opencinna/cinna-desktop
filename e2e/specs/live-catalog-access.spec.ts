@@ -119,7 +119,7 @@ test('§7 8–9: B shares a skill back; A pins it in report-bot; B, who may only
     await openSkills(b, name)
     const own = skillRow(b, erp, 'Authored')
     await expect(own).toBeVisible()
-    await expect(own.getByRole('button', { name: `Share ${erp}…`, exact: true })).toHaveCount(0)
+    await expect(own.getByRole('button', { name: `Publish ${erp}…`, exact: true })).toHaveCount(0)
     await expect(own.getByRole('button', { name: `Reveal SKILL.md of ${erp}`, exact: true })).toBeVisible()
     const pin = skillRow(b, tips, 'From the catalog')
     await expect(pin.getByRole('img', { name: 'Every engine of this agent gets this skill', exact: true })).toBeVisible()

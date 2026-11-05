@@ -133,7 +133,7 @@ export const CATALOG_SKILL_TEXT = {
   edit: (skill: string) => `Make ${skill} editable…`,
   /** `version` names the version the copy is taken at: the package's latest, whether or not the pin is behind it. */
   editConfirm: (skill: string, name: string, version: string | null) =>
-    `Make ${skill} editable in this agent? Its files move into skills/${name}/${version ? ` as ${version}` : ''}, linked to the catalog skill, and Share sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.`,
+    `Make ${skill} editable in this agent? Its files move into skills/${name}/${version ? ` as ${version}` : ''}, linked to the catalog skill, and Publish sends your changes as its next version. Catalog updates stop; newer versions show here to get when you choose.`,
   editButton: 'Make editable',
   editing: 'Making editable…',
   editFailed: 'The skill could not be made editable.',
@@ -144,15 +144,19 @@ export const CATALOG_SKILL_TEXT = {
   updatedIn: (skill: string) => `Updated. This agent now has the latest version of ${skill}.`
 } as const
 
-/** Sharing an agent's own skill to the catalog: the Skills row's action and fact, and the Share dialog. */
+/**
+ * Publishing an agent's own skill to the catalog: the Skills row's action and
+ * fact, and the Publish dialog. "Publish" is the verb for putting a version in
+ * the catalog; "Share" is kept for giving people access (Who can use).
+ */
 export const SKILL_SHARE_TEXT = {
-  share: (skill: string) => `Share ${skill}…`,
-  shareNewVersion: (skill: string) => `Share a new version of ${skill}…`,
+  share: (skill: string) => `Publish ${skill}…`,
+  shareNewVersion: (skill: string) => `Publish a new version of ${skill}…`,
   /** The row's badge once shared, beside its `Version N`. */
-  sharedBadge: 'Shared',
+  sharedBadge: 'Published',
   sharedFactTitle: (packageId: string) => (packageId ? `In the catalog as ${packageId}` : 'In the catalog'),
-  title: (skill: string) => `Share ${skill}`,
-  titleNewVersion: (skill: string) => `Share a new version of ${skill}`,
+  title: (skill: string) => `Publish ${skill}`,
+  titleNewVersion: (skill: string) => `Publish a new version of ${skill}`,
   firstBody: 'Put this skill in the catalog for the people you choose here, or for everyone on this server.',
   laterBody: 'People who can use it keep access.',
   versionLabel: 'Version',
@@ -164,7 +168,7 @@ export const SKILL_SHARE_TEXT = {
   /** Under the slots of a later version whose last version had providers that are not preselected. */
   providersNotKept: 'Credentials you provided for the last version are not kept unless you pick them again.',
   /** Under the slots of a later version shared by an editor, when the last version had providers. */
-  publisherProvidersNotKept: 'Credentials the first sharer provided are not kept — each person connects their own.',
+  publisherProvidersNotKept: 'Credentials the first publisher provided are not kept — each person connects their own.',
   /** Beside the people list's label while Everyone is ticked and someone is at Can use. */
   everyoneCoversUse: 'Everyone can use it — Can use is not sent',
   coveredByEveryone: (person: string) => `${person}: everyone can already use it, so Can use is not sent`,
@@ -174,11 +178,11 @@ export const SKILL_SHARE_TEXT = {
   everyone: 'Everyone on this server can use it',
   /** The people list while Everyone is ticked and no one is named. */
   noOneNamed: 'No one named — add people who may change it.',
-  shareButton: 'Share',
-  sharing: 'Sharing…',
+  shareButton: 'Publish',
+  sharing: 'Publishing…',
   cancel: 'Cancel',
-  previewFailed: 'What this share would be couldn’t be read.',
-  shareFailed: 'The skill couldn’t be shared.',
+  previewFailed: 'What this would publish couldn’t be read.',
+  shareFailed: 'The skill couldn’t be published.',
   /** The Skills row's and the catalog detail's icon (tooltip and name), for a maintainer of a shared skill: opens Who can use. */
   whoCanUseAction: (skill: string) => `Who can use ${skill}…`,
   whoCanUseTitle: (skill: string) => `Who can use ${skill}`,
@@ -189,20 +193,20 @@ export const SKILL_SHARE_TEXT = {
   /** The row's icon (tooltip and name) on a `diverged` skill: opens its confirm inside the card. */
   replaceWith: (skill: string, revision: number, by: string | null = null) => `Replace ${skill} with Version ${revision}…${by ? ` — shared by ${by}` : ''}`,
   replaceConfirm: (skill: string, revision: number) =>
-    `Replace ${skill} with Version ${revision}? Your changes that were never shared are moved to a backup folder outside this agent, and the skill’s files become Version ${revision}.`,
+    `Replace ${skill} with Version ${revision}? Your changes that were never published are moved to a backup folder outside this agent, and the skill’s files become Version ${revision}.`,
   replaceButton: 'Replace',
   replacing: 'Replacing…',
   getFailed: 'The newer version couldn’t be brought in.',
   /** A share refused, or previewed, as stale (S5): last before the dialog's buttons. */
-  stale: (by: string | null, revision: number) => `${by ?? 'Someone'} shared Version ${revision} since your copy. Get it first, then share your changes.`,
+  stale: (by: string | null, revision: number) => `${by ?? 'Someone'} published Version ${revision} since your copy. Get it first, then publish your changes.`,
   /** The Share dialog's button beside {@link stale}. */
   getVersionButton: (revision: number) => `Get Version ${revision}`,
   /** Under {@link stale} when the copy has unshared changes: Get is not offered there, Replace on the row is. */
   staleHasChanges: (revision: number) =>
-    `Your copy has changes that were never shared. Replace on the skill’s row gets Version ${revision} and keeps your files in a backup folder.`,
+    `Your copy has changes that were never published. Replace on the skill’s row gets Version ${revision} and keeps your files in a backup folder.`,
   getting: 'Getting…',
   /** A first share while packages of this name the person may edit exist (S6). */
-  shareAs: 'Share as',
+  shareAs: 'Publish as',
   newVersionOf: (publisher: string | null, skill: string) => `New version of ${publisher ? `${publisher}’s` : 'the catalog’s'} ${skill}`,
   separateSkill: 'A separate skill',
   /** In place of Who can use while sharing as another person's package's next version. */

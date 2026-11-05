@@ -53,15 +53,15 @@ test('§7 2, 4–6: A shares a skill from report-bot; B adds it to B’s agent w
     const row = skillRow(a, skill, 'Authored')
     await expect(row.getByRole('img', { name: 'Every engine of this agent gets this skill', exact: true })).toBeVisible()
     await expect(row).toContainText('Needserp-api')
-    await expect(row.getByRole('button', { name: `Share ${skill}…`, exact: true })).toBeVisible()
+    await expect(row.getByRole('button', { name: `Publish ${skill}…`, exact: true })).toBeVisible()
   })
 
   await test.step('4 A: Share the skill with B; SKILL.md gets its version and publications.json records it', async () => {
     await shareSkill(a, name, skill, { people: [personB], note: 'First version' })
     const row = skillRow(a, skill, 'Authored')
     await expect(row).toContainText('Version 1')
-    await expect(row).toContainText('Shared')
-    await expect(row.getByRole('button', { name: `Share a new version of ${skill}…`, exact: true })).toBeVisible()
+    await expect(row).toContainText('Published')
+    await expect(row.getByRole('button', { name: `Publish a new version of ${skill}…`, exact: true })).toBeVisible()
     const item = await skillItem(fixture, personA.token, skill)
     expect(item?.kind).toBe('skill')
     expect(item.access).toBe('maintain')

@@ -117,10 +117,10 @@ test('S1–S4 audiences: one person, the team, everyone, nobody — each skill r
     symlinkSync('../../knowledge/erp.md', join(source.path, 'skills', symlinked, 'notes.md'))
     await a.page.evaluate(() => window.api.localAgents.rescan())
     await openSkills(a, workshop)
-    await skillRow(a, symlinked, 'Authored').getByRole('button', { name: `Share ${symlinked}…`, exact: true }).click()
-    const dialog = a.page.getByRole('dialog', { name: `Share ${symlinked}` })
-    await expect(dialog.getByRole('button', { name: 'Share', exact: true })).toBeEnabled({ timeout: 30_000 })
-    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await skillRow(a, symlinked, 'Authored').getByRole('button', { name: `Publish ${symlinked}…`, exact: true }).click()
+    const dialog = a.page.getByRole('dialog', { name: `Publish ${symlinked}` })
+    await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
     await expect(dialog.getByRole('alert')).toHaveText('Replace notes.md with the file itself — a link can’t be shared. Nothing was sent.')
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(dialog).toHaveCount(0)
@@ -204,7 +204,7 @@ test('S11 an editor who is not the publisher: B shares a new skill from A’s ag
     expect((await skillItem(fixture, personA.token, bSkill))?.access).toBe('use')
   })
 
-  await test.step('B, who may only use A’s skill: no Share a new version on its row, and main’s publish is refused by core', async () => {
+  await test.step('B, who may only use A’s skill: no Publish a new version on its row, and main’s publish is refused by core', async () => {
     await refreshLibrary(b)
     await openSkills(b, name)
     const row = skillRow(b, aSkill, 'Authored')

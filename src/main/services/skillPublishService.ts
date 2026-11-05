@@ -91,42 +91,42 @@ const MB = MAX_SKILL_UPLOAD_BYTES / (1024 * 1024)
 
 /** Each refusal as the dialog says it. Leads with what the person can do where there is something. */
 export const SKILL_PUBLISH_SENTENCES: Record<SkillPublishRefusal, string> = {
-  no_account: 'Sharing a skill needs a Cinna account.',
+  no_account: 'Publishing a skill needs a Cinna account.',
   not_found: 'That agent or skill is no longer here.',
-  not_kit_agent: 'Only an agent with a cinna-agent.json can share its skills.',
-  read_only: 'This agent is shared with you to use, so its skills can’t be shared from here. Nothing was sent.',
-  access_unknown: 'This shared agent is not in your catalog listing, so its skills can’t be shared from here. Nothing was sent.',
-  skill_invalid: 'Fix this skill’s SKILL.md before sharing it.',
-  has_link: 'Replace the links in this skill with the files themselves — only files and folders can be shared. Nothing was sent.',
-  special_file: 'Remove what is not a file or a folder from this skill — only files and folders can be shared. Nothing was sent.',
-  secrets: 'A file that can hold a secret is in this skill. Move it out of the skill’s folder before sharing — nothing was sent.',
+  not_kit_agent: 'Only an agent with a cinna-agent.json can publish its skills.',
+  read_only: 'This agent is shared with you to use, so its skills can’t be published from here. Nothing was sent.',
+  access_unknown: 'This shared agent is not in your catalog listing, so its skills can’t be published from here. Nothing was sent.',
+  skill_invalid: 'Fix this skill’s SKILL.md before publishing it.',
+  has_link: 'Replace the links in this skill with the files themselves — only files and folders can be published. Nothing was sent.',
+  special_file: 'Remove what is not a file or a folder from this skill — only files and folders can be published. Nothing was sent.',
+  secrets: 'A file that can hold a secret is in this skill. Move it out of the skill’s folder before publishing — nothing was sent.',
   unreadable: 'A file in this skill could not be read, so nothing was sent.',
-  too_large: `This skill is larger than ${MB} MB, so it can’t be shared. Nothing was sent.`,
-  too_many_files: `This skill has more than ${MAX_SKILL_UPLOAD_MEMBERS.toLocaleString('en-US')} files and folders, so it can’t be shared. Nothing was sent.`,
+  too_large: `This skill is larger than ${MB} MB, so it can’t be published. Nothing was sent.`,
+  too_many_files: `This skill has more than ${MAX_SKILL_UPLOAD_MEMBERS.toLocaleString('en-US')} files and folders, so it can’t be published. Nothing was sent.`,
   skill_archive_invalid: 'The catalog could not unpack this skill. Nothing was published.',
-  skill_contains_secrets: 'The catalog refused files that look like credentials. Remove them from the skill and share again.',
+  skill_contains_secrets: 'The catalog refused files that look like credentials. Remove them from the skill and publish again.',
   invalid_publisher_credential: 'That credential can’t be provided for this skill. Choose another, or let each person connect their own.',
-  skill_name_mismatch: 'This skill was shared under another name, so a new version can’t be added to it here.',
-  package_exists: 'You already share a skill with this name. Try again to add this as its new version.',
+  skill_name_mismatch: 'This skill was published under another name, so a new version can’t be added to it here.',
+  package_exists: 'You already publish a skill with this name. Try again to add this as its new version.',
   grants_require_users_visibility: 'People who can only use the skill can’t be named while everyone can use it. Remove them, or untick Everyone.',
   invalid_grants: 'The catalog did not accept that list of people.',
-  not_publisher: 'Ask a maintainer for edit access — you can use this skill but not share new versions of it.',
+  not_publisher: 'Ask a maintainer for edit access — you can use this skill but not publish new versions of it.',
   package_not_found: 'This skill is no longer in the catalog, or you can no longer see it.',
-  reauth_required: 'Sign in to Cinna again, then share once more.',
-  failed: 'Try again — the skill couldn’t be shared.',
-  stale: 'Someone shared a newer version since your copy. Get it first, then share your changes.',
-  editable_package_exists: 'You can edit a skill of this name that someone else shares. Choose whether this is a new version of it or a separate skill.',
+  reauth_required: 'Sign in to Cinna again, then publish once more.',
+  failed: 'Try again — the skill couldn’t be published.',
+  stale: 'Someone published a newer version since your copy. Get it first, then publish your changes.',
+  editable_package_exists: 'You can edit a skill of this name that someone else publishes. Choose whether this is a new version of it or a separate skill.',
   not_linked: 'This skill is not linked to a skill in your catalog, so there is no newer version to get.',
   up_to_date: 'This skill already holds the latest version.',
-  has_changes: 'This skill has changes you have not shared, so the newer version was not brought in. Nothing was changed.',
+  has_changes: 'This skill has changes you have not published, so the newer version was not brought in. Nothing was changed.',
   download_failed: 'The newer version couldn’t be downloaded. Nothing was changed.',
   download_mismatch: 'The downloaded files did not match the published version, so nothing was changed.',
   write_failed: 'The newer version couldn’t be put in this agent’s folder. Nothing was changed.'
 }
 
-/** The stale-share sentence: who shared which version since the folder's copy (S5). */
+/** The stale-publish sentence: who published which version since the folder's copy (S5). */
 export function staleSentence(stale: SkillStaleBase): string {
-  return `${stale.publishedBy ?? 'Someone'} shared Version ${stale.latestRevision} since your copy. Get it first, then share your changes.`
+  return `${stale.publishedBy ?? 'Someone'} published Version ${stale.latestRevision} since your copy. Get it first, then publish your changes.`
 }
 
 function refused(code: SkillPublishRefusal, message?: string): SkillPublishRefused {
@@ -185,7 +185,7 @@ function unchangeableRefusal(profile: string, dir: string): SkillPublishRefused 
 function invalidRefusal(row: LocalAgentSkill): SkillPublishRefused | null {
   if (row.deliverable) return null
   const error = row.issues.find((issue) => issue.severity === 'error')
-  return refused('skill_invalid', error ? `This skill can’t be shared yet: ${error.message}` : undefined)
+  return refused('skill_invalid', error ? `This skill can’t be published yet: ${error.message}` : undefined)
 }
 
 /** A frontmatter value as JSON: integers as numbers (or text past 2^53), nested as nested. */
@@ -214,13 +214,13 @@ function frontmatterOf(skillDir: string): Record<string, unknown> {
 function treeRefusal(problem: ReturnType<typeof collectSkillTree> & { ok: false }): SkillPublishRefused {
   switch (problem.problem) {
     case 'link':
-      return refused('has_link', `Replace ${named(problem.paths)} with the file itself — a link can’t be shared. Nothing was sent.`)
+      return refused('has_link', `Replace ${named(problem.paths)} with the file itself — a link can’t be published. Nothing was sent.`)
     case 'special':
-      return refused('special_file', `Remove ${named(problem.paths)} from this skill — only files and folders can be shared. Nothing was sent.`)
+      return refused('special_file', `Remove ${named(problem.paths)} from this skill — only files and folders can be published. Nothing was sent.`)
     case 'secrets':
       return refused(
         'secrets',
-        `A file that can hold a secret is in this skill (${named(problem.paths)}). Move it out of the skill’s folder before sharing — nothing was sent.`
+        `A file that can hold a secret is in this skill (${named(problem.paths)}). Move it out of the skill’s folder before publishing — nothing was sent.`
       )
     case 'unreadable':
       return refused('unreadable', `${named(problem.paths)} could not be read, so nothing was sent.`)
@@ -249,7 +249,7 @@ export function catalogRefusal(status: number, body: unknown): SkillPublishRefus
       return refused(
         'skill_contains_secrets',
         paths.length > 0
-          ? `The catalog refused files that look like credentials (${named(paths)}). Remove them from the skill and share again.`
+          ? `The catalog refused files that look like credentials (${named(paths)}). Remove them from the skill and publish again.`
           : undefined
       )
     case 'invalid_publisher_credential':
@@ -282,7 +282,7 @@ export function catalogRefusal(status: number, body: unknown): SkillPublishRefus
   if (status === 403) return refused('not_publisher')
   if (status === 404) return refused('package_not_found')
   const said = message || (Array.isArray(record(body)?.detail) ? 'the request was not accepted' : '')
-  return refused('failed', said ? `The skill couldn’t be shared: ${said}`.slice(0, 300) : undefined)
+  return refused('failed', said ? `The skill couldn’t be published: ${said}`.slice(0, 300) : undefined)
 }
 
 function str(value: unknown, fallback = ''): string {

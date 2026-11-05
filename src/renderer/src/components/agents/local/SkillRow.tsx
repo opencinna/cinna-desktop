@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpCircle, ExternalLink, FileText, Loader2, Pencil, Replace, RotateCw, Share2, Trash2, Users } from 'lucide-react'
+import { ArrowUpCircle, ExternalLink, FileText, Loader2, Pencil, Replace, RotateCw, Trash2, Upload, Users } from 'lucide-react'
 import type { LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
 import { MARKETPLACE_SKILL_TEXT } from '../../../utils/marketplaceSkills'
@@ -324,7 +324,7 @@ export function SkillRow({
         )}
         {!catalog && skill.shareable && onShare && (
           <SettingsIconButton onClick={onShare} title={shareLabel} aria-label={shareLabel}>
-            <Share2 size={14} />
+            <Upload size={14} />
           </SettingsIconButton>
         )}
         {!catalog && copyButton}
