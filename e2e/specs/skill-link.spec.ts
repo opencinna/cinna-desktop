@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import { repoRoot } from '../playwright.config'
 import { answerAgentsFolder, expect, test, type CinnaApp } from '../fixtures/app'
+import { noticePanelSettled } from '../fixtures/noticePanel'
 import { linkSandboxAccount } from '../fixtures/jobRemoteService'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
@@ -326,10 +327,12 @@ test('S1b the row keeps its height when the lookup answers', async ({ cinna }) =
   core.holdListing(true)
   expect(await pasteText(page, httpsLink(core))).toBe(true)
   await expect(row.getByText('Nothing is added until you choose.', { exact: true })).toBeVisible()
+  await noticePanelSettled(row)
   const pending = (await row.boundingBox())!.height
   core.holdListing(false)
   core.releaseListings()
   await expect(row.getByRole('button', { name: `Add to ${AGENT}`, exact: true })).toBeEnabled()
+  await noticePanelSettled(row)
   const answered = (await row.boundingBox())!.height
   // Sub-pixel layout rounding differs between frames; a jump is a whole line.
   expect(answered).toBeCloseTo(pending, 1)

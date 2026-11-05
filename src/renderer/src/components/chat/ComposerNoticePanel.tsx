@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, X } from 'lucide-react'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -73,8 +73,99 @@ const TONE_TEXT: Record<ComposerNoticeTone, string> = {
  * the readiness rules, and a notice that does not refuse sits beside a live
  * Send. Renders nothing when there is nothing to say (ux_rules rule 2).
  */
-export function ComposerNoticePanel({ notices }: { notices: ComposerNotice[] }): React.JSX.Element | null {
+/** A row whose notice has gone, kept on screen while it folds up. */
+interface LeavingRow { notice: ComposerNotice; index: number }
+
+/** Longest a leaving row is kept if its animationend never comes (a hidden window). */
+const LEAVE_FALLBACK_MS = 600
+
+/** Whether rows animate at all: not under reduced motion, nor where no animation ever ends (jsdom). */
+function rowsAnimate(): boolean {
+  return typeof window.matchMedia === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+/**
+ * The notices a {@link ComposerNoticePanel} draws: the live ones, or — once
+ * they are all gone — the last of them, held while the panel sinks back under
+ * the message box (`leaving`), until it calls `onLeft`. The caller keeps the
+ * panel mounted while `notices` is non-empty. Under reduced motion, and where
+ * no animation ever ends (jsdom), nothing is held. A change of `resetKey` (the
+ * composer's chat) drops what is held: one chat's notices never sink in
+ * another's composer.
+ */
+export function useNoticePanelPresence(notices: ComposerNotice[], resetKey?: string | null): {
+  notices: ComposerNotice[]
+  leaving: boolean
+  onLeft: () => void
+} {
+  // Compared by emptiness, never by identity: ChatInput builds a new array
+  // on every render. The last notices shown come from a committed ref.
+  const lastRef = useRef(notices)
+  useEffect(() => { if (notices.length > 0) lastRef.current = notices })
+  const empty = notices.length === 0
+  const [wasEmpty, setWasEmpty] = useState(empty)
+  const [held, setHeld] = useState<ComposerNotice[] | null>(null)
+  const [prevResetKey, setPrevResetKey] = useState(resetKey)
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey)
+    setWasEmpty(empty)
+    if (held) setHeld(null)
+  } else if (wasEmpty !== empty) {
+    setWasEmpty(empty)
+    if (empty && rowsAnimate()) setHeld(lastRef.current.map((n) => ({ ...n, textId: undefined })))
+    else if (!empty && held) setHeld(null)
+  }
+  useEffect(() => {
+    if (!held) return
+    const timer = setTimeout(() => setHeld(null), LEAVE_FALLBACK_MS)
+    return () => clearTimeout(timer)
+  }, [held])
+  const onLeft = useCallback(() => setHeld(null), [])
+  const leaving = notices.length === 0 && held !== null
+  return { notices: leaving ? held : notices, leaving, onLeft }
+}
+
+export function ComposerNoticePanel({ notices, leaving: panelLeaving = false, onLeft: onPanelLeft }: {
+  notices: ComposerNotice[]
+  /** Its notices are gone: it sinks back under the box, inert (see {@link useNoticePanelPresence}). */
+  leaving?: boolean
+  onLeft?: () => void
+}): React.JSX.Element | null {
+  // Whether the panel was already showing before this render: its first rows
+  // ride in with the panel's own rise, only rows added later unfold.
+  const shownRef = useRef(false)
+  useEffect(() => { shownRef.current = notices.length > 0 }, [notices.length])
+  // A removed row stays where it was, inert, until it has folded up; a key
+  // that comes back takes its row back. The panel itself still goes at once
+  // with its last notice.
+  // Compared by keys, never by identity: ChatInput builds a new array on
+  // every render. A gone row is drawn as last committed.
+  const latestRef = useRef(notices)
+  useEffect(() => { latestRef.current = notices })
+  const keySignature = notices.map((n) => n.key).join('\n')
+  const [prevSignature, setPrevSignature] = useState(keySignature)
+  const [leaving, setLeaving] = useState<LeavingRow[]>([])
+  if (prevSignature !== keySignature) {
+    const keys = new Set(notices.map((n) => n.key))
+    const gone = rowsAnimate() && notices.length > 0
+      ? latestRef.current.flatMap((notice, index) => keys.has(notice.key) ? [] : [{ notice: { ...notice, textId: undefined }, index }])
+      : []
+    setPrevSignature(keySignature)
+    if (gone.length > 0 || leaving.some((r) => keys.has(r.notice.key))) {
+      setLeaving((rows) => [...rows.filter((r) => !keys.has(r.notice.key) && !gone.some((g) => g.notice.key === r.notice.key)), ...gone])
+    }
+  }
+  useEffect(() => {
+    if (leaving.length === 0) return
+    const timer = setTimeout(() => setLeaving([]), LEAVE_FALLBACK_MS)
+    return () => clearTimeout(timer)
+  }, [leaving])
   if (notices.length === 0) return null
+  const rows: Array<{ notice: ComposerNotice; leaving: boolean }> = notices.map((notice) => ({ notice, leaving: false }))
+  for (const row of [...leaving].sort((a, b) => a.index - b.index)) {
+    rows.splice(Math.min(row.index, rows.length), 0, { notice: row.notice, leaving: true })
+  }
+  const onLeft = (key: string): void => setLeaving((list) => list.filter((r) => r.notice.key !== key))
   const tone: ComposerNoticeTone = notices.some((n) => n.tone === 'danger') ? 'danger'
     : notices.some((n) => n.tone === 'warning') ? 'warning'
     : 'accent'
@@ -82,20 +173,38 @@ export function ComposerNoticePanel({ notices }: { notices: ComposerNotice[] }):
   const offerLabels = new Set(notices.map((n) => n.panelLabel ?? 'Skill link'))
   const label = notices.every((n) => n.tone === 'accent') && offerLabels.size === 1 ? [...offerLabels][0] : 'Agent status'
   return (
-    <div role="status" aria-label={label} data-tone={tone} className="composer-notice-panel relative mx-3 -mb-3 rounded-t-xl pb-3">
+    <div role="status" aria-label={label} data-tone={tone} inert={panelLeaving || undefined}
+      className={`composer-notice-panel relative mx-3 -mb-3 rounded-t-xl pb-3 ${panelLeaving ? 'composer-notice-panel-leave' : ''}`}
+      onAnimationEnd={(e) => { if (e.target === e.currentTarget && e.animationName === 'composer-notice-sink') onPanelLeft?.() }}>
       <span aria-hidden="true" className="composer-notice-border" />
       <ul className="relative divide-y divide-[var(--color-border)]/50">
-        {notices.map((notice) => <NoticeRow key={notice.key} notice={notice} />)}
+        {rows.map(({ notice, leaving: isLeaving }) => (
+          <NoticeRow key={notice.key} notice={notice} unfold={shownRef.current} leaving={isLeaving} onLeft={onLeft} />
+        ))}
       </ul>
     </div>
   )
 }
 
-function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
+function NoticeRow({ notice, unfold, leaving, onLeft }: {
+  notice: ComposerNotice
+  unfold: boolean
+  /** Its notice has gone: it folds up, inert, then the panel drops it. */
+  leaving: boolean
+  onLeft: (key: string) => void
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  // Read once, at the row's mount: a row keeps its key while its text changes.
+  const [entering, setEntering] = useState(unfold)
   const Icon = notice.icon
+  const motion = leaving ? 'composer-notice-row-leave' : entering ? 'composer-notice-row-enter' : ''
   return (
-    <li className="px-3 py-2">
+    <li className={`px-3 py-2 ${motion}`} inert={leaving || undefined} aria-hidden={leaving || undefined}
+      onAnimationEnd={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.animationName === 'composer-notice-fold') onLeft(notice.key)
+        else setEntering(false)
+      }}>
       <div className="flex items-center gap-2">
         {/* A zero-width button as the line's strut: every row is at least one
             button tall, so a row whose buttons come and go as it settles (a

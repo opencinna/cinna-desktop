@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import type { Locator, Page } from '@playwright/test'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine, type FakeAcpEngine } from '../fixtures/fakeAcpEngine'
+import { noticePanelSettled } from '../fixtures/noticePanel'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { splitTurnHeader } from '../fixtures/turnHeader'
 
@@ -112,6 +113,7 @@ test('a new kit agent hides the example prompts and offers the guidance in its c
   // In the composer's notice panel: "Guidance" alone, "Agent status" beside a readiness row.
   await expect(page.getByRole('status', { name: /^(Guidance|Agent status)$/ }).filter({ has: row })).toBeVisible()
   // The message on the left, Skip guidance on its right, on one line.
+  await noticePanelSettled(row)
   const sentence = await row.getByText(GUIDANCE_TEXT, { exact: true }).boundingBox()
   const skip = await row.getByRole('button', { name: 'Skip guidance', exact: true }).boundingBox()
   expect(sentence && skip).toBeTruthy()

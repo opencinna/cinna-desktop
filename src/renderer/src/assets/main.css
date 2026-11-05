@@ -388,14 +388,37 @@
   /* The composer's notice panel: a frosted tab tucked behind the top edge of
      the message box (which overlaps its bottom), tinted by its worst notice,
      with a slow light travelling its border. Nothing glows outside the block. */
+  /* Gradient-tinted glass: the tone glows in from the top-right corner and
+     fades toward the bottom left over a translucent base, so what scrolls behind it
+     shows through blurred. The base stays opaque enough to keep the rows
+     legible where backdrop-filter does not render. */
   .composer-notice-panel {
     --notice-tone: var(--color-warning);
-    background: color-mix(in srgb, var(--color-bg-secondary) 90%, var(--notice-tone) 10%);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
-    border: 1px solid color-mix(in srgb, var(--notice-tone) 28%, var(--color-border));
+    --notice-glass-base: color-mix(in srgb, var(--color-bg-secondary) 64%, transparent);
+    background:
+      radial-gradient(120% 160% at 100% 0%, color-mix(in srgb, var(--notice-tone) 11%, transparent), transparent 62%),
+      linear-gradient(to bottom left, color-mix(in srgb, var(--notice-tone) 12%, transparent), color-mix(in srgb, var(--notice-tone) 3%, transparent) 85%),
+      var(--notice-glass-base);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid color-mix(in srgb, var(--notice-tone) 20%, var(--color-border));
     border-bottom: none;
-    animation: composer-notice-rise 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation: composer-notice-rise 340ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  }
+  [data-theme="light"] .composer-notice-panel {
+    --notice-glass-base: color-mix(in srgb, var(--color-bg) 58%, transparent);
+    --notice-tuck-shadow: rgba(0, 0, 0, 0.09);
+  }
+  /* The message box's shadow on the panel it overlaps: a soft band darkening
+     toward the box's top edge, which sits 12px (the panel's pb-3) above the
+     panel's bottom, so the panel reads as tucked under the box. */
+  .composer-notice-panel::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 17px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--notice-tuck-shadow, rgba(0, 0, 0, 0.24)) 30%);
   }
   .composer-notice-panel[data-tone="danger"] {
     --notice-tone: var(--color-danger);
@@ -416,7 +439,7 @@
       transparent 180deg, color-mix(in srgb, var(--notice-tone) 55%, transparent) 225deg, transparent 280deg);
     mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     mask-composite: exclude;
-    opacity: 0.75;
+    opacity: 0.6;
     animation: composer-notice-orbit 9s linear infinite;
   }
   /* A notice's action: a filled secondary button, so it reads as a button
@@ -485,9 +508,48 @@
     from { --ambient-border-angle: 0deg; }
     to { --ambient-border-angle: 360deg; }
   }
+  /* The panel rolls out from behind the message box: it starts its own
+     height lower and is clipped at its resting bottom edge (12px under the
+     box's top), so it is never seen below the box. Backwards fill only, so
+     no clip is left on it once it has risen. */
   @keyframes composer-notice-rise {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: none; }
+    from { transform: translateY(100%); clip-path: inset(-2px -2px 100% -2px); }
+    to { transform: none; clip-path: inset(-2px -2px 0 -2px); }
+  }
+  /* Its last notice gone, the panel sinks back under the box: the rise
+     reversed, then ChatInput drops it on animationend. */
+  @keyframes composer-notice-sink {
+    from { transform: none; clip-path: inset(-2px -2px 0 -2px); }
+    to { transform: translateY(100%); clip-path: inset(-2px -2px 100% -2px); }
+  }
+  .composer-notice-panel.composer-notice-panel-leave {
+    pointer-events: none;
+    animation: composer-notice-sink 260ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  }
+  /* A row added to a panel already showing unfolds from its divider line:
+     its height and its py-2 open from zero to auto. The class is dropped on
+     animationend, so the clip never stays on a settled row. */
+  @keyframes composer-notice-unfold {
+    from { height: 0; padding-block: 0; opacity: 0; }
+    to { height: auto; padding-block: 0.5rem; opacity: 1; }
+  }
+  .composer-notice-row-enter {
+    interpolate-size: allow-keywords;
+    overflow: hidden;
+    animation: composer-notice-unfold 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* A removed row folds back into its divider line, the unfold reversed,
+     then the panel drops it on animationend. After the enter rule, so a row
+     removed while still opening folds instead. */
+  @keyframes composer-notice-fold {
+    from { height: auto; padding-block: 0.5rem; opacity: 1; }
+    to { height: 0; padding-block: 0; opacity: 0; }
+  }
+  .composer-notice-row-leave {
+    interpolate-size: allow-keywords;
+    overflow: hidden;
+    pointer-events: none;
+    animation: composer-notice-fold 220ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
   }
   .ambient-header-button {
     position: relative;
@@ -523,7 +585,8 @@
     .ambient-grid-burst, .ambient-grid-edge { animation: none; }
     .ambient-button[data-ambient-glow]::after { display: none; }
     [data-header-wave] > .ambient-header-button::before { display: none; }
-    .composer-notice-panel, .composer-notice-border { animation: none; }
+    .composer-notice-panel, .composer-notice-border, .composer-notice-row-enter, .composer-notice-row-leave { animation: none; }
+    .composer-notice-row-enter { overflow: visible; }
   }
 
   /* Frosted-glass surface for modals/popovers (profile dropdown, register

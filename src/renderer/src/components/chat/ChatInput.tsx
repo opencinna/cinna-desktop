@@ -63,7 +63,7 @@ import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
-import { ComposerNoticePanel } from './ComposerNoticePanel'
+import { ComposerNoticePanel, useNoticePanelPresence } from './ComposerNoticePanel'
 import { useSkillLinkNotice } from './SkillLinkNotice'
 import { useGuidedBuildNotice } from './GuidedBuildNotice'
 import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
@@ -2069,7 +2069,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const noticeAnchorRef = useRef<HTMLDivElement>(null)
   const onNoticePanelHeightRef = useRef(onNoticePanelHeight)
   onNoticePanelHeightRef.current = onNoticePanelHeight
-  const noticeAnchored = chatId === null && notices.length > 0
+  // The panel as drawn: the live notices, or the last ones while it sinks
+  // back under the box after they are gone. This ChatInput stays mounted
+  // across chat switches, so the chat resets the hold, and keys the panel so
+  // another chat's rows are drawn fresh rather than folded and unfolded.
+  const noticePanel = useNoticePanelPresence(notices, chatId)
+  const noticePanelKey = chatId ?? 'new'
+  const noticeAnchored = chatId === null && noticePanel.notices.length > 0
   useLayoutEffect(() => {
     const el = noticeAnchorRef.current
     if (!noticeAnchored || !el) {
@@ -2176,7 +2182,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
       {/* No box of its own; the cloud hides it. */}
       <div className={minimal ? 'hidden' : 'contents'}>
-        {notices.length > 0
+        {noticePanel.notices.length > 0
           ? noticeAnchored
             // An empty screen (New chat, an agent page): out of the flow, its
             // bottom tucked behind the box's top edge where the in-flow panel
@@ -2187,8 +2193,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             // covering them. The panel's own -mb-3 makes this box 12 px
             // shorter than it, so bottom-full puts the panel's last 12 px
             // under the input card (z-[1]), as in an open chat.
-            ? <div ref={noticeAnchorRef} data-testid="composer-notice-anchor" className="absolute inset-x-4 bottom-full"><ComposerNoticePanel notices={notices} /></div>
-            : <ComposerNoticePanel notices={notices} />
+            ? <div ref={noticeAnchorRef} data-testid="composer-notice-anchor" className="absolute inset-x-4 bottom-full"><ComposerNoticePanel key={noticePanelKey} {...noticePanel} /></div>
+            : <ComposerNoticePanel key={noticePanelKey} {...noticePanel} />
           : cacheNotice && <CacheExpiryNotice notice={cacheNotice.notice} onNewChat={onNewChatLike} onDismiss={cacheNotice.dismiss} />}
       </div>
       {finishSetupDialog}
