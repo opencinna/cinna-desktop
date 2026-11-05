@@ -123,6 +123,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **The docking mode is remembered the same way, and shared between windows.** Stored beside the open state; a change made in one app window is applied in every other. A window that sees another switch to Fixed docks open too. A peek is never remembered — every launch in On Hover starts hidden. The open state belongs to Fixed only: switching to On Hover leaves it as it was, and switching back to Fixed always opens.
 - **Nothing else about the layout is remembered.** (The Tasks view's Agents | Recent | Board | List choice is the view's own preference and is remembered machine-wide the same way.) Active view, sidebar tab, settings tab, open chat and agent page all start fresh, so every launch lands on the new-chat screen. A remembered chat, task or agent page can have been deleted, hidden or belong to a different profile by the next launch, and the new-chat screen is valid in every one of those cases.
 - **Window state belongs to the main window only.** The menu-bar tray popover is positioned from its icon and is neither saved nor restored.
+- **Minimal view is a shell state.** The shell root carries `data-minimal` while it is on: the sidebar and its hover peek are hidden and `inert`, the top bar's buttons slide away and are `inert`, and the drag strip stays so the window can still be moved. `data-motion-fade` (Extra UI animation off) turns the slides into fades. See [Minimal View](../../chat/minimal_view/minimal_view.md).
 
 ## Architecture Overview
 

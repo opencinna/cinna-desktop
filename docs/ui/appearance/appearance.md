@@ -62,6 +62,7 @@ Switching between chats in the main workspace (including its new-chat screen) sw
 - **Secondary buttons opt in explicitly.** Shared settings buttons, Local Development secondary actions, the neutral Settings action on agent pages and the job page's Edit are eligible. The job and task pages' **Details** panels and the main chat composer opt in as cards and take their turn in the same one-at-a-time rotation. A card the user is typing in is skipped and loses a running glow on the first keystroke, because a highlight circling the text being written competes with it. Selection excludes disabled, hidden, offscreen and center-occluded controls; primary sending actions do not opt in.
 - **Header waves affect backgrounds.** The top-bar controls — sidebar toggle, Tasks, Agent status, Inbox and New chat, swept left to right — keep their existing glyphs and status indicators; hover or visible keyboard focus suppresses a control's wave layer.
 - **Extra animation is not a general motion switch.** Existing sidebar transitions, loading indicators, tray fades and other feature-owned animations keep their own behavior. Theme changes do not change the OS theme or authentication/runtime settings.
+- **The sidebar's Interface menu also offers Minimal view** (open chat in the chat view only; disabled while the chat needs the user). With Extra UI animation off or reduced motion, its transitions fade without sliding. See [Minimal View](../../chat/minimal_view/minimal_view.md).
 
 ## Architecture Overview
 
