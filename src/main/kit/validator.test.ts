@@ -253,6 +253,20 @@ describe('validateAgentFolder — manifest errors', () => {
     expect(codes(report.warnings)).toContain('manifest.credentials.type_unknown')
   })
 
+  it('warns, as kit.py does, about an api_token template declared without a type', () => {
+    const warned = (fields: string[]): boolean => {
+      patchManifest(agentDir, (m) => {
+        m.credentials = [{ name: 'Vendor', type: 'api_token', env_prefix: 'VENDOR_', fields }]
+      })
+      const report = validateAgentFolder(agentDir, OPTIONS)
+      expect(report.errors).toEqual([])
+      return codes(report.warnings).includes('manifest.credentials.fields.template_without_type')
+    }
+    expect(warned(['api_token_template', 'api_token'])).toBe(true)
+    expect(warned(['api_token'])).toBe(false)
+    expect(warned(['api_token_type', 'api_token_template', 'api_token'])).toBe(false)
+  })
+
   it('warns about an engine it does not recognise but does not reject the folder', () => {
     // Contract 1.2.0's tolerant read, at the one layer that can brick a folder:
     // an *error* here makes `scannerService` mark the agent `invalid` and

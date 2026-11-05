@@ -204,11 +204,26 @@ export function readEnvKeys(agentDir: string): Set<string> {
  * prefix the kit reads it by (`slotEnvPrefix`: declared, else derived from the
  * name). A slot that declares no `fields` expects no particular name: see
  * `envFilledFor`.
+ *
+ * An `api_token` slot expects only its token. `api_token_type` and
+ * `api_token_template` are the form's header shape, not secrets: absent, the
+ * kit's reader sends `Authorization: Bearer <token>`, as Core and the local
+ * transform do. Expecting them would hold a bearer slot unready, and Finish
+ * setup would ask for both, until the user filled in values nothing needs.
+ * A custom header still works: they are read when set.
  */
+const OPTIONAL_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  api_token: ['api_token_type', 'api_token_template']
+}
 function expectedKeysFor(slot: CredentialSlot, prefix: string | null): string[] {
-  const fields = Array.isArray(slot.fields)
+  let fields = Array.isArray(slot.fields)
     ? slot.fields.filter((f): f is string => typeof f === 'string')
     : []
+  const optional = typeof slot.type === 'string' ? OPTIONAL_FIELDS[slot.type] : undefined
+  if (optional && fields.length > 0) {
+    const kept = fields.filter((f) => !optional.includes(f.toLowerCase()))
+    fields = kept.length > 0 ? kept : ['api_token']
+  }
   if (prefix === null) return []
   return fields.map((field) => `${prefix}${field.toUpperCase()}`)
 }

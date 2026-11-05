@@ -492,6 +492,16 @@ function checkCredentials(report: Report, manifest: CinnaAgentManifest): void {
           `\`${label}.fields\` must be an array of non-empty strings.`,
           MANIFEST_FILE
         )
+      } else if (type === 'api_token' && raw.fields.includes('api_token_template') && !raw.fields.includes('api_token_type')) {
+        // kit.py's contract 1.23.0 warning, word for word: without a type the token goes out as
+        // `Authorization: Bearer <token>` and the template is never read.
+        report.warn(
+          'manifest.credentials.fields.template_without_type',
+          `\`${label}.fields\` lists "api_token_template" without "api_token_type". Without a type the token is sent as ` +
+            '`Authorization: Bearer <token>` and the template is never read. For a bearer token declare only "api_token"; ' +
+            'for a custom header add "api_token_type" (set to custom).',
+          MANIFEST_FILE
+        )
       }
     }
 

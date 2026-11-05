@@ -1448,6 +1448,24 @@ it('reads a slot with no env_prefix under the prefix the kit derives from its na
   expect(scannerService.scanRoot(USER, root).agents[0].readiness).toBe('ok')
 })
 
+it('expects only the token of an api_token slot that also declares its header type and template', () => {
+  const dir = scaffold('bearer-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [
+    { name: 'Acme', type: 'api_token', env_prefix: 'ACME_', fields: ['api_token_type', 'api_token_template', 'api_token'] },
+    { name: 'Only Shape', type: 'api_token', env_prefix: 'SHAPE_', fields: ['api_token_template'] }
+  ]
+  writeManifest(manifestPath(dir), manifest)
+  installCredentialReadiness(() => [])
+  const scan = () => scannerService.scanRoot(USER, root).agents[0].credentials
+  expect(scan()[0]).toMatchObject({ expectedKeys: ['ACME_API_TOKEN'], satisfied: false })
+  // A slot naming only the header shape still needs the token itself.
+  expect(scan()[1]).toMatchObject({ expectedKeys: ['SHAPE_API_TOKEN'], satisfied: false })
+  writeFileSync(join(dir, 'credentials/.env'), 'ACME_API_TOKEN=x\nSHAPE_API_TOKEN=y\n')
+  expect(scan()[0]).toMatchObject({ presentKeys: ['ACME_API_TOKEN'], satisfied: true })
+  expect(scan()[1]).toMatchObject({ presentKeys: ['SHAPE_API_TOKEN'], satisfied: true })
+})
+
 it('fills a slot with a prefix and no fields by any set name under the full prefix, as the kit does', () => {
   const dir = scaffold('fieldless-agent')
   const manifest = readManifest(manifestPath(dir))
