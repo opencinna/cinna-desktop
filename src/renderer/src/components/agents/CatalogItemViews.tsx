@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { ChevronLeft, Download, ExternalLink, Loader2, PackageX, RefreshCw, Users } from 'lucide-react'
+import { ChevronLeft, Download, ExternalLink, FileText, Loader2, PackageX, RefreshCw, Users } from 'lucide-react'
 import type { CatalogItem } from '../../../../shared/catalogItems'
 import type { CatalogCredentialSpec } from '../../../../shared/catalog'
 import type { LibraryAgentDto } from '../../../../shared/agentSharing'
@@ -15,6 +15,14 @@ import { CATALOG_POPOVER_ATTR, CatalogSkillAddMenu, type CatalogSkillTarget } fr
 import { WhoCanUseSkillDialog } from './local/sharing/WhoCanUseSkillDialog'
 import { sizedButton, useCatalogSurface, useCatalogType } from './catalogSurface'
 import { CopyInstallLinkButton, useSkillInstallLink } from './CopyInstallLinkButton'
+import {
+  ManagedList,
+  ManagedListDot,
+  ManagedListFooterLink,
+  ManagedListIconButton,
+  ManagedListMessage,
+  ManagedListRow
+} from '../ui/ManagedList'
 
 /**
  * The tile, the detail and the action of one catalog item, the same for every
@@ -639,66 +647,127 @@ function ReleaseNotes({ text, settled }: { text: string; settled: boolean }): Re
   )
 }
 
+/** Versions shown before Show all. */
+const VERSIONS_SHOWN = 5
+
 /**
- * The item's versions, newest first, read when the detail opens. Loading and
- * a failure stay in this section — the detail and the dialog stay open
- * (ux_rules rule 6).
+ * The item's versions, newest first, read when the detail opens: a compact
+ * managed list, two lines a version — the label, who shared it and when —
+ * the newest marked with a green dot, release notes behind the row's notes
+ * icon. Loading and a failure stay in this section, inside the list's
+ * surface — the detail and the dialog stay open (ux_rules rule 6).
  */
 function CatalogVersions({ uuid, settled }: { uuid: string; settled: boolean }): React.JSX.Element {
   const detail = useCatalogItemDetail(uuid)
   const headingId = useId()
   const type = useCatalogType()
+  const surface = useCatalogSurface()
+  const [showAll, setShowAll] = useState(false)
+  const [notesOpen, setNotesOpen] = useState<ReadonlySet<number>>(() => new Set())
   const revisions = detail.data?.revisions ?? []
+  const shown = showAll ? revisions : revisions.slice(0, VERSIONS_SHOWN)
+  const iconSize = surface === 'settings' ? 15 : 13
+  const toggleNotes = (revision: number): void =>
+    setNotesOpen((open) => {
+      const next = new Set(open)
+      if (next.has(revision)) next.delete(revision)
+      else next.add(revision)
+      return next
+    })
   return (
     <section aria-labelledby={headingId} className="space-y-2">
       <h4 id={headingId} className={`${type.subheading} text-[var(--color-text-muted)]`}>
         {CATALOG_TEXT.versionsHeading}
       </h4>
-      {detail.isLoading ? (
-        <div className={`flex items-center gap-1.5 ${type.body} text-[var(--color-text-muted)]`}>
-          <Loader2 size={11} className="animate-spin" aria-hidden="true" />
-          {CATALOG_TEXT.versionsLoading}
-        </div>
-      ) : detail.isError && !detail.data ? (
-        <div role="alert" className={`flex flex-wrap items-center gap-2 ${type.body} text-[var(--color-danger)]`}>
-          <span>
-            {CATALOG_TEXT.versionsFailed} {unwrapIpcError(detail.error, '')}
-          </span>
-          <button
-            type="button"
-            onClick={() => void detail.refetch()}
-            disabled={detail.isFetching}
-            className={sizedButton(SECONDARY, type)}
-          >
-            <RefreshCw size={10} className={detail.isFetching ? 'animate-spin' : ''} aria-hidden="true" />
-            {CATALOG_TEXT.retry}
-          </button>
-        </div>
-      ) : revisions.length === 0 ? (
-        <div className={`${type.body} text-[var(--color-text-muted)]`}>{CATALOG_TEXT.versionsEmpty}</div>
-      ) : (
-        <ol className="space-y-2">
-          {revisions.map((revision) => {
-            const date = catalogDateLabel(revision.published_at)
-            const by = revision.published_by?.display_name
-            return (
-              <li
-                key={revision.revision_number}
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-2"
+      <ManagedList
+        scale={surface === 'settings' ? 'settings' : 'chrome'}
+        ordered
+        message={
+          detail.isLoading ? (
+            <ManagedListMessage>
+              <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+              {CATALOG_TEXT.versionsLoading}
+            </ManagedListMessage>
+          ) : detail.isError && !detail.data ? (
+            <ManagedListMessage role="alert" tone="danger">
+              <span>
+                {CATALOG_TEXT.versionsFailed} {unwrapIpcError(detail.error, '')}
+              </span>
+              <button
+                type="button"
+                onClick={() => void detail.refetch()}
+                disabled={detail.isFetching}
+                className={sizedButton(SECONDARY, type)}
               >
-                <div className={`flex min-w-0 items-baseline gap-2 ${type.body}`}>
-                  <span className="shrink-0 font-medium text-[var(--color-text)]">
-                    {catalogVersionLabel(revision.revision_number, revision.version)}
-                  </span>
-                  {by && <span className="min-w-0 truncate text-[var(--color-text-muted)]">{CATALOG_TEXT.sharedBy(by)}</span>}
-                  {date && <span className="ml-auto shrink-0 text-[var(--color-text-muted)]">{date}</span>}
+                <RefreshCw size={10} className={detail.isFetching ? 'animate-spin' : ''} aria-hidden="true" />
+                {CATALOG_TEXT.retry}
+              </button>
+            </ManagedListMessage>
+          ) : revisions.length === 0 ? (
+            <ManagedListMessage>{CATALOG_TEXT.versionsEmpty}</ManagedListMessage>
+          ) : undefined
+        }
+        footer={
+          revisions.length > VERSIONS_SHOWN ? (
+            <ManagedListFooterLink onClick={() => setShowAll((value) => !value)} aria-expanded={showAll}>
+              {showAll ? CATALOG_TEXT.showLess : CATALOG_TEXT.showAllVersions(revisions.length)}
+            </ManagedListFooterLink>
+          ) : undefined
+        }
+      >
+        {shown.map((revision, index) => {
+          const label = catalogVersionLabel(revision.revision_number, revision.version)
+          const date = catalogDateLabel(revision.published_at)
+          const by = revision.published_by?.display_name
+          const sub =
+            by || date ? (
+              <>
+                {by && <span>{CATALOG_TEXT.sharedBy(by)}</span>}
+                {by && date && ' · '}
+                {date && <span>{date}</span>}
+              </>
+            ) : undefined
+          const notes = revision.release_notes?.trim()
+          const open = !!notes && notesOpen.has(revision.revision_number)
+          const newest = index === 0
+          return (
+            <ManagedListRow
+              key={revision.revision_number}
+              lead={
+                <ManagedListDot
+                  tone={newest ? 'ok' : 'off'}
+                  label={newest ? CATALOG_TEXT.newestVersion : undefined}
+                />
+              }
+              title={label}
+              titleTooltip={label}
+              titleClassName="font-semibold"
+              sub={sub}
+              trailing={
+                notes ? (
+                  <ManagedListIconButton
+                    // The first version's notes can open under the pointer that clicked the tile.
+                    onClick={(event) => {
+                      if (!isUnsettledClick(settled, event)) toggleNotes(revision.revision_number)
+                    }}
+                    aria-expanded={open}
+                    title={CATALOG_TEXT.releaseNotes}
+                    aria-label={CATALOG_TEXT.releaseNotesFor(label)}
+                  >
+                    <FileText size={iconSize} aria-hidden="true" />
+                  </ManagedListIconButton>
+                ) : undefined
+              }
+            >
+              {open && notes && (
+                <div className="mt-1.5 pb-0.5">
+                  <ReleaseNotes text={notes} settled={settled} />
                 </div>
-                {revision.release_notes?.trim() && <ReleaseNotes text={revision.release_notes.trim()} settled={settled} />}
-              </li>
-            )
-          })}
-        </ol>
-      )}
+              )}
+            </ManagedListRow>
+          )
+        })}
+      </ManagedList>
     </section>
   )
 }

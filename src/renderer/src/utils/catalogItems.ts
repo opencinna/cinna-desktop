@@ -92,7 +92,13 @@ export const CATALOG_TEXT = {
   retry: 'Retry',
   sharedBy: (who: string) => `shared by ${who}`,
   showMore: 'Show more',
-  showLess: 'Show less'
+  showLess: 'Show less',
+  /** Under the newest versions, when there are more. */
+  showAllVersions: (count: number) => `Show all (${count})`,
+  /** The green dot on the first version. */
+  newestVersion: 'Newest version',
+  releaseNotes: 'Release notes',
+  releaseNotesFor: (label: string) => `Release notes for ${label}`
 } as const
 
 /** Words of a catalog skill's actions: Add to agent… in the catalog, Update / Try again / Remove on the agent's Skills section. */

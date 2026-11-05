@@ -699,16 +699,61 @@ describe('CatalogBrowserModal — detail', () => {
     // The month as a word: no reader has to guess the order.
     expect(within(rows[0]).getByText('13 Sep 2026')).toBeTruthy()
     expect(within(rows[1]).getByText('Version 2')).toBeTruthy()
+    // The newest is marked; the others are not.
+    expect(within(rows[0]).getByRole('img', { name: CATALOG_TEXT.newestVersion })).toBeTruthy()
+    expect(within(rows[1]).queryByRole('img')).toBeNull()
+    // Notes stay behind the row's notes icon until asked for.
+    expect(within(rows[0]).queryByText(/Line one/)).toBeNull()
+    const notes = within(rows[0]).getByRole('button', { name: CATALOG_TEXT.releaseNotesFor('Version 3 (1.2.0)') })
+    expect(notes.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(notes)
+    expect(notes.getAttribute('aria-expanded')).toBe('true')
+    expect(within(rows[0]).getByText(/Line one/)).toBeTruthy()
     // Long notes start clamped, with a control to open them; short ones have none.
     const more = within(rows[0]).getByRole('button', { name: CATALOG_TEXT.showMore })
     fireEvent.click(more)
     expect(within(rows[0]).getByRole('button', { name: CATALOG_TEXT.showLess }).getAttribute('aria-expanded')).toBe('true')
-    expect(within(rows[1]).queryByRole('button')).toBeNull()
+    fireEvent.click(within(rows[1]).getByRole('button', { name: CATALOG_TEXT.releaseNotesFor('Version 2') }))
+    expect(within(rows[1]).getByText('Short note.')).toBeTruthy()
+    expect(within(rows[1]).getAllByRole('button')).toHaveLength(1)
+    // Again closes them.
+    fireEvent.click(notes)
+    expect(within(rows[0]).queryByText(/Line one/)).toBeNull()
+    // Five versions or fewer: no Show all.
+    expect(within(versions).queryByRole('button', { name: /Show all/ })).toBeNull()
 
     // Kept while the dialog is open: back and in again reads nothing.
     fireEvent.click(screen.getByRole('button', { name: CATALOG_TEXT.back }))
     fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
     expect(itemMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the newest five versions, the rest behind Show all', async () => {
+    const revisions = Array.from({ length: 7 }, (_, i) => ({
+      revision_number: 7 - i,
+      version: null,
+      published_at: null,
+      published_by: null,
+      release_notes: null,
+      origin: 'publish' as const,
+      git_commit_sha: null
+    }))
+    itemMock.mockResolvedValue({ success: true, value: { ...INVOICES, revisions } })
+    mount()
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }))
+    const versions = screen.getByRole('region', { name: CATALOG_TEXT.versionsHeading })
+    expect(await within(versions).findAllByRole('listitem')).toHaveLength(5)
+    // A version without notes has no notes icon.
+    expect(within(within(versions).getAllByRole('listitem')[0]).queryByRole('button')).toBeNull()
+    const all = within(versions).getByRole('button', { name: CATALOG_TEXT.showAllVersions(7) })
+    expect(all.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(all)
+    expect(within(versions).getAllByRole('listitem').map((row) => row.textContent)).toEqual(
+      ['Version 7', 'Version 6', 'Version 5', 'Version 4', 'Version 3', 'Version 2', 'Version 1']
+    )
+    fireEvent.click(within(versions).getByRole('button', { name: CATALOG_TEXT.showLess }))
+    expect(within(versions).getAllByRole('listitem')).toHaveLength(5)
   })
 
   it('shows a failed read in the Versions section, keeps the dialog open, and retries there', async () => {
@@ -759,7 +804,7 @@ describe('CatalogBrowserModal — detail', () => {
       expect(onInstall).toHaveBeenCalledTimes(2)
     })
 
-    it('ignores a pointer click on the first version’s Show more until the view has settled', async () => {
+    it('ignores a pointer click on the first version’s notes until the view has settled', async () => {
       itemMock.mockResolvedValue({
         success: true,
         value: {
@@ -774,12 +819,16 @@ describe('CatalogBrowserModal — detail', () => {
       await loaded()
       await act(() => client.prefetchQuery({ queryKey: ['catalog', 'item', 'p1', 'u-invoices'], queryFn: async () => (await itemMock()).value }))
       fireEvent.click(screen.getByRole('button', { name: 'Invoice Watcher' }), { detail: 1 })
-      const more = screen.getByRole('button', { name: CATALOG_TEXT.showMore })
-      fireEvent.click(more, { detail: 2 })
-      expect(more.getAttribute('aria-expanded')).toBe('false')
+      const notes = screen.getByRole('button', { name: CATALOG_TEXT.releaseNotesFor('Version 3') })
+      fireEvent.click(notes, { detail: 2 })
+      expect(notes.getAttribute('aria-expanded')).toBe('false')
+      // Enter on the focused button is deliberate, settled or not.
+      fireEvent.click(notes, { detail: 0 })
+      expect(notes.getAttribute('aria-expanded')).toBe('true')
+      fireEvent.click(notes, { detail: 0 })
       act(() => vi.advanceTimersByTime(SETTLE_MS))
-      fireEvent.click(more, { detail: 1 })
-      expect(more.getAttribute('aria-expanded')).toBe('true')
+      fireEvent.click(notes, { detail: 1 })
+      expect(notes.getAttribute('aria-expanded')).toBe('true')
     })
   })
 })
