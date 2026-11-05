@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { installCachedEngine } from '../fixtures/engine-cache'
 import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
@@ -16,6 +16,7 @@ import {
   skillName,
   skillRow,
   uniqueName,
+  type BuiltAgent,
   type CatalogFixture
 } from '../fixtures/liveCatalog'
 import { coreCall, refreshLibrary, type PersonApp, type SharingPerson } from '../fixtures/liveTeamSharing'
@@ -48,7 +49,14 @@ import { coreCall, refreshLibrary, type PersonApp, type SharingPerson } from '..
  * (`share-people-list.png` in the test's output folder): the list is
  * portaled, so it may reach past the dialog's bottom and is never clipped.
  *
- * Billing: exactly one OpenCode turn. `CINNA_E2E_COMAINTAINER_SCRIPTED_EDIT=1`
+ * The `co-maintainer extra:` tests run no model (every edit is a file write):
+ * Replace on a diverged copy, a share refused as stale at publish time (not
+ * in the preview), a hand-written folder shared as A's next version and as a
+ * separate skill, and Make editable's `folder_exists` and `not_editor`
+ * refusals. `download_mismatch` cannot be provoked against a real core (its
+ * archive always hashes right); it stays unit-tested.
+ *
+ * Billing: exactly one OpenCode turn, in the first test only. `CINNA_E2E_COMAINTAINER_SCRIPTED_EDIT=1`
  * replaces it with a file write — for debugging later steps only; a run that
  * proves step 6 must not set it.
  */
@@ -326,5 +334,212 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     expect(await packagesNamed(fixture, personB, skill)).toEqual([uuid])
+  })
+})
+
+/**
+ * A's agent with `skill` shared at revision 1 (over IPC, no dialog) with B at
+ * `access`; B's app open with an agent of B's own.
+ */
+async function arrangeShared(
+  team: { fixture: unknown; open: (label: 'a' | 'b') => Promise<PersonApp> },
+  access: 'use' | 'edit' | 'maintain'
+): Promise<{ fixture: CatalogFixture; a: PersonApp; b: PersonApp; builtA: BuiltAgent; builtB: BuiltAgent; skill: string; uuid: string }> {
+  const fixture = team.fixture as CatalogFixture
+  const skill = skillName('tips')
+  const a = await team.open('a')
+  const builtA = await buildAgent(a, fixture, {
+    name: uniqueName(fixture, 'Comaint A'),
+    skill: { name: skill, description: 'Tips for answering.', body: 'Be brief.\n' }
+  })
+  const published = await a.page.evaluate((input) => window.api.skillPublish.publish(input), {
+    agentId: builtA.id,
+    name: skill,
+    releaseNotes: `Version 1 from A ${fixture.tag}`,
+    people: [{ userId: fixture.people.b.id, access }]
+  })
+  expect(published.ok, JSON.stringify(published)).toBe(true)
+  const uuid = (await skillItem(fixture, fixture.people.a.token, skill)).uuid as string
+  const b = await team.open('b')
+  const builtB = await buildAgent(b, fixture, { name: uniqueName(fixture, 'Comaint B') })
+  return { fixture, a, b, builtA, builtB, skill, uuid }
+}
+
+/** B pins the skill over IPC (Add to agent's verb); with `editable`, also Make editable's verb. */
+async function pinForB(b: PersonApp, builtB: BuiltAgent, skill: string, uuid: string, editable: boolean): Promise<void> {
+  const added = await b.page.evaluate((input) => window.api.catalogSkills.add(input.id, input.uuid), { id: builtB.id, uuid })
+  expect(added.ok, JSON.stringify(added)).toBe(true)
+  if (editable) {
+    const made = await b.page.evaluate((input) => window.api.catalogSkills.makeEditable(input.id, input.name), { id: builtB.id, name: skill })
+    expect(made.ok, JSON.stringify(made)).toBe(true)
+    expect(skillRecord(builtB.path, skill)).toMatchObject({ package_uuid: uuid, revision_number: 1 })
+  }
+  await b.page.evaluate(() => window.api.localAgents.rescan())
+}
+
+function appendLine(file: string, line: string): void {
+  writeFileSync(file, readFileSync(file, 'utf8') + `\n${line}\n`)
+}
+
+test('co-maintainer extra: a share refused as stale at publish time keeps the dialog and the note; Replace brings the newer version and backs up the edits', async ({ team }) => {
+  test.setTimeout(10 * 60_000)
+  const { fixture, a, b, builtA, builtB, skill, uuid } = await arrangeShared(team, 'maintain')
+  const { a: personA } = fixture.people
+  await pinForB(b, builtB, skill, uuid, true)
+  const folderB = join(builtB.path, 'skills', skill)
+  const skillMdA = join(builtA.path, 'skills', skill, 'SKILL.md')
+  const markerB = `B's unshared line ${fixture.tag}.`
+  const noteB = `B's note ${fixture.tag}`
+  appendLine(join(folderB, 'SKILL.md'), markerB)
+  await b.page.evaluate(() => window.api.localAgents.rescan())
+
+  await test.step('B opens Share a new version on a current copy; A shares Version 2 before B presses Share', async () => {
+    await freshSkills(b, builtB.name)
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share a new version of ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Share a new version of ${skill}`, exact: true })
+    const share = dialog.getByRole('button', { name: 'Share', exact: true })
+    await expect(share).toBeEnabled({ timeout: 30_000 })
+    await expect(dialog.locator('[data-share-stale]')).toHaveCount(0)
+    const note = dialog.getByRole('textbox', { name: 'Note (optional)' })
+    await note.fill(noteB)
+
+    appendLine(skillMdA, `A's Version 2 line ${fixture.tag}.`)
+    const published = await a.page.evaluate((input) => window.api.skillPublish.publish(input), { agentId: builtA.id, name: skill, releaseNotes: 'A: Version 2' })
+    expect(published.ok && published.revisionNumber, JSON.stringify(published)).toBe(2)
+
+    await share.click()
+    await expect(dialog.getByText(`${personA.name} shared Version 2 since your copy. Get it first, then share your changes.`, { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(dialog.getByText('Your copy has changes that were never shared. Replace on the skill’s row gets Version 2 and keeps your files in a backup folder.', { exact: true })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Get Version 2', exact: true })).toHaveCount(0)
+    await expect(dialog).toBeVisible()
+    await expect(note).toHaveValue(noteB)
+    await expect(share).toBeDisabled()
+    expect((await packageDetail(fixture, personA, uuid)).latest_revision_number).toBe(2)
+    expect(skillRecord(builtB.path, skill)?.revision_number).toBe(1)
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+
+  await test.step('the diverged row offers Replace (no Get); Replace makes the folder Version 2 and keeps B’s edits in skill-backups', async () => {
+    await freshSkills(b, builtB.name)
+    const row = skillRow(b, skill, 'Authored')
+    const replace = row.getByRole('button', { name: `Replace ${skill} with Version 2… — shared by ${personA.name}`, exact: true })
+    await expect(replace).toBeVisible({ timeout: 30_000 })
+    await expect(row.getByRole('button', { name: /^Get Version/ })).toHaveCount(0)
+    await replace.click()
+    const confirm = row.getByRole('group', { name: `Replace ${skill} with Version 2…`, exact: true })
+    await expect(confirm).toContainText(`Replace ${skill} with Version 2? Your changes that were never shared are moved to a backup folder outside this agent`)
+    await confirm.getByRole('button', { name: 'Replace', exact: true }).click()
+    await expect(row.getByRole('button', { name: /^(Replace|Get Version) / })).toHaveCount(0, { timeout: 60_000 })
+
+    expect(readFileSync(join(folderB, 'SKILL.md'), 'utf8')).toBe(readFileSync(skillMdA, 'utf8'))
+    const second = revisionOf(await packageDetail(fixture, personA, uuid), 2)
+    expect(skillRecord(builtB.path, skill)).toMatchObject({ package_uuid: uuid, revision_number: 2, content_hash: second.content_hash })
+    // Main names the folder by the agent id made path-safe (`folder:<uuid>` → `folder-<uuid>`), as `skillBackupDir` does.
+    const backups = join(b.sandbox.userData, 'skill-backups', builtB.id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, ''))
+    const kept = readdirSync(backups).filter((entry) => entry.startsWith(`${skill}-`) && !entry.endsWith('-set-aside'))
+    expect(kept).toHaveLength(1)
+    expect(readFileSync(join(backups, kept[0], 'SKILL.md'), 'utf8')).toContain(markerB)
+  })
+})
+
+test('co-maintainer extra: hand-written folders share as the next version of A’s skill, or as a separate skill', async ({ team }) => {
+  test.setTimeout(10 * 60_000)
+  const { fixture, b, skill, uuid } = await arrangeShared(team, 'maintain')
+  const { a: personA, b: personB } = fixture.people
+  const fork = await buildAgent(b, fixture, {
+    name: uniqueName(fixture, 'Comaint B fork'),
+    skill: { name: skill, description: 'Tips for answering, forked.', body: 'Be brief, forked.\n' }
+  })
+  const separate = await buildAgent(b, fixture, {
+    name: uniqueName(fixture, 'Comaint B own'),
+    skill: { name: skill, description: 'Tips for answering, my own.', body: 'Be brief, my own.\n' }
+  })
+
+  await test.step('New version of A’s (the default) → Version 2 of A’s package, shared by B on base 1', async () => {
+    await freshSkills(b, fork.name)
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
+    await expect(dialog.getByRole('radio', { name: `New version of ${personA.name}’s ${skill}`, exact: true })).toBeChecked({ timeout: 30_000 })
+    await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(`B's fork ${fixture.tag}`)
+    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+
+    expect(await packagesNamed(fixture, personB, skill)).toEqual([uuid])
+    const detail = await packageDetail(fixture, personA, uuid)
+    expect(detail.latest_revision_number).toBe(2)
+    expect(revisionOf(detail, 2)).toMatchObject({ published_by_user_id: personB.id, base_revision_number: 1, release_notes: `B's fork ${fixture.tag}` })
+    expect(skillRecord(fork.path, skill)).toMatchObject({ package_uuid: uuid, revision_number: 2 })
+  })
+
+  await test.step('A separate skill → a second package, published by B, linked from that folder', async () => {
+    await freshSkills(b, separate.name)
+    await skillRow(b, skill, 'Authored').getByRole('button', { name: `Share ${skill}…`, exact: true }).click()
+    const dialog = b.page.getByRole('dialog', { name: `Share ${skill}`, exact: true })
+    const own = dialog.getByRole('radio', { name: 'A separate skill', exact: true })
+    await expect(own).toBeEnabled({ timeout: 30_000 })
+    await own.check()
+    await expect(dialog.getByRole('radio', { name: `New version of ${personA.name}’s ${skill}`, exact: true })).not.toBeChecked()
+    await dialog.getByRole('button', { name: 'Share', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+
+    const named = await packagesNamed(fixture, personB, skill)
+    expect(named).toHaveLength(2)
+    const other = named.find((id) => id !== uuid)!
+    const otherDetail = await packageDetail(fixture, personB, other)
+    expect(otherDetail.publisher_user_id).toBe(personB.id)
+    expect(otherDetail.latest_revision_number).toBe(1)
+    expect(skillRecord(separate.path, skill)).toMatchObject({ package_uuid: other, revision_number: 1 })
+    expect((await packageDetail(fixture, personA, uuid)).latest_revision_number).toBe(2)
+  })
+})
+
+test('co-maintainer extra: Make editable refuses on an existing skills/<name>/ and once edit access is gone, touching nothing', async ({ team }) => {
+  test.setTimeout(10 * 60_000)
+  const { fixture, b, builtB, skill, uuid } = await arrangeShared(team, 'maintain')
+  const { a: personA, b: personB } = fixture.people
+  await pinForB(b, builtB, skill, uuid, false)
+  const pinsBefore = catalogPins(builtB.path)
+  const handDir = join(builtB.path, 'skills', skill)
+  await freshSkills(b, builtB.name)
+  const row = skillRow(b, skill, 'From the catalog')
+  const pencil = row.getByRole('button', { name: `Make ${skill} editable…`, exact: true })
+  const confirm = row.getByRole('group', { name: `Make ${skill} editable…`, exact: true })
+  await expect(pencil).toBeVisible({ timeout: 30_000 })
+
+  await test.step('folder_exists: a hand-written skills/<name>/ written after the pencil showed', async () => {
+    const hand = `---\nname: ${skill}\ndescription: By hand.\n---\n\nHand-written.\n`
+    mkdirSync(handDir, { recursive: true })
+    writeFileSync(join(handDir, 'SKILL.md'), hand)
+    await pencil.click()
+    await confirm.getByRole('button', { name: 'Make editable', exact: true }).click()
+    await expect(row.getByRole('alert')).toHaveText(`Rename or remove skills/${skill}/ first.`, { timeout: 30_000 })
+    expect(readFileSync(join(handDir, 'SKILL.md'), 'utf8')).toBe(hand)
+    expect(readdirSync(handDir)).toEqual(['SKILL.md'])
+    expect(catalogPins(builtB.path)).toEqual(pinsBefore)
+    expect(skillRecord(builtB.path, skill)).toBeUndefined()
+    await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+    rmSync(handDir, { recursive: true })
+    await b.page.evaluate(() => window.api.localAgents.rescan())
+    await expect(skillRow(b, skill, 'Authored')).toHaveCount(0, { timeout: 30_000 })
+  })
+
+  await test.step('not_editor: A lowers B to Can use in core; B (no listing refresh) presses Make editable', async () => {
+    const grants = await coreCall(fixture, personA.token, `/catalog/items/${uuid}/grants`)
+    expect(grants.status).toBe(200)
+    const body = (grants.body as { principal: { user_id?: string }; access: string }[]).map((g) => ({
+      principal: g.principal,
+      access: g.principal.user_id === personB.id ? 'use' : g.access
+    }))
+    expect((await coreCall(fixture, personA.token, `/catalog/items/${uuid}/grants`, { method: 'PUT', body })).status).toBe(200)
+    expect((await skillItem(fixture, personB.token, skill))?.access).toBe('use')
+
+    await expect(pencil).toBeVisible()
+    await pencil.click()
+    await confirm.getByRole('button', { name: 'Make editable', exact: true }).click()
+    await expect(row.getByRole('alert')).toHaveText('Ask a maintainer of this skill for edit access, then try again.', { timeout: 30_000 })
+    expect(existsSync(handDir)).toBe(false)
+    expect(catalogPins(builtB.path)).toEqual(pinsBefore)
+    expect(skillRecord(builtB.path, skill)).toBeUndefined()
   })
 })
