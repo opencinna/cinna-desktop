@@ -19,6 +19,7 @@ import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { ArtifactsHost } from './components/artifacts/ArtifactsHost'
 import { RunScriptModal } from './components/chat/RunScriptModal'
 import { useAuthStore } from './stores/auth.store'
+import { useUIStore } from './stores/ui.store'
 import { fetchSpeechStatus, SPEECH_STATUS_QUERY_KEY } from './components/chat/voice/useSpeechStatus'
 import { fetchFinderQuickActionStatus, FINDER_QUICK_ACTION_QUERY_KEY } from './hooks/useFinderQuickAction'
 import { flagReauthFromError } from './stores/reauth.store'
@@ -157,8 +158,16 @@ function Shell(): React.JSX.Element {
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.
+  // Minimal view's surfaces (main.css) key off these: `data-minimal` drives
+  // them, and with Extra UI animation off they fade without sliding.
+  const minimalView = useUIStore((s) => s.minimalView)
+  const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   return (
-    <div className="h-full flex flex-col min-h-0 p-2 relative">
+    <div
+      className="h-full flex flex-col min-h-0 p-2 relative"
+      data-minimal={minimalView || undefined}
+      data-motion-fade={!extraUIAnimation || undefined}
+    >
       <div className="flex-1 flex min-h-0 gap-2">
         <Sidebar />
         <MainArea />

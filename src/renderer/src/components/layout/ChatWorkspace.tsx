@@ -31,6 +31,11 @@ import { CinnaLogoDraw } from '../ui/CinnaLogoDraw'
 import type { ComposerAttachment } from '../../../../shared/attachments'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
+import { requestMinimalView, useMinimalView } from '../../hooks/useMinimalView'
+import { useWipeGesture } from '../../hooks/useWipeGesture'
+import { OPEN_FLOATING_LAYER_SELECTOR } from '../../hooks/useSidebarHoverDock'
+import { useOverscrollExit } from '../../hooks/useOverscrollExit'
+import { MinimalRestoreButton } from './MinimalRestoreButton'
 
 /** Why the new-chat composer holds sends while a picked agent is being drafted. */
 const DRAFTING_SEND_HOLD = "Drafting this agent's prompts — send when it finishes."
@@ -153,6 +158,23 @@ export function ChatWorkspace({
     ro.observe(el)
     return () => ro.disconnect()
   }, [activeChatId, activeView])
+
+  // Minimal view: the main chat view's open chat only — never the agent page's
+  // or the dashboard panel's workspace.
+  const chatAreaRef = useRef<HTMLDivElement>(null)
+  const composerAreaRef = useRef<HTMLDivElement>(null)
+  const minimal = useMinimalView({
+    enabled: !embedded && !hosted,
+    chatId: activeChatId,
+    inputHeight,
+    chatInputRef,
+    areaRef: chatAreaRef
+  })
+  const cloud = minimal.phase === 'cloud' || minimal.phase === 'returning'
+  // Whether the cloud shows (its draft has content): Jump to latest then sits above it.
+  const [cloudShown, setCloudShown] = useState(false)
+  // Scrolling down twice more at the bottom of the transcript leaves minimal view.
+  useOverscrollExit(chatAreaRef, { enabled: minimal.phase === 'cloud', onExit: minimal.restore })
   // Resolve effective provider exclusively from the active chat mode — the
   // app no longer keeps a "default LLM provider" concept, so the mode is the
   // single source of truth for both new chats and active chats that switch
@@ -275,6 +297,32 @@ export function ChatWorkspace({
   // its open state internally, so only the tilde popup needs coordinating here.
   const [tildeModePopupOpen, setTildeModePopupOpen] = useState(false)
   useEffect(() => setTildeModePopupOpen(false), [activeChatId, newChatDraftKey])
+
+  // The wipe across the composer's input that starts minimal view. It starts
+  // over while a composer popup is open or voice is recording.
+  useWipeGesture({
+    enabled: !embedded && !hosted && activeChatId !== null && minimal.phase === 'full',
+    // The input card (the textarea's box, chips included): every counted stroke crosses it.
+    getInput: () => {
+      const card = composerAreaRef.current?.querySelector('textarea[data-chat-composer]')?.parentElement
+      if (!card) return null
+      const { x, y, width, height } = card.getBoundingClientRect()
+      return { x, y, width, height }
+    },
+    isBlocked: () =>
+      tildeModePopupOpen ||
+      !!composerAreaRef.current?.querySelector('[data-composer-popup], [data-voice-recording]') ||
+      // A wipe made over a menu or a modal is not aimed at the composer behind it.
+      !!document.querySelector(`${OPEN_FLOATING_LAYER_SELECTOR}, .app-modal-panel`),
+    onWipe: () => { requestMinimalView(minimal.handoffPending) }
+  })
+
+  // Minimal view's transcript-wide drop target: files go through the
+  // composer's own drop path (`ChatInputHandle.dropFiles`).
+  const [minimalDropDepth, setMinimalDropDepth] = useState(0)
+  useEffect(() => { if (!minimal.on) setMinimalDropDepth(0) }, [minimal.on])
+  const takesMinimalDrop = (event: React.DragEvent): boolean =>
+    minimal.on && event.dataTransfer.types.includes('Files') && !!chatInputRef.current?.acceptsFileDrop()
 
   const handleTildeOpenRequest = useCallback(() => {
     setTildeModePopupOpen(true)
@@ -591,17 +639,49 @@ export function ChatWorkspace({
   const activeChatModeColor = activeChatMode ? getPreset(activeChatMode.colorPreset) : null
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
-      <MessageStream chatId={activeChatId} bottomPadding={inputHeight} />
+    <div
+      ref={chatAreaRef}
+      className="flex-1 flex flex-col min-w-0 relative overflow-hidden"
+      onDragEnter={(event) => {
+        if (!takesMinimalDrop(event)) return
+        event.preventDefault()
+        setMinimalDropDepth((depth) => depth + 1)
+      }}
+      onDragOver={(event) => {
+        if (!takesMinimalDrop(event)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(event) => {
+        if (!minimal.on || !event.dataTransfer.types.includes('Files')) return
+        setMinimalDropDepth((depth) => Math.max(0, depth - 1))
+      }}
+      onDrop={(event) => {
+        if (!minimal.on) return
+        setMinimalDropDepth(0)
+        // A drop on the cloud itself was taken by its own target already.
+        if (event.defaultPrevented || !takesMinimalDrop(event)) return
+        event.preventDefault()
+        chatInputRef.current?.dropFiles(event.dataTransfer)
+      }}
+    >
+      <MessageStream
+        chatId={activeChatId}
+        bottomPadding={minimal.bottomPadding}
+        // Minimal view: Jump to latest sits at the bottom edge, where the composer
+        // was, or above the cloud while it shows (the wrapper's measured height).
+        pillBottom={minimal.phase === 'cloud' ? (cloudShown ? Math.max(12, inputHeight - 8) : 12) : undefined}
+      />
       <div
         ref={inputWrapperRef}
-        className="absolute bottom-0 left-0 right-0 pt-6 pb-3 pointer-events-none"
+        data-minimal-phase={minimal.phase}
+        className="composer-dock absolute bottom-0 left-0 right-0 pt-6 pb-3 pointer-events-none"
       >
         {/* Backdrop-blur + top fade rendered as a sibling so it never clips the
             command / mention popups that overflow above the textarea. */}
         <div
           aria-hidden
-          className="absolute inset-0 pointer-events-none"
+          className={`absolute inset-0 pointer-events-none ${cloud ? 'hidden' : ''}`}
           style={{
             WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 24px)',
             maskImage: 'linear-gradient(to bottom, transparent, black 24px)',
@@ -609,12 +689,22 @@ export function ChatWorkspace({
             WebkitBackdropFilter: 'blur(12px)'
           }}
         />
-        <div className="relative pointer-events-auto">
-          {composerTop}
-          {sendErrorBanner}
+        <div
+          ref={composerAreaRef}
+          // Not clickable while it slides out or back, nor as the cloud's
+          // full-width strip (the cloud takes clicks itself only while it
+          // shows, main.css); never `inert`, so the textarea keeps focus.
+          className={`relative ${minimal.phase === 'full' || minimal.phase === 'entering' ? 'pointer-events-auto' : 'pointer-events-none'}`}
+        >
+          <div className={cloud ? 'hidden' : undefined}>
+            {composerTop}
+            {sendErrorBanner}
+          </div>
           <ChatInput
             ref={chatInputRef}
             chatId={activeChatId}
+            minimal={cloud}
+            onCloudShownChange={setCloudShown}
             onNewChatLike={onNewChatLike ?? handleNewChatLike}
             modeColor={activeChatModeColor}
             // A runtime mode's chat: the runtime chip carries the mode's glyph, not the generic bot.
@@ -654,6 +744,17 @@ export function ChatWorkspace({
           />
         </div>
       </div>
+      {minimal.on && minimalDropDepth > 0 && (
+        <div
+          data-testid="minimal-drop-overlay"
+          className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-2xl
+            border-2 border-dashed border-[var(--color-accent)] bg-[var(--color-accent)]/10 backdrop-blur-sm
+            text-sm font-medium text-[var(--color-accent)]"
+        >
+          Drop to attach
+        </div>
+      )}
+      {minimal.phase !== 'full' && <MinimalRestoreButton shown={minimal.phase === 'cloud'} onRestore={minimal.restore} />}
     </div>
   )
 }

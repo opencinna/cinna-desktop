@@ -270,6 +270,13 @@ interface UIStore {
   /** Hover mode only: the sidebar is floating over the chat now. Not persisted. */
   sidebarPeek: boolean
   /**
+   * Minimal view: an open chat with only its transcript on screen — the
+   * sidebar, the top bar's buttons and the full composer animate away, and a
+   * cloud input takes the composer's place. Session-only, never persisted;
+   * leaving the chat view ends it (`setActiveView`).
+   */
+  minimalView: boolean
+  /**
    * The file preview's Contents panel, as the user last left it. Only long
    * markdown files offer the panel, so it starts open.
    */
@@ -335,6 +342,7 @@ interface UIStore {
   setVoiceInputDeviceId: (deviceId: string | null) => void
   setShowVoiceInput: (show: boolean) => void
   setSidebarPeek: (peek: boolean) => void
+  setMinimalView: (on: boolean) => void
   /** Show the sidebar from code: opens it in fixed mode, peeks it in hover mode. */
   revealSidebar: () => void
   togglePreviewContents: () => void
@@ -389,6 +397,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   voiceInputDeviceId: localStorage.getItem(VOICE_INPUT_DEVICE_KEY) || null,
   showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) === '1',
   sidebarPeek: false,
+  minimalView: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
@@ -407,7 +416,9 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
   setAgentPageTabRequest: (tab) => set({ agentPageTabRequest: tab }),
   setCatalogItemRequest: (uuid) => set({ catalogItemRequest: uuid }),
-  setActiveView: (view) => set({ activeView: view }),
+  // Minimal view belongs to the chat view: any other view (a deep link, Inbox,
+  // Settings) ends it, so it is never waiting there on the way back.
+  setActiveView: (view) => set(view === 'chat' ? { activeView: view } : { activeView: view, minimalView: false }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   setActiveJobId: (id) => set({ activeJobId: id }),
@@ -465,6 +476,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set(docking === 'fixed' ? { sidebarDocking: docking, sidebarOpen: true, sidebarPeek: false } : { sidebarDocking: docking, sidebarPeek: false })
   },
   setSidebarPeek: (sidebarPeek) => set({ sidebarPeek }),
+  setMinimalView: (minimalView) => set({ minimalView }),
   setVoiceInputDeviceId: (voiceInputDeviceId) => {
     if (voiceInputDeviceId) localStorage.setItem(VOICE_INPUT_DEVICE_KEY, voiceInputDeviceId)
     else localStorage.removeItem(VOICE_INPUT_DEVICE_KEY)
@@ -568,9 +580,13 @@ export function disabledCapabilityOnScreen(
   return null
 }
 
-/** Whether the sidebar is on screen, in either docking mode. */
-export const selectSidebarVisible = (state: Pick<UIStore, 'sidebarDocking' | 'sidebarOpen' | 'sidebarPeek'>): boolean =>
-  state.sidebarDocking === 'fixed' ? state.sidebarOpen : state.sidebarPeek
+/**
+ * Whether the sidebar is on screen, in either docking mode. Minimal view hides
+ * it without touching `sidebarOpen` / `sidebarDocking`, so leaving minimal
+ * returns exactly the state it left.
+ */
+export const selectSidebarVisible = (state: Pick<UIStore, 'sidebarDocking' | 'sidebarOpen' | 'sidebarPeek' | 'minimalView'>): boolean =>
+  !state.minimalView && (state.sidebarDocking === 'fixed' ? state.sidebarOpen : state.sidebarPeek)
 
 applyTheme(useUIStore.getState().theme)
 const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)')

@@ -19,6 +19,8 @@ const fixtures = vi.hoisted(() => {
     defaultRouting: 'human' as 'human' | 'coordinator'
   }
 })
+// Minimal view reads the chat's pending handoff from the query cache; no client here.
+vi.mock('../tasks/PendingHandoffControl', () => ({ useChatHandoffPending: () => false }))
 vi.mock('../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { defaultMultiAgentRouting: fixtures.defaultRouting } }) }))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: fixtures.agents }) }))
 vi.mock('../../hooks/useChatModes', () => ({ useChatModes: () => ({ data: [] }), useDefaultChatMode: () => ({ data: null }) }))

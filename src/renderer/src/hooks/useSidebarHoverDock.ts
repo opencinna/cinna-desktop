@@ -31,12 +31,15 @@ export const PEEK_REVEAL_HOLD_MS = 2500
  * A field being edited inside the sidebar — a chat rename, a search — holds
  * it too, so the text does not vanish under the user's typing.
  */
+/**
+ * An open menu, listbox, dialog or body-portaled popover anywhere in the
+ * window. Also what keeps minimal view from sending keys to its cloud input.
+ */
+export const OPEN_FLOATING_LAYER_SELECTOR =
+  '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [aria-modal="true"], body > .app-popover-surface'
+
 export function sidebarCloseBlocked(sidebar: HTMLElement | null, doc: Document = document): boolean {
-  if (
-    doc.querySelector(
-      '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [aria-modal="true"], body > .app-popover-surface'
-    )
-  ) {
+  if (doc.querySelector(OPEN_FLOATING_LAYER_SELECTOR)) {
     return true
   }
   const active = doc.activeElement

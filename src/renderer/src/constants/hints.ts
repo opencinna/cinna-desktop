@@ -42,6 +42,7 @@ export type HintEvent =
   | 'double-escape'
   | 'agent-with-prompts-selected'
   | 'agent-with-commands-selected'
+  | 'minimal-view-entered'
 
 /** A key name rendered as an inline chip rather than as literal text. */
 export interface HintKey {
@@ -198,6 +199,15 @@ export const HINTS: readonly Hint[] = [
     segments: ['Drag files straight onto the message box to attach them'],
     available: (c) => c.canAttachFiles,
     retiredBy: ['files-dropped']
+  },
+  {
+    // Taught here although it works only in an open chat: the new-chat screen
+    // is the only surface with a hint bar. Once found, it is known.
+    id: 'minimal-view-wipe',
+    surfaces: NEW_CHAT,
+    segments: ['In a chat, swipe the pointer back and forth across the message box three times for a minimal view'],
+    retiredBy: ['minimal-view-entered'],
+    retireAfter: 1
   },
   {
     id: 'plus-menu',

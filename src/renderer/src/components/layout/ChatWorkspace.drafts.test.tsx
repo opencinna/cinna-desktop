@@ -8,6 +8,8 @@ const fixtures = vi.hoisted(() => {
     modes: [{ id: 'm1', name: 'Default', colorPreset: 'slate', mcpProviderIds: [] }, { id: 'm2', name: 'Chosen', colorPreset: 'rose', mcpProviderIds: [] }]
   }
 })
+// Minimal view reads the chat's pending handoff from the query cache; no client here.
+vi.mock('../tasks/PendingHandoffControl', () => ({ useChatHandoffPending: () => false }))
 vi.mock('../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { defaultMultiAgentRouting: 'human' } }) }))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: fixtures.agents }) }))
 vi.mock('../../hooks/useChatModes', () => ({ useChatModes: () => ({ data: fixtures.modes }), useDefaultChatMode: () => ({ data: fixtures.modes[0] }) }))

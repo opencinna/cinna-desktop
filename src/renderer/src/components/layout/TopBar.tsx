@@ -97,6 +97,9 @@ export function TopBar(): React.JSX.Element {
   // The sidebar footer carries the update badge; with the sidebar out of view
   // the ready badge moves here, so a downloaded update is never invisible.
   const sidebarVisible = useUIStore(selectSidebarVisible)
+  // Minimal view: the buttons slide up and fade, out of reach; the strip stays
+  // so the window can still be dragged by it.
+  const minimal = useUIStore((s) => s.minimalView)
   const [wave, setWave] = useState(false)
 
   useEffect(() => {
@@ -129,9 +132,14 @@ export function TopBar(): React.JSX.Element {
 
   return (
     <div
-      data-header-wave={extraUIAnimation && wave || undefined}
-      className={`app-drag-strip absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30 flex items-center gap-1 ${TRAFFIC_LIGHT_GUTTER} pr-3`}
+      className={`app-drag-strip absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30 flex items-center ${TRAFFIC_LIGHT_GUTTER} pr-3`}
     >
+      {/* The wave staggers by `nth-child`, so the buttons stay this box's direct children. */}
+      <div
+        data-header-wave={extraUIAnimation && wave || undefined}
+        inert={minimal || undefined}
+        className="app-topbar-controls flex-1 min-w-0 h-full flex items-center gap-1"
+      >
       <SidebarButton />
       <TasksButton className={TOPBAR_BTN} />
       <AgentStatusButton className={TOPBAR_BTN} />
@@ -145,6 +153,7 @@ export function TopBar(): React.JSX.Element {
         {!sidebarVisible && <UpdateStatusButton readyOnly className={TOPBAR_BTN} />}
         <JobOriginBanner />
         <DashboardOriginPill />
+      </div>
       </div>
     </div>
   )

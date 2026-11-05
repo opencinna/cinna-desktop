@@ -17,6 +17,8 @@ const fixtures = vi.hoisted(() => {
     startNewChat: vi.fn(async () => true)
   }
 })
+// Minimal view reads the chat's pending handoff from the query cache; no client here.
+vi.mock('../tasks/PendingHandoffControl', () => ({ useChatHandoffPending: () => false }))
 vi.mock('../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: fixtures.settings }) }))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [{ id: 'a1', name: 'Mail helper', skills: [] }, { id: 'a2', name: 'Other', skills: [] }] }) }))
 vi.mock('../../hooks/useChatModes', () => ({ useChatModes: () => ({ data: [] }), useDefaultChatMode: () => ({ data: null }) }))

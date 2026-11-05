@@ -188,3 +188,45 @@ describe('sidebar open state', () => {
     localStorage.removeItem('cinna-sidebar-open')
   })
 })
+
+describe('minimal view', () => {
+  beforeEach(() => {
+    localStorage.removeItem('cinna-sidebar-docking')
+    useUIStore.setState({ sidebarDocking: 'fixed', sidebarPeek: false, sidebarOpen: true, minimalView: false, activeView: 'chat' })
+  })
+
+  it('starts off and is never persisted', () => {
+    expect(useUIStore.getInitialState().minimalView).toBe(false)
+    const before = { ...localStorage }
+    useUIStore.getState().setMinimalView(true)
+    expect(useUIStore.getState().minimalView).toBe(true)
+    expect({ ...localStorage }).toEqual(before)
+  })
+
+  it('hides the sidebar without touching its open state or docking, in either mode', () => {
+    useUIStore.getState().setMinimalView(true)
+    let state = useUIStore.getState()
+    expect(selectSidebarVisible(state)).toBe(false)
+    expect(state.sidebarOpen).toBe(true)
+    expect(state.sidebarDocking).toBe('fixed')
+    useUIStore.setState({ sidebarDocking: 'hover', sidebarPeek: true })
+    expect(selectSidebarVisible(useUIStore.getState())).toBe(false)
+    useUIStore.getState().setMinimalView(false)
+    expect(selectSidebarVisible(useUIStore.getState())).toBe(true)
+    useUIStore.setState({ sidebarDocking: 'fixed' })
+    state = useUIStore.getState()
+    expect(selectSidebarVisible(state)).toBe(true)
+  })
+
+  it('ends when any other view opens, and survives the chat view itself', () => {
+    useUIStore.getState().setMinimalView(true)
+    useUIStore.getState().setActiveView('chat')
+    expect(useUIStore.getState().minimalView).toBe(true)
+    for (const view of ['settings', 'inbox', 'tasks', 'local-agent'] as const) {
+      useUIStore.getState().setMinimalView(true)
+      useUIStore.getState().setActiveView(view)
+      expect(useUIStore.getState().minimalView).toBe(false)
+      useUIStore.getState().setActiveView('chat')
+    }
+  })
+})

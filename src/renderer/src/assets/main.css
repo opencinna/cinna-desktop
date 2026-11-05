@@ -834,6 +834,104 @@
     -webkit-app-region: no-drag;
   }
 
+  /* Minimal view (`data-minimal` on the app shell): only the transcript stays.
+     Every surface moves on the sidebar's 260ms curve; the sidebar itself
+     leaves through its own collapse (`selectSidebarVisible`). */
+  /* Top bar: the buttons slide up and fade. The strip stays, so the window is
+     still dragged by it, and hidden buttons stop carving no-drag holes in it. */
+  .app-topbar-controls {
+    transition:
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+  }
+  [data-minimal] .app-topbar-controls {
+    transform: translateY(calc(-100% - 8px));
+    opacity: 0;
+    pointer-events: none;
+  }
+  [data-minimal] .app-drag-strip button, [data-minimal] .app-drag-strip a {
+    -webkit-app-region: drag;
+  }
+  /* Composer (`useMinimalView` phases): the full composer slides down and
+     fades, then comes back as the cloud; restoring runs the same in reverse.
+     No opacity or transform at rest, so nothing here becomes the backdrop
+     root of the blurs inside. */
+  .composer-dock {
+    transition:
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+  }
+  .composer-dock[data-minimal-phase="leaving"],
+  .composer-dock[data-minimal-phase="returning"] {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  /* The cloud: borderless frosted glass with feathered edges, on a layer of
+     its own behind the text so the text is never feathered with it. The
+     layer and the content fade separately (not their common parent), so the
+     blur keeps its backdrop while it fades. Empty draft: invisible, still
+     focused. */
+  .composer-cloud-card::before {
+    content: '';
+    position: absolute;
+    inset: -12px -18px;
+    z-index: -1;
+    pointer-events: none;
+    /* Glass, not paint: a light accent tint, mostly see-through, over a blur
+       of what is behind. */
+    background-color: color-mix(in srgb, color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-secondary)) 38%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(150%);
+    backdrop-filter: blur(10px) saturate(150%);
+    /* Feathered rounded edge, corners included: a blurred rounded square
+       nine-sliced over the layer, so the corners fade as softly as the sides
+       at any size. (A border-radius clip cuts the blur off sharply.) */
+    -webkit-mask-box-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cfilter id='f' x='-50%25' y='-50%25' width='200%25' height='200%25'%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect x='12' y='12' width='76' height='76' rx='30' filter='url(%23f)'/%3E%3C/svg%3E") 36 fill / 36px stretch;
+    transition: opacity 180ms ease-out;
+  }
+  .composer-cloud-card > * {
+    transition: opacity 180ms ease-out;
+  }
+  .composer-cloud[data-cloud-empty] .composer-cloud-card::before,
+  .composer-cloud[data-cloud-empty] .composer-cloud-card > * {
+    opacity: 0;
+  }
+  /* An empty cloud takes no clicks: the transcript under it keeps them. The
+     textarea keeps focus and still receives forwarded keys. */
+  .composer-cloud {
+    pointer-events: auto;
+  }
+  .composer-cloud[data-cloud-empty],
+  .composer-cloud[data-cloud-empty] .composer-cloud-card,
+  .composer-cloud[data-cloud-empty] .composer-cloud-card * {
+    pointer-events: none;
+  }
+  /* The restore button fades in once the composer's exit is done. */
+  .minimal-restore {
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+  }
+  .minimal-restore[data-shown] {
+    opacity: 1;
+  }
+  /* Extra UI animation off, or reduced motion: fade only, no slide. */
+  /* Later and as specific as the rules above, so these win. */
+  [data-motion-fade] .app-topbar-controls,
+  [data-motion-fade] .composer-dock {
+    transform: none;
+  }
+  [data-minimal][data-motion-fade] .app-sidebar-wrap.is-collapsed {
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-minimal] .app-topbar-controls,
+    .composer-dock[data-minimal-phase] {
+      transform: none;
+    }
+    [data-minimal] .app-sidebar-wrap.is-collapsed {
+      transform: none;
+    }
+  }
+
   ::-webkit-scrollbar {
     width: 6px;
     /* `height` is the horizontal bar's thickness. Styling this pseudo-element

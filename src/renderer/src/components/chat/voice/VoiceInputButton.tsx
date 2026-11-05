@@ -204,6 +204,8 @@ function VoiceInputControl({
         type="button"
         aria-label={recording ? 'Stop recording' : 'Audio input'}
         aria-pressed={recording}
+        // Read by minimal view's wipe gesture, which does not count while recording.
+        data-voice-recording={recording || undefined}
         title={title}
         disabled={transcribing}
         onClick={() => {

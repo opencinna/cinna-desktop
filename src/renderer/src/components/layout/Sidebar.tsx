@@ -58,6 +58,8 @@ const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 export function Sidebar(): React.JSX.Element {
   const visible = useUIStore(selectSidebarVisible)
   const floating = useUIStore((s) => s.sidebarDocking === 'hover')
+  // Minimal view hides the sidebar (`selectSidebarVisible`) and its hover peek.
+  const minimal = useUIStore((s) => s.minimalView)
   const wrapRef = useRef<HTMLDivElement>(null)
   const hoverDock = useSidebarHoverDock(wrapRef)
   const activeView = useUIStore((s) => s.activeView)
@@ -110,10 +112,11 @@ export function Sidebar(): React.JSX.Element {
     <div
       ref={wrapRef}
       className={`app-sidebar-wrap h-full ${floating ? 'is-floating' : ''} ${visible ? '' : 'is-collapsed'}`}
+      inert={minimal || undefined}
       {...hoverDock.sidebar}
     >
       {/* Portaled: the wrap's transform would make `position: fixed` mean "inside the wrap". */}
-      {floating && !visible && createPortal(
+      {floating && !visible && !minimal && createPortal(
         <div className="app-sidebar-hot-zone" aria-hidden="true" data-testid="sidebar-hot-zone" {...hoverDock.hotZone} />,
         document.body
       )}

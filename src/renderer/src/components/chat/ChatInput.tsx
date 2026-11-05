@@ -74,6 +74,7 @@ import { useComposerDraftStore } from '../../stores/composerDraft.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { VoiceInputButton } from './voice/VoiceInputButton'
 import { useVoiceErrorToast } from './voice/useVoiceErrorToast'
+import { cloudHasContent } from '../../utils/minimalView'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
@@ -121,6 +122,15 @@ interface ChatInputProps {
   sendHold?: string | null
   /** The empty composer's placeholder, when the screen above it has a better one than "Type a message...". */
   placeholder?: string
+  /**
+   * Minimal view's cloud presentation: the same composer, restyled by class
+   * only (borderless frosted glass, no toolbar row, no notice panel) so the
+   * textarea never remounts and keeps focus, IME and selection. Visible only
+   * while the draft has content (`cloudHasContent`).
+   */
+  minimal?: boolean
+  /** Minimal view: told whether the cloud shows (its draft has content), before paint. */
+  onCloudShownChange?: (shown: boolean) => void
   /**
    * New-chat MCP engagement buffer. When `chatId` is null, the on-demand MCP
    * popup picks add to / remove from this list (owned by MainArea) instead of
@@ -273,6 +283,15 @@ export interface ChatInputHandle {
    * Never sends.
    */
   fill: (text: string) => void
+  /** Focus the input with the caret at the end of the draft (leaving minimal view). */
+  focusAtEnd: () => void
+  /** Whether a file drop would be taken now — the same rule the composer's own drop target applies. */
+  acceptsFileDrop: () => boolean
+  /**
+   * Attach dropped files through the composer's one drop path. Minimal view's
+   * transcript-wide drop target hands its drops here.
+   */
+  dropFiles: (dataTransfer: DataTransfer) => void
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
@@ -297,7 +316,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onOpenChatFolder,
     onNewChatLike,
     sendHold = null,
-    placeholder
+    placeholder,
+    minimal = false,
+    onCloudShownChange
   },
   ref
 ) {
@@ -473,6 +494,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   useImperativeHandle(ref, () => ({
     focus: focusComposer,
+    focusAtEnd: () => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    },
+    acceptsFileDrop: () => dropRef.current.canAcceptDrop,
+    dropFiles: (dataTransfer: DataTransfer) => dropRef.current.dropFiles(dataTransfer),
     clearInput: () => {
       setInput('')
       const el = textareaRef.current
@@ -1171,13 +1200,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     },
     [canAcceptDrop]
   )
-  const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
+  // The one drop path: the card's own target and minimal view's transcript
+  // target (through the handle) both end here.
+  const dropFiles = useCallback(
+    (dataTransfer: DataTransfer) => {
       if (!canAcceptDrop) return
-      if (!e.dataTransfer.types.includes('Files')) return
-      e.preventDefault()
+      if (!dataTransfer.types.includes('Files')) return
       setDragOverDepth(0)
-      const dropped = Array.from(e.dataTransfer.files ?? [])
+      const dropped = Array.from(dataTransfer.files ?? [])
       if (dropped.length === 0) return
       // Renderer can't read file paths off `File` objects directly under
       // contextIsolation + sandbox — webUtils.getPathForFile is the
@@ -1195,6 +1225,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     },
     [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer, observeHint]
   )
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canAcceptDrop) return
+      if (!e.dataTransfer.types.includes('Files')) return
+      e.preventDefault()
+      dropFiles(e.dataTransfer)
+    },
+    [canAcceptDrop, dropFiles]
+  )
+  const dropRef = useRef({ canAcceptDrop, dropFiles })
+  dropRef.current = { canAcceptDrop, dropFiles }
 
   // A refused oversize paste stops being news once a paste goes through, or a
   // chip is inserted or removed. Only that error: a file error stays.
@@ -1994,9 +2035,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     void handleSend()
   }
 
+  // Minimal view's cloud: shown only while the draft has something to send.
+  const cloudEmpty = minimal && !cloudHasContent({
+    text: input,
+    attachments: pendingAttachments.length,
+    notes: pendingNotes.length,
+    pathRefs: pathRefs.length,
+    pastes: pastes.length,
+    attachError
+  })
+  const cloudShown = minimal && !cloudEmpty
+  const onCloudShownChangeRef = useRef(onCloudShownChange)
+  onCloudShownChangeRef.current = onCloudShownChange
+  useLayoutEffect(() => { onCloudShownChangeRef.current?.(cloudShown) }, [cloudShown])
+  const popupOpen = agentPopupOpen || promptPopupOpen || commandPopupOpen || notePopupOpen || (tildeActive && !!tildeModePopup)
+
+  // Minimal view switches classes on these same elements, never the tree, so
+  // the textarea below keeps its node (focus, IME, selection) across the switch.
   return (
-    <div data-sidebar-band-limit className="w-full max-w-3xl mx-auto px-4 relative">
-      <div className="absolute bottom-full right-4 mb-2"><PendingHandoffControl chatId={chatId} /></div>
+    <div
+      data-sidebar-band-limit
+      data-testid={minimal ? 'minimal-cloud' : undefined}
+      data-cloud-empty={cloudEmpty || undefined}
+      data-composer-popup={popupOpen || undefined}
+      // The cloud stays clear of the restore button in the corner.
+      className={`w-full max-w-3xl mx-auto relative ${minimal ? 'composer-cloud px-[3.25rem]' : 'px-4'}`}
+    >
+      <div className={`absolute bottom-full right-4 mb-2 ${minimal ? 'hidden' : ''}`}><PendingHandoffControl chatId={chatId} /></div>
       {agentPopupOpen &&
         (useCombinedPopup ? (
           <AgentMcpMentionPopup
@@ -2071,26 +2136,31 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
-      {notices.length > 0
-        ? <ComposerNoticePanel notices={notices} />
-        : cacheNotice && <CacheExpiryNotice notice={cacheNotice.notice} onNewChat={onNewChatLike} onDismiss={cacheNotice.dismiss} />}
+      {/* No box of its own; the cloud hides it. */}
+      <div className={minimal ? 'hidden' : 'contents'}>
+        {notices.length > 0
+          ? <ComposerNoticePanel notices={notices} />
+          : cacheNotice && <CacheExpiryNotice notice={cacheNotice.notice} onNewChat={onNewChatLike} onDismiss={cacheNotice.dismiss} />}
+      </div>
       {finishSetupDialog}
 
       <div
         // Takes its turn in the secondary buttons' border glow (useAmbientButtons).
-        data-ambient-card
-        className="ambient-grid-surface ambient-button relative z-[1] rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        data-ambient-card={minimal ? undefined : true}
+        className={minimal
+          ? 'composer-cloud-card relative z-[1] rounded-2xl'
+          : 'ambient-grid-surface ambient-button relative z-[1] rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200'}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        style={{
+        style={minimal ? undefined : {
           borderColor: inputBorderColor,
           backgroundColor: modeColor ? modeColor.bg : undefined,
           '--ambient-input-tint': inputBorderColor
         } as CSSProperties}
       >
-        <AmbientGrid inputRef={textareaRef} borderGlow={false} />
+        <AmbientGrid active={!minimal} inputRef={textareaRef} borderGlow={false} />
         <textarea
           ref={textareaRef}
           // Found by surfaces outside the composer that hand focus back to it (a brief card's Keep talking).
@@ -2157,6 +2227,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           </div>
         )}
       </div>
+      {/* The cloud has no toolbar: its attach error sits under it instead, one line. */}
+      {minimal && attachError && (
+        <div
+          role="alert"
+          title={attachError}
+          className="relative z-[1] mt-1 px-1 truncate text-right text-[11px] text-[var(--color-danger)]"
+        >
+          {attachError}
+        </div>
+      )}
 
 
       {previewNote && (
@@ -2218,7 +2298,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
       {/* `@container/composer`: the session badges collapse by this row's width.
           `gap-2`: a chip scrolled half out of view must not touch the badges. */}
-      <div className="@container/composer flex items-center justify-between gap-2 px-1 pt-2">
+      {/* Hidden, not unmounted, in the cloud: the voice input keeps its state. */}
+      <div className={`@container/composer ${minimal ? 'hidden' : 'flex'} items-center justify-between gap-2 px-1 pt-2`}>
         {/*
           One line at every width (ux_rules §1): a session badge arriving on the
           right must never fold this cluster onto a second row and move the

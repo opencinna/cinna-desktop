@@ -263,6 +263,8 @@ function renderCommandToolPair(opts: {
 interface MessageStreamProps {
   chatId: string
   bottomPadding?: number
+  /** Where the floating pills sit instead of over the composer's fade band (minimal view: the bottom edge). */
+  pillBottom?: number
 }
 
 const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
@@ -286,13 +288,15 @@ function TranscriptPills({
   pinned,
   onCollapse,
   onJumpToLatest,
-  bottomPadding
+  bottomPadding,
+  pillBottom
 }: {
   store: TranscriptExpansionStore
   pinned: boolean
   onCollapse: () => void
   onJumpToLatest: () => void
   bottomPadding?: number
+  pillBottom?: number
 }): React.JSX.Element | null {
   const hasExpanded = useSyncExternalStore(store.subscribe, store.hasExpanded)
   if (pinned && !hasExpanded) return null
@@ -305,7 +309,7 @@ function TranscriptPills({
   return (
     <div
       className="absolute inset-x-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-2 whitespace-nowrap pointer-events-none"
-      style={{ bottom: Math.max(0, (bottomPadding ?? 0) - 8) }}
+      style={{ bottom: pillBottom ?? Math.max(0, (bottomPadding ?? 0) - 8) }}
     >
       <div className="flex justify-end">
         {hasExpanded && (
@@ -629,7 +633,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
 const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
-export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding, pillBottom }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
@@ -932,6 +936,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
       // Tables in this transcript keep their header row in view (main.css,
       // against `--transcript-pt` and `--sticky-table-top`).
       data-sticky-tables={stickyTableHeaders || undefined}
+      // Minimal view's double overscroll reads this box's geometry (useOverscrollExit).
+      data-transcript-scroll
       className="flex-1 overflow-y-auto px-4 pb-4 [--transcript-pt:calc(var(--topbar-h)+12px)] [--transcript-fade:10px] pt-[var(--transcript-pt)]"
       style={{
         paddingBottom: bottomPadding ? bottomPadding + 41 : undefined,
@@ -1859,6 +1865,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
         onCollapse={collapseExpanded}
         onJumpToLatest={scrollToBottom}
         bottomPadding={bottomPadding}
+        pillBottom={pillBottom}
       />
       {messageContextMenu.menu}
     </CommandScopeContext.Provider>

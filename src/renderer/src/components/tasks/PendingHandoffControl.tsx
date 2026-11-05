@@ -5,13 +5,30 @@ import { useOpenExternal } from '../../hooks/useSystem'
 import { unwrapIpcError } from '../../utils/ipcError'
 import type { TaskHandoffReceipt } from '../../../../shared/taskHandoff'
 
+/** Whether a handoff receipt still waits on the user to review it. */
+export function isHandoffPending(receipt: TaskHandoffReceipt | null | undefined): boolean {
+  return !!receipt && ['creating', 'executing', 'accepted_pending', 'uncertain'].includes(receipt.state)
+}
+
+/**
+ * Whether the open chat has a pending handoff, read from the cache the
+ * chat's `PendingHandoffControl` keeps polled (same query key; this adds no
+ * polling of its own). Minimal view refuses to start, or ends, on it.
+ */
+export function useChatHandoffPending(chatId: string | null): boolean {
+  const receipt = useQuery({ queryKey: ['pending-handoff', undefined, chatId],
+    queryFn: () => window.api.tasks.pendingChatHandoff(chatId!),
+    enabled: !!chatId, retry: false, staleTime: 5000 })
+  return isHandoffPending(receipt.data)
+}
+
 /** A receipt stays reachable even if a peer deletes the original task. */
 export function PendingHandoffControl({ taskId, chatId, children }: { taskId?: string; chatId?: string | null; children?: React.ReactNode }): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   const receipt = useQuery({ queryKey: ['pending-handoff', taskId, chatId],
     queryFn: () => taskId ? window.api.tasks.handoffReceipt(taskId) : window.api.tasks.pendingChatHandoff(chatId!),
     enabled: !!taskId || !!chatId, retry: false, refetchInterval: 5000 })
-  const pending = receipt.data && ['creating', 'executing', 'accepted_pending', 'uncertain'].includes(receipt.data.state)
+  const pending = isHandoffPending(receipt.data)
   if (!pending) return <>{children}</>
   return <>
     <button type="button" onClick={() => setOpen(true)} className="text-xs px-3 py-1.5 rounded-md border border-[var(--color-border)] text-[var(--color-warning)]">Review pending handoff</button>
