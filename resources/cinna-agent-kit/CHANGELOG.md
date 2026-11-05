@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `46a02dd68c41ab0b`.
+Your current kit is version `1baa7d60cc599cbf`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,16 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## How cloud credential names answer `requires_credentials`
+
+Documentation update, with no schema or contract-version change.
+`guides/14-dashboards.md` now states how cinna-core names a component's
+`requires_credentials` for a cloud agent: a linked credential answers to the
+bundle's credential spec name, else (an agent that isn't a bundle install) to the
+credential's own name; a name is ready when any credential linked under it is
+usable, and a name no linked credential resolves to counts as missing. This is
+what core already did.
 
 ## 1.21.0 — cloud agents' components on cinna-core dashboards
 
