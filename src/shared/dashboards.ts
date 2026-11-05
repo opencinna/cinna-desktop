@@ -241,6 +241,19 @@ export interface TileDto {
  */
 export type TileComponentState = 'ok' | 'agent_missing' | 'component_missing' | 'invalid' | 'wrong_server'
 
+/** A cloud agent's component list is read again at most this often, in the background from `dashboards.tiles()`. */
+export const CLOUD_CATALOGUE_TTL_MS = 60_000
+
+/**
+ * How often an open dashboard holding a cloud tile asks for its tiles, so a
+ * component changed elsewhere (the CLI, the web) reaches it without reopening.
+ * A fraction of the TTL: main drops an ask that comes less than a TTL after
+ * the last read, and other asks (tile pushes) reset that read at any moment,
+ * so polling at the TTL itself would often wait two periods. Each ask past the
+ * throttle is an IPC call and a SQLite read; core is read once per TTL at most.
+ */
+export const CLOUD_TILES_POLL_MS = CLOUD_CATALOGUE_TTL_MS / 4
+
 export interface TileView {
   tile: TileDto
   /** The title the tile shows: the user's, the component's, or its name. */

@@ -55,7 +55,8 @@ import {
   type ResolveReferenceOutcome,
   type CloudComponentsOutcome,
   type CloudOrigin,
-  type UpdateTileInput
+  type UpdateTileInput,
+  CLOUD_CATALOGUE_TTL_MS
 } from '../../../shared/dashboards'
 import { publishEvent } from '../../host/events'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
@@ -103,8 +104,7 @@ export interface CloudDeps {
   now?: () => number
 }
 
-/** A cloud agent's component list is read again at most this often (in the background, from `tiles()`). */
-export const CLOUD_CATALOGUE_TTL_MS = 60_000
+export { CLOUD_CATALOGUE_TTL_MS }
 
 function defaultCloud(): CloudDeps {
   return {

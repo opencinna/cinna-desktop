@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AddTileInput, DashboardsErrorCode, DashboardsOutcome, UpdateTileInput } from '../../../shared/dashboards'
+import { CLOUD_TILES_POLL_MS, type AddTileInput, type DashboardsErrorCode, type DashboardsOutcome, type UpdateTileInput } from '../../../shared/dashboards'
 
 /**
  * Dashboards in the renderer: queries over `window.api.dashboards`, and the
@@ -72,7 +72,10 @@ export function useDashboardTiles(dashboardId: string | null) {
     queryKey: dashboardTilesKey(dashboardId),
     queryFn: async () => unwrap(await window.api.dashboards.tiles(dashboardId!)),
     enabled: !!dashboardId,
-    retry: false
+    retry: false,
+    // Main re-reads a cloud agent's list only when asked for tiles; while a cloud tile is open, keep asking
+    // (paused while the window is hidden). A change it finds comes back as a tile-changed push.
+    refetchInterval: (query) => (query.state.data?.tiles.some((view) => view.tile.cloud) ? CLOUD_TILES_POLL_MS : false)
   })
 }
 
