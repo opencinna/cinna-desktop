@@ -42,6 +42,7 @@ The dashboard's chat panel works for a cloud tile too: the panel's chat is the d
 - **A timer never wakes.** `while_open_every` asks core with reason `interval`; core skips it while the environment sleeps (and floors it at 60 seconds). The tile keeps its data and shows no error.
 - **After a turn** of the agent in the panel, an on-screen cloud tile is asked again only where its effective refresh rule says `after_turn`, exactly as a local tile. Without that rule, every turn would spend the tile's budget on core and the owner's own filter changes would start being refused.
 - **No launch warm-up** for cloud tiles; "When Cinna starts" is hidden in Edit tile. Schedule-fed tiles follow core's lazy rule: missed occurrences collapse into one recompute when the data is next read.
+- **A component changed elsewhere follows within about a minute.** While a dashboard with a cloud tile is open, the app reads that agent's component list from core once a minute (never waking the environment), so a component broken, fixed or retitled through the CLI or the web updates the tile without reopening the dashboard.
 - **Refresh** asks core with reason `manual`; a params change sends the whole set and core recomputes.
 - **Changing the refresh rule wakes the environment.** Core re-checks a block's config on every change. A change core refuses because the environment is down, or never receives, is kept and sent again after the tile's next refresh core actually runs, up to three times.
 
