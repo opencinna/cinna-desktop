@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentShareStatus, ShareRefusal } from '../../../shared/agentSharing'
 import {
+  SHARE_ACCESS_DESCRIPTION,
   SHARE_ACCESS_TEXT,
   SHARE_BADGE_TEXT,
   SHARE_REFUSAL_TEXT,
@@ -48,6 +49,7 @@ function everyString(): string[] {
   for (const fn of Object.values(SHARE_STATE_TEXT)) out.push(fn(STATUS), fn({ ...STATUS, changedFiles: 1 }))
   for (const fn of Object.values(SHARE_BADGE_TEXT)) out.push(fn(STATUS), fn({ ...STATUS, changedFiles: 1 }))
   out.push(...Object.values(SHARE_ACCESS_TEXT))
+  out.push(...Object.values(SHARE_ACCESS_DESCRIPTION))
   for (const value of Object.values(SHARE_UI_TEXT)) {
     out.push(typeof value === 'function' ? (value as (x: string, y: string) => string)('Alpha', 'Bob') : value)
   }

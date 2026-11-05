@@ -23,6 +23,7 @@ import {
   type SharingFixture,
   type Team
 } from '../fixtures/liveTeamSharing'
+import { removeAccess } from '../fixtures/managedList'
 
 /**
  * A shared agent's life outside the day-to-day, against the real local
@@ -173,9 +174,7 @@ test('A takes B’s access away: B’s copy reads No longer shared', async ({ te
   const { a, b, name, slug } = await shared(team)
   await openSharingTab(a, name)
   const people = section(a, 'People')
-  await people.getByRole('button', { name: `Remove ${fixture.people.b.name}`, exact: true }).click()
-  await expect(people.getByText(`Remove ${fixture.people.b.name}’s access?`, { exact: true })).toBeVisible()
-  await people.getByRole('button', { name: 'Remove', exact: true }).click()
+  await removeAccess(people, fixture.people.b.name)
   await expect(people.getByText('No one else has access yet.', { exact: true })).toBeVisible({ timeout: 30_000 })
   expect(await catalogEntry(fixture, fixture.people.b.token, slug)).toBeUndefined()
 

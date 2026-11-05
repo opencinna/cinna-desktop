@@ -141,6 +141,17 @@ export const SHARE_ACCESS_TEXT: Record<LibraryAccess, string> = {
 }
 
 /**
+ * What each access means, one line under it in the People list's access
+ * picker. Each level adds to the one before it: edit is sharing new versions
+ * (Share changes, a skill's next version), maintain is also People.
+ */
+export const SHARE_ACCESS_DESCRIPTION: Record<LibraryAccess, string> = {
+  use: 'Get it from the catalog and use it',
+  edit: 'Also share changes to it',
+  maintain: 'Also change who has access'
+}
+
+/**
  * A refusal from a surface that talks to the team library itself (People,
  * Remove sharing): the server's own sentence when it gave one, since "try
  * again" in front of "another person has it" would say the wrong thing;
@@ -221,8 +232,15 @@ export const SHARE_UI_TEXT = {
   peopleOnlyMaintainers: 'No one but the maintainers has access yet.',
   accessLabel: 'Access',
   addPerson: 'Add',
-  removePerson: (name: string) => `Remove ${name}`,
   accessFor: (name: string) => `Access for ${name}`,
+  /** A People row's ⋯: its tooltip, accessible name and the menu's name. */
+  personActions: (name: string) => `Actions for ${name}`,
+  /** The ⋯ item that asks the row's confirm. */
+  removeAccessMenu: 'Remove access…',
+  /** The X of a person still being chosen (Share with the team, a skill's Share): nothing is sent yet. Its tooltip and accessible name. */
+  removeFromList: (name: string) => `Remove ${name} from the list`,
+  /** A role row's meta beside its server-given name. */
+  roleMeta: (role: string) => `${role} role`,
   // The Sharing tab.
   tabLabel: 'Sharing',
   whereShared: 'Where it’s shared',
@@ -254,9 +272,16 @@ export const SHARE_UI_TEXT = {
   everyone: 'Everyone on this server',
   roleMembers: (role: string) => `Everyone with the ${role} role`,
   you: 'You',
-  shareWithPerson: 'Share with a person…',
-  /** People, for a maintainer while the agent is not public: adds the Everyone row. */
-  shareWithEveryone: 'Share with everyone',
+  /**
+   * People's header button (with a Plus) that opens Share with a person; the
+   * dialog keeps the full title, `shareWithPersonTitle`.
+   */
+  shareWithPerson: 'Share',
+  /**
+   * People, for a maintainer while the agent is not public (with a Globe):
+   * adds the Everyone row.
+   */
+  shareWithEveryone: 'Make public',
   /** Share with the team's checkbox: the same words as the skill Share dialog's. */
   whoCanUse: 'Who can use it',
   everyoneCanUse: 'Everyone on this server can use it',

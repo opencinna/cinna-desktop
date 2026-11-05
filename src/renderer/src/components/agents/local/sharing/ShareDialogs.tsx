@@ -10,7 +10,16 @@ import type {
   ShareWithTeamInput,
   ShareWithTeamPerson
 } from '../../../../../../shared/agentSharing'
-import { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } from '../../../../utils/shareText'
+import { SHARE_ACCESS_DESCRIPTION, SHARE_ACCESS_TEXT, SHARE_UI_TEXT } from '../../../../utils/shareText'
+import {
+  ManagedList,
+  ManagedListAvatar,
+  ManagedListIconButton,
+  ManagedListMessage,
+  ManagedListPicker,
+  ManagedListRow,
+  type ManagedListPickerOption
+} from '../../../ui/ManagedList'
 
 /**
  * The sharing dialogs: Share changes (with its Bring together step), the
@@ -362,7 +371,11 @@ export function ShareConflictDialog({
 
 const ACCESS_CHOICES: LibraryAccess[] = ['use', 'edit', 'maintain']
 
-/** The access select every people list uses: Can use / Can edit / Maintainer. */
+/**
+ * Can use / Can edit / Maintainer as a native select, beside the search in
+ * Share with a person. The people lists themselves pick access in the row
+ * ({@link ManagedListPicker}).
+ */
 export function AccessSelect({
   value,
   label,
@@ -684,53 +697,75 @@ export function ChosenPeopleList({
           </span>
         )}
       </div>
-      <ul
-        aria-label={SHARE_UI_TEXT.peopleLabel}
-        data-chosen-people
-        className="h-[5.5rem] space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
-      >
-        {people.length === 0 ? (
-          <li className="px-1 py-0.5 text-[11px] text-[var(--color-text-muted)]">{emptyText}</li>
-        ) : (
-          people.map((person) => (
-            <li key={person.userId} className="flex items-center gap-2 px-1">
-              {unsent?.is(person) ? (
-                <span
-                  data-unsent
-                  className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-muted)] line-through"
-                  title={unsent.title(person)}
-                >
-                  {person.label}
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text)]" title={person.label}>
-                  {person.label}
-                </span>
-              )}
-              <AccessSelect
-                value={person.access}
-                label={SHARE_UI_TEXT.accessFor(person.label)}
-                disabled={disabled}
-                onChange={(access) =>
-                  onChange((list) => list.map((p) => (p.userId === person.userId ? { ...p, access } : p)))
+      {/* The People list's rows (ux_rules rule 13), in a surface of fixed
+          height that scrolls: a pick or a removal moves nothing below it. */}
+      <div data-chosen-people>
+        <ManagedList
+          scale="chrome"
+          aria-label={SHARE_UI_TEXT.peopleLabel}
+          surfaceClassName="h-[6.5rem] overflow-y-auto"
+          message={people.length === 0 ? <ManagedListMessage>{emptyText}</ManagedListMessage> : undefined}
+        >
+          {people.map((person) => {
+            const { name, email } = splitPersonLabel(person.label)
+            const notSent = unsent?.is(person) === true
+            return (
+              <ManagedListRow
+                key={person.userId}
+                lead={<ManagedListAvatar name={name} />}
+                title={
+                  notSent ? (
+                    <span data-unsent className="text-[var(--color-text-muted)] line-through" title={unsent!.title(person)}>
+                      {name}
+                    </span>
+                  ) : (
+                    name
+                  )
+                }
+                titleTooltip={notSent ? undefined : person.label}
+                meta={email ?? undefined}
+                trailing={
+                  <>
+                    <ManagedListPicker
+                      value={person.access}
+                      options={CHOSEN_ACCESS_OPTIONS}
+                      menuLabel={SHARE_UI_TEXT.accessFor(person.label)}
+                      disabled={disabled}
+                      onChange={(access) =>
+                        onChange((list) => list.map((p) => (p.userId === person.userId ? { ...p, access } : p)))
+                      }
+                    />
+                    {/* Nothing is sent yet, so one click takes them off the list. */}
+                    <ManagedListIconButton
+                      title={SHARE_UI_TEXT.removeFromList(name)}
+                      aria-label={SHARE_UI_TEXT.removeFromList(name)}
+                      disabled={disabled}
+                      onClick={() => onChange((list) => list.filter((p) => p.userId !== person.userId))}
+                    >
+                      <X size={13} aria-hidden="true" />
+                    </ManagedListIconButton>
+                  </>
                 }
               />
-              <button
-                type="button"
-                aria-label={SHARE_UI_TEXT.removePerson(person.label)}
-                title={SHARE_UI_TEXT.removePerson(person.label)}
-                disabled={disabled}
-                onClick={() => onChange((list) => list.filter((p) => p.userId !== person.userId))}
-                className="shrink-0 rounded p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            </li>
-          ))
-        )}
-      </ul>
+            )
+          })}
+        </ManagedList>
+      </div>
     </div>
   )
+}
+
+/** The access picker's choices in a list being chosen, as in People. */
+const CHOSEN_ACCESS_OPTIONS: ManagedListPickerOption<LibraryAccess>[] = ACCESS_CHOICES.map((access) => ({
+  value: access,
+  label: SHARE_ACCESS_TEXT[access],
+  description: SHARE_ACCESS_DESCRIPTION[access]
+}))
+
+/** "Bob <bob@x.test>" → the name as the title, the email as the row's meta. */
+function splitPersonLabel(label: string): { name: string; email: string | null } {
+  const match = /^(.*\S)\s*<([^<>]+)>$/.exec(label.trim())
+  return match ? { name: match[1], email: match[2] } : { name: label, email: null }
 }
 
 /**
@@ -877,7 +912,8 @@ export function ShareWithPersonDialog({
   pending,
   error,
   onAdd,
-  onCancel
+  onCancel,
+  overlayAttrs
 }: {
   /** Who already has access, left out of the answers. */
   exclude: ReadonlySet<string>
@@ -885,10 +921,12 @@ export function ShareWithPersonDialog({
   error: string | null
   onAdd: (person: PersonSearchResult, access: LibraryAccess) => void
   onCancel: () => void
+  /** The backdrop's marks when it opens over a dialog that itself marks its backdrop (Who can use over the catalog). */
+  overlayAttrs?: Record<string, string>
 }): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   return (
-    <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef}>
+    <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef} overlayAttrs={overlayAttrs}>
       <ShareWithPersonForm exclude={exclude} pending={pending} error={error} onAdd={onAdd} onCancel={onCancel} inputRef={searchRef} />
     </DialogShell>
   )
@@ -896,10 +934,7 @@ export function ShareWithPersonDialog({
 
 /**
  * The body of {@link ShareWithPersonDialog} — the search, what they may do,
- * the refusal and Cancel / Add — for a surface that is already a dialog (a
- * skill's Who can use) and shows it in place of its list rather than opening
- * a second dialog over itself. `focusOnMount` puts the cursor in the search
- * when it replaces the list.
+ * the refusal and Cancel / Add.
  */
 export function ShareWithPersonForm({
   exclude,
@@ -907,8 +942,7 @@ export function ShareWithPersonForm({
   error,
   onAdd,
   onCancel,
-  inputRef,
-  focusOnMount = false
+  inputRef
 }: {
   exclude: ReadonlySet<string>
   pending: boolean
@@ -916,17 +950,11 @@ export function ShareWithPersonForm({
   onAdd: (person: PersonSearchResult, access: LibraryAccess) => void
   onCancel: () => void
   inputRef?: React.RefObject<HTMLInputElement | null>
-  focusOnMount?: boolean
 }): React.JSX.Element {
   const ownRef = useRef<HTMLInputElement>(null)
   const searchRef = inputRef ?? ownRef
   const [person, setPerson] = useState<PersonSearchResult | null>(null)
   const [access, setAccess] = useState<LibraryAccess>('use')
-  useEffect(() => {
-    if (focusOnMount) searchRef.current?.focus()
-    // Once, on mount: the list it replaced had the focus.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
   return (
     <>
       <div className="flex items-end gap-2">

@@ -32,6 +32,7 @@ import {
   type PersonApp,
   type SharingPerson
 } from '../fixtures/liveTeamSharing'
+import { accessPicker, accessPickers, expectAccess, peopleRow, personActions, pickAccess, removeAccess } from '../fixtures/managedList'
 
 /**
  * Sharing a desktop agent, Part 2 theme T5: who an agent reaches (named
@@ -129,14 +130,14 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
 
   await test.step('A: the Sharing tab’s People lists B and C at Can use, no Everyone row — what core holds', async () => {
     await openSharingTab(a, name)
-    await expect(people(a).getByRole('combobox', { name: `Access for ${personB.name}` })).toHaveValue('use')
-    await expect(people(a).getByRole('combobox', { name: `Access for ${personC.name}` })).toHaveValue('use')
-    await expect(people(a).getByRole('combobox')).toHaveCount(2)
+    await expectAccess(people(a), personB.name, 'use')
+    await expectAccess(people(a), personC.name, 'use')
+    await expect(accessPickers(people(a))).toHaveCount(2)
     await expect(people(a).getByText('Everyone on this server', { exact: true })).toHaveCount(0)
   })
 
-  await test.step('A makes it public with People’s Share with everyone; the tab shows Everyone at Can use and drops the button; core: public', async () => {
-    const shareWithEveryone = people(a).getByRole('button', { name: 'Share with everyone', exact: true })
+  await test.step('A makes it public with People’s Make public; the tab shows Everyone at Can use and drops the button; core: public', async () => {
+    const shareWithEveryone = people(a).getByRole('button', { name: 'Make public', exact: true })
     await expect(shareWithEveryone).toBeVisible()
     await shot(a, 'A1-people-share-with-everyone.png')
     await shareWithEveryone.click()
@@ -145,10 +146,10 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
     await expect(people(a).getByRole('alert')).toHaveCount(0)
     await expect.poll(() => visibilityOf(a, agent.slug)).toBe('public')
     await reopenSharing(a)
-    const everyone = people(a).locator('div').filter({ hasText: /^Everyone on this server/ }).last()
-    await expect(people(a).getByText('Everyone on this server', { exact: true })).toBeVisible()
+    const everyone = peopleRow(people(a), 'Everyone on this server')
+    await expect(everyone).toBeVisible()
     await expect(everyone).toContainText('Can use')
-    await expect(people(a).getByRole('button', { name: 'Remove Everyone on this server', exact: true })).toBeVisible()
+    await expect(personActions(people(a), 'Everyone on this server')).toBeVisible()
   })
 
   await test.step('D: now the catalog lists it, and D Gets it; core records D’s local install', async () => {
@@ -160,9 +161,7 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
   })
 
   await test.step('A removes Everyone in People (asks in the row); core: users again, grants unchanged', async () => {
-    await people(a).getByRole('button', { name: 'Remove Everyone on this server', exact: true }).click()
-    await expect(people(a).getByText('Remove Everyone on this server’s access?', { exact: true })).toBeVisible()
-    await people(a).getByRole('button', { name: 'Remove', exact: true }).click()
+    await removeAccess(people(a), 'Everyone on this server')
     await expect(people(a).getByText('Everyone on this server', { exact: true })).toHaveCount(0, { timeout: 30_000 })
     await expect.poll(() => visibilityOf(a, agent.slug)).toBe('users')
     const entry = await catalogEntry(fixture, personA.token, agent.slug)
@@ -172,20 +171,19 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
   })
 
   await test.step('A changes C to Can edit and back to Can use; core follows each, and the reopened tab reads core’s list', async () => {
-    const cSelect = people(a).getByRole('combobox', { name: `Access for ${personC.name}` })
-    await cSelect.selectOption('edit')
-    await expect(cSelect).toBeEnabled({ timeout: 30_000 })
+    await pickAccess(people(a), personC.name, 'edit')
+    await expect(accessPicker(people(a), personC.name)).toBeEnabled({ timeout: 30_000 })
     const uuid = (await catalogEntry(fixture, personA.token, agent.slug)).uuid
     await expect.poll(() => catalogGrants(fixture, personA.token, uuid)).toContain(grant(personC, 'edit'))
     await reopenSharing(a)
-    await expect(people(a).getByRole('combobox', { name: `Access for ${personC.name}` })).toHaveValue('edit')
-    await people(a).getByRole('combobox', { name: `Access for ${personC.name}` }).selectOption('use')
+    await expectAccess(people(a), personC.name, 'edit')
+    await pickAccess(people(a), personC.name, 'use')
     await expect.poll(() => catalogGrants(fixture, personA.token, uuid)).toEqual(
       [grant(personA, 'maintain'), grant(personB, 'use'), grant(personC, 'use')].sort()
     )
     await reopenSharing(a)
-    await expect(people(a).getByRole('combobox', { name: `Access for ${personB.name}` })).toHaveValue('use')
-    await expect(people(a).getByRole('combobox', { name: `Access for ${personC.name}` })).toHaveValue('use')
+    await expectAccess(people(a), personB.name, 'use')
+    await expectAccess(people(a), personC.name, 'use')
     await expect(people(a).getByText('Everyone on this server', { exact: true })).toHaveCount(0)
   })
 
@@ -211,26 +209,26 @@ test('A2 A makes B a Maintainer; B adds C from B’s own app and core records it
     await getAgent(b, name)
     await openSharingTab(b, name)
     await expect(people(b).getByText('Only a maintainer can change who has access.', { exact: true })).toBeVisible()
-    await expect(people(b).getByRole('button', { name: 'Share with a person…' })).toHaveCount(0)
+    await expect(people(b).getByRole('button', { name: 'Share', exact: true })).toHaveCount(0)
   })
 
   await test.step('A sets B to Maintainer in People; core: A and B maintain', async () => {
     await openSharingTab(a, name)
-    await people(a).getByRole('combobox', { name: `Access for ${personB.name}` }).selectOption('maintain')
+    await pickAccess(people(a), personB.name, 'maintain')
     await expect.poll(() => catalogGrants(fixture, personA.token, uuid)).toEqual([grant(personA, 'maintain'), grant(personB, 'maintain')].sort())
   })
 
-  await test.step('B, reopening Sharing: People is B’s to change; B adds C at Can use through Share with a person…', async () => {
+  await test.step('B, reopening Sharing: People is B’s to change; B adds C at Can use through Share', async () => {
     await refreshLibrary(b)
     await reopenSharing(b)
-    await people(b).getByRole('button', { name: 'Share with a person…' }).click()
+    await people(b).getByRole('button', { name: 'Share', exact: true }).click()
     const dialog = b.page.getByRole('dialog', { name: 'Share with a person' })
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(personC.name)
     await dialog.getByRole('option', { name: `${personC.name} <${personC.email}>` }).click()
     await expect(dialog.getByRole('combobox', { name: 'Access', exact: true })).toHaveValue('use')
     await dialog.getByRole('button', { name: 'Add', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30_000 })
-    await expect(people(b).getByRole('combobox', { name: `Access for ${personC.name}` })).toHaveValue('use')
+    await expectAccess(people(b), personC.name, 'use')
   })
 
   await test.step('core: A and B maintain, C uses; C’s catalog lists it', async () => {

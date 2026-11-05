@@ -22,9 +22,9 @@ import { PeopleSection, usePeopleEditor } from './PeopleSection'
  * The dialog owns the write (hook-level, so its answer lands after a
  * re-render) and closes only on Close, Escape or an outside click — never on
  * a refusal, which shows beside the control it answered (rule 6), and not
- * while a write runs. Share with a person… replaces the list with its form
- * inside this dialog rather than stacking a second one; Escape there goes
- * back to the list. Top-aligned, so a list that grows moves only what is
+ * while a write runs. Share opens the Share with a person dialog over this
+ * one, which stays as it was beneath it; Escape and an outside press close
+ * the upper dialog first. Top-aligned, so a list that grows moves only what is
  * below it.
  *
  * Escape is taken in the capture phase: opened from the catalog dialog, it
@@ -63,9 +63,14 @@ export function WhoCanUseSkillDialog({
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
-      // An open list (the people search's answers) closes itself first.
+      // An open list (the people search's answers) or menu (a row's access
+      // picker or ⋯) closes itself first — wherever focus is, since a press
+      // on a menu's padding leaves it on <body> — and a row asking "Remove …
+      // access?" takes Escape as its Cancel.
       const target = event.target as HTMLElement | null
       if (target?.getAttribute?.('aria-expanded') === 'true') return
+      if (document.querySelector('[role="menu"]')) return
+      if (target?.closest?.('[data-managed-row][data-confirming]')) return
       event.stopImmediatePropagation()
       dismissRef.current()
     }
@@ -87,7 +92,7 @@ export function WhoCanUseSkillDialog({
       overlayAttrs={overlayAttrs}
     >
       <div data-who-can-use className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-0.5">
-        {maintainers.length > 0 && !adding && (
+        {maintainers.length > 0 && (
           <dl data-who-can-use-maintainers className="mb-4 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 text-[13px]">
             <dt className="text-[var(--color-text-muted)]">{SHARE_UI_TEXT.maintainersLabel}</dt>
             <dd className="min-w-0 truncate text-[var(--color-text)]" title={maintainers.map((m) => m.displayName).join(', ')}>
@@ -102,17 +107,15 @@ export function WhoCanUseSkillDialog({
           editor={editor}
           pending={pending}
           onSave={(next) => set.mutate({ itemUuid, people: next }, { onError: editor.onError })}
-          inlineAdd
+          addDialogAttrs={overlayAttrs}
           maintainersShown={maintainers.length > 0}
         />
       </div>
-      {!adding && (
-        <div className="flex justify-end">
-          <button ref={closeRef} type="button" onClick={onClose} disabled={pending} className={SECONDARY}>
-            {SKILL_SHARE_TEXT.close}
-          </button>
-        </div>
-      )}
+      <div className="flex justify-end">
+        <button ref={closeRef} type="button" onClick={onClose} disabled={pending} className={SECONDARY}>
+          {SKILL_SHARE_TEXT.close}
+        </button>
+      </div>
     </DialogShell>
   )
 }

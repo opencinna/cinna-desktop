@@ -573,7 +573,14 @@ export async function shareWithTeam(
     const label = `${person.name} <${person.email}>`
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
     await dialog.page().getByRole('option', { name: label }).click()
-    if (access) await dialog.getByRole('combobox', { name: `Access for ${label}` }).selectOption({ label: access })
+    if (access) {
+      await dialog
+        .locator('[data-chosen-people] [data-managed-row]')
+        .filter({ has: dialog.page().getByText(person.name, { exact: true }) })
+        .locator('button[aria-haspopup="menu"]:not([aria-label])')
+        .click()
+      await dialog.page().getByRole('menu', { name: `Access for ${label}`, exact: true }).getByRole('menuitemradio', { name: access, exact: true }).click()
+    }
   }
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })

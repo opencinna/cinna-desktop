@@ -38,6 +38,7 @@ import {
   type CatalogFixture
 } from '../fixtures/liveCatalog'
 import { catalogGrants, coreCall, openAgent, refreshLibrary, runCommand, shareChanges, shareWithTeam, type PersonApp } from '../fixtures/liveTeamSharing'
+import { expectAccess, personActions, pickAccess } from '../fixtures/managedList'
 
 /**
  * T3 — a catalog skill's life after install, against the real local
@@ -205,13 +206,12 @@ async function withdrawnWhileHeld(
 
     await test.step('A promotes B to Can edit from the Skills row’s Who can use (core grants: edit)', async () => {
       const dialog = await openWhoCanUse(a, workshop.name, skill)
-      const access = dialog.getByRole('combobox', { name: `Access for ${personB.name}`, exact: true })
-      await expect(access).toHaveValue('use')
-      await expect(dialog.getByRole('button', { name: 'Share with everyone', exact: true })).toBeVisible()
+      await expectAccess(dialog, personB.name, 'use')
+      await expect(dialog.getByRole('button', { name: 'Make public', exact: true })).toBeVisible()
       await shot(a, 'who-can-use-people.png')
-      await access.selectOption('edit')
+      await pickAccess(dialog, personB.name, 'edit')
       await expect.poll(grants, { timeout: 30_000 }).toEqual([`user:${personA.id}:maintain`, `user:${personB.id}:edit`].sort())
-      await expect(access).toHaveValue('edit')
+      await expectAccess(dialog, personB.name, 'edit')
       await dialog.getByRole('button', { name: 'Close', exact: true }).click()
       await expect(dialog).toHaveCount(0)
     })
@@ -222,9 +222,9 @@ async function withdrawnWhileHeld(
     async () => {
       const dialog = await openWhoCanUse(a, workshop.name, skill)
       if (how === 'everyone') {
-        await dialog.getByRole('button', { name: 'Share with everyone', exact: true }).click()
-        await expect(dialog.getByRole('button', { name: 'Remove Everyone on this server', exact: true })).toBeVisible({ timeout: 30_000 })
-        await expect(dialog.getByRole('button', { name: 'Share with everyone', exact: true })).toHaveCount(0)
+        await dialog.getByRole('button', { name: 'Make public', exact: true }).click()
+        await expect(personActions(dialog, 'Everyone on this server')).toBeVisible({ timeout: 30_000 })
+        await expect(dialog.getByRole('button', { name: 'Make public', exact: true })).toHaveCount(0)
         await expect.poll(async () => (await skillItem(fixture, personA.token, skill))?.visibility, { timeout: 30_000 }).toBe('public')
         await removeFromWhoCanUse(dialog, personB.name)
         await expect.poll(grants, { timeout: 30_000 }).toEqual(onlyA)
@@ -295,7 +295,7 @@ async function withdrawnWhileHeld(
       await expect(disconnectedCard(b, skill, mine)).toHaveCount(0)
     })
 
-    await test.step('A shares it with B again through Share with a person…: B’s row is connected again, and no card', async () => {
+    await test.step('A shares it with B again through Share: B’s row is connected again, and no card', async () => {
       const dialog = await openWhoCanUse(a, workshop.name, skill)
       await addToWhoCanUse(dialog, personB, 'use', () => shot(a, 'who-can-use-add-form.png'))
       await expect.poll(grants, { timeout: 30_000 }).toEqual([`user:${personA.id}:maintain`, `user:${personB.id}:use`].sort())
@@ -402,7 +402,7 @@ test('T3.7 A opens Who can use from the catalog’s skill detail, and closes it 
   await expect(catalog.getByRole('heading', { level: 3, name: skill, exact: true })).toBeVisible()
   await catalog.getByRole('button', { name: `Who can use ${skill}…`, exact: true }).click()
   const dialog = a.page.getByRole('dialog', { name: `Who can use ${skill}`, exact: true })
-  await expect(dialog.getByRole('combobox', { name: `Access for ${fixture.people.b.name}`, exact: true })).toHaveValue('use', { timeout: 30_000 })
+  await expectAccess(dialog, fixture.people.b.name, 'use', 30_000)
   await dialog.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // The catalog dialog stays, on the detail.

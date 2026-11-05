@@ -7,7 +7,8 @@ import type {
   AgentShareStatus,
   LibraryListingDto
 } from '../../../../../shared/agentSharing'
-import { SHARE_REFUSAL_TEXT, SHARE_UI_TEXT } from '../../../utils/shareText'
+import { SHARE_ACCESS_TEXT, SHARE_REFUSAL_TEXT, SHARE_UI_TEXT } from '../../../utils/shareText'
+import { managedPicker, managedRow, pickInManagedPicker } from '../../../test/managedList'
 
 /**
  * Delete is the one destructive action on the agent page. Three things are
@@ -302,9 +303,13 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       // joins the list as "Can use".
       expect(results()).toBeNull()
       expect((search as HTMLInputElement).value).toBe('')
-      const access = screen.getByLabelText(SHARE_UI_TEXT.accessFor('Bob <bob@x.test>')) as HTMLSelectElement
-      expect(access.value).toBe('use')
-      fireEvent.change(access, { target: { value: 'edit' } })
+      const chosen = screen.getByRole('list', { name: SHARE_UI_TEXT.peopleLabel })
+      const bob = managedRow(chosen, 'Bob')
+      expect(bob.textContent).toContain('bob@x.test')
+      expect(managedPicker(bob).textContent).toBe(SHARE_ACCESS_TEXT.use)
+      pickInManagedPicker(bob, SHARE_UI_TEXT.accessFor('Bob <bob@x.test>'), SHARE_ACCESS_TEXT.edit)
+      // A pick in the menu, portaled out of the dialog, closes nothing.
+      expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })).toBeTruthy()
       // Bob is on the list, so a new search leaves him out.
       fireEvent.change(search, { target: { value: 'cy' } })
       await act(async () => { vi.advanceTimersByTime(400) })
@@ -317,7 +322,10 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       fireEvent.change(search, { target: { value: 'cy' } })
       await act(async () => { vi.advanceTimersByTime(400) })
       fireEvent.keyDown(search, { key: 'Enter' })
-      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removePerson('Cy <cy@x.test>') }))
+      // Nothing is sent yet: one click on the row's X takes Cy off the list, no menu between.
+      expect(within(chosen).queryByRole('button', { name: SHARE_UI_TEXT.personActions('Cy <cy@x.test>') })).toBeNull()
+      fireEvent.click(within(chosen).getByRole('button', { name: SHARE_UI_TEXT.removeFromList('Cy') }))
+      expect(within(chosen).queryByText('Cy', { exact: true })).toBeNull()
 
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
       expect(shareWithTeam).toHaveBeenCalledWith(

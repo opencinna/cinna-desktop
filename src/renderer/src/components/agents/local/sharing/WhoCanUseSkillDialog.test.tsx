@@ -13,7 +13,8 @@ import type { AgentPeopleDto, SetPeopleResult } from '../../../../../../shared/a
  */
 
 const { WhoCanUseSkillDialog } = await import('./WhoCanUseSkillDialog')
-const { SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+const { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+const { chooseInManagedMenu, managedPicker, managedRow, pickInManagedPicker } = await import('../../../../test/managedList')
 const { SKILL_SHARE_TEXT } = await import('../../../../utils/catalogItems')
 const { useAuthStore } = await import('../../../../stores/auth.store')
 
@@ -104,7 +105,7 @@ describe('Who can use a skill', () => {
     await within(dialog).findByText('Bob')
     expect(sharing.itemPeople).toHaveBeenCalledWith(PKG)
     expect(within(dialog).queryByText(SHARE_UI_TEXT.you)).toBeNull()
-    expect(within(dialog).getAllByRole('combobox')).toHaveLength(1)
+    expect(managedPicker(managedRow(dialog, 'Bob')).textContent).toBe(SHARE_ACCESS_TEXT.use)
     // Not public: Share with everyone is offered beside Share with a person….
     expect(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeTruthy()
     expect(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })).toBeTruthy()
@@ -137,14 +138,14 @@ describe('Who can use a skill', () => {
   it('changes a person’s access, and removes one only after the row’s confirm', async () => {
     const dialog = mount()
     await within(dialog).findByText('Bob')
-    fireEvent.change(within(dialog).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')), { target: { value: 'edit' } })
+    pickInManagedPicker(managedRow(dialog, 'Bob'), SHARE_UI_TEXT.accessFor('Bob'), SHARE_ACCESS_TEXT.edit)
     await waitFor(() => expect(sharing.setItemPeople).toHaveBeenCalledTimes(1))
     expect(sharing.setItemPeople).toHaveBeenLastCalledWith(PKG, [
       { principal: ANN.principal, access: 'maintain' },
       { principal: BOB.principal, access: 'edit' }
     ])
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removePerson('Bob') })).toHaveProperty('disabled', false))
-    fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removePerson('Bob') }))
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.personActions('Bob') })).toHaveProperty('disabled', false))
+    chooseInManagedMenu(dialog, SHARE_UI_TEXT.personActions('Bob'), SHARE_UI_TEXT.removeAccessMenu)
     expect(sharing.setItemPeople).toHaveBeenCalledTimes(1)
     fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removePersonAction }))
     await waitFor(() => expect(sharing.setItemPeople).toHaveBeenCalledTimes(2))
@@ -152,36 +153,108 @@ describe('Who can use a skill', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('adds a person in place of the list, and goes back to it once the server took them', async () => {
+  it('keeps the dialog open under a row’s menus: a press in one, and Escape, are the menu’s', async () => {
+    const dialog = mount()
+    await within(dialog).findByText('Bob')
+    // The menus are portaled to <body>, outside the dialog's frame.
+    fireEvent.click(managedPicker(managedRow(dialog, 'Bob')))
+    const menu = screen.getByRole('menu', { name: SHARE_UI_TEXT.accessFor('Bob') })
+    fireEvent.mouseDown(within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit }))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit }), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    // Back on the picker, which opened it.
+    expect(document.activeElement).toBe(managedPicker(managedRow(dialog, 'Bob')))
+
+    fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.personActions('Bob') }))
+    const actions = screen.getByRole('menu', { name: SHARE_UI_TEXT.personActions('Bob') })
+    fireEvent.mouseDown(within(actions).getByRole('menuitem', { name: SHARE_UI_TEXT.removeAccessMenu }))
+    fireEvent.keyDown(within(actions).getByRole('menuitem', { name: SHARE_UI_TEXT.removeAccessMenu }), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(sharing.setItemPeople).not.toHaveBeenCalled()
+  })
+
+  it('closes an open menu, not the dialog, on Escape after a press on the menu’s padding left focus on the page', async () => {
+    const dialog = mount()
+    await within(dialog).findByText('Bob')
+    fireEvent.click(managedPicker(managedRow(dialog, 'Bob')))
+    expect(screen.getByRole('menu', { name: SHARE_UI_TEXT.accessFor('Bob') })).toBeTruthy()
+    // A click on the menu's padding (not an item) blurs to <body>.
+    ;(document.activeElement as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('takes Escape in a row asking “Remove … access?” as its Cancel, and keeps the dialog open', async () => {
+    const dialog = mount()
+    await within(dialog).findByText('Bob')
+    chooseInManagedMenu(dialog, SHARE_UI_TEXT.personActions('Bob'), SHARE_UI_TEXT.removeAccessMenu)
+    const asking = managedRow(dialog, SHARE_UI_TEXT.removePersonConfirm('Bob'))
+    expect(document.activeElement).toBe(within(asking).getByRole('button', { name: SHARE_UI_TEXT.cancel }))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(managedRow(dialog, 'Bob').hasAttribute('data-confirming')).toBe(false)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.personActions('Bob') }))
+    // With nothing asking, Escape closes the dialog.
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(sharing.setItemPeople).not.toHaveBeenCalled()
+  })
+
+  it('Share opens a second dialog over the list, which stays beneath it, and closes it once the server took them', async () => {
     const dialog = mount()
     await within(dialog).findByText('Bob')
     fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson }))
-    // One dialog: the form replaces the list rather than opening over it.
-    expect(screen.getAllByRole('dialog')).toHaveLength(1)
-    const search = within(dialog).getByRole('combobox', { name: SHARE_UI_TEXT.peopleSearchLabel })
+    // Two dialogs: the list stays as it was, the add form opens over it.
+    const add = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+    expect(within(dialog).getByText('Bob')).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: SKILL_SHARE_TEXT.close })).toBeTruthy()
+    const search = within(add).getByRole('combobox', { name: SHARE_UI_TEXT.peopleSearchLabel })
+    // A press inside the upper dialog is not a press outside either of them.
+    fireEvent.mouseDown(search)
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+    expect(onClose).not.toHaveBeenCalled()
     fireEvent.change(search, { target: { value: 'car' } })
     fireEvent.click(await screen.findByRole('option', { name: /Carol/ }, { timeout: 2000 }))
-    fireEvent.change(within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel), { target: { value: 'edit' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
+    fireEvent.change(within(add).getByLabelText(SHARE_UI_TEXT.accessLabel), { target: { value: 'edit' } })
+    fireEvent.click(within(add).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
     await waitFor(() => expect(sharing.setItemPeople).toHaveBeenCalledTimes(1))
     expect(sharing.setItemPeople).toHaveBeenLastCalledWith(PKG, [
       { principal: ANN.principal, access: 'maintain' },
       { principal: BOB.principal, access: 'use' },
       { principal: { kind: 'user', userId: 'u3' }, access: 'edit' }
     ])
-    await within(dialog).findByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })
+    await waitFor(() => expect(screen.getAllByRole('dialog')).toHaveLength(1))
+    expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('keeps the add form open with the server’s refusal', async () => {
+  it('a press on the list beneath closes only the add dialog', async () => {
+    const dialog = mount()
+    await within(dialog).findByText('Bob')
+    fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+    fireEvent.mouseDown(within(dialog).getByText('Bob'))
+    await waitFor(() => expect(screen.getAllByRole('dialog')).toHaveLength(1))
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('keeps the add dialog open with the server’s refusal', async () => {
     sharing.setItemPeople.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: 'Carol is not active.' })))
     const dialog = mount()
     await within(dialog).findByText('Bob')
     fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson }))
-    fireEvent.change(within(dialog).getByRole('combobox', { name: SHARE_UI_TEXT.peopleSearchLabel }), { target: { value: 'car' } })
+    const add = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })
+    fireEvent.change(within(add).getByRole('combobox', { name: SHARE_UI_TEXT.peopleSearchLabel }), { target: { value: 'car' } })
     fireEvent.click(await screen.findByRole('option', { name: /Carol/ }, { timeout: 2000 }))
-    fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
-    expect(await within(dialog).findByText('Carol is not active.')).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson })).toBeTruthy()
+    fireEvent.click(within(add).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
+    expect(await within(add).findByText('Carol is not active.')).toBeTruthy()
+    expect(within(add).getByRole('button', { name: SHARE_UI_TEXT.addPerson })).toBeTruthy()
   })
 
   it('shares with everyone, and a refusal shows under the list in the skill’s words', async () => {
@@ -222,16 +295,17 @@ describe('Who can use a skill', () => {
     expect(within(dialog).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeNull()
   })
 
-  it('Escape steps back from the add form, then closes — and never reaches a surface underneath', async () => {
+  it('Escape closes the add dialog first, then this one — and never reaches a surface underneath', async () => {
     const underneath = vi.fn()
     window.addEventListener('keydown', underneath)
     try {
       const dialog = mount()
       await within(dialog).findByText('Bob')
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.shareWithPerson }))
+      expect(screen.getAllByRole('dialog')).toHaveLength(2)
       fireEvent.keyDown(window, { key: 'Escape' })
       expect(onClose).not.toHaveBeenCalled()
-      await within(dialog).findByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })
+      await waitFor(() => expect(screen.getAllByRole('dialog')).toHaveLength(1))
       fireEvent.keyDown(window, { key: 'Escape' })
       expect(onClose).toHaveBeenCalledTimes(1)
       expect(underneath).not.toHaveBeenCalled()

@@ -1,9 +1,10 @@
 import { useRef, useState, type ReactNode } from 'react'
-import { Loader2, Trash2 } from 'lucide-react'
+import { Globe, Loader2, Plus, Users } from 'lucide-react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import type {
   AgentPeopleDto,
   AgentShareResult,
+  LibraryAccess,
   LibraryGrantInput,
   LibraryMaintainer,
   LibraryPerson,
@@ -11,26 +12,34 @@ import type {
 } from '../../../../../../shared/agentSharing'
 import type { CatalogVisibility } from '../../../../../../shared/catalogItems'
 import { unwrapIpcError } from '../../../../utils/ipcError'
-import { SHARE_ACCESS_TEXT, SHARE_UI_TEXT, libraryRefusalSentence } from '../../../../utils/shareText'
 import {
-  SettingsBadge,
-  SettingsButton,
-  SettingsHint,
-  SettingsIconButton,
-  SettingsRow,
-  SettingsRows,
-  SettingsSection,
-  settingsInputClass
-} from '../../../settings/SettingsLayout'
-import { ShareWithPersonDialog, ShareWithPersonForm } from './ShareDialogs'
+  SHARE_ACCESS_DESCRIPTION,
+  SHARE_ACCESS_TEXT,
+  SHARE_UI_TEXT,
+  libraryRefusalSentence
+} from '../../../../utils/shareText'
+import { SettingsButton, SettingsSection } from '../../../settings/SettingsLayout'
+import {
+  ManagedList,
+  ManagedListAvatar,
+  ManagedListBadge,
+  ManagedListMenu,
+  ManagedListMessage,
+  ManagedListPicker,
+  ManagedListRow,
+  ManagedListSpacer,
+  type ManagedListPickerOption
+} from '../../../ui/ManagedList'
+import { ShareWithPersonDialog } from './ShareDialogs'
 
 /**
  * Who has access to a catalog item — a shared desktop agent's People
  * section, and a shared skill's Who can use dialog. One list for both
- * (ux_rules rule 13): a row per grant with its access select and a
- * remove-in-row confirm, an Everyone row, Share with a person… and Share
- * with everyone beside the title, and for someone who may not see the list,
- * the maintainers and "Only a maintainer can change who has access.".
+ * (ux_rules rule 13), a compact managed list: a row per grant with its
+ * avatar (a globe for Everyone, a people glyph for a role), its access picker and a ⋯ whose Remove access… asks in the row,
+ * an Everyone row, Share (a person) and Make public beside the title, and
+ * for someone who may not see the list, the maintainers and "Only a
+ * maintainer can change who has access.".
  *
  * The list does not own its write. The caller owns the mutation, hook-level,
  * with {@link usePeopleEditor}'s `onResult` as its callback, so an answer
@@ -48,9 +57,10 @@ function principalKey(p: LibraryPrincipal): string {
   return p.kind === 'user' ? `user:${p.userId}` : p.kind === 'role' ? `role:${p.role}` : 'everyone'
 }
 
-// The settings input without its `w-full`, which otherwise beats `w-36` and
-// takes the whole row, leaving the person's name no width at all.
-const ACCESS_SELECT = settingsInputClass.replace(/\bw-full\b\s*/, '')
+/** The access picker's choices, each with what it means. */
+const ACCESS_OPTIONS: ManagedListPickerOption<LibraryAccess>[] = (['use', 'edit', 'maintain'] as const).map(
+  (access) => ({ value: access, label: SHARE_ACCESS_TEXT[access], description: SHARE_ACCESS_DESCRIPTION[access] })
+)
 
 function personName(person: LibraryPerson, maintainers: LibraryMaintainer[]): string {
   const { principal } = person
@@ -151,7 +161,7 @@ export function PeopleSection({
   pending,
   onSave,
   info,
-  inlineAdd = false,
+  addDialogAttrs,
   maintainersShown = false
 }: {
   people: UseQueryResult<AgentPeopleDto | null>
@@ -166,10 +176,11 @@ export function PeopleSection({
   /** The section's (?) beside its title. */
   info?: ReactNode
   /**
-   * Inside a dialog: Share with a person… replaces the section with its form
-   * rather than opening a second dialog over the first.
+   * The Share with a person dialog's backdrop marks: inside a dialog that
+   * marks its own (Who can use over the catalog), Share opens a second dialog
+   * over the first, part of the same surface.
    */
-  inlineAdd?: boolean
+  addDialogAttrs?: Record<string, string>
   /**
    * The caller names the maintainers above the section (the Who can use
    * dialog's Maintainers line), so someone who may not see the list gets
@@ -224,12 +235,11 @@ export function PeopleSection({
     onCancel: () => setAdding(false)
   }
 
-  if (inlineAdd && adding) {
-    return (
-      <div data-sharing-add className="space-y-3">
-        <ShareWithPersonForm {...addForm} focusOnMount />
-      </div>
-    )
+  const removeFrom = (person: LibraryPerson): void =>
+    save(asInput(list.filter((p) => !samePrincipal(p.principal, person.principal))))
+  const askRemove = (key: string): void => {
+    setError(null)
+    setConfirmingKey(key)
   }
 
   return (
@@ -249,7 +259,12 @@ export function PeopleSection({
                 disabled={pending}
                 aria-busy={pending && addingEveryone}
               >
-                {pending && addingEveryone && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+                {/* The spinner takes the globe's place: the label does not move. */}
+                {pending && addingEveryone ? (
+                  <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Globe size={13} aria-hidden="true" />
+                )}
                 {SHARE_UI_TEXT.shareWithEveryone}
               </SettingsButton>
             )}
@@ -260,6 +275,7 @@ export function PeopleSection({
               }}
               disabled={pending}
             >
+              <Plus size={13} aria-hidden="true" />
               {SHARE_UI_TEXT.shareWithPerson}
             </SettingsButton>
           </div>
@@ -267,133 +283,121 @@ export function PeopleSection({
       }
     >
       <div data-sharing-people>
-        <SettingsRows>
-          {people.isPending ? (
-            <SettingsRow>
-              <SettingsHint>{SHARE_UI_TEXT.peopleLoading}</SettingsHint>
-            </SettingsRow>
-          ) : people.isError ? (
-            <SettingsRow>
-              <p role="alert" className="text-[13px] text-[var(--color-danger)]">
+        {people.isPending ? (
+          <ManagedList message={<ManagedListMessage>{SHARE_UI_TEXT.peopleLoading}</ManagedListMessage>} />
+        ) : people.isError ? (
+          <ManagedList
+            message={
+              <ManagedListMessage role="alert" tone="danger">
                 {unwrapIpcError(people.error, SHARE_UI_TEXT.peopleLoadFailed)}
-              </p>
-            </SettingsRow>
-          ) : editable ? (
-            rows.length === 0 ? (
-              <SettingsRow>
-                <SettingsHint>{otherMaintainers ? SHARE_UI_TEXT.peopleOnlyMaintainers : SHARE_UI_TEXT.peopleNoOneElse}</SettingsHint>
-              </SettingsRow>
-            ) : rows.map((person) => {
+              </ManagedListMessage>
+            }
+          />
+        ) : editable ? (
+          <ManagedList
+            message={
+              rows.length === 0 ? (
+                <ManagedListMessage>
+                  {otherMaintainers ? SHARE_UI_TEXT.peopleOnlyMaintainers : SHARE_UI_TEXT.peopleNoOneElse}
+                </ManagedListMessage>
+              ) : undefined
+            }
+          >
+            {rows.map((person) => {
               const key = principalKey(person.principal)
               const self = isSelf(person)
               const name = self ? SHARE_UI_TEXT.you : personName(person, maintainers)
-              const confirming = confirmingKey === key
+              const everyone = person.principal.kind === 'everyone'
+              const actions = (
+                <ManagedListMenu
+                  label={SHARE_UI_TEXT.personActions(name)}
+                  disabled={pending}
+                  items={[{ label: SHARE_UI_TEXT.removeAccessMenu, tone: 'danger', onSelect: () => askRemove(key) }]}
+                />
+              )
               return (
-                <SettingsRow key={key} className="flex items-center gap-3">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]" title={name}>
-                    {confirming ? SHARE_UI_TEXT.removePersonConfirm(name) : name}
-                  </span>
-                  {confirming ? (
-                    <>
-                      <SettingsButton onClick={() => setConfirmingKey(null)} disabled={pending}>
-                        {SHARE_UI_TEXT.cancel}
-                      </SettingsButton>
-                      <button
-                        type="button"
-                        disabled={pending}
-                        aria-busy={pending}
-                        onClick={() =>
-                          save(asInput(list.filter((p) => !samePrincipal(p.principal, person.principal))))
+                <ManagedListRow
+                  key={key}
+                  lead={
+                    everyone ? (
+                      <Globe size={16} aria-hidden="true" />
+                    ) : person.principal.kind === 'role' ? (
+                      <Users size={16} aria-hidden="true" />
+                    ) : (
+                      <ManagedListAvatar name={name} />
+                    )
+                  }
+                  title={name}
+                  titleTooltip={name}
+                  meta={
+                    person.principal.kind === 'role' && person.displayName
+                      ? SHARE_UI_TEXT.roleMeta(person.principal.role)
+                      : undefined
+                  }
+                  confirm={
+                    confirmingKey === key
+                      ? {
+                          text: SHARE_UI_TEXT.removePersonConfirm(name),
+                          action: SHARE_UI_TEXT.removePersonAction,
+                          cancel: SHARE_UI_TEXT.cancel,
+                          pending,
+                          onConfirm: () => removeFrom(person),
+                          onCancel: () => setConfirmingKey(null)
                         }
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--color-danger)] px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
-                      >
-                        {pending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-                        {SHARE_UI_TEXT.removePersonAction}
-                      </button>
-                    </>
-                  ) : self ? (
-                    <>
-                      {/* Your own access is not yours to change. The slot after
-                          it keeps the column aligned with the rows that remove. */}
-                      <SettingsBadge>{SHARE_ACCESS_TEXT[person.access]}</SettingsBadge>
-                      <span className="w-[28px] shrink-0" aria-hidden="true" />
-                    </>
-                  ) : person.principal.kind === 'everyone' ? (
-                    <>
-                      {/* Everyone on the server can only use it: that is what
-                          sharing with everyone means, so there is no choice. */}
-                      <SettingsBadge>{SHARE_ACCESS_TEXT.use}</SettingsBadge>
-                      <SettingsIconButton
-                        title={SHARE_UI_TEXT.removePerson(name)}
-                        aria-label={SHARE_UI_TEXT.removePerson(name)}
-                        danger
-                        disabled={pending}
-                        onClick={() => {
-                          setError(null)
-                          setConfirmingKey(key)
-                        }}
-                      >
-                        <Trash2 size={13} aria-hidden="true" />
-                      </SettingsIconButton>
-                    </>
-                  ) : (
-                    <>
-                      <select
-                        aria-label={SHARE_UI_TEXT.accessFor(name)}
-                        value={person.access}
-                        disabled={pending}
-                        onChange={(event) =>
-                          save(
-                            asInput(
-                              list.map((p) =>
-                                samePrincipal(p.principal, person.principal)
-                                  ? { ...p, access: event.target.value as LibraryPerson['access'] }
-                                  : p
+                      : null
+                  }
+                  trailing={
+                    self ? (
+                      <>
+                        {/* Your own access is not yours to change. The slot after
+                            it keeps the column aligned with the rows that have ⋯. */}
+                        <ManagedListBadge>{SHARE_ACCESS_TEXT[person.access]}</ManagedListBadge>
+                        <ManagedListSpacer />
+                      </>
+                    ) : everyone ? (
+                      <>
+                        {/* Everyone on the server can only use it: that is what
+                            sharing with everyone means, so there is no choice. */}
+                        <ManagedListBadge>{SHARE_ACCESS_TEXT.use}</ManagedListBadge>
+                        {actions}
+                      </>
+                    ) : (
+                      <>
+                        <ManagedListPicker
+                          value={person.access}
+                          menuLabel={SHARE_UI_TEXT.accessFor(name)}
+                          disabled={pending}
+                          options={ACCESS_OPTIONS}
+                          onChange={(access) =>
+                            save(
+                              asInput(
+                                list.map((p) => (samePrincipal(p.principal, person.principal) ? { ...p, access } : p))
                               )
                             )
-                          )
-                        }
-                        className={`${ACCESS_SELECT} w-36 shrink-0 disabled:opacity-50`}
-                      >
-                        {(['use', 'edit', 'maintain'] as const).map((access) => (
-                          <option key={access} value={access}>
-                            {SHARE_ACCESS_TEXT[access]}
-                          </option>
-                        ))}
-                      </select>
-                      <SettingsIconButton
-                        title={SHARE_UI_TEXT.removePerson(name)}
-                        aria-label={SHARE_UI_TEXT.removePerson(name)}
-                        danger
-                        disabled={pending}
-                        onClick={() => {
-                          setError(null)
-                          setConfirmingKey(key)
-                        }}
-                      >
-                        <Trash2 size={13} aria-hidden="true" />
-                      </SettingsIconButton>
-                    </>
-                  )}
-                </SettingsRow>
+                          }
+                        />
+                        {actions}
+                      </>
+                    )
+                  }
+                />
               )
-            })
-          ) : (
-            <>
-              {!maintainersShown && maintainers.map((m) => (
-                <SettingsRow key={m.userId} className="flex items-center gap-3">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]">
-                    {m.displayName}
-                  </span>
-                  <SettingsBadge>{SHARE_ACCESS_TEXT.maintain}</SettingsBadge>
-                </SettingsRow>
+            })}
+          </ManagedList>
+        ) : (
+          <ManagedList message={<ManagedListMessage>{SHARE_UI_TEXT.peopleOnlyMaintainer}</ManagedListMessage>}>
+            {!maintainersShown &&
+              maintainers.map((m) => (
+                <ManagedListRow
+                  key={m.userId}
+                  lead={<ManagedListAvatar name={m.displayName} />}
+                  title={m.displayName}
+                  titleTooltip={m.displayName}
+                  trailing={<ManagedListBadge>{SHARE_ACCESS_TEXT.maintain}</ManagedListBadge>}
+                />
               ))}
-              <SettingsRow>
-                <SettingsHint>{SHARE_UI_TEXT.peopleOnlyMaintainer}</SettingsHint>
-              </SettingsRow>
-            </>
-          )}
-        </SettingsRows>
+          </ManagedList>
+        )}
         {error && (
           <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">
             {error}
@@ -406,7 +410,7 @@ export function PeopleSection({
           </p>
         )}
       </div>
-      {adding && !inlineAdd && <ShareWithPersonDialog {...addForm} />}
+      {adding && <ShareWithPersonDialog {...addForm} overlayAttrs={addDialogAttrs} />}
     </SettingsSection>
   )
 }

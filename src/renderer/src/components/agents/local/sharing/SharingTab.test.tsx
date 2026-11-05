@@ -20,7 +20,8 @@ import type {
 
 const { SharingTab } = await import('./SharingTab')
 const { useShareActions } = await import('./useShareActions')
-const { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+const { SHARE_ACCESS_DESCRIPTION, SHARE_ACCESS_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+const { chooseInManagedMenu, managedPicker, managedRow, pickInManagedPicker } = await import('../../../../test/managedList')
 const { resetSharingFetchClock, sharingStatusesKey } = await import('../../../../hooks/useSharing')
 const { useAuthStore } = await import('../../../../stores/auth.store')
 const { useChatStore } = await import('../../../../stores/chat.store')
@@ -267,15 +268,30 @@ describe('SharingTab — where it is shared', () => {
 })
 
 describe('SharingTab — people', () => {
+  it('leads a role row with a people glyph, Everyone with the globe and a person with their initials', async () => {
+    const admins = { principal: { kind: 'role' as const, role: 'admin' }, access: 'use' as const, displayName: 'Admins' }
+    const bob = { principal: { kind: 'user' as const, userId: 'u2' }, access: 'use' as const, displayName: 'Bob Stone' }
+    sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, admins, bob] }))
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain('Admins'))
+    const lead = (title: string): Element => managedRow(people, title).firstElementChild!
+    expect(lead('Admins').querySelector('svg.lucide-users')).not.toBeNull()
+    expect(lead('Admins').textContent).toBe('')
+    expect(lead(SHARE_UI_TEXT.everyone).querySelector('svg.lucide-globe')).not.toBeNull()
+    expect(lead('Bob Stone').textContent).toBe('BS')
+  })
+
   it('leaves out your own row when you are already named a maintainer above', async () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
     expect(people.textContent).not.toContain(SHARE_UI_TEXT.you)
-    expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
+    expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.personActions(SHARE_UI_TEXT.you) })).toBeNull()
     // Everyone on the server can only use it: a fixed badge, not a choice.
-    expect(within(people).queryAllByRole('combobox')).toHaveLength(0)
-    expect(people.textContent).toContain(SHARE_ACCESS_TEXT.use)
+    const everyone = managedRow(people, SHARE_UI_TEXT.everyone)
+    expect(() => managedPicker(everyone)).toThrow()
+    expect(everyone.textContent).toContain(SHARE_ACCESS_TEXT.use)
   })
 
   it('says no one else has access when you are the only one', async () => {
@@ -297,20 +313,32 @@ describe('SharingTab — people', () => {
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.you))
     expect(people.textContent).toContain(SHARE_ACCESS_TEXT.edit)
-    expect(within(people).queryByLabelText(SHARE_UI_TEXT.accessFor(SHARE_UI_TEXT.you))).toBeNull()
-    expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.you) })).toBeNull()
+    const you = managedRow(people, SHARE_UI_TEXT.you)
+    expect(() => managedPicker(you)).toThrow()
+    expect(within(you).queryByRole('button')).toBeNull()
   })
 
-  it('gives the access select a fixed width, never the whole row the name needs', async () => {
+  it('names the access picker by the access it shows, and its menu by the person, each level saying what it allows', async () => {
     sharing.people.mockResolvedValue(ok({ ...PEOPLE, people: [...PEOPLE.people, BOB] }))
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain('Bob'))
-    // `w-full` beside `w-36` wins on stylesheet order and leaves the name no width.
-    expect(within(people).getAllByRole('combobox')).toHaveLength(1)
-    for (const select of within(people).getAllByRole('combobox')) {
-      expect(select.className.split(/\s+/)).not.toContain('w-full')
-    }
+    const picker = managedPicker(managedRow(people, 'Bob'))
+    // ux_rules rule 10: what it is called is what it shows.
+    expect(picker.textContent).toBe(SHARE_ACCESS_TEXT.use)
+    expect(picker.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(picker)
+    const menu = screen.getByRole('menu', { name: SHARE_UI_TEXT.accessFor('Bob') })
+    const items = within(menu).getAllByRole('menuitemradio')
+    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
+    const edit = within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit })
+    expect(edit).toHaveProperty('textContent', `${SHARE_ACCESS_TEXT.edit}${SHARE_ACCESS_DESCRIPTION.edit}`)
+    // Picking the access it already has saves nothing.
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.use }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    // A save would reach the IPC after a tick: let it.
+    await act(async () => {})
+    expect(sharing.setPeople).not.toHaveBeenCalled()
   })
 
   it('builds each change on the list the server answered, and holds the controls while one is saving', async () => {
@@ -321,9 +349,8 @@ describe('SharingTab — people', () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain('Bob'))
-    const bob = (): HTMLSelectElement =>
-      within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')) as HTMLSelectElement
-    fireEvent.change(bob(), { target: { value: 'edit' } })
+    const bob = (): HTMLButtonElement => managedPicker(managedRow(people, 'Bob'))
+    pickInManagedPicker(managedRow(people, 'Bob'), SHARE_UI_TEXT.accessFor('Bob'), SHARE_ACCESS_TEXT.edit)
     await waitFor(() => expect(bob().disabled).toBe(true))
     // The refetch after the change has not answered yet: the list on screen
     // and the next edit come from the PUT's own answer.
@@ -335,8 +362,8 @@ describe('SharingTab — people', () => {
     }
     await act(async () => answer(ok({ ...done(), people: answered })))
     await waitFor(() => expect(bob().disabled).toBe(false))
-    expect(bob().value).toBe('edit')
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Carol')), { target: { value: 'edit' } })
+    expect(bob().textContent).toBe(SHARE_ACCESS_TEXT.edit)
+    pickInManagedPicker(managedRow(people, 'Carol'), SHARE_UI_TEXT.accessFor('Carol'), SHARE_ACCESS_TEXT.edit)
     await waitFor(() => expect(sharing.setPeople).toHaveBeenCalledTimes(2))
     // Your own grant, hidden from the list, is still saved with it, unchanged.
     expect(sharing.setPeople).toHaveBeenLastCalledWith(AGENT.id, [
@@ -351,12 +378,22 @@ describe('SharingTab — people', () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
-    fireEvent.click(within(people).getByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.everyone) }))
+    chooseInManagedMenu(people, SHARE_UI_TEXT.personActions(SHARE_UI_TEXT.everyone), SHARE_UI_TEXT.removeAccessMenu)
     expect(sharing.setPeople).not.toHaveBeenCalled()
-    expect(people.textContent).toContain(SHARE_UI_TEXT.removePersonConfirm(SHARE_UI_TEXT.everyone))
+    // The row itself asks: its title is the question, its controls are Cancel and Remove.
+    const asking = managedRow(people, SHARE_UI_TEXT.removePersonConfirm(SHARE_UI_TEXT.everyone))
+    expect(asking.hasAttribute('data-confirming')).toBe(true)
+    expect(within(asking).getAllByRole('button')).toHaveLength(2)
+    expect(within(asking).getByRole('button', { name: SHARE_UI_TEXT.removePersonAction })).toBeTruthy()
+    // Cancel takes focus, and after it focus is back on the row's ⋯.
+    expect(document.activeElement).toBe(within(asking).getByRole('button', { name: SHARE_UI_TEXT.cancel }))
     fireEvent.click(within(people).getByRole('button', { name: SHARE_UI_TEXT.cancel }))
     expect(sharing.setPeople).not.toHaveBeenCalled()
-    fireEvent.click(within(people).getByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.everyone) }))
+    expect(managedRow(people, SHARE_UI_TEXT.everyone).hasAttribute('data-confirming')).toBe(false)
+    expect(document.activeElement).toBe(
+      within(people).getByRole('button', { name: SHARE_UI_TEXT.personActions(SHARE_UI_TEXT.everyone) })
+    )
+    chooseInManagedMenu(people, SHARE_UI_TEXT.personActions(SHARE_UI_TEXT.everyone), SHARE_UI_TEXT.removeAccessMenu)
     fireEvent.click(within(people).getByRole('button', { name: SHARE_UI_TEXT.removePersonAction }))
     await waitFor(() => expect(sharing.setPeople).toHaveBeenCalledTimes(1))
     expect(sharing.setPeople).toHaveBeenLastCalledWith(AGENT.id, [
@@ -370,7 +407,7 @@ describe('SharingTab — people', () => {
     mount(status())
     const people = section(SHARE_UI_TEXT.peopleSection)
     await waitFor(() => expect(people.textContent).toContain('Bob'))
-    fireEvent.change(within(people).getByLabelText(SHARE_UI_TEXT.accessFor('Bob')), { target: { value: 'edit' } })
+    pickInManagedPicker(managedRow(people, 'Bob'), SHARE_UI_TEXT.accessFor('Bob'), SHARE_ACCESS_TEXT.edit)
     await waitFor(() =>
       expect(within(people).getByRole('alert').textContent).toBe('An agent needs at least one maintainer.')
     )
@@ -383,7 +420,7 @@ describe('SharingTab — people', () => {
     await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.peopleOnlyMaintainer))
     await waitFor(() => expect(people.textContent).toContain('Ann'))
     expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithPerson })).toBeNull()
-    expect(within(people).queryByRole('combobox')).toBeNull()
+    expect(people.querySelector('[aria-haspopup="menu"]')).toBeNull()
   })
 
   it('offers Share with everyone while the agent is not public, adds the Everyone row through the same save, and then hides', async () => {

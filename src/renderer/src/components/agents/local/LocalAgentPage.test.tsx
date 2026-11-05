@@ -87,7 +87,8 @@ vi.mock('./ReadinessStrip', () => ({
   ReadinessStrip: ({ drafting }: { drafting: boolean }) =>
     createElement('div', { 'data-marker': 'readiness-strip', 'data-drafting': String(drafting) })
 }))
-vi.mock('./OpenInMenu', () => ({ OpenInMenu: marker('open-in') }))
+// The menu classes stay: the shared ContextMenu (through the sharing lists) builds on them.
+vi.mock('./OpenInMenu', () => ({ OpenInMenu: marker('open-in'), MENU_ITEM: '', MENU_SURFACE: '' }))
 vi.mock('./AgentActionsMenu', () => ({ AgentActionsMenu: marker('actions') }))
 vi.mock('./sharing/AgentShareBadge', () => ({
   AgentShareBadge: ({ onOpenSharing }: { onOpenSharing: () => void }) =>
