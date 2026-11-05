@@ -351,14 +351,19 @@ function teamTrackedOf(dir: string): () => Promise<boolean> {
 }
 
 /** The cached listing (refreshed once when it lacks `uuid`) and the skill item, if any. */
-async function skillItem(profile: string, uuid: string): Promise<{ listing: CachedListing | null; item: CatalogItem | null }> {
+async function skillItem(
+  profile: string,
+  uuid: string,
+  { fresh = false }: { fresh?: boolean } = {}
+): Promise<{ listing: CachedListing | null; item: CatalogItem | null }> {
   const find = (listing: CachedListing | null): CatalogItem | null =>
     listing?.items.find((item) => item.kind === 'skill' && item.uuid.toLowerCase() === uuid.toLowerCase()) ?? null
   let listing = activeListing(profile)
   let item = find(listing)
-  if (!item) {
+  // `fresh`: the answer decides on the person's access (Make editable), which a grant lowered since the last read must win over.
+  if (!item || fresh) {
     try {
-      listing = await libraryService.refresh(profile)
+      listing = (await libraryService.refresh(profile)) ?? listing
     } catch (err) {
       if (err instanceof CinnaReauthRequired || (err instanceof CinnaApiError && err.code === 'reauth_required')) throw err
       logger.warn('catalog listing could not be refreshed', { error: String(err) })
@@ -722,7 +727,7 @@ export const catalogSkillService = {
       const index = pins.findIndex((pin) => pin?.name === name)
       const current = index === -1 ? null : pins[index]
       if (!current || typeof current.package_uuid !== 'string' || !isCatalogPinName(name)) return refused('not_found')
-      const { listing, item } = await skillItem(who.profile, current.package_uuid)
+      const { listing, item } = await skillItem(who.profile, current.package_uuid, { fresh: true })
       const access = await changeability(kit.dir, listing)
       if (access !== 'ok') return refused(access)
       const latest = item ? latestPinOf(item) : null

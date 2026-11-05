@@ -1376,6 +1376,14 @@ describe('Edit skill: a pin becomes a linked copy (co-maintainers D2)', () => {
     untouched(before)
     expect(existsSync(join(agentDir, 'skills'))).toBe(false)
 
+    // Lowered to Can use since the cached listing was read: core's fresh answer wins.
+    listing.value = { items: [skillItem(1, v1, { access: 'maintain' })], agents: [] }
+    refresh.mockResolvedValueOnce({ items: [skillItem(1, v1, { access: 'use' })], agents: [] })
+    before = manifestBytes()
+    expect(await catalogSkillService.makeEditable(USER, AGENT_ID, 'erp-lookup')).toMatchObject({ ok: false, code: 'not_editor' })
+    untouched(before)
+    expect(existsSync(join(agentDir, 'skills'))).toBe(false)
+
     // skills/<name>/ already there: left exactly as it was.
     listing.value = { items: [skillItem(1, v1, { access: 'edit' })], agents: [] }
     mkdirSync(join(agentDir, 'skills', 'erp-lookup'), { recursive: true })
