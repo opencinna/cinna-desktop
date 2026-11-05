@@ -183,6 +183,17 @@ A surface tucked under another — the composer notice panel behind the message 
 
 **Origin:** on the new-chat screen a chat mode's 8%-alpha tint replaced the message box's opaque background, so the notice panel's tail, tucked 12 px under the box, showed through it as a grey band on every warning and offer row. It was visible in E2E screenshots for a while before the user spotted it by hand, because no state without a mode colour reproduced it.
 
+## 19. A notice row is one line: message on the left, actions on the right
+
+Every row that rises above an input — the composer notice panel's readiness, credentials, skill-link and session rows, and any strip like it — puts its sentence on the left and its buttons on the right, on the same line, as the folder credentials row (*Finish setup*) does. The eye reads what is wrong, then finds what to do about it at the end of the same line, in the same place on every row.
+
+- **One line, held one button tall.** The sentence truncates, with the whole text in `title`. A note, a refusal or a reason follows the sentence on that line; it does not open a second line under it.
+- **Buttons never drop under the message.** A row whose buttons sit on a line of their own, left-aligned under the text, is a finding, and so is a second, empty line "reserved" for buttons that come later.
+- **Rule 1 is kept with the buttons on the right, not by moving them below.** An action whose label changes while it runs (`Adding…`, `Checking…`) sits in the shared `StableLabel`, which is as wide as its widest label, so the message never shifts. A row whose actions come and go as it settles stays one button tall throughout (the panel's strut), so its height does not change. Two rows that replace each other in place keep the panel's height because both are one line.
+- **The one exception is a pending action several times wider than its idle label** — the engine login's *Waiting for sign-in in your browser…* plus *Cancel* beside a short *Log in*. Holding that width on the right would leave a wide blank button or squeeze the message, so it alone keeps its action on the line below (`actionBelow`). A new use of `actionBelow` must make the same case, in a comment.
+
+**Origin:** the skill-link offer and the skill-credential prompt put their buttons on a second line under the message, left-aligned, while every other row in the same panel put them on the right. The user saw the panel as inconsistent: "other dialogs always place message on the left and action buttons on the right, but here it's sometimes on the left under the message". The second line had been added to keep the row's height stable (rule 1); a single line held one button tall, with fixed-width labels, does the same without the inconsistency.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -209,3 +220,4 @@ A surface tucked under another — the composer notice panel behind the message 
 21. A new or changed animation: heavy or subtle, and is it gated accordingly? Move the pointer continuously for the idle threshold: does any heavy motion start? Finding (rule 16).
 22. An element whose role changes with the view (list vs. menu): screenshot both states side by side. Indistinguishable, or navigation lost in one of them: finding (rule 17).
 23. Anything that tucks under or slides behind another surface (a notice panel, a sticky header, an overlay): screenshot it with every variant of the covering surface (each chat mode colour, both themes). Any part of the hidden surface showing through: finding (rule 18).
+24. Every notice row above an input (the composer notice panel and any strip like it), in each of its states: is the sentence on the left and every button on the right of the same line, one line tall? Buttons on a line of their own under the text, or an empty reserved second line, is a finding unless the row makes rule 19's exception in a comment (rule 19).

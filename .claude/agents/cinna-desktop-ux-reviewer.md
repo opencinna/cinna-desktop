@@ -80,7 +80,7 @@ Drive it with the real mouse (`page.mouse.move` in steps), never with `hover()` 
 
 Report a breach under rule 1 (something appears, vanishes or moves under the pointer), rule 7 (content that restates the row) or rule 8 (popover wiring), and name which of the two needs it fails.
 
-## Switches, capabilities, motion and roles (rules 14–17)
+## Switches, capabilities, motion and roles (rules 14–19)
 
 Grep the diff for these whatever surface it touches; each is cheap to miss because the screen looks fine in a single screenshot.
 
@@ -89,6 +89,7 @@ Grep the diff for these whatever surface it touches; each is cheap to miss becau
 - **Animation (rule 16).** Any new `@keyframes`, `animation:`, interval or `setTimeout` loop driving motion: is it classed heavy or subtle in the comment by the idle tracker, and gated accordingly? A heavy one that plays while the user moves the pointer is a finding; in a full pass, keep moving the pointer past the idle threshold and watch.
 - **Role changes (rule 17).** An element whose content changes role between views (the sidebar as list vs. Settings menu): screenshot both states side by side. Identical surfaces, or navigation that exists in one state and is gone in the other, is a finding.
 - **Overlapping surfaces (rule 18).** Anything tucked under or sliding behind another surface (the composer notice panel under the message box, a sticky header): screenshot it under every variant of the covering surface — each chat mode colour, both themes. A translucent fill set *instead of* the opaque one, so the hidden part shows through as a band, is a finding.
+- **Notice rows (rule 19).** Any `ComposerNotice` the diff adds or changes, or any row-like strip above an input: in every state it can show (pending, ok, refused, error, settling), the sentence is on the left and the buttons on the right of one line, one button tall. Grep for `actionBelow` and for a hand-built second line under the text; each use needs rule 19's exception argued in a comment, or it is a finding. In a full pass, screenshot the panel per state and compare the button's vertical middle with the sentence's (`boundingBox()`): more than 2 px apart means the button sits on another line.
 
 ## Read the diff, then look at the screen
 
