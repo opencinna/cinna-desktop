@@ -14,6 +14,7 @@ import { CATALOG_KIND_ICON, CatalogKindBadge } from './CatalogKindBadge'
 import { CATALOG_POPOVER_ATTR, CatalogSkillAddMenu, type CatalogSkillTarget } from './CatalogSkillAddMenu'
 import { WhoCanUseSkillDialog } from './local/sharing/WhoCanUseSkillDialog'
 import { sizedButton, useCatalogSurface, useCatalogType } from './catalogSurface'
+import { CopyInstallLinkButton, useSkillInstallLink } from './CopyInstallLinkButton'
 
 /**
  * The tile, the detail and the action of one catalog item, the same for every
@@ -379,6 +380,10 @@ export function CatalogItemDetailView({
   const type = useCatalogType()
   const surface = useCatalogSurface()
   const installId = view.kind === 'cloud_agent' ? (view.cloud?.installId ?? null) : null
+  // A skill's shared link (skill links, D4), with the copy's own refusal beside the item's error.
+  const installLink = useSkillInstallLink(view.kind === 'skill' ? item.id : null)
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const shownError = error ?? copyError
   return (
     <div
       className={
@@ -410,14 +415,15 @@ export function CatalogItemDetailView({
           {action}
           {/* Keyed by the install: a confirm belongs to the install it was opened on. */}
           {installId && <CloudInstallControls key={installId} name={view.name} installId={installId} uninstall={uninstall} />}
+          {installLink && <CopyInstallLinkButton link={installLink} name={view.name} onError={setCopyError} variant={surface === 'settings' ? 'settings' : 'bare'} />}
           {view.kind === 'skill' && item.access === 'maintain' && (
             <SkillPeopleControl key={item.uuid} name={view.name} itemUuid={item.uuid} />
           )}
         </div>
       </div>
-      {error && (
+      {shownError && (
         <div role="alert" className={`${type.meta} text-[var(--color-danger)]`}>
-          {error}
+          {shownError}
         </div>
       )}
       {item.description && (

@@ -17,8 +17,12 @@ import { unwrapIpcError } from '../utils/ipcError'
  * mutate-level callback is dropped on unmount).
  */
 
-/** What a pin change can have moved: the agent's rows, the catalog's "Added to" pill, the Inbox's skill cards. */
-function refreshAfterSkillChange(queryClient: QueryClient, agentId: string): void {
+/**
+ * What a pin change can have moved: the agent's rows, the catalog's "Added to"
+ * pill, the Inbox's skill cards. Exported for the adds that run outside these
+ * hooks (a skill link's Add / Update, New agent with this skill's add).
+ */
+export function refreshAfterSkillChange(queryClient: QueryClient, agentId: string): void {
   void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
   void queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) })
   void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })

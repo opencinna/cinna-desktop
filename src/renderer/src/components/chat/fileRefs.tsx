@@ -10,6 +10,9 @@ import { artifactIdFromUrl } from '../../../../shared/artifacts'
 import { ArtifactLinkCard } from '../artifacts/ArtifactCard'
 import { detectCommand } from '../../../../shared/commandRun'
 import { useRunScriptStore } from '../../stores/runScript.store'
+import { parseSkillLink } from '../../../../shared/skillLink'
+import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
+import { useChatStore } from '../../stores/chat.store'
 
 export type { FileRefScope }
 
@@ -281,6 +284,35 @@ const EXTERNAL_HREF = /^https?:\/\//i
 function MarkdownLink({ node: _node, children, href, ...props }: ComponentProps<'a'> & ExtraProps): React.JSX.Element {
   const scope = useContext(FileRefContext)
   const messageId = useContext(MessageIdContext)
+  const commandMessage = useContext(CommandMessageContext)
+  const commandScope = useContext(CommandScopeContext)
+  const skillLink = href ? parseSkillLink(href) : null
+  if (skillLink) {
+    // A skill link (https or cinna://) raises the offer on this chat's
+    // composer instead of opening anything (L4): the transcript's chat when a
+    // context names it, else the open chat.
+    const raise = (): void => {
+      const chatId = commandMessage?.chatId ?? commandScope?.chatId ?? useChatStore.getState().activeChatId
+      useSkillLinkOfferStore.getState().raise(skillLink, skillLinkChatKey(chatId))
+    }
+    return (
+      <a
+        {...props}
+        href={href}
+        title={href}
+        onClick={(event) => {
+          // Never navigate the window, nor reach the browser or the OS.
+          event.preventDefault()
+          if (window.getSelection()?.toString()) return
+          if (event.detail > 1) return
+          raise()
+        }}
+        onAuxClick={(event) => event.preventDefault()}
+      >
+        <InsideLinkContext.Provider value={true}>{children}</InsideLinkContext.Provider>
+      </a>
+    )
+  }
   if (href && EXTERNAL_HREF.test(href)) {
     const link = (
       <a {...props} href={href} target="_blank" rel="noreferrer noopener">

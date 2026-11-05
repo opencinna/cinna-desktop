@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ArrowUpCircle, ExternalLink, FileText, Loader2, Pencil, Replace, RotateCw, Share2, Trash2, Users } from 'lucide-react'
 import type { LocalAgentSkill, LocalAgentSkillCredential } from '../../../../../shared/localAgents'
 import type { MarketplaceSkillPinStatus } from '../../../../../shared/marketplaceSkills'
@@ -8,6 +9,7 @@ import { CredentialStatusGlyph } from '../../settings/CredentialRow'
 import type { CredentialHealth } from '../../settings/credentialPresentation'
 import { SettingsBadge, SettingsButton, SettingsIconButton } from '../../settings/SettingsLayout'
 import { AddonRow } from './AddonRow'
+import { CopyInstallLinkButton, useSkillInstallLink } from '../CopyInstallLinkButton'
 
 /**
  * Whether a skill counts toward the tab's attention badge: any issue except
@@ -216,6 +218,13 @@ export function SkillRow({
       : skill.version
         ? `Version ${skill.version}`
         : null
+  // Copy install link (skill links, D4): a catalog pin's package, or an own skill shared to the
+  // active account's catalog — never a marketplace pin or an unshared own skill.
+  const installLink = useSkillInstallLink(
+    skill.source === 'catalog' ? skill.packageId : skill.source === 'authored' ? skill.shared?.packageId : null
+  )
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const copyButton = installLink ? <CopyInstallLinkButton link={installLink} name={title} onError={setCopyError} /> : null
   // Try again's failure is often the very sentence the amber issue above says.
   const rowError = catalogActions?.error ?? syncActions?.error ?? null
   const actionError = rowError && !skill.issues.some((issue) => issue.message === rowError) ? rowError : null
@@ -318,6 +327,7 @@ export function SkillRow({
             <Share2 size={14} />
           </SettingsIconButton>
         )}
+        {!catalog && copyButton}
         {!catalog && whoCanUseButton}
         {!catalog && (
           <SettingsIconButton
@@ -399,6 +409,7 @@ export function SkillRow({
                 </BusyIcon>
               </SettingsIconButton>
             )}
+            {copyButton}
             {whoCanUseButton}
             {!catalogActions.readOnly && (
               <SettingsIconButton
@@ -413,6 +424,7 @@ export function SkillRow({
             )}
           </>
         )}
+        {catalog && !catalogActions && copyButton}
         {catalog && !catalogActions && whoCanUseButton}
         </>
       }
@@ -534,9 +546,9 @@ export function SkillRow({
           </div>
         </AnimatedCollapse>
       )}
-      {(revealError || actionError) && (
+      {(revealError || actionError || copyError) && (
         <p role="alert" className="border-t border-[var(--color-border)] px-4 py-2 text-[13px] text-[var(--color-danger)]">
-          {revealError || actionError}
+          {revealError || actionError || copyError}
         </p>
       )}
     </AddonRow>

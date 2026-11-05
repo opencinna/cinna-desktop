@@ -9,7 +9,9 @@ vi.mock('../../stores/logger.store', () => ({
 }))
 
 import { MessageBubble } from './MessageBubble'
-import { FileRefContext, chatMarkdownComponents, collectFileRefSources, type FileRefScope } from './fileRefs'
+import { CommandScopeContext, FileRefContext, chatMarkdownComponents, collectFileRefSources, type FileRefScope } from './fileRefs'
+import { useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
+import { useChatStore } from '../../stores/chat.store'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 
 const ref = (text: string, over: Partial<AgentFileRef> = {}): AgentFileRef => ({
@@ -327,5 +329,62 @@ describe('collectFileRefSources', () => {
 
   it('is empty when no agent runs in a folder', () => {
     expect(collectFileRefSources([{ role: 'user', content: '`u.md`' }], agents.slice(2), 'remote:r').size).toBe(0)
+  })
+})
+
+/**
+ * A skill link in a message raises the offer on that chat's composer (L4)
+ * instead of opening the browser or the OS; every other link is unchanged.
+ */
+describe('a skill link in a message', () => {
+  const HTTPS = 'https://cinna.acme.com/get/skill/com.acme.erp-lookup'
+  const CINNA = 'cinna://skill/com.acme.erp-lookup?server=https://cinna.acme.com'
+  const offer = () => useSkillLinkOfferStore.getState().offer
+
+  beforeEach(() => {
+    useSkillLinkOfferStore.setState({ offer: null })
+    useChatStore.getState().setActiveChatId('chat-open')
+  })
+
+  it.each([HTTPS, CINNA])('%s raises the offer on the open chat’s composer, and navigates nowhere', (href) => {
+    renderBubble(`Try [this skill](${href}).`, { value: null })
+    const link = screen.getByRole('link', { name: 'this skill' })
+    expect(link.getAttribute('target')).toBeNull()
+    expect(link.getAttribute('href')).toBe(href)
+    const event = createEvent.click(link, { detail: 1 })
+    fireEvent(link, event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(offer()).toMatchObject({ chatKey: 'chat-open', link: { packageId: 'com.acme.erp-lookup', origin: 'https://cinna.acme.com' } })
+  })
+
+  it('raises it on the transcript’s own chat when the context names one', () => {
+    render(
+      <CommandScopeContext.Provider value={{ chatId: 'chat-in-panel', messages: new Map() }}>
+        <MessageBubble role="assistant" content={`[skill](${HTTPS})`} isStreaming={false} />
+      </CommandScopeContext.Provider>
+    )
+    fireEvent.click(screen.getByRole('link', { name: 'skill' }), { detail: 1 })
+    expect(offer()?.chatKey).toBe('chat-in-panel')
+  })
+
+  it('a middle-click opens nothing either', () => {
+    renderBubble(`[skill](${HTTPS})`, { value: null })
+    const link = screen.getByRole('link', { name: 'skill' })
+    const event = createEvent(`auxclick`, link, { button: 1, bubbles: true, cancelable: true })
+    fireEvent(link, event)
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('leaves every other link as it was: an https page outside /get/skill/ is still external', () => {
+    renderBubble('[page](https://cinna.acme.com/get/agent/x) and [prose](https://cinna.acme.com/get/skill/x?ref=1)', { value: null })
+    expect(screen.getByRole('link', { name: 'page' }).getAttribute('target')).toBe('_blank')
+    expect(screen.getByRole('link', { name: 'prose' }).getAttribute('target')).toBe('_blank')
+    expect(offer()).toBeNull()
+  })
+
+  it('keeps other cinna: hrefs emptied, as the default transform does', () => {
+    renderBubble('[x](cinna://connect?server=https://cinna.acme.com) and [y](cinna://skill/bad+id)', { value: null })
+    expect(screen.getByText('x').tagName).toBe('SPAN')
+    expect(screen.getByText('y').tagName).toBe('SPAN')
   })
 })

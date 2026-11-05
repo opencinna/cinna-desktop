@@ -15,6 +15,7 @@ import { useAppSettings } from '../../../hooks/useAppSettings'
 import { groupAgentsByRoot } from '../../../utils/localAgents'
 import { folderReadinessBlocksTurn, type LocalAgentDto } from '../../../../../shared/localAgents'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
+import { closeAddAgentDialog } from '../../chat/skillLinkNewAgent'
 import { ManagedAgentModal } from '../ManagedAgentModal'
 import { CustomAgentModal } from '../CustomAgentModal'
 import { useSidebarExternalAgents } from './useSidebarExternalAgents'
@@ -223,7 +224,7 @@ export function LocalAgentsList(): React.JSX.Element {
     return () => {
       mounted.current = false
       setTimeout(() => {
-        if (!mounted.current) useUIStore.getState().setAddAgentDialog(null)
+        if (!mounted.current) closeAddAgentDialog()
       }, 0)
     }
   }, [])
@@ -445,8 +446,8 @@ export function LocalAgentsList(): React.JSX.Element {
           onCancel={() => setRowDialog(null)}
         />
       )}
-      {addAgentDialog !== null && <NewLocalAgentModal initialStep={addAgentDialog} onClose={() => setAddAgentDialog(null)} onCatalog={isCinna ? () => { setAddAgentDialog(null); openCatalog() } : undefined} onA2A={() => { setAddAgentDialog(null); setAddingA2A(true) }} onManaged={() => { setAddAgentDialog(null); setManaged(true) }} onCustom={() => { setAddAgentDialog(null); setCustom(true) }} onRemoteAcp={() => { setAddAgentDialog(null); setRemoteAcp(true) }} onCreateFolder={() => {
-        if (homeAccess && homeAccess !== 'ready') { setAddAgentDialog(null); useAgentsHomeStore.getState().reopen(homeAccess); return false }
+      {addAgentDialog !== null && <NewLocalAgentModal initialStep={addAgentDialog} onClose={() => closeAddAgentDialog({ restoreTab: true })} onCatalog={isCinna ? () => { closeAddAgentDialog(); openCatalog() } : undefined} onA2A={() => { closeAddAgentDialog(); setAddingA2A(true) }} onManaged={() => { closeAddAgentDialog(); setManaged(true) }} onCustom={() => { closeAddAgentDialog(); setCustom(true) }} onRemoteAcp={() => { closeAddAgentDialog(); setRemoteAcp(true) }} onCreateFolder={() => {
+        if (homeAccess && homeAccess !== 'ready') { closeAddAgentDialog(); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true
       }} />}
       {catalogOpen && isCinna && (

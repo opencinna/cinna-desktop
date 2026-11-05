@@ -400,6 +400,11 @@
   .composer-notice-panel[data-tone="danger"] {
     --notice-tone: var(--color-danger);
   }
+  /* An offer (a skill link), not a problem: the accent, so a panel holding
+     only offers never reads as an error. */
+  .composer-notice-panel[data-tone="accent"] {
+    --notice-tone: var(--color-accent);
+  }
   .composer-notice-border {
     position: absolute;
     inset: -1px -1px 0 -1px;
@@ -435,6 +440,20 @@
   [data-theme="light"] .composer-notice-button:hover:not([aria-disabled="true"]) {
     background-color: var(--color-bg-secondary);
     border-color: color-mix(in srgb, var(--color-text-muted) 60%, var(--color-border));
+  }
+  /* A notice's primary action, when the row is an offer with two (a skill
+     link's Add to agent beside New agent with this skill): accent-filled, so
+     the first choice reads as the first. After the light-theme rules, so it
+     wins over the secondary fill in both themes. */
+  .composer-notice-button.composer-notice-button-primary {
+    background-color: var(--color-accent);
+    border-color: var(--color-accent);
+    /* White in both themes, as every filled primary (ui_guidelines_llm.md). */
+    color: white;
+  }
+  .composer-notice-button.composer-notice-button-primary:hover:not([aria-disabled="true"]) {
+    background-color: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
   }
   /* An artifact card's actions (Open, Copy link, Share…) and the Share
      popover's: badge-sized, filled with a tint of the theme's accent so they

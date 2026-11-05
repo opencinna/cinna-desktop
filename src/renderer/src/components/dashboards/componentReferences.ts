@@ -1,3 +1,4 @@
+import { parseSkillLink } from '../../../../shared/skillLink'
 import { defaultUrlTransform } from 'react-markdown'
 import { COMPONENT_REFERENCE_PREFIX, componentReferenceKey, parseComponentReference } from '../../../../shared/componentReference'
 
@@ -241,7 +242,14 @@ export function componentRefItems(value: unknown): ComponentRefItem[] {
   }
 }
 
-/** react-markdown's `urlTransform`, keeping component references (its default empties `cinna:`). */
+/**
+ * react-markdown's `urlTransform`, keeping component references and
+ * `cinna://skill/…` links (its default empties `cinna:`). A skill link is kept
+ * only when the grammar accepts it whole; anything else under `cinna:` is
+ * emptied as before.
+ */
 export function chatUrlTransform(url: string): string {
-  return url.startsWith(COMPONENT_REFERENCE_PREFIX) ? url : defaultUrlTransform(url)
+  if (url.startsWith(COMPONENT_REFERENCE_PREFIX)) return url
+  if (parseSkillLink(url)?.form === 'cinna') return url
+  return defaultUrlTransform(url)
 }

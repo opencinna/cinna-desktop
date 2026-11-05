@@ -27,16 +27,36 @@ const setAgentPageMode = vi.fn()
 const pickFolder = vi.fn()
 const addFolder = vi.fn()
 let createPending = false
+/** The skill a skill link's New agent with this skill queued, or none. */
+const queued = vi.hoisted(() => ({ skill: null as null | { packageUuid: string; title: string; link: unknown } }))
+const addSkillToCreatedAgent = vi.fn(async () => {})
 
-vi.mock('../../../stores/ui.store', () => ({
-  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ setActiveLocalAgentId, setPendingDraftAgentId, setActiveView, setAgentPageMode })
+const setNewAgentSkill = vi.fn((skill: typeof queued.skill) => {
+  queued.skill = skill
+})
+/** The dialog hands the app's query client to the skill's add, which outlives it. */
+const queryClient = vi.hoisted(() => ({ invalidateQueries: () => {} }))
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => queryClient
 }))
+
+vi.mock('../../../stores/ui.store', () => {
+  const state = (): Record<string, unknown> => ({ setActiveLocalAgentId, setPendingDraftAgentId, setActiveView, setAgentPageMode, setNewAgentSkill, newAgentSkill: queued.skill })
+  return { useUIStore: Object.assign((selector: (s: Record<string, unknown>) => unknown) => selector(state()), { getState: state }) }
+})
+vi.mock('../../chat/skillLinkNewAgent', () => ({ addSkillToCreatedAgent }))
 vi.mock('../../../hooks/useLocalAgents', () => ({
   useAgentRoots: () => ({
     data: [{ id: 'root-1', label: 'Agents', path: '/tmp/agents', isDefault: true }]
   }),
-  useCreateLocalAgent: () => ({ mutate: create, isPending: createPending }),
+  // The dialog creates with `mutateAsync` (its add must outlive it); `create` records each call with the
+  // promise's settle functions as `onSuccess`/`onError`, so the helpers below settle it.
+  useCreateLocalAgent: () => ({
+    mutate: create,
+    mutateAsync: (input: unknown) => new Promise((resolve, reject) => create(input, { onSuccess: resolve, onError: reject })),
+    isPending: createPending
+  }),
   usePickAgentFolder: () => ({ mutate: pickFolder, isPending: false }),
   useAddAgentFolder: () => ({ mutate: addFolder, isPending: false })
 }))
@@ -44,16 +64,16 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
 const { NewLocalAgentModal } = await import('./NewLocalAgentModal')
 const { SETTLE_MS } = await import('../../../hooks/useSettleGuard')
 
-/** Resolve the create mutation the way react-query would, through `onSuccess`. */
-function succeedCreate(): void {
+/** Resolve the create mutation, and let its continuation run. */
+async function succeedCreate(): Promise<void> {
   const [, options] = create.mock.calls[0] as [unknown, { onSuccess: (a: LocalAgentDto) => void }]
-  act(() => options.onSuccess(CREATED))
+  await act(async () => options.onSuccess(CREATED))
 }
 
-/** Fail the create mutation the way react-query would, through `onError`. */
-function failCreate(err: Error): void {
+/** Fail the create mutation, and let its continuation run. */
+async function failCreate(err: Error): Promise<void> {
   const [, options] = create.mock.calls[0] as [unknown, { onError: (e: Error) => void }]
-  act(() => options.onError(err))
+  await act(async () => options.onError(err))
 }
 
 /** Render the dialog. It opens on the choice step. */
@@ -90,10 +110,11 @@ function open(): { onClose: ReturnType<typeof vi.fn> } {
 afterEach(() => {
   vi.clearAllMocks()
   createPending = false
+  queued.skill = null
 })
 
 describe('NewLocalAgentModal', () => {
-  it('creates from a name alone, sending no description and queueing no draft', () => {
+  it('creates from a name alone, sending no description and queueing no draft', async () => {
     open()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
@@ -103,17 +124,17 @@ describe('NewLocalAgentModal', () => {
     expect(input).toEqual({ name: 'Invoice watcher', slug: 'invoice-watcher', rootId: 'root-1' })
     expect('description' in input).toBe(false)
 
-    succeedCreate()
+    await succeedCreate()
     expect(setPendingDraftAgentId).not.toHaveBeenCalled()
   })
 
-  it('lands on the new agent in chat mode and closes — no "build it with" step', () => {
+  it('lands on the new agent in chat mode and closes — no "build it with" step', async () => {
     const { onClose } = open()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     expect(onClose).not.toHaveBeenCalled()
 
-    succeedCreate()
+    await succeedCreate()
     expect(setActiveLocalAgentId).toHaveBeenCalledWith('folder:new')
     expect(setActiveView).toHaveBeenCalledWith('local-agent')
     // Chat, whatever mode the page was last left in.
@@ -133,12 +154,12 @@ describe('NewLocalAgentModal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('keeps the dialog open and shows the error when create fails', () => {
+  it('keeps the dialog open and shows the error when create fails', async () => {
     const { onClose } = open()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
-    failCreate(new Error('There is already a folder called "invoice-watcher".'))
+    await failCreate(new Error('There is already a folder called "invoice-watcher".'))
     expect(onClose).not.toHaveBeenCalled()
     expect(setActiveLocalAgentId).not.toHaveBeenCalled()
     expect(setAgentPageMode).not.toHaveBeenCalled()
@@ -154,7 +175,7 @@ describe('NewLocalAgentModal', () => {
     expect(create).toHaveBeenCalledTimes(1)
   })
 
-  it('sends a description given under More options and queues the draft for it', () => {
+  it('sends a description given under More options and queues the draft for it', async () => {
     open()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
     fireEvent.click(screen.getByRole('button', { name: /more options/i }))
@@ -165,8 +186,62 @@ describe('NewLocalAgentModal', () => {
 
     const [input] = create.mock.calls[0] as [Record<string, unknown>]
     expect(input.description).toBe('Flags invoices with no PO number.')
-    succeedCreate()
+    await succeedCreate()
     expect(setPendingDraftAgentId).toHaveBeenCalledWith('folder:new')
+  })
+
+  it('with a skill queued (New agent with this skill): names the agent after it, and adds it once created', async () => {
+    const link = { origin: 'https://cinna.test', packageId: 'test.erp', form: 'https', serverGiven: true }
+    queued.skill = { packageUuid: 'uuid-1', title: 'ERP lookup', link }
+    const { onClose } = open()
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('ERP lookup')
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    expect(create.mock.calls[0][0]).toMatchObject({ name: 'ERP lookup', slug: 'erp-lookup' })
+    // Closing the dialog clears the queue; the create already holds what it read at the click.
+    queued.skill = null
+    await succeedCreate()
+    expect(addSkillToCreatedAgent).toHaveBeenCalledWith('folder:new', { packageUuid: 'uuid-1', title: 'ERP lookup', link }, queryClient)
+    expect(setActiveLocalAgentId).toHaveBeenCalledWith('folder:new')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('with a skill queued, the name step is headed (and labelled) New agent with the skill', () => {
+    queued.skill = { packageUuid: 'uuid-1', title: 'ERP lookup', link: {} }
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), initialStep: 'name' }))
+    expect(screen.getByRole('dialog', { name: 'New agent with ERP lookup' })).toBeTruthy()
+    expect(screen.getByText('New agent with ERP lookup')).toBeTruthy()
+  })
+
+  it('Create takes the skill off the queue, so the close after it raises no offer; a failed create puts it back', async () => {
+    const skill = { packageUuid: 'uuid-1', title: 'ERP lookup', link: {} }
+    queued.skill = skill
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), initialStep: 'name' }))
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    expect(queued.skill).toBeNull()
+    // The heading does not change under the click.
+    expect(screen.getByRole('dialog', { name: 'New agent with ERP lookup' })).toBeTruthy()
+    await failCreate(new Error('disk full'))
+    expect(queued.skill).toBe(skill)
+  })
+
+  it('runs the queued add even when the dialog is gone before the create answers', async () => {
+    queued.skill = { packageUuid: 'uuid-1', title: 'ERP lookup', link: {} }
+    const view = render(createElement(NewLocalAgentModal, { onClose: vi.fn(), initialStep: 'name' }))
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    view.unmount()
+    await succeedCreate()
+    expect(addSkillToCreatedAgent).toHaveBeenCalledWith('folder:new', expect.objectContaining({ packageUuid: 'uuid-1' }), expect.anything())
+    // The landing is the dialog's, and it is gone.
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+  })
+
+  it('adds nothing when no skill is queued, and starts with an empty name', async () => {
+    open()
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await succeedCreate()
+    expect(addSkillToCreatedAgent).not.toHaveBeenCalled()
   })
 
   it('never inserts a hint under the name while typing — the dialog must not jump', () => {

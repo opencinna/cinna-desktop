@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import { readThemePreference, resolveTheme, type Theme, type ThemePreference } from '../utils/theme'
 export type { Theme, ThemePreference } from '../utils/theme'
+import type { SkillLink } from '../../../shared/skillLink'
 
 export type ActiveView =
   | 'chat'
@@ -153,6 +154,17 @@ export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 't
 
 /** Where the Add an agent dialog opens — see `NewLocalAgentModal`'s steps. */
 export type AddAgentDialogStep = 'choose' | 'name' | 'advanced'
+/** The skill a new agent is created with (`newAgentSkill`). */
+export interface NewAgentSkill {
+  packageUuid: string
+  /** The skill's catalog title: the suggested agent name. */
+  title: string
+  link: SkillLink
+  /** The composer the offer was on: closing the dialog without creating raises it there again. */
+  chatKey?: string
+  /** The sidebar tab before the dialog switched it to Agents, put back on a cancel; null when it was not switched. */
+  previousSidebarTab?: SidebarTab | null
+}
 
 interface UIStore {
   activeView: ActiveView
@@ -248,6 +260,13 @@ interface UIStore {
    */
   addAgentDialog: AddAgentDialogStep | null
   /**
+   * New agent with this skill (skill links): the catalog skill the Add an agent
+   * dialog adds to the agent it creates, and the link it came from (the offer
+   * is raised again with it if that add fails). Set only while the dialog is
+   * open; closing the dialog, for any reason, clears it.
+   */
+  newAgentSkill: NewAgentSkill | null
+  /**
    * A folder agent whose Runs with Model select should take focus once its page
    * shows it — one-shot, from the composer's "no longer offered" row. Consumed
    * by the panel when the select is there and enabled.
@@ -334,6 +353,7 @@ interface UIStore {
   setDashboardChatsStash: (stash: { chatId: string | null } | null) => void
   setPendingDraftAgentId: (id: string | null) => void
   setAddAgentDialog: (step: AddAgentDialogStep | null) => void
+  setNewAgentSkill: (skill: NewAgentSkill | null) => void
   setPendingRuntimeModelFocusId: (id: string | null) => void
   addDraftingAgentId: (id: string) => void
   removeDraftingAgentId: (id: string) => void
@@ -390,6 +410,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   dashboardChatsStash: null,
   pendingDraftAgentId: null,
   addAgentDialog: null,
+  newAgentSkill: null,
   pendingRuntimeModelFocusId: null,
   draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
@@ -448,7 +469,9 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setDashboardPanelWidth: (width) => set({ dashboardPanelWidth: width }),
   setDashboardChatsStash: (dashboardChatsStash) => set({ dashboardChatsStash }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
-  setAddAgentDialog: (step) => set({ addAgentDialog: step }),
+  // Closed (created, cancelled, handed off, or the list unmounted): no skill stays queued for the next opening.
+  setAddAgentDialog: (step) => set(step === null ? { addAgentDialog: null, newAgentSkill: null } : { addAgentDialog: step }),
+  setNewAgentSkill: (skill) => set({ newAgentSkill: skill }),
   setPendingRuntimeModelFocusId: (id) => set({ pendingRuntimeModelFocusId: id }),
   addDraftingAgentId: (id) =>
     set((state) =>

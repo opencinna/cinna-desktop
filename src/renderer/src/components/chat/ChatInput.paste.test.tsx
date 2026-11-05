@@ -24,6 +24,7 @@ const { useChatStore } = await import('../../stores/chat.store')
 const { useAuthStore } = await import('../../stores/auth.store')
 const { useComposerDraftStore, composerDraftKey } = await import('../../stores/composerDraft.store')
 const { PASTE_MAX_CHARS } = await import('../../../../shared/pastedText')
+const { NEW_CHAT_KEY, useSkillLinkOfferStore } = await import('../../stores/skillLinkOffer.store')
 
 function wrapper({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }))
@@ -359,5 +360,57 @@ describe('a long text paste becomes a chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove pasted text Dear Anna,' }))
     expect(draftPastes()).toEqual([])
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+/**
+ * A paste whose whole text is one skill link raises the offer on this
+ * composer and is not inserted (L3: the paste event's own text, never a
+ * clipboard read). Everything else pastes as before.
+ */
+describe('a skill link paste', () => {
+  const LINK = 'https://cinna.acme.com/get/skill/com.acme.erp-lookup'
+  const box = (): HTMLTextAreaElement => screen.getByRole('combobox') as HTMLTextAreaElement
+  const offer = () => useSkillLinkOfferStore.getState().offer
+
+  /** Paste `text` as text/plain; true when the composer took it over. */
+  function pasteText(text: string): boolean {
+    return !fireEvent.paste(box(), { clipboardData: { types: ['text/plain'], getData: (type: string) => (type === 'text/plain' ? text : ''), files: [] } })
+  }
+
+  beforeEach(() => useSkillLinkOfferStore.setState({ offer: null }))
+
+  it('takes an exact link, surrounding whitespace included, and raises the offer on this composer', () => {
+    render(<ChatInput chatId={null} />, { wrapper })
+    expect(pasteText(`  ${LINK}\n`)).toBe(true)
+    expect(offer()).toMatchObject({ chatKey: NEW_CHAT_KEY, link: { origin: 'https://cinna.acme.com', packageId: 'com.acme.erp-lookup', form: 'https' } })
+    expect(box().value).toBe('')
+  })
+
+  it('raises it on an open chat’s own key', () => {
+    render(<ChatInput chatId="chat-1" />, { wrapper })
+    expect(pasteText('cinna://skill/com.acme.erp-lookup?server=https://cinna.acme.com')).toBe(true)
+    expect(offer()?.chatKey).toBe('chat-1')
+  })
+
+  it('pastes a link inside prose as text, and offers nothing', () => {
+    render(<ChatInput chatId={null} />, { wrapper })
+    expect(pasteText(`have a look: ${LINK}`)).toBe(false)
+    expect(offer()).toBeNull()
+  })
+
+  it('pastes it as text after Cmd+Shift+V, and takes the next plain paste again', () => {
+    render(<ChatInput chatId={null} />, { wrapper })
+    fireEvent.keyDown(box(), { key: 'V', metaKey: true, shiftKey: true })
+    expect(pasteText(LINK)).toBe(false)
+    expect(offer()).toBeNull()
+    expect(pasteText(LINK)).toBe(true)
+    expect(offer()).not.toBeNull()
+  })
+
+  it('leaves a paste that carries files to the file path', () => {
+    render(<ChatInput chatId={null} />, { wrapper })
+    fireEvent.paste(box(), { clipboardData: { types: ['text/plain', 'Files'], getData: () => LINK, files: [] } })
+    expect(offer()).toBeNull()
   })
 })

@@ -64,6 +64,10 @@ import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
 import { ComposerNoticePanel } from './ComposerNoticePanel'
+import { useSkillLinkNotice } from './SkillLinkNotice'
+import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
+import { openNewAgentWithSkill } from './skillLinkNewAgent'
+import { parseSkillLink } from '../../../../shared/skillLink'
 import { CacheExpiryNotice } from './CacheExpiryNotice'
 import { useCacheExpiryNotice } from '../../hooks/useCacheExpiryNotice'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
@@ -1141,7 +1145,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const sessionNotices = useActiveSessionNotices(chatId === null
     ? (pendingAgentIds ?? []).map((id) => ({ id, name: agents?.find((agent) => agent.id === id)?.name ?? 'This agent' }))
     : [])
-  const notices = [...readinessNotices, ...sessionNotices]
+  // A skill link pasted or clicked on this composer: the offer, above every other row.
+  const skillLinkKey = skillLinkChatKey(chatId)
+  const skillLinkNotice = useSkillLinkNotice(skillLinkKey, directTarget, { onNewAgent: openNewAgentWithSkill })
+  const notices = [...(skillLinkNotice ? [skillLinkNotice] : []), ...readinessNotices, ...sessionNotices]
   // An open chat whose prompt cache has gone cold over a large context. In the
   // notice slot only when nothing there says the turn cannot run, nor has since
   // the hook's last snapshot (no swap under the pointer when readiness clears).
@@ -1281,6 +1288,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const types = Array.from(e.clipboardData?.types ?? [])
       const hasFileRefs = (): boolean => window.api.files.clipboardHasFileRefs()
+      // A paste that is exactly one skill link is taken as the offer, not
+      // inserted (L3: the paste event's own text, never a clipboard read).
+      // Cmd/Ctrl+Shift+V still pastes it as text; a link inside prose is text.
+      if (!types.includes('Files') && types.includes('text/plain')
+        && Date.now() - plainPasteAtRef.current >= PLAIN_PASTE_WINDOW_MS) {
+        const link = parseSkillLink(e.clipboardData?.getData('text/plain') ?? '')
+        if (link) {
+          e.preventDefault()
+          useSkillLinkOfferStore.getState().raise(link, skillLinkKey)
+          return
+        }
+      }
       if (!types.includes('Files')) {
         if (types.includes('text/plain')) takeTextPaste(e)
         return
@@ -1312,7 +1331,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
         .finally(focusComposer)
     },
-    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer, takeTextPaste]
+    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer, takeTextPaste, skillLinkKey]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */

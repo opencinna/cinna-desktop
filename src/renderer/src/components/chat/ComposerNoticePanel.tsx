@@ -1,10 +1,14 @@
 import { useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, X } from 'lucide-react'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
-export type ComposerNoticeTone = 'warning' | 'danger'
+/**
+ * `accent` is an offer, not a problem (a skill link's Add to agent): a panel
+ * holding only accent rows is tinted with the accent, never the warning colour.
+ */
+export type ComposerNoticeTone = 'warning' | 'danger' | 'accent'
 
 /** One thing about the composer's target the user should know: a line, and at most one way to act on it. */
 export interface ComposerNotice {
@@ -25,14 +29,34 @@ export interface ComposerNotice {
    * (ux_rules rule 1); below, it widens into free space.
    */
   actionBelow?: boolean
+  /**
+   * Keep the line under the text even when `action` is empty, at one button's
+   * height, so a row whose actions come and go as its state settles (a skill
+   * link resolving) never changes height (ux_rules rule 1).
+   */
+  reserveActionLine?: boolean
+  /**
+   * Line 1 on one line, truncated, instead of wrapping to two: for a row whose
+   * sentence swaps as it settles (a skill link answering), so it never grows
+   * a line (ux_rules rule 1). Put the whole sentence in `title`.
+   */
+  singleLine?: boolean
+  /** A × at the end of the first line, for a row the person may put away (an offer). */
+  onDismiss?: () => void
+  dismissLabel?: string
   /** Behind a toggle, opened in place: more findings, the rest of a long story. */
   details?: ReactNode
   detailsLabel?: string
 }
 
+/** A composer notice's ×, shared by the panel's rows and the cache-expiry strip. */
+export const NOTICE_DISMISS_BUTTON =
+  'shrink-0 rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] transition-colors'
+
 const TONE_TEXT: Record<ComposerNoticeTone, string> = {
   warning: 'text-[var(--color-warning)]',
-  danger: 'text-[var(--color-danger)]'
+  danger: 'text-[var(--color-danger)]',
+  accent: 'text-[var(--color-accent)]'
 }
 
 /**
@@ -45,9 +69,13 @@ const TONE_TEXT: Record<ComposerNoticeTone, string> = {
  */
 export function ComposerNoticePanel({ notices }: { notices: ComposerNotice[] }): React.JSX.Element | null {
   if (notices.length === 0) return null
-  const tone: ComposerNoticeTone = notices.some((n) => n.tone === 'danger') ? 'danger' : 'warning'
+  const tone: ComposerNoticeTone = notices.some((n) => n.tone === 'danger') ? 'danger'
+    : notices.some((n) => n.tone === 'warning') ? 'warning'
+    : 'accent'
+  // An offer alone (every row accent) is not the agent's status; it is named for what it is.
+  const label = notices.every((n) => n.tone === 'accent') ? 'Skill link' : 'Agent status'
   return (
-    <div role="status" aria-label="Agent status" data-tone={tone} className="composer-notice-panel relative mx-3 -mb-3 rounded-t-xl pb-3">
+    <div role="status" aria-label={label} data-tone={tone} className="composer-notice-panel relative mx-3 -mb-3 rounded-t-xl pb-3">
       <span aria-hidden="true" className="composer-notice-border" />
       <ul className="relative divide-y divide-[var(--color-border)]/50">
         {notices.map((notice) => <NoticeRow key={notice.key} notice={notice} />)}
@@ -63,7 +91,7 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
     <li className="px-3 py-2">
       <div className="flex items-center gap-2">
         <Icon size={13} aria-hidden="true" className={`shrink-0 ${TONE_TEXT[notice.tone]}`} />
-        <p id={notice.textId} title={notice.title} className="min-w-0 flex-1 text-xs leading-snug text-[var(--color-text)] line-clamp-2 break-words">
+        <p id={notice.textId} title={notice.title} className={`min-w-0 flex-1 text-xs leading-snug text-[var(--color-text)] ${notice.singleLine ? 'truncate' : 'line-clamp-2 break-words'}`}>
           {notice.text}
         </p>
         {notice.details && notice.detailsLabel && (
@@ -74,8 +102,23 @@ function NoticeRow({ notice }: { notice: ComposerNotice }): React.JSX.Element {
           </button>
         )}
         {notice.action && !notice.actionBelow && <div className="shrink-0">{notice.action}</div>}
+        {notice.onDismiss && (
+          <button type="button" onClick={notice.onDismiss} aria-label={notice.dismissLabel ?? 'Dismiss'} title={notice.dismissLabel ?? 'Dismiss'}
+            className={NOTICE_DISMISS_BUTTON}>
+            <X size={13} aria-hidden="true" />
+          </button>
+        )}
       </div>
-      {notice.action && notice.actionBelow && <div className="flex pl-[21px] pt-1.5">{notice.action}</div>}
+      {((notice.action && notice.actionBelow) || notice.reserveActionLine) && (
+        <div className="flex items-center pl-[21px] pt-1.5">
+          {/* A zero-width button as the line's strut: the reserved line is one
+              button tall whether it holds buttons or only a sentence. */}
+          {notice.reserveActionLine && (
+            <NoticeButton aria-hidden="true" tabIndex={-1} className="invisible w-0 !px-0 !border-x-0 overflow-hidden">{'\u00a0'}</NoticeButton>
+          )}
+          {notice.action}
+        </div>
+      )}
       {notice.details && (
         <AnimatedCollapse open={open}>
           <div className="pl-[21px] pt-1.5">{notice.details}</div>

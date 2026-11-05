@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   Bot,
@@ -13,6 +14,7 @@ import {
   Waypoints,
   X
 } from 'lucide-react'
+import { useSkillLinkOfferStore } from '../../../stores/skillLinkOffer.store'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useAddAgentFolder,
@@ -28,6 +30,7 @@ import {
 } from '../../../../../shared/localAgents'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { isUnsettledClick, useSettleGuard } from '../../../hooks/useSettleGuard'
+import { addSkillToCreatedAgent } from '../../chat/skillLinkNewAgent'
 
 interface NewLocalAgentModalProps {
   onClose: () => void
@@ -137,6 +140,8 @@ export function NewLocalAgentModal({
 }: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
+  // Handed to the skill's add, which outlives this dialog: the client does too.
+  const queryClient = useQueryClient()
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
@@ -152,7 +157,11 @@ export function NewLocalAgentModal({
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   /** The name for a single adopted folder. Ignored when several are ticked. */
   const [folderAgentName, setFolderAgentName] = useState('')
-  const [name, setName] = useState('')
+  // New agent with this skill (a skill link): the skill's title is the suggested name.
+  const [name, setName] = useState(() => useUIStore.getState().newAgentSkill?.title ?? '')
+  // …and its heading names the skill, read once: the queue clears at Create's click.
+  const [skillTitle] = useState(() => useUIStore.getState().newAgentSkill?.title ?? null)
+  const dialogLabel = step.kind === 'name' && skillTitle ? `New agent with ${skillTitle}` : DIALOG_LABEL[step.kind]
   const [description, setDescription] = useState('')
   const [moreOpen, setMoreOpen] = useState(false)
   // `null` means "still following the name"; a string is the user's own.
@@ -175,6 +184,15 @@ export function NewLocalAgentModal({
   useEffect(() => {
     if (step.kind === 'name') nameRef.current?.focus()
   }, [step.kind])
+
+  /** Whether the dialog is still on screen when a create answers. */
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   /**
    * Close, unless a create or an add is in flight. Landing on the agent and
@@ -328,25 +346,41 @@ export function NewLocalAgentModal({
     if (!canCreate) return
     setError(null)
     const trimmedDescription = description.trim()
-    createAgent.mutate(
-      {
+    // Read at the click: closing the dialog clears the queue, and the create may outlast it.
+    const skill = useUIStore.getState().newAgentSkill
+    // Taken off the queue now, so the dialog closing after the create (or the
+    // list unmounting mid-create) does not raise the offer again beside it.
+    if (skill) useUIStore.getState().setNewAgentSkill(null)
+    // `mutateAsync`, not `mutate` callbacks: TanStack drops those once this
+    // dialog unmounts, and the skill's add must run regardless. Landing and
+    // the error stay this dialog's, as before: only while it is on screen.
+    createAgent
+      .mutateAsync({
         name: name.trim(),
         // Absent, not empty: main writes the name in its place, and the
         // contract is "optional", not "may be blank".
         ...(trimmedDescription === '' ? {} : { description: trimmedDescription }),
         slug,
         rootId: targetRoot?.id
-      },
-      {
-        onSuccess: (agent) => {
+      })
+      .then(
+        (agent) => {
+          if (skill) void addSkillToCreatedAgent(agent.id, skill, queryClient)
+          if (!mountedRef.current) return
           landOn(agent, trimmedDescription !== '')
           onClose()
         },
-        onError: (err) => {
+        (err: unknown) => {
+          if (!mountedRef.current) {
+            // Closed meanwhile and no agent exists: the offer goes back where it came from rather than vanishing.
+            if (skill?.chatKey) useSkillLinkOfferStore.getState().raise(skill.link, skill.chatKey)
+            return
+          }
+          // Still open: the next Create (or a cancel) has the skill again.
+          if (skill) useUIStore.getState().setNewAgentSkill(skill)
           setError(unwrapIpcError(err, 'Could not create that agent.'))
         }
-      }
-    )
+      )
   }
 
   const closeButton = (
@@ -369,7 +403,7 @@ export function NewLocalAgentModal({
       <div
         ref={cardRef}
         role="dialog"
-        aria-label={DIALOG_LABEL[step.kind]}
+        aria-label={dialogLabel}
         className="w-full max-w-[30rem] max-h-[84vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
       >
         {step.kind === 'advanced' ? (
@@ -402,7 +436,7 @@ export function NewLocalAgentModal({
                 <Bot size={28} className="text-[var(--color-accent)]" />
               </div>
               <div className="text-lg font-semibold text-[var(--color-text)]">
-                {DIALOG_LABEL[step.kind]}
+                {dialogLabel}
               </div>
               {step.kind === 'folder' && <PickedPath path={step.pick.path} />}
             </div>
