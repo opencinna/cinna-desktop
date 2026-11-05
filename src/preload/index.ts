@@ -87,6 +87,12 @@ import type {
 import { ANTIGRAVITY_BINARY_CHANNEL, CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL, RUNTIME_SETUP_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
+import {
+  SKILL_LINK_INTENT_CHANNEL,
+  type SkillLinkIntent,
+  type SkillLinkResolution,
+  type SkillLinkResolveInput
+} from '../shared/skillLink'
 import { PATH_MENTION_CHANNEL, type PathMentionTake } from '../shared/pathMentions'
 import type { FinderQuickActionResult, FinderQuickActionStatus } from '../shared/finderQuickAction'
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
@@ -1782,6 +1788,29 @@ const api = {
       const listener = (_event: IpcRendererEvent, intent: ConnectIntent): void => handler(intent)
       ipcRenderer.on(CONNECT_INTENT_CHANNEL, listener)
       return () => ipcRenderer.off(CONNECT_INTENT_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * Skill links (`https://<origin>/get/skill/<package_id>`, `cinna://skill/…`).
+   * The renderer parses a paste or a transcript click itself
+   * (`parseSkillLink`); main buffers the deep link the OS delivered, and
+   * answers what a link offers. Add is `catalogSkills.add`, unchanged.
+   */
+  skillLinks: {
+    /** The buffered `cinna://skill/…` deep link, for a renderer that mounted after it arrived. */
+    getPending: (): Promise<SkillLinkIntent | null> => ipcRenderer.invoke('skill-link:get-pending'),
+    /** The offer took it. With `receivedAt`, main drops it only if it still holds that intent. */
+    consume: (receivedAt?: number): Promise<{ success: true }> =>
+      ipcRenderer.invoke('skill-link:consume', receivedAt),
+    /** What the link offers on `agentId` (README §4), read from a fresh listing. Always data, never a thrown code. */
+    resolve: (input: SkillLinkResolveInput): Promise<SkillLinkResolution> =>
+      ipcRenderer.invoke('skill-link:resolve', input),
+    /** Fires when a skill deep link arrives while the app is running. Returns an unsubscribe. */
+    onIntent: (handler: (intent: SkillLinkIntent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, intent: SkillLinkIntent): void => handler(intent)
+      ipcRenderer.on(SKILL_LINK_INTENT_CHANNEL, listener)
+      return () => ipcRenderer.off(SKILL_LINK_INTENT_CHANNEL, listener)
     }
   },
 

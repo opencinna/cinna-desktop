@@ -32,11 +32,8 @@ import { syncTrayFromSettings } from './host/desktop/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './host/desktop/logBroadcast'
 import { localDevService } from './localdev/localDevService'
-import {
-  connectIntentService,
-  connectUrlFromArgv,
-  registerConnectScheme
-} from './host/desktop/connectIntentService'
+import { connectIntentService, registerConnectScheme } from './host/desktop/connectIntentService'
+import { deepLinkService, deepLinkUrlFromArgv } from './host/desktop/deepLinkService'
 import {
   clearOpenInBrowserCopiesAtStart,
   guardPreviewFrames,
@@ -97,7 +94,7 @@ const bootLogger = createLogger('boot')
 // `mainWindow` lazily, so installing before there is a window is correct.
 installRuntimeHost(createDesktopHost())
 installDesktopFeatures({
-  authCompleted() { focusMainWindow(); connectIntentService.flush() },
+  authCompleted() { focusMainWindow(); deepLinkService.flush() },
   clearDevelopment: () => localDevService.clear(),
   reconcileDevelopment: (userId) => localDevService.reconcile(userId),
   developmentAgentContext,
@@ -109,14 +106,15 @@ installEventPublisher(desktopEventPublisher(getMainWindow))
 installLogBroadcast(getMainWindow)
 installWindowResolver(getMainWindow)
 installWindowCreator(createWindow)
-connectIntentService.install(getMainWindow)
+deepLinkService.install(getMainWindow)
 
 // ── The `cinna://` deep link ────────────────────────────────────────────────
 //
 // All of this is at module scope, before `whenReady`, and that is the whole
 // trick. On macOS a cold launch from a link fires `open-url` *before* the app
 // is ready — a handler installed inside `startup()` would miss the one delivery
-// the feature exists for. `connectIntentService` buffers whatever arrives until
+// the feature exists for. `deepLinkService` routes each link by its action
+// (`connect`, `skill`) to a service that buffers whatever arrives until
 // there is a renderer to show it to, so being early costs nothing.
 //
 // The single-instance lock is what makes the running-app case work at all:
@@ -143,8 +141,8 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(0)
 } else {
   app.on('second-instance', (_event, argv) => {
-    const url = connectUrlFromArgv(argv)
-    if (url) connectIntentService.deliver(url, 'second-instance')
+    const url = deepLinkUrlFromArgv(argv)
+    if (url) deepLinkService.deliver(url, 'second-instance')
     // A second launch with no link is still the user asking for the app —
     // typically a Dock or launcher click while the window is behind something.
     else focusMainWindow()
@@ -152,7 +150,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    connectIntentService.deliver(url, 'open-url')
+    deepLinkService.deliver(url, 'open-url')
   })
 
   // "Mention in Cinna" in Finder: the Quick Action runs `open` with the
@@ -496,9 +494,9 @@ function startup(): void {
   // appended to argv rather than through `open-url`; the E2E suite uses the
   // `--cinna-connect-intent=` form of the same thing. Both land in the funnel
   // the OS hooks above use, so nothing downstream can tell them apart.
-  const startupIntentUrl = connectUrlFromArgv(process.argv)
+  const startupIntentUrl = deepLinkUrlFromArgv(process.argv)
   if (startupIntentUrl) {
-    connectIntentService.deliver(
+    deepLinkService.deliver(
       startupIntentUrl,
       startupIntentUrl.startsWith('cinna://') ? 'argv' : 'test-argv'
     )

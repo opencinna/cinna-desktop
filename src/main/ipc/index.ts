@@ -37,6 +37,7 @@ import { registerHtmlPreviewHandlers } from './html_preview.ipc'
 import { registerDashboardHandlers } from './dashboards.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
+import { registerSkillLinkHandlers } from './skillLink.ipc'
 import { registerPathMentionHandlers } from './path_mention.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
 import { registerSharingHandlers } from './sharing.ipc'
@@ -103,6 +104,8 @@ export function registerAllIpcHandlers(): void {
   registerDashboardHandlers()
   registerEngineHandlers()
   registerConnectHandlers()
+  // Skill links: the buffered `cinna://skill` deep link and the composer offer's resolve.
+  registerSkillLinkHandlers()
   // "Mention in Cinna": Finder paths waiting for the composer, and the Quick Action.
   registerPathMentionHandlers()
   registerLocalDevHandlers()

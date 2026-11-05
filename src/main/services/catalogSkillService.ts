@@ -249,12 +249,13 @@ export function locateKit(userId: string, agentId: string): KitTarget | Refused 
   return { rootId: agent.rootId, dir: agent.path }
 }
 
-function pinsOf(manifest: CinnaAgentManifest): CatalogSkillPin[] {
+/** The manifest's `catalog_skills[]`, or none. Shared with `skillLinkService`. */
+export function pinsOf(manifest: CinnaAgentManifest): CatalogSkillPin[] {
   return Array.isArray(manifest.catalog_skills) ? manifest.catalog_skills : []
 }
 
-/** Whether a pin (as written, so possibly malformed) names the package `uuid`. */
-function pinsPackage(pin: unknown, uuid: string): boolean {
+/** Whether a pin (as written, so possibly malformed) names the package `uuid`. Shared with `skillLinkService`. */
+export function pinsPackage(pin: unknown, uuid: string): boolean {
   const value = pin && typeof pin === 'object' ? (pin as Record<string, unknown>).package_uuid : null
   return typeof value === 'string' && value.trim().toLowerCase() === uuid.trim().toLowerCase()
 }
@@ -373,8 +374,8 @@ async function skillItem(
   return { listing, item }
 }
 
-/** The pin fields of a listing item's latest version, or null when it has none to pin. */
-function latestPinOf(item: CatalogItem): CatalogSkillPin | null {
+/** The pin fields of a listing item's latest version, or null when it has none to pin. Shared with `skillLinkService`. */
+export function latestPinOf(item: CatalogItem): CatalogSkillPin | null {
   const revision = item.latest?.revision_number
   const digest = item.skill?.archive_sha256
   if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) return null
@@ -417,8 +418,8 @@ export async function latestRevisionTree(
   return { ok: true, pin: latest, tree: collected.tree }
 }
 
-/** Why `name` cannot be pinned beside what the agent already has, or null. `except` is the pin being replaced. */
-function clashOf(dir: string, pins: CatalogSkillPin[], name: string, except: number | null): boolean {
+/** Whether `name` cannot be pinned beside what the agent already has. `except` is the pin being replaced. Shared with `skillLinkService`. */
+export function clashOf(dir: string, pins: CatalogSkillPin[], name: string, except: number | null): boolean {
   if (PLATFORM_SKILL_NAMES.has(name)) return true
   if (scanAgentSkills(dir).some((skill) => skill.name === name)) return true
   return pins.some((pin, index) => index !== except && pin && typeof pin === 'object' && pin.name === name)
