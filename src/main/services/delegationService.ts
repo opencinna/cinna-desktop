@@ -468,13 +468,22 @@ export const delegationService = {
       const depth = Math.max(parent?.depth ?? 0, task?.chainDepth ?? 0) + 1
       if (depth > MAX_HANDOVER_DEPTH) throw new Error(`Delegations are limited to depth ${MAX_HANDOVER_DEPTH}.`)
 
-      const targetEntry = (await this.targetEntries(session, signal)).find((entry) => sameTarget(entry.target, target))
+      const entries = await this.targetEntries(session, signal)
+      const targetEntry = entries.find((entry) => sameTarget(entry.target, target))
       signal?.throwIfAborted()
       const fresh = validateSession(session)
       if ((fresh.task?.id ?? null) !== (task?.id ?? null) || (fresh.parent?.depth ?? 0) !== (parent?.depth ?? 0)) {
         throw new Error('This session’s task changed. Try again.')
       }
-      if (!targetEntry?.acceptsDelegations) throw new Error('That target is unavailable for delegation.')
+      if (!targetEntry?.acceptsDelegations) {
+        // What was asked for against what was on offer: tells a stale target list from a mistyped assignee.
+        logger.info('a delegation target was refused', {
+          requested: encodeTaskTarget(target),
+          found: !!targetEntry,
+          offered: entries.map((entry) => `${encodeTaskTarget(entry.target)}${entry.acceptsDelegations ? '' : ' (off)'}`)
+        })
+        throw new Error('That target is unavailable for delegation.')
+      }
       // A repeat of a bare brief already written (a draft has no delegation
       // row yet) is answered from its file below, not a new request.
       const repeatedBrief = target.kind === 'bare' && !!targetEntry.folder && delegationBriefExists(targetEntry.folder, id)

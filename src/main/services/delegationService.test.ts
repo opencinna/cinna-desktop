@@ -28,7 +28,7 @@ vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {
 } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => world.active, getSettingsScopeUserId: () => 'settings' }))
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: vi.fn() } }))
-vi.mock('../logger/logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }))
+vi.mock('../logger/logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }))
 vi.mock('../tasks/adapters', () => ({ allAdapters: () => [{ id: 'remote', capabilities: () => ({ create: true, execute: true, assigneeDirectory: true, writeArtifactKinds: ['file'] }), availability: async () => ({ ready: true }), delegationSupport: async () => ({ metadata: true, structuredResult: true, reply: false }), listAssignees: async () => [{ kind: 'remote_agent', ref: 'cloud-agent', name: 'Cloud' }] }] }))
 vi.mock('./localAgents/localAgentService', () => ({ localAgentService: {
   get: (_user: string, id: string) => ({ id, enabled: true, kind: 'kit', path: '/tmp/agent', desktop: { delegations: world.targetAuto ? 'auto' : null, cloudDelegations: world.sourceAuto ? 'auto' : null } }),
