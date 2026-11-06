@@ -28,7 +28,7 @@ function provider(id: string, revision: number, stored: OAuthStoredState = {}) {
     assertCurrent: () => {
       if (mcpProviderRepo.getOwned('owner', id)?.configRevision !== revision) throw new Error('Configuration changed')
     },
-    save: (patch) => mcpProviderRepo.saveOAuthState('owner', id, revision, {
+    save: async (patch) => mcpProviderRepo.saveOAuthState('owner', id, revision, {
       ...('tokens' in patch ? { authTokensEncrypted: patch.tokens ? Buffer.from(JSON.stringify(patch.tokens)) : null } : {}),
       ...('clientInfo' in patch ? { clientInfo: patch.clientInfo } : {}),
       ...('discovery' in patch ? { oauthDiscoveryState: patch.discovery } : {})
@@ -37,35 +37,35 @@ function provider(id: string, revision: number, stored: OAuthStoredState = {}) {
 }
 
 describe('MCP OAuth durable ownership', () => {
-  it('roundtrips complete SDK state and invalidates only the requested credential scope', () => {
+  it('roundtrips complete SDK state and invalidates only the requested credential scope', async () => {
     const { id } = mcpProviderRepo.upsert('owner', original)
     const current = provider(id, 0)
     const stamped = { ...tokens, issuer: 'https://issuer.test', extra: 'preserved' }
-    current.saveTokens(stamped)
-    current.saveClientInformation({ client_id: 'public-native', issuer: 'https://issuer.test' })
-    current.saveDiscoveryState(discovery)
+    await current.saveTokens(stamped)
+    await current.saveClientInformation({ client_id: 'public-native', issuer: 'https://issuer.test' })
+    await current.saveDiscoveryState(discovery)
     current.saveCodeVerifier('verifier')
     const saved = mcpProviderRepo.getOwned('owner', id)!
     expect(JSON.parse(Buffer.from(saved.authTokensEncrypted!).toString())).toEqual(stamped)
     expect(saved.clientInfo).toEqual(current.clientInformation())
     expect(saved.oauthDiscoveryState).toEqual(discovery)
-    current.invalidateCredentials('verifier')
+    await current.invalidateCredentials('verifier')
     expect(() => current.codeVerifier()).toThrow()
     expect(current.tokens()).toEqual(stamped)
-    current.invalidateCredentials('tokens')
+    await current.invalidateCredentials('tokens')
     expect(current.tokens()).toBeUndefined()
     expect(mcpProviderRepo.getOwned('owner', id)?.authTokensEncrypted).toBeNull()
     expect(current.clientInformation()?.client_id).toBe('public-native')
-    current.invalidateCredentials('discovery')
+    await current.invalidateCredentials('discovery')
     expect(mcpProviderRepo.getOwned('owner', id)?.oauthDiscoveryState).toBeNull()
-    current.invalidateCredentials('all')
+    await current.invalidateCredentials('all')
     expect(mcpProviderRepo.getOwned('owner', id)?.clientInfo).toBeNull()
     expect(current.clientMetadata).toMatchObject({ application_type: 'native', token_endpoint_auth_method: 'none' })
   })
 
-  it('preserves credentials for a rename and clears them for endpoint/auth changes with monotonic revisions', () => {
+  it('preserves credentials for a rename and clears them for endpoint/auth changes with monotonic revisions', async () => {
     const { id } = mcpProviderRepo.upsert('owner', original)
-    provider(id, 0).saveTokens(tokens)
+    await provider(id, 0).saveTokens(tokens)
     mcpProviderRepo.upsert('owner', { ...original, id, name: 'Renamed' })
     expect(mcpProviderRepo.getOwned('owner', id)).toMatchObject({ configRevision: 0, authTokensEncrypted: expect.anything() })
     mcpProviderRepo.upsert('owner', { ...original, id, url: 'https://new.test/mcp' })
@@ -78,21 +78,21 @@ describe('MCP OAuth durable ownership', () => {
     expect(mcpProviderRepo.getOwned('owner', id)?.configRevision).toBe(3)
   })
 
-  it('rejects a stale provider after configuration replacement or deletion', () => {
+  it('rejects a stale provider after configuration replacement or deletion', async () => {
     const { id } = mcpProviderRepo.upsert('owner', original)
     const current = provider(id, 0)
     mcpProviderRepo.upsert('owner', { ...original, id, enabled: false })
-    expect(() => current.saveTokens(tokens)).toThrow(/changed/)
+    await expect(current.saveTokens(tokens)).rejects.toThrow(/changed/)
     expect(mcpProviderRepo.getOwned('owner', id)?.authTokensEncrypted).toBeNull()
     mcpProviderRepo.delete('owner', id)
-    expect(() => current.saveDiscoveryState(discovery)).toThrow(/changed/)
+    await expect(current.saveDiscoveryState(discovery)).rejects.toThrow(/changed/)
   })
 
   it('latches persistence failure without changing in-memory or durable rotated tokens', async () => {
     const stored = { tokens }
     const failure = new Error('disk write failed')
-    const current = new ElectronOAuthProvider(stored, { assertCurrent: () => {}, save: () => { throw failure } })
-    expect(() => current.saveTokens({ ...tokens, refresh_token: 'rotated' })).toThrow(failure)
+    const current = new ElectronOAuthProvider(stored, { assertCurrent: () => {}, save: async () => { throw failure } })
+    await expect(current.saveTokens({ ...tokens, refresh_token: 'rotated' })).rejects.toThrow(failure)
     expect(stored.tokens).toEqual(tokens)
     expect(() => current.state()).toThrow(failure)
     expect(() => current.tokens()).toThrow(failure)
@@ -100,9 +100,9 @@ describe('MCP OAuth durable ownership', () => {
     expect(edge.open).not.toHaveBeenCalled()
   })
 
-  it('adds v2 columns to a populated database and preserves existing credentials on repeated migration', () => {
+  it('adds v2 columns to a populated database and preserves existing credentials on repeated migration', async () => {
     const { id } = mcpProviderRepo.upsert('owner', original)
-    provider(id, 0).saveTokens(tokens)
+    await provider(id, 0).saveTokens(tokens)
     fixture.raw.exec('ALTER TABLE mcp_providers DROP COLUMN oauth_discovery_state; ALTER TABLE mcp_providers DROP COLUMN config_revision')
     runAllMigrations(fixture.sqlite); runAllMigrations(fixture.sqlite)
     const saved = mcpProviderRepo.getOwned('owner', id)!
@@ -119,7 +119,7 @@ it('reuses the redirect URI retained with a client registration', async () => {
   try {
     await first.prepareForAuth()
     const redirect = first.redirectUrl
-    first.saveClientInformation({ client_id: 'registered-client' })
+    await first.saveClientInformation({ client_id: 'registered-client' })
     const registration = first.clientInformation()
     first.cleanup()
     second = provider(id, 0, { clientInfo: registration })
@@ -130,7 +130,7 @@ it('reuses the redirect URI retained with a client registration', async () => {
 })
 
 it('never opens a browser for a non-interactive connect, even with a callback pending', async () => {
-  const quiet = new ElectronOAuthProvider({}, { assertCurrent: () => {}, save: () => {}, interactive: false })
+  const quiet = new ElectronOAuthProvider({}, { assertCurrent: () => {}, save: async () => {}, interactive: false })
   try {
     await quiet.prepareForAuth()
     await expect(quiet.redirectToAuthorization(new URL('https://issuer.test/authorize'))).rejects.toThrow('needs the user')

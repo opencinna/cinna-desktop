@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug: () => {}, info: () => {}, warn: state.warn, error: () => {} }) }))
 vi.mock('../db/appSettings', () => ({ appSettingsRepo: { get: (key: keyof typeof state.settings) => state.settings[key] } }))
 vi.mock('../db/llmProviders', () => ({ llmProviderRepo: { getOwned: (...args: unknown[]) => state.lookup(...args) } }))
-vi.mock('../security/keystore', () => ({ decryptApiKey: (...args: unknown[]) => state.decrypt(...args) }))
+vi.mock('../security/keystore', () => ({ decryptApiKey: async (...args: unknown[]) => state.decrypt(...args) }))
 vi.mock('../auth/scope', () => ({ getManagedResourceScopes: () => ['default', 'profile'] }))
 vi.mock('../llm/factory', () => ({ isProviderType: (type: string) => state.providerType(type), createAdapter: (...args: unknown[]) => state.createAdapter(...args) }))
 vi.mock('./aiFunctionRuntimeService', () => ({ runAiFunctionOnRuntime: (...args: unknown[]) => state.runtime(...args) }))
@@ -35,42 +35,42 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('AI Functions own binding and runtime fallback', () => {
-  it('uses the default runtime when its own binding is empty without consulting providers or chat modes', () => {
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+  it('uses the default runtime when its own binding is empty without consulting providers or chat modes', async () => {
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     expect(state.lookup).not.toHaveBeenCalled()
   })
-  it('resolves its explicit credential and model, and uses the credential default when the model is empty', () => {
+  it('resolves its explicit credential and model, and uses the credential default when the model is empty', async () => {
     state.settings = { aiFunctionsCredentialId: 'credential', aiFunctionsModelId: 'own-model' }
-    expect(aiFunctions.resolveBackend('profile')).toMatchObject({ kind: 'adapter', modelId: 'own-model' })
+    expect(await aiFunctions.resolveBackend('profile')).toMatchObject({ kind: 'adapter', modelId: 'own-model' })
     state.settings.aiFunctionsModelId = ''
-    expect(aiFunctions.resolveBackend('profile')).toMatchObject({ modelId: 'default-model' })
+    expect(await aiFunctions.resolveBackend('profile')).toMatchObject({ modelId: 'default-model' })
   })
-  it('falls back to the default runtime when the configured credential is disabled, unsupported or deleted', () => {
+  it('falls back to the default runtime when the configured credential is disabled, unsupported or deleted', async () => {
     state.settings.aiFunctionsCredentialId = 'credential'
     state.provider.enabled = false
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     state.provider.enabled = true
     state.provider.unsupported = true
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     state.lookup.mockReturnValue(undefined)
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     expect(state.lookup).toHaveBeenCalledWith('profile', 'credential')
   })
-  it('falls back to the default runtime when the key no longer decrypts', () => {
+  it('falls back to the default runtime when the key no longer decrypts', async () => {
     state.settings.aiFunctionsCredentialId = 'credential'
     state.decrypt.mockImplementation(() => { throw new Error('keychain reset') })
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     expect(state.createAdapter).not.toHaveBeenCalled()
   })
-  it('warns once per stale credential, not on every call', () => {
+  it('warns once per stale credential, not on every call', async () => {
     state.settings.aiFunctionsCredentialId = 'gone'
     state.lookup.mockReturnValue(undefined)
     state.warn.mockClear()
-    aiFunctions.resolveBackend('profile')
-    aiFunctions.resolveBackend('profile')
+    await aiFunctions.resolveBackend('profile')
+    await aiFunctions.resolveBackend('profile')
     expect(state.warn).toHaveBeenCalledTimes(1)
     state.settings.aiFunctionsCredentialId = 'also-gone'
-    aiFunctions.resolveBackend('profile')
+    await aiFunctions.resolveBackend('profile')
     expect(state.warn).toHaveBeenCalledTimes(2)
   })
   it.each(['adapter', 'runtime'] as const)('applies the same trimmed output cap to %s', async (kind) => {
@@ -123,21 +123,21 @@ describe('AI Functions describeBackend', () => {
     ['unsupported', () => { state.provider.unsupported = true }],
     ['keyless where a key is required', () => { state.provider.apiKeyEncrypted = null }],
     ['an unknown provider type', () => { state.providerType = () => false }]
-  ])('is inactive when the credential is %s', (_label, arrange) => {
+  ])('is inactive when the credential is %s', async (_label, arrange) => {
     state.settings.aiFunctionsCredentialId = 'credential'
     arrange()
     expect(aiFunctions.describeBackend()).toEqual({ runsOn: 'runtime', reason: 'inactive' })
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
   })
-  it('is no_model when an active credential names no model anywhere — and resolveBackend agrees', () => {
+  it('is no_model when an active credential names no model anywhere — and resolveBackend agrees', async () => {
     state.settings.aiFunctionsCredentialId = 'credential'
     state.provider.defaultModelId = null
     state.provider.availableModels = []
     expect(aiFunctions.describeBackend()).toEqual({ runsOn: 'runtime', reason: 'no_model' })
     expectNoSideEffects()
-    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(await aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
   })
-  it('names the credential and the model main will use, in resolveBackend order, without building an adapter', () => {
+  it('names the credential and the model main will use, in resolveBackend order, without building an adapter', async () => {
     state.settings = { aiFunctionsCredentialId: 'credential', aiFunctionsModelId: 'not-in-any-list' }
     expect(aiFunctions.describeBackend()).toEqual({ runsOn: 'credential', credentialId: 'credential', credentialName: 'Work key', modelId: 'not-in-any-list' })
     state.settings.aiFunctionsModelId = ''
@@ -145,19 +145,19 @@ describe('AI Functions describeBackend', () => {
     state.provider.defaultModelId = null
     state.provider.availableModels = ['first-listed']
     expect(aiFunctions.describeBackend()).toMatchObject({ modelId: 'first-listed' })
-    expect(aiFunctions.resolveBackend('profile')).toMatchObject({ kind: 'adapter', modelId: 'first-listed' })
+    expect(await aiFunctions.resolveBackend('profile')).toMatchObject({ kind: 'adapter', modelId: 'first-listed' })
     state.createAdapter.mockClear()
     state.decrypt.mockClear()
     aiFunctions.describeBackend()
     expectNoSideEffects()
   })
-  it('does not touch the warn-once state', () => {
+  it('does not touch the warn-once state', async () => {
     state.settings.aiFunctionsCredentialId = 'describe-only'
     state.lookup.mockReturnValue(undefined)
     state.warn.mockClear()
     aiFunctions.describeBackend()
     expect(state.warn).not.toHaveBeenCalled()
-    aiFunctions.resolveBackend('profile')
+    await aiFunctions.resolveBackend('profile')
     expect(state.warn).toHaveBeenCalledTimes(1)
   })
 })

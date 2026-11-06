@@ -95,9 +95,9 @@ function world() {
     uv: () => UV
   }
   /** The user types `values` into row `id` (what mcpService does on a Save). */
-  const type = (id: string, values: Record<string, string>): void => {
+  const type = async (id: string, values: Record<string, string>): Promise<void> => {
     const row = rows.find((candidate) => candidate.id === id)!
-    row.envSecretEncrypted = encryptManagedSecrets({ ...managedSecrets(row), ...values })
+    row.envSecretEncrypted = await encryptManagedSecrets({ ...(await managedSecrets(row)), ...values })
   }
   return { rows, links, pinned, deps, type, managed: createPluginMcpProviders(deps) }
 }
@@ -188,10 +188,10 @@ describe('pluginMcpProviders.sync', () => {
     const { rows, managed, type } = world()
     const outcomes = await managed.sync(USER, 'a1', [pin({ servers: [spec({ env: { API_KEY: '${API_KEY}' } })] })], noBlock)
     expect(outcomes[0].missingEnv).toEqual(['API_KEY'])
-    type(rows[0].id, { API_KEY: 'sk-typed' })
-    expect(missingManagedEnv(rows[0])).toEqual([])
+    await type(rows[0].id, { API_KEY: 'sk-typed' })
+    expect(await missingManagedEnv(rows[0])).toEqual([])
     expect(JSON.stringify(rows[0].env)).not.toContain('sk-typed')
-    expect(managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-typed' })
+    expect(await managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-typed' })
   })
 
   it('a literal "" in the plugin’s env never reads as missing', async () => {
@@ -213,7 +213,7 @@ describe('pluginMcpProviders.sync', () => {
     const withKey = [pin({ servers: [spec({ env: { API_KEY: '${API_KEY}' } })] })]
     await managed.sync(USER, 'a1', withKey, noBlock)
     const id = rows[0].id
-    type(id, { API_KEY: 'sk-user-typed' })
+    await type(id, { API_KEY: 'sk-user-typed' })
     // Node missing this session (a slow login shell), or core's policy turning local servers off.
     const blocked = await managed.sync(USER, 'a1', withKey, () => NO_NODE)
     expect(blocked[0].blocked).toBe(NO_NODE)
@@ -223,21 +223,21 @@ describe('pluginMcpProviders.sync', () => {
     expect(deps.disconnect).toHaveBeenCalledWith(id)
     const back = await managed.sync(USER, 'a1', withKey, noBlock)
     expect(back[0]).toMatchObject({ mcpProviderId: id, missingEnv: [] })
-    expect(managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-user-typed' })
+    expect(await managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-user-typed' })
   })
 
   it('turning a server off and on keeps its row and the user’s values', async () => {
     const { rows, links, pinned, deps, managed, type } = world()
     pinned.add(`${ENTRY}/${SHA1}`)
     await managed.sync(USER, 'a1', [pin({ servers: [spec({ env: { API_KEY: '${API_KEY}' } })] })], noBlock)
-    type(rows[0].id, { API_KEY: 'sk-1' })
+    await type(rows[0].id, { API_KEY: 'sk-1' })
     await managed.sync(USER, 'a1', [pin({ servers: [spec({ env: { API_KEY: '${API_KEY}' } })], disabled: ['carbone'] })], noBlock)
     expect(links).toEqual([])
     expect(rows).toHaveLength(1)
     expect(deps.remove).not.toHaveBeenCalled()
     await managed.sync(USER, 'a1', [pin({ servers: [spec({ env: { API_KEY: '${API_KEY}' } })] })], noBlock)
     expect(links).toEqual([{ agentId: 'a1', id: rows[0].id }])
-    expect(managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-1' })
+    expect(await managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-1' })
   })
 
   it('agents on different snapshots get a row each and never re-point or disconnect the other’s', async () => {
@@ -261,7 +261,7 @@ describe('pluginMcpProviders.sync', () => {
     const servers = [spec({ env: { API_KEY: '${API_KEY}' } })]
     await managed.sync(USER, 'a1', [pin({ servers })], noBlock)
     const old = rows[0].id
-    type(old, { API_KEY: 'sk-kept' })
+    await type(old, { API_KEY: 'sk-kept' })
     pinned.clear()
     pinned.add(`${ENTRY}/${SHA2}`)
     const outcomes = await managed.sync(USER, 'a1', [pin({ sha: SHA2, dir: '/cache/v2/carbone', servers })], noBlock)
@@ -270,7 +270,7 @@ describe('pluginMcpProviders.sync', () => {
     expect(rows[0]).toMatchObject({ managedBy: `plugin:${ENTRY}@${SHA2}`, args: ['/cache/v2/carbone/server.mjs'] })
     expect(rows[0].id).not.toBe(old)
     expect(links).toEqual([{ agentId: 'a1', id: rows[0].id }])
-    expect(managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-kept' })
+    expect(await managedSecrets(rows[0])).toEqual({ API_KEY: 'sk-kept' })
   })
 
   it('shares one provider between two agents on the same snapshot and deletes it only once no pin references it', async () => {

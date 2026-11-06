@@ -30,9 +30,9 @@ test('launches into onboarding, then the main shell, inside the sandbox', async 
 })
 
 test('safeStorage encrypts inside the sandbox (mock keychain)', async ({ cinna }) => {
-  const roundTrip = await cinna.electronApp.evaluate(({ safeStorage }) => {
-    if (!safeStorage.isEncryptionAvailable()) return 'unavailable'
-    return safeStorage.decryptString(safeStorage.encryptString('sk-probe'))
+  const roundTrip = await cinna.electronApp.evaluate(async ({ safeStorage }) => {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return 'unavailable'
+    return (await safeStorage.decryptStringAsync(await safeStorage.encryptStringAsync('sk-probe'))).result
   })
   expect(roundTrip).toBe('sk-probe')
 })

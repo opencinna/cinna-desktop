@@ -23,6 +23,29 @@ permission rule belongs in the existing core service, even when the first caller
 is a desktop button. Ask whether the behavior must work with no window attached.
 If yes, own it in core; the button only requests it and renders the result.
 
+## Keystore
+
+`RuntimeHost.keystore` is asynchronous: `encryptString` and `decryptString` return
+Promises, and `encryptApiKey`/`decryptApiKey` in `security/keystore.ts` are async
+with them. Electron deprecated the synchronous `safeStorage` calls in 45 and removes
+them in 46. Ciphertext format is unchanged, so rows written by the old synchronous
+calls still decrypt.
+
+- **`keystore.prepare()` resolves availability once**, in `whenReady` before
+  `startup()`. `isEncryptionAvailable()` and `isSecureStorageAvailable()` stay
+  synchronous for the status readers but throw before `prepare()` has resolved:
+  answering "unavailable" early would send a secret down the plaintext fallback.
+  Nothing may touch the keystore before `startup()`.
+- **`decryptApiKey` refuses `v10`/`v11`-prefixed bytes when no keystore is
+  available.** Those are keychain-sealed; returning them as UTF-8 would hand
+  ciphertext to a caller as if it were the secret.
+- **Rule for new code:** never `await` the keystore inside a better-sqlite3
+  transaction (the transaction callback must be synchronous), so encrypt or decrypt
+  first and write after. After any `await` on the keystore, re-check what the code
+  before it assumed (connection still current, row revision, ownership): the world
+  may have moved while it waited. `MCPManager.persistOAuth` shows both: writes are
+  serialised per connection and `assertCurrent` runs again before the row is saved.
+
 ## Host and event contracts
 
 `index.ts` installs `createDesktopHost()`, the desktop event publisher and optional

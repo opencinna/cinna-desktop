@@ -30,7 +30,7 @@ export interface ClaudeAuthFollowDeps {
   /** Any AI credential row saved, removed or synced. Returns unsubscribe. */
   onCredentialsChanged(listener: () => void): () => void
   mode(): ClaudeAuthMode
-  fingerprint(): string
+  fingerprint(): Promise<string>
   /** Drop the login probe's cached answer. */
   invalidateLoginAnswer(): void
   /** Stop idle Claude processes started under another fingerprint; returns what was stopped. */
@@ -45,11 +45,18 @@ export function installClaudeAuthFollowWith(deps: ClaudeAuthFollowDeps): () => v
   // No remembered "last" fingerprint: nothing is decrypted at install, and the
   // pool compares each process with the current one, so a change that did not
   // move it stops nothing.
+  //
+  // The fingerprint needs the keystore, so each change is handled in turn: an
+  // older change's fingerprint can never land after a newer one's and retire
+  // the processes started under the newer.
+  let following: Promise<void> = Promise.resolve()
   const follow = (): void => {
-    const current = deps.fingerprint()
     deps.invalidateLoginAnswer()
-    const stopped = deps.retireStaleAuth(current)
-    if (stopped.length > 0) deps.log('Claude auth changed; idle processes retired', { mode: deps.mode(), retired: stopped.length })
+    following = following.then(async () => {
+      const current = await deps.fingerprint()
+      const stopped = deps.retireStaleAuth(current)
+      if (stopped.length > 0) deps.log('Claude auth changed; idle processes retired', { mode: deps.mode(), retired: stopped.length })
+    }).catch((err: unknown) => deps.log('Claude auth change could not be followed', { error: err instanceof Error ? err.message : String(err) }))
   }
   const modeChanged = (): void => {
     if (deps.mode() === 'api_key') {

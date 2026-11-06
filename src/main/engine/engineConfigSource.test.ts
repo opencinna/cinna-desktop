@@ -62,7 +62,7 @@ vi.mock('../logger/logger', () => ({
 vi.mock('../security/keystore', () => ({
   // The ciphertext in these tests is just the plaintext with a marker, so a
   // test can assert on the *decrypted* value without a real keychain.
-  decryptApiKey: (buffer: Buffer): string => {
+  decryptApiKey: async (buffer: Buffer): Promise<string> => {
     const value = buffer.toString('utf8')
     if (state.decryptFails.has(value)) throw new Error('the keychain refused this item')
     return value
@@ -231,10 +231,10 @@ beforeEach(() => {
 })
 
 describe('collectEngineProviders', () => {
-  it('decrypts the key of a usable credential and passes it through', () => {
+  it('decrypts the key of a usable credential and passes it through', async () => {
     state.dtos = [dto()]
     state.rows = [row()]
-    const [provider] = collectEngineProviders()
+    const [provider] = await collectEngineProviders()
     expect(provider).toMatchObject({
       id: 'p1',
       type: 'anthropic',
@@ -244,7 +244,7 @@ describe('collectEngineProviders', () => {
     })
   })
 
-  it('carries a gateway’s base URL through from the row, not the DTO', () => {
+  it('carries a gateway’s base URL through from the row, not the DTO', async () => {
     // `baseUrl` is not on `ProviderDto` at all — it lives only on the row — so
     // this is the one path by which an OpenAI-compatible credential can reach
     // the generator in a usable state. Reading it from the DTO would be
@@ -252,10 +252,10 @@ describe('collectEngineProviders', () => {
     // base URL, which reads to the user as "my gateway stopped working".
     state.dtos = [dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
     state.rows = [row({ id: 'gw', baseUrl: 'https://gw.example.com/v1' })]
-    expect(collectEngineProviders()[0].baseUrl).toBe('https://gw.example.com/v1')
+    expect((await collectEngineProviders())[0].baseUrl).toBe('https://gw.example.com/v1')
   })
 
-  it('excludes a credential with no key, and one this app cannot call', () => {
+  it('excludes a credential with no key, and one this app cannot call', async () => {
     state.dtos = [
       dto({ id: 'no-key', hasApiKey: false }),
       // A managed Anthropic OAuth token: a real credential, but not an API key.
@@ -263,10 +263,10 @@ describe('collectEngineProviders', () => {
       dto({ id: 'fine' })
     ]
     state.rows = [row({ id: 'no-key' }), row({ id: 'oauth' }), row({ id: 'fine' })]
-    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+    expect((await collectEngineProviders()).map((provider) => provider.id)).toEqual(['fine'])
   })
 
-  it('excludes a credential the user switched off, however good its key is', () => {
+  it('excludes a credential the user switched off, however good its key is', async () => {
     // The one exclusion that has nothing to do with whether the credential
     // *works*. A canonical type carries a real, decryptable key into the config,
     // so without this check a folder agent pinned to a credential the user had
@@ -284,26 +284,26 @@ describe('collectEngineProviders', () => {
       row({ id: 'off-keyless', apiKeyEncrypted: null, baseUrl: 'http://127.0.0.1:11434' }),
       row({ id: 'fine' })
     ]
-    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+    expect((await collectEngineProviders()).map((provider) => provider.id)).toEqual(['fine'])
   })
 
-  it('excludes a credential whose row holds no ciphertext, and one that decrypts to nothing', () => {
+  it('excludes a credential whose row holds no ciphertext, and one that decrypts to nothing', async () => {
     state.dtos = [dto({ id: 'no-cipher' }), dto({ id: 'empty' }), dto({ id: 'fine' })]
     state.rows = [
       row({ id: 'no-cipher', apiKeyEncrypted: null }),
       row({ id: 'empty', apiKeyEncrypted: Buffer.from('', 'utf8') }),
       row({ id: 'fine' })
     ]
-    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+    expect((await collectEngineProviders()).map((provider) => provider.id)).toEqual(['fine'])
   })
 
-  it('excludes a credential with no row in any scope this user can reach', () => {
+  it('excludes a credential with no row in any scope this user can reach', async () => {
     // `listMerged` unions the Default scope with the active profile's managed
     // rows; `listByUserIds` is scoped. A DTO with no reachable row must not
     // become a provider entry with an undefined key.
     state.dtos = [dto({ id: 'other-profile' }), dto({ id: 'fine' })]
     state.rows = [row({ id: 'other-profile', userId: 'someone-else' }), row({ id: 'fine' })]
-    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+    expect((await collectEngineProviders()).map((provider) => provider.id)).toEqual(['fine'])
     expect(state.scopesAsked).toBeGreaterThan(0)
     // Excluded by the `row?` guard, **not** by a TypeError caught downstream.
     // Both exclude the credential, so only the log tells them apart — and the
@@ -313,7 +313,7 @@ describe('collectEngineProviders', () => {
     expect(state.logged).toEqual([])
   })
 
-  it('collects a server-managed credential alongside the user’s own', () => {
+  it('collects a server-managed credential alongside the user’s own', async () => {
     // Excluding managed credentials would leave an account-provisioned machine
     // unable to run a local agent at all — the user has no other key to offer.
     state.scopes = ['default', 'profile-1']
@@ -322,14 +322,14 @@ describe('collectEngineProviders', () => {
       row({ id: 'mine' }),
       row({ id: 'managed', userId: 'profile-1', apiKeyEncrypted: Buffer.from('sk-managed') })
     ]
-    expect(collectEngineProviders().map((provider) => provider.id).sort()).toEqual([
+    expect((await collectEngineProviders()).map((provider) => provider.id).sort()).toEqual([
       'managed',
       'mine'
     ])
-    expect(collectEngineProviders().find((p) => p.id === 'managed')?.apiKey).toBe('sk-managed')
+    expect((await collectEngineProviders()).find((p) => p.id === 'managed')?.apiKey).toBe('sk-managed')
   })
 
-  it('skips only the credential the keystore refused, and keeps the rest', () => {
+  it('skips only the credential the keystore refused, and keeps the rest', async () => {
     // The property that matters. A keychain that has lost one item — a
     // restored machine, a changed login keychain — must not make every local
     // agent unrunnable.
@@ -339,14 +339,14 @@ describe('collectEngineProviders', () => {
       row({ id: 'broken', apiKeyEncrypted: Buffer.from('sk-broken') }),
       row({ id: 'fine' })
     ]
-    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+    expect((await collectEngineProviders()).map((provider) => provider.id)).toEqual(['fine'])
   })
 
-  it('never puts a key in the log line it writes about a refused credential', () => {
+  it('never puts a key in the log line it writes about a refused credential', async () => {
     state.decryptFails = new Set(['sk-broken'])
     state.dtos = [dto({ id: 'broken' })]
     state.rows = [row({ id: 'broken', apiKeyEncrypted: Buffer.from('sk-broken') })]
-    collectEngineProviders()
+    await collectEngineProviders()
     expect(state.logged).toHaveLength(1)
     expect(JSON.stringify(state.logged)).not.toContain('sk-broken')
     expect(JSON.stringify(state.logged)).toContain('broken')
@@ -360,7 +360,7 @@ describe('collectEngineProviders', () => {
     await refreshModelCache()
     state.dtos = [dto(), dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
     state.rows = [row(), row({ id: 'gw', baseUrl: 'https://gw.example.com/v1' })]
-    const collected = collectEngineProviders()
+    const collected = await collectEngineProviders()
     // Not merely "has models" — the wrong credential's models would produce a
     // config that offers a model the key cannot address.
     expect(collected.find((provider) => provider.id === 'gw')?.models).toEqual([
@@ -391,7 +391,7 @@ describe('refreshModelCache', () => {
 
     state.dtos = [dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
     state.rows = [row({ id: 'gw', baseUrl: 'https://gw.example.com/v1' })]
-    expect(collectEngineProviders()[0].models).toEqual([{ id: 'gpt-4o', name: 'GPT-4o' }])
+    expect((await collectEngineProviders())[0].models).toEqual([{ id: 'gpt-4o', name: 'GPT-4o' }])
   })
 })
 

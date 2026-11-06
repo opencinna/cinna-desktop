@@ -234,7 +234,7 @@ async function ensureDeviceKey(userId: string): Promise<DeviceMaterial> {
   const existing = syncRepo.getDeviceKey(userId)
   if (existing) {
     const publicKey = await deviceKeyCodec.from(existing.publicKey)
-    const privB64 = decryptApiKey(existing.privateKeyEnc)
+    const privB64 = await decryptApiKey(existing.privateKeyEnc)
     const privateKey = await deviceKeyCodec.from(privB64)
     let deviceId = existing.deviceId
     if (!deviceId) {
@@ -251,7 +251,7 @@ async function ensureDeviceKey(userId: string): Promise<DeviceMaterial> {
     userId,
     deviceId,
     publicKey: pubB64,
-    privateKeyEnc: encryptApiKey(privB64)
+    privateKeyEnc: await encryptApiKey(privB64)
   })
   return { publicKey: kp.publicKey, privateKey: kp.privateKey, deviceId }
 }

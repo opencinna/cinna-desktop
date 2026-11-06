@@ -92,7 +92,8 @@ const bootLogger = createLogger('boot')
 // puts entries in front of the renderer, and it lives here because the window
 // lives here. `getMainWindow` is a hoisted function declaration and reads
 // `mainWindow` lazily, so installing before there is a window is correct.
-installRuntimeHost(createDesktopHost())
+const desktopHost = createDesktopHost()
+installRuntimeHost(desktopHost)
 installDesktopFeatures({
   authCompleted() { focusMainWindow(); deepLinkService.flush() },
   clearDevelopment: () => localDevService.clear(),
@@ -354,8 +355,11 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
+    // Async safeStorage only initialises after `ready`; availability is read
+    // synchronously from here on, so nothing may touch the keystore earlier.
+    await desktopHost.keystore.prepare()
     startup()
   } catch (err) {
     handleFatal(err, 'whenReady')

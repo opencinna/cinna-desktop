@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-const platform = vi.hoisted(() => ({ packaged: false, backend: 'basic_text', encryption: true }))
-vi.mock('electron', () => ({ safeStorage: { isEncryptionAvailable: () => platform.encryption, getSelectedStorageBackend: () => platform.backend, encryptString: (s: string) => Buffer.from('encrypted:' + s), decryptString: (b: Buffer) => b.toString().slice('encrypted:'.length) }, app: { get isPackaged() { return platform.packaged } }, BrowserWindow: { getAllWindows: () => windows } }))
+const platform = vi.hoisted(() => ({ packaged: false, backend: 'basic_text', encryption: true, reEncrypt: false }))
+const safe = vi.hoisted(() => ({
+  isAsyncEncryptionAvailable: vi.fn(async () => platform.encryption),
+  getSelectedStorageBackend: vi.fn(() => platform.backend),
+  encryptStringAsync: vi.fn(async (s: string) => Buffer.from('encrypted:' + s)),
+  decryptStringAsync: vi.fn(async (b: Buffer) => ({ result: b.toString().slice('encrypted:'.length), shouldReEncrypt: platform.reEncrypt })),
+  // The deprecated synchronous API: any call is a regression.
+  isEncryptionAvailable: vi.fn(() => { throw new Error('sync safeStorage.isEncryptionAvailable called') }),
+  encryptString: vi.fn(() => { throw new Error('sync safeStorage.encryptString called') }),
+  decryptString: vi.fn(() => { throw new Error('sync safeStorage.decryptString called') })
+}))
+vi.mock('electron', () => ({ safeStorage: safe, app: { get isPackaged() { return platform.packaged } }, BrowserWindow: { getAllWindows: () => windows } }))
 import type { BrowserWindow } from 'electron'
 import { createDesktopHost, desktopEventPublisher } from './runtimeHost'
+import { getLogEntries } from '../../logger/logger'
 const windows: BrowserWindow[] = []
 function window(destroyed = false) {
   return { isDestroyed: () => destroyed, webContents: { send: vi.fn() } } as unknown as BrowserWindow
@@ -28,7 +39,7 @@ describe('desktop event adapter', () => {
   })
 })
 
-afterEach(() => { vi.unstubAllGlobals(); platform.packaged = false })
+afterEach(() => { vi.unstubAllGlobals(); platform.packaged = false; platform.backend = 'basic_text'; platform.encryption = true; platform.reEncrypt = false })
 it('resolves real-disk packaged adapters and selects Electron as a Node child only in the desktop host', () => {
   const executable = process.execPath
   vi.stubGlobal('process', { ...process, resourcesPath: '/application/Resources' })
@@ -45,10 +56,80 @@ it('retains provider and OAuth encryption on Linux basic_text while refusing ser
   const { installRuntimeHost } = await import('../runtimeHost')
   const { encryptApiKey, decryptApiKey } = await import('../../security/keystore')
   const host = createDesktopHost(); installRuntimeHost(host)
+  await host.keystore.prepare()
   expect(host.keystore.isEncryptionAvailable()).toBe(true)
   expect(host.keystore.isSecureStorageAvailable()).toBe(false)
-  expect(decryptApiKey(Buffer.from('encrypted:previous-oauth-token'))).toBe('previous-oauth-token')
-  expect(encryptApiKey('new-provider-key').toString()).toBe('encrypted:new-provider-key')
+  expect(await decryptApiKey(Buffer.from('encrypted:previous-oauth-token'))).toBe('previous-oauth-token')
+  expect((await encryptApiKey('new-provider-key')).toString()).toBe('encrypted:new-provider-key')
   platform.backend = 'gnome_libsecret'
+  await host.keystore.prepare()
   expect(host.keystore.isSecureStorageAvailable()).toBe(true)
+})
+
+describe('desktop keystore', () => {
+  it('refuses availability reads before prepare() has resolved', async () => {
+    const host = createDesktopHost()
+    expect(() => host.keystore.isEncryptionAvailable()).toThrow(/prepare/)
+    expect(() => host.keystore.isSecureStorageAvailable()).toThrow(/prepare/)
+    const preparing = host.keystore.prepare()
+    // Still pending: the async encryptor has not answered yet.
+    expect(() => host.keystore.isEncryptionAvailable()).toThrow(/prepare/)
+    await preparing
+    expect(host.keystore.isEncryptionAvailable()).toBe(true)
+  })
+
+  it('asks the async API once and caches both answers', async () => {
+    safe.isAsyncEncryptionAvailable.mockClear(); safe.getSelectedStorageBackend.mockClear()
+    vi.stubGlobal('process', { ...process, platform: 'linux' })
+    platform.backend = 'kwallet6'
+    const host = createDesktopHost()
+    await host.keystore.prepare()
+    platform.encryption = false; platform.backend = 'basic_text'
+    for (let i = 0; i < 3; i++) {
+      expect(host.keystore.isEncryptionAvailable()).toBe(true)
+      expect(host.keystore.isSecureStorageAvailable()).toBe(true)
+    }
+    expect(safe.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(1)
+    expect(safe.getSelectedStorageBackend).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports nothing available when the async encryptor is not', async () => {
+    platform.encryption = false
+    const host = createDesktopHost()
+    await host.keystore.prepare()
+    expect(host.keystore.isEncryptionAvailable()).toBe(false)
+    expect(host.keystore.isSecureStorageAvailable()).toBe(false)
+  })
+
+  it('encrypts and decrypts through the async API only', async () => {
+    safe.encryptStringAsync.mockClear(); safe.decryptStringAsync.mockClear()
+    const host = createDesktopHost()
+    await host.keystore.prepare()
+    const sealed = await host.keystore.encryptString('sk-secret')
+    expect(sealed.toString()).toBe('encrypted:sk-secret')
+    expect(await host.keystore.decryptString(sealed)).toBe('sk-secret')
+    expect(safe.encryptStringAsync).toHaveBeenCalledWith('sk-secret')
+    expect(safe.decryptStringAsync).toHaveBeenCalledWith(sealed)
+    expect(safe.isEncryptionAvailable).not.toHaveBeenCalled()
+    expect(safe.encryptString).not.toHaveBeenCalled()
+    expect(safe.decryptString).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a decrypt rejection', async () => {
+    const host = createDesktopHost()
+    await host.keystore.prepare()
+    safe.decryptStringAsync.mockRejectedValueOnce(new Error('Error while decrypting the ciphertext provided'))
+    await expect(host.keystore.decryptString(Buffer.from('garbage'))).rejects.toThrow(/decrypting/)
+  })
+
+  it('warns once when Electron asks for re-encryption, and still returns the plaintext', async () => {
+    platform.reEncrypt = true
+    const host = createDesktopHost()
+    await host.keystore.prepare()
+    const warnings = (): number => getLogEntries().filter((entry) => entry.scope === 'keystore' && entry.level === 'warn').length
+    const before = warnings()
+    expect(await host.keystore.decryptString(Buffer.from('encrypted:one'))).toBe('one')
+    expect(await host.keystore.decryptString(Buffer.from('encrypted:two'))).toBe('two')
+    expect(warnings() - before).toBe(1)
+  })
 })

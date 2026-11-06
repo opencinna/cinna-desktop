@@ -20,13 +20,14 @@ test.beforeEach(() => {
 async function arrange(cinna: CinnaApp): Promise<void> {
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
-  await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+  await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
     if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
+    const keyEnc = await safeStorage.encryptStringAsync(input.key)
     const requireFromApp = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
     const Database = requireFromApp('better-sqlite3') as typeof import('better-sqlite3')
     const db = new Database(`${input.userData}/cinna.db`)
     try { db.prepare('INSERT INTO llm_providers (id, user_id, type, name, api_key_enc, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(input.id, '__default__', 'anthropic', 'Managed E2E credential', safeStorage.encryptString(input.key), 1, Date.now()) }
+      .run(input.id, '__default__', 'anthropic', 'Managed E2E credential', keyEnc, 1, Date.now()) }
     finally { db.close() }
   }, { userData: cinna.sandbox.userData, id: CREDENTIAL_ID, key: MANAGED_KEY })
   await cinna.relaunch()

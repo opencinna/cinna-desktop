@@ -405,7 +405,7 @@ describe('setDisabled and remove', () => {
     await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
     expect(tables.rows).toHaveLength(1)
     const id = tables.rows[0].id
-    tables.rows[0].envSecretEncrypted = encryptManagedSecrets({ CARBONE_KEY: 'sk-typed' })
+    tables.rows[0].envSecretEncrypted = await encryptManagedSecrets({ CARBONE_KEY: 'sk-typed' })
 
     expect(await marketplacePluginService.setDisabled(USER, AGENT_ID, 'carbone', { mcpServers: ['carbone'], hooks: true })).toMatchObject({ ok: true })
     expect((manifest().marketplace_plugins as Record<string, unknown>[])[0].disabled).toEqual({ hooks: true, mcp_servers: ['carbone'] })
@@ -415,7 +415,7 @@ describe('setDisabled and remove', () => {
     await marketplacePluginService.setDisabled(USER, AGENT_ID, 'carbone', { mcpServers: [], hooks: false, skills: ['report'] })
     expect((manifest().marketplace_plugins as Record<string, unknown>[])[0].disabled).toEqual({ skills: ['report'] })
     expect(tables.links).toEqual([{ agentId: AGENT_ID, id }])
-    expect(managedSecrets(tables.rows[0] as never)).toEqual({ CARBONE_KEY: 'sk-typed' })
+    expect(await managedSecrets(tables.rows[0] as never)).toEqual({ CARBONE_KEY: 'sk-typed' })
     expect(deliveredSkillRows(agentDir, manifest()).some((row) => row.source === 'plugin')).toBe(false)
 
     // A working copy made at a launch goes with the last pin of its snapshot.
@@ -573,7 +573,7 @@ describe('managed connectors over time', () => {
     serve([entry(archive)], [archive])
     await marketplacePluginService.addToAgent(USER, AGENT_ID, ENTRY)
     const id = tables.rows[0].id
-    tables.rows[0].envSecretEncrypted = encryptManagedSecrets({ CARBONE_KEY: 'sk-user-typed' })
+    tables.rows[0].envSecretEncrypted = await encryptManagedSecrets({ CARBONE_KEY: 'sk-user-typed' })
     path.found = {}
     stdioRuntimes._reset()
     await marketplacePluginService.ensurePinned(USER, AGENT_ID)
@@ -585,7 +585,7 @@ describe('managed connectors over time', () => {
     stdioRuntimes._reset()
     await marketplacePluginService.ensurePinned(USER, AGENT_ID)
     expect(tables.links).toEqual([{ agentId: AGENT_ID, id }])
-    expect(managedSecrets(tables.rows[0] as never)).toEqual({ CARBONE_KEY: 'sk-user-typed' })
+    expect(await managedSecrets(tables.rows[0] as never)).toEqual({ CARBONE_KEY: 'sk-user-typed' })
   })
 
   it('a remove waits for a slow background ensure of the same agent, and leaves no connector behind', async () => {
@@ -674,10 +674,10 @@ describe('managed connectors over time', () => {
     const row = () => tables.rows[0] as never
     // Its key not given yet.
     expect(await marketplacePluginService.startsUnattended(row())).toBe(false)
-    expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
-    tables.rows[0].envSecretEncrypted = encryptManagedSecrets({ CARBONE_KEY: 'sk' })
+    expect(await marketplacePluginService.launchBlockOf(row())).toBeNull()
+    tables.rows[0].envSecretEncrypted = await encryptManagedSecrets({ CARBONE_KEY: 'sk' })
     expect(await marketplacePluginService.startsUnattended(row())).toBe(true)
-    expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
+    expect(await marketplacePluginService.launchBlockOf(row())).toBeNull()
     // The policy forbids local servers: not started, but its block is what app start hands the manager.
     addonPolicies._configure({
       account: () => 'profile@https://cinna.test',
@@ -686,11 +686,11 @@ describe('managed connectors over time', () => {
     })
     try {
       expect(await marketplacePluginService.startsUnattended(row())).toBe(false)
-      expect(marketplacePluginService.launchBlockOf(row())).toBe('Blocked by your admin')
+      expect(await marketplacePluginService.launchBlockOf(row())).toBe('Blocked by your admin')
       // Its key not given: needs setup first, whatever the policy.
       const key = tables.rows[0].envSecretEncrypted
       tables.rows[0].envSecretEncrypted = null
-      expect(marketplacePluginService.launchBlockOf(row())).toBeNull()
+      expect(await marketplacePluginService.launchBlockOf(row())).toBeNull()
       tables.rows[0].envSecretEncrypted = key
     } finally {
       addonPolicies._reset()

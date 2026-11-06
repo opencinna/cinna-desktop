@@ -23,10 +23,10 @@ import { createLogger } from '../logger/logger'
 const logger = createLogger('account-config')
 
 /** Re-encryption can change ciphertext without changing the credential. */
-function encryptedSyncedKey(profileId: string, providerId: string, apiKey: string): Buffer {
+async function encryptedSyncedKey(profileId: string, providerId: string, apiKey: string): Promise<Buffer> {
   const previous = llmProviderRepo.getOwned(profileId, providerId)?.apiKeyEncrypted
   if (previous) {
-    try { if (decryptApiKey(previous) === apiKey) return previous } catch { /* replace an unreadable envelope */ }
+    try { if (await decryptApiKey(previous) === apiKey) return previous } catch { /* replace an unreadable envelope */ }
   }
   return encryptApiKey(apiKey)
 }
@@ -132,6 +132,24 @@ export const accountConfigService = {
     let failed = 0
     let modeCount = 0
 
+    // Every key sealed before the loop, so the writes below run together with no await
+    // between them and the prune. A failure is the credential's own, thrown in its turn below.
+    const sealedKeys = new Map<string, Buffer | Error | null>(await Promise.all(providers.map(async (p): Promise<[string, Buffer | Error | null]> => {
+      if (!p.api_key || !mapToDesktopProviderType(p.provider_type)) return [p.credential_id, null]
+      try {
+        return [p.credential_id, await encryptedSyncedKey(profileUserId, managedProviderId(p.credential_id), p.api_key)]
+      } catch (err) {
+        return [p.credential_id, err instanceof Error ? err : new Error(String(err))]
+      }
+    })))
+    if (!current()) return { providers: 0, modes: 0, removed: 0, skipped: 0, unsupported: 0, failed: 0 }
+    const sealedKey = (credentialId: string): Buffer => {
+      const sealed = sealedKeys.get(credentialId)
+      if (sealed instanceof Error) throw sealed
+      if (!sealed) throw new Error('The credential key was not sealed')
+      return sealed
+    }
+
     for (const p of providers) {
       const type = mapToDesktopProviderType(p.provider_type)
       if (!type) {
@@ -189,7 +207,7 @@ export const accountConfigService = {
             id: providerId,
             type,
             name: managedDisplayName(p.display_name, p.credential_name),
-            apiKeyEncrypted: encryptedSyncedKey(profileUserId, providerId, p.api_key),
+            apiKeyEncrypted: sealedKey(p.credential_id),
             enabled: true,
             defaultModelId: null,
             availableModels: null,
@@ -244,7 +262,7 @@ export const accountConfigService = {
           id: providerId,
           type,
           name: managedDisplayName(p.display_name, p.credential_name),
-          apiKeyEncrypted: encryptedSyncedKey(profileUserId, providerId, p.api_key),
+          apiKeyEncrypted: sealedKey(p.credential_id),
           enabled: true,
           defaultModelId,
           availableModels,
@@ -337,14 +355,16 @@ export const accountConfigService = {
    * registry (used on activation, before the network sync completes, so managed
    * providers are usable offline / immediately). Honors local overrides.
    */
-  loadManagedAdapters(profileUserId: string): void {
+  async loadManagedAdapters(profileUserId: string, current: () => boolean = () => true): Promise<void> {
     for (const row of llmProviderRepo.listManaged(profileUserId)) {
       if (!row.apiKeyEncrypted) continue
       // Unsupported credentials (e.g. anthropic oauth tokens) can't make API
       // calls — they exist only to show in the list, so never register an adapter.
       if (row.unsupported) continue
       try {
-        const apiKey = decryptApiKey(row.apiKeyEncrypted)
+        const apiKey = await decryptApiKey(row.apiKeyEncrypted)
+        // The keystore awaited: a newer activation may have cleared the adapters meanwhile.
+        if (!current()) return
         // Prefer the curated list for the offline/gateway fallback; fall back to
         // just the default model when there is no curation.
         const fallbackModels =

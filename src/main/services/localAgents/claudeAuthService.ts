@@ -40,7 +40,7 @@ export interface ClaudeAuthServiceDeps {
   /** The Default AI credential's id, preferred when it is Anthropic. */
   preferredCredentialId(): string | null
   /** The stored key and endpoint of one credential, decrypted. Throws when it cannot be read. */
-  secret(providerId: string): { apiKey: string; baseUrl: string | null } | null
+  secret(providerId: string): Promise<{ apiKey: string; baseUrl: string | null } | null>
 }
 
 const productionDeps: ClaudeAuthServiceDeps = {
@@ -53,12 +53,12 @@ const productionDeps: ClaudeAuthServiceDeps = {
       return null
     }
   },
-  secret: (providerId) => {
+  secret: async (providerId) => {
     for (const scope of getManagedResourceScopes()) {
       const row = llmProviderRepo.getOwned(scope, providerId)
       if (!row) continue
       if (!row.apiKeyEncrypted) return null
-      return { apiKey: decryptApiKey(row.apiKeyEncrypted), baseUrl: row.baseUrl ?? null }
+      return { apiKey: await decryptApiKey(row.apiKeyEncrypted), baseUrl: row.baseUrl ?? null }
     }
     return null
   }
@@ -78,7 +78,7 @@ export function createClaudeAuthService(deps: ClaudeAuthServiceDeps = production
     }
   }
 
-  const resolve = (): ClaudeLaunchAuth => {
+  const resolve = async (): Promise<ClaudeLaunchAuth> => {
     if (mode() !== 'api_key') return { mode: 'subscription', fingerprint: SUBSCRIPTION_FINGERPRINT }
     const chosenId = (() => {
       try { return deps.settings().claudeApiCredentialId.trim() } catch { return '' }
@@ -99,7 +99,7 @@ export function createClaudeAuthService(deps: ClaudeAuthServiceDeps = production
     }
     let secret: { apiKey: string; baseUrl: string | null } | null
     try {
-      secret = deps.secret(credential.id)
+      secret = await deps.secret(credential.id)
     } catch (err) {
       logger.warn('the Anthropic credential for Claude Agent would not decrypt', {
         providerId: credential.id,
@@ -123,7 +123,7 @@ export function createClaudeAuthService(deps: ClaudeAuthServiceDeps = production
     /** How the next Claude launch authenticates. Decrypts in API mode; never throws. */
     resolve,
     /** The non-secret digest of {@link resolve}, for pool keys. */
-    fingerprint: (): string => resolve().fingerprint
+    fingerprint: async (): Promise<string> => (await resolve()).fingerprint
   }
 }
 

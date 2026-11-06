@@ -61,96 +61,96 @@ const base = {
   authType: 'oauth' as const
 }
 
-const owned = (values: Record<string, string>, spec: Partial<{ slots: string[]; headers: Record<string, string>; bearer: boolean }> = {}) => ({
+const owned = async (values: Record<string, string>, spec: Partial<{ slots: string[]; headers: Record<string, string>; bearer: boolean }> = {}) => ({
   managedBy: OWNER,
   managedSpec: { root: '/cache/carbone', slots: Object.keys(values), ...spec },
-  envSecretEncrypted: encryptManagedSecrets(values)
+  envSecretEncrypted: (await encryptManagedSecrets(values))
 })
 
 describe('managed MCP providers', () => {
-  it('fills placeholders from the user’s values and the plugin’s env at launch', () => {
-    const config = resolveManagedLaunch(
+  it('fills placeholders from the user’s values and the plugin’s env at launch', async () => {
+    const config = (await resolveManagedLaunch(
       { ...base, command: 'node', args: ['/c/s.mjs', '--key=${API_KEY}', '${UNKNOWN}'], env: { API_KEY: '${API_KEY}', AUTH: 'Bearer ${API_KEY}', MODE: 'fast' } },
-      owned({ API_KEY: 'sk-1' })
-    )
+      await owned({ API_KEY: 'sk-1' })
+    ))
     expect(config.args).toEqual(['/c/s.mjs', '--key=sk-1', '${UNKNOWN}'])
     expect(config.env).toEqual({ API_KEY: 'sk-1', AUTH: 'Bearer sk-1', MODE: 'fast' })
     expect(config.blockedReason).toBeUndefined()
   })
 
-  it('hands a managed-uv command uv’s environment and its own writable project environment', () => {
-    const config = resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run', '--frozen', '--directory', '/cache/carbone', 'carbone'], env: {} }, owned({}))
+  it('hands a managed-uv command uv’s environment and its own writable project environment', async () => {
+    const config = (await resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run', '--frozen', '--directory', '/cache/carbone', 'carbone'], env: {} }, (await owned({}))))
     expect(config.env).toEqual({
       UV_CACHE_DIR: '/ud/localdev/uv-cache',
       UV_PYTHON_INSTALL_DIR: '/ud/localdev/python',
       UV_PROJECT_ENVIRONMENT: `/ud/plugin-envs/${ENTRY}/${SHA}/carbone`
     })
-    expect(resolveManagedLaunch({ ...base, command: 'node', args: [] }, owned({})).env).toEqual({})
+    expect((await resolveManagedLaunch({ ...base, command: 'node', args: [] }, (await owned({})))).env).toEqual({})
   })
 
-  it('resolves an HTTP server’s declared headers', () => {
-    const config = resolveManagedLaunch(
+  it('resolves an HTTP server’s declared headers', async () => {
+    const config = (await resolveManagedLaunch(
       { ...base, transportType: 'streamable-http', url: 'https://api.example/mcp', authType: 'bearer' },
-      owned({ API_KEY: 'sk-h' }, { headers: { 'X-Api-Key': '${API_KEY}', 'X-Org': 'acme' } })
-    )
+      await owned({ API_KEY: 'sk-h' }, { headers: { 'X-Api-Key': '${API_KEY}', 'X-Org': 'acme' } })
+    ))
     expect(config.headers).toEqual({ 'X-Api-Key': 'sk-h', 'X-Org': 'acme' })
   })
 
-  it('refuses to launch a local server whose cached files changed, or when the policy forbids local servers', () => {
+  it('refuses to launch a local server whose cached files changed, or when the policy forbids local servers', async () => {
     tree.ok = false
-    expect(resolveManagedLaunch({ ...base, command: 'node', args: [] }, owned({})).blockedReason).toBe('The cached copy was changed on disk — Update to restore it')
+    expect((await resolveManagedLaunch({ ...base, command: 'node', args: [] }, (await owned({})))).blockedReason).toBe('The cached copy was changed on disk — Update to restore it')
     tree.ok = true
     policy.stdioMcp = false
-    expect(resolveManagedLaunch({ ...base, command: 'node', args: [] }, owned({})).blockedReason).toBe('Blocked by your admin')
+    expect((await resolveManagedLaunch({ ...base, command: 'node', args: [] }, (await owned({})))).blockedReason).toBe('Blocked by your admin')
     policy.stdioMcp = true
   })
 
-  it('leaves a provider no plugin owns as it is', () => {
+  it('leaves a provider no plugin owns as it is', async () => {
     const config = { ...base, command: 'node', args: ['${X}'], env: { X: '1' } }
-    expect(resolveManagedLaunch(config, { managedBy: null })).toBe(config)
+    expect((await resolveManagedLaunch(config, { managedBy: null }))).toBe(config)
   })
 
-  it('reads the owner, its snapshot and what is still to fill in — names and booleans only', () => {
+  it('reads the owner, its snapshot and what is still to fill in — names and booleans only', async () => {
     expect(pluginManagedBy(' ABC ', 'F00')).toBe('plugin:abc@f00')
     expect(pluginOfManagedBy('plugin:abc@f00')).toEqual({ entryUuid: 'abc', sha: 'f00' })
     expect(pluginOfManagedBy(null)).toBeNull()
     expect(snapshotKeyOfManagedBy(OWNER)).toBe(`${ENTRY}/${SHA}`)
-    const row = { ...owned({ A: 'x' }), managedSpec: { root: '/c', slots: ['A', 'B'] } }
-    expect(missingManagedEnv(row)).toEqual(['B'])
-    expect(managedSlotStates(row)).toEqual([
+    const row = { ...(await owned({ A: 'x' })), managedSpec: { root: '/c', slots: ['A', 'B'] } }
+    expect((await missingManagedEnv(row))).toEqual(['B'])
+    expect((await managedSlotStates(row))).toEqual([
       { name: 'A', hasValue: true },
       { name: 'B', hasValue: false }
     ])
-    expect(missingManagedEnv({ managedBy: null, managedSpec: { root: '/c', slots: ['A'] } })).toEqual([])
+    expect((await missingManagedEnv({ managedBy: null, managedSpec: { root: '/c', slots: ['A'] } }))).toEqual([])
     expect(fillPlaceholders('${A}-${B}', { A: '1' })).toBe('1-${B}')
   })
 
-  it('reads a directory connector’s empty settings as still to fill in, and never a hand-made connector’s', () => {
+  it('reads a directory connector’s empty settings as still to fill in, and never a hand-made connector’s', async () => {
     const ref = { source: 'core-mcp-directory', id: 'fs' }
-    expect(missingEnvOf({ registryRef: ref, env: { ROOT: '', TOKEN: 'x', KEY: '' } })).toEqual(['KEY', 'ROOT'])
-    expect(missingEnvOf({ registryRef: null, env: { ROOT: '' } })).toEqual([])
-    expect(missingEnvOf({ registryRef: ref, env: null })).toEqual([])
-    expect(missingEnvOf({ ...owned({ A: 'x' }), managedSpec: { root: '/c', slots: ['A', 'B'] } })).toEqual(['B'])
+    expect((await missingEnvOf({ registryRef: ref, env: { ROOT: '', TOKEN: 'x', KEY: '' } }))).toEqual(['KEY', 'ROOT'])
+    expect((await missingEnvOf({ registryRef: null, env: { ROOT: '' } }))).toEqual([])
+    expect((await missingEnvOf({ registryRef: ref, env: null }))).toEqual([])
+    expect((await missingEnvOf({ ...(await owned({ A: 'x' })), managedSpec: { root: '/c', slots: ['A', 'B'] } }))).toEqual(['B'])
   })
 })
 
 describe('directory connectors at launch', () => {
   const ref = { source: 'core-mcp-directory', id: 'fetch' }
 
-  it('hands a directory server under the managed uv uv’s environment, its own settings kept', () => {
-    const config = resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uvx', args: ['mcp-server-fetch==1.0'], env: { KEY: 'k' } }, { managedBy: null, registryRef: ref })
+  it('hands a directory server under the managed uv uv’s environment, its own settings kept', async () => {
+    const config = (await resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uvx', args: ['mcp-server-fetch==1.0'], env: { KEY: 'k' } }, { managedBy: null, registryRef: ref }))
     expect(config.env).toEqual({ UV_CACHE_DIR: '/ud/localdev/uv-cache', UV_PYTHON_INSTALL_DIR: '/ud/localdev/python', KEY: 'k' })
     expect(config.blockedReason).toBeUndefined()
   })
 
-  it('refuses a local directory server while the policy forbids local servers, and leaves a remote one and a hand-made one alone', () => {
+  it('refuses a local directory server while the policy forbids local servers, and leaves a remote one and a hand-made one alone', async () => {
     policy.stdioMcp = false
     try {
-      expect(resolveManagedLaunch({ ...base, command: 'npx', args: ['-y', 'x'] }, { managedBy: null, registryRef: ref }).blockedReason).toBe('Blocked by your admin')
+      expect((await resolveManagedLaunch({ ...base, command: 'npx', args: ['-y', 'x'] }, { managedBy: null, registryRef: ref })).blockedReason).toBe('Blocked by your admin')
       const remote = { ...base, transportType: 'streamable-http' as const, url: 'https://x.example' }
-      expect(resolveManagedLaunch(remote, { managedBy: null, registryRef: ref })).toBe(remote)
+      expect((await resolveManagedLaunch(remote, { managedBy: null, registryRef: ref }))).toBe(remote)
       const handMade = { ...base, command: 'npx', args: ['-y', 'x'] }
-      expect(resolveManagedLaunch(handMade, { managedBy: null, registryRef: null })).toBe(handMade)
+      expect((await resolveManagedLaunch(handMade, { managedBy: null, registryRef: null }))).toBe(handMade)
     } finally {
       policy.stdioMcp = true
     }
@@ -159,38 +159,38 @@ describe('directory connectors at launch', () => {
 
 describe('a local directory connector’s settings are secret', () => {
   const ref = { source: 'core-mcp-directory', id: 'fs' }
-  const sealed = (values: Record<string, string>, names: string[]) => ({
+  const sealed = async (values: Record<string, string>, names: string[]) => ({
     managedBy: null,
     registryRef: ref,
     transportType: 'stdio',
     env: Object.fromEntries(names.map((name) => [name, ''])),
-    envSecretEncrypted: encryptManagedSecrets(values)
+    envSecretEncrypted: (await encryptManagedSecrets(values))
   })
 
-  it('reads the encrypted values for what is still to fill in, and the renderer’s view is names and booleans', () => {
-    const row = sealed({ TOKEN: 'sk-1' }, ['ROOT', 'TOKEN'])
-    expect(missingEnvOf(row)).toEqual(['ROOT'])
-    expect(directorySlotStates(row)).toEqual([
+  it('reads the encrypted values for what is still to fill in, and the renderer’s view is names and booleans', async () => {
+    const row = (await sealed({ TOKEN: 'sk-1' }, ['ROOT', 'TOKEN']))
+    expect((await missingEnvOf(row))).toEqual(['ROOT'])
+    expect((await directorySlotStates(row))).toEqual([
       { name: 'ROOT', hasValue: false },
       { name: 'TOKEN', hasValue: true }
     ])
-    expect(JSON.stringify(directorySlotStates(row))).not.toContain('sk-1')
+    expect(JSON.stringify((await directorySlotStates(row)))).not.toContain('sk-1')
   })
 
-  it('moves values still in the plain env into the encrypted column, the names kept, and nothing when none is plain', () => {
-    const legacy = { managedBy: null, registryRef: ref, transportType: 'stdio', env: { ROOT: '/srv', TOKEN: '' }, envSecretEncrypted: encryptManagedSecrets({ OLD: 'o' }) }
-    const next = directoryEnvToSeal(legacy)!
+  it('moves values still in the plain env into the encrypted column, the names kept, and nothing when none is plain', async () => {
+    const legacy = { managedBy: null, registryRef: ref, transportType: 'stdio', env: { ROOT: '/srv', TOKEN: '' }, envSecretEncrypted: (await encryptManagedSecrets({ OLD: 'o' })) }
+    const next = (await directoryEnvToSeal(legacy))!
     expect(next.env).toEqual({ OLD: '', ROOT: '', TOKEN: '' })
-    expect(managedSecrets({ envSecretEncrypted: next.envSecretEncrypted })).toEqual({ OLD: 'o', ROOT: '/srv' })
-    expect(directoryEnvToSeal(sealed({ TOKEN: 'x' }, ['TOKEN']))).toBeNull()
+    expect((await managedSecrets({ envSecretEncrypted: next.envSecretEncrypted }))).toEqual({ OLD: 'o', ROOT: '/srv' })
+    expect((await directoryEnvToSeal((await sealed({ TOKEN: 'x' }, ['TOKEN']))))).toBeNull()
     // A hand-made connector's env is the user's as typed, and a remote one has none to seal.
-    expect(directoryEnvToSeal({ ...legacy, registryRef: null })).toBeNull()
-    expect(directoryEnvToSeal({ ...legacy, transportType: 'streamable-http' })).toBeNull()
+    expect((await directoryEnvToSeal({ ...legacy, registryRef: null }))).toBeNull()
+    expect((await directoryEnvToSeal({ ...legacy, transportType: 'streamable-http' }))).toBeNull()
   })
 
-  it('launches with the decrypted values, a name with none left empty', () => {
-    const row = sealed({ TOKEN: 'sk-1' }, ['ROOT', 'TOKEN'])
-    const config = resolveManagedLaunch({ ...base, command: 'npx', args: ['-y', 'fs'], env: row.env }, row)
+  it('launches with the decrypted values, a name with none left empty', async () => {
+    const row = (await sealed({ TOKEN: 'sk-1' }, ['ROOT', 'TOKEN']))
+    const config = (await resolveManagedLaunch({ ...base, command: 'npx', args: ['-y', 'fs'], env: row.env }, row))
     expect(config.env).toEqual({ ROOT: '', TOKEN: 'sk-1' })
   })
 })
@@ -317,12 +317,12 @@ describe('a snapshot’s writable working copy', () => {
     }
   })
 
-  it('is named in the config, never made while the config is built; the connect makes it, and a copy that cannot be made refuses the launch', () => {
+  it('is named in the config, never made while the config is built; the connect makes it, and a copy that cannot be made refuses the launch', async () => {
     const { home, root } = readOnlyTree()
     try {
       const work = join(home, 'plugin-work', 'e', 's', 'carbone')
       const row = { managedBy: OWNER, managedSpec: { root, slots: [], work }, envSecretEncrypted: null }
-      const config = resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run', '--directory', join(work, 'server'), 'srv'] }, row)
+      const config = (await resolveManagedLaunch({ ...base, command: '/ud/localdev/uv/uv', args: ['run', '--directory', join(work, 'server'), 'srv'] }, row))
       expect(config.blockedReason).toBeUndefined()
       expect(config.workCopy).toEqual({ root, work, changedReason: 'The cached copy was changed on disk — Update to restore it', failedReason: PLUGIN_WORK_COPY_FAILED })
       expect(existsSync(work)).toBe(false)
@@ -330,7 +330,7 @@ describe('a snapshot’s writable working copy', () => {
       expect(existsSync(join(work, 'server', 'pyproject.toml'))).toBe(true)
 
       const missing = { ...row, managedSpec: { root: join(home, 'nowhere'), slots: [], work: join(home, 'w2') } }
-      const refused = resolveManagedLaunch({ ...base, id: 'm2', command: '/ud/localdev/uv/uv', args: ['run'] }, missing)
+      const refused = (await resolveManagedLaunch({ ...base, id: 'm2', command: '/ud/localdev/uv/uv', args: ['run'] }, missing))
       expect(prepareWorkCopy('m2', refused.workCopy!)).toBe(PLUGIN_WORK_COPY_FAILED)
     } finally {
       _resetWorkCopiesInUse()

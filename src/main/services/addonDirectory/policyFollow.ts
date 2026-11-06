@@ -53,7 +53,7 @@ const defaultDeps: PolicyFollowDeps = {
   disconnect: (id) => mcpManager.disconnect(id),
   // Loaded on use, as `auth/reload.ts` does: the plugin service is not this module's to pull in at import.
   startsUnattended: async (row) => (await import('../marketplacePluginService')).marketplacePluginService.startsUnattended(row),
-  connect: (row) => mcpManager.connect(mcpRowToConfig(row))
+  connect: async (row) => mcpManager.connect(await mcpRowToConfig(row))
 }
 
 /** The connectors `after` gates that `before` did not: a directory's or a plugin's local servers once `stdioMcp` is off. */
@@ -89,7 +89,7 @@ export async function resumeAllowed(settingsUserId: string, before: AddonPolicy,
         await deps.disconnect(row.id)
         if (!row.enabled) return
         // The rule `auth/reload.ts` starts rows by: a plugin's when it may run unattended, a directory's once filled in.
-        const starts = row.managedBy ? await deps.startsUnattended(row) : missingEnvOf(row).length === 0
+        const starts = row.managedBy ? await deps.startsUnattended(row) : (await missingEnvOf(row)).length === 0
         if (!starts) return
         await deps.connect(row)
         started.push(row.id)

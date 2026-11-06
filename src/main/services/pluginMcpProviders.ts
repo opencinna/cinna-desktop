@@ -184,19 +184,18 @@ export function createPluginMcpProviders(deps: PluginMcpDeps) {
   }
 
   /** Values the user gave this server on another snapshot of the plugin, for a new row. */
-  function inherited(userId: string, entryUuid: string, name: string, slots: readonly string[]): Pick<UpsertInput, 'envSecretEncrypted' | 'bearerTokenEncrypted'> {
+  async function inherited(userId: string, entryUuid: string, name: string, slots: readonly string[]): Promise<Pick<UpsertInput, 'envSecretEncrypted' | 'bearerTokenEncrypted'>> {
     const uuid = entryUuid.trim().toLowerCase()
     const siblings = deps
       .rows(userId)
       .filter((row) => row.name === name && pluginOfManagedBy(row.managedBy)?.entryUuid === uuid)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     const values: Record<string, string> = {}
-    for (const row of siblings) {
-      const given = managedSecrets(row)
+    for (const given of await Promise.all(siblings.map((row) => managedSecrets(row)))) {
       for (const slot of slots) if (!(slot in values) && given[slot]) values[slot] = given[slot]
     }
     const token = siblings.find((row) => row.bearerTokenEncrypted)?.bearerTokenEncrypted ?? null
-    return { envSecretEncrypted: encryptManagedSecrets(values), ...(token ? { bearerTokenEncrypted: token } : {}) }
+    return { envSecretEncrypted: await encryptManagedSecrets(values), ...(token ? { bearerTokenEncrypted: token } : {}) }
   }
 
   return {
@@ -235,26 +234,36 @@ export function createPluginMcpProviders(deps: PluginMcpDeps) {
           }
           const wanted = managedRowSpec(spec, plugin.dir, deps.uv(), pluginWorkDir(managedBy, spec.name))
           let current = row
+          let made = false
           if (!row) {
-            current = deps.upsert(userId, {
-              name: spec.name,
-              ...wanted,
-              enabled: true,
-              managedBy,
-              ...inherited(userId, plugin.entryUuid, spec.name, wanted.managedSpec.slots)
-            }).row
-          } else if (
-            row.transportType !== wanted.transportType ||
-            (row.command ?? null) !== (wanted.command ?? null) ||
-            !sameJson(row.args, wanted.args) ||
-            (row.url ?? null) !== (wanted.url ?? null) ||
-            !sameJson(row.env, wanted.env) ||
-            (wanted.authType !== undefined && row.authType !== wanted.authType) ||
-            !sameJson(row.managedSpec, wanted.managedSpec)
+            const given = await inherited(userId, plugin.entryUuid, spec.name, wanted.managedSpec.slots)
+            // Re-read after the keystore: another agent's sync of this snapshot may have made the row meanwhile.
+            current = deps.rows(userId).find((candidate) => candidate.managedBy === managedBy && candidate.name === spec.name)
+            if (!current) {
+              current = deps.upsert(userId, {
+                name: spec.name,
+                ...wanted,
+                enabled: true,
+                managedBy,
+                ...given
+              }).row
+              made = true
+            }
+          }
+          if (
+            current && !made && (
+            current.transportType !== wanted.transportType ||
+            (current.command ?? null) !== (wanted.command ?? null) ||
+            !sameJson(current.args, wanted.args) ||
+            (current.url ?? null) !== (wanted.url ?? null) ||
+            !sameJson(current.env, wanted.env) ||
+            (wanted.authType !== undefined && current.authType !== wanted.authType) ||
+            !sameJson(current.managedSpec, wanted.managedSpec))
           ) {
             // The same snapshot from another folder (another instance's cache): the user's values stay.
-            current = deps.upsert(userId, { id: row.id, name: spec.name, ...wanted, enabled: row.enabled }).row
-            await deps.disconnect(row.id)
+            const id = current.id
+            current = deps.upsert(userId, { id, name: spec.name, ...wanted, enabled: current.enabled }).row
+            await deps.disconnect(id)
           }
           if (!current) continue
           if (!deps.attached(userId, agentId).includes(current.id)) deps.attach(userId, agentId, current.id)
@@ -264,7 +273,7 @@ export function createPluginMcpProviders(deps: PluginMcpDeps) {
             entryUuid: plugin.entryUuid,
             name: spec.name,
             mcpProviderId: current.id,
-            missingEnv: missingManagedEnv(current),
+            missingEnv: await missingManagedEnv(current),
             ...(needsBearer ? { needsBearer } : {})
           })
         }

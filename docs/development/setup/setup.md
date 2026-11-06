@@ -68,7 +68,7 @@ src/
 
 3. **`ipcRenderer.postMessage` args**: Message data is the **second argument** to `ipcMain.on` handler: `(event, message)`. Ports are on `event.ports`. Do NOT use `event.message`
 
-4. **safeStorage availability**: `safeStorage.isEncryptionAvailable()` can return false on some Linux setups; keystore falls back to base64
+4. **safeStorage availability**: `safeStorage.isAsyncEncryptionAvailable()` (read once by `keystore.prepare()`) can return false on some Linux setups; keystore falls back to base64
 
 5. **Model lists**: Anthropic fetches dynamically (with hardcoded fallback). OpenAI and Gemini use hardcoded lists — edit arrays in `src/main/llm/{openai,gemini}.ts`
 

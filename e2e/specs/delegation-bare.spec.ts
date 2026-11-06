@@ -73,9 +73,11 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
     writeFileSync(join(folder, 'CLAUDE.md'), '# Basalt Exporter\n\nYou own this project.\n')
     const executorId = await adoptFolder(cinna, folder)
     await cinna.electronApp.evaluate(({ safeStorage }) => {
-      safeStorage.isEncryptionAvailable = () => true
-      safeStorage.encryptString = text => Buffer.from([...Buffer.from(text)].map(b => b ^ 0x95))
-      safeStorage.decryptString = bytes => Buffer.from([...bytes].map(b => b ^ 0x95)).toString()
+      // The app reads secrets through the async API only (Electron 45+). Availability is
+      // read once at startup; this patch only keeps a later check consistent.
+      safeStorage.isAsyncEncryptionAvailable = async () => true
+      safeStorage.encryptStringAsync = async text => Buffer.from([...Buffer.from(text)].map(b => b ^ 0x95))
+      safeStorage.decryptStringAsync = async bytes => ({ result: Buffer.from([...bytes].map(b => b ^ 0x95)).toString(), shouldReEncrypt: false })
     })
     for (const [id, name, secret] of [[requester.id, 'Requester token', 'requester-fixture-secret-123'], [executorId, 'Executor token', EXECUTOR_SECRET]]) {
       const attached = await cinna.page.evaluate(async ({ id, name, secret }) => {

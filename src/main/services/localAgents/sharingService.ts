@@ -836,10 +836,10 @@ async function libraryWrite(
  * cannot be read or is not in the list, so a wrong guess never marks anyone
  * as "You".
  */
-function selfIn(profile: string, people: LibraryPerson[]): string | null {
+async function selfIn(profile: string, people: LibraryPerson[]): Promise<string | null> {
   let sub: string
   try {
-    sub = getStoredCinnaSubject(profile)
+    sub = await getStoredCinnaSubject(profile)
   } catch {
     return null
   }
@@ -858,7 +858,7 @@ async function readItemPeople(profile: string, item: PeopleItem): Promise<AgentP
   try {
     const body = await cinnaFetch<unknown>(profile, grantsPath(item.uuid))
     const list = withEveryone(fromCoreGrants(body), item.visibility, item.isListed)
-    return { visible: true, people: list, selfUserId: selfIn(profile, list) }
+    return { visible: true, people: list, selfUserId: await selfIn(profile, list) }
   } catch (err) {
     if (err instanceof CinnaApiError && err.status === 403) return { visible: false, people: [], selfUserId: null }
     if (err instanceof CinnaApiError && err.status === 404) return null
@@ -904,7 +904,7 @@ async function writeItemPeople(
   const shown = withEveryone(answered, visibility, item.isListed)
   const now: AgentPeopleDto | null =
     answered.length > 0
-      ? { visible: true, people: shown, selfUserId: selfIn(profile, shown) }
+      ? { visible: true, people: shown, selfUserId: await selfIn(profile, shown) }
       : await reread().catch(() => null)
   publishEvent(SHARING_CHANGED_CHANNEL)
   if (visibilityRefusal) return { ...refused(visibilityRefusal.refusal, visibilityRefusal.detail), people: now }
@@ -1127,7 +1127,7 @@ export const sharingService = {
       const diff = await gitService.diffForSummary(shared.dir)
       if (diff.trim() === '') return ''
       const output = await aiFunctions.runSingleShot({
-        backend: aiFunctions.resolveBackend(userId),
+        backend: await aiFunctions.resolveBackend(userId),
         warmOnly: false,
         label: 'share-summary',
         systemPrompt: SHARE_SUMMARY_SYSTEM_PROMPT,

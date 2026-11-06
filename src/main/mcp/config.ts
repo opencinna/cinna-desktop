@@ -27,7 +27,7 @@ function toAuthType(value: string | null, providerId: string): 'oauth' | 'bearer
  * which is how bearer providers ended up popping a browser auth window on
  * startup.
  */
-export function mcpRowToConfig(row: McpProviderRow): McpProviderConfig {
+export async function mcpRowToConfig(row: McpProviderRow): Promise<McpProviderConfig> {
   // A plugin's provider (`managed_by`) launches with its `${VAR}`s filled and, under the managed uv, uv's env.
   return resolveManagedLaunch(rowConfig(row), row)
 }

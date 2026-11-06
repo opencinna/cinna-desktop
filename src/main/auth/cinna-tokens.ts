@@ -18,8 +18,11 @@ function sameSession(a: CinnaTokenState | null | undefined, b: CinnaTokenState):
 /**
  * Store Cinna OAuth tokens (encrypted) for a user.
  * Always updates the refresh token to support rotation.
+ *
+ * The session is invalidated before encrypting; a later store or clear that
+ * lands while this one encrypts supersedes it, and this write is dropped.
  */
-export function storeCinnaTokens(
+export async function storeCinnaTokens(
   userId: string,
   tokens: {
     clientId: string
@@ -27,27 +30,36 @@ export function storeCinnaTokens(
     refreshToken: string
     expiresIn: number
   }
-): void {
+): Promise<void> {
   invalidateCinnaSession(userId)
-  persistTokens(userId, tokens)
+  const generation = cinnaSessionGeneration(userId)
+  const sealed = await sealTokens(tokens)
+  if (cinnaSessionGeneration(userId) !== generation) throw new CinnaSessionChanged()
+  userRepo.setCinnaTokens(userId, sealed)
 }
 
-function persistTokens(userId: string, tokens: {
+type SealedTokens = Parameters<typeof userRepo.setCinnaTokens>[1]
+
+async function sealTokens(tokens: {
   clientId: string; accessToken: string; refreshToken: string; expiresIn: number
-}): void {
-  userRepo.setCinnaTokens(userId, {
+}): Promise<SealedTokens> {
+  const [accessTokenEnc, refreshTokenEnc] = await Promise.all([
+    encryptApiKey(tokens.accessToken),
+    encryptApiKey(tokens.refreshToken)
+  ])
+  return {
     clientId: tokens.clientId,
-    accessTokenEnc: encryptApiKey(tokens.accessToken),
-    refreshTokenEnc: encryptApiKey(tokens.refreshToken),
+    accessTokenEnc,
+    refreshTokenEnc,
     expiresAt: Date.now() + tokens.expiresIn * 1000
-  })
+  }
 }
 
 /** Stored identity only: no refresh, expiry check, or network request. */
-export function getStoredCinnaSubject(userId: string): string {
+export async function getStoredCinnaSubject(userId: string): Promise<string> {
   const state = userRepo.getCinnaTokenState(userId)
   if (!state?.accessTokenEnc) throw new CinnaReauthRequired('No Cinna access token stored')
-  return decodeAccessTokenSubject(decryptApiKey(state.accessTokenEnc))
+  return decodeAccessTokenSubject(await decryptApiKey(state.accessTokenEnc))
 }
 
 /**
@@ -89,7 +101,7 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
   const refresh = Promise.resolve().then(async () => {
     try {
       if (!isCurrent()) throw new CinnaSessionChanged()
-      const currentRefreshToken = decryptApiKey(state.refreshTokenEnc!)
+      const currentRefreshToken = await decryptApiKey(state.refreshTokenEnc!)
       const serverUrl = state.serverUrl
       const clientId = state.clientId
 
@@ -99,14 +111,15 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
       const newTokens = await refreshCinnaTokens(serverUrl, clientId, currentRefreshToken)
 
-      if (!isCurrent()) throw new CinnaSessionChanged()
       // Rotation keeps the same session; only a login/re-link replaces it.
-      persistTokens(userId, {
+      const sealed = await sealTokens({
         clientId,
         accessToken: newTokens.accessToken,
         refreshToken: newTokens.refreshToken,
         expiresIn: newTokens.expiresIn
       })
+      if (!isCurrent()) throw new CinnaSessionChanged()
+      userRepo.setCinnaTokens(userId, sealed)
 
       return newTokens.accessToken
     } catch (e) {

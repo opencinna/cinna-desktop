@@ -32,7 +32,7 @@ vi.mock('../db/llmProviders', () => ({
     upsert: (_userId: string, input: Record<string, unknown>) => {
       upserted.calls.push(input)
       const prior = input.id ? stored.rows[input.id as string] : undefined
-      return {
+      const result = {
         id: (input.id as string) ?? 'generated-id',
         created: true,
         row: {
@@ -56,12 +56,15 @@ vi.mock('../db/llmProviders', () => ({
           createdAt: new Date(0)
         }
       }
+      // Stored like the real repo, so a read after the keystore await finds what was written.
+      stored.rows[result.id] = result.row
+      return result
     }
   }
 }))
 vi.mock('../security/keystore', () => ({
-  encryptApiKey: (k: string) => Buffer.from(k),
-  decryptApiKey: (b: Buffer) => b.toString()
+  encryptApiKey: async (k: string) => Buffer.from(k),
+  decryptApiKey: async (b: Buffer) => b.toString()
 }))
 /** What the next `createAdapter` should do when asked to list models. */
 const adapterBehaviour = vi.hoisted(() => ({ listModels: null as null | (() => Promise<never>) }))
@@ -90,7 +93,7 @@ vi.mock('../llm/registry', () => ({
   getAdapter: () => undefined,
   getAllModels: async () => []
 }))
-vi.mock('../auth/scope', () => ({ getManagedResourceScopes: () => ['__default__'] }))
+vi.mock('../auth/scope', () => ({ getManagedResourceScopes: () => ['__default__'], getSettingsScopeUserId: () => '__default__' }))
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -115,13 +118,13 @@ describe('upsert — a keyless credential', () => {
     ['localhost:11434', 'http://127.0.0.1:11434'],
     ['http://127.0.0.1:11434/', 'http://127.0.0.1:11434'],
     ['  192.168.1.40:11434  ', 'http://192.168.1.40:11434']
-  ])('stores %s as %s', (given, stored) => {
-    providerService.upsert('__default__', { ...OLLAMA, baseUrl: given })
+  ])('stores %s as %s', async (given, stored) => {
+    await providerService.upsert('__default__', { ...OLLAMA, baseUrl: given })
     expect(upserted.calls[0].baseUrl).toBe(stored)
   })
 
-  it('resolves an empty host to the default rather than storing nothing', () => {
-    providerService.upsert('__default__', { ...OLLAMA, baseUrl: '' })
+  it('resolves an empty host to the default rather than storing nothing', async () => {
+    await providerService.upsert('__default__', { ...OLLAMA, baseUrl: '' })
     expect(upserted.calls[0].baseUrl).toBe('http://127.0.0.1:11434')
   })
 
@@ -130,9 +133,9 @@ describe('upsert — a keyless credential', () => {
    * without closing, and storing a different host than the field displays would
    * be a screen that lies about what it saved.
    */
-  it('refuses a host it cannot parse, naming it back', () => {
-    expect(() => providerService.upsert('__default__', { ...OLLAMA, baseUrl: 'my ollama box' })
-    ).toThrow(/my ollama box/)
+  it('refuses a host it cannot parse, naming it back', async () => {
+    await expect(providerService.upsert('__default__', { ...OLLAMA, baseUrl: 'my ollama box' })
+    ).rejects.toThrow(/my ollama box/)
     expect(upserted.calls).toHaveLength(0)
   })
 
@@ -141,13 +144,13 @@ describe('upsert — a keyless credential', () => {
    * and the default-model writer both send. Normalising it would rewrite the
    * host to the default on every unrelated edit.
    */
-  it('leaves the stored host alone when none is supplied', () => {
-    providerService.upsert('__default__', { id: 'p1', ...OLLAMA, enabled: false })
+  it('leaves the stored host alone when none is supplied', async () => {
+    await providerService.upsert('__default__', { id: 'p1', ...OLLAMA, enabled: false })
     expect(upserted.calls[0].baseUrl).toBeUndefined()
   })
 
-  it('registers an adapter despite having no API key, and hands it the host', () => {
-    providerService.upsert('__default__', { ...OLLAMA, baseUrl: '127.0.0.1:11434' })
+  it('registers an adapter despite having no API key, and hands it the host', async () => {
+    await providerService.upsert('__default__', { ...OLLAMA, baseUrl: '127.0.0.1:11434' })
     expect(registry.registered).toHaveLength(1)
     expect(registry.unregistered).toHaveLength(0)
     expect(adapters.created[0]).toMatchObject({
@@ -157,8 +160,8 @@ describe('upsert — a keyless credential', () => {
     })
   })
 
-  it('unregisters it when disabled, like any other credential', () => {
-    providerService.upsert('__default__', { ...OLLAMA, baseUrl: '', enabled: false })
+  it('unregisters it when disabled, like any other credential', async () => {
+    await providerService.upsert('__default__', { ...OLLAMA, baseUrl: '', enabled: false })
     expect(registry.registered).toHaveLength(0)
     expect(registry.unregistered).toEqual(['generated-id'])
   })
@@ -174,8 +177,8 @@ describe('upsert — a credential that does have a key', () => {
    * from account-config sync, which writes through `llmProviderRepo` directly
    * and never through this method.
    */
-  it('drops a gateway URL supplied through this entry point', () => {
-    providerService.upsert('__default__', {
+  it('drops a gateway URL supplied through this entry point', async () => {
+    await providerService.upsert('__default__', {
       type: 'openai_compatible',
       name: 'Gateway',
       apiKey: 'k',
@@ -184,7 +187,7 @@ describe('upsert — a credential that does have a key', () => {
     expect(upserted.calls[0].baseUrl).toBeUndefined()
   })
 
-  it('registers with its key, and with whatever base URL the row already had', () => {
+  it('registers with its key, and with whatever base URL the row already had', async () => {
     stored.rows['gw'] = {
       id: 'gw',
       type: 'openai_compatible',
@@ -193,7 +196,7 @@ describe('upsert — a credential that does have a key', () => {
       enabled: true,
       baseUrl: 'https://gw.example.com/v1'
     }
-    providerService.upsert('__default__', {
+    await providerService.upsert('__default__', {
       id: 'gw',
       type: 'openai_compatible',
       name: 'Gateway',
@@ -206,8 +209,8 @@ describe('upsert — a credential that does have a key', () => {
     })
   })
 
-  it('registers no adapter for a keyed credential with no key yet', () => {
-    providerService.upsert('__default__', { type: 'anthropic', name: 'Anthropic' })
+  it('registers no adapter for a keyed credential with no key yet', async () => {
+    await providerService.upsert('__default__', { type: 'anthropic', name: 'Anthropic' })
     expect(registry.registered).toHaveLength(0)
     expect(registry.unregistered).toEqual(['generated-id'])
   })
@@ -232,16 +235,16 @@ describe('upsert — mass-assignment guards', () => {
     baseUrl: null
   }
 
-  it('refuses to re-type an existing credential', () => {
+  it('refuses to re-type an existing credential', async () => {
     stored.rows['row-anthropic'] = anthropicRow
-    expect(() =>
+    await expect(
       providerService.upsert('__default__', {
         id: 'row-anthropic',
         type: 'openai_compatible',
         name: 'Anthropic',
         baseUrl: 'https://evil.example'
       })
-    ).toThrow(/provider type cannot be changed/)
+    ).rejects.toThrow(/provider type cannot be changed/)
     expect(upserted.calls).toHaveLength(0)
     expect(adapters.created).toHaveLength(0)
   })
@@ -251,9 +254,9 @@ describe('upsert — mass-assignment guards', () => {
    * credential's endpoint is never renderer-supplied, so the stored key cannot
    * be pointed anywhere.
    */
-  it('ignores a baseUrl sent for a credential that has a key', () => {
+  it('ignores a baseUrl sent for a credential that has a key', async () => {
     stored.rows['row-anthropic'] = anthropicRow
-    providerService.upsert('__default__', {
+    await providerService.upsert('__default__', {
       id: 'row-anthropic',
       type: 'anthropic',
       name: 'Anthropic',
@@ -266,7 +269,7 @@ describe('upsert — mass-assignment guards', () => {
     expect(adapters.created[0].baseUrl).toBeNull()
   })
 
-  it('still accepts a host for a keyless credential', () => {
+  it('still accepts a host for a keyless credential', async () => {
     stored.rows['row-ollama'] = {
       id: 'row-ollama',
       type: 'ollama',
@@ -275,7 +278,7 @@ describe('upsert — mass-assignment guards', () => {
       enabled: true,
       baseUrl: 'http://127.0.0.1:11434'
     }
-    providerService.upsert('__default__', {
+    await providerService.upsert('__default__', {
       id: 'row-ollama',
       type: 'ollama',
       name: 'Ollama',

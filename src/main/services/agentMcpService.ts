@@ -4,6 +4,7 @@ import { agentMcpRepo } from '../db/agentMcp'
 import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { mcpManager } from '../mcp/manager'
 import { mcpRowToConfig } from '../mcp/config'
+import type { McpProviderConfig } from '../mcp/types'
 import { LocalAgentError, McpError } from '../errors'
 import { managedHeadersOnly, missingEnvOf } from '../mcp/managed'
 import { createLogger } from '../logger/logger'
@@ -65,10 +66,10 @@ function ownedProvider(ownerId: string, mcpProviderId: string): McpProviderRow {
  * user is in the middle of authorizing (`awaiting-auth`) or that is already up
  * is left alone — `mcpManager.connect` replaces whatever is there.
  */
-function connectsUnattended(row: McpProviderRow): boolean {
+function connectsUnattended(row: McpProviderRow, missingEnv: readonly string[]): boolean {
   if (!row.enabled) return false
   // A plugin's or a directory server whose settings are not filled in yet would only fail.
-  if (missingEnvOf(row).length > 0) return false
+  if (missingEnv.length > 0) return false
   const status = mcpManager.getConnection(row.id)?.status
   if (status === 'connected' || status === 'awaiting-auth') return false
   if (row.transportType === 'stdio') return true
@@ -77,14 +78,32 @@ function connectsUnattended(row: McpProviderRow): boolean {
   return !!row.authTokensEncrypted
 }
 
+function sameBytes(a: Buffer | null | undefined, b: Buffer | null | undefined): boolean {
+  return (a ?? null) === (b ?? null) || (!!a && !!b && a.equals(b))
+}
+
+/**
+ * The row as read now, when its settings are still the ones decrypted before an await; else nothing
+ * (left for the next try). OAuth saves change neither the revision nor the env secret, so the
+ * credentials are compared too: a connection that saved a token and ended meanwhile must not be
+ * followed by a connect on the token it replaced.
+ */
+function sameRead(before: McpProviderRow | undefined, now: McpProviderRow | undefined): McpProviderRow | undefined {
+  if (!before || !now || before.configRevision !== now.configRevision) return undefined
+  return sameBytes(before.envSecretEncrypted, now.envSecretEncrypted) &&
+    sameBytes(before.authTokensEncrypted, now.authTokensEncrypted) &&
+    sameBytes(before.bearerTokenEncrypted, now.bearerTokenEncrypted) &&
+    JSON.stringify(before.clientInfo ?? null) === JSON.stringify(now.clientInfo ?? null) ? now : undefined
+}
+
 /**
  * Start a non-interactive connect of `row` and file it under `connecting`
  * and `tried`, so turns and the Add share one attempt and its outcome.
  */
-function startConnect(ownerId: string, agentId: string, row: McpProviderRow, before: AddonAttempts | undefined, afterAdd: boolean): Promise<unknown> {
+function startConnect(ownerId: string, agentId: string, row: McpProviderRow, config: McpProviderConfig, before: AddonAttempts | undefined, afterAdd: boolean): Promise<unknown> {
   const id = row.id
   const version = versionOf(row)
-  const attempt = mcpManager.connect(mcpRowToConfig(row), { interactive: false })
+  const attempt = mcpManager.connect(config, { interactive: false })
     .then((result) => result.status, (error) => {
       logger.warn('Could not connect an agent addon', { agentId, mcpProviderId: id, error: String(error) })
       return 'error'
@@ -182,6 +201,24 @@ export const agentMcpService = {
     let afterAdd = false
     for (const id of agentMcpRepo.listProviderIds(ownerId, agentId)) {
       if (mcpManager.getConnection(id)?.status === 'connected') { tried.delete(id); continue }
+      const unread = mcpProviderRepo.getOwned(ownerId, id)
+      // Cheap checks first, so a connector that will not start this turn (connecting, waiting for the
+      // user, in backoff) costs no keystore read. Each is repeated after the await below.
+      if (!unread) continue
+      const ours0 = connecting.get(id)
+      if (ours0) {
+        if (ours0.first) waitFor.push(ours0.attempt)
+        if (ours0.afterAdd) { ours0.afterAdd = false; afterAdd = true }
+        continue
+      }
+      const before0 = tried.get(id)?.version === versionOf(unread) ? tried.get(id) : undefined
+      const theirs0 = mcpManager.connecting(id)
+      if (theirs0) { if (!before0) waitFor.push(theirs0); continue }
+      if (before0?.needsUser || (before0 && Date.now() < before0.retryAt)) continue
+      // The settings still to fill in, and the launch config, need the keystore: read first, so
+      // the checks below and the start of a connect run together, after it, with no await between.
+      const [missingEnv, config] = unread ? await Promise.all([missingEnvOf(unread), mcpRowToConfig(unread)]) : [[], undefined]
+      if (mcpManager.getConnection(id)?.status === 'connected') { tried.delete(id); continue }
       const ours = connecting.get(id)
       if (ours) {
         if (ours.first) waitFor.push(ours.attempt)
@@ -189,15 +226,15 @@ export const agentMcpService = {
         if (ours.afterAdd) { ours.afterAdd = false; afterAdd = true }
         continue
       }
-      const row = mcpProviderRepo.getOwned(ownerId, id)
+      const row = sameRead(unread, mcpProviderRepo.getOwned(ownerId, id))
       if (!row) continue
       const version = versionOf(row)
       const before = tried.get(id)?.version === version ? tried.get(id) : undefined
       // Someone else's connect (Settings) is running: calling `connect` would cancel it.
       const theirs = mcpManager.connecting(id)
       if (theirs) { if (!before) waitFor.push(theirs); continue }
-      if (!connectsUnattended(row) || before?.needsUser || (before && Date.now() < before.retryAt)) continue
-      const attempt = startConnect(ownerId, agentId, row, before, false)
+      if (!connectsUnattended(row, missingEnv) || before?.needsUser || (before && Date.now() < before.retryAt)) continue
+      const attempt = startConnect(ownerId, agentId, row, config!, before, false)
       if (!before) waitFor.push(attempt)
     }
     const signal = options.signal
@@ -221,21 +258,25 @@ export const agentMcpService = {
    * (attached to the agent) that can come up with nobody at the keyboard and
    * is not up or connecting already. The first turn after it waits for that
    * connect up to {@link ADDON_ADD_CONNECT_WAIT_MS}. Answers the ids now
-   * starting (one already in flight included). Never throws, never waits.
+   * starting (one already in flight included). Never throws; waits only for
+   * the keystore (the settings each connector still needs), never for a connect.
    */
-  connectAfterAdd(ownerId: string, agentId: string, ids: readonly string[]): string[] {
+  async connectAfterAdd(ownerId: string, agentId: string, ids: readonly string[]): Promise<string[]> {
     const starting: string[] = []
     for (const id of ids) {
       try {
+        const unread = mcpProviderRepo.getOwned(ownerId, id)
+        // Decrypted first: the checks below and the start run together, after it.
+        const [missingEnv, config] = unread ? await Promise.all([missingEnvOf(unread), mcpRowToConfig(unread)]) : [[], undefined]
         if (mcpManager.getConnection(id)?.status === 'connected') continue
         const ours = connecting.get(id)
         if (ours) { ours.afterAdd = true; starting.push(id); continue }
         if (mcpManager.connecting(id)) { starting.push(id); continue }
-        const row = mcpProviderRepo.getOwned(ownerId, id)
-        if (!row || !connectsUnattended(row)) continue
+        const row = sameRead(unread, mcpProviderRepo.getOwned(ownerId, id))
+        if (!row || !connectsUnattended(row, missingEnv)) continue
         // A new add is a first try, whatever earlier turns tried of this version.
         tried.delete(id)
-        void startConnect(ownerId, agentId, row, undefined, true)
+        void startConnect(ownerId, agentId, row, config!, undefined, true)
         starting.push(id)
       } catch (error) {
         logger.warn('Could not start an added connector', { agentId, mcpProviderId: id, error: String(error) })

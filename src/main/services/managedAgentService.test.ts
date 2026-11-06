@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({ db: null as TestDatabase | null, profile: '__d
   handlers: new Map<string, (...args: unknown[]) => unknown>() }))
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db, getRawSqlite: () => state.db!.sqlite }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }))
-vi.mock('../security/keystore', () => ({ decryptApiKey: (value: Buffer) => value.toString(), encryptApiKey: (value: string) => Buffer.from(value) }))
+vi.mock('../security/keystore', () => ({ decryptApiKey: async (value: Buffer) => value.toString(), encryptApiKey: async (value: string) => Buffer.from(value) }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => state.profile, getSettingsScopeUserId: () => '__default__',
   getManagedResourceScopes: () => [...new Set(['__default__', state.profile])] }))
 // Register the actual session IPC handler; unrelated handlers' services are not exercised.
@@ -62,26 +62,26 @@ describe('Managed binding ownership and persistence through real SQLite', () => 
     await expect(older).rejects.toThrow(/changed while/)
     expect(agentRepo.getOwned(OWNER, agent.id)).toMatchObject({ name: 'Newer edit', driverConfig: { environmentId: 'new-environment' } })
   })
-  it('reuses the exact saved binding through fresh service preparation and stores every checkpoint state without new session identities', () => {
-    const first = prepare()
+  it('reuses the exact saved binding through fresh service preparation and stores every checkpoint state without new session identities', async () => {
+    const first = await prepare()
     expect(first.checkpoint).toBeNull()
     for (const next of ['ready', 'inflight', 'uncertain', 'budget'] as const) {
       first.save({ sessionId: 'sesn_saved', state: next })
-      expect(prepare().checkpoint).toEqual({ sessionId: 'sesn_saved', state: next })
+      expect((await prepare()).checkpoint).toEqual({ sessionId: 'sesn_saved', state: next })
       expect(privateRows()).toHaveLength(1)
       expect(agentSessionRepo.getByChatAndAgent('chat', agent.id)?.contextId).toBe('sesn_saved')
     }
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it.each(['foreign-chat', 'missing-chat'] as const)('refuses %s before returning a capability that can create orphan remote work', (chatId) => {
-    expect(() => prepare(chatId)).toThrow()
+  it.each(['foreign-chat', 'missing-chat'] as const)('refuses %s before returning a capability that can create orphan remote work', async (chatId) => {
+    await expect(prepare(chatId)).rejects.toThrow()
     expectNoPrivateRows()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it.each(['deleted chat', 'deleted agent', 'foreign agent owner'] as const)('refuses a held capability after %s and never writes an orphan checkpoint', (change) => {
-    const held = prepare()
+  it.each(['deleted chat', 'deleted agent', 'foreign agent owner'] as const)('refuses a held capability after %s and never writes an orphan checkpoint', async (change) => {
+    const held = await prepare()
     if (change === 'deleted chat') state.db!.raw.prepare('DELETE FROM chats WHERE id=?').run('chat')
     if (change === 'deleted agent') agentRepo.delete(OWNER, agent.id)
     if (change === 'foreign agent owner') state.db!.raw.prepare('UPDATE agents SET user_id=? WHERE id=?').run('other', agent.id)
@@ -91,14 +91,14 @@ describe('Managed binding ownership and persistence through real SQLite', () => 
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('refuses preparation from an agent snapshot whose owned row has disappeared', () => {
+  it('refuses preparation from an agent snapshot whose owned row has disappeared', async () => {
     agentRepo.delete(OWNER, agent.id)
-    expect(() => prepare()).toThrow()
+    await expect(prepare()).rejects.toThrow()
     expectNoPrivateRows()
   })
 
-  it.each(['replacement key', 'disable and re-enable', 'delete', 'profile switch'] as const)('invalidates a captured credential on %s even when its endpoint would still work', (change) => {
-    const held = prepare()
+  it.each(['replacement key', 'disable and re-enable', 'delete', 'profile switch'] as const)('invalidates a captured credential on %s even when its endpoint would still work', async (change) => {
+    const held = await prepare()
     const revision = llmProviderRepo.getOwned(OWNER, credentialId)!.configRevision!
     if (change === 'replacement key') updateCredential({ apiKeyEncrypted: Buffer.from('sk-ant-api-new-synthetic-secret') })
     if (change === 'disable and re-enable') { updateCredential({ enabled: false }); updateCredential({ enabled: true }) }
@@ -111,72 +111,72 @@ describe('Managed binding ownership and persistence through real SQLite', () => 
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('keeps a name-only credential edit compatible with existing continuity', () => {
-    const held = prepare()
+  it('keeps a name-only credential edit compatible with existing continuity', async () => {
+    const held = await prepare()
     held.save({ sessionId: 'sesn_name-stable', state: 'ready' })
     const revision = llmProviderRepo.getOwned(OWNER, credentialId)!.configRevision
     updateCredential({ name: 'A clearer credential name' })
     expect(llmProviderRepo.getOwned(OWNER, credentialId)!.configRevision).toBe(revision)
     expect(() => held.validate()).not.toThrow()
-    expect(prepare().checkpoint).toEqual({ sessionId: 'sesn_name-stable', state: 'ready' })
+    expect((await prepare()).checkpoint).toEqual({ sessionId: 'sesn_name-stable', state: 'ready' })
   })
 
-  it.each(['configuration edit', 'agent disable and re-enable'] as const)('invalidates a held agent after %s without rewriting saved continuity', (change) => {
-    const held = prepare(); held.save({ sessionId: 'sesn_original', state: 'inflight' })
+  it.each(['configuration edit', 'agent disable and re-enable'] as const)('invalidates a held agent after %s without rewriting saved continuity', async (change) => {
+    const held = await prepare(); held.save({ sessionId: 'sesn_original', state: 'inflight' })
     const original = privateRows()
     if (change === 'configuration edit') agentRepo.updateRuntime(OWNER, agent.id, 'managed', { name: agent.name, config: { ...config, environmentId: 'another-environment' } })
     else { agentRepo.update(OWNER, agent.id, { enabled: false }); agentRepo.update(OWNER, agent.id, { enabled: true }) }
     expect(() => held.validate()).toThrow(/configuration changed/)
     expect(() => held.save({ sessionId: 'sesn_original', state: 'ready' })).toThrow()
     agent = agentRepo.getOwned(OWNER, agent.id)!
-    expect(() => prepare()).toThrow(/different configuration or credential/)
+    await expect(prepare()).rejects.toThrow(/different configuration or credential/)
     expect(privateRows()).toEqual(original)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('requires a new chat after credential replacement instead of reusing the old remote session', () => {
-    prepare().save({ sessionId: 'sesn_original', state: 'ready' })
+  it('requires a new chat after credential replacement instead of reusing the old remote session', async () => {
+    ;(await prepare()).save({ sessionId: 'sesn_original', state: 'ready' })
     const original = privateRows()
     updateCredential({ apiKeyEncrypted: Buffer.from('sk-ant-api-other-synthetic-key') })
-    expect(() => prepare()).toThrow(/different configuration or credential/)
+    await expect(prepare()).rejects.toThrow(/different configuration or credential/)
     expect(privateRows()).toEqual(original)
   })
 
-  it('rejects unsupported, disabled, foreign and CLI-login credentials without returning an HTTP capability', () => {
-    updateCredential({ enabled: false }); expect(() => prepare()).toThrow(/enabled Anthropic/)
-    updateCredential({ enabled: true, unsupported: true }); expect(() => prepare()).toThrow(/enabled Anthropic/)
-    updateCredential({ unsupported: false, apiKeyEncrypted: Buffer.from('sk-ant-oat-synthetic-cli-login') }); expect(() => prepare()).toThrow(/not a Claude CLI login/)
+  it('rejects unsupported, disabled, foreign and CLI-login credentials without returning an HTTP capability', async () => {
+    updateCredential({ enabled: false }); await expect(prepare()).rejects.toThrow(/enabled Anthropic/)
+    updateCredential({ enabled: true, unsupported: true }); await expect(prepare()).rejects.toThrow(/enabled Anthropic/)
+    updateCredential({ unsupported: false, apiKeyEncrypted: Buffer.from('sk-ant-oat-synthetic-cli-login') }); await expect(prepare()).rejects.toThrow(/not a Claude CLI login/)
     state.db!.raw.prepare('UPDATE llm_providers SET user_id=? WHERE id=?').run('other', credentialId)
-    expect(() => prepare()).toThrow(/enabled Anthropic/)
+    await expect(prepare()).rejects.toThrow(/enabled Anthropic/)
     expect(fetchSpy).not.toHaveBeenCalled()
     expectNoPrivateRows()
   })
 
-  it('rolls back the private checkpoint when writing the generic session mirror fails', () => {
+  it('rolls back the private checkpoint when writing the generic session mirror fails', async () => {
     state.db!.raw.exec("CREATE TRIGGER fail_session_mirror BEFORE INSERT ON a2a_sessions BEGIN SELECT RAISE(ABORT,'mirror write failed'); END")
-    expect(() => prepare().save({ sessionId: 'sesn_rollback', state: 'inflight' })).toThrow(/mirror write failed/)
+    const fresh = await prepare(); expect(() => fresh.save({ sessionId: 'sesn_rollback', state: 'inflight' })).toThrow(/mirror write failed/)
     expectNoPrivateRows()
   })
 
-  it('refuses a changed session id, changed fingerprint or unsupported saved state without rewriting the original row', () => {
-    const held = prepare(); held.save({ sessionId: 'sesn_original', state: 'ready' })
+  it('refuses a changed session id, changed fingerprint or unsupported saved state without rewriting the original row', async () => {
+    const held = await prepare(); held.save({ sessionId: 'sesn_original', state: 'ready' })
     const original = privateRows()
     expect(() => held.save({ sessionId: 'sesn_replacement', state: 'ready' })).toThrow(/binding changed/)
     expect(() => managedAgentSessionRepo.save(OWNER, OWNER, 'chat', agent.id, 'different-binding', { sessionId: 'sesn_original', state: 'ready' })).toThrow(/binding changed/)
     expect(privateRows()).toEqual(original)
     state.db!.raw.exec("UPDATE managed_agent_sessions SET state='future_state'")
-    expect(() => prepare()).toThrow(/unsupported saved state/)
+    await expect(prepare()).rejects.toThrow(/unsupported saved state/)
   })
 
-  it.each(['chat', 'agent'] as const)('cascades private continuity when its %s is deleted', (target) => {
-    prepare().save({ sessionId: 'sesn_cascade', state: 'budget' })
+  it.each(['chat', 'agent'] as const)('cascades private continuity when its %s is deleted', async (target) => {
+    ;(await prepare()).save({ sessionId: 'sesn_cascade', state: 'budget' })
     if (target === 'chat') state.db!.raw.prepare('DELETE FROM chats WHERE id=?').run('chat')
     else agentRepo.delete(OWNER, agent.id)
     expect(privateRows()).toEqual([])
   })
 
   it('exposes only the generic session DTO from actual agent:get-session IPC and refuses a foreign profile', async () => {
-    prepare().save({ sessionId: 'sesn_public-context', state: 'uncertain' })
+    ;(await prepare()).save({ sessionId: 'sesn_public-context', state: 'uncertain' })
     registerA2AHandlers()
     const handler = state.handlers.get('agent:get-session')!
     const dto = await handler({}, 'chat') as Record<string, unknown>

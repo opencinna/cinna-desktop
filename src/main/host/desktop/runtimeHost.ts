@@ -4,6 +4,44 @@ import { app, net, safeStorage, session, shell, BrowserWindow } from 'electron'
 import type { RuntimeHost } from '../runtimeHost'
 import { nativeImageThumbnail } from './imageThumbnails'
 import type { EventPublisher } from '../events'
+import { createLogger } from '../../logger/logger'
+
+const keystoreLogger = createLogger('keystore')
+
+/**
+ * Electron's async `safeStorage` (the sync calls are deprecated in 45, removed
+ * in 46). Availability is fixed once the async encryptor has initialised after
+ * `ready`, so `prepare()` resolves it once and the getters stay synchronous for
+ * the status readers. Reading it before `prepare()` throws: silently answering
+ * "unavailable" would send a secret down the plaintext fallback.
+ */
+export function createDesktopKeystore(): RuntimeHost['keystore'] {
+  let availability: { encryption: boolean; secure: boolean } | undefined
+  let reEncryptWarned = false
+  const prepared = (): { encryption: boolean; secure: boolean } => {
+    if (!availability) throw new Error('Keystore read before keystore.prepare() resolved')
+    return availability
+  }
+  return {
+    async prepare() {
+      const encryption = await safeStorage.isAsyncEncryptionAvailable()
+      const secure = encryption &&
+        (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend()))
+      availability = { encryption, secure }
+    },
+    isEncryptionAvailable: () => prepared().encryption,
+    isSecureStorageAvailable: () => prepared().secure,
+    encryptString: (value) => safeStorage.encryptStringAsync(value),
+    async decryptString(value) {
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(value)
+      if (shouldReEncrypt && !reEncryptWarned) {
+        reEncryptWarned = true
+        keystoreLogger.warn('safeStorage asks for stored secrets to be re-encrypted; they are kept as they are')
+      }
+      return result
+    }
+  }
+}
 
 /** Electron objects never cross this interface into the runtime. Paths stay lazy:
  * CINNA_USER_DATA and app readiness are established after module evaluation.
@@ -16,13 +54,7 @@ export function createDesktopHost(): RuntimeHost {
     get isPackaged() { return app.isPackaged },
     get resourcesPath() { return process.resourcesPath },
     http: { fetch: (input, init) => net.fetch(input, init) },
-    keystore: {
-      isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
-      isSecureStorageAvailable: () => safeStorage.isEncryptionAvailable() &&
-        (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
-      encryptString: (value) => safeStorage.encryptString(value),
-      decryptString: (value) => safeStorage.decryptString(value)
-    },
+    keystore: createDesktopKeystore(),
     resolveProxy: (url) => session.defaultSession.resolveProxy(url),
     resolvePackageFile: (specifier) => app.isPackaged
       ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', specifier)

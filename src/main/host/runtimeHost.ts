@@ -12,8 +12,14 @@ export interface RuntimeHost {
     isEncryptionAvailable(): boolean
     /** Strong storage policy for service credentials; does not change legacy key decoding. */
     isSecureStorageAvailable(): boolean
-    encryptString(plaintext: string): Buffer
-    decryptString(encrypted: Buffer): string
+    encryptString(plaintext: string): Promise<Buffer>
+    decryptString(encrypted: Buffer): Promise<string>
+    /**
+     * Resolves availability once the platform keystore can answer (the desktop
+     * awaits it after Electron's `ready`). The two availability getters throw
+     * until it has resolved.
+     */
+    prepare(): Promise<void>
   }
   resolveProxy(url: string): Promise<string>
   resolvePackageFile(specifier: string): string

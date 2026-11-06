@@ -10,8 +10,8 @@ const state = vi.hoisted(() => ({ db: null as TestDatabase | null, key: 'sk-ant-
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }) }))
 vi.mock('../security/keystore', () => ({
-  encryptApiKey: (key: string) => Buffer.from(`${randomUUID()}|${key}`),
-  decryptApiKey: (envelope: Buffer) => envelope.toString().split('|')[1]
+  encryptApiKey: async (key: string) => Buffer.from(`${randomUUID()}|${key}`),
+  decryptApiKey: async (envelope: Buffer) => envelope.toString().split('|')[1]
 }))
 vi.mock('../db/users', () => ({ userRepo: { get: () => ({ type: 'cinna_user', cinnaServerUrl: 'https://account.invalid' }) } }))
 vi.mock('../auth/cinna-tokens', () => ({ getCinnaAccessToken: async () => 'synthetic-token' }))
@@ -40,17 +40,17 @@ it('preserves an existing Managed session through routine account sync with rand
   const agent = agentRepo.createRuntime('__default__', { name: 'Managed', driver: 'managed', config: {
     credentialId: first.id, agentId: 'agent', environmentId: 'environment'
   } })
-  const held = managedAgentService.prepare('__default__', agent, 'chat')
+  const held = await managedAgentService.prepare('__default__', agent, 'chat')
   held.save({ sessionId: 'session', state: 'ready' })
   expect((await accountConfigService.syncAccountConfig('__default__')).failed).toBe(0)
   const repeated = llmProviderRepo.getOwned('__default__', first.id)!
   expect(repeated.apiKeyEncrypted).toEqual(first.apiKeyEncrypted)
   expect(repeated.configRevision).toBe(first.configRevision)
   expect(() => held.validate()).not.toThrow()
-  expect(managedAgentService.prepare('__default__', agent, 'chat').checkpoint).toEqual({ sessionId: 'session', state: 'ready' })
+  expect((await managedAgentService.prepare('__default__', agent, 'chat')).checkpoint).toEqual({ sessionId: 'session', state: 'ready' })
   state.key = 'sk-ant-api-replacement'
   expect((await accountConfigService.syncAccountConfig('__default__')).failed).toBe(0)
   expect(llmProviderRepo.getOwned('__default__', first.id)!.configRevision).toBe(first.configRevision! + 1)
   expect(() => held.validate()).toThrow(/credential/)
-  expect(() => managedAgentService.prepare('__default__', agent, 'chat')).toThrow(/different configuration or credential/)
+  await expect(managedAgentService.prepare('__default__', agent, 'chat')).rejects.toThrow(/different configuration or credential/)
 })

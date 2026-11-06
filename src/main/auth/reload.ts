@@ -33,7 +33,9 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
     // on every launch until the user re-saved it.
     if (provider.enabled && (provider.apiKeyEncrypted || !requiresApiKey(provider.type))) {
       try {
-        const apiKey = provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : ''
+        const apiKey = provider.apiKeyEncrypted ? await decryptApiKey(provider.apiKeyEncrypted) : ''
+        // The keystore awaited: a newer activation may have cleared the adapters meanwhile.
+        if (!current()) return
         const adapter = createAdapter(provider.type, apiKey, provider.id, {
           baseUrl: provider.baseUrl,
           fallbackModels: provider.defaultModelId ? [provider.defaultModelId] : []
@@ -49,7 +51,8 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
   // active profile's already-synced managed adapters so they're usable
   // immediately on activation (even before the network sync refreshes them).
   if (profileUserId !== DEFAULT_SCOPE_USER_ID) {
-    accountConfigService.loadManagedAdapters(profileUserId)
+    await accountConfigService.loadManagedAdapters(profileUserId, current)
+    if (!current()) return
   }
 
   // A plugin's connector starts only when an agent has it and it can run (values given, not blocked).
@@ -64,10 +67,11 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
         .then(async ({ marketplacePluginService }) => {
           const runs = await marketplacePluginService.startsUnattended(provider)
           if (!current()) return undefined
-          // The block and the config read together, in this tick: a policy that changed meanwhile can neither
+          // The block is the one the config carries: a policy that changed meanwhile can neither
           // start a row past startsUnattended's Node/Docker check nor connect one whose config lost its block.
-          const blocked = marketplacePluginService.launchBlockOf(provider)
-          const config = mcpRowToConfig(provider)
+          const config = await mcpRowToConfig(provider)
+          const blocked = await marketplacePluginService.launchBlockOf(provider, config)
+          if (!current()) return undefined
           if (!runs && blocked === null) return undefined
           return mcpManager.connect(config)
         })
@@ -76,9 +80,12 @@ export async function reloadUserProviders(current: () => boolean = () => true): 
     }
     // One made from a directory entry (an agent's addon, or Settings → MCP "Add from Registry", which chats use
     // as an already-connected connector) starts like any other once its settings are filled in.
-    if (provider.registryRef && missingEnvOf(provider).length > 0) continue
+    // Its settings decrypted here, in turn, so every connect has started by the time this resolves.
+    if (provider.registryRef && (await missingEnvOf(provider)).length > 0) continue
+    const config = await mcpRowToConfig(provider)
+    if (!current()) return
     mcpManager
-      .connect(mcpRowToConfig(provider))
+      .connect(config)
       .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
   }
 }

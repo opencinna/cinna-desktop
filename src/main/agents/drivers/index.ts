@@ -654,7 +654,7 @@ function codexProcessCwd(poolKey: string): string {
  * share a process, and one started before an auth change must not be found
  * again under the same key.
  */
-function claudeAuthFingerprint(engine: string): string | null {
+async function claudeAuthFingerprint(engine: string): Promise<string | null> {
   return engine === 'claude' ? claudeAuthService.fingerprint() : null
 }
 
@@ -666,7 +666,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   if (runtime.reason) throw new Error(runtime.reason)
   const engine = runtime.launcher
   // OpenCode instructions are process config; Claude and Codex own them per session.
-  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, engine === 'opencode' ? systemPrompt : null, claudeAuthFingerprint(engine))
+  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, engine === 'opencode' ? systemPrompt : null, await claudeAuthFingerprint(engine))
   // Claude shares a process across function prompts, but instruction files are
   // session-owned too: concurrent functions must never rewrite each other's cwd.
   const digest = createHash('sha256').update(JSON.stringify([poolKey, systemPrompt])).digest('hex').slice(0, 24)
@@ -703,7 +703,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const launcher = acpLaunchers[engine]
   if (!launcher) throw new Error('The default runtime cannot run AI functions')
   const chatContext = chatCandidate ? conductorContext(chatCandidate) : undefined
-  const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext, claudeAuthFingerprint(chatContext.engine)) : poolKey
+  const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext, await claudeAuthFingerprint(chatContext.engine)) : poolKey
   if (chatContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: chatContext })
   const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
     ? await prepareCodexConductorPolicy(proposed, join(runtimeHost.getPath('userData'), 'acp')) : proposed, engine)
@@ -1160,7 +1160,7 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
   if (isChatConductor(agent)) return chatConductorService.runtime(userId, agent)
   if (isDevelopmentAgent(agent)) {
     const context = await desktopFeatures.restoreDevelopmentContext(agent, options)
-    const state = customAgentService.runtime(userId, agent)
+    const state = await customAgentService.runtime(userId, agent)
     return {
       ...state, type: 'folder',
       // `kind: 'bare'` because this workspace has no manifest — but
@@ -1241,7 +1241,7 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
       // an AGENTS.md the model wrote into its own folder is never loaded as
       // the next session's instructions.
       if (context.toolPolicy === 'workspace') clearWorkspaceInstructionFiles(context.path)
-      const poolKey = syntheticRuntimePoolKey(ctx.userId, context, claudeAuthFingerprint(context.engine))
+      const poolKey = syntheticRuntimePoolKey(ctx.userId, context, await claudeAuthFingerprint(context.engine))
       syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
       // Codex includes its process cwd in the launch identity. Keep that
       // profile-owned while acpDriver supplies each chat's own session cwd.

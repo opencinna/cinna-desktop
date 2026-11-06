@@ -1,6 +1,8 @@
 vi.mock('../host/runtimeHost', async () => {
   const { createDesktopHost } = await import('../host/desktop/runtimeHost')
-  return { runtimeHost: createDesktopHost() }
+  const runtimeHost = createDesktopHost()
+  await runtimeHost.keystore.prepare()
+  return { runtimeHost }
 })
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,7 +16,7 @@ import type { CustomAgentConfig } from '../../shared/customAgents'
 const state = vi.hoisted(() => ({ db: null as TestDatabase | null, profile: '__default__', root: '' }))
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db, getRawSqlite: () => state.db!.sqlite }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }))
-vi.mock('electron', () => ({ app: { getPath: () => state.root }, safeStorage: { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value.split('').reverse().join('')), decryptString: (value: Buffer) => value.toString().split('').reverse().join('') } }))
+vi.mock('electron', () => ({ app: { getPath: () => state.root }, safeStorage: { isAsyncEncryptionAvailable: async () => true, getSelectedStorageBackend: () => 'gnome_libsecret', encryptStringAsync: async (value: string) => Buffer.from(value.split('').reverse().join('')), decryptStringAsync: async (value: Buffer) => ({ result: value.toString().split('').reverse().join(''), shouldReEncrypt: false }) } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => state.profile, getSettingsScopeUserId: () => '__default__' }))
 vi.mock('../shell/env', async () => ({ ...(await import('../shell/envMerge')), getShellEnv: async () => ({ PATH: '/usr/bin:/bin', HOME: state.root, SSH_AUTH_SOCK: '/tmp/fixture-agent.sock', ANTHROPIC_API_KEY: 'must-not-inherit' }) }))
 vi.mock('../shell/developerToolShims', () => ({
@@ -53,42 +55,42 @@ describe('custom command state with real SQLite and external files', () => {
     const agent = agentRepo.createRuntime(OWNER, { name: 'Builder', driver: 'acp', config: { ...config, developmentProfileId: OWNER, developmentEngine: 'claude' } })
     expect(() => customAgentService.configuration(agent.id)).toThrow('Local Development settings')
     await expect(customAgentService.test({ id: agent.id, config })).rejects.toThrow('Local Development settings')
-    expect(() => customAgentService.save({ id: agent.id, config, testToken: 'any' })).toThrow('Local Development settings')
+    await expect(customAgentService.save({ id: agent.id, config, testToken: 'any' })).rejects.toThrow('Local Development settings')
     expect(agentRepo.getOwned(OWNER, agent.id)?.driverConfig?.developmentProfileId).toBe(OWNER)
-    expect(customAgentService.runtime(OWNER, agent).type).toBe('external')
+    expect((await customAgentService.runtime(OWNER, agent)).type).toBe('external')
   })
   it.each(['folder', 'remote'] as const)('rejects %s rows with cached custom configuration before execution or management', async (source) => {
     const { fake, config } = fixture(), agent = row(config)
-    const captured = customAgentService.runtime(OWNER, agent)
+    const captured = (await customAgentService.runtime(OWNER, agent))
     state.db!.raw.prepare('UPDATE agents SET source = ? WHERE id = ?').run(source, agent.id)
     expect(() => customAgentService.configuration(agent.id)).toThrow(/not found/)
     expect(() => customAgentService.revokeGrant(agent.id, 'exact')).toThrow(/not found/)
-    expect(() => customAgentService.runtime(OWNER, agent)).toThrow(/not found/)
+    await expect(customAgentService.runtime(OWNER, agent)).rejects.toThrow(/not found/)
     expect(() => captured.saveSession('chat', 'stale')).toThrow(/changed/)
     await expect(customAgentService.test({ id: agent.id, config })).rejects.toThrow(/not found/)
     expect(fake.received('initialize')).toHaveLength(0)
   })
-  it('stores and resumes only the captured revision, preserving a repairable generic mirror', () => {
+  it('stores and resumes only the captured revision, preserving a repairable generic mirror', async () => {
     const { config } = fixture(); const agent = row(config)
-    const runtime = customAgentService.runtime(OWNER, agent)
+    const runtime = (await customAgentService.runtime(OWNER, agent))
     expect(runtime.readSession('chat')).toBeNull()
     runtime.saveSession('chat', 'session-one'); runtime.rememberGrant(ask)
-    expect(customAgentService.runtime(OWNER, agent).readSession('chat')).toBe('session-one')
+    expect((await customAgentService.runtime(OWNER, agent)).readSession('chat')).toBe('session-one')
     expect(runtime.isGranted(ask)).toBe(true)
     expect(agentSessionRepo.getByChatAndAgent('chat', agent.id)?.contextId).toBe('session-one')
     const path = externalRuntimeStatePath(customAgentService.stateKey(OWNER, agent))
     expect(path).toContain(join(state.root, 'external-agents', 'runtime-'))
     expect(JSON.parse(readFileSync(path, 'utf8')).sessions.chat.sessionId).toBe('session-one')
     const newer = agentRepo.updateRuntime(OWNER, agent.id, 'acp', { name: 'Changed', config: { ...config, cwd: '/remote/new' } })
-    const next = customAgentService.runtime(OWNER, newer)
+    const next = (await customAgentService.runtime(OWNER, newer))
     expect(() => next.readSession('chat')).toThrow(/earlier ACP configuration/)
     expect(next.readSession('new-chat')).toBeNull(); expect(next.isGranted(ask)).toBe(false)
     expect(() => runtime.saveSession('chat', 'late-old')).toThrow(/changed/)
     expect(() => runtime.rememberGrant(ask)).toThrow(/changed/)
     expect(agentSessionRepo.getByChatAndAgent('chat', agent.id)?.contextId).toBe('session-one')
   })
-  it.each(['profile', 'chat', 'agent', 'disabled', 'disable-enable'] as const)('rejects late session and grant authority after %s changes', (change) => {
-    const agent = row(fixture().config), runtime = customAgentService.runtime(OWNER, agent)
+  it.each(['profile', 'chat', 'agent', 'disabled', 'disable-enable'] as const)('rejects late session and grant authority after %s changes', async (change) => {
+    const agent = row(fixture().config), runtime = (await customAgentService.runtime(OWNER, agent))
     if (change === 'profile') state.profile = 'other'
     if (change === 'chat') state.db!.raw.exec("DELETE FROM chats WHERE id='chat'")
     if (change === 'agent') agentRepo.delete(OWNER, agent.id)
@@ -98,8 +100,8 @@ describe('custom command state with real SQLite and external files', () => {
     if (change !== 'chat') expect(() => runtime.rememberGrant(ask)).toThrow()
     expect(agentSessionRepo.getByChatAndAgent('chat', agent.id)).toBeUndefined()
   })
-  it('rejects foreign/missing chat reads before returning continuity', () => {
-    const agent = row(fixture().config), runtime = customAgentService.runtime(OWNER, agent)
+  it('rejects foreign/missing chat reads before returning continuity', async () => {
+    const agent = row(fixture().config), runtime = (await customAgentService.runtime(OWNER, agent))
     expect(() => runtime.readSession('foreign-chat')).toThrow(/conversation/)
     expect(() => runtime.readSession('missing')).toThrow(/conversation/)
   })
@@ -112,8 +114,8 @@ describe('custom command state with real SQLite and external files', () => {
     customAgentService.revokeGrant(agent.id, 'exact')
     expect(customAgentService.configuration(agent.id).grants).toEqual([])
   })
-  it('does not write a generic session when external state cannot be written', () => {
-    const agent = row(fixture().config), runtime = customAgentService.runtime(OWNER, agent)
+  it('does not write a generic session when external state cannot be written', async () => {
+    const agent = row(fixture().config), runtime = (await customAgentService.runtime(OWNER, agent))
     vi.spyOn(desktopStateService, 'patchExternal').mockImplementation(() => { throw new Error('disk full') })
     expect(() => runtime.saveSession('chat', 'unbound')).toThrow('disk full')
     expect(agentSessionRepo.getByChatAndAgent('chat', agent.id)).toBeUndefined()
@@ -132,9 +134,9 @@ describe('real initialize-only test receipts', () => {
     expect(start.env?.SSH_AUTH_SOCK).toBe('/tmp/fixture-agent.sock')
     expect(start.env?.PATH).toMatch(/^\/cinna-test-shims:\/usr\/bin:\/bin/)
     expect(() => process.kill(start.pid!, 0)).toThrow()
-    const saved = customAgentService.save({ config, testToken: tested.token })
-    expect(() => customAgentService.save({ config, testToken: tested.token })).toThrow(/Test this exact/)
-    const runtime = customAgentService.runtime(OWNER, agentRepo.getOwned(OWNER, saved.id)!)
+    const saved = (await customAgentService.save({ config, testToken: tested.token }))
+    await expect(customAgentService.save({ config, testToken: tested.token })).rejects.toThrow(/Test this exact/)
+    const runtime = (await customAgentService.runtime(OWNER, agentRepo.getOwned(OWNER, saved.id)!))
     if (runtime.type !== 'external') throw new Error('Wrong runtime')
     expect(await runtime.readiness()).toEqual({ state: 'ok', reason: null })
     expect(fake.received('initialize')).toHaveLength(1)
@@ -142,7 +144,7 @@ describe('real initialize-only test receipts', () => {
   it('retains the latest failed explicit probe across ordinary list readiness reads', async () => {
     const { fake, config } = fixture(), agent = row(config)
     await customAgentService.test({ id: agent.id, config })
-    const runtime = customAgentService.runtime(OWNER, agent)
+    const runtime = (await customAgentService.runtime(OWNER, agent))
     if (runtime.type !== 'external') throw new Error('Wrong runtime')
     expect(await runtime.readiness()).toEqual({ state: 'ok', reason: null })
     writeFileSync(fake.spec.env.FAKE_ACP_SCRIPT, JSON.stringify({ initialize: { error: { code: -32000, message: 'Peer intentionally unavailable' } } }))
@@ -164,21 +166,21 @@ describe('real initialize-only test receipts', () => {
   it('refuses a test receipt for a different config, profile or stale edited row', async () => {
     const { config } = fixture(), agent = row(config)
     const tested = await customAgentService.test({ id: agent.id, config })
-    expect(() => customAgentService.save({ id: agent.id, config: { ...config, cwd: '/changed' }, testToken: tested.token })).toThrow(/Test this exact/)
+    await expect(customAgentService.save({ id: agent.id, config: { ...config, cwd: '/changed' }, testToken: tested.token })).rejects.toThrow(/Test this exact/)
     state.profile = 'other'
-    expect(() => customAgentService.save({ id: agent.id, config, testToken: tested.token })).toThrow(/Test this exact/)
+    await expect(customAgentService.save({ id: agent.id, config, testToken: tested.token })).rejects.toThrow(/Test this exact/)
     state.profile = OWNER
     agentRepo.updateRuntime(OWNER, agent.id, 'acp', { name: 'Newer', config: { ...config } })
-    expect(() => customAgentService.save({ id: agent.id, config, testToken: tested.token })).toThrow(/changed after/)
+    await expect(customAgentService.save({ id: agent.id, config, testToken: tested.token })).rejects.toThrow(/changed after/)
   })
   it('refuses busy Test and Save while preserving the saved configuration', async () => {
     const { config } = fixture(), agent = row(config)
     const tested = await customAgentService.test({ id: agent.id, config })
     const lock = turnLock.acquire(agent.id, 'turn')
     await expect(customAgentService.test({ id: agent.id, config })).rejects.toThrow(/busy/)
-    expect(() => customAgentService.save({ id: agent.id, config, testToken: tested.token })).toThrow(/busy/)
+    await expect(customAgentService.save({ id: agent.id, config, testToken: tested.token })).rejects.toThrow(/busy/)
     lock.release()
-    expect(customAgentService.save({ id: agent.id, config, testToken: tested.token }).id).toBe(agent.id)
+    expect((await customAgentService.save({ id: agent.id, config, testToken: tested.token })).id).toBe(agent.id)
   })
   it('aborts and reaps a silent test when the active profile changes', async () => {
     const { fake, config } = fixture({ initialize: { hang: true } })
@@ -200,14 +202,14 @@ describe('remote ACP credentials and saved state', () => {
       const config = { launcher: 'custom' as const, transport: 'websocket' as const, url: peer.url, cwd: '/app/workspace' }
       const tested = await customAgentService.test({ config, accessToken: 'acp_fixture_secret' })
       expect(peer.received('session/new')).toHaveLength(0)
-      expect(() => customAgentService.save({ config, accessToken: 'changed', testToken: tested.token })).toThrow(/token changed/)
-      const { id } = customAgentService.save({ config, accessToken: 'acp_fixture_secret', testToken: tested.token })
+      await expect(customAgentService.save({ config, accessToken: 'changed', testToken: tested.token })).rejects.toThrow(/token changed/)
+      const { id } = (await customAgentService.save({ config, accessToken: 'acp_fixture_secret', testToken: tested.token }))
       const row = agentRepo.getOwned(OWNER, id)!
       expect(JSON.stringify(row.driverConfig)).not.toContain('acp_fixture_secret')
       expect(row.accessTokenEncrypted!.toString()).not.toContain('acp_fixture_secret')
       expect(customAgentService.configuration(id)).toMatchObject({ config, hasAccessToken: true })
       expect(JSON.stringify(customAgentService.configuration(id))).not.toContain('acp_fixture_secret')
-      const runtime = customAgentService.runtime(OWNER, row)
+      const runtime = (await customAgentService.runtime(OWNER, row))
       runtime.saveSession('chat', 'remote-session')
       runtime.rememberGrant(ask)
       expect(runtime.readSession('chat')).toBe('remote-session')
@@ -221,9 +223,9 @@ describe('remote ACP credentials and saved state', () => {
       expect(peer.headers).toHaveLength(calls)
       // Retaining the token works without reading it back through IPC.
       const retest = await customAgentService.test({ id, config })
-      customAgentService.save({ id, config, testToken: retest.token })
+      await customAgentService.save({ id, config, testToken: retest.token })
       expect(() => runtime.saveSession('chat', 'stale')).toThrow(/changed/)
-      const next = customAgentService.runtime(OWNER, agentRepo.getOwned(OWNER, id)!)
+      const next = (await customAgentService.runtime(OWNER, agentRepo.getOwned(OWNER, id)!))
       expect(() => next.readSession('chat')).toThrow(/earlier ACP configuration/)
       expect(next.isGranted(ask)).toBe(false)
       await expect(customAgentService.test({ id, config: { ...config, url: peer.url + '-other' } })).rejects.toThrow(/endpoint changed/)
@@ -235,10 +237,10 @@ describe('remote ACP credentials and saved state', () => {
     try {
       const config = { launcher: 'custom' as const, transport: 'websocket' as const, url: peer.url, cwd: '/app/workspace' }
       const tested = await customAgentService.test({ config, accessToken: 'old-token' })
-      const { id } = customAgentService.save({ config, accessToken: 'old-token', testToken: tested.token })
+      const { id } = (await customAgentService.save({ config, accessToken: 'old-token', testToken: tested.token }))
       const cleared = await customAgentService.test({ id, config, accessToken: '' })
-      expect(() => customAgentService.save({ id, config, testToken: cleared.token })).toThrow(/token changed/)
-      customAgentService.save({ id, config, accessToken: '', testToken: cleared.token })
+      await expect(customAgentService.save({ id, config, testToken: cleared.token })).rejects.toThrow(/token changed/)
+      await customAgentService.save({ id, config, accessToken: '', testToken: cleared.token })
       expect(agentRepo.getOwned(OWNER, id)!.accessTokenEncrypted).toBeNull()
       expect(peer.headers.at(-1)?.authorization).toBeUndefined()
     } finally { await peer.close() }

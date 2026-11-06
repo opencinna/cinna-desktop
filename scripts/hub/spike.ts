@@ -29,7 +29,7 @@ installRuntimeHost({
   resourcesPath: join(repo, 'resources'),
   http: { fetch: async () => { throw new Error('Network is forbidden in the offline spike') } },
   // No secrets are used. Refuse encryption rather than inventing a production keystore.
-  keystore: { isEncryptionAvailable: () => true, isSecureStorageAvailable: () => false, encryptString: unavailable, decryptString: unavailable },
+  keystore: { prepare: async () => {}, isEncryptionAvailable: () => true, isSecureStorageAvailable: () => false, encryptString: async () => unavailable(), decryptString: async () => unavailable() },
   resolveProxy: async () => 'DIRECT',
   resolvePackageFile: (specifier) => createRequire(import.meta.url).resolve(specifier),
   nodeRuntime: () => ({ command: process.execPath, args: [], env: {} }),

@@ -106,12 +106,12 @@ test.afterAll(async () => {
 async function linkSandboxAccount(cinna: CinnaApp): Promise<void> {
   const user = await cinna.page.evaluate(() => window.api.auth.getCurrent())
   expect(user).not.toBeNull()
-  await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+  await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
     const requireFromApp = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
     const Database = requireFromApp('better-sqlite3') as typeof import('better-sqlite3')
     const db = new Database(`${app.getPath('userData')}/cinna.db`)
     try {
-      const token = safeStorage.encryptString(input.token)
+      const token = await safeStorage.encryptStringAsync(input.token)
       db.prepare(`UPDATE users SET type = 'cinna_user', cinna_server_url = ?,
         cinna_access_token_enc = ?, cinna_refresh_token_enc = ?, cinna_token_expires_at = ?
         WHERE id = ?`).run(input.host, token, token, Date.now() + 3_600_000, input.userId)

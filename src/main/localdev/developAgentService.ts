@@ -68,6 +68,6 @@ async function prepare(profileId: string, agentId: string): Promise<{ agentId: s
   if (existing) return { agentId: existing.id }
   const test = await customAgentService.test({ config })
   validate()
-  const saved = customAgentService.save({ config, name: developmentName, testToken: test.token })
+  const saved = await customAgentService.save({ config, name: developmentName, testToken: test.token })
   return { agentId: saved.id }
 }

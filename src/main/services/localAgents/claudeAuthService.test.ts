@@ -40,7 +40,7 @@ function service(over: {
     settings: () => ({ claudeAuthMode: state.mode, claudeApiCredentialId: state.chosen }),
     providers: () => state.providers as never,
     preferredCredentialId: () => over.preferred ?? null,
-    secret: (id) => {
+    secret: async (id) => {
       const value = state.secrets[id]
       if (value instanceof Error) throw value
       return value ?? null
@@ -50,65 +50,65 @@ function service(over: {
 }
 
 describe('claudeAuthService.resolve', () => {
-  it('subscription: no credential, a fixed fingerprint', () => {
+  it('subscription: no credential, a fixed fingerprint', async () => {
     const { svc } = service({ mode: 'subscription' })
-    expect(svc.resolve()).toEqual({ mode: 'subscription', fingerprint: SUBSCRIPTION_FINGERPRINT })
+    expect(await svc.resolve()).toEqual({ mode: 'subscription', fingerprint: SUBSCRIPTION_FINGERPRINT })
     expect(svc.mode()).toBe('subscription')
   })
 
-  it('an unknown stored mode reads as the subscription', () => {
-    expect(service({ mode: 'bedrock' }).svc.resolve().mode).toBe('subscription')
+  it('an unknown stored mode reads as the subscription', async () => {
+    expect((await service({ mode: 'bedrock' }).svc.resolve()).mode).toBe('subscription')
   })
 
-  it('API mode: the picked credential’s decrypted key and endpoint', () => {
+  it('API mode: the picked credential’s decrypted key and endpoint', async () => {
     const { svc } = service({ secrets: { one: { apiKey: 'sk-ant-one', baseUrl: 'https://gw.example' } } })
-    const auth = svc.resolve()
+    const auth = (await svc.resolve())
     expect(auth).toMatchObject({ mode: 'api_key', credential: { apiKey: 'sk-ant-one', baseUrl: 'https://gw.example' } })
     // A digest, never the key itself.
     expect(auth.fingerprint).toMatch(/^api_key:[0-9a-f]{16}$/)
     expect(auth.fingerprint).not.toContain('sk-ant-one')
   })
 
-  it('automatic prefers the Default AI credential when it is Anthropic', () => {
+  it('automatic prefers the Default AI credential when it is Anthropic', async () => {
     const { svc } = service({
       providers: [provider('one'), provider('two')], preferred: 'two',
       secrets: { one: { apiKey: 'k1', baseUrl: null }, two: { apiKey: 'k2', baseUrl: null } }
     })
-    expect(svc.resolve()).toMatchObject({ credential: { apiKey: 'k2' } })
+    expect(await svc.resolve()).toMatchObject({ credential: { apiKey: 'k2' } })
   })
 
-  it('no qualifying credential refuses — never the subscription', () => {
+  it('no qualifying credential refuses — never the subscription', async () => {
     const { svc } = service({ providers: [provider('one', { enabled: false }), provider('oat', { unsupported: true })] })
-    const auth = svc.resolve()
+    const auth = (await svc.resolve())
     expect(auth).toMatchObject({ mode: 'api_key', error: CLAUDE_API_NO_CREDENTIAL })
     expect(auth.fingerprint).not.toBe(SUBSCRIPTION_FINGERPRINT)
   })
 
-  it('a named credential that is gone refuses, even when another key exists', () => {
+  it('a named credential that is gone refuses, even when another key exists', async () => {
     const { svc } = service({ chosen: 'deleted', providers: [provider('one')] })
-    expect(svc.resolve()).toMatchObject({ mode: 'api_key', error: CLAUDE_API_CREDENTIAL_GONE })
+    expect(await svc.resolve()).toMatchObject({ mode: 'api_key', error: CLAUDE_API_CREDENTIAL_GONE })
   })
 
-  it('a key the keystore will not decrypt refuses', () => {
-    expect(service({ secrets: { one: new Error('keychain locked') } }).svc.resolve())
+  it('a key the keystore will not decrypt refuses', async () => {
+    expect((await service({ secrets: { one: new Error('keychain locked') } }).svc.resolve()))
       .toMatchObject({ mode: 'api_key', error: CLAUDE_API_KEY_UNREADABLE })
-    expect(service({ secrets: { one: null } }).svc.resolve())
+    expect((await service({ secrets: { one: null } }).svc.resolve()))
       .toMatchObject({ error: CLAUDE_API_KEY_UNREADABLE })
   })
 
-  it('the fingerprint moves with the mode, the credential and a rotated key — and only then', () => {
+  it('the fingerprint moves with the mode, the credential and a rotated key — and only then', async () => {
     const { svc, state } = service({
       providers: [provider('one'), provider('two')],
       secrets: { one: { apiKey: 'k1', baseUrl: null }, two: { apiKey: 'k2', baseUrl: null } }
     })
-    const first = svc.fingerprint()
-    expect(svc.fingerprint()).toBe(first)
+    const first = (await svc.fingerprint())
+    expect(await svc.fingerprint()).toBe(first)
     state.chosen = 'two'
-    const second = svc.fingerprint()
+    const second = (await svc.fingerprint())
     expect(second).not.toBe(first)
     state.secrets = { ...state.secrets, two: { apiKey: 'k2-rotated', baseUrl: null } }
-    expect(svc.fingerprint()).not.toBe(second)
+    expect(await svc.fingerprint()).not.toBe(second)
     state.mode = 'subscription'
-    expect(svc.fingerprint()).toBe(SUBSCRIPTION_FINGERPRINT)
+    expect(await svc.fingerprint()).toBe(SUBSCRIPTION_FINGERPRINT)
   })
 })

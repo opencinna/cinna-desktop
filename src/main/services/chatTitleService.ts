@@ -201,7 +201,7 @@ export const chatTitleService = {
 
     let resolved
     try {
-      resolved = aiFunctions.resolveBackend(userId)
+      resolved = await aiFunctions.resolveBackend(userId)
     } catch (err) {
       if (err instanceof AiFunctionError) throw mapAiFunctionError(err)
       throw err

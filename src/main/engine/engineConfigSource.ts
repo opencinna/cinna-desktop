@@ -59,7 +59,7 @@ const logger = createLogger('engine-config-source')
  * `buildEngineConfig` puts the placeholder in the env map — which is why the
  * decryption below is conditional rather than a precondition.
  */
-export function collectEngineProviders(): EngineProviderInput[] {
+export async function collectEngineProviders(): Promise<EngineProviderInput[]> {
   const dtos = providerService.listMerged()
   const rows = new Map(
     llmProviderRepo.listByUserIds(getManagedResourceScopes()).map((row) => [row.id, row])
@@ -99,7 +99,7 @@ export function collectEngineProviders(): EngineProviderInput[] {
     let apiKey = ''
     if (row.apiKeyEncrypted) {
       try {
-        apiKey = decryptApiKey(row.apiKeyEncrypted)
+        apiKey = await decryptApiKey(row.apiKeyEncrypted)
       } catch (err) {
         // A key that will not decrypt is a keychain problem, not a reason to fail
         // the whole engine start — the other credentials still work.
@@ -407,7 +407,7 @@ export async function collectEngineConfigInput(
   const scope: ModelRefreshScope =
     options.refreshModels === false && cloudCatalogueLoaded ? 'local' : 'all'
   await refreshModelCache(scope)
-  return { providers: collectEngineProviders(), agents: collectEngineAgents(userId), skillPaths: collectSkillPaths() }
+  return { providers: await collectEngineProviders(), agents: collectEngineAgents(userId), skillPaths: collectSkillPaths() }
 }
 
 /**

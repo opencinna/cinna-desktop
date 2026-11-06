@@ -2,7 +2,7 @@ import { llmProviderRepo, LlmProviderRow } from '../db/llmProviders'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { createAdapter, isProviderType } from '../llm/factory'
 import { isManagedProviderId } from '../llm/accountConfigTypes'
-import { getManagedResourceScopes } from '../auth/scope'
+import { getManagedResourceScopes, getSettingsScopeUserId } from '../auth/scope'
 import {
   registerAdapter,
   unregisterAdapter,
@@ -73,6 +73,11 @@ function toDto(row: LlmProviderRow): ProviderDto {
   }
 }
 
+/** Two stored key envelopes are the same bytes (both absent counts as the same). */
+function sameBuffer(a: Buffer | null | undefined, b: Buffer | null | undefined): boolean {
+  return (a ?? null) === (b ?? null) || (!!a && !!b && a.equals(b))
+}
+
 export const providerService = {
   list(userId: string): ProviderDto[] {
     return llmProviderRepo.list(userId).map((r) => toDto(r))
@@ -88,7 +93,7 @@ export const providerService = {
     return llmProviderRepo.listByUserIds(getManagedResourceScopes()).map((row) => toDto(row))
   },
 
-  upsert(userId: string, input: UpsertProviderInput): { id: string; row: ProviderDto } {
+  async upsert(userId: string, input: UpsertProviderInput): Promise<{ id: string; row: ProviderDto }> {
     if (input.id && isManagedProviderId(input.id)) {
       throw new ProviderError(
         'read_only',
@@ -116,6 +121,8 @@ export const providerService = {
      * type, the Add form only creates. Account-config sync is unaffected — it
      * writes through `llmProviderRepo` directly and never through here.
      */
+    // Sealed first: the checks and the write below then run together, after the keystore.
+    const sealedKey = input.apiKey ? await encryptApiKey(input.apiKey) : undefined
     const existing = input.id ? llmProviderRepo.getOwned(userId, input.id) : undefined
     if (existing && existing.type !== input.type) {
       throw new ProviderError(
@@ -173,7 +180,7 @@ export const providerService = {
       id: input.id,
       type: input.type,
       name: input.name,
-      apiKeyEncrypted: input.apiKey ? encryptApiKey(input.apiKey) : undefined,
+      apiKeyEncrypted: sealedKey,
       enabled: input.enabled,
       defaultModelId: input.defaultModelId,
       baseUrl
@@ -191,13 +198,14 @@ export const providerService = {
     // not before: an `openai_compatible` row saved here used to lose its gateway
     // and register against the default OpenAI endpoint.
     if (row.enabled && (row.apiKeyEncrypted || !requiresApiKey(row.type))) {
-      const adapter = createAdapter(
-        row.type,
-        row.apiKeyEncrypted ? decryptApiKey(row.apiKeyEncrypted) : '',
-        row.id,
-        { baseUrl: row.baseUrl }
-      )
-      if (adapter) registerAdapter(row.id, adapter)
+      const apiKey = row.apiKeyEncrypted ? await decryptApiKey(row.apiKeyEncrypted) : ''
+      // The keystore awaited: a save or delete that landed meanwhile registers its own adapter.
+      const now = llmProviderRepo.getOwned(userId, row.id)
+      // …and a profile switch meanwhile cleared this scope's adapters: registering one now would outlive it.
+      if (getSettingsScopeUserId() === userId && now && now.enabled && sameBuffer(now.apiKeyEncrypted, row.apiKeyEncrypted) && now.type === row.type && (now.baseUrl ?? null) === (row.baseUrl ?? null)) {
+        const adapter = createAdapter(row.type, apiKey, row.id, { baseUrl: row.baseUrl })
+        if (adapter) registerAdapter(row.id, adapter)
+      }
     } else {
       unregisterAdapter(row.id)
     }
@@ -233,7 +241,7 @@ export const providerService = {
       throw new ProviderError('unsupported_type', `Unsupported provider type: ${provider.type}`)
     }
 
-    const apiKey = provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : ''
+    const apiKey = provider.apiKeyEncrypted ? await decryptApiKey(provider.apiKeyEncrypted) : ''
     const adapter = createAdapter(provider.type, apiKey, provider.id, {
       baseUrl: provider.baseUrl
     })
@@ -295,7 +303,7 @@ export const providerService = {
     if (!isProviderType(row.type)) {
       throw new ProviderError('unsupported_type', `Unsupported provider type: ${row.type}`)
     }
-    const apiKey = row.apiKeyEncrypted ? decryptApiKey(row.apiKeyEncrypted) : ''
+    const apiKey = row.apiKeyEncrypted ? await decryptApiKey(row.apiKeyEncrypted) : ''
     const fallbackModels =
       row.availableModels && row.availableModels.length > 0
         ? row.availableModels

@@ -36,7 +36,7 @@ export function registerProviderHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = providerService.upsert(getSettingsScopeUserId(), data)
+      const { id } = await providerService.upsert(getSettingsScopeUserId(), data)
       return { id, success: true }
     }
   )

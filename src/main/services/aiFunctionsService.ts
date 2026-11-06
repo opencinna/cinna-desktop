@@ -105,7 +105,7 @@ function checkEligibility(pair: ProviderModelPair): Eligibility {
   return { ok: true, provider: provider as LlmProviderRow & { type: ProviderType }, modelId }
 }
 
-function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind: 'adapter' }> | null {
+async function tryResolve(pair: ProviderModelPair): Promise<Extract<AiFunctionBackend, { kind: 'adapter' }> | null> {
   const eligible = checkEligibility(pair)
   if (!eligible.ok) return null
   const { provider, modelId } = eligible
@@ -115,7 +115,7 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
   // `describeBackend` never decrypts — so it is logged at warn.
   let apiKey = ''
   try {
-    apiKey = provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : ''
+    apiKey = provider.apiKeyEncrypted ? await decryptApiKey(provider.apiKeyEncrypted) : ''
   } catch (error) {
     logger.warn('AI Functions credential key could not be decrypted', { providerId: provider.id, error: error instanceof Error ? error.message : String(error) })
     return null
@@ -156,11 +156,11 @@ let warnedStaleCredentialId: string | null = null
 
 /** AI Functions have their own binding; chat modes never choose this backend. */
 export const aiFunctions = {
-  resolveBackend(userId: string): AiFunctionBackend {
+  async resolveBackend(userId: string): Promise<AiFunctionBackend> {
     const binding = readBinding()
     const providerId = binding.providerId
     if (!providerId) return { kind: 'runtime', userId }
-    const resolved = tryResolve(binding)
+    const resolved = await tryResolve(binding)
     if (resolved) {
       warnedStaleCredentialId = null
       return resolved

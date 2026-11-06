@@ -31,6 +31,8 @@ interface InternalConnection extends McpConnection {
   oauthProvider?: ElectronOAuthProvider
   /** The attempt failed because the server needs the user to authorize (a non-interactive connect). */
   needsUser?: boolean
+  /** The tail of this connection's OAuth writes: each waits for the one before, so they land in call order. */
+  oauthSaves?: Promise<void>
 }
 
 function broadcastStatusChange(providerId: string, status: string): void {
@@ -252,8 +254,10 @@ export class MCPManager {
         })
       } else if ((config.transportType === 'streamable-http' || config.transportType === 'sse') && config.authType === 'bearer') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
+        const headers = await this.bearerAuthHeaders(config)
+        this.assertCurrent(connection)
         transport = new (config.transportType === 'sse' ? SSEClientTransport : StreamableHTTPClientTransport)(new URL(config.url), {
-          requestInit: { headers: this.bearerAuthHeaders(config) }
+          requestInit: { headers }
         })
       } else if (config.transportType === 'streamable-http' || config.transportType === 'sse') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
@@ -264,7 +268,7 @@ export class MCPManager {
         // Restore persisted tokens
         if (config.authTokensEncrypted) {
           try {
-            const json = decryptApiKey(config.authTokensEncrypted)
+            const json = await decryptApiKey(config.authTokensEncrypted)
             storedState.tokens = JSON.parse(json)
           } catch {
             // Corrupted tokens — will re-auth
@@ -274,10 +278,12 @@ export class MCPManager {
         // Restore persisted client info
         if (config.clientInfo) {
           storedState.clientInfo = (typeof config.clientInfo.encrypted === 'string'
-            ? JSON.parse(decryptApiKey(Buffer.from(config.clientInfo.encrypted, 'base64')))
+            ? JSON.parse(await decryptApiKey(Buffer.from(config.clientInfo.encrypted, 'base64')))
             : config.clientInfo) as import('@modelcontextprotocol/client').StoredOAuthClientInformation
-          if (typeof config.clientInfo.encrypted !== 'string') this.persistOAuth(connection, { clientInfo: storedState.clientInfo })
+          if (typeof config.clientInfo.encrypted !== 'string') await this.persistOAuth(connection, { clientInfo: storedState.clientInfo })
         }
+        // The keystore awaited: a disconnect or a newer connect may have superseded this one.
+        this.assertCurrent(connection)
 
         const oauthProvider = new ElectronOAuthProvider(storedState, {
           assertCurrent: () => this.assertCurrent(connection),
@@ -386,14 +392,14 @@ export class MCPManager {
   }
 
   /** Static bearer-token auth: no DCR, no browser round-trip — just a header. */
-  private bearerAuthHeaders(config: McpProviderConfig): Record<string, string> {
+  private async bearerAuthHeaders(config: McpProviderConfig): Promise<Record<string, string>> {
     const declared = config.headers ?? {}
     if (!config.bearerTokenEncrypted) {
       // A plugin's server whose declared headers are its whole auth needs no token of the user's.
       if (Object.keys(declared).length > 0) return { ...declared }
       throw new Error('Bearer token is required for bearer auth')
     }
-    const token = decryptApiKey(config.bearerTokenEncrypted)
+    const token = await decryptApiKey(config.bearerTokenEncrypted)
     return { ...declared, Authorization: `Bearer ${token}` }
   }
 
@@ -464,12 +470,28 @@ export class MCPManager {
     }))
   }
 
-  private persistOAuth(connection: InternalConnection, patch: Parameters<import('./oauth-provider').OAuthProviderCallbacks['save']>[0]): void {
+  /**
+   * Persist an OAuth patch of `connection`. Serialised per connection: each
+   * write waits for the one before it (failed or not), so a refresh's tokens
+   * can never be overwritten by an older save whose encryption finished later.
+   * The returned promise is this write's own outcome.
+   */
+  private persistOAuth(connection: InternalConnection, patch: Parameters<import('./oauth-provider').OAuthProviderCallbacks['save']>[0]): Promise<void> {
+    this.assertCurrent(connection)
+    const run = (): Promise<void> => this.writeOAuth(connection, patch)
+    const write = (connection.oauthSaves ?? Promise.resolve()).then(run, run)
+    connection.oauthSaves = write.catch(() => undefined)
+    return write
+  }
+
+  private async writeOAuth(connection: InternalConnection, patch: Parameters<import('./oauth-provider').OAuthProviderCallbacks['save']>[0]): Promise<void> {
     this.assertCurrent(connection)
     const stored: Parameters<typeof mcpProviderRepo.saveOAuthState>[3] = {}
-    if ('tokens' in patch) stored.authTokensEncrypted = patch.tokens ? encryptApiKey(JSON.stringify(patch.tokens)) : null
-    if ('clientInfo' in patch) stored.clientInfo = patch.clientInfo ? { encrypted: encryptApiKey(JSON.stringify(patch.clientInfo)).toString('base64') } : null
+    if ('tokens' in patch) stored.authTokensEncrypted = patch.tokens ? await encryptApiKey(JSON.stringify(patch.tokens)) : null
+    if ('clientInfo' in patch) stored.clientInfo = patch.clientInfo ? { encrypted: (await encryptApiKey(JSON.stringify(patch.clientInfo))).toString('base64') } : null
     if ('discovery' in patch) stored.oauthDiscoveryState = patch.discovery ?? null
+    // Encrypting awaited: re-checked, so a superseded connection never writes.
+    this.assertCurrent(connection)
     mcpProviderRepo.saveOAuthState(connection.config.userId, connection.config.id, connection.config.configRevision, stored)
   }
 

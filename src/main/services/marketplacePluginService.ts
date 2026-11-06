@@ -70,6 +70,7 @@ import { agentMcpRepo } from '../db/agentMcp'
 import { agentMcpService } from './agentMcpService'
 import { mcpManager } from '../mcp/manager'
 import { collectPluginWork, discardPluginWork, managedLaunchBlock, managedNeedsBearer, missingManagedEnv, pluginManagedBy, snapshotKeyOfManagedBy } from '../mcp/managed'
+import type { McpProviderConfig } from '../mcp/types'
 import { managedUvLayout } from '../localdev/toolchain'
 import { effectiveEngine, type AgentEngine } from '../../shared/engine'
 import { compatibilityOf, engineSupports, ENGINE_LABELS } from '../../shared/addons/engineSupport'
@@ -759,7 +760,7 @@ export const marketplacePluginService = {
       logger.info('marketplace plugin added', { agentId, name: pin.name })
       const outcomes = await syncServers(userId, agentId, kit.dir)
       // Its connectors start now, not at the first turn: a cold `npx -y` download outlasts a turn's wait.
-      const starting = agentMcpService.connectAfterAdd(userId, agentId, readyToStart(outcomes, pin.entry_uuid))
+      const starting = await agentMcpService.connectAfterAdd(userId, agentId, readyToStart(outcomes, pin.entry_uuid))
       return {
         ok: true as const,
         name: pin.name,
@@ -917,7 +918,7 @@ export const marketplacePluginService = {
   async startsUnattended(row: McpProviderRow): Promise<boolean> {
     if (!row.managedBy) return true
     if (agentMcpRepo.agentIdsFor(row.id).length === 0) return false
-    if (missingManagedEnv(row).length > 0 || managedNeedsBearer(row)) return false
+    if ((await missingManagedEnv(row)).length > 0 || managedNeedsBearer(row)) return false
     if (managedLaunchBlock(row) !== null) return false
     if (row.transportType !== 'stdio') return true
     const runtime = runtimeOfCommand(row.command)
@@ -932,12 +933,16 @@ export const marketplacePluginService = {
    * row anyway, so the manager refuses it before anything runs and its card
    * reads why. Null for anything else (not attached, a value or token still
    * to give, nothing blocking it).
+   *
+   * `launch`: the config the row is about to be connected with. Its
+   * `blockedReason` is then the block, so the answer and the config cannot
+   * disagree about a policy that changed between the two reads.
    */
-  launchBlockOf(row: McpProviderRow): string | null {
+  async launchBlockOf(row: McpProviderRow, launch?: Pick<McpProviderConfig, 'blockedReason'>): Promise<string | null> {
     if (!row.managedBy) return null
     if (agentMcpRepo.agentIdsFor(row.id).length === 0) return null
-    if (missingManagedEnv(row).length > 0 || managedNeedsBearer(row)) return null
-    return managedLaunchBlock(row)
+    if ((await missingManagedEnv(row)).length > 0 || managedNeedsBearer(row)) return null
+    return launch ? (launch.blockedReason ?? null) : managedLaunchBlock(row)
   },
 
   /** {@link ensurePinned} in the background, never awaited and never failing the caller. */
@@ -976,6 +981,9 @@ export const marketplacePluginService = {
       const block = serverBlock(policy, known)
       const attached = new Set(agentMcpRepo.listProviderIds(userId, agentId))
       const providerRows = mcpProviderRepo.list(userId)
+      // Decrypted up front: the values a row still needs, for the attached managed rows the list below shows.
+      const missingOf = new Map(await Promise.all(providerRows.filter((row) => row.managedBy && attached.has(row.id))
+        .map(async (row) => [row.id, await missingManagedEnv(row)] as const)))
       return {
         ok: true,
         plugins: plugins.map((plugin): PluginPinStatus => {
@@ -999,7 +1007,7 @@ export const marketplacePluginService = {
             const disabled = off.mcpServers.includes(spec.name)
             const row = providerRows.find((candidate) => candidate.managedBy === managedBy && candidate.name === spec.name && attached.has(candidate.id))
             const blocked = disabled ? null : block(spec)
-            const missing = row ? missingManagedEnv(row) : []
+            const missing = row ? (missingOf.get(row.id) ?? []) : []
             const setup = row && !row.enabled ? 'enable' : missing.length > 0 ? 'env' : row && managedNeedsBearer(row) ? 'bearer' : undefined
             return {
               name: spec.name,

@@ -56,7 +56,7 @@ export function registerAgentHandlers(): void {
     ) => {
       userActivation.requireActivated()
       try {
-        const { id } = agentService.upsert(getSettingsScopeUserId(), data)
+        const { id } = await agentService.upsert(getSettingsScopeUserId(), data)
         return { id, success: true as const }
       } catch (err) {
         const e = ipcErrorShape(err)

@@ -382,7 +382,7 @@ export const agentService = {
    * match a row for this user returns `not_found` without leaking whether it
    * exists elsewhere.
    */
-  upsert(userId: string, input: UpsertAgentInput): { id: string; dto: AgentDto } {
+  async upsert(userId: string, input: UpsertAgentInput): Promise<{ id: string; dto: AgentDto }> {
     if (input.id?.startsWith(REMOTE_ID_PREFIX)) {
       throw new AgentError('invalid_id', 'Remote agents cannot be modified manually')
     }
@@ -392,15 +392,15 @@ export const agentService = {
         'Local agents are edited through their folder, not this form'
       )
     }
+    // Sealed first: the reads and writes below then run together, after the keystore.
+    const sealedToken = input.accessToken ? await encryptApiKey(input.accessToken) : null
 
     if (input.id) {
       const existing = agentRepo.getOwned(userId, input.id)
       if (!existing) {
         throw new AgentError('not_found', 'Agent not found')
       }
-      const accessTokenEncrypted = input.accessToken
-        ? encryptApiKey(input.accessToken)
-        : existing.accessTokenEncrypted
+      const accessTokenEncrypted = sealedToken ?? existing.accessTokenEncrypted
       const updated = agentRepo.update(userId, input.id, {
         name: input.name,
         description: input.description ?? existing.description,
@@ -427,7 +427,7 @@ export const agentService = {
       endpointUrl: input.endpointUrl ?? null,
       protocolInterfaceUrl: input.protocolInterfaceUrl ?? null,
       protocolInterfaceVersion: input.protocolInterfaceVersion ?? null,
-      accessTokenEncrypted: input.accessToken ? encryptApiKey(input.accessToken) : null,
+      accessTokenEncrypted: sealedToken,
       cardData: input.cardData ?? null,
       skills: input.skills ?? null,
       enabled: input.enabled ?? true

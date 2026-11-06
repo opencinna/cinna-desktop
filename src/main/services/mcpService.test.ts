@@ -20,7 +20,7 @@ vi.mock('../mcp/manager', () => ({
   mcpManager: { getConnection: () => undefined, connecting: manager.connecting, connect: vi.fn(), disconnect: vi.fn(async () => undefined), needsUser: () => false }
 }))
 vi.mock('../mcp/config', () => ({ mcpRowToConfig: (row: unknown) => row }))
-vi.mock('../security/keystore', () => ({ encryptApiKey: (value: string) => Buffer.from(value), decryptApiKey: (value: Buffer) => value.toString('utf8') }))
+vi.mock('../security/keystore', () => ({ encryptApiKey: async (value: string) => Buffer.from(value), decryptApiKey: async (value: Buffer) => value.toString('utf8') }))
 
 const policy = vi.hoisted(() => ({ externalDirectories: true, customMcp: true, stdioMcp: true }))
 vi.mock('./addonDirectory/policy', () => ({ addonPolicies: { get: () => ({ ...policy, pluginHooks: true }) } }))
@@ -104,24 +104,24 @@ describe('mcpService and a plugin’s provider', () => {
     expect(repo.upsert).not.toHaveBeenCalled()
   })
 
-  it('names the plugin it comes with, from the cached folder, else the folder’s name', () => {
+  it('names the plugin it comes with, from the cached folder, else the folder’s name', async () => {
     repo.list.mockImplementation(() => [managed])
-    expect(mcpService.list('u')[0].managedByTitle).toBe('carbone')
-    expect(mcpService.list('u')[0].envSlots).toEqual([{ name: 'API_KEY', hasValue: false }])
+    expect((await mcpService.list('u'))[0].managedByTitle).toBe('carbone')
+    expect((await mcpService.list('u'))[0].envSlots).toEqual([{ name: 'API_KEY', hasValue: false }])
   })
 
-  it('says when a connect is in flight, which its status (disconnected meanwhile) does not', () => {
+  it('says when a connect is in flight, which its status (disconnected meanwhile) does not', async () => {
     repo.list.mockReturnValue([managed])
-    expect(mcpService.list('u')[0].connecting).toBeUndefined()
+    expect((await mcpService.list('u'))[0].connecting).toBeUndefined()
     manager.connecting.mockImplementation((id: string) => (id === 'm1' ? new Promise(() => {}) : undefined))
-    expect(mcpService.list('u')[0]).toMatchObject({ status: 'disconnected', connecting: true })
+    expect((await mcpService.list('u'))[0]).toMatchObject({ status: 'disconnected', connecting: true })
     manager.connecting.mockReset()
   })
 
-  it('shows the renderer the names to fill in and whether each has a value — never a value', () => {
+  it('shows the renderer the names to fill in and whether each has a value — never a value', async () => {
     managed.envSecretEncrypted = Buffer.from(JSON.stringify({ API_KEY: 'sk-secret' }))
     repo.list.mockReturnValue([managed])
-    const [dto] = mcpService.list('u')
+    const [dto] = await mcpService.list('u')
     expect(dto.env).toEqual({ API_KEY: '' })
     expect(dto.envSlots).toEqual([{ name: 'API_KEY', hasValue: true }])
     expect(JSON.stringify(dto)).not.toContain('sk-secret')
@@ -186,9 +186,9 @@ describe('mcpService and a local connector made from a directory entry', () => {
     expect(JSON.parse(String(written.envSecretEncrypted))).toEqual({ ROOT: '/srv', TOKEN: 'sk-old' })
   })
 
-  it('shows the renderer names and whether each has a value, never a value', () => {
+  it('shows the renderer names and whether each has a value, never a value', async () => {
     repo.list.mockImplementation(() => [row({ ROOT: '', TOKEN: '' }, { TOKEN: 'sk-1' })])
-    const [dto] = mcpService.list('u')
+    const [dto] = await mcpService.list('u')
     expect(dto.env).toEqual({ ROOT: '', TOKEN: '' })
     expect(dto).not.toHaveProperty('envSecretEncrypted')
     expect(dto.envSlots).toEqual([
@@ -200,14 +200,15 @@ describe('mcpService and a local connector made from a directory entry', () => {
     expect(repo.upsert).not.toHaveBeenCalled()
   })
 
-  it('moves values stored in the plain env before they were encrypted on the first read', () => {
+  it('moves values stored in the plain env before they were encrypted on the first read', async () => {
     repo.list.mockImplementation(() => [row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null)])
+    repo.getOwned.mockImplementation(() => row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null))
     repo.upsert.mockImplementation((_userId: string, input: { env: Record<string, string>; envSecretEncrypted: Buffer }) => ({
       id: 'd1',
       created: false,
       row: { ...row(input.env, JSON.parse(String(input.envSecretEncrypted)) as Record<string, string>) }
     }))
-    const [dto] = mcpService.list('u')
+    const [dto] = await mcpService.list('u')
     const written = repo.upsert.mock.calls[0][1]
     expect(written.env).toEqual({ ROOT: '', TOKEN: '' })
     expect(JSON.parse(String(written.envSecretEncrypted))).toEqual({ ROOT: '/srv', TOKEN: 'sk-plain' })
@@ -215,12 +216,23 @@ describe('mcpService and a local connector made from a directory entry', () => {
     expect(dto.envSlots?.every((slot) => slot.hasValue)).toBe(true)
   })
 
-  it('never shows a plain value, even when moving it fails', () => {
+  it('leaves a row edited while its plain values were being encrypted, and shows no value', async () => {
     repo.list.mockImplementation(() => [row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null)])
+    // By the time the encryption resolves, the user has saved new settings.
+    repo.getOwned.mockImplementation(() => row({ ROOT: '', TOKEN: '' }, { ROOT: '/new', TOKEN: 'sk-new' }))
+    const [dto] = await mcpService.list('u')
+    expect(repo.upsert).not.toHaveBeenCalled()
+    expect(JSON.stringify(dto)).not.toContain('sk-')
+    expect(dto.envSlots).toEqual([{ name: 'ROOT', hasValue: true }, { name: 'TOKEN', hasValue: true }])
+  })
+
+  it('never shows a plain value, even when moving it fails', async () => {
+    repo.list.mockImplementation(() => [row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null)])
+    repo.getOwned.mockImplementation(() => row({ ROOT: '/srv', TOKEN: 'sk-plain' }, null))
     repo.upsert.mockImplementation(() => {
       throw new Error('database is locked')
     })
-    const [dto] = mcpService.list('u')
+    const [dto] = await mcpService.list('u')
     expect(dto.env).toEqual({ ROOT: '', TOKEN: '' })
     expect(JSON.stringify(dto)).not.toContain('sk-plain')
     expect(JSON.stringify(dto)).not.toContain('/srv')

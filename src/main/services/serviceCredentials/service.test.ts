@@ -9,12 +9,12 @@ const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, a
 vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.home, shell: { openExternal: (url: string) => world.open(url) }, keystore: {
   isEncryptionAvailable: () => true,
   isSecureStorageAvailable: () => world.secure,
-  encryptString: (s: string) => Buffer.from([...Buffer.from(s)].map(b => b ^ 0x93)),
-  decryptString: (b: Buffer) => Buffer.from([...b].map(v => v ^ 0x93)).toString()
+  encryptString: async (s: string) => Buffer.from([...Buffer.from(s)].map(b => b ^ 0x93)),
+  decryptString: async (b: Buffer) => Buffer.from([...b].map(v => v ^ 0x93)).toString()
 } } }))
 vi.mock('../../host/events', () => ({ publishEvent: vi.fn() }))
 vi.mock('../../auth/scope', () => ({ getProfileScopeUserId: () => world.user }))
-vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: (id: string) => id.replace('new-', '') }))
+vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: async (id: string) => id.replace('new-', '') }))
 vi.mock('../../db/users', () => ({ userRepo: { get: (id: string) => world.users.get(id) ?? ({ id, type: id === '__default__' ? 'local_user' : 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null }), list: () => [...world.users.values()] } }))
 vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => { const { keyStub: _stub, ...m } = JSON.parse(r.metadata); return { ...m, keyStatus: m.keyStatus ?? null, agentApi: m.agentApi ?? null, keyBlocked: m.keyBlocked ?? null, oauthStatus: m.oauthStatus ?? null, grantedUserEmail: m.grantedUserEmail ?? null, id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at } }, serviceCredentialRepo: {
   list: (id: string) => [...world.rows.values()].filter(r => r.user_id === id), get: (id: string) => world.rows.get(id), put: (r: any) => world.rows.set(r.id, r), remove: (id: string) => world.rows.delete(id), clearProfile: (id: string) => { for (const [key, row] of world.rows) if (row.user_id === id && row.origin === 'cloud') world.rows.delete(key) }
@@ -65,7 +65,7 @@ async function prepare(id: string) { return turnLock.withQueuedSharedLock(id, 't
 describe('credential delivery integration', () => {
   it('encrypts local values, writes cloud arrays, supports script reads, and preserves authored docs', async () => {
     const a = addAgent('kit'); mkdirSync(join(a.path, 'credentials')); writeFileSync(join(a.path, 'credentials', 'README.md'), 'authored docs')
-    const c = service.save({ name: 'Token', type: 'api_token', serviceUri: 'api', values: { api_token: 'local-fixture-secret-123' } }); await sleep()
+    const c = await service.save({ name: 'Token', type: 'api_token', serviceUri: 'api', values: { api_token: 'local-fixture-secret-123' } }); await sleep()
     expect(JSON.stringify(c)).not.toContain('local-fixture-secret')
     expect([...world.rows.values()][0].payload_enc.toString()).not.toContain('local-fixture-secret')
     await service.setAttachments(a.id, 'local', [c.id])
@@ -82,9 +82,9 @@ describe('credential delivery integration', () => {
   })
   it('stores bare values outside the folder and refuses unavailable keystores', async () => {
     const a = addAgent('bare'); world.secure = false
-    expect(() => service.save({ name: 'x', type: 'api_token', values: { api_token: 'secret-123456' } })).toThrow('Secure storage')
+    await expect(service.save({ name: 'x', type: 'api_token', values: { api_token: 'secret-123456' } })).rejects.toThrow('Secure storage')
     world.secure = true
-    const c = service.save({ name: 'x', type: 'api_token', values: { api_token: 'secret-123456' } }); await sleep()
+    const c = await service.save({ name: 'x', type: 'api_token', values: { api_token: 'secret-123456' } }); await sleep()
     await service.setAttachments(a.id, 'local', [c.id]); const p = await prepare(a.id)
     expect(p.path).toContain('/agent-credentials/'); expect(existsSync(join(a.path, 'credentials'))).toBe(false)
   })
@@ -139,7 +139,7 @@ describe('credential delivery integration', () => {
   it('refuses authored files and tracked credential destinations', async () => {
     const a = addAgent('kit'); mkdirSync(join(a.path, 'credentials')); writeFileSync(join(a.path, 'credentials/credentials.json'), '[]')
     execFileSync('git', ['init', '-q', a.path]); execFileSync('git', ['-C', a.path, 'add', 'credentials/credentials.json'])
-    const c = service.save({ name: 'x', type: 'api_token', values: { api_token: 'fixture-secret' } }); await sleep()
+    const c = await service.save({ name: 'x', type: 'api_token', values: { api_token: 'fixture-secret' } }); await sleep()
     await expect(service.setAttachments(a.id, 'local', [c.id])).rejects.toThrow('is tracked by git')
     expect(readFileSync(join(a.path, 'credentials/credentials.json'), 'utf8')).toBe('[]')
   })
@@ -180,7 +180,7 @@ it('isolates old-account cleanup failures to the affected agent', async () => {
 
 it('collects orphan bare secrets after scanning a moved folder and retains unknown files', async () => {
   const a = addAgent('bare')
-  const c = service.save({ name: 'x', type: 'api_token', values: { api_token: 'fixture-secret' } }); await sleep()
+  const c = await service.save({ name: 'x', type: 'api_token', values: { api_token: 'fixture-secret' } }); await sleep()
   await service.setAttachments(a.id, 'local', [c.id]); const p = await prepare(a.id)
   const { renameSync } = await import('node:fs')
   const { dirname } = await import('node:path')
@@ -206,7 +206,7 @@ it('keeps an empty runtime stable across suspend, resume, re-auth and account ch
 
 it('queues detachment until the running turn releases its credentials', async () => {
   const a = addAgent('bare')
-  const c = service.save({ name: 'Token', type: 'api_token', values: { api_token: 'fixture-detach-secret' } }); await sleep()
+  const c = await service.save({ name: 'Token', type: 'api_token', values: { api_token: 'fixture-detach-secret' } }); await sleep()
   await service.setAttachments(a.id, 'local', [c.id]); const p = await prepare(a.id)
   const lock = turnLock.acquire(a.id, 'running-turn')
   let finished = false
@@ -220,13 +220,13 @@ it('queues detachment until the running turn releases its credentials', async ()
 
 it('regenerates after a turn that was queued first, instead of failing the regeneration', async () => {
   const a = addAgent('bare')
-  const c = service.save({ name: 'Token', type: 'api_token', values: { api_token: 'fixture-queued-secret' } }); await sleep()
+  const c = await service.save({ name: 'Token', type: 'api_token', values: { api_token: 'fixture-queued-secret' } }); await sleep()
   await service.setAttachments(a.id, 'local', [c.id]); await prepare(a.id)
   const editor = turnLock.acquire(a.id, 'editor')
   // A turn queued behind the editor, before the regeneration is.
   let finishTurn!: () => void
   const turn = turnLock.withQueuedSharedLock(a.id, 'queued-turn', new AbortController().signal, () => new Promise<void>((resolve) => { finishTurn = resolve }))
-  service.save({ name: 'Other', type: 'api_token', values: { api_token: 'fixture-other-secret' } })
+  await service.save({ name: 'Other', type: 'api_token', values: { api_token: 'fixture-other-secret' } })
   editor.release(); await sleep()
   // The turn won the release; the regeneration waits for it rather than failing.
   expect(turnLock.isLocked(a.id)).toBe(true)
@@ -288,8 +288,8 @@ it('retries permission refusals on the next scheduled poll, but stops after a re
 
 it('isolates undecryptable bundles and restarts an attached runtime only when values change', async () => {
   const broken = addAgent('bare'), healthy = addAgent('kit')
-  const bad = service.save({ name: 'Bad', type: 'api_token', values: { api_token: 'fixture-bad-secret' } })
-  const good = service.save({ name: 'Good', type: 'api_token', values: { api_token: 'fixture-good-secret' } }); await sleep()
+  const bad = await service.save({ name: 'Bad', type: 'api_token', values: { api_token: 'fixture-bad-secret' } })
+  const good = await service.save({ name: 'Good', type: 'api_token', values: { api_token: 'fixture-good-secret' } }); await sleep()
   await service.setAttachments(broken.id, 'local', [bad.id])
   await service.setAttachments(healthy.id, 'local', [good.id])
   const initial = await prepare(healthy.id)
@@ -299,7 +299,7 @@ it('isolates undecryptable bundles and restarts an attached runtime only when va
   expect((await prepare(healthy.id)).generation).toBe(initial.generation)
   service.setSuspended(true); service.setSuspended(false)
   expect((await prepare(healthy.id)).generation).toBe(initial.generation)
-  service.save({ id: good.id, name: 'Good', type: 'api_token', values: { api_token: 'fixture-rotated-secret' } })
+  await service.save({ id: good.id, name: 'Good', type: 'api_token', values: { api_token: 'fixture-rotated-secret' } })
   expect((await prepare(healthy.id)).generation).not.toBe(initial.generation)
 })
 
@@ -343,10 +343,10 @@ it.each([[404, 'not_supported'], [405, 'not_supported'], [500, 'server_error']])
 
 it('updates and clears Service URI without replacing stored token values', async () => {
   const a = addAgent('bare')
-  const c = service.save({ name: 'Token', type: 'api_token', serviceUri: 'old-service', values: { api_token: 'fixture-preserved-token' } })
+  const c = await service.save({ name: 'Token', type: 'api_token', serviceUri: 'old-service', values: { api_token: 'fixture-preserved-token' } })
   await service.setAttachments(a.id, 'local', [c.id])
   for (const serviceUri of ['new-service', '']) {
-    service.save({ id: c.id, name: 'Token', type: 'api_token', serviceUri })
+    await service.save({ id: c.id, name: 'Token', type: 'api_token', serviceUri })
     const p = await prepare(a.id)
     const [entry] = JSON.parse(readFileSync(p.path!, 'utf8'))
     expect(entry.service_uri).toBe(serviceUri || null)
@@ -375,7 +375,7 @@ describe('multiple eligible accounts', () => {
     const a = addAgent('kit'); world.identity = true
     world.byUser = { 'account-a': [cloud('cred-a')], 'account-b': [cloud('cred-b'), { ...cloud('cred-off'), local_use_allowed: false }] }
     register('account-a', { displayName: 'Beta' }); register('account-b', { displayName: 'Alpha' })
-    const local = service.save({ name: 'Local', type: 'api_token', serviceUri: 'local', values: { api_token: 'local-fixture-secret-9' } })
+    const local = await service.save({ name: 'Local', type: 'api_token', serviceUri: 'local', values: { api_token: 'local-fixture-secret-9' } })
     await login('account-a'); await login('account-b')
     await service.setAttachments(a.id, 'local', [local.id])
     await service.setAttachments(a.id, key('account-a'), ['cred-a'])
@@ -997,9 +997,9 @@ describe('auto-attach and the Finish setup state', () => {
 
   it('offers this computer’s records after the account’s, with or without an account, never one already attached', async () => {
     const a = kitAgent([slot('acme', 'acme-api')])
-    const mine = service.save({ name: 'Acme here', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-1' } })
-    const kept = service.save({ name: 'Acme kept', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-2' } })
-    service.save({ name: 'Unrelated', type: 'api_token', serviceUri: 'elsewhere', values: { api_token: 'local-fixture-secret-3' } })
+    const mine = await service.save({ name: 'Acme here', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-1' } })
+    const kept = await service.save({ name: 'Acme kept', type: 'api_token', serviceUri: 'acme-api', values: { api_token: 'local-fixture-secret-2' } })
+    await service.save({ name: 'Unrelated', type: 'api_token', serviceUri: 'elsewhere', values: { api_token: 'local-fixture-secret-3' } })
     await sleep()
     // No account signed in: the local records that fit are still offered.
     expect(service.setupState(a.id).slots[0].options.map(o => [o.group, o.ref, o.credential.name])).toEqual([['local', mine.id, 'Acme here'], ['local', kept.id, 'Acme kept']])
@@ -1022,8 +1022,8 @@ describe('auto-attach and the Finish setup state', () => {
 
   it('ranks the account’s and this computer’s records in one pass: a better tier here beats a worse one in the account', async () => {
     const a = kitAgent([slot('acme', null)])
-    const byName = service.save({ name: 'acme', type: 'api_token', values: { api_token: 'local-fixture-secret-1' } })
-    const byUri = service.save({ name: 'Acme by URI here', type: 'api_token', serviceUri: 'acme', values: { api_token: 'local-fixture-secret-2' } })
+    const byName = await service.save({ name: 'acme', type: 'api_token', values: { api_token: 'local-fixture-secret-1' } })
+    const byUri = await service.save({ name: 'Acme by URI here', type: 'api_token', serviceUri: 'acme', values: { api_token: 'local-fixture-secret-2' } })
     world.metadata = [rec('uri', 'Acme by URI', 'acme', { relation: 'owned' })]
     await login('account-b')
     // Tier 1 (by name) on this computer first; then tier 2 (by Service URI), the account's before this computer's.
@@ -1205,9 +1205,9 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
 
   it('offers a fitting record on this computer, strictly, but never attaches it without asking', async () => {
     const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
-    const here = service.save({ name: 'ERP here', type: 'api_token', serviceUri: 'erp-api', values: { api_token: 'local-fixture-secret-1' } })
-    service.save({ name: 'erp-api', type: 'api_token', values: { api_token: 'local-fixture-secret-2' } })
-    service.save({ name: 'ERP mail', type: 'email_imap', serviceUri: 'erp-api', values: { host: 'h', port: '993', username: 'u', password: 'local-fixture-secret-3' } })
+    const here = await service.save({ name: 'ERP here', type: 'api_token', serviceUri: 'erp-api', values: { api_token: 'local-fixture-secret-1' } })
+    await service.save({ name: 'erp-api', type: 'api_token', values: { api_token: 'local-fixture-secret-2' } })
+    await service.save({ name: 'ERP mail', type: 'email_imap', serviceUri: 'erp-api', values: { host: 'h', port: '993', username: 'u', password: 'local-fixture-secret-3' } })
     await sleep()
     // No account: still offered, and the shared-but-not-local hint stays away.
     expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'missing', notLocal: null, options: [{ group: 'local', ref: here.id, credential: { name: 'ERP here' } }] })

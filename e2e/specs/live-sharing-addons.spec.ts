@@ -184,17 +184,17 @@ test('@live a shared agent brings its connector as Needs setup and its plugin, a
     )
     expect(off.success).toBe(true)
     await a.electronApp.evaluate(
-      ({ app, safeStorage }, input) => {
+      async ({ app, safeStorage }, input) => {
         if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
+        const tokensEnc = await safeStorage.encryptStringAsync(JSON.stringify({ access_token: input.access, refresh_token: input.refresh, token_type: 'Bearer', expires_in: 3600 }))
         const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
         const Database = req('better-sqlite3') as typeof import('better-sqlite3')
         const db = new Database(`${input.userData}/cinna.db`, { fileMustExist: true })
         try {
-          const tokens = JSON.stringify({ access_token: input.access, refresh_token: input.refresh, token_type: 'Bearer', expires_in: 3600 })
           const changed = db
             .prepare('UPDATE mcp_providers SET auth_tokens_enc = ?, client_info = ?, env = ? WHERE id = ?')
             .run(
-              safeStorage.encryptString(tokens),
+              tokensEnc,
               JSON.stringify({ client_id: 'cinna-e2e-client', client_secret: input.clientSecret }),
               JSON.stringify({ E2E_CANARY: input.env }),
               input.id

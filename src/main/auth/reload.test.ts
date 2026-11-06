@@ -5,18 +5,18 @@ vi.mock('../db/llmProviders', () => ({ llmProviderRepo: { list: () => [{ id: 'll
 const mcpRows = vi.hoisted(() => ({ rows: [{ id: 'mcp', enabled: true }] as Array<Record<string, unknown>> }))
 const starts = vi.hoisted(() => vi.fn(async (row: { id: string }) => row.id === 'ready'))
 vi.mock('../db/mcpProviders', () => ({ mcpProviderRepo: { list: () => mcpRows.rows } }))
-const blocks = vi.hoisted(() => vi.fn((row: { id: string }) => (row.id === 'policy-blocked' ? 'Blocked by your admin' : null)))
+const blocks = vi.hoisted(() => vi.fn(async (row: { id: string }, _launch?: { blockedReason?: string }): Promise<string | null> => (row.id === 'policy-blocked' ? 'Blocked by your admin' : null)))
 vi.mock('../services/marketplacePluginService', () => ({ marketplacePluginService: { startsUnattended: starts, launchBlockOf: blocks } }))
 vi.mock('../llm/registry', () => ({ clearAllAdapters() {}, registerAdapter: state.register }))
 vi.mock('../llm/factory', () => ({ createAdapter: () => ({}) }))
-vi.mock('../security/keystore', () => ({ decryptApiKey: () => '' }))
+vi.mock('../security/keystore', () => ({ decryptApiKey: async () => '' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { disconnectAll: state.disconnect, connect: state.connect } }))
 const toConfig = vi.hoisted(() => ({ map: (value: unknown): unknown => value }))
-vi.mock('../mcp/config', () => ({ mcpRowToConfig: (value: unknown) => toConfig.map(value) }))
+vi.mock('../mcp/config', () => ({ mcpRowToConfig: async (value: unknown) => toConfig.map(value) }))
 const attached = vi.hoisted(() => ({ ids: new Set<string>() }))
 vi.mock('../db/agentMcp', () => ({ agentMcpRepo: { agentIdsFor: (id: string) => (attached.ids.has(id) ? ['agent'] : []) } }))
 vi.mock('../mcp/managed', () => ({
-  missingEnvOf: (row: { env?: Record<string, string> }) => Object.entries(row.env ?? {}).filter(([, value]) => value === '').map(([name]) => name)
+  missingEnvOf: async (row: { env?: Record<string, string> }) => Object.entries(row.env ?? {}).filter(([, value]) => value === '').map(([name]) => name)
 }))
 vi.mock('./scope', () => ({ getSettingsScopeUserId: () => 'settings', getProfileScopeUserId: () => state.profile, DEFAULT_SCOPE_USER_ID: 'settings' }))
 vi.mock('../services/accountConfigService', () => ({ accountConfigService: { loadManagedAdapters: state.managed } }))
@@ -37,7 +37,7 @@ it('does not register old profile providers after its pending disconnect is revo
 it('loads the captured profile and shared providers after successful teardown', async () => {
   await reloadUserProviders(() => true)
   expect(state.register).toHaveBeenCalledWith('llm', {})
-  expect(state.managed).toHaveBeenCalledWith('a')
+  expect(state.managed).toHaveBeenCalledWith('a', expect.any(Function))
   expect(state.connect).toHaveBeenCalledTimes(1)
 })
 it('starts a plugin’s connector only when it can run unattended (an agent has it, its values given, not blocked)', async () => {
@@ -76,14 +76,16 @@ it('hands a plugin’s connector held back only by a launch block to the manager
   await new Promise((done) => setTimeout(done, 0))
   expect(state.connect.mock.calls.map(([config]) => (config as { id: string }).id).sort()).toEqual(['policy-blocked', 'ready'])
 })
-it('reads a plugin connector’s block and its config in one tick, so a policy that changes in between never starts it unblocked', async () => {
-  // The policy forbids local servers when the block is read, and allows them one microtask later.
+it('takes a plugin connector’s block from the config it connects with, so a policy that changes in between never starts it unblocked', async () => {
+  // The policy forbids local servers when the config is built, and allows them one microtask later.
   let forbidden = true
-  blocks.mockImplementationOnce(() => {
+  toConfig.map = (value) => {
+    const config = { ...(value as object), ...(forbidden ? { blockedReason: 'Blocked by your admin' } : {}) }
     queueMicrotask(() => { forbidden = false })
-    return forbidden ? 'Blocked by your admin' : null
-  })
-  toConfig.map = (value) => ({ ...(value as object), ...(forbidden ? { blockedReason: 'Blocked by your admin' } : {}) })
+    return config
+  }
+  // Like the real one: the block is the config's when it is given one; a fresh policy read otherwise.
+  blocks.mockImplementationOnce(async (_row, launch) => (launch ? (launch.blockedReason ?? null) : forbidden ? 'Blocked by your admin' : null))
   mcpRows.rows = [{ id: 'flip', enabled: true, managedBy: 'plugin:e@s' }]
   try {
     await reloadUserProviders(() => true)

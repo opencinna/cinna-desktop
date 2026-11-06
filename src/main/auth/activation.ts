@@ -72,7 +72,7 @@ class UserActivation {
    * profile's ready listeners are told.
    */
   credentialsRenewed(userId: string): void {
-    serviceCredentialService.renewed(userId)
+    void serviceCredentialService.renewed(userId)
     if (this._activated && this._activeUserId === userId) this._notifyReady(userId)
   }
 
@@ -91,7 +91,7 @@ class UserActivation {
   /** Mark a user as unlocked for the remainder of this app session. */
   markUnlocked(userId: string): void {
     this._unlockedUserIds.add(userId)
-    serviceCredentialService.refreshAccounts()
+    void serviceCredentialService.refreshAccounts()
   }
 
   /** Whether the user has already supplied their password in this app session. */
@@ -102,13 +102,13 @@ class UserActivation {
   /** Drop all unlock memory (e.g. on sign-out). */
   clearUnlocks(): void {
     this._unlockedUserIds.clear()
-    serviceCredentialService.refreshAccounts()
+    void serviceCredentialService.refreshAccounts()
   }
 
   /** Remove a single user from the unlock set (e.g. on account deletion). */
   forgetUnlock(userId: string): void {
     this._unlockedUserIds.delete(userId)
-    serviceCredentialService.refreshAccounts()
+    void serviceCredentialService.refreshAccounts()
   }
 
   /**

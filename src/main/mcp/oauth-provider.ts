@@ -10,7 +10,8 @@ export interface OAuthStoredState {
 }
 export interface OAuthProviderCallbacks {
   assertCurrent: () => void
-  save: (patch: { tokens?: StoredOAuthTokens | null; clientInfo?: StoredOAuthClientInformation | null; discovery?: OAuthDiscoveryState | null }) => void
+  /** Durable write of a patch; the SDK awaits each save, and writes land in call order. */
+  save: (patch: { tokens?: StoredOAuthTokens | null; clientInfo?: StoredOAuthClientInformation | null; discovery?: OAuthDiscoveryState | null }) => Promise<void>
   /**
    * False for a connect nobody is watching (an agent turn starting): stored
    * tokens may still be used and refreshed, but a browser is never opened —
@@ -34,9 +35,9 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
     if (this.persistenceFailure) throw this.persistenceFailure
     this.callbacks.assertCurrent()
   }
-  private persist(patch: Parameters<OAuthProviderCallbacks['save']>[0]): void {
+  private async persist(patch: Parameters<OAuthProviderCallbacks['save']>[0]): Promise<void> {
     this.assertUsable()
-    try { this.callbacks.save(patch) } catch (error) {
+    try { await this.callbacks.save(patch) } catch (error) {
       // SDK refresh recovery can swallow save errors and attempt authorization.
       // A failed durable rotation must remain fatal for this connection.
       this.persistenceFailure = error instanceof Error ? error : new Error(String(error))
@@ -58,30 +59,30 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
   clientInformation(): StoredOAuthClientInformation | undefined {
     this.assertUsable(); return this.stored.clientInfo
   }
-  saveClientInformation(clientInfo: StoredOAuthClientInformation): void {
+  async saveClientInformation(clientInfo: StoredOAuthClientInformation): Promise<void> {
     this.assertUsable()
     const registration = { ...clientInfo, ...(this.redirect ? { redirect_uris: [this.redirect] } : {}) }
-    this.persist({ clientInfo: registration }); this.stored.clientInfo = registration
+    await this.persist({ clientInfo: registration }); this.stored.clientInfo = registration
   }
   tokens(): StoredOAuthTokens | undefined {
     this.assertUsable(); return this.stored.tokens
   }
-  saveTokens(tokens: StoredOAuthTokens): void {
-    this.assertUsable(); this.persist({ tokens }); this.stored.tokens = tokens
+  async saveTokens(tokens: StoredOAuthTokens): Promise<void> {
+    this.assertUsable(); await this.persist({ tokens }); this.stored.tokens = tokens
   }
   discoveryState(): OAuthDiscoveryState | undefined {
     this.assertUsable(); return this.stored.discovery
   }
-  saveDiscoveryState(discovery: OAuthDiscoveryState): void {
-    this.assertUsable(); this.persist({ discovery }); this.stored.discovery = discovery
+  async saveDiscoveryState(discovery: OAuthDiscoveryState): Promise<void> {
+    this.assertUsable(); await this.persist({ discovery }); this.stored.discovery = discovery
   }
-  invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
+  async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): Promise<void> {
     this.assertUsable()
     const patch: Parameters<OAuthProviderCallbacks['save']>[0] = {}
     if (scope === 'all' || scope === 'client') patch.clientInfo = null
     if (scope === 'all' || scope === 'tokens') patch.tokens = null
     if (scope === 'all' || scope === 'discovery') patch.discovery = null
-    if (Object.keys(patch).length) this.persist(patch)
+    if (Object.keys(patch).length) await this.persist(patch)
     if ('clientInfo' in patch) delete this.stored.clientInfo
     if ('tokens' in patch) delete this.stored.tokens
     if ('discovery' in patch) delete this.stored.discovery
@@ -115,8 +116,8 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
     try { listener = await startOAuthCallback(state, undefined, port) }
     catch (error) {
       if (!port || (error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
-      this.invalidateCredentials('client')
-      this.invalidateCredentials('tokens')
+      await this.invalidateCredentials('client')
+      await this.invalidateCredentials('tokens')
       listener = await startOAuthCallback(state)
     }
     try { this.assertUsable() } catch (error) { listener.abort(); throw error }

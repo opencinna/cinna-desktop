@@ -752,7 +752,7 @@ export interface ClaudeLauncherDeps {
    * (`claudeAuthService.resolve`). Absent: subscription. Asked once per plan
    * and once per readiness check; must not throw.
    */
-  launchAuth?(): ClaudeLaunchAuth
+  launchAuth?(): ClaudeLaunchAuth | Promise<ClaudeLaunchAuth>
   /**
    * The system prompt for this turn, chosen by the folder's runtime mode: an
    * **isolated** folder's whole assembled document, which replaces the SDK's
@@ -834,9 +834,9 @@ export interface ClaudeLauncherDeps {
 const SUBSCRIPTION_LAUNCH: ClaudeLaunchAuth = { mode: 'subscription', fingerprint: 'subscription' }
 
 /** The launch's auth, defaulting to the subscription when nothing is wired or the resolver threw. */
-function launchAuthOf(deps: ClaudeLauncherDeps): ClaudeLaunchAuth {
+async function launchAuthOf(deps: ClaudeLauncherDeps): Promise<ClaudeLaunchAuth> {
   try {
-    return deps.launchAuth?.() ?? SUBSCRIPTION_LAUNCH
+    return (await deps.launchAuth?.()) ?? SUBSCRIPTION_LAUNCH
   } catch (err) {
     // `claudeAuthService.resolve` does not throw; a resolver that did must not
     // quietly become the subscription in API mode, so it refuses instead.
@@ -881,7 +881,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
     // missing credential is not a readiness state either (none of them says
     // it, and `credentials_needed` would be read as the folder's own): `plan`
     // refuses the turn with the sentence pointing at Settings.
-    if (launchAuthOf(deps).mode === 'api_key') return { state: 'ok', reason: null }
+    if ((await launchAuthOf(deps)).mode === 'api_key') return { state: 'ok', reason: null }
     // Only a definite `logged_out` is not ready. A probe that could not answer
     // is `unknown`, which never blocks — the same rule the runner applied, for
     // the same reason: refusing a working engine on our own uncertainty is
@@ -908,7 +908,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       const claudePath = binary.path
       // **API mode never falls back to the subscription**: no credential is a
       // refused turn, and no login check applies (the key is the login).
-      const launch = launchAuthOf(deps)
+      const launch = await launchAuthOf(deps)
       if ('error' in launch) return { error: launch.error }
       const apiKey = launch.mode === 'api_key' ? launch.credential : null
       if (!apiKey) {

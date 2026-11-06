@@ -203,8 +203,10 @@ export class PersonApp {
     }, person.email)
     if (!userId) throw new Error(`${this.label} has no profile for ${person.email} to write tokens into`)
     await this.electronApp.evaluate(
-      ({ app, safeStorage }, input) => {
+      async ({ app, safeStorage }, input) => {
         if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
+        const accessEnc = await safeStorage.encryptStringAsync(input.accessToken)
+        const refreshEnc = await safeStorage.encryptStringAsync(input.refreshToken)
         const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
         const Database = req('better-sqlite3') as typeof import('better-sqlite3')
         const db = new Database(`${input.userData}/cinna.db`, { fileMustExist: true })
@@ -217,8 +219,8 @@ export class PersonApp {
             input.server,
             input.clientId,
             input.name,
-            safeStorage.encryptString(input.accessToken),
-            safeStorage.encryptString(input.refreshToken),
+            accessEnc,
+            refreshEnc,
             Date.now() + (input.expiresIn - 60) * 1000,
             input.userId
           )

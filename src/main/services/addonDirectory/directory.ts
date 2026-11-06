@@ -155,7 +155,7 @@ export interface AddonDirectoryDeps {
   attachMcp(userId: string, agentId: string, mcpProviderId: string): void
   detachMcp(userId: string, agentId: string, mcpProviderId: string): void | Promise<void>
   /** The step a local provider still needs before it connects unattended, or null. */
-  mcpSetup(userId: string, mcpProviderId: string): McpSetup | null
+  mcpSetup(userId: string, mcpProviderId: string): Promise<McpSetup | null>
   /** The local provider created from this directory entry, if any. */
   findMcpByRef(userId: string, ref: AddonRef): string | null
   /** A local provider (not a plugin's) that is the same server as this entry of core's MCP directory (`serverIdentity.ts`), if any. */
@@ -391,7 +391,7 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
 
   async function attachLocal(userId: string, agentId: string, mcpProviderId: string): Promise<AddonActionResult> {
     deps.attachMcp(userId, agentId, mcpProviderId)
-    return setupResult(mcpProviderId, deps.mcpSetup(userId, mcpProviderId))
+    return setupResult(mcpProviderId, await deps.mcpSetup(userId, mcpProviderId))
   }
 
   /** The agent's skill access, read only for a kit agent (the others cannot pin at all). */
@@ -597,7 +597,7 @@ export function createAddonDirectory(deps: AddonDirectoryDeps) {
               items.push({ ...base, ref, state: 'needs_setup', reason: MCP_REQUIREMENT_TEXT.notAttached, mcpProviderId: local, entryRef })
               continue
             }
-            const setup = deps.mcpSetup(userId, local)
+            const setup = await deps.mcpSetup(userId, local)
             items.push({
               ...base,
               ref,

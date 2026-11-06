@@ -262,25 +262,25 @@ function row(over: Partial<McpProviderRow> = {}): McpProviderRow {
 }
 
 describe('thisComputer provider', () => {
-  it('says which local provider still needs a step', () => {
-    expect(setupOf(row({ transportType: 'stdio' }), 'disconnected', true)).toBeNull()
-    expect(setupOf(row(), 'connected', true)).toBeNull()
-    expect(setupOf(row({ authType: 'bearer' }), 'disconnected', false)).toBe('bearer')
-    expect(setupOf(row(), 'disconnected', false)).toBeNull()
-    expect(setupOf(row(), 'error', true)).toBe('oauth')
-    expect(setupOf(row(), 'awaiting-auth', false)).toBe('oauth')
+  it('says which local provider still needs a step', async () => {
+    expect(await setupOf(row({ transportType: 'stdio' }), 'disconnected', true)).toBeNull()
+    expect(await setupOf(row(), 'connected', true)).toBeNull()
+    expect(await setupOf(row({ authType: 'bearer' }), 'disconnected', false)).toBe('bearer')
+    expect(await setupOf(row(), 'disconnected', false)).toBeNull()
+    expect(await setupOf(row(), 'error', true)).toBe('oauth')
+    expect(await setupOf(row(), 'awaiting-auth', false)).toBe('oauth')
     // A connect that failed for any other reason is never "ready": it needs a Connect.
-    expect(setupOf(row({ transportType: 'stdio' }), 'error', true)).toBe('connect')
-    expect(setupOf(row({ authType: 'bearer', bearerTokenEncrypted: Buffer.from('x') }), 'error', false)).toBe('connect')
-    expect(setupOf(row({ authTokensEncrypted: Buffer.from('t') }), 'error', true)).toBe('connect')
-    expect(setupOf(row(), 'error', false)).toBe('connect')
+    expect(await setupOf(row({ transportType: 'stdio' }), 'error', true)).toBe('connect')
+    expect(await setupOf(row({ authType: 'bearer', bearerTokenEncrypted: Buffer.from('x') }), 'error', false)).toBe('connect')
+    expect(await setupOf(row({ authTokensEncrypted: Buffer.from('t') }), 'error', true)).toBe('connect')
+    expect(await setupOf(row(), 'error', false)).toBe('connect')
     // Turned off on this computer: it never connects, so turning it on comes first.
-    expect(setupOf(row({ enabled: false }), 'disconnected', false)).toBe('enable')
-    expect(setupOf(row({ enabled: false, authType: 'bearer' }), 'disconnected', false)).toBe('enable')
+    expect(await setupOf(row({ enabled: false }), 'disconnected', false)).toBe('enable')
+    expect(await setupOf(row({ enabled: false, authType: 'bearer' }), 'disconnected', false)).toBe('enable')
     // A server from a directory with a setting still empty needs it filled in; a hand-made one is as the user typed it.
     const stdio = { transportType: 'stdio', command: 'npx', url: null, env: { ROOT: '' } }
-    expect(setupOf(row({ ...stdio, registryRef: { source: 'core-mcp-directory', id: 'fs' } }), 'disconnected', false)).toBe('env')
-    expect(setupOf(row({ ...stdio, registryRef: null }), 'disconnected', false)).toBeNull()
+    expect(await setupOf(row({ ...stdio, registryRef: { source: 'core-mcp-directory', id: 'fs' } }), 'disconnected', false)).toBe('env')
+    expect(await setupOf(row({ ...stdio, registryRef: null }), 'disconnected', false)).toBeNull()
   })
 
   it('says an attached connector that is turned off is added and turned off', () => {
@@ -313,9 +313,9 @@ describe('thisComputer provider', () => {
       setupReason: 'Needs you to sign in'
     })
     expect(entries[1]).toMatchObject({ summary: 'npx -y fs', runsCode: true, registryRef: null, setupReason: 'Could not connect' })
-    expect(provider.setup('__default__', 'm1')).toEqual({ next: 'oauth' })
-    expect(provider.setup('__default__', 'm2')).toEqual({ next: 'connect', message: 'spawn npx ENOENT' })
-    expect(provider.setup('__default__', 'missing')).toBeNull()
+    expect(await provider.setup('__default__', 'm1')).toEqual({ next: 'oauth' })
+    expect(await provider.setup('__default__', 'm2')).toEqual({ next: 'connect', message: 'spawn npx ENOENT' })
+    expect(await provider.setup('__default__', 'missing')).toBeNull()
   })
 })
 

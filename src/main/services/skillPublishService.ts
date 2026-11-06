@@ -397,9 +397,9 @@ export function withPreviousProviders(
 }
 
 /** The signed-in account's id on its instance (the stored token's `sub`), or null. */
-function selfId(profile: string): string | null {
+async function selfId(profile: string): Promise<string | null> {
   try {
-    return getStoredCinnaSubject(profile)
+    return await getStoredCinnaSubject(profile)
   } catch {
     return null
   }
@@ -709,7 +709,7 @@ export const skillPublishService = {
       const parsed = toPreviewDto(name, answer.body)
       if (!parsed) return refused('failed', 'The catalog answered with something that is not a preview.')
       const preview = parsed.packageUuid
-        ? withPreviousProviders(parsed, await listedSkill(who.profile, parsed.packageUuid), selfId(who.profile))
+        ? withPreviousProviders(parsed, await listedSkill(who.profile, parsed.packageUuid), await selfId(who.profile))
         : parsed
       return { ok: true as const, preview }
     })

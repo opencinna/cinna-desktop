@@ -29,7 +29,7 @@ vi.mock('../auth/scope', () => ({
   getAgentLookupScope: () => ['__default__'],
   getManagedResourceScopes: () => ['__default__']
 }))
-vi.mock('../security/keystore', () => ({ decryptApiKey: (value: Buffer) => value.toString(), encryptApiKey: (value: string) => Buffer.from(value) }))
+vi.mock('../security/keystore', () => ({ decryptApiKey: async (value: Buffer) => value.toString(), encryptApiKey: async (value: string) => Buffer.from(value) }))
 vi.mock('../index', () => ({ getMainWindow: () => null }))
 vi.mock('./cinnaApiService', () => ({ getCinnaServerUrl: () => null, cinnaApiService: {} }))
 vi.mock('./syncService', () => ({ syncService: { markDirty: () => undefined } }))
@@ -111,12 +111,12 @@ async function remote(options: Parameters<typeof managedPeer>[0] = {}): Promise<
 }
 
 /** What a kill leaves: the user row, what the quit flush saved, the checkpoint and the marker. */
-function killedTurn(checkpoint: { state: 'ready' | 'inflight' | 'uncertain'; kickoffEventId?: string; kickoffMessageId?: string } | null = { state: 'inflight', kickoffEventId: 'kickoff' }): string {
+async function killedTurn(checkpoint: { state: 'ready' | 'inflight' | 'uncertain'; kickoffEventId?: string; kickoffMessageId?: string } | null = { state: 'inflight', kickoffEventId: 'kickoff' }): Promise<string> {
   const userMessageId = messageRepo.saveUser({ chatId, content: 'Fix the build', addressedAgentId: agent.id })
   inflightTurnRepo.open({ id: MARKER, profileId: USER, chatId, agentId: agent.id, driver: 'managed', userMessageId })
   messageRepo.saveAssistant({ chatId, content: 'Half', parts: [{ kind: 'text', text: 'Half' }], sourceAgentId: agent.id })
   // The kickoff answers this turn's user row unless the case says otherwise.
-  if (checkpoint) managedAgentService.prepare(USER, agent, chatId).save({ sessionId: SESSION,
+  if (checkpoint) (await managedAgentService.prepare(USER, agent, chatId)).save({ sessionId: SESSION,
     ...(checkpoint.kickoffEventId ? { kickoffMessageId: userMessageId } : {}), ...checkpoint })
   return userMessageId
 }
@@ -138,14 +138,14 @@ const deltas = (seen: RunWatchMessage[]): string[] =>
   seen.flatMap((m) => m.type === 'event' && m.event.type === 'delta' && m.event.kind === 'text' ? [m.event.text] : [])
 const transcript = (): [string, string][] =>
   chatRepo.listMessages(chatId).map((row) => [row.role, row.role === 'error' ? JSON.parse(row.content).short : row.content])
-const checkpoint = () => managedAgentService.prepare(USER, agent, chatId).checkpoint
+const checkpoint = async () => (await managedAgentService.prepare(USER, agent, chatId)).checkpoint
 const posts = (p: Peer) => p.requests.filter((request) => request.method === 'POST')
 const history = (...events: ManagedEvent[]) => ({ pages: [[user('earlier'), message('earlier-answer', 'Earlier turn.'), idle('earlier-end'), ...events]] })
 
 describe('a Managed turn still running on the session', () => {
   it('streams to the chat as a running turn, then replaces the killed rows and leaves the session ready', async () => {
     const p = await remote(history(user(), running('run'), message('half', 'Half')))
-    const userMessageId = killedTurn()
+    const userMessageId = await killedTurn()
     const seen = watch()
 
     const done = remoteTurnRecoveryService.resume(USER)
@@ -166,14 +166,14 @@ describe('a Managed turn still running on the session', () => {
     expect(inflightTurnRepo.list()).toEqual([])
     expect(activeRunsByChat.has(chatId)).toBe(false)
     expect(chatRunResultRepo.get(USER, chatId)).toMatchObject({ runId: MARKER, status: 'completed' })
-    expect(checkpoint()).toEqual({ sessionId: SESSION, state: 'ready' })
+    expect(await checkpoint()).toEqual({ sessionId: SESSION, state: 'ready' })
   })
 })
 
 describe('a Managed turn that ended while the app was closed', () => {
   it('shows its final message', async () => {
     const p = await remote(history(user(), running('run'), message('half', 'Half'), message('final', 'Build fixed.'), idle('end')))
-    killedTurn()
+    await killedTurn()
 
     await remoteTurnRecoveryService.resume(USER)
 
@@ -186,7 +186,7 @@ describe('a Managed turn that ended while the app was closed', () => {
     // Mutation: drop the `refused` exception in `resultOf` → the interrupted notice.
     const p = await remote(history(user(), running('run'), { type: 'session.status_idle', id: 'refused', processed_at: '2026-09-12T10:00:00Z',
       stop_reason: { type: 'refusal' }, stop_details: { type: 'refusal', category: 'general_harms', explanation: 'The request was declined.' } }))
-    killedTurn()
+    await killedTurn()
 
     await remoteTurnRecoveryService.resume(USER)
 
@@ -194,14 +194,14 @@ describe('a Managed turn that ended while the app was closed', () => {
     expect(transcript()).toEqual([['user', 'Fix the build'], ['error', reason]])
     expect(posts(p)).toEqual([])
     expect(chatRunResultRepo.get(USER, chatId)?.status).toBe('failed')
-    expect(checkpoint()).toEqual({ sessionId: SESSION, state: 'ready' })
+    expect(await checkpoint()).toEqual({ sessionId: SESSION, state: 'ready' })
   })
 })
 
 describe('a Managed turn parked on a permission', () => {
   it('offers it again, delivers the answer from the app, and completes', async () => {
     const p = await remote(history(user(), permissionTool('tool-parked'), requires(['tool-parked'])))
-    killedTurn()
+    await killedTurn()
 
     const done = remoteTurnRecoveryService.resume(USER)
     await vi.waitFor(() => expect(taskInputRequestRepo.listOpenForChat(chatId)).toHaveLength(1))
@@ -236,7 +236,7 @@ describe('Stop during a Managed recovery', () => {
         return { data: [interrupted(false)] }
       }
     })
-    killedTurn()
+    await killedTurn()
     const seen = watch()
 
     const done = remoteTurnRecoveryService.resume(USER)
@@ -259,7 +259,7 @@ describe('a Managed turn recovery cannot follow', () => {
     ['no session was opened', null]
   ])('is settled as interrupted, sending nothing, when %s', async (_name, saved) => {
     const p = await remote(history(user(), running('run')))
-    killedTurn(saved)
+    await killedTurn(saved)
 
     await remoteTurnRecoveryService.resume(USER)
 
@@ -284,7 +284,7 @@ describe('a Managed turn recovery cannot follow', () => {
 
   it('whose agent is gone is settled as interrupted', async () => {
     const p = await remote(history(user(), running('run')))
-    killedTurn()
+    await killedTurn()
     holder.current!.raw.prepare('UPDATE agents SET enabled = 0 WHERE id = ?').run(agent.id)
 
     await remoteTurnRecoveryService.resume(USER)
@@ -295,7 +295,7 @@ describe('a Managed turn recovery cannot follow', () => {
 
   it('waits, marker kept, while its credential needs the user', async () => {
     const p = await remote(history(user(), running('run')))
-    killedTurn()
+    await killedTurn()
     llmProviderRepo.upsert(USER, { id: credentialId, type: 'anthropic', name: 'Managed credential', enabled: false })
 
     await remoteTurnRecoveryService.resume(USER)
@@ -313,13 +313,13 @@ describe('a Managed turn recovery cannot follow', () => {
 describe('a Managed session that cannot be reached', () => {
   it('defers the plan (network) when the session does not answer the probe in time', async () => {
     await remote({ ...history(user(), running('run')), onRetrieve: () => true })
-    killedTurn()
+    await killedTurn()
     await expect(planKilled()).resolves.toEqual({ kind: 'defer', reason: 'network' })
   })
 
   it('defers the plan (network) when the connection fails', async () => {
     const p = await remote(history(user(), running('run')))
-    killedTurn()
+    await killedTurn()
     await p.close()
     peer = null
     await expect(planKilled()).resolves.toEqual({ kind: 'defer', reason: 'network' })
@@ -327,20 +327,20 @@ describe('a Managed session that cannot be reached', () => {
 
   it('defers the plan (auth) when the session refuses the credential', async () => {
     await remote({ ...history(user(), running('run')), onRetrieve: (res) => { res.writeHead(401); res.end('{}'); return true } })
-    killedTurn()
+    await killedTurn()
     await expect(planKilled()).resolves.toEqual({ kind: 'defer', reason: 'auth' })
   })
 
   it('defers the plan (auth) while the credential needs the user', async () => {
     await remote(history(user(), running('run')))
-    killedTurn()
+    await killedTurn()
     llmProviderRepo.upsert(USER, { id: credentialId, type: 'anthropic', name: 'Managed credential', enabled: false })
     await expect(planKilled()).resolves.toEqual({ kind: 'defer', reason: 'auth' })
   })
 
   it('settles as interrupted when the session is gone', async () => {
     await remote({ ...history(user(), running('run')), onRetrieve: (res) => { res.writeHead(404); res.end('{}'); return true } })
-    killedTurn()
+    await killedTurn()
     await expect(planKilled()).resolves.toMatchObject({ kind: 'interrupted' })
   })
 
@@ -348,19 +348,19 @@ describe('a Managed session that cannot be reached', () => {
     // Mutation: interrupt and save `uncertain` on any follow error → an interrupt is posted and the kickoff is gone.
     const p = await remote({ ...history(user(), running('run'), message('half', 'Half')),
       onStream: (res) => { res.end(); return true } })
-    const userMessageId = killedTurn()
+    const userMessageId = await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     await expect(plan.recover(quietIO())).resolves.toEqual({ kind: 'defer', reason: 'network' })
     expect(p.requests.filter((r) => r.path.endsWith('/events/stream')).length).toBeGreaterThan(1)
     expect(posts(p)).toEqual([])
-    expect(checkpoint()).toEqual({ sessionId: SESSION, state: 'inflight', kickoffEventId: 'kickoff', kickoffMessageId: userMessageId })
+    expect(await checkpoint()).toEqual({ sessionId: SESSION, state: 'inflight', kickoffEventId: 'kickoff', kickoffMessageId: userMessageId })
     expect(inflightTurnRepo.list()).toHaveLength(1)
   })
 
   it('defers a follow that loses the connection mid-turn', async () => {
     const p = await remote(history(user(), running('run'), message('half', 'Half')))
-    killedTurn()
+    await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     const recovering = plan.recover(quietIO())
@@ -370,7 +370,7 @@ describe('a Managed session that cannot be reached', () => {
     peer = null
     await expect(recovering).resolves.toEqual({ kind: 'defer', reason: 'network' })
     expect(posts(p)).toEqual([])
-    expect(checkpoint()).toMatchObject({ state: 'inflight', kickoffEventId: 'kickoff' })
+    expect(await checkpoint()).toMatchObject({ state: 'inflight', kickoffEventId: 'kickoff' })
   })
 
   it('still records a Stop during a follow as canceled, not deferred', async () => {
@@ -380,7 +380,7 @@ describe('a Managed session that cannot be reached', () => {
         peerRef.send(interrupted(true), idle('stopped'))
         return { data: [interrupted(false)] }
       } })
-    killedTurn()
+    await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     const controller = new AbortController()
@@ -396,7 +396,7 @@ describe('the still-running notice of a Managed recovery', () => {
   it('is shown once history is read and the turn is still working', async () => {
     // Mutation: drop the `onStillRunning` hook in `recover` → no notice.
     const p = await remote(history(user(), running('run'), message('half', 'Half')))
-    killedTurn()
+    await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     const notices: string[] = []
@@ -409,7 +409,7 @@ describe('the still-running notice of a Managed recovery', () => {
 
   it('is not shown for a turn that ended while the app was closed', async () => {
     await remote(history(user(), running('run'), message('final', 'Build fixed.'), idle('end')))
-    killedTurn()
+    await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     const notices: string[] = []
@@ -419,7 +419,7 @@ describe('the still-running notice of a Managed recovery', () => {
 
   it('is shown for a parked permission only once its answer is delivered', async () => {
     const p = await remote(history(user(), permissionTool('tool-parked'), requires(['tool-parked'])))
-    killedTurn()
+    await killedTurn()
     const plan = await planKilled()
     if (plan.kind !== 'recover') throw new Error(`expected a recover plan, got ${plan.kind}`)
     const notices: string[] = []

@@ -17,6 +17,11 @@ vi.mock('../mcp/manager', () => ({ mcpManager: {
   connecting: state.connecting,
   needsUser: state.needsUser
 } }))
+const config = vi.hoisted(() => ({ reads: 0 }))
+vi.mock('../mcp/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mcp/config')>()
+  return { ...actual, mcpRowToConfig: (...args: Parameters<typeof actual.mcpRowToConfig>) => { config.reads++; return actual.mcpRowToConfig(...args) } }
+})
 vi.mock('./conductorBridge', () => ({ conductorBridge: { refreshAgent: state.refreshAgent } }))
 const requirements = vi.hoisted(() => ({ dropRequirementOfProvider: vi.fn(async () => {}) }))
 vi.mock('./addonDirectory/requirements', () => requirements)
@@ -145,7 +150,7 @@ describe('agentMcpService', () => {
     let finish!: () => void
     state.connect.mockReturnValue(new Promise((resolve) => { finish = () => resolve({ status: 'connected' }) }))
     agentMcpService.attach(OWNER, 'folder:a', 'm1')
-    expect(agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])).toEqual(['m1'])
+    expect(await agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])).toEqual(['m1'])
     expect(state.connect).toHaveBeenCalledOnce()
     expect(state.connect.mock.calls[0][1]).toEqual({ interactive: false })
     let done = false
@@ -164,7 +169,7 @@ describe('agentMcpService', () => {
     vi.useFakeTimers()
     state.connect.mockReturnValue(new Promise(() => {}))
     agentMcpService.attach(OWNER, 'folder:a', 'm1')
-    agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])
+    await agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['m1'])
     let first = false
     const turn = agentMcpService.ensureConnected(OWNER, 'folder:a').then(() => { first = true })
     await vi.advanceTimersByTimeAsync(59_000)
@@ -179,10 +184,10 @@ describe('agentMcpService', () => {
     expect(second).toBe(true)
   })
 
-  it('starts nothing at an add for a connector that is up, off, or still needs the user', () => {
+  it('starts nothing at an add for a connector that is up, off, or still needs the user', async () => {
     mcp('up'); mcp('off', { enabled: 0 }); mcp('oauth-never', { transport_type: 'streamable-http', url: 'https://x.test' })
     state.status = { up: 'connected' }
-    expect(agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['up', 'off', 'oauth-never', 'gone'])).toEqual([])
+    expect(await agentMcpService.connectAfterAdd(OWNER, 'folder:a', ['up', 'off', 'oauth-never', 'gone'])).toEqual([])
     expect(state.connect).not.toHaveBeenCalled()
   })
 
@@ -204,13 +209,27 @@ describe('agentMcpService', () => {
     // flight. Mutation: drop the replaced branch and the next turn skips the
     // connector for a minute on a backoff it never earned.
     state.connect.mockResolvedValueOnce({ status: 'disconnected' })
-    state.connecting.mockReturnValueOnce(undefined).mockReturnValueOnce(Promise.resolve({ status: 'error' }))
+    // Asked before the keystore read and again after it, then by the replaced attempt.
+    state.connecting.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined).mockReturnValueOnce(Promise.resolve({ status: 'error' }))
     agentMcpService.attach(OWNER, 'folder:a', 'm1')
     await agentMcpService.ensureConnected(OWNER, 'folder:a', { waitMs: 50 })
     await flush()
     state.connect.mockResolvedValueOnce({ status: 'connected' })
     await agentMcpService.ensureConnected(OWNER, 'folder:a', { waitMs: 50 })
     expect(state.connect).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads no secrets for a connector that will not start this turn (backoff, needs the user)', async () => {
+    state.connect.mockResolvedValue({ status: 'error' })
+    agentMcpService.attach(OWNER, 'folder:a', 'm1')
+    await agentMcpService.ensureConnected(OWNER, 'folder:a', { waitMs: 50 })
+    await flush()
+    expect(state.connect).toHaveBeenCalledOnce()
+    const reads = config.reads
+    // In backoff now: a turn skips it before touching the keystore.
+    await agentMcpService.ensureConnected(OWNER, 'folder:a', { waitMs: 50 })
+    expect(state.connect).toHaveBeenCalledOnce()
+    expect(config.reads).toBe(reads)
   })
 
   it('retries a failed connector in the background on a doubling backoff, and starts over once it connects', async () => {

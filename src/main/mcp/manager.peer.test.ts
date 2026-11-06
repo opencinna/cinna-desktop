@@ -19,7 +19,7 @@ const edge = vi.hoisted(() => ({
 vi.mock('electron', () => ({ shell: { openExternal: edge.openExternal } }))
 vi.mock('../index', () => ({ getMainWindow: () => null }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }))
-vi.mock('../security/keystore', () => ({ encryptApiKey: (text: string) => Buffer.from(text), decryptApiKey: (value: Buffer) => value.toString() }))
+vi.mock('../security/keystore', () => ({ encryptApiKey: async (text: string) => Buffer.from(text), decryptApiKey: async (value: Buffer) => value.toString() }))
 vi.mock('../db/mcpProviders', () => ({ mcpProviderRepo: {
   getOwned: (userId: string, id: string) => { const row = edge.rows.get(id); return row?.userId === userId ? row : undefined },
   saveOAuthState: edge.save

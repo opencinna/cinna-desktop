@@ -63,16 +63,16 @@ const provisioned = new Map<string, SkillProvisionSlot[]>()
 const PROVISION_OUTCOMES: readonly SkillProvisionOutcome[] = ['shared', 'already_shared', 'user_provides', 'not_shareable', 'not_allowed_locally']
 const emptyAttachments = (): ServiceCredentialAttachments => ({ local: [], accounts: {} })
 function secure(): void { if (!runtimeHost.keystore.isSecureStorageAvailable()) throw new Error('Secure storage is unavailable. Unlock the system keychain before using credentials.') }
-function encrypt(value: unknown, previous?: Buffer | null): Buffer {
+async function encrypt(value: unknown, previous?: Buffer | null): Promise<Buffer> {
   secure(); const bytes = JSON.stringify(value)
-  if (previous && runtimeHost.keystore.decryptString(previous) === bytes) return previous
+  if (previous && await runtimeHost.keystore.decryptString(previous) === bytes) return previous
   return runtimeHost.keystore.encryptString(bytes)
 }
-function decrypt(row: ServiceCredentialRow): ServiceCredentialBundle | null {
+async function decrypt(row: ServiceCredentialRow): Promise<ServiceCredentialBundle | null> {
   if (!row.payload_enc) return null
   secure()
   let bundle: ServiceCredentialBundle
-  try { bundle = JSON.parse(runtimeHost.keystore.decryptString(row.payload_enc)) as ServiceCredentialBundle }
+  try { bundle = JSON.parse(await runtimeHost.keystore.decryptString(row.payload_enc)) as ServiceCredentialBundle }
   catch { throw new Error('Stored credential values could not be decrypted. Replace the local values or sync again.') }
   rememberCredentialSecrets(bundle)
   return bundle
@@ -302,7 +302,13 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
         // The token endpoint may have stored a newer Google token while this delivery was in flight: keep it.
         if (isOAuth(m) && typeof expiry === 'number' && current.expires_at !== null && current.expires_at > expiry * 1000) continue
         if (blocked) { repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() }); continue }
-        repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: encrypt(item, row.payload_enc), payload_fetched_at: Date.now(),
+        const payload = await encrypt(item, row.payload_enc)
+        // Encrypting awaited: re-check the account, the row and a newer Google token as above.
+        check(g)
+        const again = repo.get(row.id)
+        if (!again || again.metadata !== row.metadata || !deliverable(again)) continue
+        if (isOAuth(m) && typeof expiry === 'number' && again.expires_at !== null && again.expires_at > expiry * 1000) continue
+        repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: payload, payload_fetched_at: Date.now(),
           expires_at: typeof expiry === 'number' ? expiry * 1000 : keyed ? row.expires_at : null, updated_at: Date.now() })
       } else throw new Error('Incomplete credential delivery response.')
     }
@@ -338,15 +344,15 @@ async function boundedSync(account: Account, fresh = false): Promise<void> {
   finally { clearTimeout(timer) }
 }
 /** What a generation consists of: the entries in attachment order, the identity entry and the fingerprint. */
-function candidate(attached: Resolved[]): { bundles: ServiceCredentialBundle[]; identity: ServiceCredentialEntry[]; generation: string } {
-  const bundles = attached.flatMap(v => {
+async function candidate(attached: Resolved[]): Promise<{ bundles: ServiceCredentialBundle[]; identity: ServiceCredentialEntry[]; generation: string }> {
+  const bundles = (await Promise.all(attached.map(async v => {
     const status = attachmentState(v.row)
     if (v.row && status === 'key_unavailable') return [{ bundle: unavailableBundle(v.row), account: v.account }]
     if (v.row && (status === 'pending_authorization' || status === 'reauth_required')) return [{ bundle: oauthUnavailableBundle(v.row), account: v.account }]
     if (!v.row || !['ready', 'incomplete'].includes(status)) return []
-    const bundle = decrypt(v.row)
+    const bundle = await decrypt(v.row)
     return bundle ? [{ bundle, account: v.account }] : []
-  })
+  }))).flat()
   // A filled duplicate slot wins without field-level merging; a token-less key entry is never "filled".
   // Preserve attachment order otherwise. One Core record attached under two accounts is written once
   // (first group wins): duplicate entry ids would also collide on the service-account side file.
@@ -408,7 +414,8 @@ async function materializeNow(a: LocalAgentDto, refresh: boolean): Promise<{ pat
     if (refresh && attached.length) secure()
     return { generation: 'empty', prompt: '' }
   }
-  const { bundles, identity, generation } = candidate(attached)
+  const { bundles, identity, generation } = await candidate(attached)
+  check(g)
   const path = await writeCredentials(a.path, a.kind, bundles, identity, generation, () => check(g))
   check(g)
   return { path, generation, prompt: attached.length ? '\nAttached credentials (values are private):\n' + attached.map(v => v.row ? `${credentialDto(v.row).name} (${credentialDto(v.row).type}; slot ${credentialDto(v.row).serviceUri ?? 'none'}): ${promptState(v.row)}` : `Missing credential: ${v.ref}`).join('\n') : '' }
@@ -461,10 +468,14 @@ function keyOnlyChange(current: Map<string, string>, next: Map<string, string>):
 function writeKeyChanges(a: LocalAgentDto): Promise<boolean> {
   return chain(a.path, async () => {
     // Re-checked when it runs: the turn may have ended, or an exclusive holder taken over, since it was queued.
-    if (suspended || !turnLock.isLocked(a.id) || turnLock.isExclusivelyLocked(a.id) || !runtimeHost.keystore.isSecureStorageAvailable()) return false
+    const writable = (): boolean => !suspended && turnLock.isLocked(a.id) && !turnLock.isExclusivelyLocked(a.id) && runtimeHost.keystore.isSecureStorageAvailable()
+    if (!writable()) return false
     const g = guard(attachedAccounts(a))
     check(g)
-    const { bundles, identity, generation } = candidate(resolve(a).filter(v => v.available))
+    const { bundles, identity, generation } = await candidate(resolve(a).filter(v => v.available))
+    // Decrypting awaited: the turn may have ended or the account changed meanwhile.
+    check(g)
+    if (!writable()) return false
     const files = compareGeneration(a.path, a.kind, bundles, identity)
     if (!files || !keyOnlyChange(files.current, files.next)) return false
     await writeCredentials(a.path, a.kind, bundles, identity, generation, () => check(g))
@@ -473,18 +484,26 @@ function writeKeyChanges(a: LocalAgentDto): Promise<boolean> {
   }).catch(() => { logger.warn('Token change waits for the running turn', { agentId: a.id }); return false })
 }
 function hostOf(url: string): string { try { return new URL(url).host } catch { return url } }
-/** Eligible: a Cinna profile with a server and stored tokens, not signed out this session, and either passwordless or unlocked. */
-function eligible(): Map<string, AccountInfo> {
-  const out = new Map<string, AccountInfo>()
+/** Who may hold an account now, current profile first: a Cinna profile with a server, not signed out this session, and either passwordless or unlocked. */
+function eligibleUsers(): ReturnType<typeof userRepo.list> {
   // The current profile wins a key shared with another row (a recreated profile).
-  const users = userRepo.list().sort((x, y) => Number(y.id === currentUser) - Number(x.id === currentUser))
-  for (const u of users) {
-    if (u.type !== 'cinna_user' || !u.cinnaServerUrl || signedOut.has(u.id)) continue
-    if (u.passwordHash && !unlocked(u.id) && u.id !== currentUser) continue
-    let subject: string, origin: string
-    try { subject = getStoredCinnaSubject(u.id); origin = new URL(u.cinnaServerUrl).origin } catch { continue }
+  return userRepo.list().sort((x, y) => Number(y.id === currentUser) - Number(x.id === currentUser))
+    .filter(u => u.type === 'cinna_user' && !!u.cinnaServerUrl && !signedOut.has(u.id) && !(u.passwordHash && !unlocked(u.id) && u.id !== currentUser))
+}
+/** Eligible: {@link eligibleUsers} whose stored token names a subject. */
+async function eligible(): Promise<Map<string, AccountInfo>> {
+  const before = eligibleUsers()
+  const subjects = new Map(await Promise.all(before.map(async u => [u.id, await getStoredCinnaSubject(u.id).catch(() => null)] as const)))
+  const out = new Map<string, AccountInfo>()
+  // Read again after the keystore: a profile signed out, locked or deleted meanwhile is left out,
+  // and one that became eligible meanwhile is added by the refresh its change queued.
+  for (const u of eligibleUsers()) {
+    const subject = subjects.get(u.id)
+    if (!subject) continue
+    let origin: string
+    try { origin = new URL(u.cinnaServerUrl!).origin } catch { continue }
     const key = createHash('sha256').update(origin + '\n' + subject).digest('hex').slice(0, 16)
-    if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl), serverUrl: u.cinnaServerUrl,
+    if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl!), serverUrl: u.cinnaServerUrl!,
       name: u.cinnaFullName?.trim() || u.displayName || u.username, email: u.username })
   }
   return out
@@ -510,10 +529,32 @@ function createAccount(value: AccountInfo): Account {
   account.scheduler.setSuspended(suspended)
   return account
 }
-/** Recompute the eligible set; start/stop per-account sync and regenerate only agents attached to a changed account. */
-function refreshAccounts(): void {
+/**
+ * Recompute the eligible set; start/stop per-account sync and regenerate only agents attached to a changed account.
+ * A profile that stopped being eligible (signed out, locked, deleted) is retired at once; the rest waits for the
+ * keystore (an account's key needs its token's subject). Runs are chained so they apply in call order. Never rejects.
+ */
+let accountsRefresh: Promise<void> = Promise.resolve()
+function refreshAccounts(): Promise<void> {
+  if (!started) return Promise.resolve()
+  retireIneligible()
+  const run = accountsRefresh.then(applyEligible).catch((error: unknown) => {
+    logger.warn('Credential accounts were not refreshed', { error: error instanceof Error ? error.message : String(error) })
+  })
+  accountsRefresh = run
+  return run
+}
+function retireIneligible(): void {
+  const users = new Set(eligibleUsers().map(u => u.id)), touched = new Set<string>()
+  for (const account of [...accounts.values()]) if (!users.has(account.userId)) { retireAccount(account); touched.add(account.key) }
+  if (!touched.size) return
+  regenerate(a => Object.keys(state(a).accounts).some(key => touched.has(key)))
+  changed()
+}
+async function applyEligible(): Promise<void> {
   if (!started) return
-  const next = eligible(), touched = new Set<string>()
+  const next = await eligible(), touched = new Set<string>()
+  if (!started) return
   for (const account of [...accounts.values()]) {
     const wanted = next.get(account.key)
     if (!wanted || wanted.userId !== account.userId || wanted.origin !== account.origin) { retireAccount(account); touched.add(account.key) }
@@ -989,10 +1030,16 @@ async function issueAccessToken({ agentId, credentialId, minTtl, knownExpiresAt 
   try {
     const current = repo.get(rowId)
     if (current?.payload_enc && deliverable(current)) {
-      const bundle = decrypt(current)
+      const bundle = await decrypt(current)
       if (bundle) {
         bundle.entry.credential_data = { ...bundle.entry.credential_data, ...token }
-        repo.put({ ...current, payload_enc: encrypt(bundle, current.payload_enc), expires_at: token.expires_at * 1000, updated_at: Date.now() })
+        const payload = await encrypt(bundle, current.payload_enc)
+        // Re-checked after the keystore awaits: the account, and a row nobody rewrote or revoked meanwhile.
+        const again = repo.get(rowId)
+        if (!live(g) || !again || again.updated_at !== current.updated_at || again.metadata !== current.metadata || !again.payload_enc?.equals(current.payload_enc) || !deliverable(again)) {
+          throw new Error('The cached record changed while the token was stored')
+        }
+        repo.put({ ...current, payload_enc: payload, expires_at: token.expires_at * 1000, updated_at: Date.now() })
         // Waits for the calling agent's file at most `replyWaitMs`: a turn's preparation can hold the per-path
         // chain for up to ~30 s, longer than the skill's request lives. The write lands later either way.
         const written = writeKeyChanges(a).then(wrote => { if (!wrote) queue(a) })
@@ -1029,7 +1076,7 @@ export const serviceCredentialService = {
     return { items: this.list(), ...this.status() }
   },
   status,
-  save(input: ServiceCredentialInput): ServiceCredentialDto {
+  async save(input: ServiceCredentialInput): Promise<ServiceCredentialDto> {
     secure()
     const old = input.id ? repo.get(input.id) : undefined
     if (input.id && (!old || old.origin !== 'local')) throw new Error('Only local credential records can be edited.')
@@ -1037,7 +1084,7 @@ export const serviceCredentialService = {
     const id = old?.id ?? randomUUID()
     let bundle: ServiceCredentialBundle
     if (old && input.values === undefined) {
-      bundle = decrypt(old)!
+      bundle = (await decrypt(old))!
       bundle.entry = { ...bundle.entry, name: input.name.trim(), notes: input.notes ?? null, service_uri: input.serviceUri || null }
       if (input.type === 'api_token') {
         if (input.serviceUri) bundle.entry.credential_data.service_uri = input.serviceUri
@@ -1052,8 +1099,12 @@ export const serviceCredentialService = {
     const metadata: ServiceCredentialDto = { id, origin: 'local', cloudId: null, name: bundle.entry.name, type: input.type, serviceUri: bundle.entry.service_uri, notes: bundle.entry.notes,
       status: bundle.entry.is_placeholder ? 'incomplete' : 'complete', isPlaceholder: bundle.entry.is_placeholder,
       relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null }
+    const payload = await encrypt(bundle, old?.payload_enc)
+    // Encrypting awaited: refuse to overwrite (or bring back) a record changed or removed meanwhile.
+    const again = repo.get(id)
+    if (old ? !again || again.updated_at !== old.updated_at || again.metadata !== old.metadata : again) throw new Error('The credential changed while it was being saved. Try again.')
     const now = Date.now()
-    repo.put({ id, user_id: LOCAL, origin: 'local', cloud_id: null, server_origin: null, metadata: JSON.stringify(metadata), payload_enc: encrypt(bundle, old?.payload_enc), payload_fetched_at: now, expires_at: null, created_at: old?.created_at ?? now, updated_at: now })
+    repo.put({ id, user_id: LOCAL, origin: 'local', cloud_id: null, server_origin: null, metadata: JSON.stringify(metadata), payload_enc: payload, payload_fetched_at: now, expires_at: null, created_at: old?.created_at ?? now, updated_at: now })
     regenerate(); changed(); return metadata
   },
   remove(id: string): void {
@@ -1325,7 +1376,7 @@ export const serviceCredentialService = {
     const first = !started
     started = true
     const captured = epoch
-    refreshAccounts()
+    await refreshAccounts()
     markAllRootsDirty()
     const scanned = allAgents()
     try { collectOrphanBareCredentials(scanned.map(a => a.path)) }
@@ -1341,12 +1392,12 @@ export const serviceCredentialService = {
     if (captured === epoch) changed()
   },
   /** Logout: drop the profile's cache and keep it ineligible for this app session. */
-  signOut(userId: string): void { signedOut.add(userId); repo.clearProfile(userId); refreshAccounts() },
+  signOut(userId: string): void { signedOut.add(userId); repo.clearProfile(userId); void refreshAccounts() },
   clearProfile(userId: string): void { repo.clearProfile(userId) },
   /** Fresh tokens for any profile, current or not: re-derive its account and sync it now. */
-  renewed(userId: string): void {
+  async renewed(userId: string): Promise<void> {
     const existed = accountOf(userId)
-    refreshAccounts()
+    await refreshAccounts()
     const account = accountOf(userId)
     // A newly eligible account was just started by refreshAccounts; starting it again would sync twice.
     if (account && account === existed) { account.syncError = null; account.scheduler.start({ profileUserId: userId, settingsUserId: LOCAL }) }

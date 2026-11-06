@@ -7,9 +7,11 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 async function keychain(cinna: CinnaApp) {
   // Only this disposable Electron process. Never touches the real OS keychain.
   await cinna.electronApp.evaluate(({ safeStorage }) => {
-    safeStorage.isEncryptionAvailable = () => true
-    safeStorage.encryptString = text => Buffer.from([...Buffer.from(text)].map(b => b ^ 0x95))
-    safeStorage.decryptString = bytes => Buffer.from([...bytes].map(b => b ^ 0x95)).toString()
+    // The app reads secrets through the async API only (Electron 45+). Availability is
+    // read once at startup; this patch only keeps a later check consistent.
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async text => Buffer.from([...Buffer.from(text)].map(b => b ^ 0x95))
+    safeStorage.decryptStringAsync = async bytes => ({ result: Buffer.from([...bytes].map(b => b ^ 0x95)).toString(), shouldReEncrypt: false })
   })
 }
 
@@ -49,11 +51,13 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
     const profile = await cinna.page.evaluate(name => window.api.auth.register({ accountType: 'local', username: name, displayName: name }), `Credential fixture ${i}`)
     expect(profile.success).toBe(true)
     const id = profile.user!.id; profileIds.push(id)
-    await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+    await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
+      const accessEnc = await safeStorage.encryptStringAsync(input.desktop.access_token)
+      const refreshEnc = await safeStorage.encryptStringAsync(input.desktop.refresh_token)
       const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
       const Database = req('better-sqlite3') as typeof import('better-sqlite3')
       const db = new Database(`${app.getPath('userData')}/cinna.db`)
-      try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.serverUrl, input.desktop.client_id, safeStorage.encryptString(input.desktop.access_token), safeStorage.encryptString(input.desktop.refresh_token), Date.now() + 3600_000, input.id) }
+      try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.serverUrl, input.desktop.client_id, accessEnc, refreshEnc, Date.now() + 3600_000, input.id) }
       finally { db.close() }
     }, { id, desktop: account.desktop, serverUrl: liveServerUrl })
     const logged = await cinna.page.evaluate(userId => window.api.auth.login({ userId }), id)
@@ -178,12 +182,14 @@ test('Sync Now after switching profiles only contacts the displayed host', async
       const created = await cinna.page.evaluate(name => window.api.auth.register({ accountType: 'local', username: name, displayName: name }), `Routing ${index}`)
       expect(created.success).toBe(true)
       const id = created.user!.id; profiles.push(id)
-      await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+      await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
+        const token = `e30.${Buffer.from(JSON.stringify({ sub: input.id })).toString('base64url')}.fixture`
+        const accessEnc = await safeStorage.encryptStringAsync(token)
+        const refreshEnc = await safeStorage.encryptStringAsync('fixture-refresh')
         const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
         const Database = req('better-sqlite3') as typeof import('better-sqlite3')
         const db = new Database(`${app.getPath('userData')}/cinna.db`)
-        const token = `e30.${Buffer.from(JSON.stringify({ sub: input.id })).toString('base64url')}.fixture`
-        try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.url, 'routing-fixture', safeStorage.encryptString(token), safeStorage.encryptString('fixture-refresh'), Date.now() + 3600_000, input.id) }
+        try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.url, 'routing-fixture', accessEnc, refreshEnc, Date.now() + 3600_000, input.id) }
         finally { db.close() }
       }, { id, url: urls[index] })
     }
@@ -317,12 +323,14 @@ async function cinnaProfile(cinna: CinnaApp, serverUrl: string, name: string) {
   const created = await cinna.page.evaluate(n => window.api.auth.register({ accountType: 'local', username: n, displayName: n }), name)
   expect(created.success).toBe(true)
   const id = created.user!.id
-  await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+  await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: input.id })).toString('base64url')}.fixture`
+    const accessEnc = await safeStorage.encryptStringAsync(token)
+    const refreshEnc = await safeStorage.encryptStringAsync('fixture-refresh')
     const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
     const Database = req('better-sqlite3') as typeof import('better-sqlite3')
     const db = new Database(`${app.getPath('userData')}/cinna.db`)
-    const token = `e30.${Buffer.from(JSON.stringify({ sub: input.id })).toString('base64url')}.fixture`
-    try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.url, 'keys-fixture', safeStorage.encryptString(token), safeStorage.encryptString('fixture-refresh'), Date.now() + 3600_000, input.id) }
+    try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.url, 'keys-fixture', accessEnc, refreshEnc, Date.now() + 3600_000, input.id) }
     finally { db.close() }
   }, { id, url: serverUrl })
   expect((await cinna.page.evaluate(userId => window.api.auth.login({ userId }), id)).success).toBe(true)
@@ -641,11 +649,13 @@ test('live Core issued Agent API key reaches a local agent, rotates, pauses, res
     const created = await cinna.page.evaluate(n => window.api.auth.register({ accountType: 'local', username: n, displayName: n }), 'Issued key recipient')
     expect(created.success).toBe(true)
     const userId = created.user!.id
-    await cinna.electronApp.evaluate(({ app, safeStorage }, input) => {
+    await cinna.electronApp.evaluate(async ({ app, safeStorage }, input) => {
+      const accessEnc = await safeStorage.encryptStringAsync(input.desktop.access_token)
+      const refreshEnc = await safeStorage.encryptStringAsync(input.desktop.refresh_token)
       const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
       const Database = req('better-sqlite3') as typeof import('better-sqlite3')
       const db = new Database(`${app.getPath('userData')}/cinna.db`)
-      try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.serverUrl, input.desktop.client_id, safeStorage.encryptString(input.desktop.access_token), safeStorage.encryptString(input.desktop.refresh_token), Date.now() + 3600_000, input.id) }
+      try { db.prepare(`UPDATE users SET type='cinna_user', cinna_server_url=?, cinna_client_id=?, cinna_access_token_enc=?, cinna_refresh_token_enc=?, cinna_token_expires_at=? WHERE id=?`).run(input.serverUrl, input.desktop.client_id, accessEnc, refreshEnc, Date.now() + 3600_000, input.id) }
       finally { db.close() }
     }, { id: userId, desktop: fx.recipient.desktop, serverUrl: core })
     expect((await cinna.page.evaluate(id => window.api.auth.login({ userId: id }), userId)).success).toBe(true)

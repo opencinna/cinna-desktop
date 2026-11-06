@@ -111,10 +111,10 @@ export function snapshotKeyOfManagedBy(managedBy: string | null | undefined): st
 }
 
 /** The user's values of a managed row, decrypted (empty when none, or unreadable). Main only. */
-export function managedSecrets(row: Pick<ManagedRowFields, 'envSecretEncrypted'>): Record<string, string> {
+export async function managedSecrets(row: Pick<ManagedRowFields, 'envSecretEncrypted'>): Promise<Record<string, string>> {
   if (!row.envSecretEncrypted) return {}
   try {
-    const parsed = JSON.parse(decryptApiKey(row.envSecretEncrypted)) as unknown
+    const parsed = JSON.parse(await decryptApiKey(row.envSecretEncrypted)) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
     return Object.fromEntries(Object.entries(parsed).filter((pair): pair is [string, string] => typeof pair[1] === 'string'))
   } catch {
@@ -123,21 +123,21 @@ export function managedSecrets(row: Pick<ManagedRowFields, 'envSecretEncrypted'>
 }
 
 /** `values` (empty ones dropped) as the encrypted column, or null when nothing is left. */
-export function encryptManagedSecrets(values: Readonly<Record<string, string>>): Buffer | null {
+export async function encryptManagedSecrets(values: Readonly<Record<string, string>>): Promise<Buffer | null> {
   const kept = Object.fromEntries(Object.entries(values).filter(([, value]) => typeof value === 'string' && value !== ''))
   return Object.keys(kept).length > 0 ? encryptApiKey(JSON.stringify(kept)) : null
 }
 
 /** Each name the user fills in, and whether it has a value — all the renderer ever learns of them. */
-export function managedSlotStates(row: ManagedRowFields): Array<{ name: string; hasValue: boolean }> {
+export async function managedSlotStates(row: ManagedRowFields): Promise<Array<{ name: string; hasValue: boolean }>> {
   if (!row.managedBy) return []
-  const values = managedSecrets(row)
+  const values = await managedSecrets(row)
   return (row.managedSpec?.slots ?? []).map((name) => ({ name, hasValue: typeof values[name] === 'string' && values[name] !== '' }))
 }
 
 /** The names a managed provider still needs a value for. Only `${VAR}` placeholders count; the plugin's literals never do. */
-export function missingManagedEnv(row: ManagedRowFields): string[] {
-  return managedSlotStates(row)
+export async function missingManagedEnv(row: ManagedRowFields): Promise<string[]> {
+  return (await managedSlotStates(row))
     .filter((slot) => !slot.hasValue)
     .map((slot) => slot.name)
 }
@@ -158,34 +158,34 @@ const plainEnvOf = (row: ManagedRowFields): Record<string, unknown> =>
   row.env && typeof row.env === 'object' && !Array.isArray(row.env) ? (row.env as Record<string, unknown>) : {}
 
 /** A directory connector's values: the encrypted ones over any still in the plain `env`. Main only. */
-export function directorySecrets(row: ManagedRowFields): Record<string, string> {
+export async function directorySecrets(row: ManagedRowFields): Promise<Record<string, string>> {
   const plain = Object.fromEntries(Object.entries(plainEnvOf(row)).filter((pair): pair is [string, string] => typeof pair[1] === 'string' && pair[1] !== ''))
-  return { ...plain, ...managedSecrets(row) }
+  return { ...plain, ...(await managedSecrets(row)) }
 }
 
 /** A directory connector's setting names, sorted: the plain `env`'s and any with an encrypted value. */
-export function directoryEnvNames(row: ManagedRowFields): string[] {
-  return [...new Set([...Object.keys(plainEnvOf(row)), ...Object.keys(managedSecrets(row))])].sort()
+export async function directoryEnvNames(row: ManagedRowFields): Promise<string[]> {
+  return [...new Set([...Object.keys(plainEnvOf(row)), ...Object.keys(await managedSecrets(row))])].sort()
 }
 
 /** Each of a directory connector's settings and whether it has a value — all the renderer learns of them. */
-export function directorySlotStates(row: ManagedRowFields): Array<{ name: string; hasValue: boolean }> {
-  const values = directorySecrets(row)
-  return directoryEnvNames(row).map((name) => ({ name, hasValue: typeof values[name] === 'string' && values[name] !== '' }))
+export async function directorySlotStates(row: ManagedRowFields): Promise<Array<{ name: string; hasValue: boolean }>> {
+  const values = await directorySecrets(row)
+  return (await directoryEnvNames(row)).map((name) => ({ name, hasValue: typeof values[name] === 'string' && values[name] !== '' }))
 }
 
 /**
  * The columns that move a directory connector's plain values into the
  * encrypted one — names only left in `env` — or null when none is plain.
  */
-export function directoryEnvToSeal(row: ManagedRowFields): { env: Record<string, string> | null; envSecretEncrypted: Buffer | null } | null {
+export async function directoryEnvToSeal(row: ManagedRowFields): Promise<{ env: Record<string, string> | null; envSecretEncrypted: Buffer | null } | null> {
   if (!isDirectorySecretRow(row)) return null
   const plain = plainEnvOf(row)
   if (!Object.values(plain).some((value) => typeof value === 'string' && value !== '')) return null
-  const names = directoryEnvNames(row)
+  const names = await directoryEnvNames(row)
   return {
     env: names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : null,
-    envSecretEncrypted: encryptManagedSecrets(directorySecrets(row))
+    envSecretEncrypted: await encryptManagedSecrets(await directorySecrets(row))
   }
 }
 
@@ -194,10 +194,10 @@ export function directoryEnvToSeal(row: ManagedRowFields): { env: Record<string,
  * plugin's empty slots, or — for one made from a directory entry — its
  * settings with no value yet. A hand-made connector's env is the user's as typed.
  */
-export function missingEnvOf(row: ManagedRowFields): string[] {
+export async function missingEnvOf(row: ManagedRowFields): Promise<string[]> {
   if (row.managedBy) return missingManagedEnv(row)
   if (!row.registryRef) return []
-  if (isDirectorySecretRow(row)) return directorySlotStates(row).filter((slot) => !slot.hasValue).map((slot) => slot.name)
+  if (isDirectorySecretRow(row)) return (await directorySlotStates(row)).filter((slot) => !slot.hasValue).map((slot) => slot.name)
   return Object.entries(plainEnvOf(row))
     .filter(([, value]) => value === '' || value === null || value === undefined)
     .map(([name]) => name)
@@ -381,12 +381,13 @@ function managedUvEnv(config: McpProviderConfig): Record<string, string> | null 
  * managed uv, and refused while the policy forbids local servers. Never
  * deleted for it — it runs again once the policy allows.
  */
-function directoryLaunch(config: McpProviderConfig, row: ManagedRowFields): McpProviderConfig {
+async function directoryLaunch(config: McpProviderConfig, row: ManagedRowFields): Promise<McpProviderConfig> {
   if (!row.registryRef || config.transportType !== 'stdio') return config
+  // The user's values, decrypted here only, over the names still to fill (left `''`, as they were stored).
+  // Decrypted first, so the policy below is read after the keystore await, not before it.
+  const values = isDirectorySecretRow({ ...row, transportType: config.transportType }) ? await directorySecrets(row) : {}
   const uvEnv = managedUvEnv(config)
   const blocked = config.userId && !addonPolicies.get(config.userId).stdioMcp ? STDIO_RUNTIME_TEXT.policy : null
-  // The user's values, decrypted here only, over the names still to fill (left `''`, as they were stored).
-  const values = isDirectorySecretRow({ ...row, transportType: config.transportType }) ? directorySecrets(row) : {}
   const env = { ...(config.env ?? {}), ...values }
   if (!uvEnv && !blocked && Object.keys(values).length === 0) return config
   return {
@@ -396,10 +397,10 @@ function directoryLaunch(config: McpProviderConfig, row: ManagedRowFields): McpP
   }
 }
 
-export function resolveManagedLaunch(config: McpProviderConfig, row: ManagedRowFields): McpProviderConfig {
+export async function resolveManagedLaunch(config: McpProviderConfig, row: ManagedRowFields): Promise<McpProviderConfig> {
   if (!row.managedBy) return directoryLaunch(config, row)
   const literals = config.env ?? {}
-  const values = { ...literals, ...managedSecrets(row) }
+  const values = { ...literals, ...(await managedSecrets(row)) }
   const fill = (text: string): string => fillPlaceholders(text, values)
   const env = Object.fromEntries(Object.entries(literals).map(([name, value]) => [name, fill(value)]))
   let uvEnv: Record<string, string> = managedUvEnv(config) ?? {}

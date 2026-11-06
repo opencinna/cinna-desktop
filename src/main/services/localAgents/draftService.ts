@@ -263,7 +263,7 @@ export const localAgentDraftService = {
     }
 
     // A missing or unusable AI Functions credential falls back to the default runtime, so this cannot fail.
-    const resolved = aiFunctions.resolveBackend(userId)
+    const resolved = await aiFunctions.resolveBackend(userId)
 
     // Both stamps are taken here, before the model runs. A stamp taken after a
     // 30-second call would certify nothing about the file the write lands on.
@@ -389,7 +389,7 @@ export const localAgentDraftService = {
    * a provider that is down must degrade the draft, not the creation.
    */
   async runDraftCall(input: {
-    resolved: ReturnType<typeof aiFunctions.resolveBackend>
+    resolved: Awaited<ReturnType<typeof aiFunctions.resolveBackend>>
     systemPrompt: string
     userText: string
     label: string

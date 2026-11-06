@@ -47,16 +47,8 @@ export function initDatabase(openDatabase: (path: string) => Database.Database =
  * left in place).
  */
 function runConsistencyChecks(): void {
-  safeRun('encrypt-mcp-client-registrations', () => {
-    const rows = sqlite.prepare('SELECT id, client_info FROM mcp_providers WHERE client_info IS NOT NULL').all() as { id: string; client_info: string }[]
-    for (const row of rows) {
-      const registration = JSON.parse(row.client_info)
-      if (typeof registration.encrypted !== 'string') {
-        sqlite.prepare('UPDATE mcp_providers SET client_info = ? WHERE id = ?').run(
-          JSON.stringify({ encrypted: encryptApiKey(row.client_info).toString('base64') }), row.id)
-      }
-    }
-  })
+  // Needs the keystore, which is async: runs in the background, never blocking boot.
+  safeRunAsync('encrypt-mcp-client-registrations', () => encryptMcpClientRegistrations(sqlite))
   safeRun('prune-dangling-mcp-ids', () => {
     const touched = chatModeRepo.pruneDanglingMcpProviderIds()
     if (touched > 0) {
@@ -71,6 +63,32 @@ function runConsistencyChecks(): void {
     if (expired > 0) {
       logger.info('boot-cleanup:expired-orphaned-input-requests', { expired })
     }
+  })
+}
+
+/**
+ * Encrypt MCP client registrations stored in the clear (from before they were
+ * encrypted). Each row is written with compare-and-set on the value read: a
+ * registration the MCP manager wrote while this one was being encrypted is
+ * left as it is.
+ */
+export async function encryptMcpClientRegistrations(handle: Database.Database): Promise<void> {
+  const rows = handle.prepare('SELECT id, client_info FROM mcp_providers WHERE client_info IS NOT NULL').all() as { id: string; client_info: string }[]
+  for (const row of rows) {
+    const registration = JSON.parse(row.client_info)
+    if (typeof registration.encrypted === 'string') continue
+    const encrypted = (await encryptApiKey(row.client_info)).toString('base64')
+    handle.prepare('UPDATE mcp_providers SET client_info = ? WHERE id = ? AND client_info = ?').run(
+      JSON.stringify({ encrypted }), row.id, row.client_info)
+  }
+}
+
+function safeRunAsync(name: string, fn: () => Promise<void>): void {
+  void Promise.resolve().then(fn).catch((err: unknown) => {
+    logger.error('boot-cleanup:failed', {
+      check: name,
+      error: err instanceof Error ? err.message : String(err)
+    })
   })
 }
 

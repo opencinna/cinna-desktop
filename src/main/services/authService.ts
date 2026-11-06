@@ -240,7 +240,7 @@ export const authService = {
       if (previousServerUrl !== serverUrl) {
         taskSyncService.forgetBindings(existing.id)
       }
-      storeCinnaTokens(existing.id, tokens)
+      await storeCinnaTokens(existing.id, tokens)
       await userActivation.activate(existing.id)
       logger.info('user.rebound', { userId: existing.id, username, type: 'cinna_user' })
       const reboundRow = userRepo.get(existing.id)
@@ -261,7 +261,7 @@ export const authService = {
 
     // If storing tokens fails, roll back the user row so we don't leave a half-created account.
     try {
-      storeCinnaTokens(id, tokens)
+      await storeCinnaTokens(id, tokens)
     } catch (err) {
       userRepo.deleteWithCascade(id)
       logger.error('cinna token store failed, rolled back user', {
@@ -332,7 +332,7 @@ export const authService = {
       )
     }
 
-    storeCinnaTokens(userId, tokens)
+    await storeCinnaTokens(userId, tokens)
     logger.info('cinna reauth: tokens refreshed', { userId: row.id })
 
     // A dead session is the usual reason the account token in the cinna-cli
@@ -397,7 +397,7 @@ export const authService = {
     if (input.displayName !== undefined && input.displayName.trim()) {
       userRepo.updateProfile(input.userId, { displayName: input.displayName.trim() })
       // Credential lists name the account by it.
-      serviceCredentialService.refreshAccounts()
+      void serviceCredentialService.refreshAccounts()
     }
 
     // Changing or removing a password requires confirming the existing one
@@ -419,7 +419,7 @@ export const authService = {
     } else if (input.password) {
       assertPasswordStrong(input.password)
       userRepo.setPassword(input.userId, hashPassword(input.password))
-      serviceCredentialService.refreshAccounts()
+      void serviceCredentialService.refreshAccounts()
       logger.info('user.password_set', { userId: input.userId, username: row.username })
     }
 
@@ -506,7 +506,7 @@ export const authService = {
     // does matter is `registerCinna`'s rebind, which keeps the id.
     taskSyncService.resetCursors(input.userId)
     // The deleted profile's account leaves the eligible credential set.
-    serviceCredentialService.refreshAccounts()
+    void serviceCredentialService.refreshAccounts()
 
     if (wasCurrent) {
       await userActivation.activate(DEFAULT_USER_ID)

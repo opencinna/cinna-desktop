@@ -45,11 +45,11 @@ const defaultFacts: LocalMcpFacts = {
  * other reason needs a Connect (`connect`) — never "ready". One turned off on
  * this computer needs turning on first (`enable`): it never connects.
  */
-export function setupOf(row: McpProviderRow, status: string, needsUser: boolean): AddonNextStep | null {
+export async function setupOf(row: McpProviderRow, status: string, needsUser: boolean): Promise<AddonNextStep | null> {
   if (row.enabled === false) return 'enable'
   if (status === 'connected') return null
   // A plugin's or a directory server with a setting it needs still empty.
-  if (missingEnvOf(row).length > 0) return 'env'
+  if ((await missingEnvOf(row)).length > 0) return 'env'
   if (row.transportType !== 'stdio') {
     if (row.authType === 'bearer' && !row.bearerTokenEncrypted) return 'bearer'
     if (row.authType !== 'bearer' && !row.authTokensEncrypted && (needsUser || status === 'awaiting-auth')) return 'oauth'
@@ -101,9 +101,9 @@ export function localProviderEntry(row: McpProviderRow, setup: AddonNextStep | n
 }
 
 export function createThisComputerProvider(facts: LocalMcpFacts = defaultFacts): DirectoryProvider & {
-  setup(userId: string, id: string): McpSetup | null
+  setup(userId: string, id: string): Promise<McpSetup | null>
 } {
-  const setupFor = (row: McpProviderRow): AddonNextStep | null => setupOf(row, facts.status(row.id), facts.needsUser(row.id))
+  const setupFor = (row: McpProviderRow): Promise<AddonNextStep | null> => setupOf(row, facts.status(row.id), facts.needsUser(row.id))
   return {
     id: LOCAL_SOURCE,
     label: LOCAL_SOURCE_TEXT.label,
@@ -111,15 +111,15 @@ export function createThisComputerProvider(facts: LocalMcpFacts = defaultFacts):
     async list(ctx) {
       // A plugin's own servers show inside the plugin's row, never as connectors of their own.
       return {
-        entries: facts
+        entries: await Promise.all(facts
           .rows(ctx.settingsUserId)
           .filter((row) => !row.managedBy)
-          .map((row) => localProviderEntry(row, setupFor(row)))
+          .map(async (row) => localProviderEntry(row, await setupFor(row))))
       }
     },
-    setup(userId, id) {
+    async setup(userId, id) {
       const row = facts.rows(userId).find((r) => r.id === id)
-      const next = row ? setupFor(row) : null
+      const next = row ? await setupFor(row) : null
       if (!next) return null
       const message = next === 'connect' ? facts.error(id) : undefined
       return { next, ...(message ? { message } : {}) }

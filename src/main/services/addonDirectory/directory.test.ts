@@ -109,7 +109,7 @@ function build(providers: DirectoryProvider[]) {
     removeMarketplaceSkill: vi.fn(async () => ({ ok: true as const })),
     attachMcp: vi.fn(),
     detachMcp: vi.fn(),
-    mcpSetup: vi.fn(() => null),
+    mcpSetup: vi.fn(async () => null),
     findMcpByRef: vi.fn(() => null),
     createMcpFromDirectory: vi.fn(async () => ({ id: 'new-mcp', setup: { next: 'oauth' as const } })),
     deleteMcp: vi.fn(async () => undefined)
@@ -488,14 +488,14 @@ describe('addonDirectory.add and remove', () => {
 
   it('attaches a local provider and says what it still needs', async () => {
     const directory = build([core(), local()])
-    vi.mocked(deps.mcpSetup).mockReturnValueOnce({ next: 'bearer' })
+    vi.mocked(deps.mcpSetup).mockResolvedValueOnce({ next: 'bearer' })
     expect(await directory.add(USER, AGENT, localRef('l1'))).toEqual({ ok: true, next: 'bearer', mcpProviderId: 'l1' })
     expect(deps.attachMcp).toHaveBeenCalledWith(USER, AGENT, 'l1')
     expect(await directory.remove(USER, AGENT, localRef('l1'))).toEqual({ ok: true, next: null, mcpProviderId: 'l1' })
     expect(deps.detachMcp).toHaveBeenCalledWith(USER, AGENT, 'l1')
 
     // A connector that did not connect is never "ready": it needs a Connect, and says why.
-    vi.mocked(deps.mcpSetup).mockReturnValueOnce({ next: 'connect', message: 'ECONNREFUSED' })
+    vi.mocked(deps.mcpSetup).mockResolvedValueOnce({ next: 'connect', message: 'ECONNREFUSED' })
     expect(await directory.add(USER, AGENT, localRef('l1'))).toEqual({ ok: true, next: 'connect', mcpProviderId: 'l1', message: 'ECONNREFUSED' })
   })
 
@@ -719,7 +719,7 @@ describe('addonDirectory mcp_servers[] requirements', () => {
     attached = ['m-a', 'm-b']
     const dir = build([provider('cinna-core', [CORE_MCP_SOURCE], { entries: [] })])
     deps.findMcpByRef = vi.fn((_user, ref: AddonRef) => `m-${ref.id}`)
-    deps.mcpSetup = vi.fn((_user, id: string) => (id === 'm-b' ? { next: 'oauth' as const } : null))
+    deps.mcpSetup = vi.fn(async (_user, id: string) => (id === 'm-b' ? { next: 'oauth' as const } : null))
     const answer = await dir.mcpRequirements(USER, AGENT)
     if (!answer.ok) throw new Error('refused')
     expect(answer.items.map((item) => [item.name, item.state, item.reason, item.mcpProviderId, item.entryRef])).toEqual([

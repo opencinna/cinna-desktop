@@ -30,7 +30,7 @@ function harness(initial: { mode: ClaudeAuthMode; login: EngineLoginPhase | null
       return () => credentialListeners.delete(listener)
     },
     mode: () => state.mode,
-    fingerprint: () => state.fingerprint,
+    fingerprint: async () => state.fingerprint,
     invalidateLoginAnswer: vi.fn(),
     retireStaleAuth: vi.fn(() => ['claude:a']),
     login: { running: () => state.login, cancel },
@@ -41,8 +41,11 @@ function harness(initial: { mode: ClaudeAuthMode; login: EngineLoginPhase | null
   return { deps, state, cancel, save, changeCredentials, saved }
 }
 
+/** The follow reads the fingerprint through the keystore: let its queued work run. */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
 describe('installClaudeAuthFollowWith', () => {
-  it('cancels a waiting claude login when the mode switches to API Token', () => {
+  it('cancels a waiting claude login when the mode switches to API Token', async () => {
     const h = harness({ mode: 'subscription', login: 'waiting' })
     installClaudeAuthFollowWith(h.deps)
     h.state.mode = 'api_key'
@@ -51,6 +54,7 @@ describe('installClaudeAuthFollowWith', () => {
     expect(h.cancel).toHaveBeenCalledTimes(1)
     // The rest of the follow still runs on the same change.
     expect(h.deps.invalidateLoginAnswer).toHaveBeenCalledTimes(1)
+    await settle()
     expect(h.deps.retireStaleAuth).toHaveBeenCalledWith('api_key:abc')
   })
 
@@ -62,12 +66,13 @@ describe('installClaudeAuthFollowWith', () => {
     expect(h.cancel).toHaveBeenCalledTimes(1)
   })
 
-  it('cancels nothing when no login is running', () => {
+  it('cancels nothing when no login is running', async () => {
     const h = harness({ mode: 'subscription', login: null })
     installClaudeAuthFollowWith(h.deps)
     h.state.mode = 'api_key'
     h.save('claudeAuthMode')
     expect(h.cancel).not.toHaveBeenCalled()
+    await settle()
     expect(h.deps.retireStaleAuth).toHaveBeenCalledTimes(1)
   })
 
@@ -80,7 +85,7 @@ describe('installClaudeAuthFollowWith', () => {
     expect(h.deps.invalidateLoginAnswer).toHaveBeenCalledTimes(1)
   })
 
-  it('a credential change in API mode retires processes but cancels no login', () => {
+  it('a credential change in API mode retires processes but cancels no login', async () => {
     // A login started while already in API mode is the user's own choice; only the switch cancels.
     const h = harness({ mode: 'api_key', login: 'waiting' })
     installClaudeAuthFollowWith(h.deps)
@@ -88,11 +93,12 @@ describe('installClaudeAuthFollowWith', () => {
     h.save('localAgentsDefaultCredentialId')
     h.changeCredentials()
     expect(h.cancel).not.toHaveBeenCalled()
+    await settle()
     expect(h.deps.retireStaleAuth).toHaveBeenCalledTimes(3)
     expect(h.deps.invalidateLoginAnswer).toHaveBeenCalledTimes(3)
   })
 
-  it('unsubscribes every listener', () => {
+  it('unsubscribes every listener', async () => {
     const h = harness({ mode: 'subscription', login: 'waiting' })
     const off = installClaudeAuthFollowWith(h.deps)
     off()
@@ -100,6 +106,26 @@ describe('installClaudeAuthFollowWith', () => {
     h.save('claudeAuthMode')
     h.changeCredentials()
     expect(h.cancel).not.toHaveBeenCalled()
+    await settle()
     expect(h.deps.retireStaleAuth).not.toHaveBeenCalled()
+  })
+
+  it('retires with each change’s fingerprint in order, even when an older one decrypts slower', async () => {
+    const h = harness({ mode: 'api_key', login: null })
+    const answers: Array<(value: string) => void> = []
+    h.deps.fingerprint = () => new Promise<string>((resolve) => { answers.push(resolve) })
+    installClaudeAuthFollowWith(h.deps)
+    h.changeCredentials()
+    h.changeCredentials()
+    await settle()
+    // Only the first change is being followed; the second waits behind it.
+    expect(answers).toHaveLength(1)
+    answers[0]('api_key:old')
+    await settle()
+    expect(answers).toHaveLength(2)
+    answers[1]('api_key:new')
+    await settle()
+    expect(h.deps.retireStaleAuth).toHaveBeenNthCalledWith(1, 'api_key:old')
+    expect(h.deps.retireStaleAuth).toHaveBeenNthCalledWith(2, 'api_key:new')
   })
 })

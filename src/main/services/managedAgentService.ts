@@ -10,7 +10,7 @@ import { parseManagedAgentConfig, type ManagedAgentConfig } from '../../shared/m
 import type { ManagedRunBinding } from '../agents/drivers/managed/managedRun'
 
 /** One captured account capability. No renderer-supplied URL or key enters it. */
-function credential(credentialId: string): { client: Anthropic; fingerprint: string; validate(): void } {
+async function credential(credentialId: string): Promise<{ client: Anthropic; fingerprint: string; validate(): void }> {
   const profileId = getProfileScopeUserId()
   const read = () => llmProviderRepo.listByUserIds(getManagedResourceScopes()).find((row) => row.id === credentialId)
   const row = read()
@@ -23,17 +23,20 @@ function credential(credentialId: string): { client: Anthropic; fingerprint: str
     value.apiKeyEncrypted?.toString('base64')
   ])).digest('hex')
   const fingerprint = signature(row)
-  const apiKey = decryptApiKey(row.apiKeyEncrypted)
+  const apiKey = await decryptApiKey(row.apiKeyEncrypted)
   if (apiKey.startsWith('sk-ant-oat')) throw new Error('Managed agents require an Anthropic API key, not a Claude CLI login.')
+  const validate = (): void => {
+    const current = read()
+    if (getProfileScopeUserId() !== profileId || !current || signature(current) !== fingerprint) {
+      throw new Error('The Managed agent credential or active profile changed. Start again with the current configuration.')
+    }
+  }
+  // The keystore awaited: the credential and the profile must still be the ones read.
+  validate()
   return {
     client: new Anthropic({ apiKey, authToken: null, ...(row.baseUrl ? { baseURL: row.baseUrl } : {}), maxRetries: 0, timeout: 30_000 }),
     fingerprint,
-    validate() {
-      const current = read()
-      if (getProfileScopeUserId() !== profileId || !current || signature(current) !== fingerprint) {
-        throw new Error('The Managed agent credential or active profile changed. Start again with the current configuration.')
-      }
-    }
+    validate
   }
 }
 
@@ -43,15 +46,15 @@ export const managedAgentService = {
     if (!row || row.driver !== 'managed') throw new Error('Managed agent not found.')
     return { name: row.name, config: parseManagedAgentConfig(row.driverConfig) }
   },
-  readiness(agent: AgentRow): void {
+  async readiness(agent: AgentRow): Promise<void> {
     const config = parseManagedAgentConfig(agent.driverConfig)
-    credential(config.credentialId).validate()
+    ;(await credential(config.credentialId)).validate()
   },
 
-  prepare(ownerId: string, agent: AgentRow, chatId: string): ManagedRunBinding {
+  async prepare(ownerId: string, agent: AgentRow, chatId: string): Promise<ManagedRunBinding> {
     const profileId = getProfileScopeUserId()
     const config = parseManagedAgentConfig(agent.driverConfig)
-    const account = credential(config.credentialId)
+    const account = await credential(config.credentialId)
     const configIdentity = JSON.stringify(agent.driverConfig)
     const fingerprint = createHash('sha256').update(JSON.stringify([profileId, ownerId, agent.id, configIdentity, account.fingerprint])).digest('hex')
     const validate = (): void => {
@@ -77,7 +80,7 @@ export const managedAgentService = {
     agents: { id: string; name: string; description: string | null; version: number }[]
     environments: { id: string; name: string }[]
   }> {
-    const account = credential(credentialId)
+    const account = await credential(credentialId)
     const params = workspaceId ? { workspace_id: workspaceId } : {}
     const signal = AbortSignal.timeout(30_000)
     const agents: { id: string; name: string; description: string | null; version: number }[] = []
@@ -103,7 +106,7 @@ export const managedAgentService = {
     const original = input.id ? agentRepo.getOwned(ownerId, input.id) : null
     if (input.id && (!original || original.driver !== 'managed')) throw new Error('Managed agent not found.')
     const originalIdentity = original ? JSON.stringify([original.driverConfig, original.enabled]) : null
-    const account = credential(config.credentialId)
+    const account = await credential(config.credentialId)
     const params = config.workspaceId ? { workspace_id: config.workspaceId } : {}
     const options = { signal: AbortSignal.timeout(30_000), maxRetries: 0 }
     const remote = await account.client.beta.agents.retrieve(config.agentId, { ...params, ...(config.version ? { version: config.version } : {}) }, options)

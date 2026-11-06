@@ -85,7 +85,10 @@ function assertAuthType(t: string): asserts t is 'oauth' | 'bearer' {
   }
 }
 
-function toDto(row: McpProviderRow): McpProviderDto {
+async function toDto(row: McpProviderRow): Promise<McpProviderDto> {
+  // The keystore first: the connection state below is read after it, as it is now.
+  const env = row.managedBy ? managedEnvView(row) : isDirectorySecretRow(row) ? await directoryEnvView(row) : ((row.env as Record<string, string> | null) ?? undefined)
+  const envSlots = row.managedBy ? await managedSlotStates(row) : isDirectorySecretRow(row) ? await directorySlotStates(row) : undefined
   const conn = mcpManager.getConnection(row.id)
   return {
     id: row.id,
@@ -95,7 +98,7 @@ function toDto(row: McpProviderRow): McpProviderDto {
     command: row.command ?? undefined,
     args: (row.args as string[] | null) ?? undefined,
     url: row.url ?? undefined,
-    env: row.managedBy ? managedEnvView(row) : isDirectorySecretRow(row) ? directoryEnvView(row) : ((row.env as Record<string, string> | null) ?? undefined),
+    env,
     enabled: row.enabled,
     createdAt: row.createdAt,
     hasAuth: !!(row.authTokensEncrypted || row.clientInfo || row.bearerTokenEncrypted),
@@ -104,8 +107,8 @@ function toDto(row: McpProviderRow): McpProviderDto {
     tools: conn?.tools ?? [],
     error: conn?.error,
     ...(mcpManager.connecting(row.id) ? { connecting: true } : {}),
-    ...(row.managedBy ? { managedBy: row.managedBy, managedByTitle: managedTitleOf(row), envSlots: managedSlotStates(row) } : {}),
-    ...(isDirectorySecretRow(row) ? { envSlots: directorySlotStates(row) } : {})
+    ...(row.managedBy ? { managedBy: row.managedBy, managedByTitle: managedTitleOf(row), envSlots } : {}),
+    ...(isDirectorySecretRow(row) ? { envSlots } : {})
   }
 }
 
@@ -116,8 +119,8 @@ function managedTitleOf(row: McpProviderRow): string {
 }
 
 /** A directory connector's env as the renderer sees it: its setting names, no values. */
-function directoryEnvView(row: McpProviderRow): Record<string, string> | undefined {
-  const names = directoryEnvNames(row)
+async function directoryEnvView(row: McpProviderRow): Promise<Record<string, string> | undefined> {
+  const names = await directoryEnvNames(row)
   return names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : undefined
 }
 
@@ -126,11 +129,14 @@ function directoryEnvView(row: McpProviderRow): Record<string, string> | undefin
  * before they were encrypted) into the encrypted column, leaving the names.
  * The row as it is now; unchanged when nothing was plain.
  */
-function sealDirectoryEnv(userId: string, row: McpProviderRow): McpProviderRow {
-  const sealed = directoryEnvToSeal(row)
-  if (!sealed) return row
+async function sealDirectoryEnv(userId: string, row: McpProviderRow): Promise<McpProviderRow> {
   try {
-    return writeSealed(userId, row, sealed)
+    const sealed = await directoryEnvToSeal(row)
+    if (!sealed) return row
+    // Encrypting awaited: a row edited meanwhile is left for the next read, never overwritten.
+    const now = mcpProviderRepo.getOwned(userId, row.id)
+    if (!now || now.configRevision !== row.configRevision || JSON.stringify(now.env) !== JSON.stringify(row.env)) return now ?? row
+    return writeSealed(userId, now, sealed)
   } catch (err) {
     // Tried again on the next read; the renderer's view is names only either way.
     logger.warn('directory connector settings could not be moved to encrypted storage', { providerId: row.id, error: String(err) })
@@ -138,7 +144,7 @@ function sealDirectoryEnv(userId: string, row: McpProviderRow): McpProviderRow {
   }
 }
 
-function writeSealed(userId: string, row: McpProviderRow, sealed: NonNullable<ReturnType<typeof directoryEnvToSeal>>): McpProviderRow {
+function writeSealed(userId: string, row: McpProviderRow, sealed: NonNullable<Awaited<ReturnType<typeof directoryEnvToSeal>>>): McpProviderRow {
   const { row: next } = mcpProviderRepo.upsert(userId, {
     id: row.id,
     name: row.name,
@@ -161,19 +167,19 @@ function writeSealed(userId: string, row: McpProviderRow, sealed: NonNullable<Re
  * one, an empty one keeping it. Values are encrypted; the plain `env` keeps
  * the names, each `''`.
  */
-function directoryEnvEdit(existing: Pick<McpProviderRow, 'env' | 'envSecretEncrypted' | 'managedBy' | 'registryRef' | 'transportType'>, env: Record<string, string> | undefined): {
+async function directoryEnvEdit(existing: Pick<McpProviderRow, 'env' | 'envSecretEncrypted' | 'managedBy' | 'registryRef' | 'transportType'>, env: Record<string, string> | undefined): Promise<{
   env: Record<string, string> | null
   envSecretEncrypted: Buffer | null
-} {
-  const stored = directorySecrets(existing)
-  const names = env ? Object.keys(env) : directoryEnvNames(existing)
+}> {
+  const stored = await directorySecrets(existing)
+  const names = env ? Object.keys(env) : await directoryEnvNames(existing)
   const values: Record<string, string> = {}
   for (const name of names) {
     const typed = env?.[name]
     const value = typeof typed === 'string' && typed !== '' ? typed : stored[name]
     if (typeof value === 'string' && value !== '') values[name] = value
   }
-  return { env: names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : null, envSecretEncrypted: encryptManagedSecrets(values) }
+  return { env: names.length > 0 ? Object.fromEntries(names.map((name) => [name, ''])) : null, envSecretEncrypted: await encryptManagedSecrets(values) }
 }
 
 /** A managed provider's env as the renderer sees it: the names the user fills in, no values. */
@@ -220,8 +226,8 @@ function assertManagedEdit(existing: McpProviderRow, input: UpsertMcpInput): voi
  * it (the renderer never had it). Other names are not the user's and are
  * ignored. Null when nothing changed.
  */
-function editedSecrets(existing: McpProviderRow, env: Record<string, string> | undefined): Buffer | null | undefined {
-  const values = managedSecrets(existing)
+async function editedSecrets(existing: McpProviderRow, env: Record<string, string> | undefined): Promise<Buffer | null | undefined> {
+  const values = await managedSecrets(existing)
   let changed = false
   for (const name of existing.managedSpec?.slots ?? []) {
     const typed = env?.[name]
@@ -230,7 +236,7 @@ function editedSecrets(existing: McpProviderRow, env: Record<string, string> | u
       changed = true
     }
   }
-  return changed ? encryptManagedSecrets(values) : undefined
+  return changed ? await encryptManagedSecrets(values) : undefined
 }
 
 /** A refusal the IPC answers as data (a thrown code does not reach the renderer). */
@@ -290,7 +296,10 @@ export function managedRefusalOf(err: unknown): McpRefusal | null {
  */
 async function upsertManaged(userId: string, existing: McpProviderRow, input: UpsertMcpInput): Promise<{ id: string; row: McpProviderDto }> {
   assertManagedEdit(existing, input)
-  const secrets = editedSecrets(existing, input.env)
+  const secrets = await editedSecrets(existing, input.env)
+  const bearerTokenEncrypted = input.bearerToken ? await encryptApiKey(input.bearerToken) : undefined
+  // The values were merged with the stored ones before the keystore awaits: refuse if the row moved meanwhile.
+  assertUnchanged(existing, mcpProviderRepo.getOwned(userId, existing.id))
   const { id, row } = mcpProviderRepo.upsert(userId, {
     id: existing.id,
     name: existing.name,
@@ -301,18 +310,25 @@ async function upsertManaged(userId: string, existing: McpProviderRow, input: Up
     env: (existing.env as Record<string, string> | null) ?? null,
     enabled: input.enabled,
     authType: existing.authType === 'bearer' ? 'bearer' : 'oauth',
-    bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined,
+    bearerTokenEncrypted,
     ...(secrets !== undefined ? { envSecretEncrypted: secrets } : {})
   })
   logger.info('managed mcp updated', { providerId: id, enabled: row.enabled, valuesChanged: secrets !== undefined })
-  if (row.enabled && missingManagedEnv(row).length === 0) await mcpManager.connect(mcpRowToConfig(row))
+  if (row.enabled && (await missingManagedEnv(row)).length === 0) await mcpManager.connect(await mcpRowToConfig(row))
   else await mcpManager.disconnect(row.id)
-  return { id, row: toDto(row) }
+  return { id, row: await toDto(row) }
+}
+
+/** The sentence an edit is refused with when its connector changed while the edit's values were encrypted. */
+const CHANGED_WHILE_SAVING = 'The connector changed while it was being saved. Try again.'
+
+function assertUnchanged(before: McpProviderRow, now: McpProviderRow | undefined): void {
+  if (!now || now.configRevision !== before.configRevision || (now.managedBy ?? null) !== (before.managedBy ?? null)) throw new Error(CHANGED_WHILE_SAVING)
 }
 
 export const mcpService = {
-  list(userId: string): McpProviderDto[] {
-    return mcpProviderRepo.list(userId).map((row) => toDto(sealDirectoryEnv(userId, row)))
+  async list(userId: string): Promise<McpProviderDto[]> {
+    return Promise.all(mcpProviderRepo.list(userId).map(async (row) => toDto(await sealDirectoryEnv(userId, row))))
   },
 
   async upsert(
@@ -328,8 +344,12 @@ export const mcpService = {
     // A local connector made from a directory entry keeps its values encrypted, as a plugin's.
     const secretEnv =
       input.transportType === 'stdio' && (existing ? isDirectorySecretRow(existing) : !!registryRef)
-        ? directoryEnvEdit(existing ?? { env: null, envSecretEncrypted: null, managedBy: null, registryRef, transportType: 'stdio' }, input.env)
+        ? await directoryEnvEdit(existing ?? { env: null, envSecretEncrypted: null, managedBy: null, registryRef, transportType: 'stdio' }, input.env)
         : null
+    const bearerTokenEncrypted = input.bearerToken ? await encryptApiKey(input.bearerToken) : undefined
+    // Re-checked after the keystore awaits: the row, and the policy, as they are now.
+    if (existing) assertUnchanged(existing, mcpProviderRepo.getOwned(userId, existing.id))
+    assertCreateAllowed(userId, input, registryRef, existing)
 
     const { id, created, row } = mcpProviderRepo.upsert(userId, {
       id: input.id,
@@ -342,7 +362,7 @@ export const mcpService = {
       ...(secretEnv ? { envSecretEncrypted: secretEnv.envSecretEncrypted } : existing && isDirectorySecretRow(existing) ? { envSecretEncrypted: null } : {}),
       enabled: input.enabled,
       authType: input.authType,
-      bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined,
+      bearerTokenEncrypted,
       ...(registryRef ? { registryRef } : {})
     })
 
@@ -354,12 +374,12 @@ export const mcpService = {
     })
 
     if (row.enabled) {
-      await mcpManager.connect(mcpRowToConfig(row))
+      await mcpManager.connect(await mcpRowToConfig(row))
     } else {
       await mcpManager.disconnect(row.id)
     }
 
-    return { id, row: toDto(row) }
+    return { id, row: await toDto(row) }
   },
 
   /**
@@ -393,7 +413,7 @@ export const mcpService = {
     logger.info('mcp created from directory', { providerId: id, source: input.registryRef.source, authType: row.authType })
     if (!input.connect) return { id, status: 'disconnected', needsUser: false }
     try {
-      const conn = await mcpManager.connect(mcpRowToConfig(row), { interactive: false })
+      const conn = await mcpManager.connect(await mcpRowToConfig(row), { interactive: false })
       return { id, status: conn.status, needsUser: mcpManager.needsUser(id), ...(conn.error ? { error: conn.error } : {}) }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -425,7 +445,7 @@ export const mcpService = {
     const row = mcpProviderRepo.getOwned(userId, id)
     if (!row) throw new McpError('not_found', 'MCP provider not found')
 
-    const conn = await mcpManager.connect(mcpRowToConfig(row))
+    const conn = await mcpManager.connect(await mcpRowToConfig(row))
     return { tools: conn.tools, status: conn.status }
   },
 

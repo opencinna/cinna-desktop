@@ -51,9 +51,9 @@ export interface ManagedRecovererDeps extends ManagedRunDeps {
   /** `agentService.findAgent`. */
   findAgent(settingsUserId: string, profileUserId: string, agentId: string): { row: AgentRow; userId: string } | null
   /** `managedAgentService.readiness` — throws when the credential needs the user. */
-  readiness(agent: AgentRow): void
+  readiness(agent: AgentRow): Promise<void>
   /** `managedAgentService.prepare` — the binding a live turn of this chat would use. */
-  prepare(ownerId: string, agent: AgentRow, chatId: string): ManagedRunBinding
+  prepare(ownerId: string, agent: AgentRow, chatId: string): Promise<ManagedRunBinding>
   /** Bound on the plan's session probe; {@link PROBE_TIMEOUT_MS} when omitted. */
   probeTimeoutMs?: number
 }
@@ -126,14 +126,14 @@ export function createManagedTurnRecoverer(deps: ManagedRecovererDeps): TurnReco
         return { kind: 'interrupted', reason: `the agent’s configuration is unreadable: ${errorText(err)}` }
       }
       try {
-        deps.readiness(agent)
+        await deps.readiness(agent)
       } catch (err) {
         logger.info('a Managed turn waits for its credential', { error: errorText(err) })
         return { kind: 'defer', reason: 'auth' }
       }
       let binding: ManagedRunBinding
       try {
-        binding = deps.prepare(ownerId, agent, marker.chatId)
+        binding = await deps.prepare(ownerId, agent, marker.chatId)
       } catch (err) {
         return { kind: 'interrupted', reason: `the Managed session cannot be used: ${errorText(err)}` }
       }
@@ -164,7 +164,7 @@ export function createManagedTurnRecoverer(deps: ManagedRecovererDeps): TurnReco
         async recover(io) {
           // A message sent since the plan was made moved the checkpoint on,
           // and the session's turn is no longer this one.
-          const current = deps.prepare(ownerId, agent, marker.chatId)
+          const current = await deps.prepare(ownerId, agent, marker.chatId)
           const now = targetOf(current, userMessageId)
           if (typeof now === 'string' || now.sessionId !== target.sessionId || now.kickoffEventId !== target.kickoffEventId) {
             return { kind: 'interrupted' }

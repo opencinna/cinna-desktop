@@ -92,22 +92,25 @@ async function openedUrls(cinna: CinnaApp): Promise<string[]> {
  * for either, and only main may decrypt.
  */
 function storedTokens(cinna: CinnaApp, providerId: string, write?: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  return cinna.electronApp.evaluate(({ app, safeStorage }, row) => {
+  return cinna.electronApp.evaluate(async ({ app, safeStorage }, row) => {
     if (app.getPath('userData') !== row.userData) throw new Error('Not the isolated test profile')
+    const sealed = row.write ? await safeStorage.encryptStringAsync(JSON.stringify(row.write)) : null
     const requireFromApp = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
     const Database = requireFromApp('better-sqlite3') as typeof import('better-sqlite3')
     const db = new Database(`${row.userData}/cinna.db`, { fileMustExist: true })
+    let enc: Buffer | null = null
     try {
-      if (row.write) {
+      if (sealed) {
         const changed = db.prepare('UPDATE mcp_providers SET auth_tokens_enc = ? WHERE id = ?')
-          .run(safeStorage.encryptString(JSON.stringify(row.write)), row.providerId).changes
+          .run(sealed, row.providerId).changes
         if (changed !== 1) throw new Error(`no provider row ${row.providerId}`)
       }
       const found = db.prepare('SELECT auth_tokens_enc AS enc FROM mcp_providers WHERE id = ?').get(row.providerId) as { enc: Buffer | null } | undefined
-      return found?.enc ? JSON.parse(safeStorage.decryptString(Buffer.from(found.enc))) as Record<string, unknown> : null
+      enc = found?.enc ? Buffer.from(found.enc) : null
     } finally {
       db.close()
     }
+    return enc ? JSON.parse((await safeStorage.decryptStringAsync(enc)).result) as Record<string, unknown> : null
   }, { userData: cinna.sandbox.userData, providerId, write: write ?? null })
 }
 

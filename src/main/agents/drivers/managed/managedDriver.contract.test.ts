@@ -46,7 +46,7 @@ function world(scenario: Scenario = 'complete') {
     return peer
   })
   const driver = createManagedDriver({
-    prepare() {
+    async prepare() {
       reads.push(checkpoint?.sessionId ?? null)
       return {
         client, config: { credentialId: 'credential', agentId: 'agent', environmentId: 'environment' },
@@ -54,7 +54,7 @@ function world(scenario: Scenario = 'complete') {
         save(value) { checkpoint = { ...value }; saved.push(value.sessionId) }
       }
     },
-    readiness() {},
+    async readiness() {},
     registerRequest: (input) => pendingRequests.register(input),
     requestTimeoutMs: 300,
     stopTimeoutMs: 40
@@ -108,8 +108,8 @@ afterEach(async () => {
 
 function underTest(failure?: unknown) {
   const driver = createManagedDriver({
-    prepare() { throw new Error('Preparation refused by the fixture.') },
-    readiness() { if (failure !== undefined) throw failure },
+    async prepare() { throw new Error('Preparation refused by the fixture.') },
+    async readiness() { if (failure !== undefined) throw failure },
     registerRequest: (input) => pendingRequests.register(input)
   })
   return { driver, row: ROW, grantsWritten: () => 0 }

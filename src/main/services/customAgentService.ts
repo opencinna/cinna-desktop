@@ -58,12 +58,16 @@ export const customAgentService = {
   stateKey(ownerId: string, row: AgentRow): ExternalRuntimeStateKey {
     return { ownerId, agentId: row.id, binding: digest([getProfileScopeUserId(), ownerId, row.id, identity(row)]) }
   },
-  runtime(ownerId: string, supplied: AgentRow): AcpRuntimeView {
+  async runtime(ownerId: string, supplied: AgentRow): Promise<AcpRuntimeView> {
     const row = assertCustom(agentRepo.getOwned(ownerId, supplied.id), true)
     if (identity(row) !== identity(supplied)) throw new Error('This ACP configuration changed. Start again with its current configuration.')
     const profileId = getProfileScopeUserId()
     const config = parseCustomAgentConfig(row.driverConfig)
     const original = identity(row)
+    const accessToken = config.transport === 'websocket' && row.accessTokenEncrypted ? await decryptApiKey(row.accessTokenEncrypted) : undefined
+    // The keystore awaited: the row (its token included) and the profile are re-checked.
+    const now = agentRepo.getOwned(ownerId, row.id)
+    if (getProfileScopeUserId() !== profileId || !now || identity(now) !== original) throw new Error('This ACP configuration changed. Start again with its current configuration.')
     const key = this.stateKey(ownerId, row)
     const validate = (chatId?: string): void => {
       const current = agentRepo.getOwned(ownerId, row.id)
@@ -73,7 +77,7 @@ export const customAgentService = {
     const state = () => { validate(); return desktopStateService.readExternal(key) }
     return {
       type: 'external', name: row.name, enabled: row.enabled, config, binding: key.binding,
-      accessToken: config.transport === 'websocket' && row.accessTokenEncrypted ? decryptApiKey(row.accessTokenEncrypted) : undefined,
+      accessToken,
       validate,
       readiness: async (options) => {
         validate()
@@ -114,14 +118,21 @@ export const customAgentService = {
     const ownerId = getSettingsScopeUserId(), profileId = getProfileScopeUserId()
     const row = input.id ? assertCustom(agentRepo.getOwned(ownerId, input.id)) : null
     const original = row ? identity(row) : null
-    const accessToken = this.resolveToken(config, input.accessToken, row)
-    const encryptedToken = accessToken ? encryptApiKey(accessToken) : null
-    const testingSavedConfiguration = row && digest(config) === digest(parseCustomAgentConfig(row.driverConfig)) &&
-      accessToken === this.resolveToken(config, undefined, row)
+    // Registered before the keystore awaits below, so a newer test of the same scope always supersedes this one.
     const scope = JSON.stringify([ownerId, profileId, input.id ?? 'new'])
     probes.get(scope)?.abort()
     const controller = new AbortController()
     probes.set(scope, controller)
+    let accessToken: string | undefined, encryptedToken: Buffer | null, testingSavedConfiguration: boolean | null
+    try {
+      accessToken = await this.resolveToken(config, input.accessToken, row)
+      encryptedToken = accessToken ? await encryptApiKey(accessToken) : null
+      testingSavedConfiguration = row && digest(config) === digest(parseCustomAgentConfig(row.driverConfig)) &&
+        accessToken === await this.resolveToken(config, undefined, row)
+    } catch (error) {
+      if (probes.get(scope) === controller) probes.delete(scope)
+      throw error
+    }
     const validate = (): void => {
       if (controller.signal.aborted || probes.get(scope) !== controller || getProfileScopeUserId() !== profileId || getSettingsScopeUserId() !== ownerId) throw new Error('This ACP configuration test was superseded or the active profile changed.')
       if (input.id) {
@@ -169,13 +180,15 @@ export const customAgentService = {
       if (probes.get(scope) === controller) probes.delete(scope)
     }
   },
-  save(input: { id?: string; name?: string; config: CustomAgentConfig; accessToken?: string; testToken: string }): { id: string } {
+  async save(input: { id?: string; name?: string; config: CustomAgentConfig; accessToken?: string; testToken: string }): Promise<{ id: string }> {
     if (input.id) assertCustom(agentRepo.getOwned(getSettingsScopeUserId(), input.id))
     const config = parseCustomAgentConfig(input.config)
     const receipt = receipts.get(input.testToken)
     const ownerId = getSettingsScopeUserId(), profileId = getProfileScopeUserId()
     if (!receipt || receipt.expires < Date.now() || receipt.ownerId !== ownerId || receipt.profileId !== profileId || receipt.id !== input.id || digest(receipt.config) !== digest(config)) throw new Error('Test this exact ACP configuration before saving it.')
-    const suppliedToken = this.resolveToken(config, input.accessToken, input.id ? agentRepo.getOwned(ownerId, input.id) ?? null : null)
+    const suppliedToken = await this.resolveToken(config, input.accessToken, input.id ? agentRepo.getOwned(ownerId, input.id) ?? null : null)
+    // The keystore awaited: the receipt must still be this one (another save may have used it) and the profile the same.
+    if (receipts.get(input.testToken) !== receipt || getSettingsScopeUserId() !== ownerId || getProfileScopeUserId() !== profileId) throw new Error('Test this exact ACP configuration before saving it.')
     if (digest(suppliedToken ?? null) !== receipt.credentialDigest) throw new Error('The access token changed. Test the connection again before saving.')
     const name = (input.name ?? receipt.result.name).trim()
     if (!name || name.length > 200) throw new Error('Give this agent a name of up to 200 characters.')
@@ -191,14 +204,14 @@ export const customAgentService = {
     acpProcessPool.retire(row.id)
     return { id: row.id }
   },
-  resolveToken(config: CustomAgentConfig, supplied: unknown, row: AgentRow | null): string | undefined {
+  async resolveToken(config: CustomAgentConfig, supplied: unknown, row: AgentRow | null): Promise<string | undefined> {
     if (config.transport !== 'websocket') return undefined
     if (supplied !== undefined) return parseAcpAccessToken(supplied)
     // Never forward a saved credential to a newly edited endpoint implicitly.
     if (row?.accessTokenEncrypted) {
       const previous = parseCustomAgentConfig(row.driverConfig)
       if (previous.transport !== 'websocket' || previous.url !== config.url) throw new Error('The endpoint changed. Enter a token for this endpoint, or clear the token field explicitly.')
-      return parseAcpAccessToken(decryptApiKey(row.accessTokenEncrypted))
+      return parseAcpAccessToken(await decryptApiKey(row.accessTokenEncrypted))
     }
     return undefined
   },
