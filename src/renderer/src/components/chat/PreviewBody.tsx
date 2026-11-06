@@ -10,6 +10,7 @@ import { MAX_TABLE_COLUMNS, MAX_TABLE_RECORDS, jsonLinesTable } from '../../util
 import { CodePreview, MAX_HIGHLIGHT_CHARS, PreviewNote, plainTextNote } from './CodePreview'
 import { XmlTree, type XmlReveal } from './XmlTree'
 import { MAX_PREVIEW_BYTES, type PreviewRenderKind } from '../../../../shared/filePreview'
+import { parseDelimited } from '../../utils/textTable'
 
 /**
  * How a previewed file's text is shown, by its kind: markdown rendered, JSON
@@ -239,59 +240,6 @@ export function XmlPreview({
       <XmlTree doc={parsed} revealRef={revealRef} />
     </JsonTreeBoundary>
   )
-}
-
-/**
- * Parse delimited text into rows, honoring double-quoted fields that may
- * contain the delimiter, embedded newlines, and `""` escaped quotes
- * (RFC-4180-ish). A single pass over the whole text — not line-by-line — so a
- * quoted cell spanning multiple physical lines stays one cell instead of
- * splitting into bogus rows. Returns one array of cells per non-blank
- * record, and stops once it has more than `maxRows`.
- */
-function parseDelimited(text: string, delimiter: string, maxRows = Infinity): string[][] {
-  const rows: string[][] = []
-  let row: string[] = []
-  let field = ''
-  let inQuotes = false
-  const src = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        if (src[i + 1] === '"') {
-          field += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        field += ch
-      }
-    } else if (ch === '"') {
-      inQuotes = true
-    } else if (ch === delimiter) {
-      row.push(field)
-      field = ''
-    } else if (ch === '\n') {
-      row.push(field)
-      // A blank physical line parses to a single empty cell: not a row.
-      if (!(row.length === 1 && row[0] === '')) rows.push(row)
-      row = []
-      field = ''
-      if (rows.length > maxRows) return rows
-    } else {
-      field += ch
-    }
-  }
-  // Flush a trailing partial record. A file ending in a newline already
-  // pushed its last row and leaves nothing buffered, so this skips the empty
-  // phantom row that would otherwise appear.
-  if (field !== '' || row.length > 0) {
-    row.push(field)
-    rows.push(row)
-  }
-  return rows
 }
 
 /** Cap on rendered rows so a large CSV doesn't lock up layout. */

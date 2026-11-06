@@ -16,6 +16,7 @@ import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { AgentColorsProvider } from './components/agents/AgentColorsProvider'
 import { FilePreviewModal } from './components/chat/FilePreviewModal'
+import { TablePreviewModal } from './components/chat/TablePreviewModal'
 import { ArtifactsHost } from './components/artifacts/ArtifactsHost'
 import { RunScriptModal } from './components/chat/RunScriptModal'
 import { useAuthStore } from './stores/auth.store'
@@ -210,6 +211,7 @@ function App(): React.JSX.Element {
         <CatalogSetupHost />
         <SyncSetupModal />
         <FilePreviewModal />
+        <TablePreviewModal />
         <ArtifactsHost />
         <RunScriptModal />
         </AgentColorsProvider>

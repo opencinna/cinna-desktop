@@ -693,6 +693,21 @@
     border-color: rgba(0, 0, 0, 0.08);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 24px 64px -12px rgba(15, 23, 42, 0.25);
   }
+  /* The table preview (`TablePreviewModal`) fades in: the scrim and the panel
+     each, never their parent, whose opacity would cut the blurs off from
+     their backdrop while it runs. */
+  @keyframes table-preview-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .table-preview-modal > * {
+    animation: table-preview-in 120ms ease-out both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .table-preview-modal > * {
+      animation: none;
+    }
+  }
   /* A solid well on a glass panel for content read closely (a terminal). */
   .app-modal-well {
     background-color: var(--color-bg-secondary);
@@ -1339,6 +1354,60 @@
   }
   [data-sticky-tables] [data-message-markdown] table:not([data-table-scrolls]) tbody tr:last-child > :last-child {
     border-bottom-right-radius: 8px;
+  }
+  /* "Table actions" ⋯ on a chat message's table (`TableActions`): in the
+     last header cell of a markdown table, and in the top-right corner of a
+     code block that reads as a table. Hidden until its host (the table's or
+     the block's wrapper) is hovered or holds focus, and while its menu is
+     open. Opacity only: its room is reserved for good, so nothing moves.
+     The wrappers (`chat-table-host`, `table-actions-code`) are plain blocks:
+     the table's and the block's margins collapse through them as before. */
+  .table-actions-trigger {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .table-actions-host:hover .table-actions-trigger,
+  .table-actions-host:focus-within .table-actions-trigger,
+  .table-actions-trigger[aria-expanded="true"] {
+    opacity: 1;
+  }
+  /* The header cell holding it: room for the button on the right whatever
+     the cell says, and its positioning box. A sticky header cell already is
+     one (the sticky rule above is more specific and keeps `sticky`). The
+     button draws in the cell's own text colour (a button inherits it). */
+  .markdown-body th.table-actions-th {
+    position: relative;
+    padding-right: calc(0.5em + 24px);
+  }
+  /* A table that scrolls sideways clips its last header cell: the wrapper's
+     own ⋯ stands in at the right edge, centred on the header row
+     (`--table-head-mid`, ChatTable), drawn in the header's colours so it
+     covers the clipped text cleanly. Hidden otherwise; `visibility`, as the
+     button's `inline-flex` utility outranks a `display` set here. */
+  .chat-table-host > .table-actions-wide {
+    visibility: hidden;
+    top: var(--table-head-mid, 1.2em);
+    color: color-mix(in srgb, var(--color-text) 70%, var(--table-under, var(--color-bg)));
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 70%, var(--table-under, var(--color-bg)));
+  }
+  .chat-table-host > .table-actions-wide:hover {
+    color: var(--color-text);
+    background-color: var(--color-bg-hover);
+  }
+  .chat-table-host:has(> table[data-table-scrolls]) > .table-actions-wide {
+    visibility: visible;
+  }
+  .chat-table-host:has(> table[data-table-scrolls]) .table-actions-in-th {
+    visibility: hidden;
+  }
+  /* Over a code block the button may sit on the first line's text: solid,
+     its glyph at 3:1 or better on both themes at rest. */
+  .markdown-body {
+    --table-actions-chip-fg: color-mix(in srgb, var(--color-text) 65%, var(--color-bg-secondary));
+  }
+  .table-actions-code .table-actions-trigger {
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
   }
   .markdown-body a {
     color: var(--color-accent);

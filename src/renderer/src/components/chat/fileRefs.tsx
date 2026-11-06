@@ -13,6 +13,8 @@ import { useRunScriptStore } from '../../stores/runScript.store'
 import { parseSkillLink } from '../../../../shared/skillLink'
 import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
 import { useChatStore } from '../../stores/chat.store'
+import { parseTextTable } from '../../utils/textTable'
+import { TableActions } from './TableActions'
 
 export type { FileRefScope }
 
@@ -145,22 +147,32 @@ function fencedBlock(node: HastLike | undefined): { text: string; lang: string |
  * is clickable as a whole: it opens the Run Script window, nothing runs. Its
  * box stays the code block's (`pre.command-ref` only tints it), so nothing
  * moves. A click that ends a selection inside it opens nothing.
+ *
+ * A block that reads as a table (`parseTextTable`: psql output, pipe lines, a
+ * ```csv block) gets the "Table actions" ⋯ in its top-right corner. Every
+ * fenced block is wrapped (`table-actions-host`, the button's positioning
+ * box and hover target), table or not, so a streamed block that becomes one
+ * a chunk later keeps its `pre` (and the selection in it) rather than
+ * remounting under a new root. The button is the `pre`'s sibling, so a
+ * click on it never reaches a `pre.command-ref`.
  */
 function MarkdownPre({ node, children, className, ...props }: ComponentProps<'pre'> & ExtraProps): React.JSX.Element {
   const target = useContext(CommandMessageContext)
-  const block = target ? fencedBlock(node as HastLike | undefined) : null
+  const block = fencedBlock(node as HastLike | undefined)
   const text = block?.text ?? null
   const lang = block?.lang ?? null
   // Detection runs once per block text, and only in a reply that may run commands.
-  const command = useMemo(() => (text === null ? null : detectCommand(text, { fenced: true, lang })), [text, lang])
-  if (!target || command === null) {
-    return (
-      <InsidePreContext.Provider value={true}>
-        <pre className={className} {...props}>{children}</pre>
-      </InsidePreContext.Provider>
-    )
-  }
-  return (
+  const canRun = target !== null
+  const command = useMemo(
+    () => (text === null || !canRun ? null : detectCommand(text, { fenced: true, lang })),
+    [text, lang, canRun]
+  )
+  const table = useMemo(() => (text === null ? null : parseTextTable(text, lang)), [text, lang])
+  const pre = !target || command === null ? (
+    <InsidePreContext.Provider value={true}>
+      <pre className={className} {...props}>{children}</pre>
+    </InsidePreContext.Provider>
+  ) : (
     <InsidePreContext.Provider value={true}>
       <pre
         {...props}
@@ -180,6 +192,13 @@ function MarkdownPre({ node, children, className, ...props }: ComponentProps<'pr
         {children}
       </pre>
     </InsidePreContext.Provider>
+  )
+  if (!block) return pre
+  return (
+    <div className="table-actions-host table-actions-code relative">
+      {pre}
+      {table && <TableActions rows={() => table} className="absolute top-1.5 right-1.5 text-[var(--table-actions-chip-fg)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]" />}
+    </div>
   )
 }
 
