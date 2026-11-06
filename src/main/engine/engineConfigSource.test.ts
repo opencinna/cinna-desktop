@@ -150,7 +150,15 @@ vi.mock('../services/localAgents/promptAssembly', () => ({
     return `PROMPT FOR ${agentDir}`
   },
   assembleBareAgentPrompt: (agentDir: string) => `BARE PROMPT FOR ${agentDir}`,
-  resolveDesktopPromptContext: () => ({ locale: 'en-GB', timeZone: 'Europe/Berlin' })
+  resolveDesktopPromptContext: () => ({
+    locale: 'en-GB',
+    timeZone: 'Europe/Berlin',
+    ...(designPack.named ? { dashboardsDesign: { guide: '/app/dashboard-design/DESIGN.md', example: '/app/dashboard-design/example' } } : {})
+  })
+}))
+const designPack = vi.hoisted(() => ({ named: false }))
+vi.mock('../services/dashboards/designPack', () => ({
+  dashboardDesignReadDir: () => '/app/dashboard-design'
 }))
 
 const {
@@ -419,6 +427,17 @@ describe('collectEngineAgents', () => {
     expect('skillPaths' in collectEngineAgents('user-1')[0]).toBe(false)
     linksFolder.fails = false
     linksFolder.skills = {}
+  })
+
+  it('allows a kit agent’s reads of the dashboard design pack exactly when its prompt names the pack', () => {
+    // Mutation: hand every agent the pack, or none, and this fails.
+    state.agents = [agent({ id: 'folder:kit', kind: 'kit', skills: [] }), agent({ id: 'folder:bare', kind: 'bare' })]
+    designPack.named = true
+    const [kit, bare] = collectEngineAgents('user-1')
+    expect(kit.dashboardsDesignPath).toBe('/app/dashboard-design')
+    expect('dashboardsDesignPath' in bare).toBe(false)
+    designPack.named = false
+    expect('dashboardsDesignPath' in collectEngineAgents('user-1')[0]).toBe(false)
   })
 
   it('tells the prompt the skill tool has the agent’s skills only when the links folder was written', () => {

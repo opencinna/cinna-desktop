@@ -1,5 +1,6 @@
 import { runtimeHost } from '../../host/runtimeHost'
 import { workshopKitOf } from '../../services/localAgents/workshopKit'
+import { dashboardDesignReadDir } from '../../services/dashboards/designPack'
 import { installRuntimeModelCatalogProbe, installRuntimeModelCatalogVariant, recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
 import { chatConductorService, isChatConductor, conductorContext, conductorModelId, clearWorkspaceInstructionFiles } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
@@ -770,6 +771,13 @@ function dashboardsCheckFor(userId: string, agentId: string): { dashboardsCheckS
   return info.available && isKitFolderAgent(userId, agentId) ? { dashboardsCheckScript: info.checkScript } : {}
 }
 
+/** The dashboard design pack a kit agent reads and copies from (`OwnCommandPolicy.dashboardsDesign`), when its prompt names it. */
+function dashboardsDesignFor(userId: string, agentId: string): { dashboardsDesign?: string } {
+  if (!dashboardsSkillInfo().available || !isKitFolderAgent(userId, agentId)) return {}
+  const dir = dashboardDesignReadDir()
+  return dir ? { dashboardsDesign: dir } : {}
+}
+
 /** The workshop kit a folder agent reads while building (`OwnCommandPolicy.workshopKit`), when there is one. */
 function workshopKitFor(agent: { path: string }): { workshopKit?: string } {
   const kit = workshopKitOf(agent.path)
@@ -888,7 +896,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         modelDeclared: resolved.modelSource === 'declared',
         approval,
         // Only here, the folder agent's branch: every branch above asks about everything.
-        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent), ...workshopKitFor(agent), ...dashboardsCheckFor(userId, agentId) } } : {})
+        ...(approval === 'ask' ? { autoApprove: { scriptRoots: ownCommandScriptRoots(agent), ...workshopKitFor(agent), ...dashboardsCheckFor(userId, agentId), ...dashboardsDesignFor(userId, agentId) } } : {})
       }
     }
   }),
@@ -961,6 +969,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     tasksSkillPlugin: () => ensureTasksSkillPlugin(),
     artifactsSkillPlugin: () => ensureArtifactsSkillPlugin(),
     dashboardsSkillPlugin: (userId, agentId) => (isKitFolderAgent(userId, agentId) ? ensureDashboardsSkillPlugin() : null),
+    dashboardsDesignDir: (userId, agentId) => dashboardsDesignFor(userId, agentId).dashboardsDesign ?? null,
     agentSkillsPlugin: kitAgentSkillsPlugin,
     agentAddonPlugins: kitAgentAddonPlugins,
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a

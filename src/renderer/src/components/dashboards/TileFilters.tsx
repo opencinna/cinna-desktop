@@ -6,7 +6,8 @@ import { usePopover } from '../ui/usePopover'
 
 /** The filter row's height under the tile's bar; always this, whatever the values (ux rule 1). */
 export const FILTER_ROW_HEIGHT = 'h-8'
-export const FILTER_ROW_TOP = 'top-[3.75rem]'
+/** Where the content starts: under the bar (34 px, `BAR_HEIGHT` in Tile) and this row (`h-8`, 34 px at the app's 17 px root). */
+export const FILTER_ROW_TOP = 'top-[68px]'
 
 /** Typing in a text or number filter recomputes once the typing stops. */
 export const FILTER_TEXT_DEBOUNCE_MS = 600

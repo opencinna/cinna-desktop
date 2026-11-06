@@ -828,6 +828,42 @@ describe('a kit agent’s own skills', () => {
     expect((permission.write as Record<string, string>)['*.cinna-kit/*']).toBe('ask')
   })
 
+  it('allows reads of the dashboard design pack for a kit agent, and file-tool edits and writes there ask', () => {
+    // Mutation: drop `dashboardsDesignPath` from the read paths and a kit
+    // agent's first read of DESIGN.md stops the turn on `external_directory`;
+    // drop `withReadOnlyFolder` and that allow opens the pack to edits.
+    const base = input()
+    const pack = '/Applications/Cinna Desktop.app/Contents/Resources/dashboard-design'
+    base.agents[0] = { ...base.agents[0], dashboardsDesignPath: pack }
+    const permission = agentOf(buildEngineConfig(base)).permission
+    expect(permission.external_directory).toEqual({ '*': 'ask', [`${pack}/*`]: 'allow' })
+    for (const tool of ['edit', 'write'] as const) {
+      const rules = permission[tool] as Record<string, string>
+      expect(rules['*']).toBe('allow')
+      expect(rules[`${pack}/*`]).toBe('ask')
+      expect(rules['*Resources/dashboard-design/*']).toBe('ask')
+      // Last match wins: the pack's entries come after the catch-all.
+      expect(Object.keys(rules).indexOf(`${pack}/*`)).toBeGreaterThan(Object.keys(rules).indexOf('*'))
+    }
+    // Without it, neither the allow nor the guard.
+    const plain = agentOf(buildEngineConfig(input())).permission
+    expect(JSON.stringify(plain)).not.toContain('dashboard-design')
+  })
+
+  it('keeps the pack’s edit guard when the manifest overrides edit and write', () => {
+    // Mutation: apply the guard before the manifest's overrides and a manifest
+    // `edit: allow` drops it while the pack's read allow stays.
+    const base = input()
+    const pack = '/Users/me/Applications/Cinna Desktop.app/Contents/Resources/dashboard-design'
+    base.agents[0] = { ...base.agents[0], dashboardsDesignPath: pack, permissions: { edit: 'allow', write: { '*': 'allow' } } }
+    const permission = agentOf(buildEngineConfig(base)).permission
+    for (const tool of ['edit', 'write'] as const) {
+      const rules = permission[tool] as Record<string, string>
+      expect(rules['*']).toBe('allow')
+      expect(rules[`${pack}/*`]).toBe('ask')
+    }
+  })
+
   it('lets a manifest’s own skill rule replace the entry, as every override does', () => {
     const base = input()
     base.agents[0] = { ...base.agents[0], skills: ['pdf-tools'], permissions: { skill: 'deny' } }

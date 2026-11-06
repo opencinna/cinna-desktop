@@ -7,6 +7,7 @@ import { isSafeAssetSegment } from '../agentFiles/agentFileService'
 import { HTML_PREVIEW_SCHEME, MAX_HTML_PREVIEW_BYTES, htmlPreviewContentType } from './htmlPreviewServer'
 import { injectDashboardHelper } from './dashboardHelper'
 import { DASHBOARD_FRAME_HOST_PREFIX } from '../../../shared/htmlPreview'
+import { DESIGN_PACK_FILES, DESIGN_PACK_SEGMENT } from '../dashboards/designPack'
 
 const logger = createLogger('dashboard-frame')
 
@@ -45,6 +46,12 @@ export interface DashboardFrameServerDeps {
   currentUserId: () => string
   /** The component's folder now, or null when it is gone (re-read on every request). */
   resolve: (target: DashboardFrameTargetRef) => Promise<ResolvedComponentDir | null> | ResolvedComponentDir | null
+  /**
+   * The dashboard design pack's folder (`dashboards/designPack.ts`), served at
+   * the reserved `…/<tile>/_cinna/<file>` to every frame, local or cloud.
+   * Absent or null: every `_cinna/` request is a 404.
+   */
+  designDir?: () => string | null
   maxFrames?: number
   newToken?: (bytes: number) => string
   maxBytes?: number
@@ -157,6 +164,24 @@ export function createDashboardFrameServer(deps: DashboardFrameServerDeps) {
     return { token, url: `${HTML_PREVIEW_SCHEME}://${h}/${token}/${path}` }
   }
 
+  /** One of the design pack's files, with the frame's own headers and CSP. */
+  async function servePackFile(rest: string[], method: string, csp: string): Promise<Response> {
+    const name = rest.length === 1 ? rest[0] : ''
+    const dir = DESIGN_PACK_FILES.has(name) ? deps.designDir?.() : null
+    if (!dir) return status(404, 'Not found', csp)
+    let bytes: Buffer
+    try {
+      const path = join(dir, name)
+      const info = await stat(path)
+      if (!info.isFile()) return status(404, 'Not found', csp)
+      if (info.size > maxBytes) return status(413, 'This file is too large to show.', csp)
+      bytes = await readFile(path)
+    } catch {
+      return status(404, 'Not found', csp)
+    }
+    return new Response(method === 'HEAD' ? null : new Uint8Array(bytes), { status: 200, headers: headers(htmlPreviewContentType(name), csp) })
+  }
+
   return {
     owns(hostname: string): boolean {
       return hostname.startsWith(DASHBOARD_FRAME_HOST_PREFIX)
@@ -226,6 +251,10 @@ export function createDashboardFrameServer(deps: DashboardFrameServerDeps) {
         logger.info('refused a dashboard frame request', { status: 404 })
         return status(404, 'Not found', csp)
       }
+      // The design pack, before the component: a component's own `_cinna/`
+      // folder is shadowed, for local and cloud frames alike. Only the pack's
+      // own files; anything else under `_cinna/` is a 404.
+      if (file[0].toLowerCase() === DESIGN_PACK_SEGMENT) return servePackFile(file.slice(1), request.method, csp)
       if (frame.remote) {
         // Core already put the kit bridge into the entry page, byte for byte
         // the file `injectDashboardHelper` would add: no second copy. Of

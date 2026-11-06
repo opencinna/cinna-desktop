@@ -10,7 +10,7 @@ PW := npx playwright test -c e2e/playwright.config.ts
 # (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
-.PHONY: help test test-hub typecheck build speech-helper kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -87,6 +87,9 @@ pin-assets: ## url + sha256 (+ size) for EVERY platform of a version, ready to p
 demo-localdev: ## Drive one-click onboarding by hand in a throwaway profile: make demo-localdev SERVER=http://localhost:8000
 	npx electron-vite build
 	sh scripts/demo-localdev.sh
+
+dashboard-gallery: ## Dashboard design pack gallery (every tile, palette, type) in out/dashboard-gallery/<style>/: make dashboard-gallery [STYLE=<dir with ui.css + charts.js>] [SHOTS=1: dark.png + light.png]
+	node scripts/dashboard-gallery/build.mjs $(if $(STYLE),--style "$(STYLE)") $(if $(SHOTS),--shots)
 
 demo-clean: ## Delete the demo profile, so the next demo-localdev is a cold run
 	@S="$${SANDBOX:-$${TMPDIR:-/tmp}cinna-demo-profile}"; rm -rf "$$S"; echo "removed: $$S"

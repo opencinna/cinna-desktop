@@ -57,7 +57,16 @@ export function promptsOnBar(cols: number): number {
 }
 
 const BAR_TEXT_BUTTON =
-  'shrink-0 max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent-hover)]'
+  'shrink-0 max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[12px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent-hover)]'
+
+/**
+ * The hover controls when they are not in edit mode: over the end of the bar
+ * rather than beside the title, so a hidden control takes none of the title's
+ * width and showing one moves and resizes nothing (ux rule 1). Their left edge
+ * fades into the bar's colour, over the title's end.
+ */
+const BAR_OVERLAY_CONTROLS =
+  'absolute inset-y-0 right-full flex items-center gap-1 whitespace-nowrap bg-[linear-gradient(to_right,transparent,var(--color-bg)_1.25rem)] pl-6 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'
 
 const MARK = 'pointer-events-auto rounded-full bg-[var(--color-bg)] p-0.5'
 
@@ -130,9 +139,13 @@ function CloudMark({
   )
 }
 
-/** The bar's strip, reserved at the top of every tile: the bar's height, and where the content starts. */
-const BAR_HEIGHT = 'h-7'
-const BAR_HEIGHT_TOP = 'top-7'
+/**
+ * The bar's strip, reserved at the top of every tile: the bar's height, and
+ * where the content starts. 34 px, the design pack's scale (title 13, age 12);
+ * `FILTER_ROW_TOP` in TileFilters is this plus the filter row.
+ */
+const BAR_HEIGHT = 'h-[34px]'
+const BAR_HEIGHT_TOP = 'top-[34px]'
 
 /**
  * One tile: a fixed-size box whose content never resizes it (ux rule 1). A
@@ -498,13 +511,14 @@ export function Tile({
         {mark && <span className={MARK} title={mark} aria-label={`Last refresh failed: ${mark}`}><AlertTriangle size={12} className="text-[var(--color-danger)]" /></span>}
       </div>
       {hasData && data?.refreshing && (
-        <Loader2 size={12} aria-label="Refreshing" className="pointer-events-none absolute right-2 top-2 animate-spin text-[var(--color-text-muted)] group-hover:opacity-0" />
+        <Loader2 size={12} aria-label="Refreshing" className="pointer-events-none absolute right-2 top-[11px] animate-spin text-[var(--color-text-muted)] group-hover:opacity-0" />
       )}
 
       {/*
         The bar's strip is reserved on every tile, so nothing moves on hover:
-        the title always shows there, the controls fade in on hover (and stay
-        in edit mode).
+        the title always shows there and takes the whole strip; the controls
+        fade in over its end on hover or keyboard focus (and sit beside it in
+        edit mode, where they stay shown).
       */}
       <div
         data-testid="tile-bar"
@@ -521,57 +535,59 @@ export function Tile({
             <GripVertical size={13} />
           </button>
         )}
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--color-text)]">{displayTitle}</span>
-        {/* Always shown while rows are highlighted, so one below the fold is not missed; in the bar's own strip, so nothing moves. */}
-        {drawnCount > 0 && (
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text)]">{displayTitle}</span>
+        {/*
+          The end of the strip: the highlight count (always shown while rows are
+          highlighted, so one below the fold is not missed) and, just before
+          it, the controls.
+        */}
+        <div className="relative flex shrink-0 items-center gap-1 self-stretch">
+          <div data-testid="tile-bar-controls" className={editMode ? 'flex shrink-0 items-center gap-1' : BAR_OVERLAY_CONTROLS}>
+          {ok && <span className="shrink-0 text-[12px] text-[var(--color-text-muted)]">{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
+          {schedule && !scheduleOff && (
+            // Only where the tile is wide enough to keep its title readable; Refresh's tooltip says it everywhere.
+            <span data-testid="tile-schedule-line" title={scheduleLine(schedule)} className="hidden max-w-[14rem] truncate text-[12px] text-[var(--color-text-muted)] @sm:inline">
+              · {scheduleLine(schedule)}
+            </span>
+          )}
+          {onBar.map((prompt, index) => (
+            <button key={index} type="button" title={prompt.prompt} onClick={() => chat!.onPrompt(prompt)} className={BAR_TEXT_BUTTON}>
+              {prompt.label}
+            </button>
+          ))}
+          {(canAsk || (gone && !!chat && !!component)) && (
+            <button type="button" onClick={canAsk ? chat!.onAsk : undefined} disabled={!canAsk} title={canAsk ? `Ask ${agentName} about this` : undefined} aria-label={`Ask about ${displayTitle}`} className={`${BAR_TEXT_BUTTON} disabled:cursor-default disabled:opacity-50`}>
+              Ask
+            </button>
+          )}
+          {ok && (
+            <button type="button" onClick={refresh} disabled={gone} title={gone ? undefined : refreshTitle} aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent">
+              <RefreshCw size={12} className={data?.refreshing ? 'animate-spin' : undefined} />
+            </button>
+          )}
           <button
             type="button"
-            data-testid="tile-highlight-count"
-            onClick={showNextHighlight}
-            title={`Highlighted by ${agentName}: show the next one`}
-            className={BAR_TEXT_BUTTON}
+            aria-label={`Actions for ${displayTitle}`}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              setMenu({ x: rect.left, y: rect.bottom + 4, anchor: event.currentTarget })
+            }}
+            className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           >
-            {drawnCount} highlighted
+            <MoreHorizontal size={13} />
           </button>
-        )}
-        <div
-          className={`flex shrink-0 items-center gap-1 transition-opacity ${
-            editMode ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
-          }`}
-        >
-        {ok && <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]">{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
-        {schedule && !scheduleOff && (
-          // Only where the tile is wide enough to keep its title readable; Refresh's tooltip says it everywhere.
-          <span data-testid="tile-schedule-line" title={scheduleLine(schedule)} className="hidden max-w-[14rem] truncate text-[10px] text-[var(--color-text-muted)] @sm:inline">
-            · {scheduleLine(schedule)}
-          </span>
-        )}
-        {onBar.map((prompt, index) => (
-          <button key={index} type="button" title={prompt.prompt} onClick={() => chat!.onPrompt(prompt)} className={BAR_TEXT_BUTTON}>
-            {prompt.label}
-          </button>
-        ))}
-        {(canAsk || (gone && !!chat && !!component)) && (
-          <button type="button" onClick={canAsk ? chat!.onAsk : undefined} disabled={!canAsk} title={canAsk ? `Ask ${agentName} about this` : undefined} aria-label={`Ask about ${displayTitle}`} className={`${BAR_TEXT_BUTTON} disabled:cursor-default disabled:opacity-50`}>
-            Ask
-          </button>
-        )}
-        {ok && (
-          <button type="button" onClick={refresh} disabled={gone} title={gone ? undefined : refreshTitle} aria-label={`Refresh ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent">
-            <RefreshCw size={12} className={data?.refreshing ? 'animate-spin' : undefined} />
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label={`Actions for ${displayTitle}`}
-          onClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect()
-            setMenu({ x: rect.left, y: rect.bottom + 4, anchor: event.currentTarget })
-          }}
-          className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-        >
-          <MoreHorizontal size={13} />
-        </button>
+          </div>
+          {drawnCount > 0 && (
+            <button
+              type="button"
+              data-testid="tile-highlight-count"
+              onClick={showNextHighlight}
+              title={`Highlighted by ${agentName}: show the next one`}
+              className={BAR_TEXT_BUTTON}
+            >
+              {drawnCount} highlighted
+            </button>
+          )}
         </div>
       </div>
 

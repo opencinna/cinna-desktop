@@ -804,6 +804,12 @@ export interface ClaudeLauncherDeps {
    */
   dashboardsSkillPlugin?(userId: string, agentId: string): string | null
   /**
+   * The dashboard design pack's folder (`designPack.dashboardDesignReadDir`)
+   * when this session is a kit agent's whose prompt names it, else null. Its
+   * reads are allowed by one scoped `Read` rule ({@link claudeDesignPackReadRule}).
+   */
+  dashboardsDesignDir?(userId: string, agentId: string): string | null
+  /**
    * The local plugin carrying a **kit** agent's own skills
    * (`agentSkillsPlugin.ensureAgentSkillsPlugin`), or null when this session
    * is not a kit agent's or the agent has no deliverable skill. Asked on the
@@ -834,6 +840,20 @@ function launchAuthOf(deps: ClaudeLauncherDeps): ClaudeLaunchAuth {
     logger.warn('the Claude auth mode could not be resolved', { error: err instanceof Error ? err.message : String(err) })
     return { mode: 'api_key', fingerprint: 'api_key:unresolved', error: 'Claude Agent could not resolve how to authenticate. Check Settings → Local Agents.' }
   }
+}
+
+/**
+ * Claude Code's allow rule for reads under `dir` (absolute): `Read(//<path>/**)`,
+ * the `//` marking a filesystem-absolute path; a Windows path in the POSIX form
+ * Claude Code matches (`C:\x` → `//c/x`). Claude Code applies `Read` rules to
+ * its other file-reading tools (Glob, Grep) as well. Allows reads only: an
+ * edit or write there is still asked.
+ */
+export function claudeDesignPackReadRule(dir: string): string {
+  const posix = dir.replaceAll('\\', '/').replace(/\/+$/, '')
+  const drive = /^([A-Za-z]):\//.exec(posix)
+  const absolute = drive ? `/${drive[1].toLowerCase()}${posix.slice(2)}` : posix
+  return `Read(/${absolute}/**)`
 }
 
 /**
@@ -951,6 +971,12 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // The agent's pinned plugins, each its own wrapper, after its skills plugin.
       const addonPluginPaths = native ? [] : safely(() => deps.agentAddonPlugins?.(ctx.userId, ctx.agentId) ?? [], [] as string[])
       const pluginPaths = [pluginPath, artifactsPluginPath, dashboardsPluginPath, agentSkillsPath, ...addonPluginPaths].filter((path): path is string => !!path)
+      // The design pack the prompt sends a kit agent to read, outside its
+      // folder: one scoped allow rule, never a bare tool name (which would
+      // take every Read off `canUseTool`) and never an added directory (which
+      // would open the pack to edits too).
+      const designDir = safely(() => deps.dashboardsDesignDir?.(ctx.userId, ctx.agentId) ?? null, null)
+      const readRules = designDir ? { allowedTools: [claudeDesignPackReadRule(designDir)] } : {}
       const plugins = pluginPaths.length > 0
         ? { plugins: pluginPaths.map((path) => ({ type: 'local' as const, path })) }
         : {}
@@ -1008,7 +1034,8 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     },
                     ...(model ? { model } : {}),
                     settingSources: ['user', 'project', 'local'],
-                    ...plugins
+                    ...plugins,
+                    ...readRules
                   }
                 : {
                     // The folder already says what this agent is, through
@@ -1031,7 +1058,8 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     ...(Object.keys(agents).length > 0 ? { agents } : {}),
                     // Desktop-owned, so not "user plugins" the pair above
                     // shuts out: cinna-tasks and the agent's own skills.
-                    ...plugins
+                    ...plugins,
+                    ...readRules
                   }
             }
           }

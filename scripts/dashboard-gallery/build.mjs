@@ -1,0 +1,168 @@
+#!/usr/bin/env node
+/**
+ * The dashboard design pack gallery: every tile size, the palette, the type
+ * scale and the components of one style, in both themes, to compare styles.
+ *
+ *   node scripts/dashboard-gallery/build.mjs [--style <dir>] [--shots]
+ *   make dashboard-gallery [STYLE=<dir>] [SHOTS=1]
+ *
+ * `--style` is a folder holding `ui.css` and `charts.js` (default: the shipped
+ * pack, `resources/dashboard-design`). Writes `out/dashboard-gallery/<style
+ * folder name>/`: `index.html` (from `gallery.html`), the style's two files,
+ * and `tokens.css` with the host's `--cinna-*` values for dark and light,
+ * generated from the pack's `tokens.json` and the app's `main.css` (its dark
+ * `:root, [data-theme="dark"]` and its `[data-theme="light"]` blocks, `var()`
+ * resolved), so the gallery never drifts from the app. `--shots` saves
+ * `dark.png` and `light.png` beside it with Playwright's Chromium.
+ *
+ * A development tool: not part of `npm test`, never shipped.
+ */
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repo = resolve(here, '..', '..')
+const PACK = join(repo, 'resources', 'dashboard-design')
+const MAIN_CSS = join(repo, 'src', 'renderer', 'src', 'assets', 'main.css')
+
+function parseArgs(argv) {
+  const args = { style: PACK, shots: false }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--style') args.style = resolve(argv[++i] ?? '')
+    else if (arg.startsWith('--style=')) args.style = resolve(arg.slice('--style='.length))
+    else if (arg === '--shots') args.shots = true
+    else if (arg === '--help' || arg === '-h') {
+      console.log('usage: node scripts/dashboard-gallery/build.mjs [--style <dir>] [--shots]')
+      process.exit(0)
+    } else {
+      console.error(`unknown argument: ${arg}`)
+      process.exit(2)
+    }
+  }
+  return args
+}
+
+/** The declarations of the first rule whose selector is exactly `selector`. */
+function block(css, selector) {
+  const re = new RegExp(`(^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`)
+  const match = re.exec(css)
+  if (!match) throw new Error(`main.css has no \`${selector} {\` block`)
+  let depth = 1
+  let i = match.index + match[0].length
+  const start = i
+  for (; i < css.length && depth > 0; i++) {
+    if (css[i] === '{') depth++
+    else if (css[i] === '}') depth--
+  }
+  const body = css.slice(start, i - 1).replace(/\/\*[\s\S]*?\*\//g, '')
+  const out = {}
+  for (const decl of body.split(';')) {
+    const at = decl.indexOf(':')
+    if (at < 0) continue
+    const name = decl.slice(0, at).trim()
+    const value = decl.slice(at + 1).trim()
+    if (name) out[name] = value
+  }
+  return out
+}
+
+/** `var(--x)` / `var(--x, fallback)` replaced from `vars`, recursively. */
+function resolveVars(value, vars, seen = new Set()) {
+  let out = value
+  for (let guard = 0; out.includes('var(') && guard < 20; guard++) {
+    out = out.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (_, name, fallback) => {
+      if (seen.has(name)) throw new Error(`main.css: ${name} refers to itself`)
+      if (vars[name] !== undefined) return resolveVars(vars[name], vars, new Set([...seen, name]))
+      if (fallback !== undefined) return fallback.trim()
+      throw new Error(`main.css defines no ${name}`)
+    })
+  }
+  if (out.includes('var(')) throw new Error(`could not resolve ${value}`)
+  return out
+}
+
+/** The host's `--cinna-*` values for one theme, as `readHostContext` sends them. */
+function themeTokens(tokens, vars, bodyFont) {
+  const out = {}
+  for (const [name, source] of Object.entries({ ...tokens.variables, ...tokens.legacy })) {
+    if (vars[source] === undefined) throw new Error(`tokens.json: ${name} reads ${source}, which main.css does not define`)
+    out[name] = resolveVars(vars[source], vars)
+  }
+  for (const [name, property] of Object.entries(tokens.computed ?? {})) {
+    if (property !== 'font-family') throw new Error(`tokens.json: computed ${property} is not known to the gallery`)
+    out[name] = bodyFont
+  }
+  return out
+}
+
+function tokensCss(tokens) {
+  const css = readFileSync(MAIN_CSS, 'utf8')
+  const dark = block(css, ':root, [data-theme="dark"]')
+  const light = { ...dark, ...block(css, '[data-theme="light"]') }
+  const layout = block(css, ':root')
+  const bodyFont = block(css, 'html, body, #root')['font-family']
+  if (!bodyFont) throw new Error('main.css: `html, body, #root` sets no font-family')
+  const rule = (theme, vars) => {
+    const values = themeTokens(tokens, { ...layout, ...vars }, bodyFont)
+    const lines = Object.entries(values).map(([name, value]) => `  ${name}: ${value};`)
+    return `html[data-cinna-theme='${theme}'] {\n  color-scheme: ${theme};\n${lines.join('\n')}\n}\n`
+  }
+  return `/* Generated by scripts/dashboard-gallery/build.mjs from resources/dashboard-design/tokens.json\n   and src/renderer/src/assets/main.css. Do not edit. */\n${rule('dark', dark)}${rule('light', light)}`
+}
+
+async function shots(outDir) {
+  let chromium
+  try {
+    ;({ chromium } = await import('@playwright/test'))
+  } catch {
+    throw new Error('Playwright is not installed: npm install')
+  }
+  let browser
+  try {
+    browser = await chromium.launch()
+  } catch (error) {
+    throw new Error(`Chromium did not start (npx playwright install chromium): ${error.message.split('\n')[0]}`)
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 2 })
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(pathToFileURL(join(outDir, 'index.html')).href)
+    await page.waitForFunction(() => document.querySelectorAll('#grid .tile').length > 0)
+    for (const theme of ['dark', 'light']) {
+      await page.click(`#theme-seg button[data-v="${theme}"]`)
+      await page.waitForTimeout(150)
+      const file = join(outDir, `${theme}.png`)
+      await page.screenshot({ path: file, fullPage: true })
+      console.log(`  ${file}`)
+    }
+    if (errors.length) throw new Error(`the gallery page threw: ${errors.join('; ')}`)
+  } finally {
+    await browser.close()
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  for (const file of ['ui.css', 'charts.js']) {
+    if (!existsSync(join(args.style, file))) throw new Error(`${args.style} has no ${file}`)
+  }
+  const tokens = JSON.parse(readFileSync(join(PACK, 'tokens.json'), 'utf8'))
+  const name = basename(args.style)
+  const outDir = join(repo, 'out', 'dashboard-gallery', name)
+  mkdirSync(outDir, { recursive: true })
+  copyFileSync(join(args.style, 'ui.css'), join(outDir, 'ui.css'))
+  copyFileSync(join(args.style, 'charts.js'), join(outDir, 'charts.js'))
+  writeFileSync(join(outDir, 'tokens.css'), tokensCss(tokens))
+  const template = readFileSync(join(here, 'gallery.html'), 'utf8')
+  writeFileSync(join(outDir, 'index.html'), template.replaceAll('{{STYLE}}', name.replace(/[&<>"]/g, '')))
+  console.log(`dashboard gallery: ${join(outDir, 'index.html')}`)
+  if (args.shots) await shots(outDir)
+}
+
+main().catch((error) => {
+  console.error(`dashboard-gallery: ${error.message}`)
+  process.exit(1)
+})

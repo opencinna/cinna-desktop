@@ -29,6 +29,7 @@ import { createLogger } from '../../logger/logger'
 import { ownReferencePrefix } from '../../../shared/componentReference'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { TasksSkillEngine } from '../tasksSkillService'
+import type { DashboardDesignGuide } from './designPack'
 
 const logger = createLogger('dashboards-skill')
 
@@ -88,6 +89,8 @@ export interface DashboardsPromptInput {
   delivery: DashboardsSkillDelivery
   checkScript: string
   referencePrefix: string
+  /** The desktop's design pack guide and example (`designPack.ts`), when this build has them. */
+  design?: DashboardDesignGuide | null
 }
 
 /**
@@ -132,6 +135,11 @@ export function cinnaDashboardsSection(input: DashboardsPromptInput | null): str
       '',
       'When your owner wants to watch something over time, build a dashboard component under `dashboards/<name>/` and offer it by printing its reference on a line of its own.',
       open,
+      // Ahead of the rest, and worded as a replacement: the skill names the kit's
+      // own `templates/dashboard-html/`, and a softer line lost to it on OpenCode.
+      ...(input.design
+        ? [`- **An \`html\` view in Cinna Desktop uses the desktop's design pack, not the kit's \`templates/dashboard-html/\`.** Before you build or change one, read \`${input.design.guide}\`. Start from \`${input.design.example}\` (copy it to \`dashboards/<name>/\`), link \`_cinna/ui.css\` and \`_cinna/charts.js\` (Cinna Desktop serves them to the page), draw charts with \`CinnaCharts\`, and colour only with \`var(--cinna-*)\` — no hex, \`rgb()\` or \`hsl()\`.`]
+        : []),
       `- Before you print a reference, check the component from this folder: \`uv run python ${quotedPath(input.checkScript)} dashboards/<name>\`, and fix everything it prints.`,
       `- Your references start with \`${input.referencePrefix}\`, for example \`${input.referencePrefix}<name>\`.`
     ].join('\n')

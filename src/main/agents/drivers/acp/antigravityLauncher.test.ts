@@ -159,6 +159,18 @@ describe('Antigravity launcher plan', () => {
     expect(none).not.toHaveProperty('autoApprove')
   })
 
+  it('carries the kit agent’s checker and design pack into the policy, in an isolated home and a native folder alike', async () => {
+    // Mutation: drop `dashboardsDesign` from the plan's policy and a kit
+    // agent's first read of DESIGN.md (a shell `cat`) stops the turn on an ask.
+    const folder = tempDir()
+    const autoApprove = { scriptRoots: [], dashboardsCheckScript: '/app/kit/check_component.py', dashboardsDesign: '/app/dashboard-design' }
+    for (const mode of ['isolated', 'native'] as const) {
+      const plan = await createAntigravityLauncher(deps({ settings: () => ({ model: null, approval: 'ask', autoApprove }) })).plan(contexts(folder)[mode])
+      if (isRefusal(plan)) throw new Error(plan.error)
+      expect(plan.autoApprove).toEqual({ folder, ...autoApprove })
+    }
+  })
+
   it('carries the instructions as the first prompt’s preamble, chosen by the folder’s mode', async () => {
     const systemPrompt = vi.fn((_u: string, _a: string, mode: string) => (mode === 'native' ? 'Desktop context.' : 'Whole document.'))
     const { native, isolated } = contexts(tempDir())

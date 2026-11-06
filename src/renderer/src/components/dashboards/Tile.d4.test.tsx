@@ -104,7 +104,7 @@ describe('the native filter row', () => {
     // Not a hover control: fixed height, no opacity toggle; the content starts below it.
     expect(row.className).toContain('h-8')
     expect(row.className).not.toMatch(/opacity|group-hover/)
-    expect(screen.getByTestId('tile-content').className).toContain('top-[3.75rem]')
+    expect(screen.getByTestId('tile-content').className).toContain('top-[68px]')
     expect((within(row).getByLabelText('Stage') as HTMLSelectElement).value).toBe('won')
     expect((within(row).getByLabelText('Month') as HTMLInputElement).type).toBe('month')
     expect((within(row).getByLabelText('Month') as HTMLInputElement).value).toBe('2026-09')
@@ -249,7 +249,7 @@ describe('the native filter row', () => {
     const { unmount } = show(tileView({ params: {} }))
     await screen.findByText('Call Bob')
     expect(screen.queryByTestId('tile-filters')).toBeNull()
-    expect(screen.getByTestId('tile-content').className).toContain('top-7')
+    expect(screen.getByTestId('tile-content').className).toContain('top-[34px]')
     unmount()
     show(tileView({ view: 'html', params: PARAMS }))
     await screen.findByTestId('dashboard-frame')

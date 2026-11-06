@@ -153,6 +153,82 @@ describe('the dashboards component checker', () => {
   })
 })
 
+describe('the dashboard design pack', () => {
+  // The prompt names the pack's DESIGN.md and example/ by absolute path.
+  // Mutation: drop the pack from the read roots and the reads ask; drop
+  // packCopyRefusal and the copy asks; loosen it and the refusals run.
+  let agent: string
+  let pack: string
+  let packPolicy: OwnCommandPolicy
+  beforeAll(() => {
+    agent = join(base, 'design-agent')
+    pack = join(base, 'app-resources', 'dashboard-design')
+    file(join(agent, 'dashboards', 'existing', 'index.html'))
+    file(join(agent, 'credentials', 'x'))
+    file(join(pack, 'DESIGN.md'))
+    file(join(pack, 'example', 'index.html'))
+    file(join(pack, 'example', 'component.json'))
+    file(join(base, 'app-resources', 'elsewhere', 'x.md'))
+    packPolicy = { folder: agent, scriptRoots: [], dashboardsDesign: pack }
+  })
+  const packAllowed = (line: string): boolean => ownCommandAllowed(packPolicy, agent, line)
+
+  it('reads the guide and the example, and copies the example to a new component folder', () => {
+    expect(packAllowed(`cat ${join(pack, 'DESIGN.md')}`)).toBe(true)
+    expect(packAllowed(`head -n 40 ${join(pack, 'DESIGN.md')}`)).toBe(true)
+    expect(packAllowed(`ls -la ${join(pack, 'example')}`)).toBe(true)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} dashboards/deals`)).toBe(true)
+    expect(packAllowed(`cp -r ${join(pack, 'example')}/ dashboards/deals`)).toBe(true)
+    expect(packAllowed(`cp ${join(pack, 'example', 'index.html')} dashboards/new.html`)).toBe(true)
+  })
+
+  it('never writes to the pack, never overwrites, and copies nothing else', () => {
+    // Into the pack, or out of it to anywhere but a new path in the folder.
+    expect(packAllowed(`cp dashboards/existing/index.html ${join(pack, 'example', 'index.html')}`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} ${join(base, 'app-resources', 'elsewhere', 'copy')}`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} dashboards/existing`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} credentials/example`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} .agents/example`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} .`)).toBe(false)
+    // Other sources and options.
+    expect(packAllowed(`cp -R ${join(base, 'app-resources', 'elsewhere')} dashboards/deals`)).toBe(false)
+    expect(packAllowed(`cp -R dashboards/existing dashboards/copy`)).toBe(false)
+    expect(packAllowed(`cp -RL ${join(pack, 'example')} dashboards/deals`)).toBe(false)
+    expect(packAllowed(`cp -R ${join(pack, 'example')} ${join(pack, 'DESIGN.md')} dashboards`)).toBe(false)
+    expect(packAllowed(`rm ${join(pack, 'DESIGN.md')}`)).toBe(false)
+    expect(packAllowed(`grep -r chart ${pack}`)).toBe(false)
+    expect(packAllowed(`cat ${join(base, 'app-resources', 'elsewhere', 'x.md')}`)).toBe(false)
+  })
+
+  it('searches a named pack file and prints a stretch of it, as an agent reading charts.js does', () => {
+    // Seen live on Antigravity: `grep -n "function bar(" …/charts.js -A 30` and
+    // `sed -n '373,430p' …/charts.js` asked. Mutation: drop readRoots from
+    // searchRefusal, or the sed rule, and these ask again.
+    const guide = join(pack, 'DESIGN.md')
+    expect(packAllowed(`grep -n "CinnaCharts" ${guide} -A 30`)).toBe(true)
+    expect(packAllowed(`sed -n '10,40p' ${guide}`)).toBe(true)
+    expect(packAllowed(`sed -n 12p ${guide}`)).toBe(true)
+    expect(packAllowed(`sed -n '5,$p' dashboards/existing/index.html`)).toBe(true)
+    // sed that writes, executes or is not a plain print, and paths outside.
+    expect(packAllowed(`sed -i '' 's/a/b/' dashboards/existing/index.html`)).toBe(false)
+    expect(packAllowed(`sed -n '1w ${join(agent, 'out.txt')}' ${guide}`)).toBe(false)
+    expect(packAllowed(`sed -n '1e date' ${guide}`)).toBe(false)
+    expect(packAllowed(`sed 's/a/b/' ${guide}`)).toBe(false)
+    expect(packAllowed(`sed -n 1p -i ${guide}`)).toBe(false)
+    expect(packAllowed(`sed -n 1p credentials/x`)).toBe(false)
+    expect(packAllowed(`sed -n 1p ${join(base, 'app-resources', 'elsewhere', 'x.md')}`)).toBe(false)
+    expect(packAllowed(`grep -n chart ${join(base, 'app-resources', 'elsewhere', 'x.md')}`)).toBe(false)
+  })
+
+  it('only when the policy names the pack', () => {
+    const none: OwnCommandPolicy = { folder: agent, scriptRoots: [] }
+    expect(ownCommandAllowed(none, agent, `grep -n chart ${join(pack, 'DESIGN.md')}`)).toBe(false)
+    expect(ownCommandAllowed(none, agent, `sed -n 1p ${join(pack, 'DESIGN.md')}`)).toBe(false)
+    expect(ownCommandAllowed(none, agent, `cat ${join(pack, 'DESIGN.md')}`)).toBe(false)
+    expect(ownCommandAllowed(none, agent, `cp -R ${join(pack, 'example')} dashboards/deals`)).toBe(false)
+  })
+})
+
 describe('ownCommandRefusal', () => {
   const reason = (line: string): string | null => ownCommandRefusal(policy, folder, line)
 

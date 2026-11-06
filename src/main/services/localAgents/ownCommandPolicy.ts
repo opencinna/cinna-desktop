@@ -58,6 +58,14 @@ export interface OwnCommandPolicy {
    * component's own endpoints, which are the agent's own scripts anyway.
    */
   dashboardsCheckScript?: string
+  /**
+   * The desktop's dashboard design pack (`resources/dashboard-design/`,
+   * absolute), whose `DESIGN.md` the prompt tells a kit agent to read and
+   * whose `example/` to copy. The read-only basics may read under it (never
+   * `grep`/`find`, as with the kit), and one `cp -R <pack path> <new path in
+   * the folder>` may copy from it. Nothing there is ever written or run.
+   */
+  dashboardsDesign?: string
 }
 
 export interface EntryInfo {
@@ -229,18 +237,21 @@ export const OWN_COMMAND_REASONS = {
   tree: (path: string) => `${path} holds hidden or protected files, or too many to check.`
 } as const
 
-/** Why `word`, whose real path is `real`, is not readable (or writable) inside the folder, or null when it is. */
-function pathRefusal(folder: string, real: string | null, word: string, mode: 'read' | 'write', kit: string | null = null): string | null {
+/**
+ * Why `word`, whose real path is `real`, is not readable (or writable) inside
+ * the folder, or null when it is. `readRoots` (the kit, the design pack) are
+ * readable outside the folder, never writable.
+ */
+function pathRefusal(folder: string, real: string | null, word: string, mode: 'read' | 'write', readRoots: readonly string[] = []): string | null {
   if (real === null) return OWN_COMMAND_REASONS.outside(word)
   const segments = segmentsIn(folder, real)
-  if (segments === null) return mode === 'read' && inKit(kit, real) ? null : OWN_COMMAND_REASONS.outside(word)
+  if (segments === null) return mode === 'read' && readRoots.some((root) => inReadRoot(root, real)) ? null : OWN_COMMAND_REASONS.outside(word)
   return isProtected(segments, mode) ? OWN_COMMAND_REASONS.protected(word) : null
 }
 
-/** Whether `real` is the kit copy or under it, outside `.git` and secret-looking names. */
-function inKit(kit: string | null, real: string): boolean {
-  if (kit === null) return false
-  const segments = segmentsIn(kit, real)
+/** Whether `real` is the read root (the kit copy, the design pack) or under it, outside `.git` and secret-looking names. */
+function inReadRoot(root: string, real: string): boolean {
+  const segments = segmentsIn(root, real)
   return segments !== null && !segments.some((s) => s === '.git' || secretName(s))
 }
 
@@ -254,6 +265,12 @@ function realCheckScript(policy: OwnCommandPolicy, fs: OwnCommandFs): string | n
 function realKit(policy: OwnCommandPolicy, fs: OwnCommandFs): string | null {
   if (typeof policy.workshopKit !== 'string' || !isAbsolute(policy.workshopKit)) return null
   try { return fs.realpath(resolve(policy.workshopKit)) } catch { return null }
+}
+
+/** The design pack's real path, or null when the policy names none or it cannot be read. */
+function realDesignPack(policy: OwnCommandPolicy, fs: OwnCommandFs): string | null {
+  if (typeof policy.dashboardsDesign !== 'string' || !isAbsolute(policy.dashboardsDesign)) return null
+  try { return fs.realpath(resolve(policy.dashboardsDesign)) } catch { return null }
 }
 
 /* ----------------------------------------------------------------- commands */
@@ -300,7 +317,11 @@ export function ownCommandRefusal(
     const [command] = words
     if (ENV_ASSIGNMENT.test(command)) return OWN_COMMAND_REASONS.env
     const kit = realKit(policy, fs)
-    if (READ_ONLY_COMMANDS.has(command)) return readOnlyRefusal(folder, realCwd, command, words.slice(1), fs, kit)
+    const pack = realDesignPack(policy, fs)
+    const readRoots = [kit, pack].filter((root): root is string => root !== null)
+    if (READ_ONLY_COMMANDS.has(command)) return readOnlyRefusal(folder, realCwd, command, words.slice(1), fs, readRoots)
+    if (command === 'sed') return sedPrintRefusal(folder, realCwd, words.slice(1), fs, readRoots)
+    if (command === 'cp' && pack !== null) return packCopyRefusal(folder, realCwd, pack, words.slice(1), fs)
     return scriptRefusal(folder, realCwd, policy.scriptRoots, words, fs, kit, realCheckScript(policy, fs))
   } catch {
     return OWN_COMMAND_REASONS.unreadable
@@ -418,13 +439,15 @@ function searchRootRefusal(folder: string, cwd: string, command: string, root: s
   return treeReadable(folder, real, hidden, fs) ? null : OWN_COMMAND_REASONS.tree(root)
 }
 
-function searchRefusal(folder: string, cwd: string, command: 'grep' | 'rg', args: string[], fs: OwnCommandFs): string | null {
+function searchRefusal(folder: string, cwd: string, command: 'grep' | 'rg', args: string[], fs: OwnCommandFs, readRoots: readonly string[] = []): string | null {
   const parsed = parseOptions(command === 'rg' ? RG_OPTIONS : GREP_OPTIONS, args)
   if ('bad' in parsed) return OWN_COMMAND_REASONS.option(command, parsed.bad)
   const { paths, recursive, hidden } = searchShape(command, parsed)
   if (!recursive) {
     if (paths.length === 0) return OWN_COMMAND_REASONS.needsPath(command)
-    return firstRefusal(paths, (path) => pathRefusal(folder, realPathOf(resolve(cwd, path), fs), path, 'read'))
+    // Named files may also be in the read roots (the kit, the design pack); a
+    // recursive search stays inside the folder.
+    return firstRefusal(paths, (path) => pathRefusal(folder, realPathOf(resolve(cwd, path), fs), path, 'read', readRoots))
   }
   const roots = paths.length > 0 ? paths : ['.']
   return firstRefusal(roots, (root) => searchRootRefusal(folder, cwd, command, root, hidden, fs))
@@ -438,15 +461,67 @@ function firstRefusal(words: string[], check: (word: string) => string | null): 
   return null
 }
 
-function readOnlyRefusal(folder: string, cwd: string, command: string, args: string[], fs: OwnCommandFs, kit: string | null = null): string | null {
-  if (command === 'grep' || command === 'rg') return searchRefusal(folder, cwd, command, args, fs)
+function readOnlyRefusal(folder: string, cwd: string, command: string, args: string[], fs: OwnCommandFs, readRoots: readonly string[] = []): string | null {
+  if (command === 'grep' || command === 'rg') return searchRefusal(folder, cwd, command, args, fs, readRoots)
   if (command === 'find') return findRefusal(folder, cwd, args, fs)
   const options = PLAIN_OPTIONS[command]
   if (!options) return OWN_COMMAND_REASONS.notOwn(command)
   const parsed = parseOptions(options, args)
   if ('bad' in parsed) return OWN_COMMAND_REASONS.option(command, parsed.bad)
   if (NEEDS_PATH.has(command) && parsed.positionals.length === 0) return OWN_COMMAND_REASONS.needsPath(command)
-  return firstRefusal(parsed.positionals, (word) => pathRefusal(folder, realPathOf(resolve(cwd, word), fs), word, 'read', kit))
+  return firstRefusal(parsed.positionals, (word) => pathRefusal(folder, realPathOf(resolve(cwd, word), fs), word, 'read', readRoots))
+}
+
+/** `sed -n` with one print script: a line, a range or `$`, ending in `p`. Nothing else sed can do (`w`, `e`, `-i`) fits it. */
+const SED_PRINT_SCRIPT = /^(?:\d+|\$)(?:,(?:\d+|\$|\+\d+))?p$/
+
+/**
+ * `sed -n '<lines>p' <file>…` — reading a stretch of a file, which agents do
+ * as often as `head` — on files the read-only commands may read (the folder,
+ * the kit, the design pack). Any other shape of sed runs after a check.
+ */
+function sedPrintRefusal(folder: string, cwd: string, args: string[], fs: OwnCommandFs, readRoots: readonly string[]): string | null {
+  const [flag, script, ...files] = args
+  if (flag !== '-n' || script === undefined || !SED_PRINT_SCRIPT.test(script) || files.length === 0) return OWN_COMMAND_REASONS.notOwn('sed')
+  if (files.some((file) => file.startsWith('-'))) return OWN_COMMAND_REASONS.notOwn('sed')
+  return firstRefusal(files, (word) => pathRefusal(folder, realPathOf(resolve(cwd, word), fs), word, 'read', readRoots))
+}
+
+/* ------------------------------------------------- copying from the pack */
+
+/**
+ * `cp [-r|-R] <source> <dest>` from the dashboard design pack into the
+ * folder: the one copy the rule allows, because the prompt tells a kit agent
+ * to start an `html` component from the pack's `example/`. One source, under
+ * the pack (outside `.git` and secret-looking names), that exists; a
+ * destination that does **not** exist yet, inside the folder and writable
+ * there (not protected, not the folder itself) — so nothing already in the
+ * folder is overwritten or written through a link, and nothing is ever
+ * written to the pack. Every other `cp` asks.
+ */
+function packCopyRefusal(folder: string, cwd: string, pack: string, args: string[], fs: OwnCommandFs): string | null {
+  const positionals: string[] = []
+  let options = true
+  for (const arg of args) {
+    if (options && arg === '--') { options = false; continue }
+    if (options && arg.startsWith('-') && arg !== '-') {
+      if (arg !== '-r' && arg !== '-R') return OWN_COMMAND_REASONS.option('cp', arg)
+      continue
+    }
+    positionals.push(arg)
+  }
+  if (positionals.length !== 2) return OWN_COMMAND_REASONS.notOwn('cp')
+  const [source, dest] = positionals
+  const realSource = realPathOf(resolve(cwd, source), fs)
+  if (realSource === null || !inReadRoot(pack, realSource) || fs.stat(realSource) === null) return OWN_COMMAND_REASONS.notOwn('cp')
+  const destPath = resolve(cwd, dest)
+  if (fs.lstat(destPath) !== null) return OWN_COMMAND_REASONS.notOwn('cp')
+  const realDest = realPathOf(destPath, fs)
+  if (realDest === null) return OWN_COMMAND_REASONS.outside(dest)
+  const segments = segmentsIn(folder, realDest)
+  if (segments === null) return OWN_COMMAND_REASONS.outside(dest)
+  if (segments.length === 0 || isProtected(segments, 'write')) return OWN_COMMAND_REASONS.protected(dest)
+  return null
 }
 
 /**

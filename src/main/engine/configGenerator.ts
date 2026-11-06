@@ -493,6 +493,13 @@ export interface EngineAgentInput {
    */
   workshopKitPath?: string
   /**
+   * The desktop's dashboard design pack (`resources/dashboard-design/`), whose
+   * `DESIGN.md` a kit agent's prompt tells it to read and whose `example/` to
+   * copy: allowed for reads outside the folder like {@link workshopKitPath},
+   * while a file-tool edit or write there asks ({@link withReadOnlyFolder}).
+   */
+  dashboardsDesignPath?: string
+  /**
    * Its pinned marketplace plugins' commands (`commands/*.md`), each a slash
    * command bound to this agent — the config-side counterpart of core's
    * `get_opencode_plugin_artifacts` command files. Named `<plugin>:<command>`
@@ -850,7 +857,17 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     prompts.set(key, agent.prompt)
     const permission = agent.permissionMode === 'replace'
       ? { '*': 'deny', ...agent.permissions }
-      : mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [...(agent.skillPaths ?? []), ...(agent.skillReadPaths ?? []), ...(agent.workshopKitPath ? [agent.workshopKitPath] : [])]))
+      // The pack's edit guard goes on after the manifest's own overrides, so a
+      // manifest `edit`/`write` cannot drop it while the read allow stays.
+      : withReadOnlyFolder(
+          mergePermissions(agent.permissions, profileWithOwnSkills(profile, agent.skills ?? [], [
+            ...(agent.skillPaths ?? []),
+            ...(agent.skillReadPaths ?? []),
+            ...(agent.workshopKitPath ? [agent.workshopKitPath] : []),
+            ...(agent.dashboardsDesignPath ? [agent.dashboardsDesignPath] : [])
+          ])),
+          agent.dashboardsDesignPath ?? null
+        )
     policies.set(JSON.stringify(permission), permission)
     agents[key] = {
       description: agent.description || `The ${agent.slug} agent.`,
@@ -1046,6 +1063,27 @@ function profileWithOwnSkills(
     current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : { '*': typeof current === 'string' ? current : 'ask' }
   for (const path of skillPaths) external[`${path.replaceAll('\\', '/').replace(/\/+$/, '')}/*`] = 'allow'
   return { ...profile, skill, external_directory: external }
+}
+
+/**
+ * The profile with file-tool edits and writes under `folder` asking — a folder
+ * outside the project whose reads `external_directory` allows, which that
+ * allow would otherwise open to the file tools as well (the design pack, as
+ * `IDENTITY_FILES` does for the kit). After the profile's own entries, since
+ * the last match wins. Two shapes, because OpenCode may match the path as the
+ * tool names it or relative to the project: the absolute folder, and its last
+ * two segments under a leading `*`. The shell is not stopped by it.
+ */
+function withReadOnlyFolder(profile: Record<string, unknown>, folder: string | null): Record<string, unknown> {
+  if (!folder) return profile
+  const absolute = folder.replaceAll('\\', '/').replace(/\/+$/, '')
+  const tail = absolute.split('/').filter(Boolean).slice(-2).join('/')
+  const entries: Record<string, string> = { [`${absolute}/*`]: 'ask', ...(tail ? { [`*${tail}/*`]: 'ask' } : {}) }
+  const guarded = (current: unknown): Record<string, unknown> =>
+    current && typeof current === 'object'
+      ? { ...(current as Record<string, unknown>), ...entries }
+      : typeof current === 'string' ? { '*': current, ...entries } : { ...entries }
+  return { ...profile, edit: guarded(profile.edit), write: guarded(profile.write) }
 }
 
 /** The conversation profile, ending with Code Mode's entries ({@link CINNA_TOOL_PERMISSIONS}), plus the skill folders' reads. */

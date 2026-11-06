@@ -19,6 +19,7 @@ import type { EngineConfigInput } from '../../../engine/configGenerator'
 import type { AcpRuntimeMode } from './types'
 import {
   CLAUDE_NOT_INSTALLED,
+  claudeDesignPackReadRule,
   createClaudeLauncher,
   createOpencodeLauncher,
   isRefusal,
@@ -725,6 +726,33 @@ describe('the Claude launcher', () => {
     ])
     const broken = { ...all, dashboardsSkillPlugin: () => { throw new Error('disk full') } }
     expect(claudeOptions(plan(await createClaudeLauncher(broken).plan(CTX))).plugins).toHaveLength(2)
+  })
+
+  it('allows a kit agent’s reads of the dashboard design pack with one scoped Read rule, on both branches', async () => {
+    // Mutation: drop `readRules` from either branch's options and that
+    // agent's first read of DESIGN.md is an ask outside its folder.
+    const asked: [string, string][] = []
+    const withPack = {
+      ...deps,
+      dashboardsDesignDir: (userId: string, agentId: string) => {
+        asked.push([userId, agentId])
+        return '/Applications/Cinna Desktop.app/Contents/Resources/dashboard-design'
+      }
+    }
+    for (const ctx of [CTX, BARE_CTX]) {
+      const options = claudeOptions(plan(await createClaudeLauncher(withPack).plan(ctx)))
+      expect(options.allowedTools).toEqual(['Read(//Applications/Cinna Desktop.app/Contents/Resources/dashboard-design/**)'])
+      expect(options).not.toHaveProperty('additionalDirectories')
+    }
+    expect(asked).toEqual([[CTX.userId, CTX.agentId], [BARE_CTX.userId, BARE_CTX.agentId]])
+    // Not a kit agent's session, or a dep that throws: no rule at all.
+    expect(claudeOptions(plan(await createClaudeLauncher({ ...withPack, dashboardsDesignDir: () => null }).plan(CTX)))).not.toHaveProperty('allowedTools')
+    expect(claudeOptions(plan(await createClaudeLauncher({ ...withPack, dashboardsDesignDir: () => { throw new Error('gone') } }).plan(CTX)))).not.toHaveProperty('allowedTools')
+  })
+
+  it('writes the pack rule as Claude Code matches an absolute path, on Windows too', () => {
+    expect(claudeDesignPackReadRule('/opt/cinna/resources/dashboard-design/')).toBe('Read(//opt/cinna/resources/dashboard-design/**)')
+    expect(claudeDesignPackReadRule('C:\\Program Files\\Cinna\\resources\\dashboard-design')).toBe('Read(//c/Program Files/Cinna/resources/dashboard-design/**)')
   })
 
   it('loads a kit agent’s own skills plugin beside cinna-tasks, on the isolated branch only', async () => {

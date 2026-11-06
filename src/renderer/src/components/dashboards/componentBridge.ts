@@ -1,4 +1,5 @@
 import { DASHBOARD_BRIDGE_PROTOCOL, type CollectedPageContext, type DashboardCallOutcome } from '../../../../shared/dashboards'
+import designTokens from '../../../../../resources/dashboard-design/tokens.json'
 
 /**
  * The host side of one dashboard frame's bridge (MCP Apps JSON-RPC over
@@ -461,16 +462,42 @@ export function createBridgeSession(deps: BridgeSessionDeps) {
 
 export type BridgeSession = ReturnType<typeof createBridgeSession>
 
-/** The app's colours a page can match, as `--cinna-*` variables. */
-const THEME_VARIABLES = ['bg', 'bg-secondary', 'bg-tertiary', 'text', 'text-secondary', 'text-muted', 'border', 'accent', 'danger', 'success', 'warning'] as const
+/**
+ * The `--cinna-*` variables a frame gets and the app variable each is read
+ * from: one table (`resources/dashboard-design/tokens.json`), which the
+ * design pack's gallery reads too, so a page and the gallery never drift from
+ * `main.css`. `legacy` names are what the host sent before the pack.
+ */
+export const HOST_VARIABLE_SOURCES: Readonly<Record<string, string>> = { ...designTokens.variables, ...designTokens.legacy }
+/** `--cinna-*` names read from the body's computed style (the font) rather than from a variable. */
+export const HOST_COMPUTED_SOURCES: Readonly<Record<string, string>> = designTokens.computed
+
+/**
+ * A value as the frame can use it, or null. Chromium (Electron's) already
+ * substitutes `var()` inside a custom property when it is read —
+ * `--color-highlight-tint`, a `color-mix` of two app variables, reads back
+ * with both colours in place, and an undefined variable reads back empty — so
+ * the value is sent as read. One that is empty or still holds `var()` (jsdom
+ * substitutes nothing) would mean nothing in the frame and is dropped.
+ */
+function frameValue(raw: string): string | null {
+  const value = raw.trim()
+  return value && !value.includes('var(') ? value : null
+}
 
 /** The host context from the app's own CSS variables, read now. */
 export function readHostContext(theme: 'light' | 'dark'): BridgeHostContext {
-  const style = typeof document !== 'undefined' ? getComputedStyle(document.documentElement) : null
   const variables: Record<string, string> = {}
-  for (const name of THEME_VARIABLES) {
-    const value = style?.getPropertyValue(`--color-${name}`).trim()
-    if (value) variables[`--cinna-${name}`] = value
+  if (typeof document === 'undefined') return { theme, styles: { variables } }
+  const style = getComputedStyle(document.documentElement)
+  const body = document.body ? getComputedStyle(document.body) : style
+  for (const [name, source] of Object.entries(HOST_VARIABLE_SOURCES)) {
+    const value = frameValue(style.getPropertyValue(source))
+    if (value) variables[name] = value
+  }
+  for (const [name, property] of Object.entries(HOST_COMPUTED_SOURCES)) {
+    const value = frameValue(body.getPropertyValue(property))
+    if (value) variables[name] = value
   }
   return { theme, styles: { variables } }
 }

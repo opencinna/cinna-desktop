@@ -38,6 +38,7 @@ import { cachedPlugins, type CachedPlugin } from '../services/pluginSkills'
 import { readPluginCommand } from '../services/pluginTree'
 import { join } from 'node:path'
 import { workshopKitOf } from '../services/localAgents/workshopKit'
+import { dashboardDesignReadDir, type DashboardDesignGuide } from '../services/dashboards/designPack'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
 import { folderReadinessBlocksTurn } from '../../shared/localAgents'
 
@@ -285,10 +286,21 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
           : null,
       ...ownSkills(ownPlugin),
       ...workshopKit(agent),
+      ...dashboardsDesign(agent, context.dashboardsDesign ?? null),
       ...kitAgentPluginCommands(agent)
     })
   }
   return out
+}
+
+/**
+ * The dashboard design pack for OpenCode's read allow: a kit agent's, when its
+ * prompt names the pack's guide (`dashboardsDesign` in the prompt context).
+ */
+function dashboardsDesign(agent: { kind: string }, design: DashboardDesignGuide | null): Pick<EngineAgentInput, 'dashboardsDesignPath'> {
+  if (agent.kind !== 'kit' || !design) return {}
+  const dir = dashboardDesignReadDir()
+  return dir ? { dashboardsDesignPath: dir } : {}
 }
 
 /** The workshop kit for OpenCode's read allow ({@link workshopKitOf}). */

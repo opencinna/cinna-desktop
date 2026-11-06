@@ -91,8 +91,9 @@ export function MarkdownView({ data }: { data: unknown }): React.JSX.Element {
   const body = typeof data === 'string' ? data : isRecord(data) && typeof data.markdown === 'string' ? data.markdown : null
   if (body === null) return <ShapeMismatch view="markdown" />
   return (
-    <div className="dashboard-markdown px-3 py-2 text-[12px]">
-      <MarkdownPreview card={null} body={body} components={tileMarkdownComponents} />
+    // The design pack's prose scale: 14 px body, headings 17 / 16 / 14 (main.css `.dashboard-markdown`).
+    <div className="dashboard-markdown px-3 py-2">
+      <MarkdownPreview card={null} body={body} components={tileMarkdownComponents} textSize="text-[14px]" />
     </div>
   )
 }
@@ -256,44 +257,64 @@ const STATUS_COLOR: Record<string, string> = {
   error: 'text-[var(--color-danger)]'
 }
 
-function Sparkline({ values }: { values: number[] }): React.JSX.Element | null {
+function Sparkline({ values, fill = false }: { values: number[]; fill?: boolean }): React.JSX.Element | null {
   if (values.length < 2) return null
   const min = Math.min(...values)
   const max = Math.max(...values)
   const span = max - min || 1
   const points = values.map((v, i) => `${(i / (values.length - 1)) * 100},${28 - ((v - min) / span) * 26}`).join(' ')
   return (
-    <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="h-5 w-full text-[var(--color-accent)]" aria-hidden="true">
+    <svg viewBox="0 0 100 30" preserveAspectRatio="none" className={`${fill ? 'mt-1 min-h-0 max-h-5 flex-1' : 'h-5'} w-full text-[var(--color-accent)]`} aria-hidden="true">
       <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
     </svg>
   )
 }
 
-export function MetricsView({ data }: { data: unknown }): React.JSX.Element {
+/**
+ * The KPI cards at the design pack's scale: a 28 px value, or 22 px on a short
+ * tile (two grid rows: Small, Medium, Wide — the pack's `max-height: 150px`
+ * rule). A short tile's cards are tighter and share its height (rows of
+ * `minmax(0, 1fr)`), the sparkline taking what is left of a card, so the cards
+ * fit the tile without a scrollbar; too many for it are clipped, not scrolled.
+ */
+export function MetricsView({ data, short = false }: { data: unknown; short?: boolean }): React.JSX.Element {
   if (!isRecord(data) || !Array.isArray(data.items)) return <ShapeMismatch view="metrics" />
   const items = data.items.filter(isRecord)
   return (
-    <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2 p-3">
+    <div
+      data-testid="metrics-view"
+      className={
+        short
+          ? 'grid h-full auto-rows-[minmax(0,1fr)] grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] gap-2 overflow-hidden p-3'
+          : 'grid h-full grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2 p-3'
+      }
+    >
       {items.map((item, index) => {
         const delta = typeof item.delta === 'number' ? item.delta : null
         const good = delta === null || delta === 0 ? null : (delta > 0) === (item.delta_good !== 'down')
         const trend = Array.isArray(item.trend) ? item.trend.filter((v): v is number => typeof v === 'number' && Number.isFinite(v)) : []
         return (
-          <div key={text(item.id) || index} className="min-w-0 rounded-md bg-[var(--color-bg-secondary)] px-2.5 py-2">
-            <div className="truncate text-[10px] text-[var(--color-text-muted)]">{text(item.label)}</div>
-            <div className={`truncate text-lg font-semibold ${typeof item.status === 'string' ? (STATUS_COLOR[item.status] ?? 'text-[var(--color-text)]') : 'text-[var(--color-text)]'}`}>
+          <div
+            key={text(item.id) || index}
+            className={`min-w-0 rounded-md bg-[var(--color-bg-secondary)] ${short ? 'flex min-h-0 flex-col overflow-hidden px-2.5 py-1.5' : 'px-3 py-2.5'}`}
+          >
+            <div className="shrink-0 truncate text-[12px] leading-4 text-[var(--color-text-muted)]">{text(item.label)}</div>
+            <div
+              className={`shrink-0 truncate font-semibold ${short ? 'text-[22px] leading-[1.2]' : 'text-[28px] leading-tight'} ${typeof item.status === 'string' ? (STATUS_COLOR[item.status] ?? 'text-[var(--color-text)]') : 'text-[var(--color-text)]'}`}
+            >
               {formatCell(item.value, 'number')}
-              {item.unit !== undefined && <span className="ml-1 text-[11px] font-normal text-[var(--color-text-muted)]">{text(item.unit)}</span>}
+              {item.unit !== undefined && <span className="ml-1 text-[14px] font-normal text-[var(--color-text-muted)]">{text(item.unit)}</span>}
             </div>
             {delta !== null && (
-              <div className={`text-[10px] ${good === null ? 'text-[var(--color-text-muted)]' : good ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}`}>
+              <div className={`shrink-0 truncate text-[12px] leading-4 ${good === null ? 'text-[var(--color-text-muted)]' : good ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}`}>
                 {delta > 0 ? '+' : ''}{NUMBER.format(delta)}
               </div>
             )}
-            <Sparkline values={trend} />
+            <Sparkline values={trend} fill={short} />
           </div>
         )
       })}
     </div>
   )
 }
+

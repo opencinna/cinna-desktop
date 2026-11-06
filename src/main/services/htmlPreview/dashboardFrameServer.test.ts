@@ -26,10 +26,11 @@ function put(rel: string, content: string, root = componentDir): void {
   writeFileSync(file, content)
 }
 
-function server(overrides: { resolve?: () => unknown } = {}) {
+function server(overrides: { resolve?: () => unknown; designDir?: () => string | null } = {}) {
   return createDashboardFrameServer({
     currentUserId: () => user,
     resolve: (overrides.resolve as never) ?? (() => ({ agentDir, componentDir, entry: 'index.html', isSecret: (rel: string) => rel.endsWith('secret.json') })),
+    ...(overrides.designDir ? { designDir: overrides.designDir } : {}),
     newToken: (bytes) => `${bytes === 16 ? 't' : 'x'}${(++counter).toString().padStart(4, '0')}`
   })
 }
@@ -249,5 +250,89 @@ describe('dashboardFrameServer: a cloud frame (D6.3)', () => {
     const again = s.registerRemote(remote().source)
     user = 'p2'
     expect((await get(s, again.url)).status).toBe(404)
+  })
+})
+
+describe('dashboardFrameServer: the design pack at _cinna/', () => {
+  let packDir = ''
+  beforeEach(() => {
+    packDir = join(base, 'dashboard-design')
+    put('ui.css', '.cinna-page{color:var(--cinna-fg)}', packDir)
+    put('charts.js', 'window.CinnaCharts = {}', packDir)
+    put('DESIGN.md', '# guide', packDir)
+    put('tokens.json', '{}', packDir)
+    // The component's own _cinna/ folder, which the pack shadows.
+    put('_cinna/ui.css', 'the component’s own', componentDir)
+    put('_cinna/extra.css', 'the component’s own', componentDir)
+  })
+
+  it('serves ui.css and charts.js to a local frame with its CSP and headers, over the component’s own _cinna/', async () => {
+    const s = server({ designDir: () => packDir })
+    const { url, token } = s.register({ agentId: 'folder:m1', component: 'chart' }, 'index.html')
+    const prefix = url.replace('index.html', '')
+    const css = await get(s, prefix + '_cinna/ui.css')
+    expect(css.status).toBe(200)
+    expect(await css.text()).toBe('.cinna-page{color:var(--cinna-fg)}')
+    expect(css.headers.get('content-type')).toMatch(/^text\/css/)
+    expect(css.headers.get('content-security-policy')).toBe(dashboardFrameCsp(new URL(url).hostname, token))
+    expect(css.headers.get('cache-control')).toBe('no-store')
+    expect(css.headers.get('x-content-type-options')).toBe('nosniff')
+    const js = await get(s, prefix + '_cinna/charts.js')
+    expect(js.status).toBe(200)
+    expect(await js.text()).toBe('window.CinnaCharts = {}')
+    expect(js.headers.get('content-type')).toMatch(/javascript/)
+    const head = await get(s, prefix + '_cinna/ui.css', 'HEAD')
+    expect(head.status).toBe(200)
+    expect(await head.text()).toBe('')
+    // Case folded on the folder, as a case-insensitive disk would: still the pack's.
+    expect(await (await get(s, prefix + '_CINNA/ui.css')).text()).toBe('.cinna-page{color:var(--cinna-fg)}')
+  })
+
+  it('404s every other name under _cinna/, even one the pack folder or the component has', async () => {
+    const s = server({ designDir: () => packDir })
+    const { url } = s.register({ agentId: 'folder:m1', component: 'chart' }, 'index.html')
+    const prefix = url.replace('index.html', '')
+    for (const path of ['_cinna/DESIGN.md', '_cinna/tokens.json', '_cinna/extra.css', '_cinna/UI.CSS', '_cinna/', '_cinna/x/ui.css', '_cinna/.env', '_cinna/ui.css%2F', '_cinna']) {
+      expect((await get(s, prefix + path)).status, path).toBe(404)
+    }
+    // The component's other files are served as before.
+    expect((await get(s, prefix + 'app.js')).status).toBe(200)
+  })
+
+  it('serves the pack to a cloud frame without asking core', async () => {
+    const s = server({ designDir: () => packDir })
+    const calls: string[][] = []
+    const { url, token } = s.registerRemote({
+      entry: 'index.html',
+      file: async (segments) => {
+        calls.push(segments)
+        return { ok: true as const, contentType: 'text/css', body: new TextEncoder().encode('core’s own') }
+      }
+    })
+    const prefix = url.replace('index.html', '')
+    const css = await get(s, prefix + '_cinna/ui.css')
+    expect(css.status).toBe(200)
+    expect(await css.text()).toBe('.cinna-page{color:var(--cinna-fg)}')
+    expect(css.headers.get('content-security-policy')).toBe(dashboardFrameCsp(new URL(url).hostname, token))
+    expect(await (await get(s, prefix + '_cinna/charts.js')).text()).toBe('window.CinnaCharts = {}')
+    expect((await get(s, prefix + '_cinna/extra.css')).status).toBe(404)
+    expect(calls).toEqual([])
+  })
+
+  it('404s _cinna/ when the build has no pack', async () => {
+    for (const designDir of [undefined, () => null, () => join(base, 'missing')]) {
+      const s = server(designDir ? { designDir } : {})
+      const { url } = s.register({ agentId: 'folder:m1', component: 'chart' }, 'index.html')
+      expect((await get(s, url.replace('index.html', '_cinna/ui.css'))).status).toBe(404)
+    }
+  })
+
+  it('serves the pack this build ships', async () => {
+    const { getDashboardDesignDir } = await import('../dashboards/designPack')
+    const s = server({ designDir: getDashboardDesignDir })
+    const { url } = s.register({ agentId: 'folder:m1', component: 'chart' }, 'index.html')
+    const js = await get(s, url.replace('index.html', '_cinna/charts.js'))
+    expect(js.status).toBe(200)
+    expect(await js.text()).toContain('window.CinnaCharts =')
   })
 })

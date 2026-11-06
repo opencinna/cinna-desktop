@@ -1,0 +1,325 @@
+/* Cinna dashboard UI — the desktop design pack's stylesheet, served to every dashboard
+   frame at `_cinna/ui.css` (link it: `<link rel="stylesheet" href="_cinna/ui.css">`).
+   Guide: DESIGN.md beside this file.
+   Every colour is a host token (`--cinna-*`); the host sets them for light or dark and
+   re-sets them on a theme change. Nothing here is a literal colour.
+   Scale: 14 px body and prose, 12 px legends and labels, 11 px for dense rows (tables,
+   lists, rankings) and axis ticks; 28 px KPI values and 40 px for the one hero figure,
+   one step down on short tiles. */
+
+:root {
+  color-scheme: light dark;
+}
+/* The page fills the frame, and `hidden` wins over the display the classes below set. */
+html {
+  height: 100%;
+}
+[hidden] {
+  display: none !important;
+}
+:where(body, .cinna-page) {
+  margin: 0;
+  font: 14px/1.45 var(--cinna-font, system-ui, -apple-system, 'Segoe UI', sans-serif);
+  color: var(--cinna-fg);
+  background: var(--cinna-bg);
+  -webkit-font-smoothing: antialiased;
+}
+/* The page is the tile's body: the tile bar above already shows the title. */
+.cinna-page {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  container-type: size;
+  overflow: hidden;
+}
+.cinna-page *,
+.cinna-page *::before,
+.cinna-page *::after {
+  box-sizing: border-box;
+}
+.cinna-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---- text ---------------------------------------------------------------- */
+
+.cinna-muted { color: var(--cinna-muted); }
+.cinna-secondary { color: var(--cinna-fg-secondary); }
+.cinna-meta { font-size: 12px; color: var(--cinna-muted); }
+.cinna-num { font-variant-numeric: tabular-nums; }
+.cinna-section-title {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cinna-muted);
+}
+
+/* Prose: HTML text in a tile, at the size of the native markdown view. */
+.cinna-prose { font-size: 14px; line-height: 1.55; color: var(--cinna-fg); overflow: auto; }
+.cinna-prose > :first-child { margin-top: 0; }
+.cinna-prose > :last-child { margin-bottom: 0; }
+.cinna-prose h1, .cinna-prose h2, .cinna-prose h3 { margin: 12px 0 4px; line-height: 1.3; font-weight: 600; }
+.cinna-prose h1 { font-size: 17px; }
+.cinna-prose h2 { font-size: 16px; }
+.cinna-prose h3 { font-size: 14px; color: var(--cinna-fg-secondary); }
+.cinna-prose p { margin: 0 0 8px; }
+.cinna-prose ul, .cinna-prose ol { margin: 0 0 8px; padding-left: 18px; }
+.cinna-prose li { margin: 2px 0; }
+.cinna-prose li::marker { color: var(--cinna-muted); }
+.cinna-prose a { color: var(--cinna-accent); text-decoration: none; }
+.cinna-prose a:hover { text-decoration: underline; }
+.cinna-prose strong { font-weight: 600; }
+.cinna-prose code {
+  font: 12.5px var(--cinna-font-mono, ui-monospace, monospace);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--cinna-surface-2);
+}
+.cinna-prose blockquote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--cinna-border);
+  color: var(--cinna-fg-secondary);
+}
+.cinna-prose hr { border: 0; border-top: 1px solid var(--cinna-border); margin: 10px 0; }
+.cinna-prose table { border-collapse: collapse; width: 100%; margin: 0 0 8px; font-size: 11px; }
+.cinna-prose th, .cinna-prose td { padding: 3px 6px; border-bottom: 1px solid var(--cinna-grid); text-align: left; }
+.cinna-prose th { font-weight: 600; color: var(--cinna-fg-secondary); }
+
+/* A callout inside prose or a page: an icon + a sentence, never colour alone. */
+.cinna-callout {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--cinna-surface);
+  font-size: 13px;
+  color: var(--cinna-fg-secondary);
+}
+.cinna-callout > .cinna-icon { flex: none; margin-top: 1px; }
+.cinna-callout.is-warning > .cinna-icon { color: var(--cinna-warning); }
+.cinna-callout.is-danger > .cinna-icon { color: var(--cinna-danger); }
+.cinna-callout.is-success > .cinna-icon { color: var(--cinna-success); }
+
+.cinna-icon { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+
+/* ---- figures ------------------------------------------------------------- */
+
+.cinna-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 8px;
+}
+.cinna-kpi {
+  min-width: 0;
+  border-radius: 6px;
+  background: var(--cinna-surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cinna-kpi-label { font-size: 12px; color: var(--cinna-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cinna-kpi-value { font-size: 28px; font-weight: 600; line-height: 1.25; white-space: nowrap; }
+.cinna-kpi-value .cinna-unit { margin-left: 4px; font-size: 14px; font-weight: 400; color: var(--cinna-muted); }
+.cinna-kpi .cinna-sparkline { height: 28px; margin-top: 6px; }
+
+.cinna-hero { display: flex; flex-direction: column; gap: 2px; }
+.cinna-hero-value { font-size: 40px; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+.cinna-hero-label { font-size: 13px; color: var(--cinna-fg-secondary); }
+
+/* A delta reads by arrow and sign, and its colour says whether the move is good. */
+/* One line: a delta too long for its card ends in an ellipsis, so the comparison (last) is what is cut. */
+.cinna-delta { font-size: 12px; color: var(--cinna-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cinna-delta.is-good { color: var(--cinna-success); }
+.cinna-delta.is-bad { color: var(--cinna-danger); }
+.cinna-delta .cinna-vs { color: var(--cinna-muted); }
+
+/* ---- badges and status --------------------------------------------------- */
+
+.cinna-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--cinna-surface-2);
+  color: var(--cinna-fg-secondary);
+}
+.cinna-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: none;
+}
+.cinna-badge.is-success,
+.cinna-badge.is-warning,
+.cinna-badge.is-danger,
+.cinna-badge.is-accent { background: var(--cinna-surface-2); color: var(--cinna-fg-secondary); }
+.cinna-badge.is-success::before, .cinna-badge.is-warning::before, .cinna-badge.is-danger::before, .cinna-badge.is-accent::before { display: block; }
+.cinna-badge.is-success::before { background: var(--cinna-success); }
+.cinna-badge.is-warning::before { background: var(--cinna-warning); }
+.cinna-badge.is-danger::before { background: var(--cinna-danger); }
+.cinna-badge.is-accent::before { background: var(--cinna-accent); }
+
+/* ---- table: the native table view, for a page that needs one ------------- */
+
+.cinna-table-wrap { overflow: auto; min-height: 0; }
+.cinna-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.cinna-table th {
+  position: sticky;
+  top: 0;
+  background: var(--cinna-bg);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cinna-muted);
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--cinna-border);
+  white-space: nowrap;
+}
+.cinna-table td { padding: 5px 8px; border-bottom: 1px solid var(--cinna-grid); white-space: nowrap; }
+.cinna-table .is-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cinna-table tbody tr { cursor: default; }
+.cinna-table tbody tr:hover { background: var(--cinna-hover); }
+.cinna-table tbody tr.is-selected { background: color-mix(in srgb, var(--cinna-accent) 14%, var(--cinna-bg)); }
+.cinna-table tbody tr.is-highlighted { background: var(--cinna-highlight-tint); box-shadow: inset 2px 0 0 var(--cinna-highlight); }
+
+/* ---- list ---------------------------------------------------------------- */
+
+.cinna-list { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; }
+.cinna-list li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--cinna-grid); }
+.cinna-list li:last-child { border-bottom: 0; }
+.cinna-list .cinna-list-title { font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cinna-list .cinna-list-meta { font-size: 10px; color: var(--cinna-muted); white-space: nowrap; }
+
+/* ---- controls (sparingly: the tile's own filter row is the host's) -------- */
+
+.cinna-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--cinna-surface);
+}
+.cinna-seg button {
+  border: 0;
+  background: transparent;
+  color: var(--cinna-fg-secondary);
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cinna-seg button:hover { color: var(--cinna-fg); }
+.cinna-seg button[aria-pressed='true'] { background: var(--cinna-bg); color: var(--cinna-fg); box-shadow: 0 0 0 1px var(--cinna-border); }
+
+.cinna-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--cinna-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cinna-fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cinna-button:hover { background: var(--cinna-hover); }
+
+/* ---- states -------------------------------------------------------------- */
+
+.cinna-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--cinna-muted);
+}
+.cinna-empty .cinna-icon { width: 18px; height: 18px; opacity: 0.8; }
+.cinna-skeleton {
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--cinna-surface) 0%, var(--cinna-surface-2) 50%, var(--cinna-surface) 100%);
+  background-size: 200% 100%;
+  animation: cinna-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes cinna-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cinna-skeleton { animation: none; }
+}
+
+/* ---- charts (drawn by charts.js) ----------------------------------------- */
+
+.cinna-chart { position: relative; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.cinna-chart-plot { flex: 1 1 auto; min-height: 0; position: relative; }
+.cinna-chart-plot > svg { position: absolute; inset: 0; display: block; overflow: visible; }
+.cinna-axis-text { font-size: 11px; fill: var(--cinna-muted); font-variant-numeric: tabular-nums; }
+.cinna-label-text { font-size: 12px; fill: var(--cinna-fg-secondary); font-variant-numeric: tabular-nums; }
+.cinna-row-text { font-size: 11px; fill: var(--cinna-fg); }
+.cinna-donut-value { font-size: 19px; font-weight: 600; fill: var(--cinna-fg); }
+
+.cinna-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--cinna-fg-secondary); }
+.cinna-legend[hidden] { display: none; }
+.cinna-legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cinna-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.cinna-swatch.is-line { width: 12px; height: 2px; border-radius: 1px; }
+
+.cinna-tooltip {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  min-width: 110px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--cinna-border);
+  background: var(--cinna-surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+  font-size: 12px;
+  color: var(--cinna-fg);
+}
+.cinna-tooltip[hidden] { display: none; }
+.cinna-tooltip-title { font-weight: 600; margin-bottom: 3px; color: var(--cinna-fg); }
+.cinna-tooltip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
+.cinna-tooltip-label { flex: 1; color: var(--cinna-fg-secondary); }
+.cinna-tooltip-value { font-variant-numeric: tabular-nums; font-weight: 500; }
+
+.cinna-segmented { display: flex; flex-direction: column; gap: 6px; }
+.cinna-segmented-bar { display: flex; gap: 2px; height: 8px; }
+.cinna-segmented-part { min-width: 2px; border-radius: 4px; }
+
+/* ---- size-aware tiles (container queries on the page) --------------------- */
+
+@container (max-height: 150px) {
+  .cinna-hide-short { display: none !important; }
+  .cinna-kpi-value { font-size: 22px; }
+  .cinna-hero-value { font-size: 32px; }
+}
+@container (max-width: 300px) {
+  .cinna-hide-narrow { display: none !important; }
+  .cinna-kpi-row { grid-template-columns: 1fr 1fr; }
+}

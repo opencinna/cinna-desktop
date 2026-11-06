@@ -351,7 +351,7 @@ Whether a message is steered at all is decided in [Pending Messages](../../chat/
 
 ### No tool is pre-approved, because pre-approving one bypasses the asking
 
-A bare tool name in `allowedTools` auto-approves that tool *before* the permission request reaches the desktop — the SDK says so itself at runtime — so the two mechanisms cancel rather than compose. **No `allowedTools` is passed at all.** This is the half that has to be true before the desktop's grants mean anything.
+A bare tool name in `allowedTools` auto-approves that tool *before* the permission request reaches the desktop — the SDK says so itself at runtime — so the two mechanisms cancel rather than compose. **No bare tool name is passed in `allowedTools`.** The one entry ever passed is a kit agent's path-scoped `Read` rule for the dashboard design pack, which names a folder, not a tool. This is the half that has to be true before the desktop's grants mean anything.
 
 ### Automatic is the default, and the block is a backstop there
 

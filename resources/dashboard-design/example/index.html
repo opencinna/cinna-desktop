@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Revenue by channel</title>
+  <!-- The Cinna Desktop design pack: served by the host at _cinna/, never copied here. -->
+  <link rel="stylesheet" href="_cinna/ui.css">
+</head>
+<body class="cinna-page">
+  <div class="cinna-empty" id="empty">
+    <div>Loading…</div>
+  </div>
+  <div class="cinna-kpi-row" id="kpis" hidden></div>
+  <div class="cinna-fill" id="chart" hidden></div>
+  <p class="cinna-meta cinna-hide-short" id="note" hidden></p>
+  <script src="_cinna/charts.js"></script>
+  <script>
+    // The page side of a dashboards/1 web view. The host injects `window.cinna`
+    // (cinna.onData, setContext, onHighlight, onTheme); _cinna/charts.js gives
+    // `CinnaCharts`. Colours come only from the host's --cinna-* tokens.
+    (function () {
+      const empty = document.getElementById('empty')
+      const kpis = document.getElementById('kpis')
+      const chartEl = document.getElementById('chart')
+      const note = document.getElementById('note')
+      const C = window.CinnaCharts
+      let chart = null
+      let weeks = []
+
+      if (!window.cinna || !C) {
+        empty.firstElementChild.textContent = 'Open this component in Cinna Desktop to see its data.'
+        return
+      }
+      const cinna = window.cinna
+
+      function esc(s) {
+        return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+      }
+
+      function kpi(item) {
+        const value = item.text !== undefined ? esc(item.text) : esc(C.format(item.value, item.format))
+        let delta = ''
+        if (typeof item.delta === 'number') {
+          const cls = item.delta > 0 ? 'is-good' : item.delta < 0 ? 'is-bad' : ''
+          const arrow = item.delta > 0 ? '▲' : item.delta < 0 ? '▼' : '—'
+          delta = `<div class="cinna-delta ${cls}">${arrow} ${esc(C.signed(item.delta, item.format))} <span class="cinna-vs">vs last wk</span></div>`
+        }
+        const spark = item.trend ? '<div class="cinna-sparkline cinna-hide-short"></div>' : ''
+        return `<div class="cinna-kpi"><div class="cinna-kpi-label">${esc(item.label)}</div><div class="cinna-kpi-value">${value}</div>${delta}${spark}</div>`
+      }
+
+      function draw(data) {
+        weeks = data.weeks || []
+        const series = data.series || []
+        if (weeks.length === 0 || series.length === 0) {
+          empty.hidden = false
+          empty.firstElementChild.textContent = 'No revenue recorded yet.'
+          kpis.hidden = chartEl.hidden = note.hidden = true
+          cinna.setContext({ summary: 'No revenue recorded yet.', selection: [], visible: [] })
+          return
+        }
+        empty.hidden = true
+        kpis.hidden = chartEl.hidden = false
+        kpis.innerHTML = (data.kpis || []).map(kpi).join('')
+        kpis.querySelectorAll('.cinna-sparkline').forEach((el, i) => {
+          const withTrend = (data.kpis || []).filter((k) => k.trend)
+          C.sparkline(el, withTrend[i].trend)
+        })
+        // The week id is the x value: the agent highlights by it, the chat sees it.
+        const spec = { x: weeks.map((w) => w.id), xLabels: weeks.map((w) => w.label), series, format: 'money', label: 'Weekly revenue by channel' }
+        if (chart) chart.update(spec)
+        else chart = C.line(chartEl, spec)
+        note.hidden = !data.note
+        note.textContent = data.note || ''
+        const total = series.reduce((sum, s) => sum + s.values[s.values.length - 1], 0)
+        cinna.setContext({
+          summary: `Revenue for the week of ${weeks[weeks.length - 1].label}: ${C.format(total, 'money')} across ${series.length} channels.`,
+          selection: [],
+          visible: weeks.map((w) => w.id)
+        })
+      }
+
+      cinna.onData((data) => draw(data || {}))
+      cinna.onHighlight((ids) => chart && chart.highlight(ids))
+    })()
+  </script>
+</body>
+</html>

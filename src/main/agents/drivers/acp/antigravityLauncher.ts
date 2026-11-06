@@ -298,7 +298,7 @@ export interface AntigravityLauncherDeps {
     /** `model` is the agent's own `runtime.model` (see `AcpSessionSetup.modelDeclared`). */
     modelDeclared?: boolean
     approval: ClaudeApproval
-    autoApprove?: { scriptRoots: string[]; workshopKit?: string; dashboardsCheckScript?: string }
+    autoApprove?: { scriptRoots: string[]; workshopKit?: string; dashboardsCheckScript?: string; dashboardsDesign?: string }
   }
   /**
    * The isolated home for this session, when it is not the folder's own
@@ -432,7 +432,8 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
           ...(settings.approval === 'ask' && settings.autoApprove
             ? { autoApprove: { folder: ctx.folder.path, scriptRoots: [...settings.autoApprove.scriptRoots],
               ...(settings.autoApprove.workshopKit ? { workshopKit: settings.autoApprove.workshopKit } : {}),
-              ...(settings.autoApprove.dashboardsCheckScript ? { dashboardsCheckScript: settings.autoApprove.dashboardsCheckScript } : {}) } }
+              ...(settings.autoApprove.dashboardsCheckScript ? { dashboardsCheckScript: settings.autoApprove.dashboardsCheckScript } : {}),
+              ...(settings.autoApprove.dashboardsDesign ? { dashboardsDesign: settings.autoApprove.dashboardsDesign } : {}) } }
             : {})
         }
       } catch {

@@ -71,6 +71,24 @@
        strong enough on dark to read without the bar at the row's start. */
     --color-highlight: #a78bfa;
     --color-highlight-tint: color-mix(in srgb, var(--color-highlight) 26%, var(--color-bg));
+    /* Dashboard chart palette (the design pack's --cinna-chart-*): eight
+       categorical slots in a fixed order, slot 1 the theme's accent; pos/neg
+       for a diverging scale; the grid hairline, quieter than a border.
+       Validated with the dataviz palette validator against --color-bg. */
+    --color-chart-1: #d4733f;
+    --color-chart-2: #3987e5;
+    --color-chart-3: #199e70;
+    --color-chart-4: #c98500;
+    --color-chart-5: #d55181;
+    --color-chart-6: #008300;
+    --color-chart-7: #9085e9;
+    --color-chart-8: #e66767;
+    --color-chart-pos: #3987e5;
+    --color-chart-neg: #e66767;
+    --color-chart-grid: #1f1f1f;
+    /* A dashboard frame's muted grey (--cinna-muted): the app's own --color-text-muted
+       in dark; in light a step darker than #999, which is under 3:1 on white. */
+    --color-dashboard-muted: #666;
     /* The edge of a runnable command in a reply, apart from a file reference's neutral one. */
     --color-command-ref-edge: #3f6f52;
     /* Send while a turn runs: the message joins that turn or its queue. */
@@ -136,6 +154,20 @@
     --color-warning: #ca8a04;
     --color-highlight: #7c3aed;
     --color-highlight-tint: color-mix(in srgb, var(--color-highlight) 12%, var(--color-bg));
+    /* Aqua, amber and magenta are below 3:1 on white: a chart with two or
+       more series always draws its legend. */
+    --color-chart-1: #2e88b8;
+    --color-chart-2: #eb6834;
+    --color-chart-3: #1baf7a;
+    --color-chart-4: #eda100;
+    --color-chart-5: #e87ba4;
+    --color-chart-6: #008300;
+    --color-chart-7: #6250d6;
+    --color-chart-8: #e34948;
+    --color-chart-pos: #2a78d6;
+    --color-chart-neg: #e34948;
+    --color-chart-grid: #eeeeee;
+    --color-dashboard-muted: #8a8a8a;
     --color-command-ref-edge: #8cc09f;
     --color-send-queued: #2563eb;
     /* The light app icon's blue into teal. */
@@ -173,6 +205,8 @@
     --sidebar-page-width: 240px;
     --sidebar-tab-rail: 28px;
     --sidebar-width: calc(var(--sidebar-page-width) + var(--sidebar-tab-rail));
+    /* The code font, as markdown's code uses it; a dashboard frame gets it as --cinna-font-mono. */
+    --font-code: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   }
 
   html {
@@ -1100,6 +1134,13 @@
   .markdown-body h1 { font-size: 1.25em; }
   .markdown-body h2 { font-size: 1.15em; }
   .markdown-body h3 { font-size: 1.05em; }
+  /* A dashboard tile's markdown view, at the design pack's prose scale
+     (ui.css `.cinna-prose`): the tile demotes headings two levels (h1 → h3),
+     so its h3 / h4 / h5 are the page's h1 / h2 / h3 at 17 / 16 / 14 px. */
+  .dashboard-markdown .markdown-body h3 { font-size: 17px; }
+  .dashboard-markdown .markdown-body h4 { font-size: 16px; }
+  .dashboard-markdown .markdown-body h5,
+  .dashboard-markdown .markdown-body h6 { font-size: 14px; color: var(--color-text-secondary); }
   /* Prose `compact` (task comments): a heading is a bold body line, never
      larger than the page's own section titles, and keeps the body's line
      height so a clamped comment still ends on a whole line. */

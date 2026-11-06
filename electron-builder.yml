@@ -24,6 +24,9 @@ files:
   # The skill runtime (`core.cinna_api` for skill scripts) ships via
   # extraResources too: Python reads it from a real directory on PYTHONPATH.
   - '!resources/skill-runtime/**'
+  # The dashboard design pack ships via extraResources too: it is served to
+  # dashboard frames and named to agents by path, so it is a real directory.
+  - '!resources/dashboard-design/**'
   # The speech helper ships via extraResources too (an executable must sit
   # outside the asar), so it is kept out of the asar and asarUnpack here.
   - '!resources/speech/**'
@@ -81,6 +84,15 @@ extraResources:
   # as the kit). Bytecode a development run left behind is not shipped.
   - from: resources/skill-runtime
     to: skill-runtime
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
+  # The dashboard design pack (`ui.css`, `charts.js`, `DESIGN.md`, the
+  # example component), served to every dashboard frame at `_cinna/` and named
+  # to kit agents by absolute path (src/main/services/dashboards/designPack.ts,
+  # same dev/packaged rule as the kit). Bytecode from a check run is not shipped.
+  - from: resources/dashboard-design
+    to: dashboard-design
     filter:
       - '**/*'
       - '!**/__pycache__/**'

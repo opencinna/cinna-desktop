@@ -13,6 +13,7 @@ import { createArtifactPreviewServer } from '../../services/htmlPreview/artifact
 import { artifactService } from '../../services/artifacts/artifactService'
 import { createDashboardFrameServer } from '../../services/htmlPreview/dashboardFrameServer'
 import { dashboardService } from '../../services/dashboards/dashboardService'
+import { getDashboardDesignDir } from '../../services/dashboards/designPack'
 import { getLayoutView } from '../../kit/contractStore'
 import { agentFileService, openInBrowser } from './agentFiles'
 import {
@@ -71,6 +72,8 @@ export const artifactPreviewServer = createArtifactPreviewServer({
  */
 export const dashboardFrameServer = createDashboardFrameServer({
   currentUserId: getProfileScopeUserId,
+  // The design pack at `…/<tile>/_cinna/`, for every frame.
+  designDir: getDashboardDesignDir,
   resolve: (target) => {
     const found = dashboardService.resolveComponent(target.agentId, target.component, target.skill)
     if (!found?.scanned.spec) return null

@@ -78,12 +78,15 @@ export function PreviewBody({
 export function MarkdownPreview({
   card,
   body,
-  components = previewMarkdownComponents
+  components = previewMarkdownComponents,
+  textSize = 'text-sm'
 }: {
   card: React.JSX.Element | null
   body: string
   /** Overrides for the preview's markdown components (a dashboard tile demotes headings). */
   components?: Components
+  /** The body's text size utility (a dashboard tile sets its own scale). */
+  textSize?: string
 }): React.JSX.Element {
   if (body.length > MAX_HIGHLIGHT_CHARS) {
     return (
@@ -102,7 +105,7 @@ export function MarkdownPreview({
   return (
     <>
       {card}
-      <div className="file-preview-markdown markdown-body text-sm text-[var(--color-text)] leading-relaxed">
+      <div className={`file-preview-markdown markdown-body ${textSize} text-[var(--color-text)] leading-relaxed`}>
         <Markdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}

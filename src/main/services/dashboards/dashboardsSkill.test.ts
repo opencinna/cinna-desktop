@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 const userData = mkdtempSync(join(tmpdir(), 'cinna-dashboards-skill-'))
 vi.mock('../../host/runtimeHost', () => ({
@@ -15,6 +15,7 @@ const {
 } = await import('./dashboardsSkill')
 const { resolveDesktopPromptContext } = await import('../localAgents/promptAssembly')
 const { PLATFORM_SKILL_NAMES } = await import('../../kit/skills')
+const { DESIGN_PACK_FILES, dashboardDesignGuide, getDashboardDesignDir } = await import('./designPack')
 
 afterAll(() => rmSync(userData, { recursive: true, force: true }))
 
@@ -55,6 +56,28 @@ describe('the cinna-dashboards skill', () => {
     expect(cinnaDashboardsSection(null)).toEqual([])
   })
 
+  it('names the design pack guide and example by absolute path for an html view, and says nothing of it when the build has none', () => {
+    const input = { delivery: { kind: 'skill' as const }, checkScript: '/k/check_component.py', referencePrefix: 'cinna://component/id:abc/' }
+    const [section] = cinnaDashboardsSection({ ...input, design: { guide: '/app/dashboard-design/DESIGN.md', example: '/app/dashboard-design/example' } })
+    const line = section.split('\n').find((l) => l.includes('design pack'))!
+    expect(line).toContain("not the kit's `templates/dashboard-html/`")
+    expect(line).toContain('read `/app/dashboard-design/DESIGN.md`')
+    expect(line).toContain('Start from `/app/dashboard-design/example` (copy it to `dashboards/<name>/`)')
+    expect(line).toContain('link `_cinna/ui.css` and `_cinna/charts.js`')
+    expect(line).toContain('`var(--cinna-*)`')
+    // It comes right after the skill line, ahead of the check and reference lines,
+    // so it is read before the skill's own pointer to the kit template wins.
+    const lines = section.split('\n')
+    expect(lines.indexOf(line)).toBeLessThan(lines.findIndex((l) => l.includes('check_component.py')))
+    expect(cinnaDashboardsSection({ ...input, design: null })[0]).not.toContain('_cinna/')
+    expect(cinnaDashboardsSection(input)[0]).not.toContain('DESIGN.md')
+    // The prompt context carries this build's pack with the skill, absolute.
+    const context = resolveDesktopPromptContext('claude')
+    expect(context.dashboardsDesign).toEqual(dashboardDesignGuide())
+    expect(context.dashboardsDesign?.guide).toBe(join(getDashboardDesignDir(), 'DESIGN.md'))
+    expect(isAbsolute(context.dashboardsDesign!.example)).toBe(true)
+  })
+
   it('writes a Claude plugin carrying the skill and its script, and rebuilds it only when the skill changes', () => {
     const target = ensureDashboardsSkillPlugin()
     expect(target).toBe(join(userData, 'cinna-plugins', DASHBOARDS_SKILL_NAME))
@@ -83,5 +106,23 @@ describe('skillDashboardComponentCount', () => {
     } finally {
       rmSync(skill, { recursive: true, force: true })
     }
+  })
+})
+
+/** The desktop's dashboard design pack (resources/dashboard-design), served at _cinna/ and named in the prompt. */
+describe('the dashboard design pack', () => {
+  it('ships its served files, its guide and a complete example component', () => {
+    const dir = getDashboardDesignDir()
+    expect(dir).toBe(join(process.cwd(), 'resources', 'dashboard-design'))
+    for (const file of DESIGN_PACK_FILES) expect(existsSync(join(dir, file)), file).toBe(true)
+    const guide = dashboardDesignGuide()
+    expect(guide).toEqual({ guide: join(dir, 'DESIGN.md'), example: join(dir, 'example') })
+    for (const file of ['component.json', 'index.html', 'api/data.py']) expect(existsSync(join(guide!.example, file)), file).toBe(true)
+    const component = JSON.parse(readFileSync(join(guide!.example, 'component.json'), 'utf8'))
+    expect(component).toMatchObject({ view: 'html', entry: 'index.html', source: { endpoint: 'data' } })
+    const page = readFileSync(join(guide!.example, 'index.html'), 'utf8')
+    expect(page).toContain('<link rel="stylesheet" href="_cinna/ui.css">')
+    expect(page).toContain('<script src="_cinna/charts.js"></script>')
+    expect(dashboardDesignGuide(join(dir, 'missing'))).toBeNull()
   })
 })

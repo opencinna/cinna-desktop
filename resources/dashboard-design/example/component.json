@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "title": "Revenue by channel",
+  "description": "Three headline figures, weekly revenue per channel as lines, and a short note, drawn with the Cinna Desktop design pack.",
+  "view": "html",
+  "entry": "index.html",
+  "source": { "endpoint": "data" },
+  "endpoints": {
+    "data": { "script": "api/data.py", "description": "Headline figures, twelve weeks of revenue per channel, and a note. No params." }
+  },
+  "refresh": { "max_age": "1h", "after_turn": false, "on_app_start": false,
+               "while_open_every": null, "command": null, "schedule": null },
+  "size": "l",
+  "context": "Revenue is in USD per week; a week id looks like 2026-W45. The figures compare this week with the week before.",
+  "prompts": [
+    { "label": "What moved?", "prompt": "Which channel moved revenue most this week, and why?" }
+  ]
+}

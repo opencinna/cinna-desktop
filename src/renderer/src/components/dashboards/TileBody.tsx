@@ -1,4 +1,4 @@
-import type { DashboardFrameTarget, DashboardViewKind, TileResultDto, TileSize } from '../../../../shared/dashboards'
+import { TILE_SIZE_SPANS, type DashboardFrameTarget, type DashboardViewKind, type TileResultDto, type TileSize } from '../../../../shared/dashboards'
 import { ListView, MarkdownView, MetricsView, TableView, type ViewSelection } from './views/nativeViews'
 import { WebView, type BridgeActions, type FrameCollect, type FrameHighlight } from './views/WebView'
 
@@ -101,6 +101,7 @@ export function TileBody({
     case 'list':
       return <ListView data={data} selection={selection} highlighted={highlight?.ids} highlightLabel={highlight?.label} />
     case 'metrics':
-      return <MetricsView data={data} />
+      // Two grid rows (Small, Medium, Wide) is a short tile: the KPI cards get the short scale.
+      return <MetricsView data={data} short={(TILE_SIZE_SPANS[meta.size]?.rows ?? 4) <= 2} />
   }
 }
