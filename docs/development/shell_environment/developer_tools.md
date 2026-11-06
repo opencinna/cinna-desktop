@@ -61,7 +61,7 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 ### The managed uv
 - **Why.** A kit agent's commands are `uv run …`, and a fresh Mac has no uv. Cinna already downloads a pinned, checksummed uv for MCP servers and Local Development; the same copy is the last place a local-agent child looks. Without it, the first `/run:status` on a bare machine failed with "exited with code 127"
 - **Appended, never prepended.** A uv the user installed always wins; Homebrew or a distro package installed later takes over with no setting. The directory is added whether or not the download has landed, so a long-lived engine process finds uv the moment the install finishes
-- **Reaches every local-agent child:** the engine children and the other hosts of the shims (custom agents, stdio MCP servers), and also `/run:` commands, schedules and clickable chat scripts, which do not go through the shims and apply the same append themselves
+- **Reaches every local-agent child:** the engine children and the other hosts of the shims (custom agents, stdio MCP servers), and also `/run:` commands, dashboard endpoints, schedules, clickable chat scripts, the uv pre-warm and the Local Development toolchain, which all take the shims too (see below)
 - **No `UV_*` directory variables.** uv uses its default cache and Python directories, the ones a later user-installed uv shares, so nothing is downloaded twice and the toolchain's own tools directory (the Cinna CLI) stays invisible to agent code
 - **One exception: `UV_PYTHON_PREFERENCE=only-managed`, only when no other uv resolves and the environment does not already set it.** On a Mac without the Command Line Tools, uv probing `/usr/bin/python3` pops the install dialog. A user with their own uv keeps their own preference
 - **Pre-warm.** When an agent is scaffolded, and once at profile-ready when this computer has a local agent, Cinna installs the managed uv and runs `uv python install` with the same environment a run gets, so the interpreter lands where runs look. Nothing waits for it and a scaffold never fails on it. One install at a time; a failure is remembered, never thrown, and a `uv …` command that cannot start starts another, so "run it again" is true. Child installs are killed when the app quits. `CINNA_UV_PREWARM=off` turns it off, which the E2E fixture does on every launch; the bare-Mac suite leaves it on
@@ -84,6 +84,13 @@ Engine / custom agent / stdio MCP child env
                  + [tool-shims/ if any name lands on a stub] + rest
        -> withManagedUvFallback: + managed uv dir last (+ UV_PYTHON_PREFERENCE when no other uv)
 ```
+
+### uv and `install_name_tool`
+
+`uv python install`, a first `uv run` and `uv tool install` download a managed CPython and patch its dylib with `install_name_tool`, found by `PATH` lookup. On a Mac without the Command Line Tools that is the `/usr/bin` stub, which raised Apple's "Install Command Line Developer Tools" dialog (caught by `make bare-mac`; latent since the pre-warm shipped in 0.10.0). So every app-spawned uv path runs with the shims: the shim exits 127, uv only warns ("Failed to patch the install name") and Python still installs.
+
+- The managed Python stays unpatched even if the user installs the tools later. That matters only for building native extensions that link libpython.
+- These flows inherit the shims' `unknown`-state behaviour: a tools probe that times out hides real tools for that run, as engine children already did.
 
 ## Integration Points
 

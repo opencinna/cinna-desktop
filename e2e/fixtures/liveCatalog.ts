@@ -782,7 +782,10 @@ export async function switchProfile(app: PersonApp, name: string, username: stri
   const page = app.page
   const user = await page.evaluate(() => window.api.auth.getCurrent())
   await page.getByTitle(user?.cinnaFullName ?? user?.displayName ?? 'User', { exact: true }).click()
-  await page.getByRole('button').filter({ hasText: name }).first().click()
+  // The menu (no role) is portaled to the end of body; scope to its Profiles group, or a
+  // catalog tile on the page behind it that names the same person is clicked instead.
+  const profiles = page.getByText('Profiles', { exact: true }).locator('xpath=..')
+  await profiles.getByRole('button').filter({ hasText: name }).first().click()
   await expect.poll(async () => (await page.evaluate(() => window.api.auth.getCurrent()))?.username).toBe(username)
 }
 
@@ -820,10 +823,13 @@ export async function addToWhoCanUse(
   beforeAdd?: () => Promise<void>
 ): Promise<void> {
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
-  await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
+  // Share opens its own dialog stacked over Who can use; its options are portaled to the page.
+  const share = dialog.page().getByRole('dialog', { name: 'Share with a person', exact: true })
+  await share.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
   await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
-  await dialog.getByRole('combobox', { name: 'Access', exact: true }).selectOption(access)
+  await share.getByRole('combobox', { name: 'Access', exact: true }).selectOption(access)
   await beforeAdd?.()
-  await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+  await share.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(share).toHaveCount(0, { timeout: 30_000 })
   await expectAccess(dialog, person.name, access, 30_000)
 }

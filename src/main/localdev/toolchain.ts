@@ -1026,6 +1026,18 @@ export function runCapture(
   })
 }
 
+/**
+ * The login shell's env with the developer-tool stubs shadowed. `uv tool
+ * install cinna-cli` downloads a Python and patches its dylib with
+ * `install_name_tool`, found by `PATH` lookup; on a Mac without the command
+ * line tools that is the `/usr/bin` stub, which raises Apple's install dialog.
+ * Imported lazily: `developerToolShims` → `managedUvPath` imports this module.
+ */
+export async function toolchainShellEnv(): Promise<NodeJS.ProcessEnv> {
+  const { withDeveloperToolShims } = await import('../shell/developerToolShims')
+  return withDeveloperToolShims(await getShellEnv())
+}
+
 export function realToolchainDeps(): ToolchainDeps {
   return {
     root: localDevRootDir,
@@ -1035,7 +1047,7 @@ export function realToolchainDeps(): ToolchainDeps {
     mutagenAssets: MUTAGEN_ASSETS,
     download: downloadToFile,
     extract: extractArchive,
-    shellEnv: getShellEnv,
+    shellEnv: toolchainShellEnv,
     run: runCapture,
     cliSourceOverride: localCliSource
   }

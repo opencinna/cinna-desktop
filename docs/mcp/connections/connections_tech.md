@@ -94,5 +94,21 @@
 - `src/main/mcp/manager.peer.test.ts` with `src/main/mcp/testSupport/protocolPeers.ts` exercises the real SDK against raw modern/legacy HTTP, SSE and stdio peers; includes actual loopback OAuth callback/token exchange, issuer mismatch, insufficient scope, preserved tool errors and persistence failure. UI, repository and keystore edges are mocked there.
 - `src/main/mcp/oauth-provider.test.ts` covers real database migration, revision/owner writes, invalidation and latched persistence failure. `src/main/mcp/oauth-callback.test.ts` covers callback path/state/issuer parameters, neutral HTML, timeout and abort.
 - `e2e/specs/mcp-connection.spec.ts` uses a local synthetic bearer server for saved HTTP configuration, discovery failure/reconnect, tool display and the disabled legacy transport choice. They do not verify real external OAuth accounts or browser authorization. Broader Tasks/resume and managed-agent work remain separate.
+- `e2e/specs/live-mcp-oauth.spec.ts` is the one check against a real OAuth MCP server (below).
+
+### Testing MCP OAuth against a local cinna-core
+
+`live-mcp-oauth.spec.ts` adds one of cinna-core's agent MCP connectors through **Add Custom MCP** (OAuth), approves core's consent page as fixture person A in Playwright's Chromium, and lets the loopback callback finish. It then asserts the card reads Connected with `get_file_upload_url` and `send_message`, and that the stored tokens carry core's issuer. Three restarts follow, each of which must connect with no second `shell.openExternal`: the normal restart, one with the stored record rewritten without `issuer` (a pre-client-2.4 record), and one with no issuer and an access token core refuses. That last one must refresh silently and get the issuer stamped. The client stamps a missing issuer only when it runs its auth flow (on a 401); while the access token is still accepted it is used as is. No tool is called, so no model runs. The connector is deleted by id afterwards.
+
+Prerequisites:
+
+- A running local core and `CINNA_CATALOG_LIVE_FIXTURE` (the JSON from `e2e/fixtures/live-catalog.py create`).
+- Core's `MCP_SERVER_BASE_URL` on localhost for the run: `make mcp-set-url URL=http://localhost:8000` in `$CINNA_CORE_PATH` (`../workflow-runner-core`), and `make mcp-set-url` afterwards to go back to `PINGGY_URL`. The client connects to `http://localhost:8000/mcp/<id>/mcp` and checks it against the `resource` core's protected-resource metadata advertises, which is built from that base URL. With a tunnel URL there, the two differ and the connect is refused. The spec skips, naming the reason, when the fixture is missing, core is unreachable, or the advertised issuer is not `http://localhost:8000/mcp/oauth`.
+
+```bash
+CINNA_CATALOG_LIVE_FIXTURE=/tmp/catalog.json make e2e-one SPEC=e2e/specs/live-mcp-oauth.spec.ts
+```
+
+`shell.openExternal` is recorded from process start by `e2e/fixtures/openExternalRecorder.cjs`, which the fixture's `mainRequire` option loads as `-r`. A stub installed with `electronApp.evaluate` comes after the startup connect, and a failed one would open a real browser.
 
 `mcp:status-changed` is the main-to-renderer connection-status notification; the renderer invalidates the provider query when it arrives. The Transport selector remains visible for every transport so an edit can be reversed.

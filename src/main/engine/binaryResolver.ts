@@ -71,6 +71,7 @@ import {
 import { which } from '../shell/env'
 import { opencodeMajorVersion, PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
 import { RUNTIME_PINS, type RuntimePinCompanion } from '../../shared/runtimePins'
+import { stripAnsi } from '../../shared/userCommands'
 
 const logger = createLogger('engine-binary')
 
@@ -650,7 +651,11 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
           // the pinned bytes, and this proves the pinned bytes are the version
           // the manifest says they are. A wrong answer publishes nothing.
           if (process.platform !== 'win32') await chmod(target, 0o755)
-          if (!spec.acceptsVersion(await deps.probeVersion(target), deps.version)) {
+          const probed = await deps.probeVersion(target)
+          if (!spec.acceptsVersion(probed, deps.version)) {
+            // What it answered (null: no line, non-zero exit or timeout) is
+            // the only clue to why the pinned bytes were refused.
+            logger.warn('downloaded runtime failed its version check', { tool: spec.tool, expected: deps.version, probed })
             rejectedVersion = true
             return null
           }
@@ -886,7 +891,12 @@ export function probeEngineVersion(path: string): Promise<string | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(path, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] })
+      // No colour: OpenCode 2.2 paints its version line when the environment
+      // forces colour (`FORCE_COLOR`, as a test runner or a user's shell sets).
+      const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1' }
+      delete env['FORCE_COLOR']
+      delete env['CLICOLOR_FORCE']
+      child = spawn(path, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env })
     } catch {
       resolve(null)
       return
@@ -913,10 +923,19 @@ export function probeEngineVersion(path: string): Promise<string | null> {
     })
     child.on('error', () => finish(null))
     child.on('close', (code) => {
-      const trimmed = out.trim().split('\n')[0]?.trim() ?? ''
-      finish(code === 0 && trimmed !== '' ? trimmed : null)
+      const line = versionLine(out)
+      finish(code === 0 && line !== '' ? line : null)
     })
   })
+}
+
+/**
+ * The first line a `--version` printed, without terminal escapes: the line the
+ * pins compare exactly (`opencode v2.2.5`), and a release that starts painting
+ * it must not read as a different version.
+ */
+export function versionLine(stdout: string): string {
+  return stripAnsi(stdout).trim().split('\n')[0]?.trim() ?? ''
 }
 
 /** The engine's own directory inside the app data dir. Never the agents home. */

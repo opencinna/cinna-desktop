@@ -36,9 +36,9 @@ import {
   resolveOnEnvPath,
   uvCouldNotStart,
   uvUnavailableMessage,
-  withManagedUvFallback,
   type UvInstallFailure
 } from '../../shell/managedUvPath'
+import { withDeveloperToolShims } from '../../shell/developerToolShims'
 
 const logger = createLogger('uv-prewarm')
 
@@ -238,10 +238,24 @@ function runInstall(bin: string, args: readonly string[], options: { env: NodeJS
   })
 }
 
-export const uvPrewarm = createUvPrewarm({
+/**
+ * The pre-warm's child env: the login shell's, the developer-tool stubs
+ * shadowed and the managed uv last on `PATH` (`withDeveloperToolShims` applies
+ * the uv fallback after its own edits). `uv python install` patches the
+ * downloaded Python's dylib with `install_name_tool`, found by `PATH` lookup;
+ * on a Mac without the command line tools that is the `/usr/bin` stub, and
+ * reaching it raises Apple's install dialog. The shim exits 127 instead, which
+ * uv reports as a warning and installs Python anyway.
+ */
+export async function prewarmRunEnv(): Promise<NodeJS.ProcessEnv> {
+  return withDeveloperToolShims(shellEnvForChild(await getShellEnv()))
+}
+
+/** The real pre-warm's deps; exported so a test can see what is wired. */
+export const realUvPrewarmDeps: UvPrewarmDeps = {
   enabled: () => process.env['CINNA_UV_PREWARM'] !== 'off',
   ensureUv: () => toolchain.ensureUv(),
-  runEnv: async () => withManagedUvFallback(shellEnvForChild(await getShellEnv())),
+  runEnv: prewarmRunEnv,
   resolveUv: (env) => resolveOnEnvPath('uv', env),
   contractPythonVersion: () => {
     try {
@@ -258,7 +272,9 @@ export const uvPrewarm = createUvPrewarm({
     }
     activeRuns.clear()
   }
-})
+}
+
+export const uvPrewarm = createUvPrewarm(realUvPrewarmDeps)
 
 /** {@link uvPrewarm}'s `prewarm`: fire and forget. */
 export function prewarm(agentDir?: string): Promise<void> {

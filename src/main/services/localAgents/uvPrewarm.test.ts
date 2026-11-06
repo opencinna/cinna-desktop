@@ -17,7 +17,24 @@ vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} })
 }))
 
-const { createUvPrewarm, TEMPLATE_PYTHON_VERSION_FILE, RETRY_BACKOFF_MS } = await import('./uvPrewarm')
+// The login shell and the shim helper, as a Mac without the developer tools
+// sees them: the helper's own tests cover when it shims; this file only proves
+// the pre-warm's child goes through it.
+vi.mock('../../shell/env', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../shell/env')>()),
+  getShellEnv: async () => ({ PATH: '/usr/bin:/bin', HOME: '/home/test' })
+}))
+vi.mock('../../shell/developerToolShims', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shell/developerToolShims')>()
+  return {
+    ...actual,
+    withDeveloperToolShims: async (env: Record<string, string | undefined>) =>
+      ({ ...env, PATH: `/data/${actual.SHIM_DIR_NAME}:${env.PATH ?? ''}` })
+  }
+})
+
+const { createUvPrewarm, prewarmRunEnv, realUvPrewarmDeps, TEMPLATE_PYTHON_VERSION_FILE, RETRY_BACKOFF_MS } = await import('./uvPrewarm')
+const { SHIM_DIR_NAME } = await import('../../shell/developerToolShims')
 const { ToolchainError } = await import('../../errors')
 const { readContractFile } = await import('../../kit/contractStore')
 
@@ -215,5 +232,19 @@ describe('the reason a `uv …` command could not start', () => {
     expect(await prewarmer.unavailableReason('uv run x.py', { exitCode: 127, stderr: 'jq: command not found' })).toBeNull()
     expect(resolveUv).toHaveBeenCalledWith(RUN_ENV)
     expect(ensureUv).not.toHaveBeenCalled()
+  })
+})
+
+describe('the pre-warm\'s child env', () => {
+  // `uv python install` patches the Python it downloads with `install_name_tool`,
+  // found by PATH lookup: the /usr/bin stub raises Apple's install dialog.
+  it('puts the developer-tool shims first on PATH, ahead of the /usr/bin stubs', async () => {
+    const env = await prewarmRunEnv()
+    expect(env.PATH?.split(':')[0]).toBe(`/data/${SHIM_DIR_NAME}`)
+    expect(env.PATH?.split(':')).toContain('/usr/bin')
+  })
+
+  it('is the env the real pre-warm runs uv in', () => {
+    expect(realUvPrewarmDeps.runEnv).toBe(prewarmRunEnv)
   })
 })

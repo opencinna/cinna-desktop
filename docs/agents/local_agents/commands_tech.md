@@ -60,7 +60,7 @@ Commands use normal run:start/watch (or lower-level run:send). runExecutionServi
 
 ### `execute()` lifecycle
 
-`withManagedUvFallback(shellEnvForChild(await getShellEnv()))` (`commandService.ts`) supplies the child's environment — the same narrowed login-shell environment a stdio MCP server or the local engine gets, with the managed uv's directory appended last to `PATH` (and `UV_PYTHON_PREFERENCE=only-managed` when no other uv resolves), so `uv run` works before the user installs a uv; see [Shell Environment Resolution](../../development/shell_environment/shell_environment.md). The abort listener and the timeout ceiling both route through `killTree`, and `finish()` (`:219-230`) is idempotent — the first of `'error'` or `'close'` to fire settles the promise, `clearTimeout` and `removeEventListener` run exactly once.
+`withDeveloperToolShims(shellEnvForChild(await getShellEnv()))` (`agentCommandEnv` in `commandService.ts`; it applies `withManagedUvFallback` itself, and shadows the macOS developer-tool stubs so uv's Python download cannot raise the Command Line Tools dialog) supplies the child's environment — the same narrowed login-shell environment a stdio MCP server or the local engine gets, with the managed uv's directory appended last to `PATH` (and `UV_PYTHON_PREFERENCE=only-managed` when no other uv resolves), so `uv run` works before the user installs a uv; see [Shell Environment Resolution](../../development/shell_environment/shell_environment.md). The abort listener and the timeout ceiling both route through `killTree`, and `finish()` (`:219-230`) is idempotent — the first of `'error'` or `'close'` to fire settles the promise, `clearTimeout` and `removeEventListener` run exactly once.
 
 ### `killTree` — why it exists
 

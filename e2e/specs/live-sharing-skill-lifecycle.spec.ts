@@ -273,7 +273,7 @@ async function withdrawnWhileHeld(
     expect(readlinkSync(join(links, skill))).toBe(cached)
     const written = openCodeConfigOf(b, agent.id)
     expect(written?.config.skills.paths).toContain(links)
-    expect(written?.entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', [skill]: 'allow' })
+    expect(written?.entry.permission.skill).toEqual({ '*': 'ask', 'cinna-tasks': 'allow', 'cinna-artifacts': 'allow', 'cinna-dashboards': 'allow', [skill]: 'allow' })
   })
 
   await test.step('B’s Inbox has the Disconnected card: the agent, Remove, Dismiss', async () => {

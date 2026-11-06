@@ -46,7 +46,7 @@ import { join } from 'node:path'
 import { getLayoutView } from '../../kit/contractStore'
 import { readCommandCatalog } from '../../kit/validator'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
-import { withManagedUvFallback } from '../../shell/managedUvPath'
+import { withDeveloperToolShims } from '../../shell/developerToolShims'
 import { uvUnavailableReason } from './uvPrewarm'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
@@ -289,12 +289,15 @@ function execute(
 
 /**
  * The environment a command for `agentId` runs in: the login shell's, the
- * managed uv last on `PATH`, and the agent's credential env (its credentials
+ * developer-tool stubs shadowed (a first `uv run` downloads a Python and
+ * patches it with `install_name_tool`, which on a Mac without the command line
+ * tools is the stub that raises the install dialog), the managed uv last on
+ * `PATH`, and the agent's credential env (its credentials
  * file and, for a kit agent, the skill runtime). What `/run:` gets, and what
  * a dashboard endpoint gets.
  */
 export async function agentCommandEnv(agentId: string): Promise<NodeJS.ProcessEnv> {
-  const env = await withManagedUvFallback(shellEnvForChild(await getShellEnv()))
+  const env = await withDeveloperToolShims(shellEnvForChild(await getShellEnv()))
   const prepared = await prepareCredentials(agentId)
   return engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint })
 }

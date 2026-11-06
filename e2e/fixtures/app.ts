@@ -156,7 +156,8 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
 export async function launch(
   sandbox: Sandbox,
   extraArgs: readonly string[] = [],
-  extraEnv: Readonly<Record<string, string>> = {}
+  extraEnv: Readonly<Record<string, string>> = {},
+  mainRequire: readonly string[] = []
 ): Promise<{ electronApp: ElectronApplication; page: Page }> {
   const electronApp = await electron.launch({
     executablePath: electronPath as unknown as string,
@@ -166,7 +167,8 @@ export async function launch(
     // the login keychain under it and `safeStorage.encryptString` fails with
     // "A keychain cannot be found to store …". Chromium's mock keychain keeps
     // the real safeStorage code path and never touches the user's keychain.
-    args: [repoRoot, '--use-mock-keychain', ...extraArgs],
+    // `-r <file>` must come before the app path: Electron reads node options only there.
+    args: [...mainRequire.flatMap((file) => ['-r', file]), repoRoot, '--use-mock-keychain', ...extraArgs],
     cwd: repoRoot,
     env: launchEnv(sandbox, extraEnv),
     timeout: 60_000
@@ -227,6 +229,14 @@ export interface CinnaOptions {
    * the fresh-user default sets `test.use({ capabilities: [] })`.
    */
   capabilities: readonly ('notes' | 'dashboards')[]
+  /**
+   * Absolute paths of CommonJS files loaded into the main process before the
+   * app's own code, on every launch including `relaunch()` — for a stub that
+   * must already be in place when main's startup runs (an `electronApp.evaluate`
+   * comes after it). `NODE_OPTIONS` cannot carry them: Playwright deletes it.
+   * See `openExternalRecorder.cjs`.
+   */
+  mainRequire: readonly string[]
 }
 
 export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
@@ -236,7 +246,8 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   realLogin: [null, { option: true }],
   liveEngineCheck: [null, { option: true }],
   capabilities: [['notes', 'dashboards'], { option: true }],
-  cinna: async ({ engine, launchArgs, env, realLogin: requestedLogin, liveEngineCheck, capabilities }, use, testInfo) => {
+  mainRequire: [[], { option: true }],
+  cinna: async ({ engine, launchArgs, env, realLogin: requestedLogin, liveEngineCheck, capabilities, mainRequire }, use, testInfo) => {
     // `CINNA_E2E_CLAUDE_AUTH=api_key` (`claudeApiAuth.ts`): a Claude real-login
     // run becomes an ordinary sandbox in API Token mode on the `.env` key.
     const claudeApi: ClaudeApiAuth | null = CLAUDE_API_AUTH && requestedLogin?.engine === 'claude'
@@ -252,7 +263,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       app.process().stdout?.on('data', (chunk) => mainLog.push(String(chunk)))
       app.process().stderr?.on('data', (chunk) => mainLog.push(String(chunk)))
     }
-    let current = await launch(sandbox, launchArgs, env)
+    let current = await launch(sandbox, launchArgs, env, mainRequire)
     capture(current.electronApp)
 
     const cinna: CinnaApp = {
@@ -265,7 +276,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       },
       async relaunch(extraArgs: readonly string[] = []) {
         await current.electronApp.close()
-        current = await launch(sandbox, extraArgs, env)
+        current = await launch(sandbox, extraArgs, env, mainRequire)
         capture(current.electronApp)
       },
       async stubDirectoryPicker(dir: string) {
@@ -330,6 +341,8 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       }
     }
 
+    /** A failed live-engine check: thrown only after the sandbox and `main.log` are kept beside the trace. */
+    let engineCheckError: unknown = null
     try {
       await use(cinna)
     } finally {
@@ -343,12 +356,16 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       // After the cleanup, so a failed check never leaves anything under the real `HOME`.
       if (liveEngineCheck && testInfo.status === 'passed') {
         const expectsTurn = !testInfo.annotations.some((note) => note.type === NO_AGENT_TURN)
-        const summary = checkLiveEngine(mainLog.join(''), liveEngineCheck, expectsTurn)
-        console.log(`live engine: ${summary}`)
-        testInfo.annotations.push({ type: 'live engine', description: summary })
+        try {
+          const summary = checkLiveEngine(mainLog.join(''), liveEngineCheck, expectsTurn)
+          console.log(`live engine: ${summary}`)
+          testInfo.annotations.push({ type: 'live engine', description: summary })
+        } catch (err) {
+          engineCheckError = err
+        }
       }
     }
-    if (testInfo.status === testInfo.expectedStatus) {
+    if (engineCheckError === null && testInfo.status === testInfo.expectedStatus) {
       // The pinned-skill caches under userData (`catalog-skills/`,
       // `marketplace-skills/`) are read-only by design (files 0444, folders
       // 0555), and `rmSync` cannot empty a folder it may not write: EACCES.
@@ -374,6 +391,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       // The main process's own account of the failure, beside the trace.
       writeFileSync(testInfo.outputPath('main.log'), mainLog.join('').replace(/\x1b\[[0-9;]*m/g, ''))
     }
+    if (engineCheckError !== null) throw engineCheckError
   }
 })
 

@@ -69,9 +69,12 @@ test('§7 7: C Gets an agent that pins A’s private skill, and the skill downlo
     const row = skillRow(c, skill, 'From the catalog')
     await expect(row.getByRole('img', { name: 'Every engine of this agent gets this skill', exact: true })).toBeVisible()
     await expect(row).not.toContainText('Not on this computer yet.')
-    // C has no ERP credential: the slot chip says so and offers Finish setup, the only button left.
+    // C has no ERP credential: the slot chip says so and offers Finish setup, the only action left
+    // beside the icon-only Copy install link (no Update, Remove or Re-fetch).
     await expect(row.getByRole('img', { name: 'No credential for erp-api is attached yet', exact: true })).toBeVisible()
-    await expect(row.getByRole('button')).toHaveText(['Finish setup'])
+    await expect(row.getByRole('button', { name: `Copy install link for ${skill}`, exact: true })).toBeVisible()
+    await expect(row.getByRole('button', { name: 'Finish setup', exact: true })).toBeVisible()
+    await expect(row.getByRole('button')).toHaveCount(2)
   })
 })
 

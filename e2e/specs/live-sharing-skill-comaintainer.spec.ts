@@ -232,7 +232,7 @@ test('skill co-maintainers: B maintains A’s skill, edits it with a real turn, 
       writeFileSync(join(folderB, 'SKILL.md'), readFileSync(join(folderB, 'SKILL.md'), 'utf8') + `\n${marker}\n`)
     } else {
       const inAgent = [builtB.path, realpathSync(builtB.path)]
-      const prompt = `Edit the file skills/${skill}/SKILL.md in your own folder: add this line at the end of it, exactly: ${marker} Change no other file.`
+      const prompt = `Edit the file skills/${skill}/SKILL.md in your own folder: add this line at the end of it, exactly as it is between the backticks, final period included: \`${marker}\`. Change no other file.`
       const { turn, asks } = await askAgent(b, builtB.path, prompt, {
         agent: agentB,
         // Only asks about paths inside B's agent folder, and never its manifest.

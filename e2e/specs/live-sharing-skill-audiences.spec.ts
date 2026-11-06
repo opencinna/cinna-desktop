@@ -46,7 +46,7 @@ function personD(fixture: { people: { d?: SharingPerson } }): SharingPerson {
   return d
 }
 
-const NOT_PUBLISHER = 'Ask a maintainer for edit access — you can use this skill but not share new versions of it.'
+const NOT_PUBLISHER = 'Ask a maintainer for edit access — you can use this skill but not publish new versions of it.'
 
 test('S1–S4 audiences: one person, the team, everyone, nobody — each skill reaches exactly its people, and B’s add is recorded against B’s agent', async ({ team }) => {
   test.setTimeout(480_000)
@@ -121,7 +121,7 @@ test('S1–S4 audiences: one person, the team, everyone, nobody — each skill r
     const dialog = a.page.getByRole('dialog', { name: `Publish ${symlinked}` })
     await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
     await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
-    await expect(dialog.getByRole('alert')).toHaveText('Replace notes.md with the file itself — a link can’t be shared. Nothing was sent.')
+    await expect(dialog.getByRole('alert')).toHaveText('Replace notes.md with the file itself — a link can’t be published. Nothing was sent.')
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     expect(await skillItem(fixture, tokens.a, symlinked)).toBeUndefined()

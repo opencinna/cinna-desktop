@@ -12,8 +12,7 @@ import type { AgentRow } from '../../db/agents'
 import { agentService } from '../agentService'
 import { sessionActivityHub } from '../sessionActivityHub'
 import { installSessionActivityStopper } from '../sessionActivityStop'
-import { getShellEnv, shellEnvForChild } from '../../shell/env'
-import { withManagedUvFallback } from '../../shell/managedUvPath'
+import { userCommandShellEnv } from './childEnv'
 import { uvUnavailableReason } from '../localAgents/uvPrewarm'
 import { createUserCommandService, type UserCommandAgent, type UserCommandWorkspace } from './userCommandService'
 
@@ -42,8 +41,7 @@ export const userCommandService = createUserCommandService<RowAgent>({
     return found ? { userId: found.userId, id: found.row.id, row: found.row } : null
   },
   workspace: (agent) => workspaceResolver ? workspaceResolver(agent.userId, agent.row) : Promise.resolve(null),
-  // The managed uv last on PATH: a script's `uv run` works before the user installs one.
-  shellEnv: async () => withManagedUvFallback(shellEnvForChild(await getShellEnv())),
+  shellEnv: userCommandShellEnv,
   uvUnavailable: (command, outcome) => uvUnavailableReason(command, outcome),
   userData: () => runtimeHost.getPath('userData'),
   hub: sessionActivityHub

@@ -190,7 +190,7 @@ cinna-cli invocations, all with `--no-input --json`:
 
 ### `src/main/localdev/toolchain.ts`
 
-`ToolchainDeps` (`root`, `platformKey`, `uvVersion`, `uvAssets`, `mutagenAssets`, `download`, `extract`, `shellEnv`, `run`) is **injected rather than module-mocked**, for the same reason `BinaryResolverDeps` is: the interesting cases are failures — an unknown Mutagen version, a digest mismatch, a `uv tool install` that exits non-zero, a `cinna` that will not run — and a test that cannot produce a mismatch is not testing verification.
+`ToolchainDeps` (`root`, `platformKey`, `uvVersion`, `uvAssets`, `mutagenAssets`, `download`, `extract`, `shellEnv`, `run`) is **injected rather than module-mocked**, for the same reason `BinaryResolverDeps` is: the interesting cases are failures — an unknown Mutagen version, a digest mismatch, a `uv tool install` that exits non-zero, a `cinna` that will not run — and a test that cannot produce a mismatch is not testing verification. The real `shellEnv` is `toolchainShellEnv()`: the login shell's env through `withDeveloperToolShims`, so `uv tool install cinna-cli` downloading a Python cannot raise the Command Line Tools dialog on a bare Mac (lazy import: `developerToolShims` → `managedUvPath` imports `toolchain`).
 
 - `requireAssets(pins)` resolves **both** tables before any work, raising `unsupported_platform` / `unknown_mutagen_version` up front
 - `once(key, work)` de-duplicates concurrent installs keyed by tool, version **and** the reinstall flag. Entries are dropped when they settle rather than memoised — memoising would make the app confidently wrong about a directory the user has since deleted, which is the state Repair exists to recover from

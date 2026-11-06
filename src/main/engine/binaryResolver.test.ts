@@ -19,14 +19,17 @@ import {
   EngineBinaryError,
   knownRuntimeBinary,
   managedBinaryPath,
+  OPENCODE_SPEC,
   pinnedAssetBytes,
+  probeEngineVersion,
   realAntigravityResolverDeps,
   realClaudeResolverDeps,
   realCodexResolverDeps,
   resolveEngineBinaryWith,
   sha256File,
   type BinaryResolverDeps,
-  type EngineAsset
+  type EngineAsset,
+  versionLine
 } from './binaryResolver'
 import { opencodeMajorVersion } from '../../shared/engine'
 
@@ -1120,3 +1123,29 @@ describe('sha256File', () => {
   })
 })
 
+
+// OpenCode 2.2.5 paints `--version` when the environment forces colour (a test
+// runner's FORCE_COLOR): the pin compares the line exactly, so the downloaded
+// bytes read as another version and were discarded.
+describe('the version probe', () => {
+  it('reads a painted version line as the plain one', () => {
+    expect(versionLine('\x1b[1mopencode\x1b[0m \x1b[2mv\x1b[0m\x1b[1m2.2.5\x1b[0m\n')).toBe('opencode v2.2.5')
+    expect(OPENCODE_SPEC.acceptsVersion?.(versionLine('\x1b[1mopencode\x1b[0m \x1b[2mv\x1b[0m\x1b[1m2.2.5\x1b[0m'), '2.2.5')).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32')('asks the binary for no colour even when the app inherited FORCE_COLOR', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cinna-probe-'))
+    const bin = join(dir, 'opencode')
+    writeFileSync(bin, '#!/bin/sh\nif [ -n "$FORCE_COLOR" ] && [ -z "$NO_COLOR" ]; then printf "\\033[1mopencode\\033[0m v2.2.5 painted\\n"; else echo "opencode v2.2.5"; fi\n')
+    chmodSync(bin, 0o755)
+    const saved = process.env.FORCE_COLOR
+    process.env.FORCE_COLOR = '1'
+    try {
+      expect(await probeEngineVersion(bin)).toBe('opencode v2.2.5')
+    } finally {
+      if (saved === undefined) delete process.env.FORCE_COLOR
+      else process.env.FORCE_COLOR = saved
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

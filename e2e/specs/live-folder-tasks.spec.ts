@@ -136,4 +136,14 @@ test('@live a real agent moves its own task by editing the task file', async ({ 
     await expect(folderColumn(cinna, 'Shipped').getByRole('button', { name: `${TITLE} — Shipped`, exact: true })).toBeVisible()
     await expect(folderColumn(cinna, 'Up Next').locator('[data-task-card]')).toHaveCount(0)
   })
+
+  // The file changes mid-turn; the agent still has to say done. Closing the app before that kills
+  // the turn (Codex is slower than OpenCode here), so no `ACP turn complete` reaches the engine check.
+  await test.step('the agent’s turn ends', async () => {
+    // A fresh profile: this turn's chat is the only one.
+    const chats = await cinna.page.evaluate(() => window.api.chat.list())
+    expect(chats.length, 'chats in the profile').toBe(1)
+    await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id).then((chat) => chat?.activeRunId ?? null), chats[0].id),
+      { message: 'the turn ends', timeout: 2 * 60_000 }).toBeNull()
+  })
 })

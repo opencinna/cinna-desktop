@@ -34,12 +34,21 @@ export async function expectAccess(scope: Locator, name: string, access: PeopleA
 
 /** Open `name`'s access picker and choose `access`. */
 export async function pickAccess(scope: Locator, name: string, access: PeopleAccess): Promise<void> {
-  await accessPicker(scope, name).click()
-  await scope
-    .page()
-    .getByRole('menu', { name: `Access for ${name}`, exact: true })
-    .getByRole('menuitemradio', { name: ACCESS_LABEL[access], exact: true })
-    .click()
+  const menu = scope.page().getByRole('menu', { name: `Access for ${name}`, exact: true })
+  await openMenu(accessPicker(scope, name), menu)
+  await menu.getByRole('menuitemradio', { name: ACCESS_LABEL[access], exact: true }).click()
+}
+
+/**
+ * Click `trigger` until `menu` stays open. The menu closes on a scroll of
+ * the pane holding its trigger, and the scroll Playwright makes to bring a
+ * row low on the page into view can be delivered after the click opened it.
+ */
+async function openMenu(trigger: Locator, menu: Locator): Promise<void> {
+  await expect(async () => {
+    if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
+    await expect(menu).toBeVisible({ timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 /** The row's ⋯. */
@@ -49,12 +58,9 @@ export function personActions(scope: Locator, name: string): Locator {
 
 /** ⋯ → Remove access… → the row asks `Remove <name>’s access?` → Remove; waits until the row left. */
 export async function removeAccess(scope: Locator, name: string): Promise<void> {
-  await personActions(scope, name).click()
-  await scope
-    .page()
-    .getByRole('menu', { name: `Actions for ${name}`, exact: true })
-    .getByRole('menuitem', { name: 'Remove access…', exact: true })
-    .click()
+  const menu = scope.page().getByRole('menu', { name: `Actions for ${name}`, exact: true })
+  await openMenu(personActions(scope, name), menu)
+  await menu.getByRole('menuitem', { name: 'Remove access…', exact: true }).click()
   await expect(scope.getByText(`Remove ${name}’s access?`, { exact: true })).toBeVisible()
   await scope.getByRole('button', { name: 'Remove', exact: true }).click()
   await expect(scope.getByText(`Remove ${name}’s access?`, { exact: true })).toHaveCount(0, { timeout: 30_000 })

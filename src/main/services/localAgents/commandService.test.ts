@@ -46,6 +46,21 @@ vi.mock('../../shell/env', () => ({
   shellEnvForChild: (env: NodeJS.ProcessEnv) => env
 }))
 
+// The shim helper as on a Mac without the developer tools, when a test turns
+// it on: its directory first, then the real managed-uv fallback it applies.
+// Its own tests cover when it shims; here only that commands go through it.
+const shimsOn = vi.hoisted(() => ({ current: false }))
+vi.mock('../../shell/developerToolShims', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shell/developerToolShims')>()
+  const { withManagedUvFallback } = await import('../../shell/managedUvPath')
+  return {
+    ...actual,
+    withDeveloperToolShims: async (env: Record<string, string | undefined>) => withManagedUvFallback(shimsOn.current
+      ? { ...env, PATH: `${join(workshop, 'userData', actual.SHIM_DIR_NAME)}:${env.PATH ?? ''}` }
+      : env)
+  }
+})
+
 // The real toolchain module (the managed uv's layout under userData), except
 // that installing the managed uv is the test's: nothing is ever downloaded.
 const ensureUv = vi.hoisted(() => ({ current: async (): Promise<unknown> => { throw new Error('test bug: ensureUv not configured') } }))
@@ -93,6 +108,7 @@ vi.mock('../../kit/contractStore', async (importOriginal) => {
 })
 
 const { commandService, resolveCommandRunner, MAX_OUTPUT_BYTES } = await import('./commandService')
+const { SHIM_DIR_NAME } = await import('../../shell/developerToolShims')
 const { turnLock } = await import('./turnLock')
 const { LocalAgentError } = await import('../../errors')
 const { clearContractCache } = await import('../../kit/contractStore')
@@ -120,6 +136,7 @@ beforeEach(() => {
   spawnShouldThrow.current = false
   layoutShouldThrow.current = false
   shellEnv.current = null
+  shimsOn.current = false
   turnLock.releaseAll()
 })
 
@@ -633,6 +650,16 @@ describe('the managed uv on a command\'s PATH', () => {
     const entries = result.output.split(':')
     expect(entries.at(-1)).toBe(managedDir())
     expect(entries.filter((entry) => entry === managedDir())).toHaveLength(1)
+  })
+
+  it('puts the developer-tool shims first on the spawned PATH, so a first `uv run` never reaches the install_name_tool stub', async () => {
+    shimsOn.current = true
+    writeCatalog('commands:\n  - name: path\n    description: x\n    command: printf "%s" "$PATH"\n')
+    const result = await commandService.run(USER, AGENT_ID, 'path')
+    expect(result.ok).toBe(true)
+    const entries = result.output.split(':')
+    expect(entries[0]).toBe(join(workshop, 'userData', SHIM_DIR_NAME))
+    expect(entries.at(-1)).toBe(managedDir())
   })
 
   it('runs the user\'s own uv when one is on PATH, and keeps the ordinary exit text when it fails', async () => {

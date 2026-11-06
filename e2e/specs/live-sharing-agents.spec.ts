@@ -224,7 +224,7 @@ test('A2 A makes B a Maintainer; B adds C from B’s own app and core records it
     await people(b).getByRole('button', { name: 'Share', exact: true }).click()
     const dialog = b.page.getByRole('dialog', { name: 'Share with a person' })
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(personC.name)
-    await dialog.getByRole('option', { name: `${personC.name} <${personC.email}>` }).click()
+    await b.page.getByRole('option', { name: `${personC.name} <${personC.email}>` }).click()
     await expect(dialog.getByRole('combobox', { name: 'Access', exact: true })).toHaveValue('use')
     await dialog.getByRole('button', { name: 'Add', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30_000 })
