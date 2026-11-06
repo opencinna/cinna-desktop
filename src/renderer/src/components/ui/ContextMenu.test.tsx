@@ -10,11 +10,17 @@ import { ContextMenu } from './ContextMenu'
  */
 
 const menuHeight = { current: 100 }
+/** The top of an element marked `data-test-anchor`, a 24px trigger at x 500. */
+const anchorTop = { current: 300 }
 
 beforeEach(() => {
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this.dataset.testAnchor !== undefined) {
+      const top = anchorTop.current
+      return { x: 500, y: top, left: 500, top, right: 524, bottom: top + 24, width: 24, height: 24, toJSON: () => ({}) } as DOMRect
+    }
     const height = this.getAttribute('role') === 'menu' ? menuHeight.current : 0
     return { x: 0, y: 0, left: 0, top: 0, right: 176, bottom: height, width: 176, height, toJSON: () => ({}) } as DOMRect
   })
@@ -23,6 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   menuHeight.current = 100
+  anchorTop.current = 300
 })
 
 const menu = (error: string | null, y: number): React.JSX.Element => (
@@ -126,5 +133,59 @@ describe('ContextMenu opened from a button', () => {
       window.removeEventListener('mousedown', windowMouseDown)
       window.removeEventListener('keydown', windowEscape)
     }
+  })
+})
+
+/**
+ * A scroll event can reach the menu after it opened for a scroll that had
+ * already ended (Playwright's scroll into view before its click, momentum
+ * settling). Only a scroll that moves the anchor closes the menu.
+ */
+describe('ContextMenu and a scroll of the pane holding its anchor', () => {
+  const added: HTMLElement[] = []
+  afterEach(() => {
+    for (const node of added.splice(0)) node.remove()
+  })
+
+  const setup = (): { pane: HTMLElement; other: HTMLElement; onClose: ReturnType<typeof vi.fn> } => {
+    const pane = document.createElement('div')
+    const anchor = document.createElement('button')
+    anchor.dataset.testAnchor = ''
+    pane.appendChild(anchor)
+    const other = document.createElement('div')
+    document.body.append(pane, other)
+    added.push(pane, other)
+    const onClose = vi.fn()
+    render(
+      <ContextMenu x={500} y={324} anchor={anchor} label="Actions" onClose={onClose}>
+        <button type="button" role="menuitem">Remove access…</button>
+      </ContextMenu>
+    )
+    return { pane, other, onClose }
+  }
+
+
+  it('stays open for a scroll that leaves the anchor where it was when the menu opened', () => {
+    const { pane, onClose } = setup()
+    fireEvent.scroll(pane)
+    // Sub-pixel drift is not a move.
+    anchorTop.current = 300.5
+    fireEvent.scroll(pane)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('menu', { name: 'Actions' })).toBeTruthy()
+  })
+
+  it('closes on a scroll that moves the anchor', () => {
+    const { pane, onClose } = setup()
+    anchorTop.current = 260
+    fireEvent.scroll(pane)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a scroll of a pane that does not hold the anchor, even while the anchor moves', () => {
+    const { other, onClose } = setup()
+    anchorTop.current = 260
+    fireEvent.scroll(other)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

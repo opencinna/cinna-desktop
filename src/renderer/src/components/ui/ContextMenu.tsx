@@ -15,7 +15,10 @@ interface ContextMenuProps {
   /** The pointer, where the menu opens; clamped to the viewport. */
   x: number
   y: number
-  /** What the menu was opened on: a scroll of anything containing it closes the menu. */
+  /**
+   * What the menu was opened on: a scroll of anything containing it that moves
+   * it closes the menu. Without one, any scroll closes it.
+   */
   anchor: HTMLElement | null
   /** The menu's accessible name. */
   label: string
@@ -36,9 +39,10 @@ interface ContextMenuProps {
  * The shell of a right-click menu. Portaled, opened at the pointer and kept
  * inside the window; the first enabled item takes focus and the arrow keys
  * move between items. Closes on Escape, Tab, an outside click, a scroll that
- * moves the anchor, a resize and the window losing focus. Closing on a pick is
- * the caller's: see {@link useContextMenuAction}. Escape and presses inside
- * it stop at the menu, so a dialog it was opened from stays open.
+ * moves the anchor (one that leaves it in place does not), a resize and the
+ * window losing focus. Closing on a pick is the caller's: see
+ * {@link useContextMenuAction}. Escape and presses inside it stop at the
+ * menu, so a dialog it was opened from stays open.
  */
 export function ContextMenu({
   x, y, anchor, label, error, align = 'left', className = CONTEXT_MENU_SURFACE, onClose, children
@@ -69,6 +73,16 @@ export function ContextMenu({
     return () => observer.disconnect()
   }, [x, y, error, align])
 
+  // Where the anchor sat when the menu opened. A scroll event can arrive after
+  // the menu opened for a scroll that ended before it (a scroll into view just
+  // before the click, momentum settling); only a scroll that moves the anchor
+  // away from the menu closes it.
+  const anchorAt = useRef<{ left: number; top: number } | null>(null)
+  useLayoutEffect(() => {
+    const rect = anchor?.getBoundingClientRect()
+    anchorAt.current = rect ? { left: rect.left, top: rect.top } : null
+  }, [anchor])
+
   useLayoutEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>(ENABLED_ITEMS)?.focus({ preventScroll: true })
     const outside = (event: PointerEvent): void => {
@@ -94,6 +108,11 @@ export function ContextMenu({
     // its own while a turn streams and must not close the menu.
     const scroll = (event: Event): void => {
       if (event.target instanceof Node && anchor && !event.target.contains(anchor)) return
+      const at = anchorAt.current
+      if (anchor && at) {
+        const rect = anchor.getBoundingClientRect()
+        if (Math.abs(rect.left - at.left) <= 1 && Math.abs(rect.top - at.top) <= 1) return
+      }
       onClose()
     }
     document.addEventListener('pointerdown', outside)

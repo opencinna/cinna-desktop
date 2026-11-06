@@ -40,9 +40,10 @@ export async function pickAccess(scope: Locator, name: string, access: PeopleAcc
 }
 
 /**
- * Click `trigger` until `menu` stays open. The menu closes on a scroll of
- * the pane holding its trigger, and the scroll Playwright makes to bring a
- * row low on the page into view can be delivered after the click opened it.
+ * Click `trigger` until `menu` stays open. Kept as a guard: the scroll
+ * Playwright makes to bring a low row into view can be delivered after the
+ * click opened the menu. `ContextMenu` now ignores a scroll that leaves its
+ * anchor in place, so one click normally does it.
  */
 async function openMenu(trigger: Locator, menu: Locator): Promise<void> {
   await expect(async () => {
