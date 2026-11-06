@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
-import { liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
+import { expectTaskTurnSettled, liveEngineOptions, requireLiveEngine, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { adoptFolder, openTasksTab } from '../fixtures/dispatcher'
 
 /**
@@ -135,4 +135,6 @@ test('@live One at a time runs two Ready tasks of a real agent in order, each re
     .filter((id, index, list) => index === 0 || list[index - 1] !== id)
   expect(order).toEqual([ids.first, ids.second])
   expect((await cinna.page.evaluate((id) => window.api.taskDispatch.get(id), agentId))?.paused).toBeNull()
+  // `completed` lands at `tasks_report`, mid-turn: both turns must end before the app closes.
+  await expectTaskTurnSettled(cinna, ids.first, ids.second)
 })

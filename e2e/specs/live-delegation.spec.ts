@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from
 import { basename, join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { LIVE_ENGINE, liveEngineOptions, requireLiveEngine, requireOpenCode, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
+import { LIVE_ENGINE, expectTaskTurnSettled, liveEngineOptions, requireLiveEngine, requireOpenCode, seedLiveModel, useLiveRuntime } from '../fixtures/liveEngine'
 import { showTasksLayout } from '../fixtures/tasksView'
 import { coreApi, linkLiveCinnaProfile, liveCoreSession } from '../fixtures/liveCinnaLink'
 import type { LiveCinnaConfig } from '../fixtures/liveCinna'
@@ -296,6 +296,8 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
       await expect(from.getByRole('button')).toHaveText(TITLE)
       expect((await linksOf(cinna, childIds[0])).from?.originTaskId ?? (await linksOf(cinna, childIds[1])).from?.originTaskId).toBe(taskId)
     })
+
+    await test.step('every turn has ended: the coordinator’s follow-up and both helpers', () => expectTaskTurnSettled(cinna, taskId, ...childIds))
   } finally {
     await attachState(cinna, [taskId])
   }
@@ -409,6 +411,8 @@ test('@live auto-run under standing grants; the third hop is refused and nothing
       { timeout: TURN, intervals: [5_000] }).toBe(true)
       expect((await cinna.page.evaluate(() => window.api.inbox.list())).entries).toEqual([])
     })
+
+    await test.step('every turn has ended: the lead, the relay and the last helper', () => expectTaskTurnSettled(cinna, taskId, first.taskId!, second.taskId!))
   } finally {
     await attachState(cinna, tracked)
   }
@@ -444,6 +448,8 @@ test('@live a relay waiting on its own delegation is not reported done early', a
     expect(received[0].split('\n')[0]).toMatch(/^Task result from .+ on .+: done — /)
     expect(received[0]).not.toContain('without a structured report')
     expect(received[0]).toContain(WORD_D)
+    // The lead, the relay and the last helper: each chat ran a turn.
+    await expectTaskTurnSettled(cinna, taskId, middle.taskId!, middleChildren[0].taskId!)
   } finally {
     await attachState(cinna, [taskId])
   }
@@ -476,6 +482,7 @@ test('@live a relay that answers its child in plain text settles once, after the
     expect(received).toHaveLength(1)
     expect(received[0].split('\n')[0]).toMatch(/^Task result from .+ on .+: done — /)
     expect(received[0]).toContain(WORD_D)
+    await expectTaskTurnSettled(cinna, taskId, middle.taskId!, middleChildren[0].taskId!)
   } finally {
     await attachState(cinna, [taskId])
   }
@@ -579,6 +586,9 @@ test.describe('against the running cinna-core', () => {
         expect((await linksOf(cinna, taskId)).to.map((d) => d.state)).toEqual(['done'])
         expect((await coreApi(config, token, '/tasks/?limit=200')).body.data.filter((t: { title: string }) => t.title === remoteTitle)).toHaveLength(1)
       })
+
+      // The packet opened a follow-up turn in the requester's chat; the remote child has no chat here.
+      await test.step('the requester’s turn has ended', () => expectTaskTurnSettled(cinna, taskId))
     } finally {
       await attachState(cinna, [taskId])
     }

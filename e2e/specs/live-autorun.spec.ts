@@ -643,6 +643,8 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
 
     await expect.poll(() => statusOf(cinna, taskId), { message: 'the coordinator task completes', timeout: TURN, intervals: [2_000] }).toBe('completed')
     await expectInboxStayedEmpty(watch)
+    // The coordinator's follow-up turn and both helpers' turns end before the app closes.
+    await expectTaskTurnSettled(cinna, taskId, ...(await linksOf(taskId)).to.map((d) => d.taskId!))
   } finally {
     await watch.stop()
     await attachState(cinna)

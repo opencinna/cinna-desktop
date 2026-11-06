@@ -128,13 +128,23 @@ export function expectNoAgentTurn(): void {
  * after it, and closing the app then kills the turn (`an ACP turn failed …
  * ACP connection closed`) before `ACP turn complete` is logged, so the engine
  * check finds no turn. A test must not leave a real turn running at close.
+ *
+ * Pass every task whose chat ran a turn — a coordinator and each local child
+ * (a remote child has no chat here) — and they are read together, so a
+ * return packet that opens a follow-up turn in one while another settles is
+ * still waited out. Answers only once all of them are idle in one sample.
  */
-export async function expectTaskTurnSettled(cinna: CinnaApp, taskId: string): Promise<void> {
-  await expect.poll(() => cinna.page.evaluate(async (id) => {
-    const chatId = (await window.api.tasks.get(id)).chatId
-    if (!chatId) return 'no chat'
-    return (await window.api.chat.get(chatId))?.activeRunId ?? null
-  }, taskId), { message: 'the task’s turn ends', timeout: 120_000 }).toBeNull()
+export async function expectTaskTurnSettled(cinna: CinnaApp, ...taskIds: string[]): Promise<void> {
+  if (taskIds.length === 0) throw new Error('expectTaskTurnSettled needs at least one task')
+  await expect.poll(() => cinna.page.evaluate(async (ids) => {
+    const busy: string[] = []
+    for (const id of ids) {
+      const chatId = (await window.api.tasks.get(id)).chatId
+      if (!chatId) busy.push(`${id}: no chat`)
+      else if ((await window.api.chat.get(chatId))?.activeRunId) busy.push(`${id}: running`)
+    }
+    return busy
+  }, taskIds), { message: taskIds.length === 1 ? 'the task’s turn ends' : 'every task’s turn ends', timeout: 120_000 }).toEqual([])
 }
 
 /** `test.beforeEach(() => requireLiveEngine())`: the live gate, then this engine's prerequisites. */

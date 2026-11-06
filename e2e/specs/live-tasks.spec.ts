@@ -204,6 +204,7 @@ test('@live one agent processes a task started from the task page', async ({ cin
     expect(stored.chatId).not.toBeNull()
     expect(await assistantMessages(cinna, stored.chatId!)).toBeGreaterThan(0)
     expect(await asksFor(cinna, task.id)).toBe(0)
+    await expectTaskTurnSettled(cinna, task.id)
   })
 })
 
@@ -257,6 +258,7 @@ test('@live two tasks for the same agent run at once without cross-talk', async 
       expect(await assistantMessages(cinna, s.chatId)).toBeGreaterThan(0)
       expect(await asksFor(cinna, s.taskId)).toBe(0)
     }
+    await expectTaskTurnSettled(cinna, ...started.map((s) => s.taskId))
   })
 })
 
