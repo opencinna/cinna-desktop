@@ -89,8 +89,29 @@ function setActive(theme: ResolvedBrandTheme | null): void {
 }
 
 let requested = 0
+/** The `get` started by the latest change, until it settles. */
+let pending: Promise<void> | null = null
 
-async function fetchAndApply(): Promise<void> {
+function fetchAndApply(): Promise<void> {
+  const run = fetchAndApplyNow().finally(() => {
+    if (pending === run) pending = null
+  })
+  pending = run
+  return run
+}
+
+/**
+ * Resolves once the brand main last announced is applied. A profile switch
+ * awaits it before the new profile renders: main sends `brandTheme:changed`
+ * before the login reply, so its `get` is already under way here, and
+ * without the wait the new profile's first frame could paint in the former
+ * look (the brand-theme E2E no-flash check).
+ */
+export function brandThemeSettled(): Promise<void> {
+  return pending ?? Promise.resolve()
+}
+
+async function fetchAndApplyNow(): Promise<void> {
   const ticket = ++requested
   let theme: ResolvedBrandTheme | null = null
   try {

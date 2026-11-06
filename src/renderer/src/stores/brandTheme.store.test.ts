@@ -6,6 +6,7 @@ import { act, renderHook } from '@testing-library/react'
 import {
   BRAND_STYLE_ID,
   applyBrandTheme,
+  brandThemeSettled,
   handleBrandThemeChanged,
   initBrandTheme,
   useBrandThemeForProfile,
@@ -207,5 +208,23 @@ describe('a profile override (sign-in surfaces)', () => {
     expect(shown()).toBeNull()
     view.unmount()
     expect(shown()).toBe('https://acme.example#1')
+  })
+})
+
+describe('brandThemeSettled (profile switch waits for the brand)', () => {
+  it('resolves only after the get started by a change is applied, and at once when nothing is pending', async () => {
+    let answer: (t: ResolvedBrandTheme | null) => void = () => {}
+    get.mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    void handleBrandThemeChanged({ origin: 'https://acme.example', revision: 9 }, options)
+    let settled = false
+    const wait = brandThemeSettled().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(document.documentElement.hasAttribute('data-brand')).toBe(false)
+    answer(theme(9))
+    await wait
+    expect(settled).toBe(true)
+    expect(document.documentElement.hasAttribute('data-brand')).toBe(true)
+    await expect(brandThemeSettled()).resolves.toBeUndefined()
   })
 })

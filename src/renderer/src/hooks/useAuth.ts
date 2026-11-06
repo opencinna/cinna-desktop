@@ -5,6 +5,7 @@ import { useReauthStore } from '../stores/reauth.store'
 import { useChatStore } from '../stores/chat.store'
 import { REMOTE_SYNC_STATUS_KEY, type RemoteSyncStatus } from './useAgents'
 import { unwrapIpcError } from '../utils/ipcError'
+import { brandThemeSettled } from '../stores/brandTheme.store'
 
 export function useUsers() {
   return useQuery({
@@ -130,8 +131,12 @@ export function useLogin() {
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
 
   return useMutation({
-    mutationFn: (data: { userId: string; password?: string }) =>
-      window.api.auth.login(data),
+    // The new profile's brand is on the document before it renders (see brandThemeSettled).
+    mutationFn: async (data: { userId: string; password?: string }) => {
+      const result = await window.api.auth.login(data)
+      if (result.success) await brandThemeSettled()
+      return result
+    },
     onSuccess: (result) => {
       if (result.success && result.user) {
         setCurrentUser(toAuthUser(result.user))
